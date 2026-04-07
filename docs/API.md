@@ -126,7 +126,7 @@ status:
 
 - `allowedImages` is mandatory in practice for real clusters; an empty list means "any image" and validation will emit a warning.
 - `allowedProviders` is the primary access control mechanism for LLM providers at the class level. ModelProvider itself has `allowedNamespaces` for namespace-level control. Both must pass for an Agent to use a provider.
-- Defaults vs. maxLimits: defaults are applied at admission time if the Agent does not specify; maxLimits are enforced regardless and reject manifests that exceed them.
+- Defaults vs. maxLimits: defaults are applied at reconcile time if the Agent does not specify; maxLimits are enforced regardless and reject manifests that exceed them.
 - `runtime.backend: agentSandbox` is future-facing. v1 may ship with only `pod` and add the Sandbox backend in v1.1.
 
 ---
@@ -524,7 +524,7 @@ status:
 
 ### Design notes
 
-- **AgentChannel owns no Pod resources.** Configuration is managed by the AgentChannelReconciler and pushed to the gateway's configuration store (a ConfigMap or the gateway's API). The gateway performs the actual platform connection.
+- **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages platform connections based on their specs. The reconciler's role is validation and status reporting.
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (Discord bot tokens, etc.) are referenced from the agent's namespace and mounted only into the gateway's channel adapter process for that connection.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway tracks `(channelId, userId)` pairs and adds a `sessionId` to the message envelope. Agents use this to look up conversation context in their PVC. When disabled, each message is stateless from the gateway's perspective.

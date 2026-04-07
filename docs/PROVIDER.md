@@ -93,6 +93,18 @@ Pros: Credentials never leave `agentry-system`. NetworkPolicy cleanly isolates a
 
 ---
 
+## Namespace Identification
+
+The gateway must identify the source namespace of each LLM request to enforce access controls and per-namespace budget tracking. It does this via **source IP resolution**:
+
+1. The gateway maintains a Pod informer cache (it already watches Pods cluster-wide for annotation writes).
+2. On each inbound LLM request, the gateway resolves the source IP to a Pod via the informer cache, then reads the Pod's namespace.
+3. If the source IP does not resolve to a known Pod, the request is rejected.
+
+This approach is **unforgeable**: source IPs are assigned by the cluster network (CNI) and cannot be overridden from within a container. An agent cannot claim to be from a different namespace. No agent-provided headers or tokens are trusted for namespace identification.
+
+---
+
 ## Budget State Management
 
 Budget counters are maintained **in-process in the gateway**. Because the gateway is the single choke point for all LLM traffic, there is no need for a separate aggregator or distributed counter.

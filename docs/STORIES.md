@@ -74,7 +74,7 @@ The next morning, a customer sends a message via Discord. The channel event arri
 
 ### S8: Run an ephemeral coding agent on an issue
 
-Dev has an AI coding agent that fixes GitHub issues. He creates an `AgentTask` manifest: image is the coding agent, class is `sandboxed`, provider is `anthropic-shared`, goal is passed as an environment variable referencing the issue URL, completion condition is the agent reporting `done` to the gateway, timeout is 1 hour, and artifact output is a path inside the container where the agent writes the PR URL. He applies it. The controller creates a Pod under gVisor, runs it to completion, captures the artifact into the AgentTask status, and tears down the Pod.
+Dev has an AI coding agent that fixes GitHub issues. He creates an `AgentTask` manifest: image is the coding agent, class is `sandboxed`, provider is `anthropic-shared`, goal is passed as an environment variable referencing the issue URL, completion condition is the agent reporting `done` to the gateway, timeout is 1 hour, and artifact output is declared by name — the agent includes the PR URL in its completion payload. He applies it. The controller creates a Pod under gVisor, runs it to completion, captures the artifact into the AgentTask status, and tears down the Pod.
 
 ### S9: Promote a task agent to persistent for human takeover
 

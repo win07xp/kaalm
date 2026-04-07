@@ -118,7 +118,7 @@ The AgentChannelReconciler does not own Pod resources. The gateway watches `Agen
           │             │ pod scaled to 0, PVC retained
           │             ▼
           │      ┌────────────┐
-          │      │ Hibernated │──── incoming request on Service
+          │      │ Hibernated │──── channel message via User Gateway
           │      └─────┬──────┘     OR manual wake annotation
           │            │
           │            ▼
@@ -184,7 +184,7 @@ This avoids tight coupling to the Agent CRD for a high-frequency field while giv
 
 **Hibernation mechanics:**
 
-Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. The Service remains pointing at the gateway's activator listener while the Agent is hibernated.
+Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. The Service remains (with no endpoints) while the Agent is hibernated. Wake is triggered by the User Gateway (on channel message arrival) or manual annotation, not by traffic to the Service.
 
 **Wake trigger:**
 

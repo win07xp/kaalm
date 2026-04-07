@@ -73,7 +73,7 @@ The Agentry control plane consists of a single operator (Go, built on `controlle
 
 4. **AgentClass Reconciler** — watches `AgentClass` resources. Validates that referenced ModelProviders exist, maintains usage counts, and updates status conditions.
 
-5. **AgentChannel Reconciler** — watches `AgentChannel` resources. Validates that the referenced Agent exists and is Running, provisions channel adapter configuration in the gateway, and monitors channel health.
+5. **AgentChannel Reconciler** — watches `AgentChannel` resources. Validates that the referenced Agent exists and has a Service, validates channel credentials, and monitors channel health. The gateway watches AgentChannel resources directly for platform connection management.
 
 The controller does **not** host admission webhooks. Field-level validation uses CEL expressions in CRD schemas. Cross-resource validation (reference resolution, image allowlists, provider access) is handled at reconcile time and surfaced as status conditions rather than admission errors.
 
@@ -100,6 +100,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 
 **LLM Gateway** (outbound, agent → provider)
 - Receives LLM API calls from agent containers via `$AGENTRY_PROVIDER_ENDPOINT`
+- Identifies the source namespace via source IP → Pod resolution from the Pod informer cache (unforgeable)
 - Validates the requested model and checks namespace access
 - Enforces soft budget guardrails and per-namespace rate limits
 - Routes to the upstream provider, falling back through the chain on errors
