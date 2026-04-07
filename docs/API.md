@@ -146,7 +146,7 @@ spec:
   # Provider type. Built-in: "anthropic" | "openai" | "google-vertex" | "openai-compatible"
   type: anthropic
 
-  # Endpoint override (for self-hosted or proxy gateways). Optional for known types.
+  # Endpoint override (for self-hosted or custom gateways). Optional for known types.
   endpoint: "https://api.anthropic.com"
 
   # Credentials: a reference to a Secret in the operator's namespace.
@@ -156,7 +156,7 @@ spec:
     name: anthropic-api-key
     key: api-key
 
-  # Models offered through this provider. The proxy validates that requested
+  # Models offered through this provider. The gateway validates that requested
   # models are in this list; unknown models are rejected.
   models:
     - id: "claude-opus-4-6"
@@ -190,13 +190,13 @@ spec:
     # Cluster-wide ceiling (sum across all namespaces). Optional.
     clusterUSD: "10000.00"
 
-  # Rate limits enforced at the proxy (per namespace).
+  # Rate limits enforced at the gateway (per namespace).
   rateLimits:
     requestsPerMinute: 300
     tokensPerMinute: 500000
 
-  # Fallback chain. If this provider is unavailable or budget-blocked, the proxy
-  # tries the next one in order. Referenced providers must also allow the namespace.
+  # Fallback chain. If this provider is unavailable or budget-blocked, the
+  # gateway tries the next one in order. Referenced providers must also allow the namespace.
   fallback:
     - name: openai-fallback
 
@@ -238,10 +238,10 @@ status:
 ### Design notes
 
 - **Secret scoping**: credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers.
-- **Budget state**: persisted in status is the source of truth for display, but the proxy maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy.
+- **Budget state**: persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy.
 - **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Exact match is preferred where possible.
 - **Fallback chains** are flat (not nested). Circular references are rejected by validation.
-- **Cost fields are strings** (not floats) to avoid precision issues. The proxy parses them as decimals.
+- **Cost fields are strings** (not floats) to avoid precision issues. The gateway parses them as decimals.
 
 ---
 
@@ -388,14 +388,11 @@ spec:
     # Retry on failure. v1 supports simple count-based retries, no backoff tuning.
     backoffLimit: 0
 
-  # Artifacts to collect from the agent container on completion.
+  # Artifacts to collect on completion. The agent includes values for these
+  # names in the POST /v1/task/complete body.
   artifacts:
     - name: pr-url
-      path: "/workspace/.agentry/outputs/pr-url.txt"
-      type: text      # "text" | "json" | "file"
     - name: summary
-      path: "/workspace/.agentry/outputs/summary.md"
-      type: text
 
   # Retention: how long to keep the AgentTask resource after completion.
   ttlSecondsAfterFinished: 3600
@@ -430,7 +427,7 @@ status:
 ### Design notes
 
 - **`completion.condition: agentReported` is the v1 default.** The agent container calls the gateway's completion endpoint with a status payload that may include artifact key-value pairs. This is more flexible than exit codes alone because the agent can report structured metadata and artifacts in a single call.
-- **Artifact collection via completion payload**: artifacts are included in the `POST /v1/task/complete` body rather than collected by exec after the fact. This eliminates race conditions and removes the need for `pods/exec` RBAC. Artifact size limits still apply (4 KiB per artifact, 32 KiB total inline; larger artifacts use ConfigMap references).
+- **Artifact collection via completion payload**: artifacts are declared by name in the spec. The agent includes artifact values (keyed by name) in the `POST /v1/task/complete` body. The controller validates that all declared artifact names are present in the payload. This eliminates race conditions, removes the need for `pods/exec` RBAC, and keeps the artifact contract simple. Artifact size limits still apply (4 KiB per artifact, 32 KiB total inline; larger artifacts use ConfigMap references).
 - **`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done.
 - **`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.
 - **Concurrency**: unlike Job, AgentTask is always parallelism=1 in v1. Parallel fan-out tasks would be a separate future resource (`AgentTaskSet`) rather than a field on AgentTask.

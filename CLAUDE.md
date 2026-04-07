@@ -27,7 +27,7 @@ KUBEBUILDER_ASSETS=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest u
   go test ./internal/... -tags integration
 
 # Generate CRD manifests and deep copy
-controller-gen crd rbac:roleName=manager-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+controller-gen crd rbac:roleName=manager-role paths="./..." output:crd:artifacts:config=config/crd/bases
 
 # Apply CRDs to a local cluster
 kubectl apply -f config/crd/bases/

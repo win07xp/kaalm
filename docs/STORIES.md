@@ -52,11 +52,11 @@ Priya creates a cluster-scoped `ModelProvider` named `anthropic-shared` referenc
 
 ### S4: Add a fallback provider for availability
 
-Priya creates a second `ModelProvider` for OpenAI and configures it as a fallback on the `anthropic-shared` provider. When Anthropic is unreachable or returning errors, the proxy automatically routes to OpenAI. She sets a lower budget on the fallback to limit spend during outages.
+Priya creates a second `ModelProvider` for OpenAI and configures it as a fallback on the `anthropic-shared` provider. When Anthropic is unreachable or returning errors, the gateway automatically routes to OpenAI. She sets a lower budget on the fallback to limit spend during outages.
 
 ### S5: Revoke access for a team
 
-A team is decommissioned. Priya removes their namespace from the `allowedNamespaces` list on the relevant ModelProviders. Existing agents in that namespace continue running until their next LLM call, at which point the proxy denies the request. Priya then deletes the namespace.
+A team is decommissioned. Priya removes their namespace from the `allowedNamespaces` list on the relevant ModelProviders. Existing agents in that namespace continue running until their next LLM call, at which point the gateway denies the request. Priya then deletes the namespace.
 
 ---
 

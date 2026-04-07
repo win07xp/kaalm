@@ -106,6 +106,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 - Extracts actual token usage from the provider response and updates spend counters
 
 **User Gateway** (inbound, channel → agent)
+- Watches `AgentChannel` resources directly to determine message routing
 - Listens for inbound platform events (Discord webhook, WhatsApp message, etc.)
 - Normalizes platform payloads into the standard Agentry message envelope
 - Looks up the AgentChannel resource to find the target Agent and its endpoint

@@ -37,6 +37,8 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 - `get, watch` on `Secrets` in `agentry-system` (to read LLM provider credentials).
 - `get, watch` on `ConfigMaps` in `agentry-system` (to receive channel adapter and budget configuration from the operator).
 - `get, watch` on `Agent` resources cluster-wide (to check hibernation state for wake-on-demand decisions).
+- `get, list, watch` on `AgentChannel` resources cluster-wide (to look up which Agent a channel message targets and to manage platform connections).
+- `get, watch` on `Secrets` in user namespaces where `AgentChannel` resources reference them (for channel platform credentials like Discord bot tokens). The gateway only reads Secrets explicitly referenced by `AgentChannel.spec.credentialsRef` — it does not have blanket Secret access across user namespaces.
 - `patch` on `Pod` annotations in user namespaces (to write activity timestamps and task completion status).
 - `get` on `Services` in user namespaces (to resolve Agent endpoints for message delivery).
 
@@ -85,8 +87,8 @@ If an agent needs cluster API access (e.g., a Kubernetes-administering agent), t
 
 1. **Stored**: in a Secret in the agent's namespace (e.g., `team-support/discord-bot-credentials`), created by the developer.
 2. **Referenced**: by AgentChannel.spec.credentialsRef.
-3. **Loaded**: the gateway reads the Secret when the AgentChannel is configured (via the channel adapter ConfigMap) and holds credentials in-process for the channel adapter.
-4. **Rotated**: same watch-based mechanism as LLM credentials.
+3. **Loaded**: the gateway watches `AgentChannel` resources directly. When it sees a new or updated AgentChannel, it reads the referenced Secret from the agent's namespace using its scoped RBAC and holds the credential in-process for the channel adapter.
+4. **Rotated**: same watch-based mechanism as LLM credentials — the gateway watches the referenced Secret for changes and refreshes in-memory credentials without a restart.
 
 Channel credentials are namespace-scoped because they belong to the developer (not the platform team) and the developer already has access to their namespace's Secrets.
 

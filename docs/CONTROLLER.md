@@ -76,11 +76,11 @@ Reconciliation steps:
 
 1. Resolve `agentRef` — if the referenced Agent does not exist, set `Ready=False, reason=AgentNotFound`. Note: `agentRef` must reference an `Agent`, not an `AgentTask`. Tasks are ephemeral and lack a stable Service endpoint.
 2. Verify the Agent has `spec.service.enabled: true`. If not, set `Ready=False, reason=AgentServiceDisabled`.
-3. Write channel adapter configuration (platform type, credentials reference, target Agent Service endpoint) to a ConfigMap in `agentry-system` that the gateway watches for reload.
-4. Poll channel health status from the gateway's metrics/status endpoint and update `status.conditions[type=PlatformConnected]`.
+3. Validate that the `credentialsRef` Secret exists in the AgentChannel's namespace. If not, set `Ready=False, reason=CredentialsMissing`.
+4. Poll channel health status from the gateway's internal status endpoint and update `status.conditions[type=PlatformConnected]`.
 5. On Agent phase changes (e.g., Agent transitions to `Failed`), update `status.phase` to `Degraded` with a clear reason.
 
-The AgentChannelReconciler does not own Pod resources. The gateway manages the live platform connection; the reconciler manages the configuration that drives it.
+The AgentChannelReconciler does not own Pod resources. The gateway watches `AgentChannel` resources directly, reads the referenced credentials from user namespaces, and manages the live platform connections. The reconciler's role is validation and status reporting.
 
 ---
 
@@ -171,9 +171,16 @@ The AgentChannelReconciler does not own Pod resources. The gateway manages the l
 
 **Activity Detection:**
 
-Activity is updated in `status.lastActivityTime` by one of:
-- **Gateway traffic**: the LLM Gateway or User Gateway reports each request for an Agent by writing a timestamp to a controller-managed annotation on the Agent Pod. The reconciler reads this annotation to update `lastActivityTime`. This avoids tight coupling to the Agent CRD for a high-frequency field.
-- **Agent heartbeat**: the agent calls `POST /v1/agent/heartbeat` on the gateway; the gateway propagates to the controller via the same Pod annotation mechanism.
+Activity is updated in `status.lastActivityTime` via Pod annotations written by the gateway. Two signal sources exist:
+- **Gateway traffic**: the LLM Gateway or User Gateway reports each request for an Agent by writing a timestamp to a controller-managed annotation (`agentry.io/last-traffic`) on the Agent Pod.
+- **Agent heartbeat**: the agent calls `POST /v1/agent/heartbeat` on the gateway; the gateway writes a timestamp to a separate annotation (`agentry.io/last-heartbeat`) on the Pod.
+
+The reconciler reads these annotations and updates `lastActivityTime` based on the Agent's `spec.lifecycle.activitySource` setting:
+- `providerTraffic` (default): only the `agentry.io/last-traffic` annotation is considered. Agent heartbeats are ignored for idle detection.
+- `agentHeartbeat`: only the `agentry.io/last-heartbeat` annotation is considered. Gateway traffic timestamps are ignored.
+- `both`: the most recent timestamp from either annotation is used.
+
+This avoids tight coupling to the Agent CRD for a high-frequency field while giving developers control over what constitutes "activity" for their agent.
 
 **Hibernation mechanics:**
 
@@ -262,7 +269,7 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
 - **AgentTask**: on delete, terminate the Pod, clean up ConfigMaps.
 - **ModelProvider**: on delete, reject if any Agent or AgentTask still references it; otherwise remove gateway credential configuration.
 - **AgentClass**: on delete, reject if any Agent or AgentTask still references it.
-- **AgentChannel**: on delete, remove the channel adapter configuration from the gateway ConfigMap, allowing the gateway to drop the platform connection.
+- **AgentChannel**: on delete, the gateway detects the AgentChannel resource removal (via its watch) and drops the platform connection.
 
 Finalizers prevent accidental deletion of cluster-scoped resources that would break running workloads.
 
