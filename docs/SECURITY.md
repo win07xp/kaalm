@@ -36,6 +36,7 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 
 - `get, watch` on `Secrets` in `agentry-system` (to read LLM provider credentials).
 - `get, watch` on `ConfigMaps` in `agentry-system` (to receive channel adapter and budget configuration from the operator).
+- `get, watch` on `Agent` resources cluster-wide (to check hibernation state for wake-on-demand decisions).
 - `patch` on `Pod` annotations in user namespaces (to write activity timestamps and task completion status).
 - `get` on `Services` in user namespaces (to resolve Agent endpoints for message delivery).
 

@@ -77,6 +77,8 @@ The Agentry control plane consists of a single operator (Go, built on `controlle
 
 The controller does **not** host admission webhooks. Field-level validation uses CEL expressions in CRD schemas. Cross-resource validation (reference resolution, image allowlists, provider access) is handled at reconcile time and surfaced as status conditions rather than admission errors.
 
+The controller exposes an internal ClusterIP Service (`agentry-controller.agentry-system.svc.cluster.local`, default port 9443) for the activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) and health/readiness probes. The gateway uses this Service to send wake requests when a channel message arrives for a hibernated agent.
+
 Leader election is enabled so the operator can run with multiple replicas for availability.
 
 ## Data Plane
@@ -102,12 +104,12 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 - Enforces soft budget guardrails and per-namespace rate limits
 - Routes to the upstream provider, falling back through the chain on errors
 - Extracts actual token usage from the provider response and updates spend counters
-- The gateway also functions as the **activator** for hibernated agents: when a request arrives for an Agent that is in the `Hibernated` state, the gateway signals the controller to wake it and returns `503 Retry-After` until the Pod is ready
 
 **User Gateway** (inbound, channel → agent)
 - Listens for inbound platform events (Discord webhook, WhatsApp message, etc.)
 - Normalizes platform payloads into the standard Agentry message envelope
 - Looks up the AgentChannel resource to find the target Agent and its endpoint
+- If the agent is `Hibernated`, the gateway signals the controller to wake it via the activator endpoint and waits (sending a "typing" indicator to the platform) until the Pod is ready
 - Delivers the message to the agent container via `POST /v1/message`
 - Translates the agent's response back to the platform-native format and replies
 

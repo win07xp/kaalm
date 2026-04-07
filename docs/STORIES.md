@@ -74,21 +74,17 @@ The next morning, a customer sends a message via Discord. The channel event arri
 
 ### S8: Run an ephemeral coding agent on an issue
 
-Dev has an AI coding agent that fixes GitHub issues. He creates an `AgentTask` manifest: image is the coding agent, class is `sandboxed`, provider is `anthropic-shared`, goal is passed as an environment variable referencing the issue URL, completion condition is the agent reporting `done` to its sidecar, timeout is 1 hour, and artifact output is a path inside the container where the agent writes the PR URL. He applies it. The controller creates a Pod under gVisor, runs it to completion, captures the artifact into the AgentTask status, and tears down the Pod.
+Dev has an AI coding agent that fixes GitHub issues. He creates an `AgentTask` manifest: image is the coding agent, class is `sandboxed`, provider is `anthropic-shared`, goal is passed as an environment variable referencing the issue URL, completion condition is the agent reporting `done` to the gateway, timeout is 1 hour, and artifact output is a path inside the container where the agent writes the PR URL. He applies it. The controller creates a Pod under gVisor, runs it to completion, captures the artifact into the AgentTask status, and tears down the Pod.
 
 ### S9: Promote a task agent to persistent for human takeover
 
 Dev's coding agent task completes, but the PR needs human review. He wants the agent's sandbox to stick around so a human can jump in via an IDE. He creates a new persistent `Agent` from the same image, mounts a snapshot of the task's PVC, and labels it for IDE attachment (the IDE-attachment capability itself is out of scope for v1, but the lifecycle primitive supports the pattern).
 
-### S10: Use multiple providers with explicit routing
-
-Dev's agent should use Claude for reasoning and a local Ollama model for summarization to save cost. His Agent spec references two ModelProviders with explicit roles: `reasoning: anthropic-shared`, `summarization: ollama-local`. The agent runtime reads these and calls the appropriate provider per task.
-
-### S11: Watch an agent fail gracefully when budget is exhausted
+### S10: Watch an agent fail gracefully when budget is exhausted
 
 Dev's team hits their monthly Anthropic budget on the 25th. The gateway starts returning budget-exhausted errors to Dev's agent. The Agent transitions to a `Degraded` state with a clear status condition explaining the reason. Dev sees it in `kubectl describe agent` and pings Priya for a budget increase or model downgrade.
 
-### S12: Clean teardown on delete
+### S11: Clean teardown on delete
 
 Dev `kubectl delete agent my-support-agent`. The controller drains in-flight requests, gracefully shuts down the Pod with SIGTERM, runs the finalizer, and only then removes the resource. The PVC is deleted if `persistentVolumeReclaimPolicy: Delete` is set; otherwise it is retained.
 
@@ -96,15 +92,15 @@ Dev `kubectl delete agent my-support-agent`. The controller drains in-flight req
 
 ## Scenarios — Channel Integration
 
-### S13: Connect a personal assistant to Discord
+### S12: Connect a personal assistant to Discord
 
 Dev creates a persistent `Agent` for his personal AI assistant and creates an `AgentChannel` pointing at a Discord server he administers. He provides a Discord bot token in a Secret. The gateway authenticates with Discord using the bot token and begins listening for messages in the allowed channels. When Dev (or anyone in the server) sends a message, it flows through the gateway to the agent, and the response flows back as a Discord reply. Dev's agent has conversation memory via its PVC, so context persists across sessions.
 
-### S14: Expose an agent via a generic webhook
+### S13: Expose an agent via a generic webhook
 
 Dev's customer support team uses an internal ticketing system that can POST to webhooks. Dev creates an `AgentChannel` of type `webhook`, configures a bearer token for authentication, and gets a URL path that the gateway exposes (`/channels/support-assistant`). He configures the ticketing system to POST ticket descriptions to this URL. The gateway authenticates the request, normalizes the ticket payload into a message envelope, delivers it to the agent, and returns the agent's suggested response as the webhook response body. The ticketing system displays the suggestion to the support agent.
 
-### S15: Channel message arrives for a hibernated agent
+### S14: Channel message arrives for a hibernated agent
 
 Same as S7 (told from the channel perspective). A user messages the Discord bot connected to an agent that is currently `Hibernated`. The gateway receives the Discord event, determines the target agent is hibernated, calls the controller activator, sends a Discord "typing" indicator, and waits up to the configured timeout for the Pod to become ready. The user sees the bot acknowledge their message immediately; the response arrives a few seconds later once the agent has resumed. If the timeout is exceeded, the gateway sends an appropriate error message to the user.
 
@@ -117,11 +113,10 @@ These scenarios drive specific design requirements:
 - **S1, S2** require AgentClass to be cluster-scoped with allowed images, RuntimeClass, and provider restrictions.
 - **S3, S4** require ModelProvider to support budget policies, degradation rules, and fallback chains.
 - **S5** requires `allowedNamespaces` on ModelProvider and graceful handling of mid-session access revocation.
-- **S6, S7, S15** require a persistent agent lifecycle with `idleTimeout`, hibernation state transitions, PVC retention across pod restarts, and gateway-driven wake-on-demand.
+- **S6, S7, S14** require a persistent agent lifecycle with `idleTimeout`, hibernation state transitions, PVC retention across pod restarts, and gateway-driven wake-on-demand.
 - **S8** requires AgentTask with a defined completion condition (agent-reported via gateway), timeout, and artifact collection in the completion payload.
 - **S9** is not a v1 acceptance criterion but informs the resource model — task and persistent agents should be built from shared primitives.
-- **S10** requires Agent to reference multiple ModelProviders by role.
-- **S11** requires the controller to surface ModelProvider errors as Agent status conditions.
-- **S12** requires finalizers and configurable PVC reclaim policy.
-- **S13, S14** require AgentChannel with platform adapters (Discord, webhook) and the gateway User Gateway listener.
-- **S15** requires the gateway activator to integrate with the User Gateway path (not just the LLM Gateway path).
+- **S10** requires the controller to surface ModelProvider errors as Agent status conditions.
+- **S11** requires finalizers and configurable PVC reclaim policy.
+- **S12, S13** require AgentChannel with platform adapters (Discord, webhook) and the User Gateway listener.
+- **S14** requires the gateway activator to integrate with the User Gateway path for wake-on-demand of hibernated agents.

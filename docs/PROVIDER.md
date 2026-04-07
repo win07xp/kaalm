@@ -199,11 +199,10 @@ type ChannelAdapter interface {
 
 When an Agent is in the `Hibernated` phase, its Service has no endpoints. The gateway serves as the activator:
 
-1. A request arrives at the gateway targeting a hibernated Agent (via the LLM Gateway or User Gateway path).
-2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) to signal a wake request.
+1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
+2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service) to signal a wake request.
 3. The controller transitions the Agent from `Hibernated` to `Resuming` and recreates the Pod.
-4. For LLM requests: the gateway returns `503 Service Unavailable` with `Retry-After` to the agent container (which should retry).
-5. For channel messages: the gateway holds the message briefly (up to a configurable timeout) and retries delivery once the Pod is ready, or returns a "please wait" response to the platform.
+4. The gateway sends a "typing" or "processing" indicator to the channel platform while waiting, then delivers the message once the Pod is ready (bounded by a configurable timeout). If the timeout is exceeded, the gateway returns an appropriate error to the platform.
 
 ---
 

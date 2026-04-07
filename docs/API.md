@@ -75,8 +75,8 @@ spec:
   # Network policy hints (the controller translates these into NetworkPolicy resources)
   network:
     egress:
-      # Allowed external destinations beyond the provider proxy. Agent containers
-      # call providers through the sidecar; this governs other egress (MCP, tools).
+      # Allowed external destinations beyond the Agentry gateway. Agent containers
+      # call providers through the gateway; this governs other egress (MCP, tools).
       allowedHosts:
         - "mcp.internal.corp"
         - "api.github.com"
@@ -150,8 +150,8 @@ spec:
   endpoint: "https://api.anthropic.com"
 
   # Credentials: a reference to a Secret in the operator's namespace.
-  # The operator reads this and configures the proxy sidecars; the Secret is
-  # never mounted into agent containers directly.
+  # The gateway reads this directly from agentry-system; credentials
+  # never leave that namespace.
   credentialsRef:
     name: anthropic-api-key
     key: api-key
@@ -237,7 +237,7 @@ status:
 
 ### Design notes
 
-- **Secret scoping**: credentials are referenced from the operator's namespace and never mounted into user agent containers. The proxy sidecar receives credentials via a controller-managed mechanism (detailed in the Security doc).
+- **Secret scoping**: credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers.
 - **Budget state**: persisted in status is the source of truth for display, but the proxy maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy.
 - **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Exact match is preferred where possible.
 - **Fallback chains** are flat (not nested). Circular references are rejected by validation.
@@ -270,17 +270,13 @@ spec:
     - name: LOG_LEVEL
       value: "info"
 
-  # ModelProviders this agent uses. Each has a role the agent interprets.
+  # ModelProviders this agent uses.
   # Optional: omit entirely for agents that do not call LLM providers
   # (e.g., sub-agents, coding agents with IDE integration, pure webhook handlers).
   # When omitted, $AGENTRY_PROVIDER_ENDPOINT is not injected.
   providers:
-    - role: primary
-      providerRef: { name: anthropic-shared }
+    - providerRef: { name: anthropic-shared }
       defaultModel: "claude-opus-4-6"
-    - role: summarization
-      providerRef: { name: openai-fallback }
-      defaultModel: "gpt-4o-mini"
 
   # Resource overrides (must fit within AgentClass.resources.maxLimits).
   resources:
@@ -335,7 +331,7 @@ status:
 ### Design notes
 
 - **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs.
-- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a list with roles — Roles are opaque strings interpreted by the agent container; Agentry does not enforce their meaning.
+- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references with a default model. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`; the gateway selects the provider based on the model requested in each API call.
 - **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See Controller Design for the heartbeat protocol.
 - **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages. Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 
@@ -366,8 +362,7 @@ spec:
         secretKeyRef: { name: github-bot-token, key: token }
 
   providers:
-    - role: primary
-      providerRef: { name: anthropic-shared }
+    - providerRef: { name: anthropic-shared }
       defaultModel: "claude-opus-4-6"
 
   resources:
@@ -383,7 +378,7 @@ spec:
   # Completion semantics
   completion:
     # How the task signals completion.
-    # "agentReported": agent POSTs to sidecar /v1/task/complete
+    # "agentReported": agent POSTs to gateway /v1/task/complete
     # "exitCode": task is complete when the container exits 0
     # "webhook": external service calls a controller webhook (v1.1+, not in v1)
     condition: agentReported
@@ -537,6 +532,7 @@ status:
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway tracks `(channelId, userId)` pairs and adds a `sessionId` to the message envelope. Agents use this to look up conversation context in their PVC. When disabled, each message is stateless from the gateway's perspective.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
+- **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
 - **Wake-on-demand integration**: if the target Agent is `Hibernated` when a channel message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. The platform receives an appropriate "typing" or "processing" indicator while the agent resumes.
 
 ---

@@ -7,8 +7,8 @@ This document describes how the Agentry operator implements the CRDs defined in 
 The operator is a single binary built with `controller-runtime` (kubebuilder scaffolding is fine but not required). It hosts:
 
 - Five reconcilers: `AgentClassReconciler`, `ModelProviderReconciler`, `AgentReconciler`, `AgentTaskReconciler`, `AgentChannelReconciler`.
-- An activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) called by the gateway to trigger hibernated agent wake-up.
-- A health/readiness endpoint.
+- An activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) called by the gateway to trigger hibernated agent wake-up. This endpoint is exposed via a ClusterIP Service (`agentry-controller.agentry-system.svc.cluster.local`, default port 9443).
+- A health/readiness endpoint (on the same Service).
 - A metrics endpoint (Prometheus format) exposing controller internals (reconcile counts, errors, queue depth).
 
 It runs as a Deployment in `agentry-system` with leader election enabled. Two replicas are recommended for availability; only the leader actively reconciles.
@@ -74,7 +74,7 @@ Watches: `AgentChannel`, plus the referenced Agent and its Service.
 
 Reconciliation steps:
 
-1. Resolve `agentRef` — if the referenced Agent does not exist, set `Ready=False, reason=AgentNotFound`.
+1. Resolve `agentRef` — if the referenced Agent does not exist, set `Ready=False, reason=AgentNotFound`. Note: `agentRef` must reference an `Agent`, not an `AgentTask`. Tasks are ephemeral and lack a stable Service endpoint.
 2. Verify the Agent has `spec.service.enabled: true`. If not, set `Ready=False, reason=AgentServiceDisabled`.
 3. Write channel adapter configuration (platform type, credentials reference, target Agent Service endpoint) to a ConfigMap in `agentry-system` that the gateway watches for reload.
 4. Poll channel health status from the gateway's metrics/status endpoint and update `status.conditions[type=PlatformConnected]`.
@@ -162,7 +162,7 @@ The AgentChannelReconciler does not own Pod resources. The gateway manages the l
 | Idle → Running | Activity observed (see Activity Detection) |
 | Idle → Hibernating | Idle for 2x idleTimeout AND `hibernationEnabled` |
 | Hibernating → Hibernated | Pod scaled to 0, PVC retained, Service remains |
-| Hibernated → Resuming | Gateway activator calls `POST /v1/activate/{namespace}/{name}` on the controller (triggered by LLM request or channel message for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
+| Hibernated → Resuming | Gateway activator calls `POST /v1/activate/{namespace}/{name}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming → Running | Pod becomes Ready |
 | any → Degraded | Provider unavailable, quota exhausted, other recoverable issue |
 | Degraded → Running | Underlying condition resolved |
@@ -182,10 +182,10 @@ Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On w
 **Wake trigger:**
 
 When an Agent is `Hibernated`, its ClusterIP Service has no endpoints — traffic is not routed. The gateway serves as the activator:
-1. A request arrives at the gateway targeting a hibernated Agent (LLM call with this Agent's namespace/name, or a channel message via AgentChannel).
-2. The gateway calls `POST /v1/activate/{namespace}/{agentName}` on the controller.
+1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
+2. The gateway calls `POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service.
 3. The controller transitions the Agent to `Resuming` and creates the Pod.
-4. The gateway holds the triggering request briefly and retries once the Pod is Ready (bounded by a configurable timeout).
+4. The gateway holds the message and sends a "typing" or "processing" indicator to the channel platform while waiting. Once the Pod is Ready (bounded by a configurable timeout), the gateway delivers the message.
 
 Manual wake is also supported via annotation: `kubectl annotate agent foo agentry.io/wake=true`.
 
@@ -328,4 +328,4 @@ While detailed test guidance lives in the (deferred) contribution guide, the des
 - Integration tests use `envtest` for API server + etcd in-memory.
 - End-to-end tests run against a kind cluster with a stubbed LLM provider (an HTTP server that responds with canned completions and reports fake token counts).
 
-The controller should not hardcode assumptions about real LLM providers — testability depends on the proxy sidecar being swappable with a mock.
+The controller should not hardcode assumptions about real LLM providers — testability depends on the gateway being swappable with a mock.
