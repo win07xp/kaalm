@@ -161,7 +161,7 @@ Each gateway replica maintains an in-memory spend counter per (provider, namespa
 
 **Multi-replica consistency**: In a replicated gateway deployment, each replica has its own counter. Spend is reconciled across replicas by the controller periodically (every 30s) — the controller sums the per-replica partial counters and writes the canonical total back to ModelProvider status. Each replica then refreshes from the canonical total.
 
-This means budget enforcement is **approximate under high concurrency** — replicas can collectively overspend before the next reconcile cycle. The overspend is bounded: `number_of_replicas × cost_per_call × reconcile_interval`. For typical deployments (2-3 replicas, $0.01-0.10 per call, 30s interval), this is acceptable.
+This means budget enforcement is **approximate under high concurrency** — replicas can collectively overspend before the next reconcile cycle. The overspend is bounded by: `number_of_replicas × max_calls_per_second_per_replica × cost_per_call × reconcile_interval_seconds`. For typical deployments (2-3 replicas, 1 call/sec peak per replica, $0.01-0.10 per call, 30s interval), the maximum overspend per cycle is roughly $0.60-$9.00, which is acceptable for a soft guardrail.
 
 **Agentry's budget feature is spend visibility and soft guardrails, not a hard financial cap.** This is an explicit design decision, not a limitation to be fixed. Teams requiring hard caps should use provider-level account limits in addition to Agentry's per-namespace guardrails.
 
@@ -202,7 +202,8 @@ When the primary provider fails (network error, 5xx, timeout, or budget-blocked)
 
 1. Verify the namespace is in the fallback provider's `allowedNamespaces`.
 2. Verify the requested model exists in the fallback provider's `models`.
-3. Forward the request with the fallback provider's credentials.
+3. Check the fallback provider's budget state for the agent's namespace. If the fallback is budget-blocked, skip it and try the next fallback in the list (or return an error if no more fallbacks remain).
+4. Forward the request with the fallback provider's credentials.
 
 Fallback does not chain beyond one level — if the fallback itself fails, the gateway returns an error rather than walking the fallback's fallback.
 

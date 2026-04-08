@@ -82,6 +82,8 @@ Wake-on-demand is a v1 feature, triggered by:
 - **User Gateway**: a channel message arrives for a hibernated agent; the gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`)
 - **Manual annotation**: `kubectl annotate agent foo agentry.io/wake=true`
 
+The gateway waits up to `spec.lifecycle.wakeTimeout` (defaults from AgentClass) for the Pod to become Ready before returning an error to the channel platform.
+
 ### State Machines
 
 Full transition tables are in `docs/CONTROLLER.md`. Key points:
@@ -93,7 +95,7 @@ Full transition tables are in `docs/CONTROLLER.md`. Key points:
 
 - `agentry.io/agent-finalizer`, `agentry.io/task-finalizer`, `agentry.io/provider-finalizer`, `agentry.io/class-finalizer`, `agentry.io/channel-finalizer`
 - ModelProvider and AgentClass finalizers reject deletion while Agents/AgentTasks still reference them.
-- AgentChannel finalizer: the gateway detects the resource removal via its watch and drops the platform connection.
+- AgentChannel finalizer: the reconciler sets `Terminating` phase, waits for the gateway to confirm disconnection (via annotation), then removes the finalizer. A 30s timeout prevents indefinite blocking if the gateway is unavailable.
 
 ### Agent Runtime Contract
 

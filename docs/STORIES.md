@@ -64,7 +64,7 @@ A team is decommissioned. Priya removes their namespace from the `allowedNamespa
 
 ### S6: Deploy a persistent customer support agent
 
-Dev writes an `Agent` manifest for his customer support agent. He references `agentclass/standard`, specifies his container image, references `modelprovider/anthropic-shared`, sets `mode: persistent`, and requests a 5Gi PVC for conversation memory. He `kubectl apply`s it. The controller creates a Pod, PVC, and Service. Dev `kubectl get agent` and sees it in `Running` state with an endpoint he can hit.
+Dev writes an `Agent` manifest for his customer support agent. He references `agentclass/standard`, specifies his container image, references `modelprovider/anthropic-shared`, sets `mode: persistent`, and requests a 5Gi PVC for conversation memory. His agent code uses the qualified model name format (`anthropic-shared/claude-opus-4-6`) in LLM API calls so the gateway knows which provider and model to route to. He `kubectl apply`s it. The controller creates a Pod, PVC, and Service. Dev `kubectl get agent` and sees it in `Running` state with an endpoint he can hit.
 
 ### S7: Hibernate an idle agent and wake it automatically on the first morning message
 

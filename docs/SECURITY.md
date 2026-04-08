@@ -28,7 +28,7 @@ The operator runs under a ServiceAccount (`agentry-system/agentry-controller`) w
 - Leader election resources (`Leases`) in its own namespace.
 - `get, list, watch` on `Secrets` in `agentry-system` only (not cluster-wide) — the operator validates that ModelProvider credential Secrets exist.
 
-**Compared to the sidecar model, the operator no longer needs cluster-wide Secret read/write access.** Credentials are held by the gateway ServiceAccount in `agentry-system` and never copied to user namespaces. This significantly reduces the operator's blast radius.
+**Unlike a sidecar model, the operator does not need cluster-wide Secret read/write access.** Credentials are held by the gateway ServiceAccount in `agentry-system` and never copied to user namespaces. This significantly reduces the operator's blast radius.
 
 ### Gateway ServiceAccount
 
@@ -51,6 +51,7 @@ A `ClusterRole` named `agentry-platform-admin` with:
 - Full access to `AgentClass` and `ModelProvider`.
 - `get, list, watch` on `Agent`, `AgentTask` cluster-wide (for observability).
 - `create, get, update, delete` on Secrets in the operator's namespace (to manage LLM credentials).
+- `create, get, update, delete` on Secrets in agent namespaces (to provision channel credentials referenced by `AgentChannel.spec.credentialsRef`).
 
 Assigned via `ClusterRoleBinding` to users/groups who should manage platform-level configuration.
 
@@ -71,6 +72,10 @@ Each Agent Pod runs with a ServiceAccount **distinct** from both the operator an
 
 If an agent needs cluster API access (e.g., a Kubernetes-administering agent), the developer or platform team must explicitly create a Role and RoleBinding. This is opt-in, not default.
 
+### Agent→Gateway Authentication
+
+The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — via **source IP → Pod resolution** using the Pod informer cache. This is the same mechanism used for namespace identification (see Gateway Design doc). Since agent Pods have no Kubernetes API credentials by default, and the gateway identifies callers by their cluster-assigned source IP, no token-based authentication is needed between agent containers and the gateway.
+
 ---
 
 ## Credential Handling
@@ -86,12 +91,12 @@ If an agent needs cluster API access (e.g., a Kubernetes-administering agent), t
 
 ### Lifecycle of a channel credential (AgentChannel)
 
-1. **Stored**: in a Secret in the agent's namespace (e.g., `team-support/discord-bot-credentials`), created by the developer.
+1. **Stored**: in a Secret in the agent's namespace (e.g., `team-support/discord-bot-credentials`), created by the platform team or a provisioning service.
 2. **Referenced**: by AgentChannel.spec.credentialsRef.
 3. **Loaded**: the gateway watches `AgentChannel` resources directly. When it sees a new or updated AgentChannel, it reads the referenced Secret from the agent's namespace using its scoped RBAC and holds the credential in-process for the channel adapter.
 4. **Rotated**: same watch-based mechanism as LLM credentials — the gateway watches the referenced Secret for changes and refreshes in-memory credentials without a restart.
 
-Channel credentials are namespace-scoped because they belong to the developer (not the platform team) and the developer already has access to their namespace's Secrets.
+Channel credentials are namespace-scoped for organizational isolation — each namespace contains only the credentials for its own agents' channels. They are created by the platform team or a provisioning service; developers do not need Secret access in their namespace.
 
 ### Protecting agent containers from LLM provider access
 

@@ -130,6 +130,8 @@ Agentry is BYO-image, but containers must satisfy a minimal contract to particip
 5. **Optional activity signal** — for idle detection, the agent may emit activity heartbeats by calling `POST /v1/agent/heartbeat` on the gateway. Alternatively, the gateway infers activity from observed LLM traffic.
 6. **Optional completion signal** (AgentTask only) — the agent reports completion to the gateway via `POST /v1/task/complete` with a status payload that may include artifact key-value pairs.
 
+All agent→gateway communication (LLM requests, heartbeats, task completion) is authenticated via source IP → Pod resolution. No API keys or tokens are exchanged between agent containers and the gateway.
+
 Agentry will ship a reference base image (Python and Go variants) that implements this contract. Using it is optional.
 
 ## Integration Points

@@ -98,6 +98,8 @@ spec:
     defaultIdleTimeout: "30m"
     maxIdleTimeout: "24h"
     hibernationEnabled: true
+    defaultWakeTimeout: "2m"     # default time gateway waits for Pod Ready on wake
+    maxWakeTimeout: "5m"         # cap on per-Agent wakeTimeout overrides
     terminationGracePeriodSeconds: 60
 
   # Labels and annotations added to every Pod created under this class
@@ -295,6 +297,7 @@ spec:
     idleTimeout: "30m"           # transition to Hibernating after this much idle time
     hibernationEnabled: true
     activitySource: providerTraffic   # "providerTraffic" | "agentHeartbeat" | "both"
+    wakeTimeout: "2m"                # max time gateway waits for Pod Ready on wake; defaults from AgentClass
 
   # Service exposure. Only ClusterIP is supported in v1.
   service:
@@ -525,7 +528,7 @@ status:
 ### Design notes
 
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages platform connections based on their specs. The reconciler's role is validation and status reporting.
-- **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (Discord bot tokens, etc.) are referenced from the agent's namespace and mounted only into the gateway's channel adapter process for that connection.
+- **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (Discord bot tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway tracks `(channelId, userId)` pairs and adds a `sessionId` to the message envelope. Agents use this to look up conversation context in their PVC. When disabled, each message is stateless from the gateway's perspective.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
@@ -546,9 +549,10 @@ The following constraints are enforced at reconcile time. Failed validation resu
 6. Resource `limits` in Agent/AgentTask must not exceed `AgentClass.spec.resources.maxLimits`.
 7. `persistence.sizeGi` must not exceed `AgentClass.spec.persistence.maxSizeGi`.
 8. `lifecycle.idleTimeout` must not exceed `AgentClass.spec.lifecycle.maxIdleTimeout`.
-9. `ModelProvider.spec.fallback` chains must not be circular.
-10. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
-11. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
+9. `lifecycle.wakeTimeout` must not exceed `AgentClass.spec.lifecycle.maxWakeTimeout`.
+10. `ModelProvider.spec.fallback` chains must not be circular.
+11. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
+12. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 
@@ -560,5 +564,57 @@ AgentClass defaults are applied at reconcile time when Agent/AgentTask fields ar
 - `persistence.sizeGi` defaults from `AgentClass.spec.persistence.defaultSizeGi`
 - `image` defaults from `AgentClass.spec.image.defaultImage`
 - `lifecycle.idleTimeout` defaults from `AgentClass.spec.lifecycle.defaultIdleTimeout`
+- `lifecycle.wakeTimeout` defaults from `AgentClass.spec.lifecycle.defaultWakeTimeout`
 
 Defaults are applied at reconcile time rather than admission. The stored spec reflects what the developer wrote; effective configuration is reflected in the Agent's status. This avoids a mutating webhook dependency while keeping the behavior predictable.
+
+---
+
+## Gateway Endpoints
+
+The Agentry Gateway exposes several HTTP endpoints that agent containers may call. All requests are authenticated via **source IP → Pod resolution** — no API keys or tokens are exchanged. The gateway resolves the caller's Pod and namespace from its Pod informer cache.
+
+### `POST /v1/task/complete` (AgentTask only)
+
+Called by the agent container to report task completion. The gateway writes the payload to the Pod annotation `agentry.io/task-status`; the AgentTaskReconciler watches for this annotation to drive the Completing transition.
+
+**Request body:**
+
+```json
+{
+  "status": "success",
+  "message": "PR opened successfully",
+  "artifacts": {
+    "pr-url": "https://github.com/acme/widgets/pull/587",
+    "summary": "Fixed null pointer in WidgetService.get(). Added regression test."
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `status` | string | yes | `"success"` or `"failure"` |
+| `message` | string | no | Human-readable completion message |
+| `artifacts` | map[string]string | no | Key-value pairs matching the names declared in `spec.artifacts`. The reconciler validates that all declared artifact names are present. |
+
+**Response:** `200 OK` with empty body on success. `400 Bad Request` if the calling Pod is not associated with an AgentTask. `413 Payload Too Large` if any single artifact value exceeds 4 KiB or total artifacts exceed 32 KiB (large artifacts should be stored externally and referenced by URL in the value).
+
+### `POST /v1/agent/heartbeat` (Agent only)
+
+Called by the agent container to signal liveness for idle detection. Only meaningful when `spec.lifecycle.activitySource` is `agentHeartbeat` or `both`. The gateway writes the current timestamp to the Pod annotation `agentry.io/last-heartbeat`.
+
+**Request body:** empty or `{}`.
+
+**Response:** `200 OK` with empty body. `400 Bad Request` if the calling Pod is not associated with an Agent.
+
+Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 seconds. The gateway coalesces rapid heartbeats — annotation writes are debounced to at most once per 5 seconds to avoid API server pressure.
+
+### Manual Wake Annotation
+
+Agents in the `Hibernated` phase can be manually woken by applying the annotation:
+
+```
+kubectl annotate agent <name> agentry.io/wake=true
+```
+
+The AgentReconciler watches for this annotation. When observed on a `Hibernated` Agent, the reconciler transitions the Agent to `Resuming`, recreates the Pod, and removes the annotation after processing. This provides an escape hatch when no AgentChannel is configured or for operational use cases (e.g., pre-warming an agent before business hours).

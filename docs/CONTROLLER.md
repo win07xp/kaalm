@@ -192,7 +192,7 @@ When an Agent is `Hibernated`, its ClusterIP Service has no endpoints — traffi
 1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
 2. The gateway calls `POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service.
 3. The controller transitions the Agent to `Resuming` and creates the Pod.
-4. The gateway holds the message and sends a "typing" or "processing" indicator to the channel platform while waiting. Once the Pod is Ready (bounded by a configurable timeout), the gateway delivers the message.
+4. The gateway holds the message and sends a "typing" or "processing" indicator to the channel platform while waiting. Once the Pod is Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), the gateway delivers the message. If the timeout is exceeded, the gateway returns an appropriate error to the channel platform.
 
 Manual wake is also supported via annotation: `kubectl annotate agent foo agentry.io/wake=true`.
 
@@ -269,7 +269,11 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
 - **AgentTask**: on delete, terminate the Pod, clean up ConfigMaps.
 - **ModelProvider**: on delete, reject if any Agent or AgentTask still references it; otherwise remove gateway credential configuration.
 - **AgentClass**: on delete, reject if any Agent or AgentTask still references it.
-- **AgentChannel**: on delete, the gateway detects the AgentChannel resource removal (via its watch) and drops the platform connection.
+- **AgentChannel**: on delete, the reconciler coordinates with the gateway:
+  1. The reconciler sets `status.phase = Terminating` on the AgentChannel.
+  2. The gateway sees the phase change via its watch and drops the platform connection.
+  3. The gateway writes an `agentry.io/channel-disconnected: "true"` annotation on the AgentChannel to confirm disconnection.
+  4. The reconciler watches for this annotation. Once observed (or after a bounded timeout of 30s if the gateway is unavailable), the reconciler removes the finalizer and the resource is deleted. The timeout prevents indefinite blocking if the gateway is down.
 
 Finalizers prevent accidental deletion of cluster-scoped resources that would break running workloads.
 
