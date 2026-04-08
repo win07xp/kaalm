@@ -159,7 +159,7 @@ Budget counters are maintained **in-process in the gateway**. Because the gatewa
 
 Each gateway replica maintains an in-memory spend counter per (provider, namespace, period) tuple. On startup, each replica reads the current period's spent value from a ConfigMap managed by the ModelProviderReconciler. On each LLM call, the counter is updated synchronously.
 
-**Multi-replica consistency**: In a replicated gateway deployment, each replica has its own counter. Spend is reconciled across replicas by the controller periodically (every 30s) — the controller sums the per-replica partial counters and writes the canonical total back to ModelProvider status. Each replica then refreshes from the canonical total.
+**Multi-replica consistency**: In a replicated gateway deployment, each replica has its own counter. Spend is reconciled across replicas by the controller periodically (every 30s) — the controller sums the per-replica partial counters, writes the canonical total to a ConfigMap in `agentry-system` (so gateway replicas can refresh their local counters on the next cycle), and updates `status.budgetUsage` on the ModelProvider for observability.
 
 This means budget enforcement is **approximate under high concurrency** — replicas can collectively overspend before the next reconcile cycle. The overspend is bounded by: `number_of_replicas × max_calls_per_second_per_replica × cost_per_call × reconcile_interval_seconds`. For typical deployments (2-3 replicas, 1 call/sec peak per replica, $0.01-0.10 per call, 30s interval), the maximum overspend per cycle is roughly $0.60-$9.00, which is acceptable for a soft guardrail.
 
@@ -215,6 +215,8 @@ Rate limits are enforced at the gateway using token-bucket limiters keyed on (na
 
 In a replicated gateway deployment, rate limiting is per-replica (approximate at the cluster level). This is acceptable for v1; a coordinated rate limiter can be introduced in v2 if needed.
 
+**Note:** the effective cluster-wide rate limit is approximately `configured_limit × number_of_replicas`, since each replica enforces independently. Platform engineers should account for this when setting `rateLimits` values — e.g., to achieve a cluster-wide ceiling of 300 req/min with 3 replicas, set `requestsPerMinute: 100`.
+
 ---
 
 ## User Gateway — Request Flow
@@ -263,7 +265,7 @@ When an Agent is in the `Hibernated` phase, its Service has no endpoints. The ga
 1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
 2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service) to signal a wake request.
 3. The controller transitions the Agent from `Hibernated` to `Resuming` and recreates the Pod.
-4. The gateway sends a "typing" or "processing" indicator to the channel platform while waiting, then delivers the message once the Pod is ready (bounded by a configurable timeout). If the timeout is exceeded, the gateway returns an appropriate error to the platform.
+4. The gateway sends a "typing" or "processing" indicator to the channel platform while waiting, then delivers the message once the Pod is ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass). If the timeout is exceeded, the gateway returns an appropriate error to the platform.
 
 ---
 

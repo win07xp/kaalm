@@ -179,6 +179,5 @@ Agentry ships as a Helm chart that installs:
 No cert-manager dependency — admission webhooks are not used.
 
 The Helm chart supports a tiered on-ramp:
-1. **Gateway only**: install the chart, configure a ModelProvider, and point existing workloads at the gateway for LLM traffic and spend tracking.
-2. **Add agent lifecycle**: configure AgentClasses, deploy Agents with hibernation and wake-on-demand.
-3. **Add channel integration**: configure AgentChannels to connect agents to Discord, WhatsApp, or webhooks.
+1. **Gateway only**: install the chart, configure a ModelProvider, and point existing workloads at the gateway for LLM traffic and spend tracking. No AgentClass or Agent resources required.
+2. **Full agent lifecycle**: configure AgentClasses, deploy Agents and AgentTasks with hibernation and wake-on-demand, and connect them to user-facing channels via AgentChannels. Channel integration is included in this tier because wake-on-demand requires a channel to be fully testable.

@@ -22,7 +22,7 @@ Agentry's security design flows from the assumption that agent containers are un
 The operator runs under a ServiceAccount (`agentry-system/agentry-controller`) with a ClusterRole granting:
 
 - Full access (`get, list, watch, create, update, patch, delete`) to all Agentry CRDs.
-- `create, get, update, patch, delete` on `Pods`, `PersistentVolumeClaims`, `Services`, `ConfigMaps` cluster-wide.
+- `create, get, update, patch, delete` on `Pods`, `PersistentVolumeClaims`, `Services`, `ConfigMaps`, `NetworkPolicies` cluster-wide.
 - `get, list, watch` on `RuntimeClass`, `StorageClass`, `Namespaces` (for validation).
 - `create, patch` on `Events` (for event emission).
 - Leader election resources (`Leases`) in its own namespace.
@@ -38,12 +38,14 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 - `get, watch` on `ConfigMaps` in `agentry-system` (to receive budget configuration from the operator).
 - `get, list, watch` on `Agent` resources cluster-wide (for provider routing resolution and hibernation state checks).
 - `get, list, watch` on `AgentChannel` resources cluster-wide (to look up which Agent a channel message targets and to manage platform connections).
+- `patch` on `AgentChannel` resources cluster-wide (to write the `agentry.io/channel-disconnected` annotation during the finalizer handoff — see Controller Design doc).
+- `get, list, watch` on `ModelProvider` resources cluster-wide (for model validation, `allowedNamespaces` checks, budget configuration, and fallback chain resolution).
 - `get, watch` on `Secrets` in user namespaces where `AgentChannel` resources reference them (for channel platform credentials like Discord bot tokens). The gateway only reads Secrets explicitly referenced by `AgentChannel.spec.credentialsRef` — it does not have blanket Secret access across user namespaces.
 - `get, list, watch` on `Pods` cluster-wide (to maintain the Pod informer cache used for source IP → namespace resolution on LLM requests, and for annotation writes).
 - `patch` on `Pod` annotations in user namespaces (to write activity timestamps and task completion status).
 - `get` on `Services` in user namespaces (to resolve Agent endpoints for message delivery).
 
-The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces but is narrowly scoped: the gateway only reads Secrets explicitly referenced by `AgentChannel.spec.credentialsRef` fields, not arbitrary Secrets.
+The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces but is narrowly scoped: the gateway only reads Secrets explicitly referenced by `AgentChannel.spec.credentialsRef` fields, not arbitrary Secrets. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted.
 
 ### Platform Engineer role
 
@@ -204,7 +206,7 @@ Agentry does **not** log prompts or completions. LLM payloads are sensitive (may
 | Budget guardrails exceeded under high concurrency | Budgets are documented as soft limits with bounded overspend; hard caps at the provider account level recommended for strict requirements |
 | Malicious message from channel platform | Platform adapter authenticates inbound events (Discord signature verification, etc.) before processing |
 | Agent spoofs namespace to bypass budget/access controls | Gateway identifies namespace via source IP → Pod resolution from informer cache; source IPs are assigned by the cluster network and unforgeable from within a container |
-| Channel credential leaked from developer namespace | Channel credentials are developer-namespaced; blast radius is limited to that namespace and channel |
+| Channel credential leaked from agent namespace | Channel credentials are stored in the agent's namespace; blast radius is limited to that namespace's channels. The platform team (not the developer) is responsible for rotation. |
 
 ---
 

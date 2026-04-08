@@ -512,7 +512,7 @@ spec:
 ```yaml
 status:
   observedGeneration: 1
-  phase: Active     # Pending | Active | Degraded | Failed
+  phase: Active     # Pending | Active | Degraded | Failed | Terminating
   conditions:
     - type: Ready
       status: "True"
@@ -531,6 +531,7 @@ status:
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (Discord bot tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway tracks `(channelId, userId)` pairs and adds a `sessionId` to the message envelope. Agents use this to look up conversation context in their PVC. When disabled, each message is stateless from the gateway's perspective.
+- **Session state is in-memory in the gateway for v1.** Sessions are lost on gateway restarts or rebalancing — the next message from the same user starts a new session. This is acceptable because the agent's PVC holds the actual conversation state; the session ID is a routing convenience. The message envelope always includes `channelId` and `userId`, so agents can re-derive context without a persistent session. Durable session storage may be added in a future version.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
 - **Wake-on-demand integration**: if the target Agent is `Hibernated` when a channel message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. The platform receives an appropriate "typing" or "processing" indicator while the agent resumes.
@@ -618,3 +619,51 @@ kubectl annotate agent <name> agentry.io/wake=true
 ```
 
 The AgentReconciler watches for this annotation. When observed on a `Hibernated` Agent, the reconciler transitions the Agent to `Resuming`, recreates the Pod, and removes the annotation after processing. This provides an escape hatch when no AgentChannel is configured or for operational use cases (e.g., pre-warming an agent before business hours).
+
+### `POST /v1/message` (Agent only — agent-implemented)
+
+This endpoint is **implemented by the agent container**, not by the gateway. The User Gateway calls it to deliver normalized channel messages. Agents that use AgentChannel must expose this endpoint on `$AGENTRY_HEALTH_PORT` (default 8080).
+
+**Request body (sent by the gateway):**
+
+```json
+{
+  "messageId": "550e8400-e29b-41d4-a716-446655440000",
+  "channelType": "discord",
+  "channelId": "987654321098765432",
+  "userId": "111222333444555666",
+  "sessionId": "optional-session-uuid",
+  "content": "Hello, I need help with my order",
+  "attachments": [],
+  "metadata": { "guildId": "123456789012345678" }
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `messageId` | string (UUID) | yes | Unique identifier for this message, for deduplication |
+| `channelType` | string | yes | Platform type: `"discord"`, `"whatsapp"`, `"webhook"` |
+| `channelId` | string | yes | Platform-specific channel identifier |
+| `userId` | string | yes | Platform-specific user identifier |
+| `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled: true`. Stable across messages in a session; changes when a session expires or the gateway restarts. |
+| `content` | string | yes | The user's message text |
+| `attachments` | array | no | List of attachment objects (platform-specific schema) |
+| `metadata` | map | no | Platform-specific fields (e.g., `guildId` for Discord) |
+
+**Response body (returned by the agent):**
+
+```json
+{
+  "content": "I'd be happy to help! Can you share your order number?",
+  "attachments": [],
+  "metadata": {}
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `content` | string | yes | The agent's reply text |
+| `attachments` | array | no | Attachments to send in the reply |
+| `metadata` | map | no | Optional platform-specific reply metadata |
+
+**Response codes:** `200 OK` with the response envelope. The gateway translates the response body into the platform-native reply format and sends it. Non-200 responses are treated as delivery failures and recorded in AgentChannel status conditions. If the agent takes longer than the channel platform's timeout allows, the gateway sends a "still processing" indicator and delivers the reply asynchronously when it arrives.

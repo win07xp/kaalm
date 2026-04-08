@@ -70,7 +70,7 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 - User Gateway: channel integration via AgentChannel (Discord, WhatsApp, generic webhook in v1)
 - Integration with Agent Sandbox as an optional runtime backend
 - RBAC, namespace scoping, and a documented security model
-- Helm chart with tiered on-ramp (gateway-only → persistent agents → task agents)
+- Helm chart with tiered on-ramp (gateway-only → full agent lifecycle with channels)
 
 **Out of scope for v1** (may land in later versions):
 - Agent-to-agent communication and multi-agent orchestration
