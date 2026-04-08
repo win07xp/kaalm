@@ -60,7 +60,7 @@ Agentry consists of a controller (Go, `controller-runtime`) and a gateway, both 
 - **ModelProviderReconciler** — validates credentials Secret, probes provider health, reconciles budget state from the gateway's in-process counters.
 - **AgentReconciler** — most complex; drives the persistent-Agent state machine (Pending → Provisioning → Running → Idle → Hibernating → Hibernated → Resuming, plus Degraded/Failed/Terminating). Owns Pod, PVC, Service, ConfigMap.
 - **AgentTaskReconciler** — drives the task state machine (Pending → Provisioning → Running → Completing → Succeeded/Failed/TimedOut). Collects artifacts on completion.
-- **AgentChannelReconciler** — validates referenced Agent exists and has a Service, writes channel adapter configuration to the gateway, monitors channel health.
+- **AgentChannelReconciler** — validates referenced Agent exists and has a Service, validates channel credentials, monitors channel health. The gateway watches AgentChannel resources directly for platform connection management.
 
 Field-level validation uses CEL expressions in CRD schemas. Cross-resource validation runs at reconcile time and is surfaced as status conditions. No admission webhooks, no cert-manager dependency.
 
@@ -93,7 +93,7 @@ Full transition tables are in `docs/CONTROLLER.md`. Key points:
 
 - `agentry.io/agent-finalizer`, `agentry.io/task-finalizer`, `agentry.io/provider-finalizer`, `agentry.io/class-finalizer`, `agentry.io/channel-finalizer`
 - ModelProvider and AgentClass finalizers reject deletion while Agents/AgentTasks still reference them.
-- AgentChannel finalizer removes channel adapter configuration from the gateway.
+- AgentChannel finalizer: the gateway detects the resource removal via its watch and drops the platform connection.
 
 ### Agent Runtime Contract
 

@@ -88,7 +88,7 @@ The data plane is what actually runs when an Agent is created. For each Agent in
 - **One Pod** containing the user's agent container. The Pod runs under the RuntimeClass specified by its AgentClass (runc, gVisor, or Kata).
 - **One PVC** if the Agent spec requests persistence, mounted into the agent container at a configured path.
 - **One Service** (ClusterIP) exposing the agent's HTTP endpoint for intra-cluster traffic. The gateway uses this Service to deliver channel messages; direct external exposure remains the developer's responsibility.
-- **One ConfigMap** holding non-sensitive agent configuration (gateway endpoint, role mappings, feature flags).
+- **One ConfigMap** holding non-sensitive agent configuration (gateway endpoint, feature flags).
 
 There is no sidecar container. The **Agentry Gateway** in `agentry-system` handles all LLM traffic and inbound channel messages as a shared cluster-level service.
 
@@ -101,6 +101,8 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 **LLM Gateway** (outbound, agent → provider)
 - Receives LLM API calls from agent containers via `$AGENTRY_PROVIDER_ENDPOINT`
 - Identifies the source namespace via source IP → Pod resolution from the Pod informer cache (unforgeable)
+- Resolves the target ModelProvider from the qualified `provider/model` name in the request and the Agent's `spec.providers`
+- Detects the request format from the URL path (`/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible)
 - Validates the requested model and checks namespace access
 - Enforces soft budget guardrails and per-namespace rate limits
 - Routes to the upstream provider, falling back through the chain on errors

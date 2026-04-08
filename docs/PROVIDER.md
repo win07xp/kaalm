@@ -82,14 +82,16 @@ Pros: Credentials never leave `agentry-system`. NetworkPolicy cleanly isolates a
 
 ## LLM Gateway — Request Flow
 
-1. **Agent sends request**: the agent container makes an HTTP request to `$AGENTRY_PROVIDER_ENDPOINT` (resolves to the gateway Service in `agentry-system`). The request format is provider-native (the agent uses Anthropic's or OpenAI's API shape).
-2. **Gateway validates**: confirms the requested model is listed in the target ModelProvider's `models` and the namespace is in `allowedNamespaces`.
-3. **Budget check**: the gateway reads the current budget state for the agent's namespace. If a `degrade` policy applies, it rewrites the model name in the request. If `block` applies, it returns an error to the agent.
-4. **Rate limit check**: per-namespace token-bucket rate limiter on requests/min and tokens/min.
-5. **Route to upstream**: the gateway adds the provider API key (read directly from Secrets in `agentry-system`) and forwards the request. If the upstream fails (connection error, 5xx, timeout), the gateway tries the next provider in `spec.fallback`.
-6. **Response returned**: the gateway relays the response to the agent container.
-7. **Token counting**: the gateway extracts actual token usage from the provider response (`usage.input_tokens` / `usage.output_tokens` for Anthropic; `usage.prompt_tokens` / `usage.completion_tokens` for OpenAI, etc.). Actual usage from the provider response is always preferred over pre-call estimation.
-8. **Spend update**: the gateway updates the in-process spend counter for the namespace.
+1. **Agent sends request**: the agent container makes an HTTP request to `$AGENTRY_PROVIDER_ENDPOINT` (resolves to the gateway Service in `agentry-system`). The agent uses the upstream provider's native API path (e.g., `/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible) and includes a qualified model name in the request body (see Model Identification below).
+2. **Namespace identification**: the gateway resolves the source IP to a Pod via its Pod informer cache, then reads the Pod's namespace (see Namespace Identification below).
+3. **Provider routing**: the gateway resolves the Pod's ownerRef to the Agent resource, reads `spec.providers` to determine which ModelProviders this agent is allowed to use, and parses the `provider/model` name from the request to identify the target ModelProvider (see Provider Routing below).
+4. **Gateway validates**: confirms the requested model is listed in the target ModelProvider's `models` and the namespace is in `allowedNamespaces`.
+5. **Budget check**: the gateway reads the current budget state for the agent's namespace. If a `degrade` policy applies, it rewrites the model name in the request. If `block` applies, it returns an error to the agent.
+6. **Rate limit check**: per-namespace token-bucket rate limiter on requests/min and tokens/min.
+7. **Route to upstream**: the gateway adds the provider API key (read directly from Secrets in `agentry-system`), strips the provider prefix from the model name, and forwards the request. If the upstream fails (connection error, 5xx, timeout), the gateway tries the next provider in `spec.fallback`.
+8. **Response returned**: the gateway relays the response to the agent container.
+9. **Token counting**: the gateway extracts actual token usage from the provider response (`usage.input_tokens` / `usage.output_tokens` for Anthropic; `usage.prompt_tokens` / `usage.completion_tokens` for OpenAI, etc.). Actual usage from the provider response is always preferred over pre-call estimation.
+10. **Spend update**: the gateway updates the in-process spend counter for the namespace.
 
 ---
 
@@ -102,6 +104,52 @@ The gateway must identify the source namespace of each LLM request to enforce ac
 3. If the source IP does not resolve to a known Pod, the request is rejected.
 
 This approach is **unforgeable**: source IPs are assigned by the cluster network (CNI) and cannot be overridden from within a container. An agent cannot claim to be from a different namespace. No agent-provided headers or tokens are trusted for namespace identification.
+
+---
+
+## Model Identification
+
+Agents identify both the provider and the model in each LLM request using a **qualified model name** format: `{providerRef}/{modelId}`.
+
+Examples:
+- `anthropic-shared/claude-opus-4-6` — Claude Opus via the `anthropic-shared` ModelProvider
+- `anthropic-shared/claude-sonnet-4-6` — Claude Sonnet via the same provider
+- `openai-fallback/gpt-4o` — GPT-4o via the `openai-fallback` ModelProvider
+- `local-vllm/llama-3-70b` — Llama 3 70B via a local vLLM instance registered as a ModelProvider
+
+The gateway splits the model name on the first `/`: the prefix identifies the ModelProvider by `metadata.name`, and the suffix is the raw model ID that must appear in the ModelProvider's `models` list. Before forwarding upstream, the gateway strips the provider prefix and sends only the raw model ID (e.g., the upstream Anthropic API receives `claude-opus-4-6`, not `anthropic-shared/claude-opus-4-6`).
+
+This format uniquely identifies the (provider, model) pair and eliminates ambiguity when multiple ModelProviders offer models with similar names (e.g., a managed Anthropic endpoint and an OpenAI-compatible proxy both serving Claude models).
+
+The `defaultModel` field in `Agent.spec.providers` uses the raw model ID (not the qualified format) because the provider context is already established by the enclosing `providerRef`. The agent is responsible for constructing the qualified `provider/model` name in its API calls.
+
+---
+
+## Provider Routing
+
+The gateway resolves which ModelProvider to use for each LLM request through the following chain:
+
+1. **Source IP → Pod**: resolved from the Pod informer cache (see Namespace Identification).
+2. **Pod → Agent**: the Pod's ownerRef identifies the Agent (or AgentTask) resource. The gateway maintains an Agent informer cache for this lookup.
+3. **Agent → allowed providers**: the Agent's `spec.providers` lists the ModelProviders this agent may use.
+4. **Model name → ModelProvider**: the gateway parses the `provider/model` qualified name from the request body. The provider prefix must match a `providerRef` in the Agent's `spec.providers`. If it does not, the request is rejected.
+5. **ModelProvider → upstream**: the gateway reads the ModelProvider's `spec.endpoint`, `spec.type`, and credentials to forward the request.
+
+This chain ensures that an agent can only reach ModelProviders explicitly listed in its spec, which in turn must be in the AgentClass's `allowedProviders` and must include the agent's namespace in `allowedNamespaces`. All three access checks (Agent → ModelProvider → Namespace) must pass.
+
+---
+
+## Request Format Detection
+
+The agent sends LLM requests using the upstream provider's native API format. The gateway detects the request format from the **URL path** the agent uses:
+
+- `/v1/messages` → Anthropic format
+- `/v1/chat/completions` → OpenAI / OpenAI-compatible format (also used by vLLM, Ollama, LiteLLM)
+- `/v1/completions` → OpenAI legacy completions format
+
+The gateway uses the detected format to parse the request body (extracting the model name and other fields), then forwards to the upstream provider. If the upstream provider expects a different format than what the agent sent (e.g., the agent sends Anthropic-format but the fallback provider is OpenAI-compatible), the gateway translates the request and response between formats.
+
+This means the gateway is **protocol-aware**, not a simple pass-through proxy. It understands the request/response shapes of supported provider types and can translate between them. This translation enables cross-provider fallback (e.g., falling back from Anthropic to an OpenAI-compatible endpoint) without requiring the agent to handle multiple API formats.
 
 ---
 

@@ -36,7 +36,7 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 
 - `get, watch` on `Secrets` in `agentry-system` (to read LLM provider credentials).
 - `get, watch` on `ConfigMaps` in `agentry-system` (to receive budget configuration from the operator).
-- `get, watch` on `Agent` resources cluster-wide (to check hibernation state for wake-on-demand decisions).
+- `get, list, watch` on `Agent` resources cluster-wide (for provider routing resolution and hibernation state checks).
 - `get, list, watch` on `AgentChannel` resources cluster-wide (to look up which Agent a channel message targets and to manage platform connections).
 - `get, watch` on `Secrets` in user namespaces where `AgentChannel` resources reference them (for channel platform credentials like Discord bot tokens). The gateway only reads Secrets explicitly referenced by `AgentChannel.spec.credentialsRef` — it does not have blanket Secret access across user namespaces.
 - `get, list, watch` on `Pods` cluster-wide (to maintain the Pod informer cache used for source IP → namespace resolution on LLM requests, and for annotation writes).
