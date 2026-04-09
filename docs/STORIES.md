@@ -52,7 +52,7 @@ Priya creates a cluster-scoped `ModelProvider` named `anthropic-shared` referenc
 
 ### S4: Add a fallback provider for availability
 
-Priya creates a second `ModelProvider` of the same type (e.g., a second `anthropic` provider pointing at a different account or region) and configures it as a fallback on the `anthropic-shared` provider. When the primary is unreachable or returning errors, the gateway automatically routes to the fallback. She sets a lower budget on the fallback to limit spend during outages. Note: fallback is restricted to same-type providers in v1 — cross-format fallback (e.g., Anthropic to OpenAI) is not supported because the gateway does not translate between API formats.
+Priya creates a second `ModelProvider` of the same type (e.g., a second `anthropic` provider pointing at a different account or region) and configures it as a fallback on the `anthropic-shared` provider. She also configures a third provider as a fallback on the second, creating a chain: primary → regional-fallback → disaster-recovery. When the primary is unreachable or returning errors, the gateway walks the fallback chain in order up to the gateway-level depth cap (default 3). She sets lower budgets on the fallback providers to limit spend during outages. Note: fallback is restricted to same-type providers in v1 — cross-format fallback (e.g., Anthropic to OpenAI) is not supported because the gateway does not translate between API formats.
 
 ### S5: Revoke access for a team
 
@@ -106,6 +106,10 @@ Dev's customer support team uses an internal ticketing system that can POST to w
 
 Same flow as S7 from the channel perspective. The additional detail: if `wakeTimeout` is exceeded before the Pod becomes Ready, the gateway returns HTTP 504 to the webhook caller rather than holding the connection indefinitely.
 
+### S15: Async webhook for a long-running coding agent
+
+Dev creates an `AgentChannel` for a coding agent that typically takes 5-10 minutes to process requests. He sets `spec.webhook.responseMode: async` and configures `spec.webhook.callbackUrl` pointing at his CI system's webhook receiver. When a ticket system POSTs a coding request, the gateway immediately returns HTTP 202 with a `requestId`. The coding agent processes the request, generates a fix, and responds. The gateway POSTs the agent's response (including the PR URL) to the CI system's callback URL. If the CI system is unreachable, Dev can poll `GET /v1/channels/{channelId}/responses/{requestId}` as a fallback.
+
 ---
 
 ## Design Implications
@@ -122,3 +126,4 @@ These scenarios drive specific design requirements:
 - **S11** requires finalizers and configurable PVC reclaim policy.
 - **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener. Discord and WhatsApp adapters are deferred to v1.1.
 - **S14** requires the gateway's authenticated activator to integrate with the User Gateway path for wake-on-demand of hibernated agents.
+- **S15** requires the User Gateway to support async webhook response mode with callback delivery and a polling fallback endpoint.

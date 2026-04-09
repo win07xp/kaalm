@@ -88,7 +88,7 @@ The data plane is what actually runs when an Agent is created. For each Agent in
 - **One Pod** containing the user's agent container. The Pod runs under the RuntimeClass specified by its AgentClass (runc, gVisor, or Kata).
 - **One PVC** if the Agent spec requests persistence, mounted into the agent container at a configured path.
 - **One Service** (ClusterIP) exposing the agent's HTTPS endpoint for intra-cluster traffic. The gateway uses this Service to deliver channel messages over TLS; direct external exposure remains the developer's responsibility.
-- **One TLS Secret** containing a per-agent serving certificate and key, signed by the operator-managed CA. Mounted into the Pod for the agent's HTTPS listener.
+- **One TLS Secret** containing a per-agent serving certificate and key, signed by the operator-managed CA. Mounted into the Pod for the agent's HTTPS listener. During CA rotation, the CA bundle (projected into Pods at `/var/run/agentry/ca.crt`) contains both old and new CAs to ensure zero-downtime certificate rollover.
 - **One ConfigMap** holding non-sensitive agent configuration (gateway endpoint, feature flags).
 
 There is no sidecar container. The **Agentry Gateway** in `agentry-system` handles all LLM traffic and inbound channel messages as a shared cluster-level service.
@@ -106,7 +106,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 - Detects the request format from the URL path (`/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible)
 - Validates the requested model and checks namespace access
 - Enforces soft budget guardrails and per-namespace rate limits
-- Routes to the upstream provider; on failure, falls back to same-type providers only (no cross-format translation)
+- Routes to the upstream provider; on failure, walks the fallback chain (same-type providers only, up to `maxFallbackDepth` depth; no cross-format translation)
 - Extracts actual token usage from the provider response and updates spend counters
 - Returns structured error responses (JSON with `error.type`) on failure — see Gateway Design doc
 
@@ -117,7 +117,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 - Looks up the AgentChannel resource to find the target Agent and its endpoint
 - If the agent is `Hibernated`, the gateway signals the controller to wake it via the authenticated activator endpoint and waits until the Pod is ready (bounded by `wakeTimeout`)
 - Delivers the message to the agent container via `POST /v1/message`
-- Returns the agent's response as the webhook HTTP response body
+- Supports both synchronous and asynchronous response modes per AgentChannel: sync (default) returns the agent's response as the webhook HTTP response; async returns 202 Accepted immediately and delivers the response via callback URL or polling endpoint
 - v1 supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1
 
 LLM provider credentials are stored as Secrets in `agentry-system` and read directly by the gateway. They never leave `agentry-system` namespace.

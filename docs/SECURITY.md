@@ -115,7 +115,7 @@ Channel credentials are namespace-scoped for organizational isolation — each n
 2. **Stored**: in a Secret in the agent's namespace (e.g., `team-support/support-assistant-tls`), owned by the Agent resource for cascade deletion.
 3. **Mounted**: into the agent Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS using this certificate.
 4. **Verified**: the gateway verifies the agent's certificate against the operator CA on every message delivery request.
-5. **Rotated**: the controller watches the Secret and recreates the certificate before expiry (90-day lifetime, rotate at 60 days — same policy as the gateway serving cert). The kubelet updates the projected volume in the running Pod.
+5. **Rotated**: the controller watches the Secret and recreates the certificate before expiry (90-day lifetime, rotate at 60 days — same policy as the gateway serving cert). The kubelet updates the projected volume in the running Pod. During CA rotation, the agent's certificate may temporarily be signed by the old CA while the bundle already contains the new CA. This is safe — the gateway verifies against the full CA bundle, which includes both CAs during the rotation window. The agent's certificate is re-issued from the new CA on the next rotation pass by the AgentReconciler.
 6. **Deleted**: cascade-deleted when the Agent resource is deleted (via ownerRef).
 
 ### In-cluster TLS (Bidirectional)
@@ -125,6 +125,15 @@ All traffic between agent containers and the gateway is encrypted with TLS in bo
 **Agent → Gateway (LLM traffic):** The LLM Gateway listener serves TLS to protect prompts and completions in transit within the cluster. The operator manages a self-signed CA (`agentry-gateway-ca` Secret) and a TLS serving certificate (`agentry-gateway-tls` Secret), both in `agentry-system`. The CA certificate is injected into agent Pods as a projected volume (`/var/run/agentry/ca.crt`). Agent containers use this CA to verify the gateway's TLS certificate when calling `$AGENTRY_PROVIDER_ENDPOINT` (an `https://` URL). See Gateway Design doc § TLS on the LLM Gateway Listener for certificate lifecycle details.
 
 **Gateway → Agent (channel message delivery):** The operator issues a per-agent TLS serving certificate signed by the same CA, stored as a Secret in the agent's namespace and mounted into the Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS on its health/message port. The gateway verifies the agent's certificate against the operator CA when delivering channel messages via `POST /v1/message`. This protects user messages (which may contain PII or sensitive data) from network-level sniffing on shared nodes. Certificate lifecycle follows the same rotation policy as the gateway serving certificate (90-day lifetime, rotate at 60 days).
+
+**CA rotation**: the operator rotates the CA certificate using a bundle-based approach that avoids any TLS disruption. The `agentry-gateway-ca` Secret contains a CA bundle (concatenated PEM) rather than a single CA certificate. During rotation:
+
+1. The operator generates a new CA and adds it to the bundle alongside the existing CA. All components now trust both CAs.
+2. The gateway serving certificate is re-issued from the new CA. Agents still trust it because the bundle contains both CAs.
+3. Agent serving certificates are re-issued from the new CA in a rolling fashion across reconcile cycles. The gateway trusts both CAs, so agents with old or new certs are both valid.
+4. Once all certificates are re-issued, the old CA is removed from the bundle.
+
+The CA bundle is injected into agent Pods as a projected volume. Kubernetes automatically updates projected volumes when the backing Secret changes, so agents pick up the new bundle without Pod restarts. The rotation sequence ensures that at no point does any component present a certificate that the other side cannot verify.
 
 ### Protecting agent containers from LLM provider access
 

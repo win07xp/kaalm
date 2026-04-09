@@ -89,7 +89,7 @@ Pros: Credentials never leave `agentry-system`. NetworkPolicy cleanly isolates a
 4. **Gateway validates**: confirms the requested model is listed in the target ModelProvider's `models` and the namespace is in `allowedNamespaces`.
 5. **Budget check**: the gateway reads the current budget state for the agent's namespace. If a `degrade` policy applies, it rewrites the model name in the request. If `block` applies, it returns an error to the agent.
 6. **Rate limit check**: per-namespace token-bucket rate limiter on requests/min and tokens/min.
-7. **Route to upstream**: the gateway adds the provider API key (read directly from Secrets in `agentry-system`), strips the provider prefix from the model name, and forwards the request. If the upstream fails (connection error, 5xx, timeout), the gateway tries the next provider in `spec.fallback`.
+7. **Route to upstream**: the gateway adds the provider API key (read directly from Secrets in `agentry-system`), strips the provider prefix from the model name, and forwards the request. If the upstream fails (connection error, 5xx, timeout), the gateway walks the fallback chain — trying the primary provider's `spec.fallback` entries, then each fallback's own fallback, up to `maxFallbackDepth` (default 3). See Fallback Logic below.
 8. **Response returned**: the gateway relays the response to the agent container.
 9. **Token counting**: the gateway extracts actual token usage from the provider response (`usage.input_tokens` / `usage.output_tokens` for Anthropic; `usage.prompt_tokens` / `usage.completion_tokens` for OpenAI, etc.). Actual usage from the provider response is always preferred over pre-call estimation.
 10. **Spend update**: the gateway updates the in-process spend counter for the namespace.
@@ -120,7 +120,16 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 **Certificate rotation**: the operator rotates the serving certificate before expiry (default: 90-day lifetime, rotate at 60 days). The gateway watches the TLS Secret and reloads without restart. The CA certificate has a longer lifetime (1 year) and is rotated less frequently.
 
-**No cert-manager dependency**: the operator manages its own CA and serving certificates. This keeps the deployment self-contained. Teams that prefer cert-manager can override the TLS Secrets externally; the gateway does not care how the certificate is provisioned as long as the Secret exists.
+**CA rotation**: CA rotation uses a **bundle-based approach** to avoid TLS outages. The `agentry-gateway-ca` Secret contains a CA bundle (a concatenated PEM file) rather than a single certificate. During rotation, the bundle contains both the current and the new CA certificates. The rotation sequence is:
+
+1. **Generate new CA**: the operator creates a new CA certificate and appends it to the CA bundle in `agentry-gateway-ca`. Both old and new CA certificates are now trusted by all components.
+2. **Re-issue gateway cert**: the operator re-issues the gateway serving certificate (`agentry-gateway-tls`) signed by the new CA. The gateway reloads it. Agents trust both CAs via the bundle, so there is no interruption.
+3. **Re-issue agent certs**: the operator re-issues per-agent TLS certificates signed by the new CA, rolling across agents over multiple reconcile cycles. The gateway trusts both CAs via its copy of the bundle, so agents with old certs remain valid during the rollout.
+4. **Remove old CA**: once all serving certificates have been re-issued from the new CA, the operator removes the old CA from the bundle. Only the new CA remains.
+
+This is the same pattern Kubernetes itself uses for service account signing key rotation. The CA bundle is projected into agent Pods at `/var/run/agentry/ca.crt`; the kubelet updates the projected volume contents automatically when the Secret changes.
+
+**No cert-manager dependency**: the operator manages its own CA and serving certificates, including CA rotation. This keeps the deployment self-contained. Teams that prefer cert-manager can override the TLS Secrets externally; the gateway does not care how the certificate is provisioned as long as the Secret exists.
 
 `$AGENTRY_PROVIDER_ENDPOINT` is an `https://` URL when TLS is enabled (the default).
 
@@ -241,9 +250,9 @@ When the primary provider fails (network error, 5xx, timeout, or budget-blocked)
 4. Check the fallback provider's budget state for the agent's namespace. If the fallback is budget-blocked, skip it and try the next fallback in the list (or return an error if no more fallbacks remain).
 5. Forward the request with the fallback provider's credentials.
 
-Fallback does not chain beyond one level — if the fallback itself fails, the gateway returns an error rather than walking the fallback's fallback.
+Fallback chains up to a configurable depth. If provider A's fallback is B, and B has a fallback to C, the gateway tries A → B → C. The maximum depth is controlled by the gateway-level `maxFallbackDepth` setting (default: 3). If the chain is exhausted or the depth cap is reached without a successful response, the gateway returns an error. The depth cap prevents unbounded latency from long fallback chains. Circular references are rejected at reconcile time by the ModelProviderReconciler (see Controller Design doc), so the gateway does not need runtime cycle detection.
 
-**Same-type constraint**: this is validated at reconcile time by the ModelProviderReconciler. A ModelProvider with `type: anthropic` cannot list a fallback with `type: openai`. Cross-format fallback may be considered for a future version if there is sufficient demand, but the translation surface area (streaming, tool use, system prompts, multimodal content) is large and error-prone.
+**Same-type constraint**: this is validated at reconcile time by the ModelProviderReconciler. Each provider in the fallback chain must have the same `spec.type` as the primary provider (e.g., all `anthropic` or all `openai-compatible`). A ModelProvider with `type: anthropic` cannot list a fallback with `type: openai`. Cross-format fallback may be considered for a future version if there is sufficient demand, but the translation surface area (streaming, tool use, system prompts, multimodal content) is large and error-prone.
 
 ---
 
@@ -275,9 +284,11 @@ Each gateway replica divides the configured limit by the number of active gatewa
    ```
 4. **AgentChannel lookup**: the gateway finds the AgentChannel resource matching the webhook path, which identifies the target Agent and namespace. If multiple AgentChannels claim the same path (a transient conflict before the reconciler marks the newer one as `Ready=False`), the gateway routes to the AgentChannel with the earliest `creationTimestamp`.
    If the AgentChannel has `session.enabled: true`, the gateway generates a deterministic `sessionId` from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: fixed Agentry UUID, name: channelId + ":" + userId)`. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility using its PVC state.
-5. **Activator check**: if the Agent is `Hibernated`, the gateway signals the controller to wake it and waits up to `wakeTimeout` for the Pod to become Ready. The webhook caller receives a response only after the agent processes the message (or a timeout error).
+5. **Activator check**: if the Agent is `Hibernated`, the gateway signals the controller to wake it and waits up to `wakeTimeout` for the Pod to become Ready. In sync mode, the webhook caller blocks during this wait. In async mode, the gateway has already returned 202 (see step 5a).
+5a. **Async early return** (async mode only): if `AgentChannel.spec.webhook.responseMode` is `async`, the gateway returns HTTP 202 Accepted with a `requestId` immediately after normalization (step 3). Steps 5-7 proceed asynchronously — the webhook caller does not block. See API Design doc § Async Webhook Response for the response schemas.
 6. **Message delivery**: the gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS (or the override endpoint in `AgentChannel.spec.agentEndpoint`). The gateway verifies the agent's TLS certificate against the operator-managed CA.
-7. **Response**: the agent returns a response envelope; the gateway returns it as the webhook HTTP response body.
+7. **Response (sync mode, default)**: the agent returns a response envelope; the gateway returns it as the webhook HTTP response body.
+8. **Response (async mode)**: the agent returns a response envelope; the gateway POSTs it to the configured `callbackUrl` (with retries) or stores it for polling retrieval via `GET /v1/channels/{channelId}/responses/{requestId}`.
 
 ### Platform Adapters
 
@@ -295,7 +306,7 @@ type ChannelAdapter interface {
 }
 ```
 
-Discord and WhatsApp adapters will implement this interface in v1.1.
+The `SendReply` method is used for async response delivery: when `responseMode: async`, the gateway calls `SendReply` to POST the agent's response to the configured `callbackUrl` after the agent has processed the message. For sync mode, `SendReply` is not called — the response is returned inline as the HTTP response body. Discord and WhatsApp adapters (v1.1) will use `SendReply` for all responses since those platforms are inherently asynchronous.
 
 ---
 
@@ -422,7 +433,7 @@ The gateway exposes Prometheus metrics on `:9090/metrics`:
 |---|---|
 | Gateway replica crashes | Other replicas continue; Kubernetes restarts the crashed replica |
 | All gateway replicas down | LLM calls from agents fail; webhook callers receive 503; controller cannot wake hibernated agents; up to 10s of spend data may be lost (see Budget State Management) |
-| Provider API down | Fallback attempted (same-type providers only); if fallback also down, request fails with `502 provider_error` |
+| Provider API down | Fallback chain walked (same-type providers only, up to `maxFallbackDepth` depth); if all providers in the chain fail, request fails with `502 provider_error` |
 | Budget exhausted | Request blocked or degraded per policy; Warning event emitted on ModelProvider |
 | Channel credential invalid | AgentChannel marked `Ready=False`; platform connection drops |
 | Agent Pod not ready (resuming) | User Gateway holds or retries message delivery up to configured timeout |

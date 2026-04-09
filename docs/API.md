@@ -203,7 +203,10 @@ spec:
     tokensPerMinute: 500000
 
   # Fallback chain. If this provider is unavailable or budget-blocked, the
-  # gateway tries the next one in order. Referenced providers must also allow the namespace.
+  # gateway tries the next provider in order. The gateway also walks each
+  # fallback provider's own fallback chain, up to the gateway-level
+  # maxFallbackDepth setting (default 3). Referenced providers must also
+  # allow the namespace.
   fallback:
     - name: openai-fallback
 
@@ -247,7 +250,7 @@ status:
 - **Secret scoping**: credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers.
 - **Budget state**: persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy.
 - **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Exact match is preferred where possible.
-- **Fallback chains** are flat (not nested). Circular references are rejected by validation. Fallback providers must have the **same `spec.type`** as the primary provider (e.g., both `anthropic` or both `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats.
+- **Fallback chains** may be nested up to a gateway-configured depth cap (`maxFallbackDepth`, default 3). If provider A falls back to B, and B falls back to C, the gateway walks A → B → C. Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats. The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster.
 - **Cost fields are strings** (not floats) to avoid precision issues. The gateway parses them as decimals.
 
 ---
@@ -330,7 +333,7 @@ status:
     - type: ProvidersReady
       status: "True"
       reason: AllProvidersHealthy
-  endpoint: "http://support-assistant.team-support.svc.cluster.local:8080"
+  endpoint: "https://support-assistant.team-support.svc.cluster.local:8080"
   podName: "support-assistant-7d4b9f"
   pvcName: "support-assistant-memory"
   lastActivityTime: "2026-04-05T11:58:22Z"
@@ -473,6 +476,18 @@ spec:
     auth:
       type: bearer
       secretRef: { name: webhook-secret, key: token }
+    # Response mode: "sync" (default) or "async".
+    # sync: gateway blocks until the agent responds and returns the response
+    #   as the webhook HTTP response body.
+    # async: gateway returns 202 Accepted immediately with a requestId,
+    #   delivers the message to the agent, and posts the agent's response
+    #   to callbackUrl (if configured) or makes it available for polling.
+    responseMode: sync
+    # Required when responseMode is "async" and push-based delivery is desired.
+    # The gateway POSTs the agent's response to this URL when it becomes available.
+    # If omitted in async mode, responses are stored and retrievable via polling
+    # at GET /v1/channels/{channelId}/responses/{requestId}.
+    # callbackUrl: "https://my-service.example.com/agent-responses"
 
   # Optional: override how the gateway delivers messages to the agent.
   # By default the gateway posts to POST /v1/message on the agent's Service port.
@@ -534,7 +549,8 @@ status:
 - **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: fixed Agentry UUID, name: channelId + ":" + userId)`. This ID is identical across gateway replicas and survives gateway restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
-- **Wake-on-demand integration**: if the target Agent is `Hibernated` when a webhook message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. The webhook caller blocks until the agent is ready and responds, or receives a timeout error if `wakeTimeout` is exceeded.
+- **Async response mode** (`spec.webhook.responseMode: async`): designed for agents that take minutes to respond (e.g., coding agents, research agents). When async mode is enabled, the gateway immediately returns HTTP 202 with a `requestId` in the response body. The agent processes the message normally. When the agent responds, the gateway either (a) POSTs the response to `spec.webhook.callbackUrl` if configured, or (b) stores the response for retrieval via `GET /v1/channels/{channelId}/responses/{requestId}`. Stored responses are retained for 1 hour (sufficient for polling use cases). Async mode does not affect the agent's implementation — the agent still receives `POST /v1/message` and returns a response envelope. The async/sync distinction is handled entirely by the gateway.
+- **Wake-on-demand integration**: if the target Agent is `Hibernated` when a webhook message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. In sync mode, the webhook caller blocks until the agent is ready and responds, or receives a timeout error if `wakeTimeout` is exceeded. In async mode, the gateway returns 202 immediately and handles wake + delivery asynchronously.
 
 ---
 
@@ -552,7 +568,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 8. `lifecycle.idleTimeout` must not exceed `AgentClass.spec.lifecycle.maxIdleTimeout`.
 9. `lifecycle.wakeTimeout` must not exceed `AgentClass.spec.lifecycle.maxWakeTimeout`.
 10. `lifecycle.hibernationDelay` must not exceed `AgentClass.spec.lifecycle.maxHibernationDelay`.
-11. `ModelProvider.spec.fallback` chains must not be circular.
+11. `ModelProvider.spec.fallback` chains must not be circular (validated by walking the full chain up to `maxFallbackDepth`).
 12. `ModelProvider.spec.fallback` entries must have the same `spec.type` as the primary provider (no cross-format fallback).
 13. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
 14. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
@@ -670,7 +686,50 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 | `attachments` | array | no | Attachments to send in the reply |
 | `metadata` | map | no | Optional platform-specific reply metadata |
 
-**Response codes:** `200 OK` with the response envelope. The gateway returns the response body as the webhook HTTP response. Non-200 responses are treated as delivery failures and recorded in AgentChannel status conditions.
+**Response codes:** `200 OK` with the response envelope. In sync mode, the gateway returns the response body as the webhook HTTP response. Non-200 responses are treated as delivery failures and recorded in AgentChannel status conditions.
+
+### Async Webhook Response (gateway-managed)
+
+When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles the asynchronous response flow. The agent's implementation is unchanged — it still receives `POST /v1/message` and returns a response envelope. The async behavior is entirely gateway-side.
+
+**Webhook caller receives (immediate 202 response):**
+
+```json
+{
+  "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "status": "accepted",
+  "message": "Message accepted for processing"
+}
+```
+
+**Callback delivery** (gateway POSTs to `spec.webhook.callbackUrl`):
+
+```json
+{
+  "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "channelId": "/channels/support-assistant",
+  "response": {
+    "content": "I've analyzed the issue and opened a PR with the fix.",
+    "attachments": [],
+    "metadata": {}
+  },
+  "completedAt": "2026-04-05T12:10:42Z"
+}
+```
+
+The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the response is stored for polling retrieval.
+
+**`GET /v1/channels/{channelId}/responses/{requestId}`** (polling fallback):
+
+Returns the agent's response if available. This endpoint is authenticated via the same mechanism as the webhook itself (`AgentChannel.spec.webhook.auth`).
+
+| Status | Meaning |
+|---|---|
+| 200 | Response available; body contains the callback payload above |
+| 202 | Request is still being processed |
+| 404 | Unknown requestId or response expired |
+
+Stored responses are retained for 1 hour, after which they are evicted. This is a polling fallback, not a durable queue — webhook callers that need guaranteed delivery should configure `callbackUrl`.
 
 ### LLM Gateway Error Responses
 
