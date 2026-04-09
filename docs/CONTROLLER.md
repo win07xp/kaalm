@@ -45,7 +45,7 @@ The ModelProviderReconciler is **not** responsible for credential distribution t
 
 ### AgentReconciler
 
-Watches: `Agent`, plus owned `Pod`, `PVC`, `Service`, `ConfigMap`.
+Watches: `Agent`, plus owned `Pod`, `PVC`, `Service`, `ConfigMap`, `Secret` (TLS cert). Also watches `AgentClass` via `handler.EnqueueRequestsFromMapFunc` — when an AgentClass changes (e.g., `allowedProviders` updated, `maxLimits` lowered), re-queue all Agents referencing that class (via indexed lookup on `agentClassRef.name`).
 
 This is the most complex reconciler. It implements the persistent Agent state machine described below. Each reconciliation pass:
 
@@ -53,14 +53,15 @@ This is the most complex reconciler. It implements the persistent Agent state ma
 2. If `spec.providers` is present, resolve all `providerRef`s. If any are missing or the Agent's namespace is not allowed, set `Degraded` with details.
 3. Determine the desired phase based on the state machine (see below).
 4. Converge child resources (Pod, PVC, Service, ConfigMap) to match the desired phase.
-5. When creating a Pod, inject controller-managed environment variables: `$AGENTRY_HEALTH_PORT` (always), `$AGENTRY_PROVIDER_ENDPOINT` (only when `spec.providers` is non-empty, pointing at the gateway Service in `agentry-system`).
-6. Update status and emit events for phase transitions.
+5. When creating a Pod, inject controller-managed environment variables: `$AGENTRY_HEALTH_PORT` (always), `$AGENTRY_PROVIDER_ENDPOINT` (only when `spec.providers` is non-empty, pointing at the gateway Service in `agentry-system`), `$AGENTRY_CA_CERT` (path to the operator CA certificate), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving certificate and key).
+6. Create a TLS serving certificate Secret for the agent (signed by the operator-managed CA), owned by the Agent resource. Mount the cert and key into the Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The certificate's SAN includes the agent's Service DNS name (`{name}.{namespace}.svc.cluster.local`). Certificate lifetime and rotation follow the same policy as the gateway serving cert (90-day lifetime, rotate at 60 days). The controller watches the Secret and recreates it before expiry.
+7. Update status and emit events for phase transitions.
 
 Owner references are set on all child resources pointing back to the Agent, so cascade deletion works naturally.
 
 ### AgentTaskReconciler
 
-Watches: `AgentTask`, plus owned `Pod`, `PVC`, `ConfigMap` (for artifacts).
+Watches: `AgentTask`, plus owned `Pod`, `PVC`, `ConfigMap` (for artifacts). Also watches `AgentClass` via `handler.EnqueueRequestsFromMapFunc` — when an AgentClass changes, re-queue all AgentTasks referencing that class (via indexed lookup on `agentClassRef.name`).
 
 Reconciliation steps:
 
@@ -187,6 +188,8 @@ The reconciler updates `status.lastActivityTime` on the Agent only when a phase 
 
 **Gateway unavailability**: if the gateway's activity endpoint is unreachable, the controller preserves the Agent's current phase — no idle or hibernation transitions are made without activity data. The reconciler sets a `GatewayReachable=False` condition on affected Agents and requeues with backoff until the gateway recovers.
 
+**Gateway restart**: the `/v1/activity` response includes a `startedAt` timestamp indicating when the gateway started. If `startedAt` is more recent than the Agent's last known phase transition time (i.e., the gateway restarted while the agent was Running), the controller treats missing activity data as "unknown" — same behavior as gateway-unreachable. No idle or hibernation transitions are made. The controller requeues with backoff until the gateway has been running for at least `idleTimeout`, at which point missing activity data can be reliably interpreted as genuine inactivity.
+
 **Hibernation mechanics:**
 
 Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. The Service remains (with no endpoints) while the Agent is hibernated. Wake is triggered by the User Gateway (on channel message arrival) or manual annotation, not by traffic to the Service.
@@ -262,6 +265,7 @@ Any state → Terminating (on delete or after TTL)
 | Running → Completing | Agent reports completion, container exits, or timeout hits |
 | Completing → Succeeded | Completion reported success AND artifacts collected |
 | Completing → Failed | Completion reported failure OR artifact collection failed OR container exited non-zero |
+| Failed → Provisioning | `backoffLimit > 0` AND `status.retries < backoffLimit` (retry — see below) |
 | Completing → TimedOut | Timeout hit before completion reported |
 | Succeeded/Failed/TimedOut → Terminating | TTL expired OR deletion requested |
 
@@ -270,6 +274,14 @@ Any state → Terminating (on delete or after TTL)
 - `exitCode`: the reconciler watches Pod phase; exit 0 → Succeeded, non-zero → Failed.
 
 **Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required. Artifacts exceeding the inline size limit (4 KiB per artifact, 32 KiB total) are stored in a separate auto-created ConfigMap and referenced by name in `status.artifactRefs`.
+
+**Retry mechanics**: when `spec.completion.backoffLimit > 0` and the task transitions to `Failed` with `status.retries` below the limit:
+1. The reconciler increments `status.retries`.
+2. The existing Pod is deleted (it has already exited or will be terminated).
+3. The `{taskName}-completion` ConfigMap is deleted to clear stale completion data.
+4. The PVC is retained — the retry runs with the same scratch storage.
+5. The task transitions back to `Provisioning` and a new Pod is created.
+6. If the retry also fails and `status.retries` equals `backoffLimit`, the task remains in `Failed` as a terminal state.
 
 ---
 
@@ -318,7 +330,6 @@ Handled by returning a `Requeue` result with exponential backoff (250ms → 30s 
 The Agent remains in its current phase with `Degraded` condition set. Reconciles continue on relevant resource events.
 
 **Terminal** (set Failed phase, stop reconciling except on spec change):
-- AgentClass deleted while Agent still references it
 - Image pull failure after max retries
 - PVC provisioning failure that exceeds retry budget
 - Invalid configuration that cannot be corrected

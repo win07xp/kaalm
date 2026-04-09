@@ -78,9 +78,14 @@ If an agent needs cluster API access (e.g., a Kubernetes-administering agent), t
 
 The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — via **source IP → Pod resolution** using the Pod informer cache. This is the same mechanism used for namespace identification (see Gateway Design doc). Since agent Pods have no Kubernetes API credentials by default, and the gateway identifies callers by their cluster-assigned source IP, no token-based authentication is needed between agent containers and the gateway. Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
 
-### Gateway→Controller Authentication (Activator)
+### Internal Endpoint Authentication (Activator & Activity API)
 
-The controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) is authenticated to prevent unauthorized wake-ups. The operator generates a shared HMAC key on installation and stores it in a Secret in `agentry-system` (`agentry-activator-key`). The gateway includes an HMAC-signed `Authorization` header on each activation request; the controller validates the signature and rejects requests with stale timestamps (>30s). This ensures only the gateway can trigger agent wake-ups. See Gateway Design doc § Activator Authentication for details.
+The controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) and the gateway's activity endpoint (`GET /v1/activity`) are both authenticated using the same HMAC scheme. The operator generates a shared HMAC key on installation and stores it in a Secret in `agentry-system` (`agentry-activator-key`). Both the controller and gateway use this key:
+
+- **Activator** (gateway → controller): the gateway includes an HMAC-signed `Authorization` header on each activation request; the controller validates the signature and rejects requests with stale timestamps (>30s). This ensures only the gateway can trigger agent wake-ups.
+- **Activity API** (controller → gateway): the controller includes the same HMAC-signed header when querying `/v1/activity`; the gateway validates it. This prevents arbitrary Pods from querying per-agent activity data across namespaces.
+
+See Gateway Design doc § Activator Authentication for the HMAC scheme details.
 
 ---
 
@@ -104,13 +109,22 @@ The controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`
 
 Channel credentials are namespace-scoped for organizational isolation — each namespace contains only the credentials for its own agents' channels. They are created by the platform team or a provisioning service; developers do not need Secret access in their namespace.
 
-### In-cluster TLS (Agent → Gateway)
+### Lifecycle of an agent TLS serving certificate
 
-The LLM Gateway listener serves TLS to protect prompts and completions in transit within the cluster. Without TLS, LLM payloads traverse the cluster network in plaintext — unacceptable when agent containers run untrusted code on shared nodes.
+1. **Created**: by the AgentReconciler when provisioning the agent's Pod. The controller signs a TLS certificate using the operator-managed CA, with the agent's Service DNS name as the SAN.
+2. **Stored**: in a Secret in the agent's namespace (e.g., `team-support/support-assistant-tls`), owned by the Agent resource for cascade deletion.
+3. **Mounted**: into the agent Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS using this certificate.
+4. **Verified**: the gateway verifies the agent's certificate against the operator CA on every message delivery request.
+5. **Rotated**: the controller watches the Secret and recreates the certificate before expiry (90-day lifetime, rotate at 60 days — same policy as the gateway serving cert). The kubelet updates the projected volume in the running Pod.
+6. **Deleted**: cascade-deleted when the Agent resource is deleted (via ownerRef).
 
-The operator manages a self-signed CA (`agentry-gateway-ca` Secret) and a TLS serving certificate (`agentry-gateway-tls` Secret), both in `agentry-system`. The CA certificate is injected into agent Pods as a projected volume (`/var/run/agentry/ca.crt`). Agent containers use this CA to verify the gateway's TLS certificate when calling `$AGENTRY_PROVIDER_ENDPOINT` (an `https://` URL). See Gateway Design doc § TLS on the LLM Gateway Listener for certificate lifecycle details.
+### In-cluster TLS (Bidirectional)
 
-The User Gateway's delivery to agent Services (`POST /v1/message`) remains plaintext HTTP — this traffic is initiated by the trusted gateway, not by untrusted agent containers.
+All traffic between agent containers and the gateway is encrypted with TLS in both directions.
+
+**Agent → Gateway (LLM traffic):** The LLM Gateway listener serves TLS to protect prompts and completions in transit within the cluster. The operator manages a self-signed CA (`agentry-gateway-ca` Secret) and a TLS serving certificate (`agentry-gateway-tls` Secret), both in `agentry-system`. The CA certificate is injected into agent Pods as a projected volume (`/var/run/agentry/ca.crt`). Agent containers use this CA to verify the gateway's TLS certificate when calling `$AGENTRY_PROVIDER_ENDPOINT` (an `https://` URL). See Gateway Design doc § TLS on the LLM Gateway Listener for certificate lifecycle details.
+
+**Gateway → Agent (channel message delivery):** The operator issues a per-agent TLS serving certificate signed by the same CA, stored as a Secret in the agent's namespace and mounted into the Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS on its health/message port. The gateway verifies the agent's certificate against the operator CA when delivering channel messages via `POST /v1/message`. This protects user messages (which may contain PII or sensitive data) from network-level sniffing on shared nodes. Certificate lifecycle follows the same rotation policy as the gateway serving certificate (90-day lifetime, rotate at 60 days).
 
 ### Protecting agent containers from LLM provider access
 
@@ -184,8 +198,8 @@ Every Agent/AgentTask has resource limits enforced via Pod `resources.limits`. A
 - **Agent → LLM Gateway**: prompts and completions. In-cluster HTTPS (TLS terminated at the gateway; agent trusts the operator-managed CA). See § In-cluster TLS above.
 - **LLM Gateway → LLM Provider**: prompts and completions over egress. Always HTTPS. Custom CA bundles supported for enterprise environments — see Gateway Design doc § Upstream TLS Configuration.
 - **Channel Platform → User Gateway**: inbound webhook messages. HTTPS inbound to the gateway's public endpoint (via Ingress).
-- **User Gateway → Agent**: normalized message envelope via `POST /v1/message` to the agent's ClusterIP Service (plaintext HTTP — trusted initiator).
-- **Controller → Gateway**: activity timestamp queries via `GET /v1/activity` (HTTP, internal ClusterIP Service).
+- **User Gateway → Agent**: normalized message envelope via `POST /v1/message` to the agent's ClusterIP Service over HTTPS (gateway verifies agent's operator-issued TLS certificate). See § In-cluster TLS above.
+- **Controller → Gateway**: activity timestamp queries via `GET /v1/activity` (HMAC-authenticated, internal ClusterIP Service). See § Internal Endpoint Authentication above.
 - **Gateway → API Server**: task completion data written to per-task ConfigMaps in user namespaces.
 - **Controller ↔ API server**: CRD updates, Pod creation, events. Standard kubelet/apiserver channels.
 
@@ -221,8 +235,8 @@ Agentry does **not** log prompts or completions. LLM payloads are sensitive (may
 | Malicious message from channel platform | Webhook adapter authenticates inbound events (bearer token, HMAC signature) before processing |
 | Agent spoofs namespace to bypass budget/access controls | Gateway identifies namespace via source IP → Pod resolution from informer cache; source IPs are assigned by the cluster network and unforgeable from within a container |
 | Channel credential leaked from agent namespace | Channel credentials are stored in the agent's namespace; blast radius is limited to that namespace's channels. The platform team (not the developer) is responsible for rotation. |
-| Unauthorized agent wake-up via activator endpoint | Activator endpoint is HMAC-authenticated; only the gateway (which holds the shared key) can trigger wake-ups. See § Gateway→Controller Authentication above. |
-| LLM traffic sniffed on cluster network | LLM Gateway serves TLS; agent→gateway traffic is encrypted. See § In-cluster TLS above. |
+| Unauthorized agent wake-up via activator endpoint | Activator endpoint is HMAC-authenticated; only the gateway (which holds the shared key) can trigger wake-ups. See § Internal Endpoint Authentication above. |
+| In-cluster traffic sniffed on shared nodes | All agent↔gateway traffic is TLS-encrypted in both directions: agent→gateway (LLM traffic) and gateway→agent (channel messages). See § In-cluster TLS above. |
 
 ---
 

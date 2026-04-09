@@ -87,7 +87,8 @@ The data plane is what actually runs when an Agent is created. For each Agent in
 
 - **One Pod** containing the user's agent container. The Pod runs under the RuntimeClass specified by its AgentClass (runc, gVisor, or Kata).
 - **One PVC** if the Agent spec requests persistence, mounted into the agent container at a configured path.
-- **One Service** (ClusterIP) exposing the agent's HTTP endpoint for intra-cluster traffic. The gateway uses this Service to deliver channel messages; direct external exposure remains the developer's responsibility.
+- **One Service** (ClusterIP) exposing the agent's HTTPS endpoint for intra-cluster traffic. The gateway uses this Service to deliver channel messages over TLS; direct external exposure remains the developer's responsibility.
+- **One TLS Secret** containing a per-agent serving certificate and key, signed by the operator-managed CA. Mounted into the Pod for the agent's HTTPS listener.
 - **One ConfigMap** holding non-sensitive agent configuration (gateway endpoint, feature flags).
 
 There is no sidecar container. The **Agentry Gateway** in `agentry-system` handles all LLM traffic and inbound channel messages as a shared cluster-level service.
@@ -128,11 +129,11 @@ Agentry is BYO-image, but containers must satisfy a minimal contract to particip
 1. **HTTP health endpoint** on a known port (`$AGENTRY_HEALTH_PORT`, default 8080) returning 200 when ready.
 2. **Graceful SIGTERM handling** — on receiving SIGTERM, the agent should finish in-flight work and exit within the configured `terminationGracePeriodSeconds`.
 3. **LLM traffic via the gateway** (optional) — if the agent uses LLM providers, it reads `$AGENTRY_PROVIDER_ENDPOINT` (an HTTPS URL) and sends LLM requests there rather than calling providers directly. The agent must trust the operator-managed CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`). The reference base images handle this automatically. This is how spend tracking and fallback work. Agents that do not reference a ModelProvider do not receive these variables.
-4. **Message endpoint** (optional) — if the agent uses an AgentChannel, it exposes `POST /v1/message` on `$AGENTRY_HEALTH_PORT` accepting the standard Agentry message envelope and returning a response envelope. Agents without an AgentChannel do not need to implement this.
+4. **Message endpoint** (optional) — if the agent uses an AgentChannel, it exposes `POST /v1/message` on `$AGENTRY_HEALTH_PORT` over TLS, accepting the standard Agentry message envelope and returning a response envelope. The agent serves TLS using the operator-issued certificate at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) and key at `$AGENTRY_TLS_KEY` (`/var/run/agentry/tls.key`). The reference base images handle TLS setup automatically. Agents without an AgentChannel do not need to implement this.
 5. **Optional activity signal** — for idle detection, the agent may emit activity heartbeats by calling `POST /v1/agent/heartbeat` on the gateway. The gateway tracks these timestamps in-memory (no etcd writes). Alternatively, the gateway infers activity from observed LLM and channel traffic.
 6. **Optional completion signal** (AgentTask only) — the agent reports completion to the gateway via `POST /v1/task/complete` with a status payload that may include artifact key-value pairs.
 
-All agent→gateway communication (LLM requests, heartbeats, task completion) is over TLS and authenticated via source IP → Pod resolution. No API keys or tokens are exchanged between agent containers and the gateway. Activity timestamps are maintained in-memory in the gateway — the controller queries them via an internal API endpoint rather than reading Pod annotations, avoiding per-request etcd writes at scale.
+All agent↔gateway communication is over TLS. Agent→gateway traffic (LLM requests, heartbeats, task completion) is authenticated via source IP → Pod resolution. Gateway→agent traffic (channel message delivery) uses the agent's operator-issued TLS certificate, verified against the operator CA. No API keys or tokens are exchanged between agent containers and the gateway. Activity timestamps are maintained in-memory in the gateway — the controller queries them via an internal API endpoint rather than reading Pod annotations, avoiding per-request etcd writes at scale.
 
 Agentry plans to ship reference base images (Python and Go variants) that implement this contract in a future release. These are not part of the v1 scope. Using them will be optional.
 

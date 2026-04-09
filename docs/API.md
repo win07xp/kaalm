@@ -194,9 +194,10 @@ spec:
     # Cluster-wide ceiling (sum across all namespaces). Optional.
     clusterUSD: "10000.00"
 
-  # Rate limits enforced at the gateway (per namespace, per gateway replica).
-  # The effective cluster-wide limit is value × number of gateway replicas.
-  # E.g., with 3 replicas, requestsPerMinute: 100 gives ~300 req/min cluster-wide.
+  # Rate limits enforced at the gateway (per namespace, cluster-wide ceiling).
+  # Each gateway replica divides these values by the number of active replicas
+  # and enforces its share independently. The configured value represents the
+  # intended cluster-wide limit regardless of replica count.
   rateLimits:
     requestsPerMinute: 300
     tokensPerMinute: 500000
@@ -339,9 +340,10 @@ status:
 ### Design notes
 
 - **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs.
-- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references with a default model. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. The gateway resolves the provider, validates access, strips the prefix, and forwards the raw model name upstream. See the Gateway Design doc for the full routing chain.
+- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references with a default model. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. The gateway resolves the provider, validates access, strips the prefix, and forwards the raw model name upstream. See the Gateway Design doc for the full routing chain. `defaultModel` is **informational only** — it documents the developer's intended primary model for this provider binding but has no runtime effect in the gateway. The agent is always responsible for including the qualified `provider/model` name in API calls.
 - **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See Controller Design for the heartbeat protocol.
-- **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages. Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
+- **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS. Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
+- **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. Agents serve HTTPS on their health/message port using these. The reference base images handle TLS setup automatically.
 
 ---
 
@@ -479,12 +481,12 @@ spec:
     path: /v1/message          # default
     port: 8080                 # default ($AGENTRY_HEALTH_PORT)
 
-  # Optional: session configuration. When enabled, the gateway tracks a
-  # session ID per (channelId, userId) pair and includes it in the message
-  # envelope so the agent can maintain conversation context.
+  # Optional: session configuration. When enabled, the gateway generates a
+  # deterministic sessionId from (channelId, userId) and includes it in the
+  # message envelope so the agent can maintain conversation context.
+  # Session expiry/rotation is the agent's responsibility using its PVC state.
   session:
     enabled: true
-    ttl: "1h"    # session expires after this much inactivity
 ```
 
 ### Future platform types (v1.1+)
@@ -529,8 +531,7 @@ status:
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
-- **Session management is opt-in.** When `session.enabled: true`, the gateway tracks `(channelId, userId)` pairs and adds a `sessionId` to the message envelope. Agents use this to look up conversation context in their PVC. When disabled, each message is stateless from the gateway's perspective.
-- **Session state is in-memory in the gateway for v1.** Sessions are lost on gateway restarts or rebalancing — the next message from the same user starts a new session. This is acceptable because the agent's PVC holds the actual conversation state; the session ID is a routing convenience. The message envelope always includes `channelId` and `userId`, so agents can re-derive context without a persistent session. Durable session storage may be added in a future version.
+- **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: fixed Agentry UUID, name: channelId + ":" + userId)`. This ID is identical across gateway replicas and survives gateway restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
 - **Wake-on-demand integration**: if the target Agent is `Hibernated` when a webhook message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. The webhook caller blocks until the agent is ready and responds, or receives a timeout error if `wakeTimeout` is exceeded.
@@ -555,7 +556,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 12. `ModelProvider.spec.fallback` entries must have the same `spec.type` as the primary provider (no cross-format fallback).
 13. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
 14. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
-15. `AgentChannel.spec.webhook.path` must be globally unique across all AgentChannels in the cluster. Namespace-prefixed paths (e.g., `/channels/{namespace}/{name}`) are recommended as a convention to avoid collisions.
+15. `AgentChannel.spec.webhook.path` must be globally unique across all AgentChannels in the cluster. Namespace-prefixed paths (e.g., `/channels/{namespace}/{name}`) are recommended as a convention to avoid collisions. On conflict, the reconciler marks the newer AgentChannel (by `creationTimestamp`) as `Ready=False, reason=PathConflict`. The gateway uses `creationTimestamp` as a tiebreaker, routing to the oldest AgentChannel until the conflict is resolved.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 
@@ -648,7 +649,7 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 | `channelType` | string | yes | Platform type: `"webhook"` in v1 (Discord, WhatsApp in v1.1) |
 | `channelId` | string | yes | Platform-specific channel identifier |
 | `userId` | string | yes | Platform-specific user identifier |
-| `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled: true`. Stable across messages in a session; changes when a session expires or the gateway restarts. |
+| `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled: true`. Deterministic: derived from `UUIDv5(channelId + ":" + userId)`, identical across replicas and gateway restarts. Session expiry is the agent's responsibility. |
 | `content` | string | yes | The user's message text |
 | `attachments` | array | no | List of attachment objects (platform-specific schema) |
 | `metadata` | map | no | Platform-specific fields (e.g., `guildId` for Discord) |

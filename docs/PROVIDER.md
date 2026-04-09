@@ -122,7 +122,9 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 **No cert-manager dependency**: the operator manages its own CA and serving certificates. This keeps the deployment self-contained. Teams that prefer cert-manager can override the TLS Secrets externally; the gateway does not care how the certificate is provisioned as long as the Secret exists.
 
-`$AGENTRY_PROVIDER_ENDPOINT` is an `https://` URL when TLS is enabled (the default). The User Gateway's internal delivery to agent Services (`POST /v1/message`) remains plaintext HTTP since it is initiated by a trusted component (the gateway) to the agent, not the reverse.
+`$AGENTRY_PROVIDER_ENDPOINT` is an `https://` URL when TLS is enabled (the default).
+
+**Agent Serving TLS**: the User Gateway's delivery to agent Services (`POST /v1/message`) is also over HTTPS. The operator issues a per-agent TLS serving certificate signed by the same operator-managed CA. The certificate and key are mounted into the agent Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The certificate's SAN includes the agent's Service DNS name. The gateway verifies the agent's certificate against the operator CA on every message delivery request. Certificate lifecycle (rotation, expiry) follows the same policy as the gateway serving certificate — see Controller Design doc § AgentReconciler.
 
 ---
 
@@ -178,7 +180,7 @@ Budget counters are maintained **in-process in the gateway**. Because the gatewa
 
 Each gateway replica maintains an in-memory spend counter per (provider, namespace, period) tuple. On startup, each replica reads the current period's spent value from the canonical ConfigMap managed by the ModelProviderReconciler. On each LLM call, the counter is updated synchronously.
 
-**Budget counter exchange interface**: each gateway replica periodically (every 10s) writes its partial spend counters to a ConfigMap in `agentry-system` named `agentry-budget-{providerName}`, keyed by the replica's Pod name. The ConfigMap data structure is:
+**Budget counter exchange interface**: each gateway replica periodically (every 10s) writes its partial spend counters to a ConfigMap in `agentry-system` named `agentry-budget-{providerName}`, keyed by the replica's Pod name. Replicas use **server-side apply** with per-replica field managers (field manager name = Pod name), so each replica owns only its own key. This eliminates optimistic concurrency conflicts between replicas writing simultaneously. The ConfigMap data structure is:
 
 ```yaml
 data:
@@ -247,11 +249,11 @@ Fallback does not chain beyond one level — if the fallback itself fails, the g
 
 ## Rate Limiting
 
-Rate limits are enforced at the gateway using token-bucket limiters keyed on (namespace, model). Limits come from `ModelProvider.spec.rateLimits`. When a limit is hit, the gateway returns HTTP 429 with a `Retry-After` header.
+Rate limits are enforced at the gateway using token-bucket limiters keyed on (namespace, model). Limits come from `ModelProvider.spec.rateLimits` and represent **cluster-wide ceilings**. When a limit is hit, the gateway returns HTTP 429 with a `Retry-After` header.
 
-In a replicated gateway deployment, rate limiting is per-replica (approximate at the cluster level). This is acceptable for v1; a coordinated rate limiter can be introduced in v2 if needed.
+Each gateway replica divides the configured limit by the number of active gateway replicas (discovered from its Pod informer — count Pods matching the gateway label selector). When replicas scale up or down, each replica adjusts its local token bucket capacity on the next refill cycle. This means the configured value directly represents the intended cluster-wide rate limit regardless of replica count.
 
-**Note:** the effective cluster-wide rate limit is approximately `configured_limit × number_of_replicas`, since each replica enforces independently. Platform engineers should account for this when setting `rateLimits` values — e.g., to achieve a cluster-wide ceiling of 300 req/min with 3 replicas, set `requestsPerMinute: 100`.
+**Note:** because each replica enforces its share independently, the effective cluster-wide limit is approximate — transient bursts may slightly exceed the configured ceiling. The approximation is bounded by `configured_limit / number_of_replicas` per replica (one replica's full bucket) and is acceptable for v1.
 
 ---
 
@@ -271,9 +273,10 @@ In a replicated gateway deployment, rate limiting is per-replica (approximate at
      "metadata": {}
    }
    ```
-4. **AgentChannel lookup**: the gateway finds the AgentChannel resource matching the webhook path, which identifies the target Agent and namespace.
+4. **AgentChannel lookup**: the gateway finds the AgentChannel resource matching the webhook path, which identifies the target Agent and namespace. If multiple AgentChannels claim the same path (a transient conflict before the reconciler marks the newer one as `Ready=False`), the gateway routes to the AgentChannel with the earliest `creationTimestamp`.
+   If the AgentChannel has `session.enabled: true`, the gateway generates a deterministic `sessionId` from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: fixed Agentry UUID, name: channelId + ":" + userId)`. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility using its PVC state.
 5. **Activator check**: if the Agent is `Hibernated`, the gateway signals the controller to wake it and waits up to `wakeTimeout` for the Pod to become Ready. The webhook caller receives a response only after the agent processes the message (or a timeout error).
-6. **Message delivery**: the gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service (or the override endpoint in `AgentChannel.spec.agentEndpoint`).
+6. **Message delivery**: the gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS (or the override endpoint in `AgentChannel.spec.agentEndpoint`). The gateway verifies the agent's TLS certificate against the operator-managed CA.
 7. **Response**: the agent returns a response envelope; the gateway returns it as the webhook HTTP response body.
 
 ### Platform Adapters
@@ -320,25 +323,30 @@ This ensures only the gateway (which holds the shared key) can trigger agent wak
 
 The gateway maintains per-agent activity timestamps in-memory, updated on every LLM request, channel message delivery, and agent heartbeat. This avoids per-request etcd writes, which is critical at scale (hundreds of thousands of agents).
 
-The gateway exposes an internal endpoint for the controller to query activity state:
+The gateway exposes an internal endpoint for the controller to query activity state. This endpoint uses the same HMAC authentication as the activator endpoint (shared key from `agentry-activator-key` Secret) — see § Activator Authentication.
 
 **`GET /v1/activity?namespace={ns}`**
 
-Returns a JSON map of agent names to their last-activity timestamps for the given namespace:
+Returns a JSON object containing the gateway's startup timestamp and a map of agent names to their last-activity timestamps for the given namespace:
 
 ```json
 {
-  "support-assistant": "2026-04-05T11:58:22Z",
-  "code-helper": "2026-04-05T11:45:10Z"
+  "startedAt": "2026-04-05T06:00:00Z",
+  "agents": {
+    "support-assistant": "2026-04-05T11:58:22Z",
+    "code-helper": "2026-04-05T11:45:10Z"
+  }
 }
 ```
 
+The `startedAt` field indicates when the gateway started. The controller uses this to detect gateway restarts — if the gateway started more recently than an agent's last phase transition, missing activity data is treated as "unknown" rather than "no activity" (see Controller Design doc § Activity Detection).
+
 The controller queries this endpoint on each reconcile for agents in `Running` or `Idle` phase to evaluate idle and hibernation transitions. If the gateway is unreachable, the controller preserves the agent's current phase — no idle transitions are made without activity data.
 
-Activity data is ephemeral: it is lost on gateway restart. This is acceptable because:
-- On restart, agents in `Running` will have no recorded activity and will naturally transition to `Idle` after `idleTimeout` if they are truly idle.
-- Agents that are actively sending traffic will re-establish their activity timestamps immediately.
-- The worst case is a premature `Running → Idle` transition, which is self-correcting on the next activity signal.
+Activity data is ephemeral: it is lost on gateway restart. The gateway includes its `startedAt` timestamp in the `/v1/activity` response so the controller can detect this condition. After a gateway restart:
+- The controller defers idle and hibernation transitions for agents whose last phase transition predates the gateway's `startedAt`, treating missing data as "unknown" until the gateway has been running for at least `idleTimeout`.
+- Agents that are actively sending traffic re-establish their activity timestamps immediately.
+- Agents that are truly idle will transition to `Idle` after `idleTimeout` elapses from the gateway's startup, which is the correct behavior.
 
 The `activitySource` setting on Agent (`providerTraffic`, `agentHeartbeat`, `both`) controls which signals the gateway includes in its per-agent timestamp. The gateway tracks both sources separately and returns the appropriate one based on the Agent's configuration.
 
