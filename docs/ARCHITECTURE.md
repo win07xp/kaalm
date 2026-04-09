@@ -44,11 +44,11 @@ This document describes the high-level architecture of Agentry: the control plan
         │              Agentry Gateway (agentry-system namespace)          │
         │                                                                  │
         │   ┌─────────────────────────┐  ┌───────────────────────────┐    │
-        │   │     LLM Gateway         │  │     User Gateway           │    │
+        │   │   LLM Gateway (TLS)    │  │     User Gateway           │    │
         │   │                         │  │                            │    │
-        │   │  Request validation     │  │  Platform adapters         │    │
-        │   │  Budget check           │  │  (Discord, WhatsApp,       │    │
-        │   │  Rate limiting          │  │   webhook, ...)            │    │
+        │   │  Request validation     │  │  Webhook adapter           │    │
+        │   │  Budget check           │  │  (v1: webhook only;        │    │
+        │   │  Rate limiting          │  │   Discord, WhatsApp v1.1)  │    │
         │   │  Fallback routing       │  │                            │    │
         │   │  Provider adapters      │  │  Message normalization     │    │
         │   │  Token counting         │  │  Agent delivery            │    │
@@ -56,8 +56,8 @@ This document describes the high-level architecture of Agentry: the control plan
         │   └──────────┬──────────────┘  └───────────┬───────────────┘    │
         │              │                              │                    │
         │              ▼ (egress)                     ▲ (inbound)         │
-        │       LLM Provider APIs              Channel Platforms           │
-        │   (Anthropic, OpenAI, etc.)     (Discord, WhatsApp, etc.)       │
+        │       LLM Provider APIs              Webhook Callers              │
+        │   (Anthropic, OpenAI, etc.)     (external systems, bots, etc.)  │
         └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -99,23 +99,25 @@ For AgentTask, the data plane is the same minus the Service (tasks do not typica
 The gateway is a replicated Deployment in `agentry-system` that serves two distinct roles on separate listeners:
 
 **LLM Gateway** (outbound, agent → provider)
-- Receives LLM API calls from agent containers via `$AGENTRY_PROVIDER_ENDPOINT`
+- Serves TLS on port 8443; agent containers connect via `$AGENTRY_PROVIDER_ENDPOINT` (HTTPS)
 - Identifies the source namespace via source IP → Pod resolution from the Pod informer cache (unforgeable)
 - Resolves the target ModelProvider from the qualified `provider/model` name in the request and the Agent's `spec.providers`
 - Detects the request format from the URL path (`/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible)
 - Validates the requested model and checks namespace access
 - Enforces soft budget guardrails and per-namespace rate limits
-- Routes to the upstream provider, falling back through the chain on errors
+- Routes to the upstream provider; on failure, falls back to same-type providers only (no cross-format translation)
 - Extracts actual token usage from the provider response and updates spend counters
+- Returns structured error responses (JSON with `error.type`) on failure — see Gateway Design doc
 
 **User Gateway** (inbound, channel → agent)
 - Watches `AgentChannel` resources directly to determine message routing
-- Listens for inbound platform events (Discord webhook, WhatsApp message, etc.)
-- Normalizes platform payloads into the standard Agentry message envelope
+- Listens for inbound webhook events on port 8080 (plaintext HTTP, behind Ingress with TLS termination)
+- Normalizes webhook payloads into the standard Agentry message envelope
 - Looks up the AgentChannel resource to find the target Agent and its endpoint
-- If the agent is `Hibernated`, the gateway signals the controller to wake it via the activator endpoint and waits (sending a "typing" indicator to the platform) until the Pod is ready
+- If the agent is `Hibernated`, the gateway signals the controller to wake it via the authenticated activator endpoint and waits until the Pod is ready (bounded by `wakeTimeout`)
 - Delivers the message to the agent container via `POST /v1/message`
-- Translates the agent's response back to the platform-native format and replies
+- Returns the agent's response as the webhook HTTP response body
+- v1 supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1
 
 LLM provider credentials are stored as Secrets in `agentry-system` and read directly by the gateway. They never leave `agentry-system` namespace.
 
@@ -125,12 +127,12 @@ Agentry is BYO-image, but containers must satisfy a minimal contract to particip
 
 1. **HTTP health endpoint** on a known port (`$AGENTRY_HEALTH_PORT`, default 8080) returning 200 when ready.
 2. **Graceful SIGTERM handling** — on receiving SIGTERM, the agent should finish in-flight work and exit within the configured `terminationGracePeriodSeconds`.
-3. **LLM traffic via the gateway** (optional) — if the agent uses LLM providers, it reads `$AGENTRY_PROVIDER_ENDPOINT` and sends LLM requests there rather than calling providers directly. This is how spend tracking and fallback work. Agents that do not reference a ModelProvider do not receive this variable.
+3. **LLM traffic via the gateway** (optional) — if the agent uses LLM providers, it reads `$AGENTRY_PROVIDER_ENDPOINT` (an HTTPS URL) and sends LLM requests there rather than calling providers directly. The agent must trust the operator-managed CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`). The reference base images handle this automatically. This is how spend tracking and fallback work. Agents that do not reference a ModelProvider do not receive these variables.
 4. **Message endpoint** (optional) — if the agent uses an AgentChannel, it exposes `POST /v1/message` on `$AGENTRY_HEALTH_PORT` accepting the standard Agentry message envelope and returning a response envelope. Agents without an AgentChannel do not need to implement this.
 5. **Optional activity signal** — for idle detection, the agent may emit activity heartbeats by calling `POST /v1/agent/heartbeat` on the gateway. Alternatively, the gateway infers activity from observed LLM traffic.
 6. **Optional completion signal** (AgentTask only) — the agent reports completion to the gateway via `POST /v1/task/complete` with a status payload that may include artifact key-value pairs.
 
-All agent→gateway communication (LLM requests, heartbeats, task completion) is authenticated via source IP → Pod resolution. No API keys or tokens are exchanged between agent containers and the gateway.
+All agent→gateway communication (LLM requests, heartbeats, task completion) is over TLS and authenticated via source IP → Pod resolution. No API keys or tokens are exchanged between agent containers and the gateway.
 
 Agentry will ship a reference base image (Python and Go variants) that implements this contract. Using it is optional.
 
@@ -150,7 +152,7 @@ Agentry supports any HTTP-based LLM provider. Out of the box, the gateway unders
 
 ### Channel Platforms
 
-The User Gateway ships with adapters for Discord, WhatsApp, and a generic webhook. Additional platform adapters follow the same plugin pattern as LLM provider adapters.
+The User Gateway ships with a **generic webhook adapter** in v1 (inbound HTTP POST with configurable auth). Discord and WhatsApp adapters are planned for v1.1 — they require persistent connections and platform-specific reconnection logic. Additional platform adapters follow the same plugin pattern as LLM provider adapters.
 
 ## Scoping Summary
 
@@ -172,7 +174,7 @@ Agentry ships as a Helm chart that installs:
 
 - The CRDs (AgentClass, ModelProvider, Agent, AgentTask, AgentChannel).
 - The operator Deployment with RBAC, ServiceAccount, and leader election.
-- The Agentry Gateway Deployment with its RBAC and ServiceAccount.
+- The Agentry Gateway Deployment with its RBAC, ServiceAccount, PodDisruptionBudget (`minAvailable: 1`), and `maxUnavailable: 1` rolling update strategy.
 - A default set of AgentClasses (e.g., `standard`, `sandboxed`) that platform teams can customize or delete.
 - Optional: a sample ModelProvider manifest stub (keys not included) as a starting template.
 
@@ -180,4 +182,4 @@ No cert-manager dependency — admission webhooks are not used.
 
 The Helm chart supports a tiered on-ramp:
 1. **Gateway only**: install the chart, configure a ModelProvider, and point existing workloads at the gateway for LLM traffic and spend tracking. No AgentClass or Agent resources required.
-2. **Full agent lifecycle**: configure AgentClasses, deploy Agents and AgentTasks with hibernation and wake-on-demand, and connect them to user-facing channels via AgentChannels. Channel integration is included in this tier because wake-on-demand requires a channel to be fully testable.
+2. **Full agent lifecycle**: configure AgentClasses, deploy Agents and AgentTasks with hibernation and wake-on-demand, and connect them to user-facing channels via AgentChannels (webhook in v1). Channel integration is included in this tier because wake-on-demand requires a channel to be fully testable.

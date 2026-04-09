@@ -52,7 +52,7 @@ Agentry consists of a controller (Go, `controller-runtime`) and a gateway, both 
 | `ModelProvider` | Cluster | Platform | Managed LLM provider with spend tracking, budget guardrails, and fallback |
 | `Agent` | Namespace | Developer | Persistent agent workload |
 | `AgentTask` | Namespace | Developer | Ephemeral, goal-driven agent (analogous to Job) |
-| `AgentChannel` | Namespace | Developer | Connection between a running Agent and a user-facing channel (Discord, WhatsApp, webhook) |
+| `AgentChannel` | Namespace | Developer | Connection between a running Agent and a user-facing channel (webhook in v1; Discord, WhatsApp in v1.1) |
 
 ### Five Reconcilers (no webhooks)
 
@@ -60,7 +60,7 @@ Agentry consists of a controller (Go, `controller-runtime`) and a gateway, both 
 - **ModelProviderReconciler** — validates credentials Secret, probes provider health, reconciles budget state from the gateway's in-process counters.
 - **AgentReconciler** — most complex; drives the persistent-Agent state machine (Pending → Provisioning → Running → Idle → Hibernating → Hibernated → Resuming, plus Degraded/Failed/Terminating). Owns Pod, PVC, Service, ConfigMap.
 - **AgentTaskReconciler** — drives the task state machine (Pending → Provisioning → Running → Completing → Succeeded/Failed/TimedOut). Collects artifacts on completion.
-- **AgentChannelReconciler** — validates referenced Agent exists and has a Service, validates channel credentials, monitors channel health. The gateway watches AgentChannel resources directly for platform connection management.
+- **AgentChannelReconciler** — validates referenced Agent exists and has a Service, validates channel credentials, monitors channel health, manages dynamic per-namespace Roles for gateway Secret access. The gateway watches AgentChannel resources directly for webhook endpoint management.
 
 Field-level validation uses CEL expressions in CRD schemas. Cross-resource validation runs at reconcile time and is surfaced as status conditions. No admission webhooks, no cert-manager dependency.
 
@@ -68,9 +68,9 @@ Field-level validation uses CEL expressions in CRD schemas. Cross-resource valid
 
 A replicated Deployment in `agentry-system` serving two listeners:
 
-**LLM Gateway** (agent → LLM provider): Agents call `$AGENTRY_PROVIDER_ENDPOINT` (the gateway Service). The gateway validates the model, checks namespace access, enforces soft budget guardrails, applies rate limits, routes to the upstream provider (with fallback), extracts token usage from the response, and updates spend counters. Credentials are read directly from Secrets in `agentry-system` — they never leave that namespace.
+**LLM Gateway** (agent → LLM provider): Agents call `$AGENTRY_PROVIDER_ENDPOINT` (HTTPS, TLS-secured). The gateway validates the model, checks namespace access, enforces soft budget guardrails, applies rate limits, routes to the upstream provider (with same-type fallback only — no cross-format translation), extracts token usage from the response, and updates spend counters. Returns structured JSON error responses on failure. Credentials are read directly from Secrets in `agentry-system` — they never leave that namespace.
 
-**User Gateway** (channel → agent): Receives inbound platform events (Discord, WhatsApp, webhooks), normalizes them into the Agentry message envelope, looks up the AgentChannel to find the target Agent, and delivers via `POST /v1/message` to the agent's ClusterIP Service. If the agent is hibernated, the gateway triggers a wake via the controller's activator endpoint.
+**User Gateway** (channel → agent): Receives inbound webhook events, normalizes them into the Agentry message envelope, looks up the AgentChannel to find the target Agent, and delivers via `POST /v1/message` to the agent's ClusterIP Service. If the agent is hibernated, the gateway triggers a wake via the controller's authenticated activator endpoint. v1 supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1.
 
 Budget state is maintained in-process in the gateway. Multi-replica consistency is approximate (reconciled every 30s by the controller). Budgets are **soft limits** by design.
 
@@ -79,10 +79,10 @@ Budget state is maintained in-process in the gateway. Multi-replica consistency 
 Hibernation works by deleting the Pod while retaining the PVC. On wake, the controller recreates the Pod with the same PVC. The Service remains throughout (no endpoints while hibernated).
 
 Wake-on-demand is a v1 feature, triggered by:
-- **User Gateway**: a channel message arrives for a hibernated agent; the gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`)
+- **User Gateway**: a webhook message arrives for a hibernated agent; the gateway calls the controller's authenticated activator endpoint (`POST /v1/activate/{namespace}/{agentName}`, HMAC-signed)
 - **Manual annotation**: `kubectl annotate agent foo agentry.io/wake=true`
 
-The gateway waits up to `spec.lifecycle.wakeTimeout` (defaults from AgentClass) for the Pod to become Ready before returning an error to the channel platform.
+The gateway waits up to `spec.lifecycle.wakeTimeout` (defaults from AgentClass) for the Pod to become Ready before returning a timeout error to the webhook caller.
 
 ### State Machines
 
@@ -102,7 +102,7 @@ Full transition tables are in `docs/CONTROLLER.md`. Key points:
 Agent containers must:
 1. Expose HTTP health on `$AGENTRY_HEALTH_PORT` (default 8080).
 2. Handle SIGTERM gracefully.
-3. (Optional) Send LLM traffic to `$AGENTRY_PROVIDER_ENDPOINT` (the gateway), not providers directly. Only injected when `spec.providers` is present.
+3. (Optional) Send LLM traffic to `$AGENTRY_PROVIDER_ENDPOINT` (HTTPS, the gateway), not providers directly. Trust the CA at `$AGENTRY_CA_CERT`. Only injected when `spec.providers` is present.
 4. (Optional) Expose `POST /v1/message` on `$AGENTRY_HEALTH_PORT` to receive channel messages via AgentChannel.
 5. (Optional) Emit heartbeats to `POST /v1/agent/heartbeat` on the gateway for idle detection.
 6. (AgentTask) Call `POST /v1/task/complete` on the gateway on completion.
@@ -129,6 +129,11 @@ No cert-manager dependency — no admission webhooks are used.
 - **Two-tier platform/developer split**: cluster-scoped resources (AgentClass, ModelProvider) set guardrails; namespace-scoped resources (Agent, AgentTask, AgentChannel) let developers self-serve.
 - **BYO image**: Agentry doesn't dictate agent framework or language; any image satisfying the runtime contract works.
 - **Cluster-level gateway over sidecar**: per-Pod sidecar was rejected because Kubernetes NetworkPolicy cannot enforce per-container rules within a Pod (shared network namespace). The cluster-level gateway in `agentry-system` provides clean credential isolation and enforceable NetworkPolicy. See `docs/PROVIDER.md` for the option analysis.
+- **TLS on LLM Gateway**: agent→gateway LLM traffic is encrypted via operator-managed self-signed CA (no cert-manager dependency). Protects prompts/completions from network sniffing on shared nodes.
+- **Same-type fallback only**: fallback providers must have the same `spec.type` as the primary. No cross-format API translation (e.g., Anthropic → OpenAI). Keeps the gateway simple and avoids a large, error-prone translation surface.
+- **Webhook-only channels in v1**: the User Gateway ships with a generic webhook adapter. Discord, WhatsApp, and other platform-specific adapters are deferred to v1.1 to reduce implementation surface.
+- **Authenticated activator endpoint**: gateway→controller wake-up calls are HMAC-signed to prevent unauthorized agent wake-ups.
+- **Dynamic RBAC for channel credentials**: the AgentChannelReconciler creates per-namespace Roles granting the gateway access to specific Secrets referenced by AgentChannels, rather than granting blanket Secret access.
 - **Agent Sandbox integration** as an optional runtime backend (`spec.runtime.backend: agentSandbox` on AgentClass).
 - **No external exposure management**: Agentry creates ClusterIP Services only; Ingress/Gateway is the developer's responsibility.
 

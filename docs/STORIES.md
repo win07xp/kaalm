@@ -6,7 +6,7 @@ This document describes who uses Agentry and how. The scenarios here are intende
 
 The motivating deployment for Agentry is a **shared Kubernetes cluster running hundreds of personal long-lived agents**, each owned by a different user.
 
-Consider an engineering organization where every developer has their own persistent AI assistant. The platform team configures one `AgentClass` (`personal-standard`), one `ModelProvider` with a per-namespace monthly budget, and provisions namespaces for each user. Developers deploy their `Agent` and optionally connect it to their preferred channels (iMessage, Discord, a web webhook). They write one manifest; they never touch RuntimeClasses, PodSecurityContexts, or API keys.
+Consider an engineering organization where every developer has their own persistent AI assistant. The platform team configures one `AgentClass` (`personal-standard`), one `ModelProvider` with a per-namespace monthly budget, and provisions namespaces for each user. Developers deploy their `Agent` and optionally connect it to their preferred channels via webhooks (with platform-specific adapters like Discord planned for v1.1). They write one manifest; they never touch RuntimeClasses, PodSecurityContexts, or API keys.
 
 The platform team has full visibility into LLM spend per namespace. Idle agents hibernate automatically overnight and wake when the first message arrives. The platform can serve hundreds of these agents on a reasonably sized cluster because hibernated agents consume no compute.
 
@@ -30,7 +30,7 @@ Dev works on a product team. He wants to ship agents as part of his product — 
 
 His concerns:
 - Fast iteration — he wants to deploy, test, tear down, redeploy.
-- His agent should be reachable via Discord, WhatsApp, or a webhook, and remember context across conversations.
+- His agent should be reachable via webhooks (and in the future via Discord, WhatsApp), and remember context across conversations.
 - He wants to use the LLM providers his platform team has approved without managing API keys himself.
 - For some use cases, he needs a one-shot agent that does a task and self-terminates.
 
@@ -52,7 +52,7 @@ Priya creates a cluster-scoped `ModelProvider` named `anthropic-shared` referenc
 
 ### S4: Add a fallback provider for availability
 
-Priya creates a second `ModelProvider` for OpenAI and configures it as a fallback on the `anthropic-shared` provider. When Anthropic is unreachable or returning errors, the gateway automatically routes to OpenAI. She sets a lower budget on the fallback to limit spend during outages.
+Priya creates a second `ModelProvider` of the same type (e.g., a second `anthropic` provider pointing at a different account or region) and configures it as a fallback on the `anthropic-shared` provider. When the primary is unreachable or returning errors, the gateway automatically routes to the fallback. She sets a lower budget on the fallback to limit spend during outages. Note: fallback is restricted to same-type providers in v1 — cross-format fallback (e.g., Anthropic to OpenAI) is not supported because the gateway does not translate between API formats.
 
 ### S5: Revoke access for a team
 
@@ -66,11 +66,11 @@ A team is decommissioned. Priya removes their namespace from the `allowedNamespa
 
 Dev writes an `Agent` manifest for his customer support agent. He references `agentclass/standard`, specifies his container image, references `modelprovider/anthropic-shared`, sets `mode: persistent`, and requests a 5Gi PVC for conversation memory. His agent code uses the qualified model name format (`anthropic-shared/claude-opus-4-6`) in LLM API calls so the gateway knows which provider and model to route to. He `kubectl apply`s it. The controller creates a Pod, PVC, and Service. Dev `kubectl get agent` and sees it in `Running` state with an endpoint he can hit.
 
-### S7: Hibernate an idle agent and wake it automatically on the first morning message
+### S7: Hibernate an idle agent and wake it automatically on the first incoming message
 
 Dev's customer support agent is quiet overnight. The Agent spec has `idleTimeout: 30m`. After 30 minutes without traffic, the controller transitions the Agent to `Hibernating` and deletes the Pod, retaining the PVC.
 
-The next morning, a customer sends a message via Discord. The channel event arrives at the Agentry User Gateway. The gateway looks up the AgentChannel, finds the target Agent, and discovers it is `Hibernated`. The gateway calls the controller's activator endpoint to trigger a wake. While the Pod is starting (the `Resuming` phase), the gateway sends a "typing" indicator to Discord so the customer sees the bot is processing. Once the Pod is `Ready`, the gateway delivers the message and the agent responds. Dev's conversation memory is intact because the PVC persisted through hibernation.
+The next morning, the ticketing system sends a webhook message to the agent. The webhook request arrives at the Agentry User Gateway. The gateway looks up the AgentChannel, finds the target Agent, and discovers it is `Hibernated`. The gateway calls the controller's authenticated activator endpoint to trigger a wake. While the Pod is starting (the `Resuming` phase), the webhook caller blocks waiting for a response. Once the Pod is `Ready`, the gateway delivers the message and the agent responds. Dev's conversation memory is intact because the PVC persisted through hibernation.
 
 ### S8: Run an ephemeral coding agent on an issue
 
@@ -92,17 +92,19 @@ Dev `kubectl delete agent my-support-agent`. The controller drains in-flight req
 
 ## Scenarios — Channel Integration
 
-### S12: Connect a personal assistant to Discord
+### S12: Connect a personal assistant via webhook (v1) / Discord (v1.1)
 
-Dev creates a persistent `Agent` for his personal AI assistant and creates an `AgentChannel` pointing at a Discord server he administers. He provides a Discord bot token in a Secret. The gateway authenticates with Discord using the bot token and begins listening for messages in the allowed channels. When Dev (or anyone in the server) sends a message, it flows through the gateway to the agent, and the response flows back as a Discord reply. Dev's agent has conversation memory via its PVC, so context persists across sessions.
+**v1 (webhook):** Dev creates a persistent `Agent` for his personal AI assistant and creates an `AgentChannel` of type `webhook`, configuring a bearer token for authentication. He gets a webhook URL path (`/channels/personal-assistant`) that the gateway exposes. Dev configures his tools (IDE plugin, Slack integration, or a simple web client) to POST messages to this URL. The gateway authenticates, normalizes the message, delivers it to the agent, and returns the response. Dev's agent has conversation memory via its PVC, so context persists across sessions.
+
+**v1.1 (Discord):** The same flow with a native Discord adapter — Dev provides a Discord bot token, the gateway manages the WebSocket connection, and messages flow through Discord's platform natively.
 
 ### S13: Expose an agent via a generic webhook
 
 Dev's customer support team uses an internal ticketing system that can POST to webhooks. Dev creates an `AgentChannel` of type `webhook`, configures a bearer token for authentication, and gets a URL path that the gateway exposes (`/channels/support-assistant`). He configures the ticketing system to POST ticket descriptions to this URL. The gateway authenticates the request, normalizes the ticket payload into a message envelope, delivers it to the agent, and returns the agent's suggested response as the webhook response body. The ticketing system displays the suggestion to the support agent.
 
-### S14: Channel message arrives for a hibernated agent
+### S14: Webhook message arrives for a hibernated agent
 
-Same as S7 (told from the channel perspective). A user messages the Discord bot connected to an agent that is currently `Hibernated`. The gateway receives the Discord event, determines the target agent is hibernated, calls the controller activator, sends a Discord "typing" indicator, and waits up to the configured timeout for the Pod to become ready. The user sees the bot acknowledge their message immediately; the response arrives a few seconds later once the agent has resumed. If the timeout is exceeded, the gateway sends an appropriate error message to the user.
+Same as S7 (told from the channel perspective). An external system sends a webhook request to an agent that is currently `Hibernated`. The gateway receives the webhook, determines the target agent is hibernated, calls the controller's authenticated activator endpoint, and holds the webhook request open while waiting up to the configured `wakeTimeout` for the Pod to become ready. Once the agent resumes, the gateway delivers the message and returns the agent's response as the webhook HTTP response. If the timeout is exceeded, the gateway returns an appropriate error (504) to the webhook caller.
 
 ---
 
@@ -118,5 +120,5 @@ These scenarios drive specific design requirements:
 - **S9** is not a v1 acceptance criterion but informs the resource model — task and persistent agents should be built from shared primitives.
 - **S10** requires the controller to surface ModelProvider errors as Agent status conditions.
 - **S11** requires finalizers and configurable PVC reclaim policy.
-- **S12, S13** require AgentChannel with platform adapters (Discord, webhook) and the User Gateway listener.
-- **S14** requires the gateway activator to integrate with the User Gateway path for wake-on-demand of hibernated agents.
+- **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener. Discord and WhatsApp adapters are deferred to v1.1.
+- **S14** requires the gateway's authenticated activator to integrate with the User Gateway path for wake-on-demand of hibernated agents.

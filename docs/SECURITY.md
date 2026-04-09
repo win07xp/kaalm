@@ -40,12 +40,12 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 - `get, list, watch` on `AgentChannel` resources cluster-wide (to look up which Agent a channel message targets and to manage platform connections).
 - `patch` on `AgentChannel` resources cluster-wide (to write the `agentry.io/channel-disconnected` annotation during the finalizer handoff — see Controller Design doc).
 - `get, list, watch` on `ModelProvider` resources cluster-wide (for model validation, `allowedNamespaces` checks, budget configuration, and fallback chain resolution).
-- `get, watch` on `Secrets` in user namespaces where `AgentChannel` resources reference them (for channel platform credentials like Discord bot tokens). The gateway only reads Secrets explicitly referenced by `AgentChannel.spec.credentialsRef` — it does not have blanket Secret access across user namespaces.
+- `get, watch` on specific Secrets in user namespaces referenced by `AgentChannel.spec.credentialsRef` (for channel platform credentials like webhook auth tokens). This is implemented via **dynamic per-namespace Roles**: when the AgentChannelReconciler creates or updates an AgentChannel, it ensures a Role and RoleBinding exist in the agent's namespace granting the gateway ServiceAccount `get, watch` on the specific Secret named in `credentialsRef`. The reconciler cleans up these Roles when the AgentChannel is deleted. The gateway does not have blanket Secret access across user namespaces.
 - `get, list, watch` on `Pods` cluster-wide (to maintain the Pod informer cache used for source IP → namespace resolution on LLM requests, and for annotation writes).
 - `patch` on `Pod` annotations in user namespaces (to write activity timestamps and task completion status).
 - `get` on `Services` in user namespaces (to resolve Agent endpoints for message delivery).
 
-The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces but is narrowly scoped: the gateway only reads Secrets explicitly referenced by `AgentChannel.spec.credentialsRef` fields, not arbitrary Secrets. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted.
+The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces via dynamic per-namespace Roles created by the AgentChannelReconciler — the gateway only reads the specific Secrets referenced by `AgentChannel.spec.credentialsRef`, not arbitrary Secrets. These Roles are cleaned up when the AgentChannel is deleted. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted.
 
 ### Platform Engineer role
 
@@ -78,6 +78,10 @@ If an agent needs cluster API access (e.g., a Kubernetes-administering agent), t
 
 The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — via **source IP → Pod resolution** using the Pod informer cache. This is the same mechanism used for namespace identification (see Gateway Design doc). Since agent Pods have no Kubernetes API credentials by default, and the gateway identifies callers by their cluster-assigned source IP, no token-based authentication is needed between agent containers and the gateway.
 
+### Gateway→Controller Authentication (Activator)
+
+The controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) is authenticated to prevent unauthorized wake-ups. The operator generates a shared HMAC key on installation and stores it in a Secret in `agentry-system` (`agentry-activator-key`). The gateway includes an HMAC-signed `Authorization` header on each activation request; the controller validates the signature and rejects requests with stale timestamps (>30s). This ensures only the gateway can trigger agent wake-ups. See Gateway Design doc § Activator Authentication for details.
+
 ---
 
 ## Credential Handling
@@ -100,6 +104,14 @@ The gateway authenticates all inbound requests from agent containers — LLM API
 
 Channel credentials are namespace-scoped for organizational isolation — each namespace contains only the credentials for its own agents' channels. They are created by the platform team or a provisioning service; developers do not need Secret access in their namespace.
 
+### In-cluster TLS (Agent → Gateway)
+
+The LLM Gateway listener serves TLS to protect prompts and completions in transit within the cluster. Without TLS, LLM payloads traverse the cluster network in plaintext — unacceptable when agent containers run untrusted code on shared nodes.
+
+The operator manages a self-signed CA (`agentry-gateway-ca` Secret) and a TLS serving certificate (`agentry-gateway-tls` Secret), both in `agentry-system`. The CA certificate is injected into agent Pods as a projected volume (`/var/run/agentry/ca.crt`). Agent containers use this CA to verify the gateway's TLS certificate when calling `$AGENTRY_PROVIDER_ENDPOINT` (an `https://` URL). See Gateway Design doc § TLS on the LLM Gateway Listener for certificate lifecycle details.
+
+The User Gateway's delivery to agent Services (`POST /v1/message`) remains plaintext HTTP — this traffic is initiated by the trusted gateway, not by untrusted agent containers.
+
 ### Protecting agent containers from LLM provider access
 
 Because the gateway is a separate Pod in `agentry-system`, NetworkPolicy can cleanly enforce agent isolation without any per-container workarounds:
@@ -115,14 +127,15 @@ egress:
         matchLabels:
           app.kubernetes.io/name: agentry-gateway
     ports:
-      - port: 8080
+      - port: 8443      # LLM Gateway (TLS)
+        protocol: TCP
   - to:                    # DNS
     - namespaceSelector: {}
     ports:
       - port: 53
 ```
 
-Agent containers that attempt to call LLM providers directly are blocked at the NetworkPolicy level. No service mesh or L7-capable CNI is required for this guarantee — standard Kubernetes NetworkPolicy is sufficient because the enforcement is cross-Pod.
+Agent containers that attempt to call LLM providers directly are blocked at the NetworkPolicy level. No service mesh or L7-capable CNI is required for this guarantee — standard Kubernetes NetworkPolicy is sufficient because the enforcement is cross-Pod. The LLM Gateway listens on port 8443 (TLS); the User Gateway listens on a separate port (8080, plaintext, inbound from external platforms via Ingress).
 
 ---
 
@@ -168,10 +181,10 @@ Every Agent/AgentTask has resource limits enforced via Pod `resources.limits`. A
 
 ### What flows where
 
-- **Agent → LLM Gateway**: prompts and completions. In-cluster Service call (cross-namespace, encrypted if mTLS/service mesh is present; plaintext within cluster by default).
-- **LLM Gateway → LLM Provider**: prompts and completions over egress. Always HTTPS.
-- **Channel Platform → User Gateway**: inbound user messages. HTTPS inbound to the gateway's public endpoint.
-- **User Gateway → Agent**: normalized message envelope via `POST /v1/message` to the agent's ClusterIP Service.
+- **Agent → LLM Gateway**: prompts and completions. In-cluster HTTPS (TLS terminated at the gateway; agent trusts the operator-managed CA). See § In-cluster TLS above.
+- **LLM Gateway → LLM Provider**: prompts and completions over egress. Always HTTPS. Custom CA bundles supported for enterprise environments — see Gateway Design doc § Upstream TLS Configuration.
+- **Channel Platform → User Gateway**: inbound webhook messages. HTTPS inbound to the gateway's public endpoint (via Ingress).
+- **User Gateway → Agent**: normalized message envelope via `POST /v1/message` to the agent's ClusterIP Service (plaintext HTTP — trusted initiator).
 - **Gateway → Controller**: activity timestamps and task completion status via Pod annotation writes.
 - **Controller ↔ API server**: CRD updates, Pod creation, events. Standard kubelet/apiserver channels.
 
@@ -204,9 +217,11 @@ Agentry does **not** log prompts or completions. LLM payloads are sensitive (may
 | Compromised gateway reads all LLM credentials | Gateway Secret access scoped to `agentry-system`; gateway image should be signed and verified; restrict who can update gateway Deployment |
 | Agent makes requests to unauthorized provider | Gateway validates model against ModelProvider.models and namespace against allowedNamespaces |
 | Budget guardrails exceeded under high concurrency | Budgets are documented as soft limits with bounded overspend; hard caps at the provider account level recommended for strict requirements |
-| Malicious message from channel platform | Platform adapter authenticates inbound events (Discord signature verification, etc.) before processing |
+| Malicious message from channel platform | Webhook adapter authenticates inbound events (bearer token, HMAC signature) before processing |
 | Agent spoofs namespace to bypass budget/access controls | Gateway identifies namespace via source IP → Pod resolution from informer cache; source IPs are assigned by the cluster network and unforgeable from within a container |
 | Channel credential leaked from agent namespace | Channel credentials are stored in the agent's namespace; blast radius is limited to that namespace's channels. The platform team (not the developer) is responsible for rotation. |
+| Unauthorized agent wake-up via activator endpoint | Activator endpoint is HMAC-authenticated; only the gateway (which holds the shared key) can trigger wake-ups. See § Gateway→Controller Authentication above. |
+| LLM traffic sniffed on cluster network | LLM Gateway serves TLS; agent→gateway traffic is encrypted. See § In-cluster TLS above. |
 
 ---
 

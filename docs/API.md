@@ -242,7 +242,7 @@ status:
 - **Secret scoping**: credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers.
 - **Budget state**: persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy.
 - **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Exact match is preferred where possible.
-- **Fallback chains** are flat (not nested). Circular references are rejected by validation.
+- **Fallback chains** are flat (not nested). Circular references are rejected by validation. Fallback providers must have the **same `spec.type`** as the primary provider (e.g., both `anthropic` or both `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats.
 - **Cost fields are strings** (not floats) to avoid precision issues. The gateway parses them as decimals.
 
 ---
@@ -439,7 +439,7 @@ status:
 
 ## AgentChannel
 
-AgentChannel is a namespace-scoped resource that connects a running Agent to a user-facing communication channel. It is how humans reach agents: via Discord, WhatsApp, iMessage, a generic webhook, or other platform adapters supported by the User Gateway.
+AgentChannel is a namespace-scoped resource that connects a running Agent to a user-facing communication channel. In v1, the only supported channel type is **webhook** (generic inbound HTTP POST with configurable auth). Discord, WhatsApp, and other platform-specific adapters are deferred to v1.1 — they require persistent connections and platform-specific reconnection logic that adds significant implementation surface.
 
 ### Spec
 
@@ -454,22 +454,18 @@ spec:
   agentRef:
     name: support-assistant
 
-  # Channel platform type. Built-in: "discord" | "whatsapp" | "webhook"
-  type: discord
+  # Channel platform type. v1 supports: "webhook"
+  # Discord and WhatsApp adapters are planned for v1.1.
+  type: webhook
 
-  # Credentials for the channel platform. Referenced Secret must exist
-  # in the same namespace as the AgentChannel.
-  credentialsRef:
-    name: discord-bot-credentials
-    key: bot-token
-
-  # Platform-specific configuration.
-  discord:
-    # The guild (server) ID to listen in.
-    guildId: "123456789012345678"
-    # Optional: restrict to specific channels. Empty = all channels in the guild.
-    allowedChannelIds:
-      - "987654321098765432"
+  # Webhook-specific configuration.
+  webhook:
+    # The gateway exposes this path externally (requires an Ingress pointing
+    # at the gateway Service in agentry-system).
+    path: /channels/support-assistant
+    auth:
+      type: bearer
+      secretRef: { name: webhook-secret, key: token }
 
   # Optional: override how the gateway delivers messages to the agent.
   # By default the gateway posts to POST /v1/message on the agent's Service port.
@@ -486,26 +482,23 @@ spec:
     ttl: "1h"    # session expires after this much inactivity
 ```
 
-### Webhook variant
+### Future platform types (v1.1+)
+
+When Discord and WhatsApp adapters are added in v1.1, the spec will support platform-specific configuration blocks:
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
-kind: AgentChannel
-metadata:
-  name: support-webhook
-  namespace: team-support
 spec:
-  agentRef:
-    name: support-assistant
-  type: webhook
-  webhook:
-    # The gateway exposes this path externally (requires an Ingress pointing
-    # at the gateway Service in agentry-system).
-    path: /channels/support-assistant
-    auth:
-      type: bearer
-      secretRef: { name: webhook-secret, key: token }
+  type: discord
+  credentialsRef:
+    name: discord-bot-credentials
+    key: bot-token
+  discord:
+    guildId: "123456789012345678"
+    allowedChannelIds:
+      - "987654321098765432"
 ```
+
+These types require persistent connections (Discord WebSocket, WhatsApp Cloud API registration) and platform-specific reconnection logic, which is why they are deferred.
 
 ### Status
 
@@ -519,22 +512,23 @@ status:
       reason: AgentReachable
     - type: PlatformConnected
       status: "True"
-      reason: BotOnline
-      message: "Discord bot connected, listening in guild 123456789012345678"
+      reason: WebhookReady
+      message: "Webhook endpoint /channels/support-assistant is active"
   messagesDelivered: 142
   lastMessageTime: "2026-04-05T11:58:22Z"
 ```
 
 ### Design notes
 
-- **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages platform connections based on their specs. The reconciler's role is validation and status reporting.
-- **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (Discord bot tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
+- **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
+- **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
+- **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway tracks `(channelId, userId)` pairs and adds a `sessionId` to the message envelope. Agents use this to look up conversation context in their PVC. When disabled, each message is stateless from the gateway's perspective.
 - **Session state is in-memory in the gateway for v1.** Sessions are lost on gateway restarts or rebalancing — the next message from the same user starts a new session. This is acceptable because the agent's PVC holds the actual conversation state; the session ID is a routing convenience. The message envelope always includes `channelId` and `userId`, so agents can re-derive context without a persistent session. Durable session storage may be added in a future version.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
-- **Wake-on-demand integration**: if the target Agent is `Hibernated` when a channel message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. The platform receives an appropriate "typing" or "processing" indicator while the agent resumes.
+- **Wake-on-demand integration**: if the target Agent is `Hibernated` when a webhook message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. The webhook caller blocks until the agent is ready and responds, or receives a timeout error if `wakeTimeout` is exceeded.
 
 ---
 
@@ -552,6 +546,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 8. `lifecycle.idleTimeout` must not exceed `AgentClass.spec.lifecycle.maxIdleTimeout`.
 9. `lifecycle.wakeTimeout` must not exceed `AgentClass.spec.lifecycle.maxWakeTimeout`.
 10. `ModelProvider.spec.fallback` chains must not be circular.
+13. `ModelProvider.spec.fallback` entries must have the same `spec.type` as the primary provider (no cross-format fallback).
 11. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
 12. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
 
@@ -629,20 +624,20 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 ```json
 {
   "messageId": "550e8400-e29b-41d4-a716-446655440000",
-  "channelType": "discord",
-  "channelId": "987654321098765432",
-  "userId": "111222333444555666",
+  "channelType": "webhook",
+  "channelId": "/channels/support-assistant",
+  "userId": "caller-id-from-header-or-body",
   "sessionId": "optional-session-uuid",
   "content": "Hello, I need help with my order",
   "attachments": [],
-  "metadata": { "guildId": "123456789012345678" }
+  "metadata": {}
 }
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `messageId` | string (UUID) | yes | Unique identifier for this message, for deduplication |
-| `channelType` | string | yes | Platform type: `"discord"`, `"whatsapp"`, `"webhook"` |
+| `channelType` | string | yes | Platform type: `"webhook"` in v1 (Discord, WhatsApp in v1.1) |
 | `channelId` | string | yes | Platform-specific channel identifier |
 | `userId` | string | yes | Platform-specific user identifier |
 | `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled: true`. Stable across messages in a session; changes when a session expires or the gateway restarts. |
@@ -666,4 +661,8 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 | `attachments` | array | no | Attachments to send in the reply |
 | `metadata` | map | no | Optional platform-specific reply metadata |
 
-**Response codes:** `200 OK` with the response envelope. The gateway translates the response body into the platform-native reply format and sends it. Non-200 responses are treated as delivery failures and recorded in AgentChannel status conditions. If the agent takes longer than the channel platform's timeout allows, the gateway sends a "still processing" indicator and delivers the reply asynchronously when it arrives.
+**Response codes:** `200 OK` with the response envelope. The gateway returns the response body as the webhook HTTP response. Non-200 responses are treated as delivery failures and recorded in AgentChannel status conditions.
+
+### LLM Gateway Error Responses
+
+When the LLM Gateway cannot fulfill a request, it returns a structured JSON error body with an `error.type` field and appropriate HTTP status code. See the Gateway Design doc (`PROVIDER.md` § Gateway Error Responses) for the full error schema and status code mapping. Key error types: `access_denied` (403), `rate_limited` (429), `budget_exhausted` (503), `provider_error` (502), `provider_unavailable` (503).

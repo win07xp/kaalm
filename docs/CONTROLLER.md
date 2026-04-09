@@ -37,8 +37,9 @@ Reconciliation steps:
 
 1. Validate the referenced Secret exists and contains the expected key. If not, set `Ready=False, reason=CredentialsMissing`.
 2. If health checks are enabled, dispatch a probe against the provider endpoint. Track result in `status.conditions[type=Healthy]` with exponential backoff on failures.
-3. Reconcile budget state: read per-replica partial spend counters from the gateway (via a lightweight scrape of each gateway replica's internal metrics endpoint), sum them, compute percentages, and update `status.budgetUsage` per namespace. Write the canonical total back to a ConfigMap so gateway replicas can refresh their local counters on the next cycle.
-4. Validate fallback chain: walk `spec.fallback` and confirm no circular references, all referenced providers exist. Emit `Ready=False` if invalid.
+3. Reconcile budget state: read per-replica partial spend counters from the gateway's budget ConfigMap in `agentry-system` (`agentry-budget-{providerName}`, where each key is a gateway Pod name with JSON spend data — see Gateway Design doc § Budget State Management). Sum the per-replica partials, write the canonical total to the `_canonical` key, and update `status.budgetUsage` per namespace.
+4. Health-check the gateway: the reconciler periodically (every 30s) probes the gateway Service's health endpoint. If unreachable, set `GatewayReachable=False` on the ModelProvider's status conditions. This signals that LLM traffic may be disrupted for all agents using this provider. When the gateway recovers, the condition is set back to `True`.
+5. Validate fallback chain: walk `spec.fallback` and confirm no circular references, all referenced providers exist, and all fallback providers have the same `spec.type` as the primary. Emit `Ready=False` if invalid.
 
 The ModelProviderReconciler is **not** responsible for credential distribution to agent pods. Credentials are held in `agentry-system` Secrets and read directly by the gateway.
 
@@ -181,6 +182,8 @@ The reconciler reads these annotations and updates `lastActivityTime` based on t
 - `both`: the most recent timestamp from either annotation is used.
 
 This avoids tight coupling to the Agent CRD for a high-frequency field while giving developers control over what constitutes "activity" for their agent.
+
+**Activity tracking health**: the reconciler maintains an `ActivityTrackingHealthy` status condition on Agent. If an Agent is in `Running` phase, has `activitySource: providerTraffic` or `both`, and the `agentry.io/last-traffic` annotation has not been updated for longer than 2x the reconcile interval (10 minutes) despite the gateway reporting healthy and the ModelProvider showing recent traffic, the condition is set to `False` with reason `StaleActivityAnnotation`. This catches cases where the gateway's Pod annotation patch RBAC is broken — without it, agents would silently appear idle and hibernate while actively handling traffic.
 
 **Hibernation mechanics:**
 

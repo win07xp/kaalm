@@ -4,7 +4,7 @@
 
 ## What is Agentry?
 
-Agentry is a Kubernetes-native platform that makes AI agents a first-class workload type. It provides a set of custom resources and a controller that manage the full lifecycle of agents — from deployment and hibernation through resumption and teardown — alongside two managed gateway types: an **LLM Gateway** for controlled access to AI model providers, and a **User Gateway** for connecting agents to channels like Discord, WhatsApp, and webhooks.
+Agentry is a Kubernetes-native platform that makes AI agents a first-class workload type. It provides a set of custom resources and a controller that manage the full lifecycle of agents — from deployment and hibernation through resumption and teardown — alongside two managed gateway types: an **LLM Gateway** (TLS-secured) for controlled access to AI model providers, and a **User Gateway** for connecting agents to user-facing channels via webhooks (Discord, WhatsApp, and other platform-specific adapters are planned for v1.1).
 
 Agentry is **not** an agent framework, an agent marketplace, or an IDE. It does not define how an agent thinks, which tools it uses, or how users talk to it at the application layer. It defines how an agent is **run**: what image, under what isolation policy, against which LLM providers, with what lifecycle, within what cost guardrails, and over what user-facing channels.
 
@@ -29,7 +29,7 @@ Agentry introduces five custom resources:
 The controller reconciles these resources into standard Kubernetes primitives — Pods, PVCs, Services, ConfigMaps — while layering in agent-aware lifecycle logic (idle detection, hibernation, wake-on-demand, task completion semantics) and managing two shared gateway components:
 
 - The **LLM Gateway**: a replicated proxy Deployment in `agentry-system` that mediates all agent-to-provider traffic. It provides spend visibility, soft budget guardrails, rate limiting, fallback routing, and credential isolation. Using it is optional per agent.
-- The **User Gateway**: a listener on the same gateway Deployment that receives inbound messages from configured channels, normalizes them into a standard envelope, and delivers them to the agent's HTTP endpoint.
+- The **User Gateway**: a listener on the same gateway Deployment that receives inbound webhook messages, normalizes them into a standard envelope, and delivers them to the agent's HTTP endpoint. Discord, WhatsApp, and other platform-specific adapters are planned for v1.1.
 
 ## Budget Visibility and Guardrails
 
@@ -66,8 +66,8 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 **In scope:**
 - All five CRDs and the reconciling controller
 - Persistent and task-mode agent lifecycle (including idle detection, hibernation, wake-on-demand, timeout, artifact collection)
-- LLM Gateway: cluster-level proxy with spend tracking, soft budget guardrails, rate limiting, fallback chains, and provider credential isolation
-- User Gateway: channel integration via AgentChannel (Discord, WhatsApp, generic webhook in v1)
+- LLM Gateway: TLS-secured cluster-level proxy with spend tracking, soft budget guardrails, rate limiting, same-type fallback chains (no cross-format translation), and provider credential isolation
+- User Gateway: channel integration via AgentChannel (generic webhook in v1; Discord and WhatsApp adapters in v1.1)
 - Integration with Agent Sandbox as an optional runtime backend
 - RBAC, namespace scoping, and a documented security model
 - Helm chart with tiered on-ramp (gateway-only → full agent lifecycle with channels)
@@ -79,5 +79,7 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 - Multi-cluster federation
 - Advanced scheduling (GPU-awareness, priority classes, preemption policies specific to agents)
 - Hard budget enforcement (synchronous per-request aggregation)
+- Cross-format provider fallback (e.g., Anthropic → OpenAI translation)
+- Platform-specific channel adapters (Discord, WhatsApp) — v1.1
 
 The v1 scope is deliberately narrow: get the workload abstraction, provider management, and channel integration right first. Everything else is an additive layer.
