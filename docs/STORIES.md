@@ -104,7 +104,7 @@ Dev's customer support team uses an internal ticketing system that can POST to w
 
 ### S14: Webhook message arrives for a hibernated agent
 
-Same as S7 (told from the channel perspective). An external system sends a webhook request to an agent that is currently `Hibernated`. The gateway receives the webhook, determines the target agent is hibernated, calls the controller's authenticated activator endpoint, and holds the webhook request open while waiting up to the configured `wakeTimeout` for the Pod to become ready. Once the agent resumes, the gateway delivers the message and returns the agent's response as the webhook HTTP response. If the timeout is exceeded, the gateway returns an appropriate error (504) to the webhook caller.
+Same flow as S7 from the channel perspective. The additional detail: if `wakeTimeout` is exceeded before the Pod becomes Ready, the gateway returns HTTP 504 to the webhook caller rather than holding the connection indefinitely.
 
 ---
 

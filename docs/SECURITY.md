@@ -41,11 +41,11 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 - `patch` on `AgentChannel` resources cluster-wide (to write the `agentry.io/channel-disconnected` annotation during the finalizer handoff — see Controller Design doc).
 - `get, list, watch` on `ModelProvider` resources cluster-wide (for model validation, `allowedNamespaces` checks, budget configuration, and fallback chain resolution).
 - `get, watch` on specific Secrets in user namespaces referenced by `AgentChannel.spec.credentialsRef` (for channel platform credentials like webhook auth tokens). This is implemented via **dynamic per-namespace Roles**: when the AgentChannelReconciler creates or updates an AgentChannel, it ensures a Role and RoleBinding exist in the agent's namespace granting the gateway ServiceAccount `get, watch` on the specific Secret named in `credentialsRef`. The reconciler cleans up these Roles when the AgentChannel is deleted. The gateway does not have blanket Secret access across user namespaces.
-- `get, list, watch` on `Pods` cluster-wide (to maintain the Pod informer cache used for source IP → namespace resolution on LLM requests, and for annotation writes).
-- `patch` on `Pod` annotations in user namespaces (to write activity timestamps and task completion status).
+- `get, list, watch` on `Pods` cluster-wide (to maintain the Pod informer cache used for source IP → namespace resolution on LLM requests).
+- `create, update, delete` on `ConfigMaps` in user namespaces (to write task completion data to per-task ConfigMaps; these ConfigMaps are owned by the AgentTask and cascade-deleted).
 - `get` on `Services` in user namespaces (to resolve Agent endpoints for message delivery).
 
-The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces via dynamic per-namespace Roles created by the AgentChannelReconciler — the gateway only reads the specific Secrets referenced by `AgentChannel.spec.credentialsRef`, not arbitrary Secrets. These Roles are cleaned up when the AgentChannel is deleted. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted.
+The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces via dynamic per-namespace Roles created by the AgentChannelReconciler — the gateway only reads the specific Secrets referenced by `AgentChannel.spec.credentialsRef`, not arbitrary Secrets. These Roles are cleaned up when the AgentChannel is deleted. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted. ConfigMap write access in user namespaces is used only for task completion data (per-task ConfigMaps owned by the AgentTask). Activity tracking does not require any etcd writes — the gateway maintains activity timestamps in-memory and serves them to the controller via an internal HTTP API.
 
 ### Platform Engineer role
 
@@ -76,7 +76,7 @@ If an agent needs cluster API access (e.g., a Kubernetes-administering agent), t
 
 ### Agent→Gateway Authentication
 
-The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — via **source IP → Pod resolution** using the Pod informer cache. This is the same mechanism used for namespace identification (see Gateway Design doc). Since agent Pods have no Kubernetes API credentials by default, and the gateway identifies callers by their cluster-assigned source IP, no token-based authentication is needed between agent containers and the gateway.
+The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — via **source IP → Pod resolution** using the Pod informer cache. This is the same mechanism used for namespace identification (see Gateway Design doc). Since agent Pods have no Kubernetes API credentials by default, and the gateway identifies callers by their cluster-assigned source IP, no token-based authentication is needed between agent containers and the gateway. Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
 
 ### Gateway→Controller Authentication (Activator)
 
@@ -185,7 +185,8 @@ Every Agent/AgentTask has resource limits enforced via Pod `resources.limits`. A
 - **LLM Gateway → LLM Provider**: prompts and completions over egress. Always HTTPS. Custom CA bundles supported for enterprise environments — see Gateway Design doc § Upstream TLS Configuration.
 - **Channel Platform → User Gateway**: inbound webhook messages. HTTPS inbound to the gateway's public endpoint (via Ingress).
 - **User Gateway → Agent**: normalized message envelope via `POST /v1/message` to the agent's ClusterIP Service (plaintext HTTP — trusted initiator).
-- **Gateway → Controller**: activity timestamps and task completion status via Pod annotation writes.
+- **Controller → Gateway**: activity timestamp queries via `GET /v1/activity` (HTTP, internal ClusterIP Service).
+- **Gateway → API Server**: task completion data written to per-task ConfigMaps in user namespaces.
 - **Controller ↔ API server**: CRD updates, Pod creation, events. Standard kubelet/apiserver channels.
 
 ### Audit trail

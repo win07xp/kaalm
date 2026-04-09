@@ -37,7 +37,7 @@ Reconciliation steps:
 
 1. Validate the referenced Secret exists and contains the expected key. If not, set `Ready=False, reason=CredentialsMissing`.
 2. If health checks are enabled, dispatch a probe against the provider endpoint. Track result in `status.conditions[type=Healthy]` with exponential backoff on failures.
-3. Reconcile budget state: read per-replica partial spend counters from the gateway's budget ConfigMap in `agentry-system` (`agentry-budget-{providerName}`, where each key is a gateway Pod name with JSON spend data — see Gateway Design doc § Budget State Management). Sum the per-replica partials, write the canonical total to the `_canonical` key, and update `status.budgetUsage` per namespace.
+3. Reconcile budget state: read per-replica partial spend counters from the gateway's budget ConfigMap in `agentry-system` (`agentry-budget-{providerName}`, where each key is a gateway Pod name with JSON spend data — see Gateway Design doc § Budget State Management). Before summing, cross-reference ConfigMap keys against the current set of gateway Pod names (from the gateway Deployment's Pods) and delete stale entries left by scaled-down or replaced replicas. Sum the remaining per-replica partials, write the canonical total to the `_canonical` key, and update `status.budgetUsage` per namespace. On budget period rollover (midnight UTC), archive the previous period's totals to ModelProvider status, delete all per-replica keys from the ConfigMap, and write a fresh `_canonical: {}`.
 4. Health-check the gateway: the reconciler periodically (every 30s) probes the gateway Service's health endpoint. If unreachable, set `GatewayReachable=False` on the ModelProvider's status conditions. This signals that LLM traffic may be disrupted for all agents using this provider. When the gateway recovers, the condition is set back to `True`.
 5. Validate fallback chain: walk `spec.fallback` and confirm no circular references, all referenced providers exist, and all fallback providers have the same `spec.type` as the primary. Emit `Ready=False` if invalid.
 
@@ -66,7 +66,7 @@ Reconciliation steps:
 
 1. Resolve AgentClass and ModelProviders (same validation as Agent).
 2. Drive the AgentTask state machine (see below).
-3. On `Completing`: artifact values are read directly from the task completion payload posted by the agent to the gateway (`POST /v1/task/complete`). The gateway writes artifact values to an annotation on the Pod; the reconciler reads that annotation and populates `status.artifactValues`. No exec into the container is required.
+3. On `Completing`: artifact values are read from a ConfigMap created by the gateway. When the agent calls `POST /v1/task/complete`, the gateway writes the completion payload to a ConfigMap named `{taskName}-completion` in the task's namespace. The ConfigMap is owned by the AgentTask (via ownerRef) for cascade deletion. The reconciler watches for this ConfigMap, reads artifact values, and populates `status.artifactValues`. No exec into the container is required, and the completion data survives Pod crashes or eviction.
 4. Honor `ttlSecondsAfterFinished` by scheduling deletion.
 
 ### AgentChannelReconciler
@@ -111,7 +111,7 @@ The AgentChannelReconciler does not own Pod resources. The gateway watches `Agen
           │         │ Idle │──────────┘
           │         └──┬───┘
           │            │ hibernationEnabled=true
-          │            │ AND idle for grace period
+          │            │ AND idle for hibernationDelay
           │            ▼
           │      ┌─────────────┐
           │      │ Hibernating │   scaling pod to zero
@@ -161,7 +161,7 @@ The AgentChannelReconciler does not own Pod resources. The gateway watches `Agen
 | Provisioning → Running | Pod reports Ready, Service endpoint populated |
 | Running → Idle | `lastActivityTime` older than `idleTimeout` |
 | Idle → Running | Activity observed (see Activity Detection) |
-| Idle → Hibernating | Idle for 2x idleTimeout AND `hibernationEnabled` |
+| Idle → Hibernating | Idle for `hibernationDelay` (defaults from AgentClass) AND `hibernationEnabled` |
 | Hibernating → Hibernated | Pod scaled to 0, PVC retained, Service remains |
 | Hibernated → Resuming | Gateway activator calls `POST /v1/activate/{namespace}/{name}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming → Running | Pod becomes Ready |
@@ -172,18 +172,20 @@ The AgentChannelReconciler does not own Pod resources. The gateway watches `Agen
 
 **Activity Detection:**
 
-Activity is updated in `status.lastActivityTime` via Pod annotations written by the gateway. Two signal sources exist:
-- **Gateway traffic**: the LLM Gateway or User Gateway reports each request for an Agent by writing a timestamp to a controller-managed annotation (`agentry.io/last-traffic`) on the Agent Pod.
-- **Agent heartbeat**: the agent calls `POST /v1/agent/heartbeat` on the gateway; the gateway writes a timestamp to a separate annotation (`agentry.io/last-heartbeat`) on the Pod.
+Activity timestamps are maintained **in-memory in the gateway**, not in etcd. This is critical for scale — at hundreds of thousands of agents, per-request annotation writes would overwhelm the API server. Two signal sources feed the gateway's in-memory activity store:
+- **Gateway traffic**: the LLM Gateway and User Gateway record the timestamp of each request for an Agent in-memory.
+- **Agent heartbeat**: the agent calls `POST /v1/agent/heartbeat` on the gateway; the gateway updates the agent's timestamp in its in-memory store.
 
-The reconciler reads these annotations and updates `lastActivityTime` based on the Agent's `spec.lifecycle.activitySource` setting:
-- `providerTraffic` (default): only the `agentry.io/last-traffic` annotation is considered. Agent heartbeats are ignored for idle detection.
-- `agentHeartbeat`: only the `agentry.io/last-heartbeat` annotation is considered. Gateway traffic timestamps are ignored.
-- `both`: the most recent timestamp from either annotation is used.
+The gateway exposes `GET /v1/activity?namespace={ns}` returning a map of agent names to last-activity timestamps. The controller queries this endpoint on each reconcile for agents in `Running` or `Idle` phase.
 
-This avoids tight coupling to the Agent CRD for a high-frequency field while giving developers control over what constitutes "activity" for their agent.
+The reconciler evaluates `lastActivityTime` based on the Agent's `spec.lifecycle.activitySource` setting:
+- `providerTraffic` (default): only gateway-observed LLM and channel traffic timestamps are considered.
+- `agentHeartbeat`: only heartbeat timestamps are considered.
+- `both`: the most recent timestamp from either source is used.
 
-**Activity tracking health**: the reconciler maintains an `ActivityTrackingHealthy` status condition on Agent. If an Agent is in `Running` phase, has `activitySource: providerTraffic` or `both`, and the `agentry.io/last-traffic` annotation has not been updated for longer than 2x the reconcile interval (10 minutes) despite the gateway reporting healthy and the ModelProvider showing recent traffic, the condition is set to `False` with reason `StaleActivityAnnotation`. This catches cases where the gateway's Pod annotation patch RBAC is broken — without it, agents would silently appear idle and hibernate while actively handling traffic.
+The reconciler updates `status.lastActivityTime` on the Agent only when a phase transition is warranted, avoiding unnecessary etcd writes.
+
+**Gateway unavailability**: if the gateway's activity endpoint is unreachable, the controller preserves the Agent's current phase — no idle or hibernation transitions are made without activity data. The reconciler sets a `GatewayReachable=False` condition on affected Agents and requeues with backoff until the gateway recovers.
 
 **Hibernation mechanics:**
 
@@ -198,6 +200,21 @@ When an Agent is `Hibernated`, its ClusterIP Service has no endpoints — traffi
 4. The gateway holds the message and sends a "typing" or "processing" indicator to the channel platform while waiting. Once the Pod is Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), the gateway delivers the message. If the timeout is exceeded, the gateway returns an appropriate error to the channel platform.
 
 Manual wake is also supported via annotation: `kubectl annotate agent foo agentry.io/wake=true`.
+
+**Spec change handling (Running Agent):**
+
+When a developer updates an Agent's spec while it is in `Running` or `Idle` phase, the controller detects spec drift by comparing the desired Pod spec (derived from the current Agent spec and AgentClass) against the existing Pod's spec. If drift is detected in immutable Pod fields (image, resources, command, args, env, providers), the controller recreates the Pod:
+
+1. The Agent transitions to `Provisioning`.
+2. The existing Pod is deleted (SIGTERM is sent; the agent has `terminationGracePeriodSeconds` to shut down).
+3. The controller creates a new Pod with the updated spec.
+4. Once the new Pod is Ready, the Agent transitions back to `Running`.
+
+The PVC, Service, and ConfigMap are preserved — only the Pod is replaced. This is intentionally disruptive: the agent process restarts, but its persistent state (PVC) is retained.
+
+Changes to mutable fields (labels, annotations, non-structural metadata) are patched in-place without Pod recreation.
+
+If the Agent is `Hibernated`, spec changes are applied on the next wake — no Pod exists to recreate.
 
 ### AgentTask
 
@@ -249,10 +266,10 @@ Any state → Terminating (on delete or after TTL)
 | Succeeded/Failed/TimedOut → Terminating | TTL expired OR deletion requested |
 
 **Completion detection** depends on `spec.completion.condition`:
-- `agentReported`: the gateway receives `POST /v1/task/complete` from the agent container. The gateway writes the completion payload (status, message, and artifact key-values) to the Pod annotation `agentry.io/task-status`. The reconciler watches for this annotation and transitions to `Completing`.
+- `agentReported`: the gateway receives `POST /v1/task/complete` from the agent container. The gateway writes the completion payload (status, message, and artifact key-values) to a ConfigMap named `{taskName}-completion` in the task's namespace. The reconciler watches for this ConfigMap and transitions to `Completing`. Using a ConfigMap (rather than a Pod annotation) ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass.
 - `exitCode`: the reconciler watches Pod phase; exit 0 → Succeeded, non-zero → Failed.
 
-**Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `agentry.io/task-status` Pod annotation and writes them to `status.artifactValues`. No exec into the container is required. Artifacts exceeding the inline size limit (4 KiB per artifact, 32 KiB total) are stored in an auto-created ConfigMap and referenced by name in `status.artifactRefs`.
+**Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required. Artifacts exceeding the inline size limit (4 KiB per artifact, 32 KiB total) are stored in a separate auto-created ConfigMap and referenced by name in `status.artifactRefs`.
 
 ---
 

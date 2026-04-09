@@ -56,7 +56,7 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 1. **General-purpose over framework-specific.** Any container that satisfies the runtime contract can be an Agent. No assumption about language, framework, or agent architecture.
 2. **Two-tier platform/developer model.** Cluster-scoped resources (AgentClass, ModelProvider) let platform teams set guardrails. Namespace-scoped resources (Agent, AgentTask, AgentChannel) let developers self-serve within those guardrails.
 3. **Composable with the ecosystem.** Agent Sandbox can be used as a runtime backend. MCP can be used for tool integration. No reinvention of primitives that already exist.
-4. **Opinionated defaults, BYO escape hatches.** A default base image and runtime contract make the simple case simple. Custom images are a first-class path.
+4. **Opinionated defaults, BYO escape hatches.** A minimal runtime contract makes the simple case simple. Reference base images (Python and Go) are planned for a future release. Custom images are a first-class path.
 5. **Policy at the boundary, not in the workload.** Budget guardrails, isolation policy, and provider access control live in cluster-scoped resources, not in individual Agent manifests.
 6. **Kubernetes-native semantics.** Lifecycle mirrors familiar primitives: AgentClass is to Agent as StorageClass is to PVC; AgentTask is to Agent as Job is to Deployment.
 7. **Honest about tradeoffs.** Where the system makes a tradeoff (soft budget limits, approximate enforcement under concurrency), this is documented explicitly rather than obscured.

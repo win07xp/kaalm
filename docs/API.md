@@ -98,8 +98,10 @@ spec:
     defaultIdleTimeout: "30m"
     maxIdleTimeout: "24h"
     hibernationEnabled: true
-    defaultWakeTimeout: "2m"     # default time gateway waits for Pod Ready on wake
-    maxWakeTimeout: "5m"         # cap on per-Agent wakeTimeout overrides
+    defaultHibernationDelay: "30m"  # how long an agent stays Idle before hibernating
+    maxHibernationDelay: "2h"      # cap on per-Agent hibernationDelay overrides
+    defaultWakeTimeout: "2m"       # default time gateway waits for Pod Ready on wake
+    maxWakeTimeout: "5m"           # cap on per-Agent wakeTimeout overrides
     terminationGracePeriodSeconds: 60
 
   # Labels and annotations added to every Pod created under this class
@@ -192,7 +194,9 @@ spec:
     # Cluster-wide ceiling (sum across all namespaces). Optional.
     clusterUSD: "10000.00"
 
-  # Rate limits enforced at the gateway (per namespace).
+  # Rate limits enforced at the gateway (per namespace, per gateway replica).
+  # The effective cluster-wide limit is value × number of gateway replicas.
+  # E.g., with 3 replicas, requestsPerMinute: 100 gives ~300 req/min cluster-wide.
   rateLimits:
     requestsPerMinute: 300
     tokensPerMinute: 500000
@@ -294,8 +298,9 @@ spec:
   # Lifecycle: persistent means long-lived with hibernation support.
   mode: persistent
   lifecycle:
-    idleTimeout: "30m"           # transition to Hibernating after this much idle time
+    idleTimeout: "30m"           # transition to Idle after this much inactivity
     hibernationEnabled: true
+    hibernationDelay: "30m"      # how long to stay Idle before hibernating; defaults from AgentClass
     activitySource: providerTraffic   # "providerTraffic" | "agentHeartbeat" | "both"
     wakeTimeout: "2m"                # max time gateway waits for Pod Ready on wake; defaults from AgentClass
 
@@ -545,10 +550,12 @@ The following constraints are enforced at reconcile time. Failed validation resu
 7. `persistence.sizeGi` must not exceed `AgentClass.spec.persistence.maxSizeGi`.
 8. `lifecycle.idleTimeout` must not exceed `AgentClass.spec.lifecycle.maxIdleTimeout`.
 9. `lifecycle.wakeTimeout` must not exceed `AgentClass.spec.lifecycle.maxWakeTimeout`.
-10. `ModelProvider.spec.fallback` chains must not be circular.
-13. `ModelProvider.spec.fallback` entries must have the same `spec.type` as the primary provider (no cross-format fallback).
-11. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
-12. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
+10. `lifecycle.hibernationDelay` must not exceed `AgentClass.spec.lifecycle.maxHibernationDelay`.
+11. `ModelProvider.spec.fallback` chains must not be circular.
+12. `ModelProvider.spec.fallback` entries must have the same `spec.type` as the primary provider (no cross-format fallback).
+13. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
+14. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
+15. `AgentChannel.spec.webhook.path` must be globally unique across all AgentChannels in the cluster. Namespace-prefixed paths (e.g., `/channels/{namespace}/{name}`) are recommended as a convention to avoid collisions.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 
@@ -560,6 +567,7 @@ AgentClass defaults are applied at reconcile time when Agent/AgentTask fields ar
 - `persistence.sizeGi` defaults from `AgentClass.spec.persistence.defaultSizeGi`
 - `image` defaults from `AgentClass.spec.image.defaultImage`
 - `lifecycle.idleTimeout` defaults from `AgentClass.spec.lifecycle.defaultIdleTimeout`
+- `lifecycle.hibernationDelay` defaults from `AgentClass.spec.lifecycle.defaultHibernationDelay`
 - `lifecycle.wakeTimeout` defaults from `AgentClass.spec.lifecycle.defaultWakeTimeout`
 
 Defaults are applied at reconcile time rather than admission. The stored spec reflects what the developer wrote; effective configuration is reflected in the Agent's status. This avoids a mutating webhook dependency while keeping the behavior predictable.
@@ -572,7 +580,7 @@ The Agentry Gateway exposes several HTTP endpoints that agent containers may cal
 
 ### `POST /v1/task/complete` (AgentTask only)
 
-Called by the agent container to report task completion. The gateway writes the payload to the Pod annotation `agentry.io/task-status`; the AgentTaskReconciler watches for this annotation to drive the Completing transition.
+Called by the agent container to report task completion. The gateway writes the payload to a ConfigMap named `{taskName}-completion` in the task's namespace (owned by the AgentTask for cascade deletion). The AgentTaskReconciler watches for this ConfigMap to drive the Completing transition.
 
 **Request body:**
 
@@ -597,13 +605,13 @@ Called by the agent container to report task completion. The gateway writes the 
 
 ### `POST /v1/agent/heartbeat` (Agent only)
 
-Called by the agent container to signal liveness for idle detection. Only meaningful when `spec.lifecycle.activitySource` is `agentHeartbeat` or `both`. The gateway writes the current timestamp to the Pod annotation `agentry.io/last-heartbeat`.
+Called by the agent container to signal liveness for idle detection. Only meaningful when `spec.lifecycle.activitySource` is `agentHeartbeat` or `both`. The gateway updates the agent's last-activity timestamp in its in-memory activity store.
 
 **Request body:** empty or `{}`.
 
 **Response:** `200 OK` with empty body. `400 Bad Request` if the calling Pod is not associated with an Agent.
 
-Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 seconds. The gateway coalesces rapid heartbeats — annotation writes are debounced to at most once per 5 seconds to avoid API server pressure.
+Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 seconds. The gateway coalesces rapid heartbeats in memory — no etcd or API server writes occur per heartbeat. The controller queries the gateway's activity API on each reconcile to evaluate idle transitions (see Controller Design doc § Activity Detection).
 
 ### Manual Wake Annotation
 

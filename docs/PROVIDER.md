@@ -66,9 +66,10 @@ Pros: Credentials never leave `agentry-system`. NetworkPolicy cleanly isolates a
 │  └─────────────────────────────────────────────────────────────┘     │
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐     │
-│  │                  Activator / Heartbeat                      │     │
+│  │              Activator / Activity Store                     │     │
 │  │  Monitors Agent hibernation state; signals controller to    │     │
-│  │  wake agents on incoming traffic; tracks agent heartbeats.  │     │
+│  │  wake agents on incoming traffic; tracks per-agent activity │     │
+│  │  timestamps in-memory; serves GET /v1/activity to controller│     │
 │  └─────────────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────────┘
          │ (egress)                        ▲ (inbound)
@@ -195,7 +196,9 @@ This means budget enforcement is **approximate under high concurrency** — repl
 
 **Agentry's budget feature is spend visibility and soft guardrails, not a hard financial cap.** This is an explicit design decision, not a limitation to be fixed. Teams requiring hard caps should use provider-level account limits in addition to Agentry's per-namespace guardrails.
 
-Budget periods roll over at midnight UTC. The controller archives the previous period's total to ModelProvider status for auditability.
+**Budget period rollover**: budget periods roll over at midnight UTC. The gateway detects period changes on each request and resets its local counters when the current period no longer matches the stored period. The controller archives the previous period's totals to ModelProvider status for auditability, deletes all per-replica keys from the budget ConfigMap, and writes a fresh `_canonical: {}`.
+
+**Stale replica cleanup**: when a gateway replica is scaled down or replaced, its entry in the budget ConfigMap persists. The ModelProviderReconciler cross-references ConfigMap keys against the current set of gateway Pod names and deletes stale entries before summing partials. This prevents inflated spend totals from terminated replicas.
 
 ---
 
@@ -310,6 +313,34 @@ The activator endpoint is authenticated to prevent unauthorized wake-ups from ar
 - The controller validates the HMAC signature and rejects requests with timestamps older than 30 seconds (replay window).
 
 This ensures only the gateway (which holds the shared key) can trigger agent wake-ups. The HMAC key is rotated by the operator on a configurable interval (default: 30 days); both components watch the Secret for changes.
+
+---
+
+## Activity Tracking API
+
+The gateway maintains per-agent activity timestamps in-memory, updated on every LLM request, channel message delivery, and agent heartbeat. This avoids per-request etcd writes, which is critical at scale (hundreds of thousands of agents).
+
+The gateway exposes an internal endpoint for the controller to query activity state:
+
+**`GET /v1/activity?namespace={ns}`**
+
+Returns a JSON map of agent names to their last-activity timestamps for the given namespace:
+
+```json
+{
+  "support-assistant": "2026-04-05T11:58:22Z",
+  "code-helper": "2026-04-05T11:45:10Z"
+}
+```
+
+The controller queries this endpoint on each reconcile for agents in `Running` or `Idle` phase to evaluate idle and hibernation transitions. If the gateway is unreachable, the controller preserves the agent's current phase — no idle transitions are made without activity data.
+
+Activity data is ephemeral: it is lost on gateway restart. This is acceptable because:
+- On restart, agents in `Running` will have no recorded activity and will naturally transition to `Idle` after `idleTimeout` if they are truly idle.
+- Agents that are actively sending traffic will re-establish their activity timestamps immediately.
+- The worst case is a premature `Running → Idle` transition, which is self-correcting on the next activity signal.
+
+The `activitySource` setting on Agent (`providerTraffic`, `agentHeartbeat`, `both`) controls which signals the gateway includes in its per-agent timestamp. The gateway tracks both sources separately and returns the appropriate one based on the Agent's configuration.
 
 ---
 
