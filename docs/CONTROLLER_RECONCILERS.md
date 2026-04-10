@@ -85,7 +85,7 @@ Reconciliation steps:
 1. Resolve `agentRef` — if the referenced Agent does not exist, set `Ready=False, reason=AgentNotFound`. Note: `agentRef` must reference an `Agent`, not an `AgentTask`. Tasks are ephemeral and lack a stable Service endpoint.
 2. Verify the Agent has `spec.service.enabled: true`. If not, set `Ready=False, reason=AgentServiceDisabled`.
 3. Validate that the `credentialsRef` Secret exists in the AgentChannel's namespace. If not, set `Ready=False, reason=CredentialsMissing`.
-4. Poll channel health status from the gateway's internal status endpoint and update `status.conditions[type=PlatformConnected]`.
+4. Poll channel health status from the gateway's `GET /v1/channels/health?namespace={ns}` endpoint (see [Channel Health Endpoint](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only)) using the shared HMAC key (`agentry-activator-key` Secret). The response maps channel paths to `{ phase, platformConnected, lastError }`. Update `status.conditions[type=PlatformConnected]` accordingly.
 5. On Agent phase changes (e.g., Agent transitions to `Failed`), update `status.phase` to `Degraded` with a clear reason.
 
 The AgentChannelReconciler does not own Pod resources. The gateway watches `AgentChannel` resources directly, reads the referenced credentials from user namespaces, and manages the live platform connections — see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow). The reconciler's role is validation and status reporting.

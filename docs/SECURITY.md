@@ -76,7 +76,11 @@ If an agent needs cluster API access (e.g., a Kubernetes-administering agent), t
 
 ### Agent→Gateway Authentication
 
-The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — via **source IP → Pod resolution** using the Pod informer cache. This is the same mechanism used for namespace identification (see [Namespace Identification](./GATEWAY_LLM.md#namespace-identification)). Since agent Pods have no Kubernetes API credentials by default, and the gateway identifies callers by their cluster-assigned source IP, no token-based authentication is needed between agent containers and the gateway. Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
+The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — using **mutual TLS (mTLS)** as the primary mechanism. Agents present their operator-issued TLS certificate (mounted at `$AGENTRY_TLS_CERT`) as a client certificate on the LLM Gateway's TLS listener. The gateway verifies the cert against the operator CA and extracts the agent's namespace and name from the certificate's SAN (`{name}.{namespace}.svc.cluster.local`). This gives a cryptographically attested identity that is independent of network-layer addressing.
+
+As a secondary defense-in-depth check, the gateway also resolves the source IP to a Pod via its Pod informer cache and confirms the Pod matches the identity claimed in the client certificate. A mismatch (e.g., a compromised agent presenting a stolen certificate from a different agent) causes the request to be rejected. See [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full two-layer identity resolution.
+
+Reference base images configure client cert presentation automatically. Custom agent images must configure their HTTP client to present `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate when calling `$AGENTRY_PROVIDER_ENDPOINT`. Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
 
 ### Internal Endpoint Authentication (Activator & Activity API)
 
@@ -150,7 +154,7 @@ egress:
         matchLabels:
           app.kubernetes.io/name: agentry-gateway
     ports:
-      - port: 8443      # LLM Gateway (TLS)
+      - port: 8443      # All agent→gateway TLS traffic (LLM calls, heartbeats, task completion)
         protocol: TCP
   - to:                    # DNS
     - namespaceSelector: {}
@@ -243,7 +247,7 @@ Agentry does **not** log prompts or completions. LLM payloads are sensitive (may
 | Budget guardrails exceeded under high concurrency | Budgets are documented as soft limits with bounded overspend; hard caps at the provider account level recommended for strict requirements |
 | Compromised gateway writes malicious ConfigMaps to user namespaces | Per-task dynamic Roles scope gateway ConfigMap write access to only `{taskName}-completion` in the task's namespace, for the task's lifetime. No blanket namespace access — a compromised gateway cannot write arbitrary ConfigMaps. |
 | Malicious message from channel platform | Webhook adapter authenticates inbound events (bearer token, HMAC signature) before processing |
-| Agent spoofs namespace to bypass budget/access controls | Gateway identifies namespace via source IP → Pod resolution from informer cache; source IPs are assigned by the cluster network and unforgeable from within a container |
+| Agent spoofs namespace to bypass budget/access controls | Primary mitigation: mTLS client certificate — namespace is extracted from the cert SAN, which is signed by the operator CA; an agent cannot forge a cert for a different namespace. Secondary check: source IP → Pod resolution cross-validates the cert identity against the actual source Pod. Both checks must pass. |
 | Channel credential leaked from agent namespace | Channel credentials are stored in the agent's namespace; blast radius is limited to that namespace's channels. The platform team (not the developer) is responsible for rotation. |
 | Unauthorized agent wake-up via activator endpoint | Activator endpoint is HMAC-authenticated; only the gateway (which holds the shared key) can trigger wake-ups. See § Internal Endpoint Authentication above. |
 | In-cluster traffic sniffed on shared nodes | All agent↔gateway traffic is TLS-encrypted in both directions: agent→gateway (LLM traffic) and gateway→agent (channel messages). See § In-cluster TLS above. |

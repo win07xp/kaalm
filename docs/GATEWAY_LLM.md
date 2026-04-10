@@ -91,15 +91,25 @@ Pros: Credentials never leave `agentry-system`. NetworkPolicy cleanly isolates a
 
 ## Namespace Identification
 
-The gateway must identify the source namespace of each LLM request to enforce access controls and per-namespace budget tracking. It does this via **source IP resolution**:
+The gateway identifies the source namespace and agent identity of each LLM request using **mutual TLS (mTLS)** as the primary mechanism, with source IP as a secondary defense-in-depth cross-check.
 
-1. The gateway maintains a Pod informer cache (it already watches Pods cluster-wide for annotation writes).
-2. On each inbound LLM request, the gateway resolves the source IP to a Pod via the informer cache, then reads the Pod's namespace.
-3. If the source IP does not resolve to a known Pod, the request is rejected.
+### Primary: mTLS client certificate
 
-This approach is **unforgeable**: source IPs are assigned by the cluster network (CNI) and cannot be overridden from within a container. An agent cannot claim to be from a different namespace. No agent-provided headers or tokens are trusted for namespace identification. See [Agent-to-Gateway Authentication](./SECURITY.md#agentgateway-authentication) for the security analysis.
+The LLM Gateway listener requires a client certificate from every agent that connects. Agents present their operator-issued TLS certificate (mounted at `$AGENTRY_TLS_CERT`, `/var/run/agentry/tls.crt`) as the client cert. The gateway verifies it against the operator-managed CA and extracts the agent's identity from the certificate's SAN field: `{name}.{namespace}.svc.cluster.local`. This gives the gateway a cryptographically attested (namespace, agent name) pair on every request.
 
-**Pod IP reassignment**: when a Pod is deleted and a new Pod receives the same IP (common in small CIDR ranges), the informer cache may briefly map the old Pod. The gateway MUST process Pod delete events before accepting traffic from recycled IPs. The Pod informer must be fully synced before the gateway's readiness probe passes. In practice, the watch event for Pod deletion arrives before the new Pod is scheduled, so the window is negligible — but the gateway must not serve LLM traffic until its initial informer sync is complete.
+Reference base images handle client cert presentation automatically — agents using the base image do not need to configure this. Custom images must configure their HTTP client to present the cert at `$AGENTRY_TLS_CERT` with the key at `$AGENTRY_TLS_KEY` when calling `$AGENTRY_PROVIDER_ENDPOINT`. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
+
+This approach is **CNI-independent**: agent identity is cryptographically attested by the certificate, not by a network-layer header that may be modified by intermediate infrastructure. No agent can claim a different identity without a valid CA-signed certificate for that identity.
+
+### Secondary: source IP cross-check
+
+After extracting identity from the client certificate, the gateway additionally resolves the source IP to a Pod via its Pod informer cache and confirms the Pod belongs to the same (namespace, agent name) as the certificate claims. If there is a mismatch, the request is rejected. This cross-check protects against a compromised agent presenting a stolen certificate from a different agent — the certificate identity must match the actual source Pod.
+
+The gateway maintains a Pod informer cache for this lookup (and for other purposes — provider routing resolution, activity tracking). The Pod informer must be fully synced before the gateway's readiness probe passes.
+
+**Pod IP reassignment**: when a Pod is deleted and a new Pod receives the same IP (common in small CIDR ranges), the informer cache may briefly map the old Pod. The gateway MUST process Pod delete events before accepting traffic from recycled IPs. In practice, the watch event for Pod deletion arrives before the new Pod is scheduled, so the window is negligible.
+
+See [Agent-to-Gateway Authentication](./SECURITY.md#agentgateway-authentication) for the full security analysis.
 
 ---
 
@@ -110,6 +120,8 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 **Certificate provisioning**: the operator generates a self-signed CA certificate and stores it in a Secret in `agentry-system` (`agentry-gateway-ca`). On startup, the operator creates a TLS serving certificate for the gateway signed by this CA and stores it in a separate Secret (`agentry-gateway-tls`). The gateway reads this Secret to serve HTTPS on its LLM listener.
 
 **Agent trust**: the CA certificate is injected into agent Pods as a projected volume mount at a well-known path (`/var/run/agentry/ca.crt`). The controller sets the `$AGENTRY_CA_CERT` environment variable pointing to this path. Agent containers (or their HTTP clients) must trust this CA when calling `$AGENTRY_PROVIDER_ENDPOINT`. The reference base images handle this automatically.
+
+**Mutual TLS (mTLS)**: the LLM Gateway listener requires client certificates from all connecting agents. Agents present their operator-issued per-agent TLS certificate (the same cert used for gateway→agent delivery) as the client cert when calling `$AGENTRY_PROVIDER_ENDPOINT`. The gateway verifies the client cert against the operator CA and extracts the SAN to identify the agent and namespace. Reference base images configure client cert presentation automatically. Custom images must explicitly configure their HTTP client to use `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate. This is the primary identity mechanism for agent→gateway communication — see [Namespace Identification](#namespace-identification).
 
 **Certificate rotation**: the operator rotates the serving certificate before expiry (default: 90-day lifetime, rotate at 60 days). The gateway watches the TLS Secret and reloads without restart. The CA certificate has a longer lifetime (1 year) and is rotated less frequently.
 
@@ -184,13 +196,18 @@ Each gateway replica maintains an in-memory spend counter per (provider, namespa
 
 ```yaml
 data:
-  # Each key is a gateway Pod name; value is JSON with per-namespace spend
-  agentry-gateway-0: '{"team-support": "142.50", "team-ml": "87.30"}'
-  agentry-gateway-1: '{"team-support": "138.20", "team-ml": "91.10"}'
+  # Each key is a gateway Pod name; value is JSON with the budget period and per-namespace spend.
+  # The "period" field is required so the reconciler can exclude stale entries from prior periods
+  # during rollover — replicas transition to the new period independently on their first request,
+  # so mixed-period entries are expected in the rollover window.
+  agentry-gateway-0: '{"period": "2026-04", "team-support": "142.50", "team-ml": "87.30"}'
+  agentry-gateway-1: '{"period": "2026-04", "team-support": "138.20", "team-ml": "91.10"}'
   _canonical: '{"team-support": "280.70", "team-ml": "178.40"}'
 ```
 
-The ModelProviderReconciler reads this ConfigMap every 30s, sums the per-replica partials, writes the `_canonical` key with the total, and updates `status.budgetUsage` on the ModelProvider. Gateway replicas read the `_canonical` key on startup to initialize their local counters. This avoids a Prometheus dependency and works with existing ConfigMap RBAC.
+The ModelProviderReconciler reads this ConfigMap every 30s, **filters out any per-replica entries whose `period` does not match the current period**, sums the remaining partials, writes the `_canonical` key with the total, and updates `status.budgetUsage` on the ModelProvider. Gateway replicas read the `_canonical` key on startup to initialize their local counters. This avoids a Prometheus dependency and works with existing ConfigMap RBAC.
+
+**Period tag rationale**: at period rollover (midnight UTC), gateway replicas detect the new period on their first incoming request and reset their local counter to zero. Because replicas transition independently, there is a window where some replicas have written new-period partials and others still hold old-period totals. Without the `period` field, the reconciler would sum mixed values and produce an incorrect canonical total. By tagging each entry, the reconciler skips old-period entries until all replicas have transitioned, giving a correct (if slightly underestimated) total during the rollover window — which is acceptable for a soft guardrail.
 
 **Budget state on crash**: if all gateway replicas crash simultaneously, up to 10s of spend data (the partial-write interval) may be lost. This is acceptable given that budgets are soft limits — the bounded loss is small relative to typical budget thresholds. Gateway replicas re-initialize from the `_canonical` ConfigMap value on restart.
 
@@ -198,7 +215,7 @@ This means budget enforcement is **approximate under high concurrency** — repl
 
 **Agentry's budget feature is spend visibility and soft guardrails, not a hard financial cap.** This is an explicit design decision, not a limitation to be fixed. Teams requiring hard caps should use provider-level account limits in addition to Agentry's per-namespace guardrails.
 
-**Budget period rollover**: budget periods roll over at midnight UTC. The gateway detects period changes on each request and resets its local counters when the current period no longer matches the stored period. The controller archives the previous period's totals to ModelProvider status for auditability, deletes all per-replica keys from the budget ConfigMap, and writes a fresh `_canonical: {}`.
+**Budget period rollover**: budget periods roll over at midnight UTC. Each gateway replica detects the period change on its first request of the new period and resets its local counter, writing a new-period entry (with the updated `period` field) to its ConfigMap key. The reconciler, filtering by the current period, excludes old-period entries during the rollover window — the canonical total may be temporarily underestimated until all replicas have written new-period entries, which is acceptable for soft guardrails. Once the new period is fully established, the controller archives the previous period's totals to ModelProvider status for auditability, deletes all per-replica keys from the budget ConfigMap, and writes a fresh `_canonical: {}`.
 
 **Stale replica cleanup**: when a gateway replica is scaled down or replaced, its entry in the budget ConfigMap persists. The ModelProviderReconciler cross-references ConfigMap keys against the current set of gateway Pod names and deletes stale entries before summing partials. This prevents inflated spend totals from terminated replicas.
 

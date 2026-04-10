@@ -98,7 +98,7 @@ Activity timestamps are maintained **in-memory in the gateway**, not in etcd. Th
 The gateway exposes `GET /v1/activity?namespace={ns}` returning a map of agent names to last-activity timestamps. Because each gateway replica maintains its own in-memory store (updated only by the traffic it handles), the controller fans out this query to **all gateway Pod IPs in parallel** (enumerating them via its Pod informer) rather than hitting the ClusterIP Service, which would round-robin to one replica and miss activity recorded by the others. The controller takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection. See [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) for the full fan-out protocol.
 
 The reconciler evaluates `lastActivityTime` based on the Agent's `spec.lifecycle.activitySource` setting:
-- `providerTraffic` (default): only gateway-observed LLM and channel traffic timestamps are considered.
+- `gatewayTraffic` (default): only gateway-observed LLM and channel traffic timestamps are considered.
 - `agentHeartbeat`: only heartbeat timestamps are considered.
 - `both`: the most recent timestamp from either source is used.
 

@@ -299,13 +299,15 @@ spec:
     sizeGi: 10
     mountPath: "/var/agent/memory"
 
-  # Lifecycle: persistent means long-lived with hibernation support.
+  # Lifecycle mode. In v1alpha1, only "persistent" is accepted.
+  # Additional modes (e.g., "scheduled") will be added in later versions.
+  # CRD schema enforces: x-kubernetes-validations: [{rule: "self == 'persistent'"}]
   mode: persistent
   lifecycle:
     idleTimeout: "30m"           # transition to Idle after this much inactivity
     hibernationEnabled: true
     hibernationDelay: "30m"      # how long to stay Idle before hibernating; defaults from AgentClass
-    activitySource: providerTraffic   # "providerTraffic" | "agentHeartbeat" | "both"
+    activitySource: gatewayTraffic   # "gatewayTraffic" | "agentHeartbeat" | "both"
     wakeTimeout: "2m"                # max time gateway waits for Pod Ready on wake; defaults from AgentClass
 
   # Service exposure. Only ClusterIP is supported in v1.
@@ -342,11 +344,14 @@ status:
 
 ### Design notes
 
-- **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs.
+- **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs. In v1alpha1, the only accepted value is `persistent` — this is enforced by a CEL constraint in the CRD schema (`x-kubernetes-validations: [{rule: "self == 'persistent'"}]`) so that invalid values are rejected at apply time rather than surfaced as a reconcile error.
 - **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain.
 - **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol.
 - **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
-- **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. Agents serve HTTPS on their health/message port using these. The reference base images handle TLS setup automatically.
+- **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. These cert/key files serve a dual purpose:
+  - **Server TLS** (gateway→agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against the operator CA on message delivery.
+  - **Client TLS / mTLS** (agent→gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_PROVIDER_ENDPOINT`, allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
+  Reference base images handle both uses automatically. Custom images must configure their HTTP client to present the client cert when calling the gateway.
 
 ---
 

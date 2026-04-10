@@ -121,6 +121,8 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 }
 ```
 
+The `requestId` is an **opaque string** — callers must treat it as an identifier to use in poll requests and must not attempt to parse, construct, or reverse-engineer its structure. Internally it encodes routing affinity so the gateway can consistently route poll requests to the correct in-memory store across replicas (see [GATEWAY_USER.md — Async shard routing](./GATEWAY_USER.md#user-gateway--request-flow)).
+
 **Callback delivery** (gateway POSTs to `spec.webhook.callbackUrl`):
 
 ```json
@@ -174,13 +176,57 @@ Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s 
 
 Returns the agent's response or error payload if available. This endpoint is authenticated via the same mechanism as the webhook itself (`AgentChannel.spec.webhook.auth`).
 
+Any gateway replica accepts this request. The receiving replica extracts the shard index from the opaque `requestId`, routes internally to the owning replica if needed, and falls back to the `agentry-async-{requestId}` ConfigMap in the agent's namespace if the owning replica is unreachable or the in-memory response is unavailable (e.g., after a scale event). Callers always receive a consistent response regardless of which gateway replica they reach — replica topology is invisible.
+
 | Status | Meaning |
 |---|---|
 | 200 | Response or error payload available; body contains the callback payload above |
 | 202 | Request is still being processed |
-| 404 | Unknown requestId or response expired |
+| 404 | Unknown requestId, response expired, or owning replica crashed before writing the durability ConfigMap |
 
-Stored responses are retained for 1 hour, after which they are evicted. This is a polling fallback, not a durable queue — webhook callers that need guaranteed delivery should configure `callbackUrl`.
+Stored responses are retained for 1 hour (in-memory on the owning replica and in the durability ConfigMap), after which they are evicted. This is a polling fallback, not a durable queue — webhook callers that need guaranteed delivery should configure `callbackUrl`.
+
+---
+
+## `GET /v1/channels/health` (internal — controller use only)
+
+Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated via the same HMAC scheme as the activator and activity endpoints (shared key from `agentry-activator-key` Secret) — see [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
+
+**Request:**
+
+```
+GET /v1/channels/health?namespace=team-support
+Authorization: Bearer <HMAC(timestamp:namespace)>
+X-Agentry-Timestamp: <unix-timestamp>
+```
+
+**Response body:**
+
+```json
+{
+  "channels": {
+    "/channels/support-assistant": {
+      "phase": "Active",
+      "platformConnected": true,
+      "lastError": null
+    },
+    "/channels/personal-assistant": {
+      "phase": "Degraded",
+      "platformConnected": false,
+      "lastError": "webhook auth validation failed: 401 Unauthorized"
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `channels` | map | Keys are webhook paths as registered in the gateway; values are health records for each channel |
+| `phase` | string | `"Active"` \| `"Degraded"` \| `"Failed"` — mirrors `AgentChannel.status.phase` as seen from the gateway |
+| `platformConnected` | boolean | `true` if the gateway considers the channel endpoint healthy and ready to receive messages |
+| `lastError` | string or null | Most recent error seen by the gateway for this channel; null if no error |
+
+**Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. `401 Unauthorized` if the HMAC signature is invalid or the timestamp is stale (>30s). Only channels whose target Agent is in the requested namespace are returned.
 
 ---
 
