@@ -10,13 +10,13 @@ For the LLM Gateway (provider routing, budget, fallback) and the shared gateway 
 
 1. **Webhook event arrives**: an external system POSTs to the gateway's webhook endpoint (e.g., `/channels/support-assistant`).
 2. **Webhook adapter authenticates**: the gateway verifies the request using the configured auth method (bearer token, HMAC signature, etc.) from the AgentChannel's `credentialsRef`.
-3. **Normalization**: the adapter translates the webhook payload into the Agentry message envelope:
+3. **Normalization**: the adapter translates the webhook payload into the Agentry message envelope. The `userId` is resolved using `AgentChannel.spec.webhook.userId` config (`fromHeader` or `fromBody`); if neither is configured or the value is absent, the configured `fallback` is used (empty string if omitted). See [AgentChannel](./API_RESOURCES.md#agentchannel) for extraction configuration.
    ```json
    {
      "messageId": "uuid",
      "channelType": "webhook",
      "channelId": "/channels/support-assistant",
-     "userId": "caller-id-from-header-or-body",
+     "userId": "caller-id-extracted-per-config",
      "content": "Hello, I need help with my order",
      "attachments": [],
      "metadata": {}
@@ -63,6 +63,8 @@ When an Agent is in the `Hibernated` phase, its Service has no endpoints. The ga
 4. The gateway waits for the Pod to become Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), then delivers the message. If the timeout is exceeded:
    - **Sync mode**: the gateway returns HTTP 504 to the webhook caller.
    - **Async mode**: the gateway delivers a `wake_timeout` error payload to `callbackUrl` (if configured, with retries) or stores it at the polling endpoint under the original `requestId`. The error expires after 1 hour, same as successful responses. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the error payload schema.
+
+**Sync-mode retry risk**: in sync mode, if the wake takes longer than the webhook caller's HTTP timeout (commonly 30-60s, shorter than the default `wakeTimeout` of 2 minutes), the caller receives 504 and will typically retry the webhook call. The gateway treats the retry as a new delivery and posts the message to the agent again — potentially with the same `messageId` if the caller preserves it. Agents with `hibernationEnabled: true` must deduplicate on `messageId` — see [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
 ### Activator Authentication
 

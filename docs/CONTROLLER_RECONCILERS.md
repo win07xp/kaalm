@@ -71,6 +71,7 @@ Watches: `AgentTask`, plus owned `Pod`, `PVC`, `ConfigMap` (for artifacts). Also
 Reconciliation steps:
 
 1. Resolve AgentClass and ModelProviders (same validation as Agent).
+1a. Ensure a per-task `Role` and `RoleBinding` exist in the task's namespace, granting the gateway ServiceAccount (`agentry-system/agentry-gateway`) `create, update` on the ConfigMap named `{taskName}-completion`. Both resources are owned by the AgentTask via ownerRef and cascade-delete when the task is cleaned up. This mirrors the per-channel Role pattern in [AgentChannelReconciler](#agentchannelreconciler) and avoids granting the gateway blanket ConfigMap write access. See [Gateway ServiceAccount](./SECURITY.md#gateway-serviceaccount) for the security rationale.
 2. Drive the [AgentTask State Machine](./CONTROLLER_LIFECYCLE.md#agenttask).
 3. On `Completing`: artifact values are read from a ConfigMap created by the gateway. When the agent calls `POST /v1/task/complete`, the gateway writes the completion payload to a ConfigMap named `{taskName}-completion` in the task's namespace. The ConfigMap is owned by the AgentTask (via ownerRef) for cascade deletion. The reconciler watches for this ConfigMap, reads artifact values, and populates `status.artifactValues`. No exec into the container is required, and the completion data survives Pod crashes or eviction.
 4. Honor `ttlSecondsAfterFinished` by scheduling deletion.

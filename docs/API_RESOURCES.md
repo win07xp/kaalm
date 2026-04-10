@@ -31,12 +31,11 @@ kind: AgentClass
 metadata:
   name: standard
 spec:
-  # Runtime backend: "pod" (default) or "agentSandbox"
+  # Runtime backend. Only "pod" is supported in v1.
+  # "agentSandbox" backend (Sandbox CRD integration) is planned for v1.1.
   runtime:
     backend: pod
     runtimeClassName: runc           # optional; matches k8s RuntimeClass
-    # For agentSandbox backend, additional fields control SandboxTemplate ref:
-    # sandboxTemplateRef: { name: "standard-sandbox", namespace: "agent-sandbox-system" }
 
   # Image policy
   image:
@@ -133,7 +132,7 @@ status:
 - `allowedImages` is mandatory in practice for real clusters; an empty list means "any image" and validation will emit a warning.
 - `allowedProviders` is the primary access control mechanism for LLM providers at the class level. ModelProvider itself has `allowedNamespaces` for namespace-level control. Both must pass for an Agent to use a provider.
 - Defaults vs. maxLimits: defaults are applied at reconcile time if the Agent does not specify; maxLimits are enforced regardless and reject manifests that exceed them.
-- `runtime.backend: agentSandbox` is future-facing. v1 may ship with only `pod` and add the Sandbox backend in v1.1.
+- `runtime.backend` only accepts `pod` in v1. The `agentSandbox` value (which creates Agent Sandbox `Sandbox` CRs instead of raw Pods) is deferred to v1.1. See [Integration Points](./ARCHITECTURE.md#agent-sandbox-optional-backend) for the planned integration design.
 
 ---
 
@@ -288,7 +287,6 @@ spec:
   # When omitted, $AGENTRY_PROVIDER_ENDPOINT is not injected.
   providers:
     - providerRef: { name: anthropic-shared }
-      primaryModelHint: "claude-opus-4-6"  # informational only — no runtime effect
 
   # Resource overrides (must fit within AgentClass.resources.maxLimits).
   resources:
@@ -345,7 +343,7 @@ status:
 ### Design notes
 
 - **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs.
-- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain. `primaryModelHint` is **informational only** — it documents the developer's intended primary model for this provider binding but has no runtime effect in the gateway. The agent is always responsible for including the qualified `provider/model` name in its API calls.
+- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain.
 - **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol.
 - **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 - **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. Agents serve HTTPS on their health/message port using these. The reference base images handle TLS setup automatically.
@@ -378,7 +376,6 @@ spec:
 
   providers:
     - providerRef: { name: anthropic-shared }
-      primaryModelHint: "claude-opus-4-6"  # informational only — no runtime effect
 
   resources:
     requests: { cpu: "1", memory: "2Gi" }
@@ -478,6 +475,14 @@ spec:
     auth:
       type: bearer
       secretRef: { name: webhook-secret, key: token }
+    # How the webhook adapter extracts the userId for session tracking.
+    # At most one of fromHeader / fromBody may be set; both are optional.
+    # When omitted, userId defaults to the empty string — all unattributed
+    # requests share one session if session.enabled is true.
+    userId:
+      fromHeader: "X-User-Id"       # read userId from this request header
+      # fromBody: ".user.id"        # alternative: jq-style path into the JSON body
+      fallback: "anonymous"         # value when userId cannot be resolved
     # Response mode: "sync" (default) or "async".
     # sync: gateway blocks until the agent responds and returns the response
     #   as the webhook HTTP response body.
@@ -547,7 +552,8 @@ status:
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
-- **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: fixed Agentry UUID, name: channelId + ":" + userId)`. This ID is identical across gateway replicas and survives gateway restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope.
+- **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: agentry-session-ns, name: channelId + ":" + userId)`, where `agentry-session-ns` is the fixed constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` — a purpose-generated UUID published as part of the Agentry API specification, identical across all installations and versions. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope. **This constant must not change after v1 ships** — any change would invalidate existing session state in agent PVCs.
+- **userId extraction**: the webhook adapter resolves `userId` using `webhook.userId` config (`fromHeader` or `fromBody`). If both are absent, the adapter uses the empty string. When `session.enabled: true`, this means all requests that cannot be attributed to a user share a single session — set `fallback` explicitly to control this behavior. See the `webhook.userId` spec block above.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
 - **Async response mode** (`spec.webhook.responseMode: async`): designed for agents that take minutes to respond (e.g., coding agents, research agents). The async/sync distinction is handled entirely by the gateway. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.

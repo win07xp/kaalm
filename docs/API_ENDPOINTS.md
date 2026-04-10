@@ -81,8 +81,8 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 | `messageId` | string (UUID) | yes | Unique identifier for this message, for deduplication |
 | `channelType` | string | yes | Platform type: `"webhook"` in v1 (Discord, WhatsApp in v1.1) |
 | `channelId` | string | yes | Platform-specific channel identifier |
-| `userId` | string | yes | Platform-specific user identifier |
-| `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled: true`. Deterministic: derived from `UUIDv5(channelId + ":" + userId)`, identical across replicas and gateway restarts. Session expiry is the agent's responsibility. |
+| `userId` | string | yes | Platform-specific user identifier. Extracted per `AgentChannel.spec.webhook.userId` config (`fromHeader` or `fromBody`); falls back to the configured `fallback` value (or empty string if unconfigured). When `session.enabled: true` and userId is empty, all unattributed requests share a session. |
+| `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled: true`. Computed as `UUIDv5(namespace: f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d, name: channelId + ":" + userId)` — identical across replicas and gateway restarts. Session expiry is the agent's responsibility. |
 | `content` | string | yes | The user's message text |
 | `attachments` | array | no | List of attachment objects (platform-specific schema) |
 | `metadata` | map | no | Platform-specific fields (e.g., `guildId` for Discord) |

@@ -142,9 +142,7 @@ Examples:
 
 The gateway splits the model name on the first `/`: the prefix identifies the ModelProvider by `metadata.name`, and the suffix is the raw model ID that must appear in the ModelProvider's `models` list. Before forwarding upstream, the gateway strips the provider prefix and sends only the raw model ID (e.g., the upstream Anthropic API receives `claude-opus-4-6`, not `anthropic-shared/claude-opus-4-6`).
 
-This format uniquely identifies the (provider, model) pair and eliminates ambiguity when multiple ModelProviders offer models with similar names (e.g., a managed Anthropic endpoint and an OpenAI-compatible proxy both serving Claude models).
-
-The `primaryModelHint` field in `Agent.spec.providers` uses the raw model ID (not the qualified format) because the provider context is already established by the enclosing `providerRef`. This field is **informational only** — it has no runtime effect in the gateway. The agent is always responsible for constructing the qualified `provider/model` name in its API calls.
+This format uniquely identifies the (provider, model) pair and eliminates ambiguity when multiple ModelProviders offer models with similar names (e.g., a managed Anthropic endpoint and an OpenAI-compatible proxy both serving Claude models). The agent is always responsible for constructing the qualified `provider/model` name in its API calls.
 
 ---
 
@@ -256,6 +254,8 @@ Rate limits are enforced at the gateway using token-bucket limiters keyed on (na
 Each gateway replica divides the configured limit by the number of active gateway replicas (discovered from its Pod informer — count Pods matching the gateway label selector). When replicas scale up or down, each replica adjusts its local token bucket capacity on the next refill cycle. This means the configured value directly represents the intended cluster-wide rate limit regardless of replica count.
 
 **Note:** because each replica enforces its share independently, the effective cluster-wide limit is approximate — transient bursts may slightly exceed the configured ceiling. The approximation is bounded by `configured_limit / number_of_replicas` per replica (one replica's full bucket) and is acceptable for v1.
+
+**Worst-case deviation during scaling events**: during scale-up, existing replicas immediately divide by N+1 when the new Pod appears in their informer — before the new replica begins serving traffic — momentarily reducing each existing replica's effective limit. During rolling restarts (`maxUnavailable: 1`), different replicas can transiently hold different bucket sizes, causing the effective cluster-wide ceiling to deviate by up to one replica's share. If tighter enforcement is required, replace per-replica division with a shared ConfigMap-backed token bucket (the `agentry-budget-{providerName}` ConfigMap already provides the coordination primitive).
 
 ---
 
