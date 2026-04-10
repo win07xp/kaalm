@@ -95,7 +95,7 @@ Activity timestamps are maintained **in-memory in the gateway**, not in etcd. Th
 - **Gateway traffic**: the LLM Gateway and User Gateway record the timestamp of each request for an Agent in-memory.
 - **Agent heartbeat**: the agent calls `POST /v1/agent/heartbeat` on the gateway; the gateway updates the agent's timestamp in its in-memory store.
 
-The gateway exposes `GET /v1/activity?namespace={ns}` returning a map of agent names to last-activity timestamps. The controller queries this endpoint on each reconcile for agents in `Running` or `Idle` phase.
+The gateway exposes `GET /v1/activity?namespace={ns}` returning a map of agent names to last-activity timestamps. Because each gateway replica maintains its own in-memory store (updated only by the traffic it handles), the controller fans out this query to **all gateway Pod IPs in parallel** (enumerating them via its Pod informer) rather than hitting the ClusterIP Service, which would round-robin to one replica and miss activity recorded by the others. The controller takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection. See [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) for the full fan-out protocol.
 
 The reconciler evaluates `lastActivityTime` based on the Agent's `spec.lifecycle.activitySource` setting:
 - `providerTraffic` (default): only gateway-observed LLM and channel traffic timestamps are considered.
@@ -104,9 +104,9 @@ The reconciler evaluates `lastActivityTime` based on the Agent's `spec.lifecycle
 
 The reconciler updates `status.lastActivityTime` on the Agent only when a phase transition is warranted, avoiding unnecessary etcd writes.
 
-**Gateway unavailability**: if the gateway's activity endpoint is unreachable, the controller preserves the Agent's current phase — no idle or hibernation transitions are made without activity data. The reconciler sets a `GatewayReachable=False` condition on affected Agents and requeues with backoff until the gateway recovers.
+**Gateway unavailability**: if all gateway replicas are unreachable, the controller preserves the Agent's current phase — no idle or hibernation transitions are made without activity data. The reconciler sets a `GatewayReachable=False` condition on affected Agents and requeues with backoff until the gateway recovers. If only some replicas are unreachable, the controller uses the data available from the reachable replicas.
 
-**Gateway restart**: the `/v1/activity` response includes a `startedAt` timestamp indicating when the gateway started. If `startedAt` is more recent than the Agent's last known phase transition time (i.e., the gateway restarted while the agent was Running), the controller treats missing activity data as "unknown" — same behavior as gateway-unreachable. No idle or hibernation transitions are made. The controller requeues with backoff until the gateway has been running for at least `idleTimeout`, at which point missing activity data can be reliably interpreted as genuine inactivity.
+**Gateway restart**: each replica's `/v1/activity` response includes a `startedAt` timestamp. If a replica's `startedAt` is more recent than the Agent's last known phase transition time (i.e., that replica restarted while the agent was Running), the controller treats that replica's missing activity data as "unknown" — it uses data from other replicas, or defers if all replicas have restarted. No idle or hibernation transitions are made until at least one replica has been running for `idleTimeout`, at which point missing activity data from that replica can be interpreted as genuine inactivity.
 
 ### Hibernation mechanics
 

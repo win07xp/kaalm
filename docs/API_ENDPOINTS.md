@@ -138,13 +138,45 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 
 The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the response is stored for polling retrieval.
 
+**Error callback payload** (sent to `callbackUrl` or stored at the polling endpoint on failure):
+
+```json
+{
+  "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "channelId": "/channels/support-assistant",
+  "error": {
+    "type": "delivery_failed",
+    "message": "Failed to deliver message to agent after 3 attempts",
+    "retryable": false
+  },
+  "failedAt": "2026-04-05T12:11:07Z"
+}
+```
+
+`delivery_failed` is returned when all 3 attempts to `POST /v1/message` to the agent's Service fail (connection error, non-200 response). `wake_timeout` is returned when the agent is `Hibernated` and fails to become Ready within `wakeTimeout`:
+
+```json
+{
+  "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "channelId": "/channels/support-assistant",
+  "error": {
+    "type": "wake_timeout",
+    "message": "Agent did not become ready within wakeTimeout (120s)",
+    "retryable": false
+  },
+  "failedAt": "2026-04-05T12:12:00Z"
+}
+```
+
+Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour.
+
 **`GET /v1/channels/{channelId}/responses/{requestId}`** (polling fallback):
 
-Returns the agent's response if available. This endpoint is authenticated via the same mechanism as the webhook itself (`AgentChannel.spec.webhook.auth`).
+Returns the agent's response or error payload if available. This endpoint is authenticated via the same mechanism as the webhook itself (`AgentChannel.spec.webhook.auth`).
 
 | Status | Meaning |
 |---|---|
-| 200 | Response available; body contains the callback payload above |
+| 200 | Response or error payload available; body contains the callback payload above |
 | 202 | Request is still being processed |
 | 404 | Unknown requestId or response expired |
 

@@ -117,8 +117,8 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 1. **Generate new CA**: the operator creates a new CA certificate and appends it to the CA bundle in `agentry-gateway-ca`. Both old and new CA certificates are now trusted by all components.
 2. **Re-issue gateway cert**: the operator re-issues the gateway serving certificate (`agentry-gateway-tls`) signed by the new CA. The gateway reloads it. Agents trust both CAs via the bundle, so there is no interruption.
-3. **Re-issue agent certs**: the operator re-issues per-agent TLS certificates signed by the new CA, rolling across agents over multiple reconcile cycles. The gateway trusts both CAs via its copy of the bundle, so agents with old certs remain valid during the rollout. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) for the rolling re-issuance details.
-4. **Remove old CA**: once all serving certificates have been re-issued from the new CA, the operator removes the old CA from the bundle. Only the new CA remains.
+3. **Re-issue agent certs**: the operator re-issues per-agent TLS certificates signed by the new CA in a rate-limited rolling fashion — at most 50 agents per reconcile cycle (configurable), tracked via a ConfigMap in `agentry-system` (`agentry-ca-rotation-state`). The gateway trusts both CAs via the bundle, so agents with old certs remain valid during the rollout. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) for the implementation detail.
+4. **Remove old CA**: once the reconciler has confirmed that every agent cert Secret is signed by the new CA (verified by checking all agent Secrets in `agentry-ca-rotation-state`), the operator removes the old CA from the bundle. Only the new CA remains.
 
 This is the same pattern Kubernetes itself uses for service account signing key rotation. The CA bundle is projected into agent Pods at `/var/run/agentry/ca.crt`; the kubelet updates the projected volume contents automatically when the Secret changes.
 
@@ -144,7 +144,7 @@ The gateway splits the model name on the first `/`: the prefix identifies the Mo
 
 This format uniquely identifies the (provider, model) pair and eliminates ambiguity when multiple ModelProviders offer models with similar names (e.g., a managed Anthropic endpoint and an OpenAI-compatible proxy both serving Claude models).
 
-The `defaultModel` field in `Agent.spec.providers` uses the raw model ID (not the qualified format) because the provider context is already established by the enclosing `providerRef`. The agent is responsible for constructing the qualified `provider/model` name in its API calls.
+The `primaryModelHint` field in `Agent.spec.providers` uses the raw model ID (not the qualified format) because the provider context is already established by the enclosing `providerRef`. This field is **informational only** — it has no runtime effect in the gateway. The agent is always responsible for constructing the qualified `provider/model` name in its API calls.
 
 ---
 

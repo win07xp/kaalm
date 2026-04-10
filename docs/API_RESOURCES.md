@@ -288,7 +288,7 @@ spec:
   # When omitted, $AGENTRY_PROVIDER_ENDPOINT is not injected.
   providers:
     - providerRef: { name: anthropic-shared }
-      defaultModel: "claude-opus-4-6"
+      primaryModelHint: "claude-opus-4-6"  # informational only — no runtime effect
 
   # Resource overrides (must fit within AgentClass.resources.maxLimits).
   resources:
@@ -345,7 +345,7 @@ status:
 ### Design notes
 
 - **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs.
-- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references with a default model. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain. `defaultModel` is **informational only** — it documents the developer's intended primary model for this provider binding but has no runtime effect in the gateway. The agent is always responsible for including the qualified `provider/model` name in API calls.
+- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain. `primaryModelHint` is **informational only** — it documents the developer's intended primary model for this provider binding but has no runtime effect in the gateway. The agent is always responsible for including the qualified `provider/model` name in its API calls.
 - **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol.
 - **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 - **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. Agents serve HTTPS on their health/message port using these. The reference base images handle TLS setup automatically.
@@ -378,7 +378,7 @@ spec:
 
   providers:
     - providerRef: { name: anthropic-shared }
-      defaultModel: "claude-opus-4-6"
+      primaryModelHint: "claude-opus-4-6"  # informational only — no runtime effect
 
   resources:
     requests: { cpu: "1", memory: "2Gi" }
@@ -538,13 +538,12 @@ status:
       status: "True"
       reason: WebhookReady
       message: "Webhook endpoint /channels/support-assistant is active"
-  messagesDelivered: 142
-  lastMessageTime: "2026-04-05T11:58:22Z"
 ```
 
 ### Design notes
 
 - **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
+- **Delivery counts are not in status.** Per-message counters require either a status patch on every delivery (high etcd write pressure at scale) or a separate in-memory accumulation mechanism. Instead, delivery volume is tracked via the Prometheus metric `agentry_channel_messages_total{channel_type,namespace,status}` exposed by the gateway. Status reflects channel health (phase, conditions) — not traffic volume.
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.

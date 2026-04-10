@@ -27,6 +27,7 @@ For the LLM Gateway (provider routing, budget, fallback) and the shared gateway 
 5. **Activator check**: if the Agent is `Hibernated`, the gateway signals the controller to wake it and waits up to `wakeTimeout` for the Pod to become Ready. In sync mode, the webhook caller blocks during this wait. In async mode, the gateway has already returned 202 (see step 5a). See [Activator](#activator) below.
 5a. **Async early return** (async mode only): if `AgentChannel.spec.webhook.responseMode` is `async`, the gateway returns HTTP 202 Accepted with a `requestId` immediately after normalization (step 3). Steps 5-7 proceed asynchronously — the webhook caller does not block. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.
 6. **Message delivery**: the gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS (or the override endpoint in `AgentChannel.spec.agentEndpoint`). The gateway verifies the agent's TLS certificate against the operator-managed CA.
+6a. **Async delivery retry**: in async mode, if `POST /v1/message` fails (connection error, non-200 response), the gateway retries up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the gateway delivers a `delivery_failed` error payload to `callbackUrl` (if configured, with retries) or stores it at the polling endpoint under the original `requestId`. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the error payload schema. In sync mode, non-200 responses are treated as delivery failures recorded in AgentChannel status conditions.
 7. **Response (sync mode, default)**: the agent returns a response envelope; the gateway returns it as the webhook HTTP response body.
 8. **Response (async mode)**: the agent returns a response envelope; the gateway POSTs it to the configured `callbackUrl` (with retries) or stores it for polling retrieval via `GET /v1/channels/{channelId}/responses/{requestId}`.
 
@@ -59,7 +60,9 @@ When an Agent is in the `Hibernated` phase, its Service has no endpoints. The ga
 1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
 2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service) to signal a wake request.
 3. The controller transitions the Agent from `Hibernated` to `Resuming` and recreates the Pod. See [Agent State Machine](./CONTROLLER_LIFECYCLE.md#agent-persistent-mode) for the full lifecycle.
-4. The gateway waits for the Pod to become Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), then delivers the message. If the timeout is exceeded, the gateway returns a timeout error to the webhook caller.
+4. The gateway waits for the Pod to become Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), then delivers the message. If the timeout is exceeded:
+   - **Sync mode**: the gateway returns HTTP 504 to the webhook caller.
+   - **Async mode**: the gateway delivers a `wake_timeout` error payload to `callbackUrl` (if configured, with retries) or stores it at the polling endpoint under the original `requestId`. The error expires after 1 hour, same as successful responses. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the error payload schema.
 
 ### Activator Authentication
 
@@ -96,7 +99,9 @@ Returns a JSON object containing the gateway's startup timestamp and a map of ag
 
 The `startedAt` field indicates when the gateway started. The controller uses this to detect gateway restarts — if the gateway started more recently than an agent's last phase transition, missing activity data is treated as "unknown" rather than "no activity".
 
-The controller queries this endpoint on each reconcile for agents in `Running` or `Idle` phase to evaluate idle and hibernation transitions. If the gateway is unreachable, the controller preserves the agent's current phase — no idle transitions are made without activity data.
+**Multi-replica fan-out**: because each gateway replica maintains its own in-memory activity store (updated only by the traffic it handles), querying the gateway ClusterIP Service (which round-robins to one replica) would return only that replica's view — agents whose last request landed on a different replica would appear idle. The controller instead queries all gateway Pod IPs directly in parallel: it enumerates gateway Pods via its Pod informer (matching the gateway label selector in `agentry-system`) and issues one `GET /v1/activity?namespace={ns}` request per Pod IP. It takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable (connection refused, timeout) are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection — if one replica has restarted more recently than an agent's last phase transition, only that replica's data is treated as unknown. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) for the reconciler implementation detail.
+
+The controller queries all replica Pod IPs on each reconcile for agents in `Running` or `Idle` phase to evaluate idle and hibernation transitions. If all replicas are unreachable, the controller preserves the agent's current phase — no idle transitions are made without activity data.
 
 Activity data is ephemeral: it is lost on gateway restart. The gateway includes its `startedAt` timestamp in the `/v1/activity` response so the controller can detect this condition. After a gateway restart:
 - The controller defers idle and hibernation transitions for agents whose last phase transition predates the gateway's `startedAt`, treating missing data as "unknown" until the gateway has been running for at least `idleTimeout`.
