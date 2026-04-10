@@ -82,6 +82,11 @@ spec:
         - "mcp.internal.corp"
         - "api.github.com"
     allowHostNetwork: false
+    # Allow ingress from other agent Pods in the same namespace.
+    # When true, the controller adds a NetworkPolicy ingress rule that allows
+    # traffic from any Pod in the same namespace bearing the agentry agent label.
+    # Default false (deny all ingress except from the Agentry gateway).
+    allowSameNamespaceIngress: false
 
   # Pod security
   security:
@@ -484,6 +489,10 @@ spec:
     # At most one of fromHeader / fromBody may be set; both are optional.
     # When omitted, userId defaults to the empty string — all unattributed
     # requests share one session if session.enabled is true.
+    # CRD schema enforces the mutex via:
+    #   x-kubernetes-validations:
+    #     - rule: "!has(self.fromHeader) || !has(self.fromBody)"
+    #       message: "at most one of fromHeader or fromBody may be set"
     userId:
       fromHeader: "X-User-Id"       # read userId from this request header
       # fromBody: ".user.id"        # alternative: jq-style path into the JSON body
@@ -558,7 +567,7 @@ status:
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: agentry-session-ns, name: channelId + ":" + userId)`, where `agentry-session-ns` is the fixed constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` — a purpose-generated UUID published as part of the Agentry API specification, identical across all installations and versions. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope. **This constant must not change after v1 ships** — any change would invalidate existing session state in agent PVCs.
-- **userId extraction**: the webhook adapter resolves `userId` using `webhook.userId` config (`fromHeader` or `fromBody`). If both are absent, the adapter uses the empty string. When `session.enabled: true`, this means all requests that cannot be attributed to a user share a single session — set `fallback` explicitly to control this behavior. See the `webhook.userId` spec block above.
+- **userId extraction**: the webhook adapter resolves `userId` using `webhook.userId` config (`fromHeader` or `fromBody`). At most one may be set — the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), rejecting invalid combinations at apply time. If both are absent, the adapter uses the empty string. When `session.enabled: true`, this means all requests that cannot be attributed to a user share a single session — set `fallback` explicitly to control this behavior. See the `webhook.userId` spec block above.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
 - **Async response mode** (`spec.webhook.responseMode: async`): designed for agents that take minutes to respond (e.g., coding agents, research agents). The async/sync distinction is handled entirely by the gateway. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.

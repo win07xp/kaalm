@@ -195,8 +195,8 @@ AgentClass can override these defaults, but the operator emits warnings for any 
 AgentClass includes network policy fields that the controller translates into `NetworkPolicy` resources:
 
 - **Egress**: by default, deny all egress except to the Agentry gateway in `agentry-system` and DNS. Because the gateway is a separate Pod (not a sidecar), this is enforceable with standard Kubernetes NetworkPolicy without requiring a service mesh. Platform team adds explicit allowlist entries for MCP servers, external APIs, etc.
-- **Ingress**: by default, deny all ingress. The Service makes the agent reachable within the cluster by the gateway; the developer adds additional ingress rules if needed.
-- **Inter-agent**: agents in the same namespace can talk to each other by default. Platform teams can override.
+- **Ingress**: by default, deny all ingress except from the Agentry gateway (which delivers channel messages via `POST /v1/message`). The Service makes the agent reachable within the cluster by the gateway; no other inbound traffic is allowed by default.
+- **Inter-agent**: disabled by default. To allow same-namespace agent-to-agent traffic, platform teams set `spec.network.allowSameNamespaceIngress: true` on the AgentClass. The controller translates this into a NetworkPolicy `ingress.from.podSelector` rule scoped to Pods in the same namespace bearing the Agentry agent label. This is opt-in — the default deny-all-ingress posture reflects the assumption that agent containers are untrusted.
 
 ### Resource Isolation
 

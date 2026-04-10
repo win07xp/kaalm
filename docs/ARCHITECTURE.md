@@ -141,7 +141,7 @@ LLM provider credentials are stored as Secrets in `agentry-system` and read dire
 
 Agentry is BYO-image, but containers must satisfy a minimal contract to participate in the lifecycle:
 
-1. **HTTP health endpoint** on a known port (`$AGENTRY_HEALTH_PORT`, default 8080) returning 200 when ready.
+1. **HTTPS health endpoint** on a known port (`$AGENTRY_HEALTH_PORT`, default 8080) returning 200 when ready. The agent serves TLS on this port using the operator-issued certificate (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`), so liveness and readiness probes must be configured with `httpGet.scheme: HTTPS`. Kubernetes does not verify TLS certificates for httpGet probes, so the operator-issued cert works without any additional CA configuration on the probe.
 2. **Graceful SIGTERM handling** — on receiving SIGTERM, the agent should finish in-flight work and exit within the configured `terminationGracePeriodSeconds`.
 3. **LLM traffic via the gateway** (optional) — if the agent uses LLM providers, it reads `$AGENTRY_PROVIDER_ENDPOINT` (an HTTPS URL) and sends LLM requests there rather than calling providers directly. Two TLS requirements apply:
    - **Server verification**: the agent must trust the operator-managed CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`) to verify the gateway's TLS certificate.
@@ -193,7 +193,7 @@ Agentry ships as a Helm chart that installs:
 
 - The CRDs (AgentClass, ModelProvider, Agent, AgentTask, AgentChannel).
 - The operator Deployment with RBAC, ServiceAccount, and leader election.
-- The Agentry Gateway Deployment with its RBAC, ServiceAccount, PodDisruptionBudget (`minAvailable: 1`), and `maxUnavailable: 1` rolling update strategy.
+- The Agentry Gateway Deployment with its RBAC, ServiceAccount, PodDisruptionBudget (`minAvailable: 1`), and `maxUnavailable: 1` rolling update strategy. The gateway's operational settings are exposed as Helm values — notably `gateway.maxFallbackDepth` (default: `3`), which sets the `AGENTRY_MAX_FALLBACK_DEPTH` environment variable on the gateway Deployment and controls the maximum fallback chain depth for LLM provider routing (see [Fallback Logic](./GATEWAY_LLM.md#fallback-logic)).
 - A default set of AgentClasses (e.g., `standard`, `sandboxed`) that platform teams can customize or delete.
 - Optional: a sample ModelProvider manifest stub (keys not included) as a starting template.
 

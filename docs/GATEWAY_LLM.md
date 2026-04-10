@@ -134,6 +134,8 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 This is the same pattern Kubernetes itself uses for service account signing key rotation. The CA bundle is projected into agent Pods at `/var/run/agentry/ca.crt`; the kubelet updates the projected volume contents automatically when the Secret changes.
 
+**Agent health probes and TLS**: because the agent serves HTTPS on `$AGENTRY_HEALTH_PORT` (using the same operator-issued certificate), the readiness and liveness probes injected by the AgentReconciler must set `httpGet.scheme: HTTPS`. Kubernetes httpGet probes do not verify TLS certificates, so no additional CA configuration is required on the probe. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
+
 **No cert-manager dependency**: the operator manages its own CA and serving certificates, including CA rotation. This keeps the deployment self-contained. Teams that prefer cert-manager can override the TLS Secrets externally; the gateway does not care how the certificate is provisioned as long as the Secret exists.
 
 `$AGENTRY_PROVIDER_ENDPOINT` is an `https://` URL when TLS is enabled (the default).
@@ -258,7 +260,7 @@ When the primary provider fails (network error, 5xx, timeout, or budget-blocked)
 4. Check the fallback provider's budget state for the agent's namespace. If the fallback is budget-blocked, skip it and try the next fallback in the list (or return an error if no more fallbacks remain).
 5. Forward the request with the fallback provider's credentials.
 
-Fallback chains up to a configurable depth. If provider A's fallback is B, and B has a fallback to C, the gateway tries A -> B -> C. The maximum depth is controlled by the gateway-level `maxFallbackDepth` setting (default: 3). If the chain is exhausted or the depth cap is reached without a successful response, the gateway returns an error. The depth cap prevents unbounded latency from long fallback chains. Circular references are rejected at reconcile time by the [ModelProviderReconciler](./CONTROLLER_RECONCILERS.md#modelproviderreconciler), so the gateway does not need runtime cycle detection.
+Fallback chains up to a configurable depth. If provider A's fallback is B, and B has a fallback to C, the gateway tries A -> B -> C. The maximum depth is controlled by the gateway-level `maxFallbackDepth` setting (default: 3), configured via the Helm value `gateway.maxFallbackDepth`, which sets the `AGENTRY_MAX_FALLBACK_DEPTH` environment variable on the gateway Deployment. If the chain is exhausted or the depth cap is reached without a successful response, the gateway returns an error. The depth cap prevents unbounded latency from long fallback chains. Circular references are rejected at reconcile time by the [ModelProviderReconciler](./CONTROLLER_RECONCILERS.md#modelproviderreconciler), so the gateway does not need runtime cycle detection.
 
 **Same-type constraint**: this is validated at reconcile time by the ModelProviderReconciler. Each provider in the fallback chain must have the same `spec.type` as the primary provider (e.g., all `anthropic` or all `openai-compatible`). A ModelProvider with `type: anthropic` cannot list a fallback with `type: openai`. Cross-format fallback may be considered for a future version if there is sufficient demand, but the translation surface area (streaming, tool use, system prompts, multimodal content) is large and error-prone.
 
