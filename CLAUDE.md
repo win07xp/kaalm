@@ -9,7 +9,7 @@ Currently in design/documentation phase (`docs/`). Go implementation has not sta
 - Stack: Go, controller-runtime (kubebuilder), Helm
 - Components: operator controller + gateway, both in `agentry-system` namespace
 - 5 CRDs: AgentClass, ModelProvider, Agent, AgentTask, AgentChannel
-- Design docs: `docs/ARCHITECTURE.md`, `docs/CONTROLLER.md`, `docs/PROVIDER.md`
+- Design docs: `docs/ARCHITECTURE.md` (index), `docs/API_RESOURCES.md`, `docs/API_ENDPOINTS.md`, `docs/GATEWAY_LLM.md`, `docs/GATEWAY_USER.md`, `docs/CONTROLLER_RECONCILERS.md`, `docs/CONTROLLER_LIFECYCLE.md`, `docs/SECURITY.md`
 
 ## Build Commands
 

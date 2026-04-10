@@ -1,6 +1,8 @@
-# Agentry — CRD API Design
+# Agentry — CRD API Reference
 
 This document defines the custom resources Agentry provides, their spec and status schemas, and the rationale for design choices. It is the canonical API reference for implementation.
+
+For the HTTP endpoints that agent containers call (task completion, heartbeat, message delivery, async webhook), see [API_ENDPOINTS.md](./API_ENDPOINTS.md).
 
 API group: `agentry.io`
 API version: `v1alpha1` (v1 API stability is not a goal for the initial release)
@@ -248,9 +250,9 @@ status:
 ### Design notes
 
 - **Secret scoping**: credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers.
-- **Budget state**: persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy.
+- **Budget state**: persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy. See [Budget State Management](./GATEWAY_LLM.md#budget-state-management).
 - **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Exact match is preferred where possible.
-- **Fallback chains** may be nested up to a gateway-configured depth cap (`maxFallbackDepth`, default 3). If provider A falls back to B, and B falls back to C, the gateway walks A → B → C. Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats. The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster.
+- **Fallback chains** may be nested up to a gateway-configured depth cap (`maxFallbackDepth`, default 3). If provider A falls back to B, and B falls back to C, the gateway walks A -> B -> C. Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats. The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster. See [Fallback Logic](./GATEWAY_LLM.md#fallback-logic).
 - **Cost fields are strings** (not floats) to avoid precision issues. The gateway parses them as decimals.
 
 ---
@@ -343,9 +345,9 @@ status:
 ### Design notes
 
 - **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs.
-- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references with a default model. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. The gateway resolves the provider, validates access, strips the prefix, and forwards the raw model name upstream. See the Gateway Design doc for the full routing chain. `defaultModel` is **informational only** — it documents the developer's intended primary model for this provider binding but has no runtime effect in the gateway. The agent is always responsible for including the qualified `provider/model` name in API calls.
-- **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See Controller Design for the heartbeat protocol.
-- **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS. Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
+- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references with a default model. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain. `defaultModel` is **informational only** — it documents the developer's intended primary model for this provider binding but has no runtime effect in the gateway. The agent is always responsible for including the qualified `provider/model` name in API calls.
+- **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol.
+- **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 - **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. Agents serve HTTPS on their health/message port using these. The reference base images handle TLS setup automatically.
 
 ---
@@ -439,7 +441,7 @@ status:
 
 ### Design notes
 
-- **`completion.condition: agentReported` is the v1 default.** The agent container calls the gateway's completion endpoint with a status payload that may include artifact key-value pairs. This is more flexible than exit codes alone because the agent can report structured metadata and artifacts in a single call.
+- **`completion.condition: agentReported` is the v1 default.** The agent container calls the gateway's completion endpoint with a status payload that may include artifact key-value pairs. This is more flexible than exit codes alone because the agent can report structured metadata and artifacts in a single call. See [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) for the endpoint spec.
 - **Artifact collection via completion payload**: artifacts are declared by name in the spec. The agent includes artifact values (keyed by name) in the `POST /v1/task/complete` body. The controller validates that all declared artifact names are present in the payload. This eliminates race conditions, removes the need for `pods/exec` RBAC, and keeps the artifact contract simple. Artifact size limits still apply (4 KiB per artifact, 32 KiB total inline; larger artifacts use ConfigMap references).
 - **`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done.
 - **`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.
@@ -549,8 +551,8 @@ status:
 - **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: fixed Agentry UUID, name: channelId + ":" + userId)`. This ID is identical across gateway replicas and survives gateway restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
-- **Async response mode** (`spec.webhook.responseMode: async`): designed for agents that take minutes to respond (e.g., coding agents, research agents). When async mode is enabled, the gateway immediately returns HTTP 202 with a `requestId` in the response body. The agent processes the message normally. When the agent responds, the gateway either (a) POSTs the response to `spec.webhook.callbackUrl` if configured, or (b) stores the response for retrieval via `GET /v1/channels/{channelId}/responses/{requestId}`. Stored responses are retained for 1 hour (sufficient for polling use cases). Async mode does not affect the agent's implementation — the agent still receives `POST /v1/message` and returns a response envelope. The async/sync distinction is handled entirely by the gateway.
-- **Wake-on-demand integration**: if the target Agent is `Hibernated` when a webhook message arrives, the gateway wakes it (via the activator mechanism) before delivering the message. In sync mode, the webhook caller blocks until the agent is ready and responds, or receives a timeout error if `wakeTimeout` is exceeded. In async mode, the gateway returns 202 immediately and handles wake + delivery asynchronously.
+- **Async response mode** (`spec.webhook.responseMode: async`): designed for agents that take minutes to respond (e.g., coding agents, research agents). The async/sync distinction is handled entirely by the gateway. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.
+- **Wake-on-demand integration**: if the target Agent is `Hibernated` when a webhook message arrives, the gateway wakes it via the [Activator](./GATEWAY_USER.md#activator) before delivering the message. In sync mode, the webhook caller blocks until the agent is ready and responds, or receives a timeout error if `wakeTimeout` is exceeded. In async mode, the gateway returns 202 immediately and handles wake + delivery asynchronously.
 
 ---
 
@@ -588,149 +590,3 @@ AgentClass defaults are applied at reconcile time when Agent/AgentTask fields ar
 - `lifecycle.wakeTimeout` defaults from `AgentClass.spec.lifecycle.defaultWakeTimeout`
 
 Defaults are applied at reconcile time rather than admission. The stored spec reflects what the developer wrote; effective configuration is reflected in the Agent's status. This avoids a mutating webhook dependency while keeping the behavior predictable.
-
----
-
-## Gateway Endpoints
-
-The Agentry Gateway exposes several HTTP endpoints that agent containers may call. All requests are authenticated via **source IP → Pod resolution** — no API keys or tokens are exchanged. The gateway resolves the caller's Pod and namespace from its Pod informer cache.
-
-### `POST /v1/task/complete` (AgentTask only)
-
-Called by the agent container to report task completion. The gateway writes the payload to a ConfigMap named `{taskName}-completion` in the task's namespace (owned by the AgentTask for cascade deletion). The AgentTaskReconciler watches for this ConfigMap to drive the Completing transition.
-
-**Request body:**
-
-```json
-{
-  "status": "success",
-  "message": "PR opened successfully",
-  "artifacts": {
-    "pr-url": "https://github.com/acme/widgets/pull/587",
-    "summary": "Fixed null pointer in WidgetService.get(). Added regression test."
-  }
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `status` | string | yes | `"success"` or `"failure"` |
-| `message` | string | no | Human-readable completion message |
-| `artifacts` | map[string]string | no | Key-value pairs matching the names declared in `spec.artifacts`. The reconciler validates that all declared artifact names are present. |
-
-**Response:** `200 OK` with empty body on success. `400 Bad Request` if the calling Pod is not associated with an AgentTask. `413 Payload Too Large` if any single artifact value exceeds 4 KiB or total artifacts exceed 32 KiB (large artifacts should be stored externally and referenced by URL in the value).
-
-### `POST /v1/agent/heartbeat` (Agent only)
-
-Called by the agent container to signal liveness for idle detection. Only meaningful when `spec.lifecycle.activitySource` is `agentHeartbeat` or `both`. The gateway updates the agent's last-activity timestamp in its in-memory activity store.
-
-**Request body:** empty or `{}`.
-
-**Response:** `200 OK` with empty body. `400 Bad Request` if the calling Pod is not associated with an Agent.
-
-Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 seconds. The gateway coalesces rapid heartbeats in memory — no etcd or API server writes occur per heartbeat. The controller queries the gateway's activity API on each reconcile to evaluate idle transitions (see Controller Design doc § Activity Detection).
-
-### Manual Wake Annotation
-
-Agents in the `Hibernated` phase can be manually woken by applying the annotation:
-
-```
-kubectl annotate agent <name> agentry.io/wake=true
-```
-
-The AgentReconciler watches for this annotation. When observed on a `Hibernated` Agent, the reconciler transitions the Agent to `Resuming`, recreates the Pod, and removes the annotation after processing. This provides an escape hatch when no AgentChannel is configured or for operational use cases (e.g., pre-warming an agent before business hours).
-
-### `POST /v1/message` (Agent only — agent-implemented)
-
-This endpoint is **implemented by the agent container**, not by the gateway. The User Gateway calls it to deliver normalized channel messages. Agents that use AgentChannel must expose this endpoint on `$AGENTRY_HEALTH_PORT` (default 8080).
-
-**Request body (sent by the gateway):**
-
-```json
-{
-  "messageId": "550e8400-e29b-41d4-a716-446655440000",
-  "channelType": "webhook",
-  "channelId": "/channels/support-assistant",
-  "userId": "caller-id-from-header-or-body",
-  "sessionId": "optional-session-uuid",
-  "content": "Hello, I need help with my order",
-  "attachments": [],
-  "metadata": {}
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `messageId` | string (UUID) | yes | Unique identifier for this message, for deduplication |
-| `channelType` | string | yes | Platform type: `"webhook"` in v1 (Discord, WhatsApp in v1.1) |
-| `channelId` | string | yes | Platform-specific channel identifier |
-| `userId` | string | yes | Platform-specific user identifier |
-| `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled: true`. Deterministic: derived from `UUIDv5(channelId + ":" + userId)`, identical across replicas and gateway restarts. Session expiry is the agent's responsibility. |
-| `content` | string | yes | The user's message text |
-| `attachments` | array | no | List of attachment objects (platform-specific schema) |
-| `metadata` | map | no | Platform-specific fields (e.g., `guildId` for Discord) |
-
-**Response body (returned by the agent):**
-
-```json
-{
-  "content": "I'd be happy to help! Can you share your order number?",
-  "attachments": [],
-  "metadata": {}
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `content` | string | yes | The agent's reply text |
-| `attachments` | array | no | Attachments to send in the reply |
-| `metadata` | map | no | Optional platform-specific reply metadata |
-
-**Response codes:** `200 OK` with the response envelope. In sync mode, the gateway returns the response body as the webhook HTTP response. Non-200 responses are treated as delivery failures and recorded in AgentChannel status conditions.
-
-### Async Webhook Response (gateway-managed)
-
-When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles the asynchronous response flow. The agent's implementation is unchanged — it still receives `POST /v1/message` and returns a response envelope. The async behavior is entirely gateway-side.
-
-**Webhook caller receives (immediate 202 response):**
-
-```json
-{
-  "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "status": "accepted",
-  "message": "Message accepted for processing"
-}
-```
-
-**Callback delivery** (gateway POSTs to `spec.webhook.callbackUrl`):
-
-```json
-{
-  "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/support-assistant",
-  "response": {
-    "content": "I've analyzed the issue and opened a PR with the fix.",
-    "attachments": [],
-    "metadata": {}
-  },
-  "completedAt": "2026-04-05T12:10:42Z"
-}
-```
-
-The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the response is stored for polling retrieval.
-
-**`GET /v1/channels/{channelId}/responses/{requestId}`** (polling fallback):
-
-Returns the agent's response if available. This endpoint is authenticated via the same mechanism as the webhook itself (`AgentChannel.spec.webhook.auth`).
-
-| Status | Meaning |
-|---|---|
-| 200 | Response available; body contains the callback payload above |
-| 202 | Request is still being processed |
-| 404 | Unknown requestId or response expired |
-
-Stored responses are retained for 1 hour, after which they are evicted. This is a polling fallback, not a durable queue — webhook callers that need guaranteed delivery should configure `callbackUrl`.
-
-### LLM Gateway Error Responses
-
-When the LLM Gateway cannot fulfill a request, it returns a structured JSON error body with an `error.type` field and appropriate HTTP status code. See the Gateway Design doc (`PROVIDER.md` § Gateway Error Responses) for the full error schema and status code mapping. Key error types: `access_denied` (403), `rate_limited` (429), `budget_exhausted` (503), `provider_error` (502), `provider_unavailable` (503).

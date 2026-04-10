@@ -1,6 +1,21 @@
 # Agentry — Architecture Overview
 
-This document describes the high-level architecture of Agentry: the control plane, the data plane, and the integration points with the surrounding ecosystem. Implementation detail lives in the Controller Design, ModelProvider Gateway, and API Design docs.
+This document describes the high-level architecture of Agentry: the control plane, the data plane, and the integration points with the surrounding ecosystem.
+
+## Documentation Map
+
+| Document | Contents |
+|---|---|
+| [VISION.md](./VISION.md) | Problem statement, design principles, v1 scope |
+| [STORIES.md](./STORIES.md) | Personas and user scenarios driving the design |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | This file — system topology, control/data plane, deployment |
+| [API_RESOURCES.md](./API_RESOURCES.md) | CRD specs: AgentClass, ModelProvider, Agent, AgentTask, AgentChannel |
+| [API_ENDPOINTS.md](./API_ENDPOINTS.md) | Gateway HTTP endpoints and agent-implemented contracts |
+| [GATEWAY_LLM.md](./GATEWAY_LLM.md) | LLM Gateway: routing, budget, fallback, TLS, credentials |
+| [GATEWAY_USER.md](./GATEWAY_USER.md) | User Gateway: webhook delivery, activator, activity tracking |
+| [CONTROLLER_RECONCILERS.md](./CONTROLLER_RECONCILERS.md) | Operator structure, five reconcilers, error handling |
+| [CONTROLLER_LIFECYCLE.md](./CONTROLLER_LIFECYCLE.md) | State machines for Agent and AgentTask, finalizers |
+| [SECURITY.md](./SECURITY.md) | Trust model, RBAC, credential lifecycle, TLS, isolation |
 
 ## System Topology
 
@@ -108,7 +123,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 - Enforces soft budget guardrails and per-namespace rate limits
 - Routes to the upstream provider; on failure, walks the fallback chain (same-type providers only, up to `maxFallbackDepth` depth; no cross-format translation)
 - Extracts actual token usage from the provider response and updates spend counters
-- Returns structured error responses (JSON with `error.type`) on failure — see Gateway Design doc
+- Returns structured error responses (JSON with `error.type`) on failure — see [LLM Gateway Error Responses](./API_ENDPOINTS.md#llm-gateway-error-responses)
 
 **User Gateway** (inbound, channel → agent)
 - Watches `AgentChannel` resources directly to determine message routing
