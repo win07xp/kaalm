@@ -135,9 +135,10 @@ status:
 ### Design notes
 
 - `allowedImages` is mandatory in practice for real clusters; an empty list means "any image" and validation will emit a warning.
+- **Image pattern glob semantics**: patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules. The `*` wildcard matches any sequence of non-`/` characters — it does **not** cross path separators. Examples: `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo:latest` but NOT `registry.internal.corp/agents/team/foo:latest`. Use explicit multi-segment patterns (e.g., `registry.internal.corp/agents/team/*`) for nested paths. Digest references (`sha256:...`) are not matched by glob and must be listed explicitly.
 - `allowedProviders` is the primary access control mechanism for LLM providers at the class level. ModelProvider itself has `allowedNamespaces` for namespace-level control. Both must pass for an Agent to use a provider.
 - Defaults vs. maxLimits: defaults are applied at reconcile time if the Agent does not specify; maxLimits are enforced regardless and reject manifests that exceed them.
-- `runtime.backend` only accepts `pod` in v1. The `agentSandbox` value (which creates Agent Sandbox `Sandbox` CRs instead of raw Pods) is deferred to v1.1. See [Integration Points](./ARCHITECTURE.md#agent-sandbox-optional-backend) for the planned integration design.
+- `runtime.backend` only accepts `pod` in v1. The `agentSandbox` value (which creates Agent Sandbox `Sandbox` CRs instead of raw Pods) is deferred to v1.1. The CRD schema enforces this via `x-kubernetes-validations: [{rule: "self == 'pod'", message: "agentSandbox backend is not supported in v1; use pod"}]` on the `runtime.backend` field — invalid values are rejected at apply time rather than surfaced as a reconcile error. See [Integration Points](./ARCHITECTURE.md#agent-sandbox-optional-backend) for the planned integration design.
 
 ---
 
@@ -255,7 +256,7 @@ status:
 
 - **Secret scoping**: credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers.
 - **Budget state**: persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy. See [Budget State Management](./GATEWAY_LLM.md#budget-state-management).
-- **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Exact match is preferred where possible.
+- **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Uses Go's [`path.Match`](https://pkg.go.dev/path#Match) rules — `*` matches any sequence of non-`/` characters and does not cross path separators. Since Kubernetes namespace names are DNS labels (no `/`), `*` behaves as expected: `sandbox-*` matches `sandbox-foo` but not `sandbox-foo-bar/sub`. Exact match is preferred where possible.
 - **Fallback chains** may be nested up to a gateway-configured depth cap (`maxFallbackDepth`, default 3). If provider A falls back to B, and B falls back to C, the gateway walks A -> B -> C. Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats. The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster. See [Fallback Logic](./GATEWAY_LLM.md#fallback-logic).
 - **Cost fields are strings** (not floats) to avoid precision issues. The gateway parses them as decimals.
 
@@ -355,8 +356,8 @@ status:
 - **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 - **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. These cert/key files serve a dual purpose:
   - **Server TLS** (gateway→agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against the operator CA on message delivery.
-  - **Client TLS / mTLS** (agent→gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_PROVIDER_ENDPOINT`, allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
-  Reference base images handle both uses automatically. Custom images must configure their HTTP client to present the client cert when calling the gateway.
+  - **Client TLS / mTLS** (agent→gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (which includes `$AGENTRY_PROVIDER_ENDPOINT` for LLM calls, heartbeats, and task completion), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
+  Reference base images handle both uses automatically. Custom images must configure their HTTP client to present the client cert for all calls to the gateway.
 
 ---
 
@@ -450,7 +451,7 @@ status:
 
 - **`completion.condition: agentReported` is the v1 default.** The agent container calls the gateway's completion endpoint with a status payload that may include artifact key-value pairs. This is more flexible than exit codes alone because the agent can report structured metadata and artifacts in a single call. See [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) for the endpoint spec.
 - **Artifact collection via completion payload**: artifacts are declared by name in the spec. The agent includes artifact values (keyed by name) in the `POST /v1/task/complete` body. The controller validates that all declared artifact names are present in the payload. This eliminates race conditions, removes the need for `pods/exec` RBAC, and keeps the artifact contract simple. Artifact size limits still apply (4 KiB per artifact, 32 KiB total inline; larger artifacts use ConfigMap references).
-- **`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done.
+- **`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done. The CRD schema enforces this: `spec.completion.condition` accepts only `agentReported` and `exitCode` in v1 via `x-kubernetes-validations: [{rule: "self in ['agentReported', 'exitCode']", message: "webhook completion condition is not supported in v1"}]` — invalid values are rejected at apply time.
 - **`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.
 - **Concurrency**: unlike Job, AgentTask is always parallelism=1 in v1. Parallel fan-out tasks would be a separate future resource (`AgentTaskSet`) rather than a field on AgentTask.
 
@@ -507,7 +508,7 @@ spec:
     # Required when responseMode is "async" and push-based delivery is desired.
     # The gateway POSTs the agent's response to this URL when it becomes available.
     # If omitted in async mode, responses are stored and retrievable via polling
-    # at GET /v1/channels/{channelId}/responses/{requestId}.
+    # at GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}.
     # callbackUrl: "https://my-service.example.com/agent-responses"
 
   # Optional: override how the gateway delivers messages to the agent.
@@ -562,6 +563,7 @@ status:
 ### Design notes
 
 - **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
+- **Webhook path restrictions**: `spec.webhook.path` must not begin with `/v1/` — that prefix is reserved for gateway-internal endpoints. See validation rule 16 in [Cross-Resource Validation](#cross-resource-validation) and [Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths).
 - **Delivery counts are not in status.** Per-message counters require either a status patch on every delivery (high etcd write pressure at scale) or a separate in-memory accumulation mechanism. Instead, delivery volume is tracked via the Prometheus metric `agentry_channel_messages_total{channel_type,namespace,status}` exposed by the gateway. Status reflects channel health (phase, conditions) — not traffic volume.
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
@@ -594,6 +596,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 13. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
 14. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
 15. `AgentChannel.spec.webhook.path` must be globally unique across all AgentChannels in the cluster. Namespace-prefixed paths (e.g., `/channels/{namespace}/{name}`) are recommended as a convention to avoid collisions. On conflict, the reconciler marks the newer AgentChannel (by `creationTimestamp`) as `Ready=False, reason=PathConflict`. The gateway uses `creationTimestamp` as a tiebreaker, routing to the oldest AgentChannel until the conflict is resolved.
+16. `AgentChannel.spec.webhook.path` must not begin with `/v1/`. Paths starting with `/v1/` are reserved for gateway-internal endpoints (task completion, heartbeat, async polling, channel health). On violation, the reconciler sets `Ready=False, reason=ReservedPath`. The recommended convention is to prefix developer paths with `/channels/` (e.g., `/channels/{namespace}/{name}`) — see [Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths).
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 

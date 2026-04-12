@@ -6,6 +6,16 @@ All gateway-exposed endpoints authenticate requests via **source IP -> Pod resol
 
 ---
 
+## Reserved Gateway Paths
+
+The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints (served on the LLM Gateway listener at port 8443 for agent-initiated calls, and reserved on the User Gateway listener to prevent webhook path collisions):
+
+- `/v1/` — all current and future gateway-internal endpoints (task completion, heartbeat, async polling, channel health, activator)
+
+AgentChannels whose `spec.webhook.path` begins with `/v1/` are rejected at reconcile time with `Ready=False, reason=ReservedPath`. The recommended developer convention is to use `/channels/` as a prefix (e.g., `/channels/team-support/support-assistant`).
+
+---
+
 ## `POST /v1/task/complete` (AgentTask only)
 
 Called by the agent container to report task completion. The gateway writes the payload to a ConfigMap named `{taskName}-completion` in the task's namespace (owned by the AgentTask for cascade deletion). The AgentTaskReconciler watches for this ConfigMap to drive the Completing transition — see [AgentTask State Machine](./CONTROLLER_LIFECYCLE.md#agenttask).
@@ -172,11 +182,11 @@ The gateway retries callback delivery up to 3 times with exponential backoff (1s
 
 Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour.
 
-**`GET /v1/channels/{channelId}/responses/{requestId}`** (polling fallback):
+**`GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`** (polling fallback):
 
-Returns the agent's response or error payload if available. This endpoint is authenticated via the same mechanism as the webhook itself (`AgentChannel.spec.webhook.auth`).
+Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel (i.e., the value of `channelId` from the 202 response body). The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request via the same mechanism as the original webhook (`AgentChannel.spec.webhook.auth`). Callers must preserve the `channelId` value from the 202 response and pass it as `channelPath` on poll — it should not be constructed independently.
 
-Any gateway replica accepts this request. The receiving replica extracts the shard index from the opaque `requestId`, routes internally to the owning replica if needed, and falls back to the `agentry-async-{requestId}` ConfigMap in the agent's namespace if the owning replica is unreachable or the in-memory response is unavailable (e.g., after a scale event). Callers always receive a consistent response regardless of which gateway replica they reach — replica topology is invisible.
+Any gateway replica accepts this request. The receiving replica extracts the shard index from the opaque `requestId`, routes internally to the owning replica if needed, and falls back to the `agentry-async-{requestId}` ConfigMap in `agentry-system` if the owning replica is unreachable or the in-memory response is unavailable (e.g., after a scale event). Callers always receive a consistent response regardless of which gateway replica they reach — replica topology is invisible.
 
 | Status | Meaning |
 |---|---|

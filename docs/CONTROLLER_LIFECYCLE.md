@@ -85,7 +85,7 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 | Hibernated -> Resuming | Gateway [Activator](./GATEWAY_USER.md#activator) calls `POST /v1/activate/{namespace}/{name}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
 | any -> Degraded | Provider unavailable, quota exhausted, other recoverable issue |
-| Degraded -> Running | Underlying condition resolved |
+| Degraded -> Running | Underlying condition resolved. Note: recovery always transitions to `Running` regardless of the pre-Degraded phase (including `Idle`). The idle clock restarts from the gateway's most recent observed activity timestamp for the agent. This is intentional — the controller cannot reason about how much idle time elapsed during the degraded window. |
 | any -> Failed | Unrecoverable error (image pull failure after retries, invalid config, persistent crash loop) |
 | any -> Terminating | Deletion requested |
 
@@ -97,10 +97,12 @@ Activity timestamps are maintained **in-memory in the gateway**, not in etcd. Th
 
 The gateway exposes `GET /v1/activity?namespace={ns}` returning a map of agent names to last-activity timestamps. Because each gateway replica maintains its own in-memory store (updated only by the traffic it handles), the controller fans out this query to **all gateway Pod IPs in parallel** (enumerating them via its Pod informer) rather than hitting the ClusterIP Service, which would round-robin to one replica and miss activity recorded by the others. The controller takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection. See [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) for the full fan-out protocol.
 
-The reconciler evaluates `lastActivityTime` based on the Agent's `spec.lifecycle.activitySource` setting:
-- `gatewayTraffic` (default): only gateway-observed LLM and channel traffic timestamps are considered.
-- `agentHeartbeat`: only heartbeat timestamps are considered.
-- `both`: the most recent timestamp from either source is used.
+The `/v1/activity` response returns both signal sources separately per agent (see [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api)). The reconciler applies the `activitySource` filter from the Agent's `spec.lifecycle.activitySource` setting after merging results across all gateway replicas:
+- `gatewayTraffic` (default): only the `gatewayTraffic` timestamp field is considered.
+- `agentHeartbeat`: only the `heartbeat` timestamp field is considered.
+- `both`: the most recent timestamp from either field is used.
+
+The gateway returns both signal sources unconditionally — the controller (which already holds the Agent spec) owns the filtering decision. This avoids a dependency on the gateway watching Agent resources.
 
 The reconciler updates `status.lastActivityTime` on the Agent only when a phase transition is warranted, avoiding unnecessary etcd writes.
 
@@ -120,7 +122,7 @@ When an Agent is `Hibernated`, its ClusterIP Service has no endpoints — traffi
 3. The controller transitions the Agent to `Resuming` and creates the Pod.
 4. The gateway holds the message and sends a "typing" or "processing" indicator to the channel platform while waiting. Once the Pod is Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), the gateway delivers the message. If the timeout is exceeded, the gateway returns an appropriate error to the channel platform.
 
-Manual wake is also supported via annotation: `kubectl annotate agent foo agentry.io/wake=true`.
+Manual wake is also supported via annotation: `kubectl annotate agent foo agentry.io/wake=true`. The AgentReconciler removes this annotation unconditionally on every reconcile pass — if the agent is `Hibernated`, it transitions to `Resuming` before removing it; if the agent is in any other phase, it removes the annotation and emits a Warning event (`reason=WakeIgnored`) without changing phase. The annotation is never left on a resource after a reconcile pass. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 8 for the implementation detail.
 
 ### Spec change handling (Running Agent)
 

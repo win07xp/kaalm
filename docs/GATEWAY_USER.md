@@ -23,21 +23,21 @@ For the LLM Gateway (provider routing, budget, fallback) and the shared gateway 
    }
    ```
 4. **AgentChannel lookup**: the gateway finds the AgentChannel resource matching the webhook path, which identifies the target Agent and namespace. If multiple AgentChannels claim the same path (a transient conflict before the reconciler marks the newer one as `Ready=False`), the gateway routes to the AgentChannel with the earliest `creationTimestamp`. See [AgentChannel](./API_RESOURCES.md#agentchannel) for session configuration and webhook path uniqueness constraints.
-   If the AgentChannel has `session.enabled: true`, the gateway generates a deterministic `sessionId` from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: fixed Agentry UUID, name: channelId + ":" + userId)`. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility using its PVC state.
+   If the AgentChannel has `session.enabled: true`, the gateway generates a deterministic `sessionId` from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d, name: channelId + ":" + userId)`. The namespace constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` is a purpose-generated UUID published as part of the Agentry API specification; it is identical across all installations and versions and must not change after v1 ships. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility using its PVC state.
 5. **Activator check**: if the Agent is `Hibernated`, the gateway signals the controller to wake it and waits up to `wakeTimeout` for the Pod to become Ready. In sync mode, the webhook caller blocks during this wait. In async mode, the gateway has already returned 202 (see step 5a). See [Activator](#activator) below.
 5a. **Async early return** (async mode only): if `AgentChannel.spec.webhook.responseMode` is `async`, the gateway returns HTTP 202 Accepted with a `requestId` immediately after normalization (step 3). Steps 5-7 proceed asynchronously — the webhook caller does not block.
 
 **Async shard routing**: to ensure polls are always routable to the correct in-memory store, async deliveries are sharded by `channelId`. When any replica receives an async webhook, it computes `ownerShard = hash(channelId) % numReplicas` (using the Pod informer count for `numReplicas`) and, if it is not the owner, internally forwards the full delivery to the owner replica's Pod IP before returning 202. The `requestId` returned in the 202 encodes the shard index as an opaque prefix (`{shardIndex}-{uuidv4}`). Callers must treat `requestId` as an opaque string and must not attempt to parse or construct it.
 
-**Async shard forward failure**: if the forward to the owner replica fails (connection error, owner mid-restart, stale Pod IP in the informer), the **receiving replica handles the delivery locally** — it processes the message, writes the ConfigMap durability backstop (`agentry-async-{requestId}` in the agent's namespace), and returns 202. The shard index in the `requestId` is a routing optimization hint, not a hard contract: on poll, any replica that does not find the response in its in-memory store falls back to reading the ConfigMap. Callers always receive a consistent response regardless of which replica holds the data.
+**Async shard forward failure**: if the forward to the owner replica fails (connection error, owner mid-restart, stale Pod IP in the informer), the **receiving replica handles the delivery locally** — it processes the message, writes the ConfigMap durability backstop (`agentry-async-{requestId}` in `agentry-system`), and returns 202. The shard index in the `requestId` is a routing optimization hint, not a hard contract: on poll, any replica that does not find the response in its in-memory store falls back to reading the ConfigMap. Callers always receive a consistent response regardless of which replica holds the data.
 
-On poll (`GET /v1/channels/{channelId}/responses/{requestId}`), any replica extracts the shard index from the `requestId`, identifies the owner Pod IP from the Pod informer, and proxies the request internally if needed. Callers always receive a consistent response regardless of which gateway replica serves the poll. This routing is entirely internal — callers are never aware of replica topology. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.
+On poll (`GET /v1/channels/responses/{requestId}?channelPath=...`), any replica extracts the shard index from the `requestId`, identifies the owner Pod IP from the Pod informer, and proxies the request internally if needed. The `channelPath` query parameter is used to look up AgentChannel auth config for authenticating the poll request. Callers always receive a consistent response regardless of which gateway replica serves the poll. This routing is entirely internal — callers are never aware of replica topology. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.
 6. **Message delivery**: the gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS (or the override endpoint in `AgentChannel.spec.agentEndpoint`). The gateway verifies the agent's TLS certificate against the operator-managed CA.
 6a. **Async delivery retry**: in async mode, if `POST /v1/message` fails (connection error, non-200 response), the gateway retries up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the gateway delivers a `delivery_failed` error payload to `callbackUrl` (if configured, with retries) or stores it at the polling endpoint under the original `requestId`. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the error payload schema. In sync mode, non-200 responses are treated as delivery failures recorded in AgentChannel status conditions.
 
-**ConfigMap durability backstop**: when the owning replica completes an async delivery and has the agent's response ready (or produces an error), it writes the response payload to a ConfigMap named `agentry-async-{requestId}` in the agent's namespace (in addition to storing it in-memory). This ConfigMap is owned by the AgentChannel (via ownerRef for cascade deletion) and annotated with a 1-hour expiry. On poll, if the owning replica is unreachable (crash, rolling restart) or the hash-based shard mapping has shifted due to a scale event, the receiving replica falls back to reading the ConfigMap. The AgentChannelReconciler prunes expired ConfigMaps on its reconcile passes. This means poll responses are durable across replica restarts — the in-memory store is the fast path, the ConfigMap is the fallback.
+**ConfigMap durability backstop**: when the owning replica completes an async delivery and has the agent's response ready (or produces an error), it writes the response payload to a ConfigMap named `agentry-async-{requestId}` in `agentry-system` (in addition to storing it in-memory). The gateway already has full ConfigMap access in `agentry-system`, so no additional RBAC is required. Each ConfigMap is labeled with `agentry.io/channel-namespace` and `agentry.io/channel-name` to identify the originating AgentChannel, and annotated with a 1-hour expiry. Cross-namespace ownerRefs are not used (Kubernetes GC does not follow them); instead, the AgentChannelReconciler prunes expired ConfigMaps in `agentry-system` using label selectors on its reconcile passes. On poll, if the owning replica is unreachable (crash, rolling restart) or the hash-based shard mapping has shifted due to a scale event, the receiving replica falls back to reading the ConfigMap from `agentry-system`. This means poll responses are durable across replica restarts — the in-memory store is the fast path, the ConfigMap is the fallback.
 7. **Response (sync mode, default)**: the agent returns a response envelope; the gateway returns it as the webhook HTTP response body.
-8. **Response (async mode)**: the agent returns a response envelope; the gateway POSTs it to the configured `callbackUrl` (with retries) or stores it for polling retrieval via `GET /v1/channels/{channelId}/responses/{requestId}`.
+8. **Response (async mode)**: the agent returns a response envelope; the gateway POSTs it to the configured `callbackUrl` (with retries) or stores it for polling retrieval via `GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}` — see [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed).
 
 ---
 
@@ -83,7 +83,14 @@ The operator generates a shared HMAC key on installation and stores it in a Secr
 - The gateway includes an `Authorization: Bearer <HMAC(timestamp:namespace:agentName)>` header with each activation request, plus an `X-Agentry-Timestamp` header.
 - The controller validates the HMAC signature and rejects requests with timestamps older than 30 seconds (replay window).
 
-This ensures only the gateway (which holds the shared key) can trigger agent wake-ups. The HMAC key is rotated by the operator on a configurable interval (default: 30 days); both components watch the Secret for changes.
+This ensures only the gateway (which holds the shared key) can trigger agent wake-ups.
+
+**HMAC key rotation**: the `agentry-activator-key` Secret stores two fields: `current-key` and `previous-key` (base64-encoded random bytes). When the operator rotates the key (configurable interval, default: 30 days):
+1. The operator writes the new key to `current-key` and moves the old value to `previous-key`.
+2. Both the gateway and controller watch the Secret. When they pick up the change, they accept HMAC signatures validated against **either** key.
+3. After a configurable transition window (default: 60 seconds, `hmacKeyTransitionWindow`), the operator removes `previous-key`.
+
+This key-ring approach eliminates the failure window that would otherwise occur between the two components independently picking up the new Secret — during the transition window, either key is valid. If `previous-key` is absent (first install or after the transition window has elapsed), only `current-key` is used for both signing and verification.
 
 ---
 
@@ -95,21 +102,31 @@ The gateway exposes an internal endpoint for the controller to query activity st
 
 **`GET /v1/activity?namespace={ns}`**
 
-Returns a JSON object containing the gateway's startup timestamp and a map of agent names to their last-activity timestamps for the given namespace:
+Returns a JSON object containing the gateway's startup timestamp and a map of agent names to their last-activity timestamps, broken out by signal source, for the given namespace:
 
 ```json
 {
   "startedAt": "2026-04-05T06:00:00Z",
   "agents": {
-    "support-assistant": "2026-04-05T11:58:22Z",
-    "code-helper": "2026-04-05T11:45:10Z"
+    "support-assistant": {
+      "gatewayTraffic": "2026-04-05T11:58:22Z",
+      "heartbeat": "2026-04-05T11:57:10Z"
+    },
+    "code-helper": {
+      "gatewayTraffic": "2026-04-05T11:45:10Z",
+      "heartbeat": null
+    }
   }
 }
 ```
 
+The gateway tracks both signal sources (gateway-observed LLM and channel traffic, and agent heartbeats) separately per agent and always returns both. The controller applies the `activitySource` filter (from `Agent.spec.lifecycle.activitySource`) after merging results across replicas — selecting `gatewayTraffic`, `heartbeat`, or the max of both depending on the setting. The gateway does not need to read Agent specs to perform this filtering; the controller owns the policy.
+
+A `null` value for a source means the gateway has no record of that signal type for the agent since its last restart.
+
 The `startedAt` field indicates when the gateway started. The controller uses this to detect gateway restarts — if the gateway started more recently than an agent's last phase transition, missing activity data is treated as "unknown" rather than "no activity".
 
-**Multi-replica fan-out**: because each gateway replica maintains its own in-memory activity store (updated only by the traffic it handles), querying the gateway ClusterIP Service (which round-robins to one replica) would return only that replica's view — agents whose last request landed on a different replica would appear idle. The controller instead queries all gateway Pod IPs directly in parallel: it enumerates gateway Pods via its Pod informer (matching the gateway label selector in `agentry-system`) and issues one `GET /v1/activity?namespace={ns}` request per Pod IP. It takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable (connection refused, timeout) are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection — if one replica has restarted more recently than an agent's last phase transition, only that replica's data is treated as unknown. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) for the reconciler implementation detail.
+**Multi-replica fan-out**: because each gateway replica maintains its own in-memory activity store (updated only by the traffic it handles), querying the gateway ClusterIP Service (which round-robins to one replica) would return only that replica's view — agents whose last request landed on a different replica would appear idle. The controller instead queries all gateway Pod IPs directly in parallel: it enumerates gateway Pods via its Pod informer (matching the gateway label selector in `agentry-system`) and issues one `GET /v1/activity?namespace={ns}` request per Pod IP. It takes the **most recent timestamp per agent per source** across all responses. Replicas that are unreachable (connection refused, timeout) are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection — if one replica has restarted more recently than an agent's last phase transition, only that replica's data is treated as unknown. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) for the reconciler implementation detail.
 
 The controller queries all replica Pod IPs on each reconcile for agents in `Running` or `Idle` phase to evaluate idle and hibernation transitions. If all replicas are unreachable, the controller preserves the agent's current phase — no idle transitions are made without activity data.
 
@@ -117,8 +134,6 @@ Activity data is ephemeral: it is lost on gateway restart. The gateway includes 
 - The controller defers idle and hibernation transitions for agents whose last phase transition predates the gateway's `startedAt`, treating missing data as "unknown" until the gateway has been running for at least `idleTimeout`.
 - Agents that are actively sending traffic re-establish their activity timestamps immediately.
 - Agents that are truly idle will transition to `Idle` after `idleTimeout` elapses from the gateway's startup, which is the correct behavior.
-
-The `activitySource` setting on Agent (`gatewayTraffic`, `agentHeartbeat`, `both`) controls which signals the gateway includes in its per-agent timestamp. The gateway tracks both sources separately and returns the appropriate one based on the Agent's configuration.
 
 ---
 
@@ -141,5 +156,5 @@ For LLM Gateway metrics, see [GATEWAY_LLM.md](./GATEWAY_LLM.md#observability).
 | All gateway replicas down | Webhook callers receive 503; controller cannot wake hibernated agents |
 | Channel credential invalid | AgentChannel marked `Ready=False`; platform connection drops |
 | Agent Pod not ready (resuming) | User Gateway holds or retries message delivery up to configured timeout |
-| Owning replica down during async poll | Polling replica falls back to the `agentry-async-{requestId}` ConfigMap in the agent's namespace; returns 404 only if the ConfigMap is also absent (replica crashed before writing it) |
-| Replica scale-up shifts shard mapping | Polling replica detects hash mismatch, proxies to new owner; new owner falls back to ConfigMap if response not yet in its in-memory store |
+| Owning replica down during async poll | Polling replica falls back to the `agentry-async-{requestId}` ConfigMap in `agentry-system`; returns 404 only if the ConfigMap is also absent (replica crashed before writing it) |
+| Replica scale-up shifts shard mapping | Polling replica detects hash mismatch, proxies to new owner; new owner falls back to ConfigMap in `agentry-system` if response not yet in its in-memory store |

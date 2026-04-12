@@ -37,6 +37,7 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 - `get, watch` on `Secrets` in `agentry-system` (to read LLM provider credentials).
 - `get, watch` on `ConfigMaps` in `agentry-system` (to receive budget configuration from the operator).
 - `get, list, watch` on `Agent` resources cluster-wide (for provider routing resolution and hibernation state checks).
+- `get, list, watch` on `AgentTask` resources cluster-wide (for task completion handling: the gateway resolves the calling Pod's ownerRef to identify the associated AgentTask, validates that declared artifact names in the completion payload match `spec.artifacts`, and reads the AgentTask's UID to set the ownerRef on the completion ConfigMap it creates).
 - `get, list, watch` on `AgentChannel` resources cluster-wide (to look up which Agent a channel message targets and to manage platform connections).
 - `patch` on `AgentChannel` resources cluster-wide (to write the `agentry.io/channel-disconnected` annotation during the finalizer handoff — see [Finalizers](./CONTROLLER_LIFECYCLE.md#finalizers)).
 - `get, list, watch` on `ModelProvider` resources cluster-wide (for model validation, `allowedNamespaces` checks, budget configuration, and fallback chain resolution).
@@ -45,7 +46,7 @@ The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentr
 - Per-task dynamic `Role` and `RoleBinding` for ConfigMap write access: when the AgentTaskReconciler provisions a task, it creates a `Role` in the task's namespace granting the gateway ServiceAccount `create, update` on the specific ConfigMap named `{taskName}-completion`, along with a `RoleBinding` to `agentry-system/agentry-gateway`. Both are owned by the AgentTask (via ownerRef) and cascade-deleted on task cleanup. This follows the same scoped-access pattern used for channel credentials (see `AgentChannel.spec.credentialsRef`). The gateway does **not** have blanket ConfigMap write access across user namespaces.
 - `get` on `Services` in user namespaces (to resolve Agent endpoints for message delivery).
 
-The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces via dynamic per-namespace Roles created by the AgentChannelReconciler — the gateway only reads the specific Secrets referenced by `AgentChannel.spec.credentialsRef`, not arbitrary Secrets. These Roles are cleaned up when the AgentChannel is deleted. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted. ConfigMap write access in user namespaces follows the same scoped-Role pattern: the AgentTaskReconciler creates a per-task Role granting the gateway `create, update` on only the `{taskName}-completion` ConfigMap in the task's namespace; both Role and RoleBinding are owned by the AgentTask and cascade-deleted. The gateway has no blanket ConfigMap access across user namespaces. Activity tracking does not require any etcd writes — the gateway maintains activity timestamps in-memory and serves them to the controller via an internal HTTP API.
+The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces via dynamic per-namespace Roles created by the AgentChannelReconciler — the gateway only reads the specific Secrets referenced by `AgentChannel.spec.credentialsRef`, not arbitrary Secrets. These Roles are cleaned up when the AgentChannel is deleted. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted. ConfigMap write access in user namespaces follows the same scoped-Role pattern: the AgentTaskReconciler creates a per-task Role granting the gateway `create, update` on only the `{taskName}-completion` ConfigMap in the task's namespace; both Role and RoleBinding are owned by the AgentTask and cascade-deleted. The gateway has no blanket ConfigMap access across user namespaces. Async webhook response durability ConfigMaps (`agentry-async-{requestId}`) are stored in `agentry-system` (where the gateway already has full ConfigMap access), not in agent namespaces — this is why no additional per-channel Role is needed for async durability writes. The AgentChannelReconciler prunes these ConfigMaps in `agentry-system` using label selectors (`agentry.io/channel-namespace`, `agentry.io/channel-name`) rather than ownerRefs (cross-namespace ownerRefs do not trigger Kubernetes GC). Activity tracking does not require any etcd writes — the gateway maintains activity timestamps in-memory and serves them to the controller via an internal HTTP API.
 
 ### Platform Engineer role
 
@@ -80,7 +81,7 @@ The gateway authenticates all inbound requests from agent containers — LLM API
 
 As a secondary defense-in-depth check, the gateway also resolves the source IP to a Pod via its Pod informer cache and confirms the Pod matches the identity claimed in the client certificate. A mismatch (e.g., a compromised agent presenting a stolen certificate from a different agent) causes the request to be rejected. See [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full two-layer identity resolution.
 
-Reference base images configure client cert presentation automatically. Custom agent images must configure their HTTP client to present `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate when calling `$AGENTRY_PROVIDER_ENDPOINT`. Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
+Reference base images configure client cert presentation automatically. Custom agent images must configure their HTTP client to present `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (for all agent→gateway calls: LLM requests, heartbeats, and task completion). Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
 
 ### Internal Endpoint Authentication (Activator & Activity API)
 
@@ -89,7 +90,7 @@ The controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}`
 - **Activator** (gateway → controller): the gateway includes an HMAC-signed `Authorization` header on each activation request; the controller validates the signature and rejects requests with stale timestamps (>30s). This ensures only the gateway can trigger agent wake-ups.
 - **Activity API** (controller → gateway): the controller includes the same HMAC-signed header when querying `/v1/activity`; the gateway validates it. This prevents arbitrary Pods from querying per-agent activity data across namespaces.
 
-See [Activator Authentication](./GATEWAY_USER.md#activator-authentication) for the HMAC scheme details.
+**Key rotation uses a key-ring to eliminate the transition failure window.** The `agentry-activator-key` Secret stores two fields (`current-key` and `previous-key`). During rotation, both keys are accepted simultaneously for a configurable transition window (default: 60s) before the old key is removed. This ensures the gateway and controller — which pick up Secret changes independently via their respective watches — are never in a state where one component has the new key and the other does not. See [Activator Authentication](./GATEWAY_USER.md#activator-authentication) for the full rotation sequence.
 
 ---
 
@@ -144,7 +145,18 @@ The CA bundle is injected into agent Pods as a projected volume. Kubernetes auto
 Because the gateway is a separate Pod in `agentry-system`, NetworkPolicy can cleanly enforce agent isolation without any per-container workarounds:
 
 ```yaml
-# NetworkPolicy for agent Pods: deny all egress except to the Agentry gateway
+# NetworkPolicy for agent Pods
+ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: agentry-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: agentry-gateway
+    ports:
+      - port: 8080      # Agent HTTPS health/message port ($AGENTRY_HEALTH_PORT) — gateway→agent channel message delivery
+        protocol: TCP
 egress:
   - to:
     - namespaceSelector:

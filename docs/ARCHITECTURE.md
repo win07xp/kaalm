@@ -48,7 +48,8 @@ This document describes the high-level architecture of Agentry: the control plan
         │  ┌──────────────────────────────────────────────────────────┐    │
         │  │                  Agent Container (user image)            │    │
         │  │                                                          │    │
-        │  │  • $AGENTRY_PROVIDER_ENDPOINT → LLM Gateway (optional)  │    │
+        │  │  • $AGENTRY_GATEWAY_ENDPOINT  → Gateway (always)       │    │
+        │  │  • $AGENTRY_PROVIDER_ENDPOINT → Gateway alias (optional)│    │
         │  │  • POST /v1/message           → receives channel msgs    │    │
         │  │  • GET  /health               → liveness / readiness     │    │
         │  └──────────────────────────────────────────────────────────┘    │
@@ -115,7 +116,7 @@ For AgentTask, the data plane is the same minus the Service (tasks do not typica
 The gateway is a replicated Deployment in `agentry-system` that serves two distinct roles on separate listeners:
 
 **LLM Gateway** (outbound, agent → provider)
-- Serves TLS on port 8443; agent containers connect via `$AGENTRY_PROVIDER_ENDPOINT` (HTTPS)
+- Serves TLS on port 8443; agent containers connect via `$AGENTRY_GATEWAY_ENDPOINT` (HTTPS, always injected) or `$AGENTRY_PROVIDER_ENDPOINT` (alias, injected only when `spec.providers` is non-empty)
 - Identifies the source namespace via source IP → Pod resolution from the Pod informer cache (unforgeable)
 - Resolves the target ModelProvider from the qualified `provider/model` name in the request and the Agent's `spec.providers`
 - Detects the request format from the URL path (`/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible)
@@ -143,9 +144,13 @@ Agentry is BYO-image, but containers must satisfy a minimal contract to particip
 
 1. **HTTPS health endpoint** on a known port (`$AGENTRY_HEALTH_PORT`, default 8080) returning 200 when ready. The agent serves TLS on this port using the operator-issued certificate (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`), so liveness and readiness probes must be configured with `httpGet.scheme: HTTPS`. Kubernetes does not verify TLS certificates for httpGet probes, so the operator-issued cert works without any additional CA configuration on the probe.
 2. **Graceful SIGTERM handling** — on receiving SIGTERM, the agent should finish in-flight work and exit within the configured `terminationGracePeriodSeconds`.
-3. **LLM traffic via the gateway** (optional) — if the agent uses LLM providers, it reads `$AGENTRY_PROVIDER_ENDPOINT` (an HTTPS URL) and sends LLM requests there rather than calling providers directly. Two TLS requirements apply:
+3. **Gateway communication** — the controller injects two gateway-related env vars:
+   - `$AGENTRY_GATEWAY_ENDPOINT`: always injected. An HTTPS URL pointing to the gateway's LLM listener (port 8443). This is the base URL for **all** agent→gateway calls: LLM requests, heartbeats (`POST /v1/agent/heartbeat`), and task completion (`POST /v1/task/complete`). All calls to this endpoint require the agent to present its operator-issued client certificate (mTLS) — see below.
+   - `$AGENTRY_PROVIDER_ENDPOINT`: injected only when `spec.providers` is non-empty. Identical in value to `$AGENTRY_GATEWAY_ENDPOINT`. Provided as a convenience alias for agents whose primary concern is LLM traffic. Custom images built before `$AGENTRY_GATEWAY_ENDPOINT` was introduced can continue using this name; reference base images use `$AGENTRY_GATEWAY_ENDPOINT`. Agents that need to send heartbeats or report task completion but have no `spec.providers` must use `$AGENTRY_GATEWAY_ENDPOINT`.
+
+   Two TLS requirements apply to all calls to `$AGENTRY_GATEWAY_ENDPOINT`:
    - **Server verification**: the agent must trust the operator-managed CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`) to verify the gateway's TLS certificate.
-   - **Client certificate (mTLS)**: the agent must present its operator-issued TLS certificate (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`) as a client certificate on every request to `$AGENTRY_PROVIDER_ENDPOINT`. The gateway uses this certificate to cryptographically identify the agent and its namespace. Reference base images handle both requirements automatically. Custom images must configure their HTTP client to present the client cert. Agents that do not reference a ModelProvider do not receive these variables and do not need to satisfy this requirement.
+   - **Client certificate (mTLS)**: the agent must present its operator-issued TLS certificate (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`) as a client certificate on every request to `$AGENTRY_GATEWAY_ENDPOINT`. The gateway uses this certificate to cryptographically identify the agent and its namespace. Reference base images handle both requirements automatically. Custom images must configure their HTTP client to present the client cert for all gateway calls — not only LLM requests.
 4. **Message endpoint** (optional) — if the agent uses an AgentChannel, it exposes `POST /v1/message` on `$AGENTRY_HEALTH_PORT` over TLS, accepting the standard Agentry message envelope and returning a response envelope. The agent serves TLS using the operator-issued certificate at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) and key at `$AGENTRY_TLS_KEY` (`/var/run/agentry/tls.key`). The reference base images handle TLS setup automatically. Agents without an AgentChannel do not need to implement this. Agents must also **watch the cert and key files for changes** (the kubelet automatically updates projected volume contents when the backing Secret is rotated — see [Lifecycle of an agent TLS serving certificate](./SECURITY.md#lifecycle-of-an-agent-tls-serving-certificate)) and reload their TLS configuration for new connections without dropping existing ones. Standard approaches: Go's `tls.Config.GetCertificate` callback (re-reads from disk on each new TLS handshake), Python's `SSLContext` reload on `inotify` event. Reference base images will handle this automatically.
 5. **Optional activity signal** — for idle detection, the agent may emit activity heartbeats by calling `POST /v1/agent/heartbeat` on the gateway. The gateway tracks these timestamps in-memory (no etcd writes). Alternatively, the gateway infers activity from observed LLM and channel traffic.
 6. **Optional completion signal** (AgentTask only) — the agent reports completion to the gateway via `POST /v1/task/complete` with a status payload that may include artifact key-value pairs.
