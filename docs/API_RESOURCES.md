@@ -342,6 +342,7 @@ status:
   pvcName: "support-assistant-memory"
   lastActivityTime: "2026-04-05T11:58:22Z"
   hibernatedAt: null
+  preDegradedPhase: null   # set on entry to Degraded, cleared on recovery
 ```
 
 ### Design notes
@@ -527,6 +528,9 @@ spec:
     # If omitted in async mode, responses are stored and retrievable via polling
     # at GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}.
     # callbackUrl: "https://my-service.example.com/agent-responses"
+    # Maximum number of in-flight async responses before the gateway rejects
+    # new async requests with HTTP 503. Bounds ConfigMap creation in agentry-system.
+    maxPendingAsyncResponses: 100
 
   # Optional: override how the gateway delivers messages to the agent.
   # By default the gateway posts to POST /v1/message on the agent's Service port.
@@ -591,6 +595,7 @@ status:
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
 - **Async response mode** (`spec.webhook.responseMode: async`): designed for agents that take minutes to respond (e.g., coding agents, research agents). The async/sync distinction is handled entirely by the gateway. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.
+- **`maxPendingAsyncResponses`** (default: 100) caps the number of in-flight async responses per AgentChannel. The gateway tracks pending async requests per channel and rejects new async requests with HTTP 503 when this limit is reached. This bounds the number of `agentry-async-{requestId}` ConfigMaps created in `agentry-system` per channel, preventing unbounded etcd pressure from burst traffic or slow agents.
 - **Wake-on-demand integration**: if the target Agent is `Hibernated` when a webhook message arrives, the gateway wakes it via the [Activator](./GATEWAY_USER.md#activator) before delivering the message. In sync mode, the webhook caller blocks until the agent is ready and responds, or receives a timeout error if `wakeTimeout` is exceeded. In async mode, the gateway returns 202 immediately and handles wake + delivery asynchronously.
 
 ---

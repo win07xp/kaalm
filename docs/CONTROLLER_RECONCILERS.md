@@ -92,7 +92,7 @@ Reconciliation steps:
 
 1. Resolve `agentRef` — if the referenced Agent does not exist, set `Ready=False, reason=AgentNotFound`. Note: `agentRef` must reference an `Agent`, not an `AgentTask`. Tasks are ephemeral and lack a stable Service endpoint.
 2. Verify the Agent has `spec.service.enabled: true`. If not, set `Ready=False, reason=AgentServiceDisabled`.
-3. Validate that the `credentialsRef` Secret exists in the AgentChannel's namespace. If not, set `Ready=False, reason=CredentialsMissing`. Ensure a Role named `agentry-channel-{channelName}-creds` exists in the AgentChannel's namespace, granting the gateway ServiceAccount `get, watch` on the specific Secret named in `credentialsRef`. If `credentialsRef` has changed since the last reconcile (detectable by comparing the current Role's resource name rule against the new Secret name), the reconciler deletes the old Role before creating the new one — this prevents the gateway from retaining read access to a Secret it no longer needs. The Role name is deterministic so that successive reconciles are idempotent.
+3. Validate that the webhook auth Secret exists in the AgentChannel's namespace. The Secret location depends on `spec.webhook.auth.type`: for `bearer`, it is `spec.webhook.auth.secretRef`; for `hmac`, it is `spec.webhook.auth.hmac.secretRef`. If the Secret is missing, set `Ready=False, reason=CredentialsMissing`. Ensure a Role named `agentry-channel-{channelName}-creds` exists in the AgentChannel's namespace, granting the gateway ServiceAccount `get, watch` on the specific Secret referenced by the active auth type. If the auth type or Secret reference has changed since the last reconcile (detectable by comparing the current Role's resource name rule against the new Secret name), the reconciler deletes the old Role before creating the new one — this prevents the gateway from retaining read access to a Secret it no longer needs. The Role name is deterministic so that successive reconciles are idempotent.
 4. Poll channel health status from the gateway's `GET /v1/channels/health?namespace={ns}` endpoint (see [Channel Health Endpoint](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only)) using the shared HMAC key (`agentry-activator-key` Secret). The response maps channel paths to `{ phase, platformConnected, lastError }`. Update `status.conditions[type=PlatformConnected]` accordingly.
 5. On Agent phase changes (e.g., Agent transitions to `Failed`), update `status.phase` to `Degraded` with a clear reason.
 
@@ -147,6 +147,22 @@ Events are critical for `kubectl describe` usability. Err toward emitting events
 - Idle detection: requeue at `lastActivityTime + idleTimeout` when in Running state.
 
 The operator should handle 1000+ Agents and AgentTasks per cluster without issue. Use indexed caches for all cross-resource lookups.
+
+---
+
+## Observability
+
+The controller exposes Prometheus metrics on `:8080/metrics` (standard controller-runtime port).
+
+Standard controller-runtime metrics (reconcile counts, duration, queue depth) are emitted automatically. The following Agentry-specific metrics are added:
+
+- `agentry_agents_total{phase,namespace}` — gauge of Agent count by phase and namespace
+- `agentry_tasks_total{phase,namespace}` — gauge of AgentTask count by phase and namespace
+- `agentry_hibernations_total{namespace}` — counter of hibernation events
+- `agentry_wakes_total{namespace,trigger}` — counter of wake events (trigger = `channel` | `annotation`)
+- `agentry_budget_threshold_events_total{provider,namespace,action}` — counter of budget policy triggers (action = `degrade` | `block` | `warn`)
+
+For gateway metrics (LLM and channel), see [GATEWAY_LLM.md](./GATEWAY_LLM.md#observability) and [GATEWAY_USER.md](./GATEWAY_USER.md#observability).
 
 ---
 

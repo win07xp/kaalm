@@ -131,7 +131,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 }
 ```
 
-The `requestId` is an **opaque string** — callers must treat it as an identifier to use in poll requests and must not attempt to parse, construct, or reverse-engineer its structure. Internally it encodes routing affinity so the gateway can consistently route poll requests to the correct in-memory store across replicas (see [GATEWAY_USER.md — Async shard routing](./GATEWAY_USER.md#user-gateway--request-flow)).
+The `requestId` is a UUID identifying this async request. Callers must treat it as an opaque string — it should be used as-is in poll requests and must not be parsed or constructed independently.
 
 **Callback delivery** (gateway POSTs to `spec.webhook.callbackUrl`):
 
@@ -186,15 +186,15 @@ Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s 
 
 Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel (i.e., the value of `channelId` from the 202 response body). The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request via the same mechanism as the original webhook (`AgentChannel.spec.webhook.auth`). Callers must preserve the `channelId` value from the 202 response and pass it as `channelPath` on poll — it should not be constructed independently.
 
-Any gateway replica accepts this request. The receiving replica extracts the shard index from the opaque `requestId`, routes internally to the owning replica if needed, and falls back to the `agentry-async-{requestId}` ConfigMap in `agentry-system` if the owning replica is unreachable or the in-memory response is unavailable (e.g., after a scale event). Callers always receive a consistent response regardless of which gateway replica they reach — replica topology is invisible.
+Any gateway replica accepts this request. The replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`.
 
 | Status | Meaning |
 |---|---|
 | 200 | Response or error payload available; body contains the callback payload above |
 | 202 | Request is still being processed |
-| 404 | Unknown requestId, response expired, or owning replica crashed before writing the durability ConfigMap |
+| 404 | Unknown requestId or response expired (1-hour TTL) |
 
-Stored responses are retained for 1 hour (in-memory on the owning replica and in the durability ConfigMap), after which they are evicted. This is a polling fallback, not a durable queue — webhook callers that need guaranteed delivery should configure `callbackUrl`.
+Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the AgentChannelReconciler. This is a polling fallback, not a durable queue — webhook callers that need guaranteed delivery should configure `callbackUrl`.
 
 ---
 

@@ -84,8 +84,8 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 | Hibernating -> Hibernated | Pod scaled to 0, PVC retained, Service remains |
 | Hibernated -> Resuming | Gateway [Activator](./GATEWAY_USER.md#activator) calls `POST /v1/activate/{namespace}/{name}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
-| any -> Degraded | Provider unavailable, quota exhausted, other recoverable issue |
-| Degraded -> Running | Underlying condition resolved. Note: recovery always transitions to `Running` regardless of the pre-Degraded phase (including `Idle`). The idle clock restarts from the gateway's most recent observed activity timestamp for the agent. This is intentional — the controller cannot reason about how much idle time elapsed during the degraded window. |
+| any -> Degraded | Provider unavailable, quota exhausted, other recoverable issue. The controller records the current phase in `status.preDegradedPhase` before transitioning. |
+| Degraded -> {pre-degradation phase} | Underlying condition resolved. The controller restores the phase the Agent was in before entering Degraded (tracked in `status.preDegradedPhase`). The idle clock is not reset — the controller evaluates idleness against the gateway's activity timestamp, which is continuous through the Degraded period. If the pre-degradation phase was `Idle` and `hibernationDelay` has since elapsed, the agent transitions to `Hibernating` on the next reconcile. |
 | any -> Failed | Unrecoverable error (image pull failure after retries, invalid config, persistent crash loop) |
 | any -> Terminating | Deletion requested |
 
