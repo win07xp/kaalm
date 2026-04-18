@@ -48,8 +48,7 @@ This document describes the high-level architecture of Agentry: the control plan
         │  ┌──────────────────────────────────────────────────────────┐    │
         │  │                  Agent Container (user image)            │    │
         │  │                                                          │    │
-        │  │  • $AGENTRY_GATEWAY_ENDPOINT  → Gateway (always)       │    │
-        │  │  • $AGENTRY_PROVIDER_ENDPOINT → Gateway alias (optional)│    │
+        │  │  • $AGENTRY_GATEWAY_ENDPOINT  → Gateway (always)        │    │
         │  │  • POST /v1/message           → receives channel msgs    │    │
         │  │  • GET  /health               → liveness / readiness     │    │
         │  └──────────────────────────────────────────────────────────┘    │
@@ -116,7 +115,7 @@ For AgentTask, the data plane is the same minus the Service (tasks do not typica
 The gateway is a replicated Deployment in `agentry-system` that serves two distinct roles on separate listeners:
 
 **LLM Gateway** (outbound, agent → provider)
-- Serves TLS on port 8443; agent containers connect via `$AGENTRY_GATEWAY_ENDPOINT` (HTTPS, always injected) or `$AGENTRY_PROVIDER_ENDPOINT` (alias, injected only when `spec.providers` is non-empty)
+- Serves TLS on port 8443; agent containers connect via `$AGENTRY_GATEWAY_ENDPOINT` (HTTPS, always injected)
 - Identifies the source namespace via source IP → Pod resolution from the Pod informer cache (unforgeable)
 - Resolves the target ModelProvider from the qualified `provider/model` name in the request and the Agent's `spec.providers`
 - Detects the request format from the URL path (`/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible)
@@ -144,9 +143,7 @@ Agentry is BYO-image, but containers must satisfy a minimal contract to particip
 
 1. **HTTPS health endpoint** on a known port (`$AGENTRY_HEALTH_PORT`, default 8080) returning 200 when ready. The agent serves TLS on this port using the operator-issued certificate (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`), so liveness and readiness probes must be configured with `httpGet.scheme: HTTPS`. Kubernetes does not verify TLS certificates for httpGet probes, so the operator-issued cert works without any additional CA configuration on the probe.
 2. **Graceful SIGTERM handling** — on receiving SIGTERM, the agent should finish in-flight work and exit within the configured `terminationGracePeriodSeconds`.
-3. **Gateway communication** — the controller injects two gateway-related env vars:
-   - `$AGENTRY_GATEWAY_ENDPOINT`: always injected. An HTTPS URL pointing to the gateway's LLM listener (port 8443). This is the base URL for **all** agent→gateway calls: LLM requests, heartbeats (`POST /v1/agent/heartbeat`), and task completion (`POST /v1/task/complete`). All calls to this endpoint require the agent to present its operator-issued client certificate (mTLS) — see below.
-   - `$AGENTRY_PROVIDER_ENDPOINT`: injected only when `spec.providers` is non-empty. Identical in value to `$AGENTRY_GATEWAY_ENDPOINT`. Provided as a convenience alias for agents whose primary concern is LLM traffic. Custom images built before `$AGENTRY_GATEWAY_ENDPOINT` was introduced can continue using this name; reference base images use `$AGENTRY_GATEWAY_ENDPOINT`. Agents that need to send heartbeats or report task completion but have no `spec.providers` must use `$AGENTRY_GATEWAY_ENDPOINT`.
+3. **Gateway communication** — the controller injects `$AGENTRY_GATEWAY_ENDPOINT`: an HTTPS URL pointing to the gateway's LLM listener (port 8443). This is the base URL for **all** agent→gateway calls: LLM requests, heartbeats (`POST /v1/agent/heartbeat`), and task completion (`POST /v1/task/complete`). Always injected regardless of whether `spec.providers` is set, so provider-less agents can still reach the gateway for heartbeats and task completion.
 
    Two TLS requirements apply to all calls to `$AGENTRY_GATEWAY_ENDPOINT`:
    - **Server verification**: the agent must trust the operator-managed CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`) to verify the gateway's TLS certificate.
@@ -162,9 +159,9 @@ Agentry plans to ship reference base images (Python and Go variants) that implem
 
 ## Integration Points
 
-### Agent Sandbox (optional backend)
+### Agent Sandbox (optional backend — v1.1)
 
-An `AgentClass` may specify `spec.runtime.backend: agentSandbox`. When set, the Agent Reconciler creates `Sandbox` custom resources (from the SIG Apps Agent Sandbox project) instead of raw Pods. This gives Agentry agents access to Agent Sandbox's warm pools and enhanced isolation without reimplementing those features. When the backend is `pod` (default), the controller creates Pods directly.
+An `AgentClass` will be able to specify `spec.runtime.backend: agentSandbox` (v1.1). When set, the Agent Reconciler will create `Sandbox` custom resources (from the SIG Apps Agent Sandbox project) instead of raw Pods. This will give Agentry agents access to Agent Sandbox's warm pools and enhanced isolation without reimplementing those features. In v1, the only supported backend is `pod` — the CRD schema rejects `agentSandbox` at apply time.
 
 ### MCP (Model Context Protocol)
 

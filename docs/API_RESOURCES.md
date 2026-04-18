@@ -259,6 +259,7 @@ status:
 - **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Uses Go's [`path.Match`](https://pkg.go.dev/path#Match) rules — `*` matches any sequence of non-`/` characters and does not cross path separators. Since Kubernetes namespace names are DNS labels (no `/`), `*` behaves as expected: `sandbox-*` matches `sandbox-foo` but not `sandbox-foo-bar/sub`. Exact match is preferred where possible.
 - **Fallback chains** may be nested up to a gateway-configured depth cap (`maxFallbackDepth`, default 3). If provider A falls back to B, and B falls back to C, the gateway walks A -> B -> C. Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats. The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster. See [Fallback Logic](./GATEWAY_LLM.md#fallback-logic).
 - **Cost fields are strings** (not floats) to avoid precision issues. The gateway parses them as decimals.
+- **`degradeTo` model validation**: every `degradeTo` value in `budget.policies` must reference a model `id` in the same provider's `spec.models` list. The ModelProviderReconciler validates this and sets `Ready=False, reason=InvalidDegradeTarget` if violated. See validation rule 18 in [Cross-Resource Validation](#cross-resource-validation).
 
 ---
 
@@ -290,7 +291,6 @@ spec:
   # ModelProviders this agent uses.
   # Optional: omit entirely for agents that do not call LLM providers
   # (e.g., sub-agents, coding agents with IDE integration, pure webhook handlers).
-  # When omitted, $AGENTRY_PROVIDER_ENDPOINT is not injected.
   providers:
     - providerRef: { name: anthropic-shared }
 
@@ -305,10 +305,6 @@ spec:
     sizeGi: 10
     mountPath: "/var/agent/memory"
 
-  # Lifecycle mode. In v1alpha1, only "persistent" is accepted.
-  # Additional modes (e.g., "scheduled") will be added in later versions.
-  # CRD schema enforces: x-kubernetes-validations: [{rule: "self == 'persistent'"}]
-  mode: persistent
   lifecycle:
     idleTimeout: "30m"           # transition to Idle after this much inactivity
     hibernationEnabled: true
@@ -350,13 +346,13 @@ status:
 
 ### Design notes
 
-- **`mode` is on Agent, not a separate CRD.** There was a design discussion about splitting persistent and task into separate CRDs. The decision: AgentTask is separate (see below) because task lifecycle semantics differ significantly; but `mode` remains on Agent in case future modes (e.g., `mode: scheduled` for cron-style agents) are added without proliferating CRDs. In v1alpha1, the only accepted value is `persistent` — this is enforced by a CEL constraint in the CRD schema (`x-kubernetes-validations: [{rule: "self == 'persistent'"}]`) so that invalid values are rejected at apply time rather than surfaced as a reconcile error.
-- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through the single `$AGENTRY_PROVIDER_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain.
+- **Persistent is the only agent mode in v1.** AgentTask serves the ephemeral use case. If future modes (e.g., `scheduled` for cron-style agents) are needed, a `mode` field will be added to the Agent spec.
+- **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through `$AGENTRY_GATEWAY_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain.
 - **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol.
 - **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 - **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. These cert/key files serve a dual purpose:
   - **Server TLS** (gateway→agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against the operator CA on message delivery.
-  - **Client TLS / mTLS** (agent→gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (which includes `$AGENTRY_PROVIDER_ENDPOINT` for LLM calls, heartbeats, and task completion), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
+  - **Client TLS / mTLS** (agent→gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (LLM requests, heartbeats, and task completion), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
   Reference base images handle both uses automatically. Custom images must configure their HTTP client to present the client cert for all calls to the gateway.
 
 ---
@@ -413,6 +409,10 @@ spec:
 
   # Artifacts to collect on completion. The agent includes values for these
   # names in the POST /v1/task/complete body.
+  # Only valid with condition: agentReported. CRD schema enforces:
+  # x-kubernetes-validations:
+  #   - rule: "self.completion.condition != 'exitCode' || !has(self.artifacts) || size(self.artifacts) == 0"
+  #     message: "artifacts cannot be collected with exitCode completion; use agentReported"
   artifacts:
     - name: pr-url
     - name: summary
@@ -452,6 +452,7 @@ status:
 - **`completion.condition: agentReported` is the v1 default.** The agent container calls the gateway's completion endpoint with a status payload that may include artifact key-value pairs. This is more flexible than exit codes alone because the agent can report structured metadata and artifacts in a single call. See [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) for the endpoint spec.
 - **Artifact collection via completion payload**: artifacts are declared by name in the spec. The agent includes artifact values (keyed by name) in the `POST /v1/task/complete` body. The controller validates that all declared artifact names are present in the payload. This eliminates race conditions, removes the need for `pods/exec` RBAC, and keeps the artifact contract simple. Artifact size limits still apply (4 KiB per artifact, 32 KiB total inline; larger artifacts use ConfigMap references).
 - **`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done. The CRD schema enforces this: `spec.completion.condition` accepts only `agentReported` and `exitCode` in v1 via `x-kubernetes-validations: [{rule: "self in ['agentReported', 'exitCode']", message: "webhook completion condition is not supported in v1"}]` — invalid values are rejected at apply time.
+- **`exitCode` does not support artifact collection.** Artifacts are collected via the `POST /v1/task/complete` payload, which is only used by `agentReported` mode. Declaring `spec.artifacts` with `completion.condition: exitCode` is rejected by CRD schema validation. Tasks using `exitCode` that need to produce output should write results to an external system (e.g., a Git repository, object storage) and rely on the container logs for status.
 - **`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.
 - **Concurrency**: unlike Job, AgentTask is always parallelism=1 in v1. Parallel fan-out tasks would be a separate future resource (`AgentTaskSet`) rather than a field on AgentTask.
 
@@ -482,10 +483,26 @@ spec:
   webhook:
     # The gateway exposes this path externally (requires an Ingress pointing
     # at the gateway Service in agentry-system).
-    path: /channels/support-assistant
+    # Must begin with /channels/{namespace}/ — enforced by CRD schema:
+    #   x-kubernetes-validations:
+    #     - rule: "self.webhook.path.startsWith('/channels/' + self.__namespace__ + '/')"
+    #       message: "webhook path must begin with /channels/{namespace}/"
+    path: /channels/team-support/support-assistant
+    # Auth type: "bearer" or "hmac". CRD schema enforces:
+    #   x-kubernetes-validations:
+    #     - rule: "self.type == 'bearer' ? has(self.secretRef) : true"
+    #       message: "secretRef is required when auth type is bearer"
+    #     - rule: "self.type == 'hmac' ? has(self.hmac) : true"
+    #       message: "hmac block is required when auth type is hmac"
     auth:
-      type: bearer
-      secretRef: { name: webhook-secret, key: token }
+      type: bearer                              # "bearer" | "hmac"
+      secretRef: { name: webhook-secret, key: token }   # required for bearer
+      # For HMAC signature verification (e.g., GitHub, Stripe, Twilio webhooks):
+      # type: hmac
+      # hmac:
+      #   header: "X-Hub-Signature-256"         # request header containing the signature
+      #   algorithm: sha256                      # "sha256" | "sha1"
+      #   secretRef: { name: webhook-hmac-secret, key: secret }
     # How the webhook adapter extracts the userId for session tracking.
     # At most one of fromHeader / fromBody may be set; both are optional.
     # When omitted, userId defaults to the empty string — all unattributed
@@ -557,13 +574,14 @@ status:
     - type: PlatformConnected
       status: "True"
       reason: WebhookReady
-      message: "Webhook endpoint /channels/support-assistant is active"
+      message: "Webhook endpoint /channels/team-support/support-assistant is active"
 ```
 
 ### Design notes
 
 - **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
-- **Webhook path restrictions**: `spec.webhook.path` must not begin with `/v1/` — that prefix is reserved for gateway-internal endpoints. See validation rule 16 in [Cross-Resource Validation](#cross-resource-validation) and [Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths).
+- **Webhook auth types**: `bearer` validates a static token from the `Authorization` header against the value in `secretRef`. `hmac` validates a request body signature: the gateway reads the signature from the configured `header` (e.g., `X-Hub-Signature-256`), computes `HMAC(algorithm, secret, request_body)` using the shared secret from `hmac.secretRef`, and compares the values using constant-time comparison. HMAC is preferred for integrations where the calling platform signs payloads (GitHub, Stripe, Twilio) — it avoids exposing a static token in every request.
+- **Webhook path namespace scoping**: `spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` is the AgentChannel's own namespace. This is enforced at apply time via CEL, eliminating cross-tenant path conflicts by construction. Within a namespace, paths must be unique (see validation rules 15-16 in [Cross-Resource Validation](#cross-resource-validation)).
 - **Delivery counts are not in status.** Per-message counters require either a status patch on every delivery (high etcd write pressure at scale) or a separate in-memory accumulation mechanism. Instead, delivery volume is tracked via the Prometheus metric `agentry_channel_messages_total{channel_type,namespace,status}` exposed by the gateway. Status reflects channel health (phase, conditions) — not traffic volume.
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
@@ -595,8 +613,10 @@ The following constraints are enforced at reconcile time. Failed validation resu
 12. `ModelProvider.spec.fallback` entries must have the same `spec.type` as the primary provider (no cross-format fallback).
 13. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
 14. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
-15. `AgentChannel.spec.webhook.path` must be globally unique across all AgentChannels in the cluster. Namespace-prefixed paths (e.g., `/channels/{namespace}/{name}`) are recommended as a convention to avoid collisions. On conflict, the reconciler marks the newer AgentChannel (by `creationTimestamp`) as `Ready=False, reason=PathConflict`. The gateway uses `creationTimestamp` as a tiebreaker, routing to the oldest AgentChannel until the conflict is resolved.
-16. `AgentChannel.spec.webhook.path` must not begin with `/v1/`. Paths starting with `/v1/` are reserved for gateway-internal endpoints (task completion, heartbeat, async polling, channel health). On violation, the reconciler sets `Ready=False, reason=ReservedPath`. The recommended convention is to prefix developer paths with `/channels/` (e.g., `/channels/{namespace}/{name}`) — see [Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths).
+15. `AgentChannel.spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` matches the AgentChannel's own namespace. This is enforced at apply time via CEL (`self.webhook.path.startsWith('/channels/' + self.__namespace__ + '/')`). Namespace-scoping eliminates cross-tenant path conflicts by construction — two namespaces cannot claim the same path prefix. Within a namespace, paths must still be unique; on conflict, the reconciler marks the newer AgentChannel (by `creationTimestamp`) as `Ready=False, reason=PathConflict`.
+16. `AgentChannel.spec.webhook.path` must not begin with `/v1/`. This is subsumed by rule 15 (the enforced `/channels/` prefix inherently avoids `/v1/`), but retained as an explicit validation for defense in depth. See [Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths).
+17. `AgentTask` with `spec.completion.condition: exitCode` must not declare `spec.artifacts`. Artifact collection requires the `POST /v1/task/complete` payload, which is only available in `agentReported` mode. Enforced via CRD schema validation (CEL).
+18. `ModelProvider.budget.policies[x].degradeTo` must match a model `id` in the same ModelProvider's `spec.models` list. A missing target model would cause silent routing failures when the budget threshold is crossed.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 

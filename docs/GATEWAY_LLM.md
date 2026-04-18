@@ -76,16 +76,32 @@ Pros: Credentials never leave `agentry-system`. NetworkPolicy cleanly isolates a
 
 ## LLM Gateway — Request Flow
 
-1. **Agent sends request**: the agent container makes an HTTPS request to `$AGENTRY_PROVIDER_ENDPOINT` (resolves to the gateway Service in `agentry-system`). The agent uses the upstream provider's native API path (e.g., `/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible) and includes a qualified model name in the request body (see [Model Identification](#model-identification) below).
+1. **Agent sends request**: the agent container makes an HTTPS request to `$AGENTRY_GATEWAY_ENDPOINT` (resolves to the gateway Service in `agentry-system`). The agent uses the upstream provider's native API path (e.g., `/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible) and includes a qualified model name in the request body (see [Model Identification](#model-identification) below).
 2. **Namespace identification**: the gateway resolves the source IP to a Pod via its Pod informer cache, then reads the Pod's namespace (see [Namespace Identification](#namespace-identification) below).
 3. **Provider routing**: the gateway resolves the Pod's ownerRef to the Agent resource, reads `spec.providers` to determine which ModelProviders this agent is allowed to use, and parses the `provider/model` name from the request to identify the target ModelProvider (see [Provider Routing](#provider-routing) below).
 4. **Gateway validates**: confirms the requested model is listed in the target ModelProvider's `models` and the namespace is in `allowedNamespaces`.
 5. **Budget check**: the gateway reads the current budget state for the agent's namespace. If a `degrade` policy applies, it rewrites the model name in the request. If `block` applies, it returns an error to the agent.
 6. **Rate limit check**: per-namespace token-bucket rate limiter on requests/min and tokens/min.
 7. **Route to upstream**: the gateway adds the provider API key (read directly from Secrets in `agentry-system`), strips the provider prefix from the model name, and forwards the request. If the upstream fails (connection error, 5xx, timeout), the gateway walks the fallback chain — trying the primary provider's `spec.fallback` entries, then each fallback's own fallback, up to `maxFallbackDepth` (default 3). See [Fallback Logic](#fallback-logic) below.
-8. **Response returned**: the gateway relays the response to the agent container.
-9. **Token counting**: the gateway extracts actual token usage from the provider response (`usage.input_tokens` / `usage.output_tokens` for Anthropic; `usage.prompt_tokens` / `usage.completion_tokens` for OpenAI, etc.). Actual usage from the provider response is always preferred over pre-call estimation.
+8. **Response returned**: the gateway relays the response to the agent container. For streaming responses (SSE), the gateway transparently relays each chunk as it arrives — see [Streaming Responses](#streaming-responses) below.
+9. **Token counting**: the gateway extracts actual token usage from the provider response (`usage.input_tokens` / `usage.output_tokens` for Anthropic; `usage.prompt_tokens` / `usage.completion_tokens` for OpenAI, etc.). For streaming responses, token usage is extracted from the final SSE chunk (e.g., the `message_stop` event for Anthropic, the usage object in the final chunk before `[DONE]` for OpenAI). Actual usage from the provider response is always preferred over pre-call estimation.
 10. **Spend update**: the gateway updates the in-process spend counter for the namespace.
+
+---
+
+## Streaming Responses
+
+Most LLM usage involves streaming responses (Server-Sent Events / SSE), where the provider sends token-by-token output as a stream of chunks. The gateway supports streaming transparently:
+
+**Relay model**: the gateway acts as a pass-through proxy for SSE streams. When the upstream provider begins sending a streaming response (`Content-Type: text/event-stream`), the gateway relays each SSE chunk to the agent as it arrives. The gateway does not buffer the full response — chunks are forwarded immediately to preserve the low-latency benefit of streaming.
+
+**Token counting**: the gateway inspects each SSE chunk as it relays it, looking for the final chunk that contains usage metadata. For Anthropic, this is the `message_stop` event (which includes `usage.input_tokens` and `usage.output_tokens`). For OpenAI-compatible providers, usage data appears in the final chunk preceding the `[DONE]` sentinel. The gateway extracts this data and updates spend counters after the stream completes — the same as step 9 in the non-streaming flow.
+
+**Budget checks**: budget checks occur pre-call (step 5) using the last-known spend state, the same as non-streaming requests. No mid-stream budget enforcement is performed — once a stream has started, it runs to completion. This is the correct behavior: aborting a stream mid-response would leave the agent with a partial, unusable response while still incurring provider charges for the full generation.
+
+**Mid-stream failures**: if the upstream provider connection drops or errors mid-stream (after the first chunk has been relayed to the agent), the gateway closes the agent's SSE stream with an error event and does **not** attempt fallback. A partially-consumed stream cannot be retried — the agent has already received partial output, and replaying the request on a fallback provider would produce a different, potentially contradictory continuation. Fallback only applies to **pre-stream failures**: connection errors, timeouts before the first chunk, and error responses returned before streaming begins.
+
+**Provider adapter**: the `ProviderAdapter.ForwardRequest` method handles both streaming and non-streaming modes. The adapter detects streaming from the upstream response headers (`Content-Type: text/event-stream` or `Transfer-Encoding: chunked` with SSE content) and returns a streaming reader that the gateway relays to the agent. Token extraction is adapter-specific — each adapter knows where usage metadata appears in its provider's SSE format.
 
 ---
 
@@ -97,7 +113,7 @@ The gateway identifies the source namespace and agent identity of each LLM reque
 
 The LLM Gateway listener requires a client certificate from every agent that connects. Agents present their operator-issued TLS certificate (mounted at `$AGENTRY_TLS_CERT`, `/var/run/agentry/tls.crt`) as the client cert. The gateway verifies it against the operator-managed CA and extracts the agent's identity from the certificate's SAN field: `{name}.{namespace}.svc.cluster.local`. This gives the gateway a cryptographically attested (namespace, agent name) pair on every request.
 
-Reference base images handle client cert presentation automatically — agents using the base image do not need to configure this. Custom images must configure their HTTP client to present the cert at `$AGENTRY_TLS_CERT` with the key at `$AGENTRY_TLS_KEY` when calling `$AGENTRY_PROVIDER_ENDPOINT`. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
+Reference base images handle client cert presentation automatically — agents using the base image do not need to configure this. Custom images must configure their HTTP client to present the cert at `$AGENTRY_TLS_CERT` with the key at `$AGENTRY_TLS_KEY` when calling `$AGENTRY_GATEWAY_ENDPOINT`. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
 This approach is **CNI-independent**: agent identity is cryptographically attested by the certificate, not by a network-layer header that may be modified by intermediate infrastructure. No agent can claim a different identity without a valid CA-signed certificate for that identity.
 
@@ -119,9 +135,9 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 **Certificate provisioning**: the operator generates a self-signed CA certificate and stores it in a Secret in `agentry-system` (`agentry-gateway-ca`). On startup, the operator creates a TLS serving certificate for the gateway signed by this CA and stores it in a separate Secret (`agentry-gateway-tls`). The gateway reads this Secret to serve HTTPS on its LLM listener.
 
-**Agent trust**: the CA certificate is injected into agent Pods as a projected volume mount at a well-known path (`/var/run/agentry/ca.crt`). The controller sets the `$AGENTRY_CA_CERT` environment variable pointing to this path. Agent containers (or their HTTP clients) must trust this CA when calling `$AGENTRY_PROVIDER_ENDPOINT`. The reference base images handle this automatically.
+**Agent trust**: the CA certificate is injected into agent Pods as a projected volume mount at a well-known path (`/var/run/agentry/ca.crt`). The controller sets the `$AGENTRY_CA_CERT` environment variable pointing to this path. Agent containers (or their HTTP clients) must trust this CA when calling `$AGENTRY_GATEWAY_ENDPOINT`. The reference base images handle this automatically.
 
-**Mutual TLS (mTLS)**: the LLM Gateway listener requires client certificates from all connecting agents. Agents present their operator-issued per-agent TLS certificate (the same cert used for gateway→agent delivery) as the client cert when calling `$AGENTRY_PROVIDER_ENDPOINT`. The gateway verifies the client cert against the operator CA and extracts the SAN to identify the agent and namespace. Reference base images configure client cert presentation automatically. Custom images must explicitly configure their HTTP client to use `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate. This is the primary identity mechanism for agent→gateway communication — see [Namespace Identification](#namespace-identification).
+**Mutual TLS (mTLS)**: the LLM Gateway listener requires client certificates from all connecting agents. Agents present their operator-issued per-agent TLS certificate (the same cert used for gateway→agent delivery) as the client cert when calling `$AGENTRY_GATEWAY_ENDPOINT`. The gateway verifies the client cert against the operator CA and extracts the SAN to identify the agent and namespace. Reference base images configure client cert presentation automatically. Custom images must explicitly configure their HTTP client to use `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate. This is the primary identity mechanism for agent→gateway communication — see [Namespace Identification](#namespace-identification).
 
 **Certificate rotation**: the operator rotates the serving certificate before expiry (default: 90-day lifetime, rotate at 60 days). The gateway watches the TLS Secret and reloads without restart. The CA certificate has a longer lifetime (1 year) and is rotated less frequently.
 
@@ -138,7 +154,7 @@ This is the same pattern Kubernetes itself uses for service account signing key 
 
 **No cert-manager dependency**: the operator manages its own CA and serving certificates, including CA rotation. This keeps the deployment self-contained. Teams that prefer cert-manager can override the TLS Secrets externally; the gateway does not care how the certificate is provisioned as long as the Secret exists.
 
-`$AGENTRY_PROVIDER_ENDPOINT` is an `https://` URL when TLS is enabled (the default).
+`$AGENTRY_GATEWAY_ENDPOINT` is an `https://` URL when TLS is enabled (the default).
 
 **Agent Serving TLS**: the User Gateway's delivery to agent Services (`POST /v1/message`) is also over HTTPS. The operator issues a per-agent TLS serving certificate signed by the same operator-managed CA. The certificate and key are mounted into the agent Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The certificate's SAN includes the agent's Service DNS name. The gateway verifies the agent's certificate against the operator CA on every message delivery request. Certificate lifecycle (rotation, expiry) follows the same policy as the gateway serving certificate — see [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler).
 
@@ -317,4 +333,4 @@ For User Gateway metrics, see [GATEWAY_USER.md](./GATEWAY_USER.md#observability)
 | Gateway replica crashes | Other replicas continue; Kubernetes restarts the crashed replica |
 | All gateway replicas down | LLM calls from agents fail; up to 10s of spend data may be lost (see [Budget State Management](#budget-state-management)) |
 | Provider API down | Fallback chain walked (same-type providers only, up to `maxFallbackDepth` depth); if all providers in the chain fail, request fails with `502 provider_error` |
-| Budget exhausted | Request blocked or degraded per policy; Warning event emitted on ModelProvider |
+| Budget exhausted | Request blocked (`429 budget_exhausted` with `Retry-After` header) or degraded per policy; Warning event emitted on ModelProvider |

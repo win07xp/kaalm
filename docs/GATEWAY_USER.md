@@ -8,14 +8,14 @@ For the LLM Gateway (provider routing, budget, fallback) and the shared gateway 
 
 ## User Gateway — Request Flow
 
-1. **Webhook event arrives**: an external system POSTs to the gateway's webhook endpoint (e.g., `/channels/support-assistant`).
-2. **Webhook adapter authenticates**: the gateway verifies the request using the configured auth method (bearer token, HMAC signature, etc.) from the AgentChannel's `credentialsRef`.
+1. **Webhook event arrives**: an external system POSTs to the gateway's webhook endpoint (e.g., `/channels/team-support/support-assistant`).
+2. **Webhook adapter authenticates**: the gateway verifies the request using the configured auth method — bearer token validation or HMAC signature verification — from the AgentChannel's webhook auth config. See [AgentChannel webhook auth types](./API_RESOURCES.md#agentchannel) for configuration.
 3. **Normalization**: the adapter translates the webhook payload into the Agentry message envelope. The `userId` is resolved using `AgentChannel.spec.webhook.userId` config (`fromHeader` or `fromBody`); if neither is configured or the value is absent, the configured `fallback` is used (empty string if omitted). See [AgentChannel](./API_RESOURCES.md#agentchannel) for extraction configuration.
    ```json
    {
      "messageId": "uuid",
      "channelType": "webhook",
-     "channelId": "/channels/support-assistant",
+     "channelId": "/channels/team-support/support-assistant",
      "userId": "caller-id-extracted-per-config",
      "content": "Hello, I need help with my order",
      "attachments": [],

@@ -68,7 +68,6 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 - Persistent and task-mode agent lifecycle (including idle detection, hibernation, wake-on-demand, timeout, artifact collection)
 - LLM Gateway: TLS-secured cluster-level proxy with spend tracking, soft budget guardrails, rate limiting, same-type fallback chains (no cross-format translation), and provider credential isolation
 - User Gateway: channel integration via AgentChannel (generic webhook in v1 with sync and async response modes; Discord and WhatsApp adapters in v1.1)
-- Integration with Agent Sandbox as an optional runtime backend
 - RBAC, namespace scoping, and a documented security model
 - Helm chart with tiered on-ramp (gateway-only → full agent lifecycle with channels)
 
@@ -80,6 +79,7 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 - Advanced scheduling (GPU-awareness, priority classes, preemption policies specific to agents)
 - Hard budget enforcement (synchronous per-request aggregation)
 - Cross-format provider fallback (e.g., Anthropic → OpenAI translation)
+- Agent Sandbox integration (`agentSandbox` runtime backend) — v1.1
 - Platform-specific channel adapters (Discord, WhatsApp) — v1.1
 
 The v1 scope is deliberately narrow: get the workload abstraction, provider management, and channel integration right first. Everything else is an additive layer.

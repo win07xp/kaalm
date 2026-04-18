@@ -64,7 +64,7 @@ A team is decommissioned. Priya removes their namespace from the `allowedNamespa
 
 ### S6: Deploy a persistent customer support agent
 
-Dev writes an `Agent` manifest for his customer support agent. He references `agentclass/standard`, specifies his container image, references `modelprovider/anthropic-shared`, sets `mode: persistent`, and requests a 5Gi PVC for conversation memory. His agent code uses the qualified model name format (`anthropic-shared/claude-opus-4-6`) in LLM API calls so the gateway knows which provider and model to route to. He `kubectl apply`s it. The controller creates a Pod, PVC, and Service. Dev `kubectl get agent` and sees it in `Running` state with an endpoint he can hit.
+Dev writes an `Agent` manifest for his customer support agent. He references `agentclass/standard`, specifies his container image, references `modelprovider/anthropic-shared`, and requests a 5Gi PVC for conversation memory. His agent code uses the qualified model name format (`anthropic-shared/claude-opus-4-6`) in LLM API calls so the gateway knows which provider and model to route to. He `kubectl apply`s it. The controller creates a Pod, PVC, and Service. Dev `kubectl get agent` and sees it in `Running` state with an endpoint he can hit.
 
 ### S7: Hibernate an idle agent and wake it automatically on the first incoming message
 
@@ -94,13 +94,13 @@ Dev `kubectl delete agent my-support-agent`. The controller drains in-flight req
 
 ### S12: Connect a personal assistant via webhook (v1) / Discord (v1.1)
 
-**v1 (webhook):** Dev creates a persistent `Agent` for his personal AI assistant and creates an `AgentChannel` of type `webhook`, configuring a bearer token for authentication. He gets a webhook URL path (`/channels/personal-assistant`) that the gateway exposes. Dev configures his tools (IDE plugin, Slack integration, or a simple web client) to POST messages to this URL. The gateway authenticates, normalizes the message, delivers it to the agent, and returns the response. Dev's agent has conversation memory via its PVC, so context persists across sessions.
+**v1 (webhook):** Dev creates a persistent `Agent` for his personal AI assistant and creates an `AgentChannel` of type `webhook`, configuring a bearer token for authentication. He gets a webhook URL path (`/channels/dev-namespace/personal-assistant`) that the gateway exposes. Dev configures his tools (IDE plugin, Slack integration, or a simple web client) to POST messages to this URL. The gateway authenticates, normalizes the message, delivers it to the agent, and returns the response. Dev's agent has conversation memory via its PVC, so context persists across sessions.
 
 **v1.1 (Discord):** The same flow with a native Discord adapter — Dev provides a Discord bot token, the gateway manages the WebSocket connection, and messages flow through Discord's platform natively.
 
 ### S13: Expose an agent via a generic webhook
 
-Dev's customer support team uses an internal ticketing system that can POST to webhooks. Dev creates an `AgentChannel` of type `webhook`, configures a bearer token for authentication, and gets a URL path that the gateway exposes (`/channels/support-assistant`). He configures the ticketing system to POST ticket descriptions to this URL. The gateway authenticates the request, normalizes the ticket payload into a message envelope, delivers it to the agent, and returns the agent's suggested response as the webhook response body. The ticketing system displays the suggestion to the support agent.
+Dev's customer support team uses an internal ticketing system that can POST to webhooks. Dev creates an `AgentChannel` of type `webhook`, configures a bearer token for authentication, and gets a URL path that the gateway exposes (`/channels/team-support/support-assistant`). He configures the ticketing system to POST ticket descriptions to this URL. The gateway authenticates the request, normalizes the ticket payload into a message envelope, delivers it to the agent, and returns the agent's suggested response as the webhook response body. The ticketing system displays the suggestion to the support agent.
 
 ### S14: Webhook message arrives for a hibernated agent
 
@@ -108,7 +108,7 @@ Same flow as S7 from the channel perspective. The additional detail: if `wakeTim
 
 ### S15: Async webhook for a long-running coding agent
 
-Dev creates an `AgentChannel` for a coding agent that typically takes 5-10 minutes to process requests. He sets `spec.webhook.responseMode: async` and configures `spec.webhook.callbackUrl` pointing at his CI system's webhook receiver. When a ticket system POSTs a coding request, the gateway immediately returns HTTP 202 with a `requestId`. The coding agent processes the request, generates a fix, and responds. The gateway POSTs the agent's response (including the PR URL) to the CI system's callback URL. If the CI system is unreachable, Dev can poll `GET /v1/channels/{channelId}/responses/{requestId}` as a fallback.
+Dev creates an `AgentChannel` for a coding agent that typically takes 5-10 minutes to process requests. He sets `spec.webhook.responseMode: async` and configures `spec.webhook.callbackUrl` pointing at his CI system's webhook receiver. When a ticket system POSTs a coding request, the gateway immediately returns HTTP 202 with a `requestId`. The coding agent processes the request, generates a fix, and responds. The gateway POSTs the agent's response (including the PR URL) to the CI system's callback URL. If the CI system is unreachable, Dev can poll `GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}` as a fallback (the `channelId` value from the 202 response is passed as `channelPath`).
 
 ---
 

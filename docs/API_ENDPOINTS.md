@@ -77,7 +77,7 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 {
   "messageId": "550e8400-e29b-41d4-a716-446655440000",
   "channelType": "webhook",
-  "channelId": "/channels/support-assistant",
+  "channelId": "/channels/team-support/support-assistant",
   "userId": "caller-id-from-header-or-body",
   "sessionId": "optional-session-uuid",
   "content": "Hello, I need help with my order",
@@ -138,7 +138,7 @@ The `requestId` is an **opaque string** — callers must treat it as an identifi
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/support-assistant",
+  "channelId": "/channels/team-support/support-assistant",
   "response": {
     "content": "I've analyzed the issue and opened a PR with the fix.",
     "attachments": [],
@@ -155,7 +155,7 @@ The gateway retries callback delivery up to 3 times with exponential backoff (1s
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/support-assistant",
+  "channelId": "/channels/team-support/support-assistant",
   "error": {
     "type": "delivery_failed",
     "message": "Failed to deliver message to agent after 3 attempts",
@@ -170,7 +170,7 @@ The gateway retries callback delivery up to 3 times with exponential backoff (1s
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/support-assistant",
+  "channelId": "/channels/team-support/support-assistant",
   "error": {
     "type": "wake_timeout",
     "message": "Agent did not become ready within wakeTimeout (120s)",
@@ -215,12 +215,12 @@ X-Agentry-Timestamp: <unix-timestamp>
 ```json
 {
   "channels": {
-    "/channels/support-assistant": {
+    "/channels/team-support/support-assistant": {
       "phase": "Active",
       "platformConnected": true,
       "lastError": null
     },
-    "/channels/personal-assistant": {
+    "/channels/team-support/personal-assistant": {
       "phase": "Degraded",
       "platformConnected": false,
       "lastError": "webhook auth validation failed: 401 Unauthorized"
@@ -265,9 +265,9 @@ When the LLM Gateway cannot fulfill a request, it returns a structured error res
 | 403 | `access_denied` | Namespace not in `allowedNamespaces`, model not in Agent's providers |
 | 413 | `payload_too_large` | Artifact payload exceeds size limits (task completion only) |
 | 429 | `rate_limited` | Per-namespace rate limit exceeded; includes `Retry-After` header |
+| 429 | `budget_exhausted` | Budget blocked per policy; includes `Retry-After` header set to the start of the next budget period |
 | 502 | `provider_error` | Upstream provider returned an error after exhausting fallback chain |
-| 503 | `budget_exhausted` | Budget blocked per policy; `retryable: false` |
 | 503 | `provider_unavailable` | All providers (primary + fallback) unreachable |
 | 504 | `provider_timeout` | Upstream provider timed out after exhausting fallback chain |
 
-The `error.retryable` field indicates whether the agent should retry the request. Rate-limited requests are retryable; budget-exhausted and access-denied are not.
+The `error.retryable` field indicates whether the agent should retry the request. Rate-limited requests are retryable (short backoff). Budget-exhausted requests include a `Retry-After` header indicating when the next budget period starts, but `retryable` is `false` — the agent should not retry before that time. Access-denied requests are not retryable.
