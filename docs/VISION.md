@@ -28,7 +28,7 @@ Agentry introduces five custom resources:
 
 The controller reconciles these resources into standard Kubernetes primitives — Pods, PVCs, Services, ConfigMaps — while layering in agent-aware lifecycle logic (idle detection, hibernation, wake-on-demand, task completion semantics) and managing two shared gateway components:
 
-- The **LLM Gateway**: a replicated proxy Deployment in `agentry-system` that mediates all agent-to-provider traffic. It provides spend visibility, soft budget guardrails, rate limiting, fallback routing, and credential isolation. Using it is optional per agent.
+- The **LLM Gateway**: a replicated proxy Deployment in `agentry-system` that mediates all agent-to-provider traffic. It provides spend visibility, soft budget guardrails, rate limiting, fallback routing, and credential isolation. Callers authenticate via one of two modes — mTLS client certificates for Agentry-managed Pods, or `TokenReview`-validated ServiceAccount bearer tokens for existing workloads in the gateway-only tier. Using it is optional per agent.
 - The **User Gateway**: a listener on the same gateway Deployment that receives inbound webhook messages, normalizes them into a standard envelope, and delivers them to the agent's HTTP endpoint. Discord, WhatsApp, and other platform-specific adapters are planned for v1.1.
 
 ## Budget Visibility and Guardrails
@@ -56,7 +56,7 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 1. **General-purpose over framework-specific.** Any container that satisfies the runtime contract can be an Agent. No assumption about language, framework, or agent architecture.
 2. **Two-tier platform/developer model.** Cluster-scoped resources (AgentClass, ModelProvider) let platform teams set guardrails. Namespace-scoped resources (Agent, AgentTask, AgentChannel) let developers self-serve within those guardrails.
 3. **Composable with the ecosystem.** Agent Sandbox can be used as a runtime backend. MCP can be used for tool integration. No reinvention of primitives that already exist.
-4. **Opinionated defaults, BYO escape hatches.** A minimal runtime contract makes the simple case simple. Reference base images (Python and Go) are planned for a future release. Custom images are a first-class path.
+4. **Opinionated defaults, BYO escape hatches.** A minimal runtime contract makes the simple case simple. v1 ships starter templates (one Go, one Python) under `examples/` that implement the full contract end-to-end — adopters copy the template and replace the agent logic. Full-featured reference base images (published as container images that wrap the contract) are planned for a future release. Custom images are a first-class path.
 5. **Policy at the boundary, not in the workload.** Budget guardrails, isolation policy, and provider access control live in cluster-scoped resources, not in individual Agent manifests.
 6. **Kubernetes-native semantics.** Lifecycle mirrors familiar primitives: AgentClass is to Agent as StorageClass is to PVC; AgentTask is to Agent as Job is to Deployment.
 7. **Honest about tradeoffs.** Where the system makes a tradeoff (soft budget limits, approximate enforcement under concurrency), this is documented explicitly rather than obscured.
@@ -66,9 +66,11 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 **In scope:**
 - All five CRDs and the reconciling controller
 - Persistent and task-mode agent lifecycle (including idle detection, hibernation, wake-on-demand, timeout, artifact collection)
-- LLM Gateway: TLS-secured cluster-level proxy with spend tracking, soft budget guardrails, rate limiting, same-type fallback chains (no cross-format translation), and provider credential isolation
+- LLM Gateway: TLS-secured cluster-level proxy with spend tracking, soft budget guardrails, rate limiting, same-type fallback chains (no cross-format translation), and provider credential isolation. Two authentication modes: mTLS for Agentry-managed Pods and `TokenReview`-validated ServiceAccount tokens for existing workloads.
 - User Gateway: channel integration via AgentChannel (generic webhook in v1 with sync and async response modes; Discord and WhatsApp adapters in v1.1)
 - RBAC, namespace scoping, and a documented security model
+- cert-manager-based TLS certificate lifecycle for the gateway and per-agent serving certs
+- Starter templates (one Go, one Python) under `examples/` that implement the runtime contract — see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)
 - Helm chart with tiered on-ramp (gateway-only → full agent lifecycle with channels)
 
 **Out of scope for v1** (may land in later versions):
@@ -81,5 +83,6 @@ Agentry's differentiator is the **generalized, policy-driven workload abstractio
 - Cross-format provider fallback (e.g., Anthropic → OpenAI translation)
 - Agent Sandbox integration (`agentSandbox` runtime backend) — v1.1
 - Platform-specific channel adapters (Discord, WhatsApp) — v1.1
+- Full-featured reference base images (published container images wrapping the runtime contract) — v1.1 (v1 ships starter templates instead)
 
 The v1 scope is deliberately narrow: get the workload abstraction, provider management, and channel integration right first. Everything else is an additive layer.

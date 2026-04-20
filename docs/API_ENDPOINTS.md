@@ -180,6 +180,23 @@ The gateway retries callback delivery up to 3 times with exponential backoff (1s
 }
 ```
 
+`controller_unavailable` is returned when a message arrives for a `Hibernated` agent and the gateway cannot reach the controller's activator endpoint (connection error, 5xx after retry, or HMAC rejection due to a key-rotation mismatch). The wake could not even be attempted, so the agent remains `Hibernated`:
+
+```json
+{
+  "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "channelId": "/channels/team-support/support-assistant",
+  "error": {
+    "type": "controller_unavailable",
+    "message": "Controller activator endpoint unreachable; wake could not be triggered",
+    "retryable": true
+  },
+  "failedAt": "2026-04-05T12:12:00Z"
+}
+```
+
+Unlike `wake_timeout` (agent was asked to wake but did not become ready in time), `controller_unavailable` indicates the wake request itself never reached the controller — retrying the original webhook is expected to succeed once the controller recovers, hence `retryable: true`. The sync-webhook equivalent is HTTP `504 Gateway Timeout` with the same error body; see [GATEWAY_USER.md § Failure Modes](./GATEWAY_USER.md#failure-modes).
+
 Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour.
 
 **`GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`** (polling fallback):

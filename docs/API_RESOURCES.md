@@ -76,8 +76,18 @@ spec:
   # Network policy hints (the controller translates these into NetworkPolicy resources)
   network:
     egress:
-      # Allowed external destinations beyond the Agentry gateway. Agent containers
-      # call providers through the gateway; this governs other egress (MCP, tools).
+      # Allowed external destinations beyond the Agentry gateway, expressed as
+      # CIDR blocks. Agent containers call providers through the gateway; this
+      # governs other egress (MCP, tools). Enforced on any CNI that implements
+      # standard Kubernetes NetworkPolicy.
+      allowedCIDRs:
+        - "10.42.0.0/16"         # internal MCP subnet
+        - "140.82.112.0/20"      # api.github.com (example; pin to actual ranges)
+      # Optional DNS-based allowlist. Only enforced on CNIs that support FQDN
+      # egress policies (e.g., Cilium, Calico Enterprise). On standard CNIs this
+      # field is ignored and AgentClassReconciler emits a Warning event. Use
+      # allowedCIDRs for portable enforcement; use allowedHosts in addition only
+      # when you have a CNI that supports FQDN-based policy.
       allowedHosts:
         - "mcp.internal.corp"
         - "api.github.com"
@@ -136,6 +146,7 @@ status:
 
 - `allowedImages` is mandatory in practice for real clusters; an empty list means "any image" and validation will emit a warning.
 - **Image pattern glob semantics**: patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules. The `*` wildcard matches any sequence of non-`/` characters — it does **not** cross path separators. Examples: `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo:latest` but NOT `registry.internal.corp/agents/team/foo:latest`. Use explicit multi-segment patterns (e.g., `registry.internal.corp/agents/team/*`) for nested paths. Digest references (`sha256:...`) are not matched by glob and must be listed explicitly.
+- **Network egress — `allowedCIDRs` vs. `allowedHosts`**: `allowedCIDRs` is the portable primitive and maps directly to `NetworkPolicy.egress.to.ipBlock.cidr`, which every CNI implementing Kubernetes NetworkPolicy supports. `allowedHosts` (DNS names) cannot be expressed in standard `NetworkPolicy` — it requires a CNI with FQDN egress policies (Cilium via `CiliumNetworkPolicy`, Calico Enterprise). The AgentClassReconciler detects the cluster CNI on startup; if `allowedHosts` is set but no supported FQDN-policy CRD is present, a `Warning` event is emitted and `allowedHosts` is ignored. Prefer `allowedCIDRs` for egress governance; layer `allowedHosts` on top only when the CNI supports it.
 - `allowedProviders` is the primary access control mechanism for LLM providers at the class level. ModelProvider itself has `allowedNamespaces` for namespace-level control. Both must pass for an Agent to use a provider.
 - Defaults vs. maxLimits: defaults are applied at reconcile time if the Agent does not specify; maxLimits are enforced regardless and reject manifests that exceed them.
 - `runtime.backend` only accepts `pod` in v1. The `agentSandbox` value (which creates Agent Sandbox `Sandbox` CRs instead of raw Pods) is deferred to v1.1. The CRD schema enforces this via `x-kubernetes-validations: [{rule: "self == 'pod'", message: "agentSandbox backend is not supported in v1; use pod"}]` on the `runtime.backend` field — invalid values are rejected at apply time rather than surfaced as a reconcile error. See [Integration Points](./ARCHITECTURE.md#agent-sandbox-optional-backend) for the planned integration design.
@@ -351,10 +362,10 @@ status:
 - **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through `$AGENTRY_GATEWAY_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain.
 - **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol.
 - **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
-- **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the operator CA), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the agent's TLS serving cert and key) into every agent Pod. These cert/key files serve a dual purpose:
-  - **Server TLS** (gateway→agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against the operator CA on message delivery.
+- **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the Agentry CA trust bundle), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the cert-manager-issued per-Agent cert and key) into every agent Pod. These cert/key files serve a dual purpose:
+  - **Server TLS** (gateway→agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against `agentry-ca` on message delivery.
   - **Client TLS / mTLS** (agent→gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (LLM requests, heartbeats, and task completion), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
-  Reference base images handle both uses automatically. Custom images must configure their HTTP client to present the client cert for all calls to the gateway.
+  Starter templates handle both uses automatically — see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md). Custom images must configure their HTTP client to present the client cert for all calls to the gateway and must watch the cert/key files for rotation updates.
 
 ---
 
@@ -622,6 +633,8 @@ The following constraints are enforced at reconcile time. Failed validation resu
 16. `AgentChannel.spec.webhook.path` must not begin with `/v1/`. This is subsumed by rule 15 (the enforced `/channels/` prefix inherently avoids `/v1/`), but retained as an explicit validation for defense in depth. See [Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths).
 17. `AgentTask` with `spec.completion.condition: exitCode` must not declare `spec.artifacts`. Artifact collection requires the `POST /v1/task/complete` payload, which is only available in `agentReported` mode. Enforced via CRD schema validation (CEL).
 18. `ModelProvider.budget.policies[x].degradeTo` must match a model `id` in the same ModelProvider's `spec.models` list. A missing target model would cause silent routing failures when the budget threshold is crossed.
+19. `AgentClass.spec.network.egress.allowedCIDRs` entries must parse as valid CIDR blocks (IPv4 or IPv6). Invalid entries cause `Ready=False, reason=InvalidCIDR` on the AgentClass.
+20. `AgentClass.spec.network.egress.allowedHosts` entries must be valid DNS names (RFC 1123). If the field is non-empty and the AgentClassReconciler's startup CNI probe did not detect FQDN egress policy support (Cilium's `CiliumNetworkPolicy` CRD or Calico Enterprise's equivalent), the reconciler emits a `Warning` event (`reason=FQDNPolicyUnsupported`) on the AgentClass and ignores `allowedHosts` when synthesizing the per-agent NetworkPolicy. The AgentClass still becomes `Ready=True`; `allowedCIDRs` alone governs egress.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 

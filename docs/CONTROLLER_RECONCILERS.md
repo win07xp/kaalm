@@ -15,7 +15,9 @@ The operator is a single binary built with `controller-runtime` (kubebuilder sca
 
 It runs as a Deployment in `agentry-system` with leader election enabled. Two replicas are recommended for availability; only the leader actively reconciles.
 
-**No admission webhooks.** Field-level validation uses CEL expressions in CRD schemas (`x-kubernetes-validations`). Cross-resource validation runs at reconcile time and is surfaced as `Ready=False` status conditions with descriptive messages. This eliminates the cert-manager dependency and the availability risk of a webhook server.
+**No admission webhooks.** Field-level validation uses CEL expressions in CRD schemas (`x-kubernetes-validations`). Cross-resource validation runs at reconcile time and is surfaced as `Ready=False` status conditions with descriptive messages. This eliminates the availability risk of a webhook server on the apiserver request path.
+
+**Controller TLS.** The activator / activity-API / health endpoints on port 9443 serve HTTPS using a cert-manager-issued `Certificate` named `agentry-controller-tls` in `agentry-system`. The chart installs this `Certificate` with `issuerRef` → `agentry-issuer` (the same `Issuer` that signs the gateway cert). Its SAN set covers `agentry-controller.agentry-system.svc.cluster.local`, `agentry-controller.agentry-system.svc`, and `localhost`. The gateway trusts the Agentry CA (`agentry-ca`) when dialing the controller. cert-manager rotates this cert continuously — no operator code is involved in its lifecycle. See [GATEWAY_LLM.md § TLS on the LLM Gateway Listener](./GATEWAY_LLM.md#tls-on-the-llm-gateway-listener) for the full trust chain.
 
 ---
 
@@ -28,8 +30,17 @@ Watches: `AgentClass`.
 AgentClass has no owned child resources. Its reconciliation is lightweight:
 
 1. Validate that all referenced `allowedProviders` exist (emit a `Ready=False` condition if any are missing).
-2. Count `Agent` and `AgentTask` resources currently referencing this class; populate `status.agentsInUse` and `status.tasksInUse`.
-3. Update `status.conditions` accordingly.
+2. Validate `network.egress.allowedCIDRs`: every entry must parse as a valid CIDR block (IPv4 or IPv6). Invalid entries set `Ready=False, reason=InvalidCIDR` with a message naming the offending entry.
+3. Validate `network.egress.allowedHosts`: every entry must be a valid DNS name (RFC 1123). If `allowedHosts` is non-empty, check the cached result of the startup **CNI FQDN-policy probe** (see below). If the cluster's CNI does not support FQDN egress policies, emit a `Warning` event (`reason=FQDNPolicyUnsupported`, message naming the AgentClass and the unsupported entries) on the AgentClass and mark the condition `FQDNPolicySupported=False` on status. `allowedHosts` is **ignored** when the AgentClassReconciler (or any dependent reconciler) synthesizes per-agent NetworkPolicy — only `allowedCIDRs` is applied. The AgentClass itself still becomes `Ready=True`; the warning is actionable for the platform engineer but not blocking.
+4. Count `Agent` and `AgentTask` resources currently referencing this class; populate `status.agentsInUse` and `status.tasksInUse`.
+5. Update `status.conditions` accordingly.
+
+**CNI FQDN-policy probe** (runs once at controller startup, result cached for the process lifetime): the reconciler checks the apiserver's discovery API for CRDs that indicate FQDN egress support:
+
+- Cilium: presence of `ciliumnetworkpolicies.cilium.io` (v2) — supports `toFQDNs`.
+- Calico Enterprise: presence of `networkpolicies.crd.projectcalico.org` **with** Enterprise licensing CRDs (`licensekeys.crd.projectcalico.org`) — open-source Calico does not support FQDN egress.
+
+If neither is present, FQDN policy is unsupported. The probe is intentionally conservative — unknown CNIs are treated as unsupported to avoid silently generating NetworkPolicy that the CNI cannot enforce.
 
 AgentClassReconciler must also watch `ModelProvider` (to re-evaluate when providers come and go) and `Agent`/`AgentTask` (to keep usage counts fresh). Use indexed lookups by `agentClassRef.name` for efficient fan-out.
 
@@ -50,7 +61,7 @@ The ModelProviderReconciler is **not** responsible for credential distribution t
 
 ### AgentReconciler
 
-Watches: `Agent`, plus owned `Pod`, `PVC`, `Service`, `ConfigMap`, `Secret` (TLS cert). Also watches `AgentClass` via `handler.EnqueueRequestsFromMapFunc` — when an AgentClass changes (e.g., `allowedProviders` updated, `maxLimits` lowered), re-queue all Agents referencing that class (via indexed lookup on `agentClassRef.name`).
+Watches: `Agent`, plus owned `Pod`, `PVC`, `Service`, `ConfigMap`, `cert-manager.io/v1/Certificate`. The cert-manager-managed `Secret` (`spec.secretName` output) is **not** owned by the reconciler — cert-manager owns it and populates it from the `Certificate`. Also watches `AgentClass` via `handler.EnqueueRequestsFromMapFunc` — when an AgentClass changes (e.g., `allowedProviders` updated, `maxLimits` lowered), re-queue all Agents referencing that class (via indexed lookup on `agentClassRef.name`).
 
 This is the most complex reconciler. It implements the persistent [Agent State Machine](./CONTROLLER_LIFECYCLE.md#agent-persistent-mode). Each reconciliation pass:
 
@@ -61,11 +72,20 @@ This is the most complex reconciler. It implements the persistent [Agent State M
 5. When creating a Pod, inject controller-managed environment variables:
    - `$AGENTRY_HEALTH_PORT` (always): the port the agent serves its HTTPS health/message endpoint on (default 8080).
    - `$AGENTRY_GATEWAY_ENDPOINT` (always): HTTPS URL pointing to the gateway Service in `agentry-system` on port 8443. This is the base URL for all agent→gateway calls — LLM requests, heartbeats (`POST /v1/agent/heartbeat`), and task completion (`POST /v1/task/complete`). Always injected regardless of whether `spec.providers` is set, so provider-less agents (e.g., AgentTasks that report completion but make no LLM calls) can still reach the gateway.
-   - `$AGENTRY_CA_CERT` (always): path to the operator CA certificate.
-   - `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (always): paths to the agent's TLS serving certificate and key.
+   - `$AGENTRY_CA_CERT` (always): path to the Agentry CA trust bundle projected into the Pod.
+   - `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (always): paths to the agent's TLS serving/client certificate and key (cert-manager-managed; see step 6).
 
    The controller also sets `httpGet.scheme: HTTPS` on the injected liveness and readiness probes — the agent serves TLS on `$AGENTRY_HEALTH_PORT`, and Kubernetes httpGet probes do not verify TLS certificates, so no additional CA configuration is required on the probe itself.
-6. Create a TLS serving certificate Secret for the agent (signed by the operator-managed CA), owned by the Agent resource. Mount the cert and key into the Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The certificate's SAN includes the agent's Service DNS name (`{name}.{namespace}.svc.cluster.local`). Certificate lifetime and rotation follow the same policy as the gateway serving cert (90-day lifetime, rotate at 60 days) — see [TLS on LLM Gateway](./GATEWAY_LLM.md#tls-on-the-llm-gateway-listener). The controller watches the Secret and recreates it before expiry. During CA rotation, the controller re-issues agent certificates signed by the new CA in a **rate-limited rolling fashion**: at most 50 agents per reconcile cycle (configurable), tracked via a ConfigMap in `agentry-system` (`agentry-ca-rotation-state`). The CA bundle (containing both old and new CAs) ensures no TLS disruption during the rollout — the old CA is not removed from the bundle until the reconciler has confirmed that every agent cert Secret is signed by the new CA. See [CA Rotation](./GATEWAY_LLM.md#tls-on-the-llm-gateway-listener) for the full 4-step rotation sequence.
+6. Create a cert-manager `Certificate` resource for the Agent, named `{agentName}-tls` in the Agent's namespace. The `Certificate` is owned by the Agent via `ownerReferences` so it is garbage-collected on Agent deletion. Key fields:
+   - `spec.issuerRef`: `{ name: "agentry-issuer", kind: "Issuer" }` (cross-namespace resolution is enabled on the chart-installed `Issuer` in `agentry-system`).
+   - `spec.secretName`: `{agentName}-tls` (the output Secret cert-manager creates in the Agent's namespace).
+   - `spec.dnsNames`: `{agentName}.{namespace}.svc.cluster.local`, `{agentName}.{namespace}.svc`, `{agentName}.{namespace}`.
+   - `spec.duration`: `2160h` (90d), `spec.renewBefore`: `720h` (30d) — chart defaults.
+   - `spec.usages`: `server auth`, `client auth` (the same cert acts as the agent's serving cert and as its mTLS client cert when calling the gateway).
+
+   The reconciler mounts the cert-manager-managed Secret into the Pod as a projected volume at `/var/run/agentry/` (`tls.crt`, `tls.key`). It does **not** create the Secret itself — cert-manager does — and it does not track cert rotation state. cert-manager rotates continuously per `renewBefore`; kubelet propagates the new Secret contents into the Pod's projected volume; the agent reloads via the file-watch pattern (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)).
+
+   CA rotation requires no reconciler participation — cert-manager re-issues leaves as the root rotates and a trust-bundle overlap window covers leaves signed by either CA. See [TLS on the LLM Gateway Listener](./GATEWAY_LLM.md#tls-on-the-llm-gateway-listener).
 7. For agents in `Running` or `Idle` phase: query the activity API in a **per-namespace batch**, not per individual agent reconcile. Because each agent's reconcile is an independent controller-runtime invocation, a naive implementation would issue O(agents × replicas) gateway HTTP calls per reconcile cycle — at 1000 agents and 3 replicas, that is 3000+ calls per cycle. Instead, the reconciler caches the activity fan-out result for a namespace for a short window (e.g., 15 seconds): on the first reconcile of any agent in a namespace during this window, it fans out to all gateway Pod IPs in parallel (`GET /v1/activity?namespace={ns}`, one call per replica), takes the most recent timestamp per agent across all responses, and stores the result in a reconciler-local namespace-keyed cache. Subsequent agent reconciles in the same namespace within the window read from the cache rather than issuing new HTTP calls. This reduces gateway query load to O(namespaces × replicas) per window. Skips unreachable replicas. Uses the result to evaluate idle and hibernation transitions. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the full logic.
 8. On every reconcile pass, check for the `agentry.io/wake=true` annotation **unconditionally**. If present on a `Hibernated` agent, transition to `Resuming` and recreate the Pod (see [Wake trigger](./CONTROLLER_LIFECYCLE.md#wake-trigger)). If present on an agent in any other phase, remove the annotation immediately and emit a Warning event (`reason=WakeIgnored, message="wake annotation observed on non-Hibernated agent; ignored"`). The annotation is always removed after being observed — it must never be left on a resource after a reconcile pass, regardless of phase. This prevents stale annotations from triggering spurious wakes on a future hibernation cycle.
 9. Update status and emit events for phase transitions.

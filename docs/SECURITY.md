@@ -30,12 +30,13 @@ The operator runs under a ServiceAccount (`agentry-system/agentry-controller`) w
 
 **Unlike a sidecar model, the operator does not need cluster-wide Secret read/write access.** Credentials are held by the gateway ServiceAccount in `agentry-system` and never copied to user namespaces. This significantly reduces the operator's blast radius.
 
-### Gateway ServiceAccount
+### Gateway ServiceAccount permissions
 
 The Agentry Gateway runs under a separate ServiceAccount (`agentry-system/agentry-gateway`) with:
 
 - `get, watch` on `Secrets` in `agentry-system` (to read LLM provider credentials).
 - `get, watch` on `ConfigMaps` in `agentry-system` (to receive budget configuration from the operator).
+- **`create` on `tokenreviews.authentication.k8s.io`** (cluster-scoped, no resource name needed — `TokenReview` is a virtual resource). This permits the gateway to validate projected ServiceAccount bearer tokens presented by gateway-only-tier workloads. Without this, the gateway cannot accept non-mTLS authentication. See [LLM Gateway § Namespace Identification mode 2](./GATEWAY_LLM.md#mode-2--serviceaccount-bearer-token-gateway-only-tier).
 - `get, list, watch` on `Agent` resources cluster-wide (for provider routing resolution and hibernation state checks).
 - `get, list, watch` on `AgentTask` resources cluster-wide (for task completion handling: the gateway resolves the calling Pod's ownerRef to identify the associated AgentTask, validates that declared artifact names in the completion payload match `spec.artifacts`, and reads the AgentTask's UID to set the ownerRef on the completion ConfigMap it creates).
 - `get, list, watch` on `AgentChannel` resources cluster-wide (to look up which Agent a channel message targets and to manage platform connections).
@@ -77,11 +78,21 @@ If an agent needs cluster API access (e.g., a Kubernetes-administering agent), t
 
 ### Agent→Gateway Authentication
 
-The gateway authenticates all inbound requests from agent containers — LLM API calls, heartbeats (`POST /v1/agent/heartbeat`), and task completion signals (`POST /v1/task/complete`) — using **mutual TLS (mTLS)** as the primary mechanism. Agents present their operator-issued TLS certificate (mounted at `$AGENTRY_TLS_CERT`) as a client certificate on the LLM Gateway's TLS listener. The gateway verifies the cert against the operator CA and extracts the agent's namespace and name from the certificate's SAN (`{name}.{namespace}.svc.cluster.local`). This gives a cryptographically attested identity that is independent of network-layer addressing.
+The gateway supports **two authentication modes** for inbound requests, mapped to the two Helm tiers.
 
-As a secondary defense-in-depth check, the gateway also resolves the source IP to a Pod via its Pod informer cache and confirms the Pod matches the identity claimed in the client certificate. A mismatch (e.g., a compromised agent presenting a stolen certificate from a different agent) causes the request to be rejected. See [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full two-layer identity resolution.
+**Mode 1 — mTLS client certificate (Agentry-managed Pods).** This is the only authentication path available to Pods created by the AgentReconciler (Agent / AgentTask workloads). Agents present the cert-manager-issued certificate at `$AGENTRY_TLS_CERT` as a client cert on the LLM Gateway's TLS listener. The gateway verifies against `agentry-ca` and extracts (namespace, agent name) from the SAN (`{name}.{namespace}.svc.cluster.local`). Identity is cryptographically attested; the CA private key is not reachable from any agent Pod.
 
-Reference base images configure client cert presentation automatically. Custom agent images must configure their HTTP client to present `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (for all agent→gateway calls: LLM requests, heartbeats, and task completion). Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
+**Agent/AgentTask Pods must use mTLS — their ServiceAccount tokens are not accepted by the gateway.** This is a deliberate asymmetry: accepting SA tokens from Agentry-managed Pods would create two attack paths (cert path plus token path), and a compromised agent could use the token path to bypass cert revocation after rotation. Rejecting SA tokens from the cert-path tier forces cert rotation to remain the single revocation mechanism for that tier.
+
+**Mode 2 — projected ServiceAccount bearer token via `TokenReview` (gateway-only tier).** For existing workloads in user namespaces that the platform team has granted LLM-provider access to without adopting the Agent CRD. The caller mounts a projected ServiceAccount token with audience `agentry-gateway` and sends it as `Authorization: Bearer <token>`. The gateway POSTs the token to `authentication.k8s.io/v1/tokenreviews`, requires `status.authenticated: true`, and extracts the namespace from `status.user.username` (`system:serviceaccount:<ns>:<sa>`). Validation results are cached by the token's SHA-256 hash until `status.expirationTimestamp` minus a 60s safety margin.
+
+Audience binding is critical: the gateway requests the `agentry-gateway` audience in its `TokenReview`, so a generic `kubernetes.default.svc`-audience token (such as a stolen kubelet token) cannot authenticate. Callers must configure their projected-volume `audience: agentry-gateway`.
+
+**Secondary cross-check (both modes):** the gateway resolves the source IP to a Pod via its Pod informer and confirms the Pod is in the namespace identity resolution produced. This closes a stolen-credential scenario where a cert or token from one Pod is presented from a different Pod. Cross-check failure → request rejected.
+
+See [GATEWAY_LLM.md § Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full request-time flow.
+
+**Client cert presentation:** starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) configure mTLS client-cert presentation and the cert-file watch-and-reload pattern. Custom Agent/AgentTask images must present `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` on every agent→gateway call (LLM requests, heartbeats, task completion). Activity timestamps and heartbeats are tracked in-memory in the gateway — no etcd writes are involved in agent→gateway communication.
 
 ### Internal Endpoint Authentication (Activator & Activity API)
 
@@ -116,29 +127,31 @@ Channel credentials are namespace-scoped for organizational isolation — each n
 
 ### Lifecycle of an agent TLS serving certificate
 
-1. **Created**: by the AgentReconciler when provisioning the agent's Pod. The controller signs a TLS certificate using the operator-managed CA, with the agent's Service DNS name as the SAN.
-2. **Stored**: in a Secret in the agent's namespace (e.g., `team-support/support-assistant-tls`), owned by the Agent resource for cascade deletion.
-3. **Mounted**: into the agent Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS using this certificate.
-4. **Verified**: the gateway verifies the agent's certificate against the operator CA on every message delivery request.
-5. **Rotated**: the controller watches the Secret and recreates the certificate before expiry (90-day lifetime, rotate at 60 days — same policy as the gateway serving cert). The kubelet updates the projected volume in the running Pod. During CA rotation, the agent's certificate may temporarily be signed by the old CA while the bundle already contains the new CA. This is safe — the gateway verifies against the full CA bundle, which includes both CAs during the rotation window. The agent's certificate is re-issued from the new CA on the next rotation pass by the AgentReconciler.
-6. **Deleted**: cascade-deleted when the Agent resource is deleted (via ownerRef).
+1. **Created**: by the AgentReconciler when provisioning the agent's Pod. The reconciler creates a cert-manager `Certificate` resource named `{agentName}-tls` in the Agent's namespace, owner-referenced to the Agent. Its `issuerRef` points at `agentry-issuer` in `agentry-system`; SAN list covers `{name}.{namespace}.svc.cluster.local`, `{name}.{namespace}.svc`, `{name}.{namespace}`; usages are `server auth` and `client auth` (the same cert serves both directions).
+2. **Stored**: cert-manager writes the output Secret (name = `Certificate.spec.secretName`, e.g., `team-support/support-assistant-tls`) in the Agent's namespace.
+3. **Mounted**: into the agent Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS using this certificate and presents it as a client cert on agent→gateway calls.
+4. **Verified**: the gateway verifies the agent's certificate against the Agentry CA (`agentry-ca`) on every message delivery request and on every inbound mTLS call.
+5. **Rotated**: cert-manager continuously re-issues the cert within `spec.renewBefore` of expiry (chart defaults: 90d duration, 30d renewBefore). kubelet updates the projected volume in the running Pod when the Secret changes; the agent reloads via a cert-file watch (starter templates demonstrate the pattern — see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)).
+6. **Deleted**: the `Certificate` resource is owner-referenced to the Agent, so deleting the Agent cascade-deletes the `Certificate`; cert-manager in turn cleans up the output Secret.
 
 ### In-cluster TLS (Bidirectional)
 
-All traffic between agent containers and the gateway is encrypted with TLS in both directions.
+All traffic between agent containers and the gateway is encrypted with TLS in both directions. **Agentry uses cert-manager as its sole CA and leaf-cert management stack.** The Helm chart installs cert-manager resources (not the cert-manager controller itself — cert-manager must already be present in the cluster):
 
-**Agent → Gateway (LLM traffic):** The LLM Gateway listener serves TLS to protect prompts and completions in transit within the cluster. The operator manages a self-signed CA (`agentry-gateway-ca` Secret) and a TLS serving certificate (`agentry-gateway-tls` Secret), both in `agentry-system`. The CA certificate is injected into agent Pods as a projected volume (`/var/run/agentry/ca.crt`). Agent containers use this CA to verify the gateway's TLS certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (an `https://` URL). See [TLS on the LLM Gateway Listener](./GATEWAY_LLM.md#tls-on-the-llm-gateway-listener) for certificate lifecycle details.
+- A cluster-scoped self-signed `ClusterIssuer` (`agentry-selfsigned`).
+- A `Certificate` for the Agentry root (`agentry-ca` in `agentry-system`, `isCA: true`, chart default 5y lifetime).
+- A namespace-scoped `Issuer` (`agentry-issuer` in `agentry-system`, sourcing from `agentry-ca`) with `spec.ca.crossNamespace: true` so the AgentReconciler can create per-Agent `Certificate` resources in user namespaces that reference the `agentry-system` issuer.
+- A `Certificate` for the gateway (`agentry-gateway-tls`) and one for the controller (`agentry-controller-tls`), both issued from `agentry-issuer`.
 
-**Gateway → Agent (channel message delivery):** The operator issues a per-agent TLS serving certificate signed by the same CA, stored as a Secret in the agent's namespace and mounted into the Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS on its health/message port. The gateway verifies the agent's certificate against the operator CA when delivering channel messages via `POST /v1/message`. This protects user messages (which may contain PII or sensitive data) from network-level sniffing on shared nodes. Certificate lifecycle follows the same rotation policy as the gateway serving certificate (90-day lifetime, rotate at 60 days).
+cert-manager is a **required dependency**. Teams with an existing cert-manager deployment reuse it; the chart ships the Agentry-specific `Certificate`/`Issuer` resources but leaves cert-manager's own controller out of scope. This decision supersedes an earlier self-managed-CA design; the earlier design was rejected because the operator code needed to manage CA generation, bundle rotation, staged leaf re-issuance, and cross-namespace cert distribution was large, had no analogue to borrow from, and duplicated functionality that cert-manager already provides correctly.
 
-**CA rotation**: the operator rotates the CA certificate using a bundle-based approach that avoids any TLS disruption. The `agentry-gateway-ca` Secret contains a CA bundle (concatenated PEM) rather than a single CA certificate. During rotation:
+**Agent → Gateway (LLM traffic):** the LLM Gateway listener serves TLS using the `agentry-gateway-tls` Secret. The Agentry CA (`agentry-ca`) is distributed into every agent Pod's namespace as a trust bundle (via cert-manager's `trust-manager` `Bundle` resource, which projects the CA into a ConfigMap per namespace) and mounted into the agent Pod at `/var/run/agentry/ca.crt` (`$AGENTRY_CA_CERT`). Agents use this CA to verify the gateway's cert on `$AGENTRY_GATEWAY_ENDPOINT`. See [TLS on the LLM Gateway Listener](./GATEWAY_LLM.md#tls-on-the-llm-gateway-listener) for the full trust chain.
 
-1. The operator generates a new CA and adds it to the bundle alongside the existing CA. All components now trust both CAs.
-2. The gateway serving certificate is re-issued from the new CA. Agents still trust it because the bundle contains both CAs.
-3. Agent serving certificates are re-issued from the new CA in a rolling fashion across reconcile cycles. The gateway trusts both CAs, so agents with old or new certs are both valid.
-4. Once all certificates are re-issued, the old CA is removed from the bundle.
+**Gateway → Agent (channel message delivery):** the gateway verifies the agent's cert-manager-issued `{agentName}-tls` certificate against `agentry-ca` when delivering messages via `POST /v1/message`. This protects user messages (which may contain PII or sensitive data) from network-level sniffing on shared nodes.
 
-The CA bundle is injected into agent Pods as a projected volume. Kubernetes automatically updates projected volumes when the backing Secret changes, so agents pick up the new bundle without Pod restarts. The rotation sequence ensures that at no point does any component present a certificate that the other side cannot verify.
+**Controller endpoints (activator, activity, health):** the controller's HTTPS endpoints on port 9443 use `agentry-controller-tls` (issued from the same `agentry-issuer`). The gateway trusts `agentry-ca` to verify. See [CONTROLLER_RECONCILERS.md § Operator Structure](./CONTROLLER_RECONCILERS.md#operator-structure).
+
+**CA rotation:** cert-manager re-issues the `agentry-ca` `Certificate` within `spec.renewBefore` of expiry. During the overlap window both the old and new CA certificates are present in the trust-bundle Secret; kubelet propagates the update into projected volumes; every leaf cert remains valid under at least one of the two CAs until cert-manager has rotated all leaves to the new root. No operator code implements CA rotation — this was the main motivation for adopting cert-manager. The earlier bundle-based 4-step rotation sequence has been removed; cert-manager provides the equivalent behavior natively.
 
 ### Protecting agent containers from LLM provider access
 
@@ -206,9 +219,13 @@ AgentClass can override these defaults, but the operator emits warnings for any 
 
 AgentClass includes network policy fields that the controller translates into `NetworkPolicy` resources:
 
-- **Egress**: by default, deny all egress except to the Agentry gateway in `agentry-system` and DNS. Because the gateway is a separate Pod (not a sidecar), this is enforceable with standard Kubernetes NetworkPolicy without requiring a service mesh. Platform team adds explicit allowlist entries for MCP servers, external APIs, etc.
+- **Egress**: by default, deny all egress except to the Agentry gateway in `agentry-system` and DNS. Because the gateway is a separate Pod (not a sidecar), this is enforceable with standard Kubernetes NetworkPolicy without requiring a service mesh. Platform team adds explicit allowlist entries for MCP servers, external APIs, etc. via two fields:
+  - **`spec.network.egress.allowedCIDRs`** — array of CIDR blocks. Maps directly to `NetworkPolicy.egress.to.ipBlock.cidr` and works on every CNI that implements Kubernetes NetworkPolicy. This is the portable primitive and should be preferred.
+  - **`spec.network.egress.allowedHosts`** — array of DNS names. Only enforceable on CNIs that support FQDN egress policies (Cilium via `CiliumNetworkPolicy.toFQDNs`, Calico Enterprise). Standard `NetworkPolicy` has no equivalent. On unsupported CNIs the AgentClassReconciler emits a `Warning` event and ignores the field; `allowedCIDRs` alone governs egress. See [AgentClassReconciler](./CONTROLLER_RECONCILERS.md#agentclassreconciler).
 - **Ingress**: by default, deny all ingress except from the Agentry gateway (which delivers channel messages via `POST /v1/message`). The Service makes the agent reachable within the cluster by the gateway; no other inbound traffic is allowed by default.
 - **Inter-agent**: disabled by default. To allow same-namespace agent-to-agent traffic, platform teams set `spec.network.allowSameNamespaceIngress: true` on the AgentClass. The controller translates this into a NetworkPolicy `ingress.from.podSelector` rule scoped to Pods in the same namespace bearing the Agentry agent label. This is opt-in — the default deny-all-ingress posture reflects the assumption that agent containers are untrusted.
+
+**The "standard Kubernetes NetworkPolicy is sufficient" claim is scoped to agent → gateway enforcement and to IP-/CIDR-level egress governance.** Hostname-based egress (`allowedHosts`) is *not* enforceable on standard NetworkPolicy; clusters that require FQDN-level egress must use Cilium or Calico Enterprise.
 
 ### Resource Isolation
 
@@ -220,10 +237,10 @@ Every Agent/AgentTask has resource limits enforced via Pod `resources.limits`. A
 
 ### What flows where
 
-- **Agent → LLM Gateway**: prompts and completions. In-cluster HTTPS (TLS terminated at the gateway; agent trusts the operator-managed CA). See § In-cluster TLS above.
+- **Agent → LLM Gateway**: prompts and completions. In-cluster HTTPS (TLS terminated at the gateway; agent trusts the Agentry CA via the projected trust bundle). See § In-cluster TLS above.
 - **LLM Gateway → LLM Provider**: prompts and completions over egress. Always HTTPS. Custom CA bundles supported for enterprise environments — see [Upstream TLS Configuration](./GATEWAY_LLM.md#upstream-tls-configuration).
 - **Channel Platform → User Gateway**: inbound webhook messages. HTTPS inbound to the gateway's public endpoint (via Ingress).
-- **User Gateway → Agent**: normalized message envelope via `POST /v1/message` to the agent's ClusterIP Service over HTTPS (gateway verifies agent's operator-issued TLS certificate). See § In-cluster TLS above.
+- **User Gateway → Agent**: normalized message envelope via `POST /v1/message` to the agent's ClusterIP Service over HTTPS (gateway verifies agent's cert-manager-issued TLS certificate against `agentry-ca`). See § In-cluster TLS above.
 - **Controller → Gateway**: activity timestamp queries via `GET /v1/activity` (HMAC-authenticated, internal ClusterIP Service). See § Internal Endpoint Authentication above.
 - **Gateway → API Server**: task completion data written to per-task ConfigMaps in user namespaces.
 - **Controller ↔ API server**: CRD updates, Pod creation, events. Standard kubelet/apiserver channels.
@@ -259,10 +276,15 @@ Agentry does **not** log prompts or completions. LLM payloads are sensitive (may
 | Budget guardrails exceeded under high concurrency | Budgets are documented as soft limits with bounded overspend; hard caps at the provider account level recommended for strict requirements |
 | Compromised gateway writes malicious ConfigMaps to user namespaces | Per-task dynamic Roles scope gateway ConfigMap write access to only `{taskName}-completion` in the task's namespace, for the task's lifetime. No blanket namespace access — a compromised gateway cannot write arbitrary ConfigMaps. |
 | Malicious message from channel platform | Webhook adapter authenticates inbound events (bearer token, HMAC signature) before processing |
-| Agent spoofs namespace to bypass budget/access controls | Primary mitigation: mTLS client certificate — namespace is extracted from the cert SAN, which is signed by the operator CA; an agent cannot forge a cert for a different namespace. Secondary check: source IP → Pod resolution cross-validates the cert identity against the actual source Pod. Both checks must pass. |
+| Agent spoofs namespace to bypass budget/access controls (mTLS tier) | Namespace is extracted from the cert SAN, signed by `agentry-ca`. An agent cannot forge a cert for a different namespace (the CA key is not reachable from any agent Pod). Source-IP → Pod cross-check validates the cert identity against the actual source Pod; both must match. |
+| Agent spoofs namespace (gateway-only-tier, token auth) | Namespace is extracted from the token's `status.user.username` returned by `TokenReview`, which the apiserver signs. An agent cannot forge a token for a different namespace — the token's signature is checked by the apiserver, not the gateway. Source-IP → Pod cross-check validates the Pod's actual namespace matches. Both cryptographic (apiserver signature) and topological (source IP) attestation must agree. |
+| Gateway-only-tier tenant uses a ServiceAccount token from another namespace to read another tenant's budget | Impossible: `TokenReview`'s returned `status.user.username` names the token's actual namespace of origin. The gateway uses *that* namespace for all authorization decisions, not any namespace the caller claims in the request body. A valid token from namespace A can only be used to act as namespace A. |
+| Stolen `kubernetes.default.svc`-audience token reused against the gateway | Gateway's `TokenReview` request specifies audience `agentry-gateway`. Tokens minted for a different audience fail validation. Workloads must explicitly project a gateway-audience token. |
+| Agentry-managed Agent/AgentTask Pod tries to downgrade auth by using its ServiceAccount token instead of mTLS | Rejected by policy: the gateway does not accept SA-token auth from Pods created by the AgentReconciler. mTLS is the only accepted path for that tier, so cert revocation remains the single authoritative revocation mechanism. (Enforcement: the gateway attempts mTLS first; if a client presents a cert, the token is ignored. If mTLS fails and the Pod's IP belongs to an Agent/AgentTask Pod, the request is rejected regardless of a presented token.) |
 | Channel credential leaked from agent namespace | Channel credentials are stored in the agent's namespace; blast radius is limited to that namespace's channels. The platform team (not the developer) is responsible for rotation. |
-| Unauthorized agent wake-up via activator endpoint | Activator endpoint is HMAC-authenticated; only the gateway (which holds the shared key) can trigger wake-ups. See § Internal Endpoint Authentication above. |
-| In-cluster traffic sniffed on shared nodes | All agent↔gateway traffic is TLS-encrypted in both directions: agent→gateway (LLM traffic) and gateway→agent (channel messages). See § In-cluster TLS above. |
+| Unauthorized agent wake-up via activator endpoint | Activator endpoint is TLS-protected (cert-manager-issued `agentry-controller-tls`, verified by the gateway against `agentry-ca`) and HMAC-authenticated inside the tunnel; only the gateway (which holds the shared key) can trigger wake-ups. See § Internal Endpoint Authentication above. |
+| In-cluster traffic sniffed on shared nodes | All agent↔gateway and gateway↔controller traffic is TLS-encrypted. Certificates are cert-manager-managed and rooted at `agentry-ca`. See § In-cluster TLS above. |
+| cert-manager not installed or unhealthy | Chart install fails fast if `agentry-issuer` cannot be created. Runtime degradation of cert-manager delays new Agent provisioning (the `Certificate` Secret is not populated) and blocks cert rotation, but running agents continue until their current certs approach expiry. Operators should monitor cert-manager health as a cluster-critical dependency. |
 
 ---
 
@@ -271,7 +293,7 @@ Agentry does **not** log prompts or completions. LLM payloads are sensitive (may
 1. **Install Agentry in a dedicated, locked-down namespace** (`agentry-system`). Restrict who can `exec` into or modify resources in this namespace.
 2. **Expose the User Gateway via a dedicated Ingress or LoadBalancer** with TLS termination. The gateway's public endpoint receives inbound platform events.
 3. **Enable k8s audit logging** at the `Metadata` level minimum, `RequestResponse` for Secret access if feasible.
-4. **Standard Kubernetes NetworkPolicy is sufficient** for agent egress enforcement — no service mesh required. The cluster-level gateway architecture makes egress rules cross-Pod and fully enforceable.
+4. **Standard Kubernetes NetworkPolicy is sufficient** for the agent → gateway egress rule and for CIDR-scoped external egress (`allowedCIDRs`) — no service mesh required. The cluster-level gateway architecture makes agent→gateway egress cross-Pod and fully enforceable. If you need FQDN-based egress (`allowedHosts`), install Cilium or Calico Enterprise; standard NetworkPolicy cannot express hostname rules.
 5. **Separate LLM credential management from platform engineering access** if possible (e.g., only a secrets-admin role can read/write credential Secrets in `agentry-system`). This requires cluster RBAC beyond Agentry's scope.
 6. **Require an appropriate RuntimeClass for any AgentClass that allows LLM code execution.** Platform admins own RuntimeClass installation and compatibility validation.
 7. **Review AgentClass configurations as code** (GitOps). Cluster-scoped resources that grant capabilities should never be edited by hand in production.
