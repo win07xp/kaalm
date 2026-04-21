@@ -2,7 +2,7 @@
 
 This document defines the HTTP endpoints exposed by the Agentry Gateway and the contract for agent-implemented endpoints. For CRD specifications, see [API_RESOURCES.md](./API_RESOURCES.md).
 
-All gateway-exposed endpoints authenticate requests via **source IP -> Pod resolution** — no API keys or tokens are exchanged. The gateway resolves the caller's Pod and namespace from its Pod informer cache. See [Namespace Identification](./GATEWAY_LLM.md#namespace-identification).
+Agent→gateway endpoints authenticate via **mTLS** (Agentry-managed Agent/AgentTask Pods) or a **`TokenReview`-validated ServiceAccount bearer token** (gateway-only tier). A **source-IP → Pod cross-check** runs in both modes as defense in depth. See [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full flow and [Agent→Gateway Authentication](./SECURITY.md#agentgateway-authentication) for the threat-model analysis.
 
 ---
 
@@ -200,6 +200,8 @@ Unlike `wake_timeout` (agent was asked to wake but did not become ready in time)
 Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour.
 
 **`GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`** (polling fallback):
+
+Served over HTTPS on the User Gateway listener (port 8080, TLS using `agentry-gateway-tls` — same certificate used by the LLM listener). External callers reach it through the cluster Ingress that fronts port 8080; see [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress).
 
 Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel (i.e., the value of `channelId` from the 202 response body). The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request via the same mechanism as the original webhook (`AgentChannel.spec.webhook.auth`). Callers must preserve the `channelId` value from the 202 response and pass it as `channelPath` on poll — it should not be constructed independently.
 

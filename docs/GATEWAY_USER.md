@@ -38,6 +38,19 @@ On poll (`GET /v1/channels/responses/{requestId}?channelPath=...`), any gateway 
 
 ---
 
+## TLS and Ingress
+
+The User Gateway listener on `:8080` serves TLS using the same `agentry-gateway-tls` Certificate as the LLM listener — both listeners share a single cert whose SAN set covers the gateway's in-cluster Service DNS names. No plaintext path exists on the gateway; all webhook, activator, activity, and async-polling traffic is TLS end-to-end.
+
+**Recommended Ingress configuration**: external webhook traffic arrives at a cluster Ingress that terminates TLS with the cluster's public certificate and then connects to the gateway backend. Two Ingress modes are supported; operators pick one:
+
+- **Backend re-encrypt (HTTPS-to-HTTPS)** — the Ingress controller speaks HTTPS to the gateway on port 8080, presenting the Agentry CA as the backend CA bundle (or disabling verification if the controller trusts cluster-internal names). This is the recommended default because it works with off-the-shelf Ingress controllers (NGINX, Traefik, HAProxy, most cloud LB Ingress classes).
+- **TLS pass-through** — the Ingress forwards raw TLS bytes to the gateway without terminating, so the external client speaks TLS directly with the gateway. This preserves end-to-end TLS with the gateway's cert but requires the Ingress controller to support pass-through SNI routing and requires clients to trust the gateway's cert chain.
+
+Internal callers inside the cluster (the controller's activity fan-out, the gateway's own async-poll reads, cluster-local webhook producers) dial the gateway Service on 8080 over TLS directly, verifying against the Agentry CA (`agentry-ca`) that `trust-manager` projects into every namespace.
+
+---
+
 ## Platform Adapters
 
 v1 ships with the **generic webhook adapter** only (inbound HTTP POST with configurable auth). Discord and WhatsApp adapters are deferred to v1.1 — they require persistent connections (Discord WebSocket, WhatsApp Cloud API registration), platform-specific reconnection logic, and API versioning, which adds significant implementation surface. The webhook adapter is stateless and covers the core channel integration pattern.
@@ -94,7 +107,7 @@ This key-ring approach eliminates the failure window that would otherwise occur 
 
 ## Activity Tracking API
 
-The gateway maintains per-agent activity timestamps in-memory, updated on every LLM request, channel message delivery, and agent heartbeat. This avoids per-request etcd writes, which is critical at scale (hundreds of thousands of agents). The controller uses this data to evaluate idle and hibernation transitions — see [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection).
+The gateway maintains per-agent activity timestamps in-memory, updated on every LLM request, channel message delivery, and agent heartbeat. This avoids per-request etcd writes: v1 targets 1000 Agents/AgentTasks per cluster, and the in-memory store is deliberately designed to scale an order of magnitude higher without a design change as future versions grow the target. The controller uses this data to evaluate idle and hibernation transitions — see [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection).
 
 The gateway exposes an internal endpoint for the controller to query activity state. The endpoint serves **HTTPS** using the gateway's `agentry-gateway-tls` Certificate; the controller trusts the Agentry CA (`agentry-ca`) to verify. On top of TLS, the endpoint uses the same HMAC authentication as the activator endpoint (shared key from `agentry-activator-key` Secret) — see [Activator Authentication](#activator-authentication).
 

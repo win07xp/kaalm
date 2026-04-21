@@ -220,11 +220,12 @@ spec:
     requestsPerMinute: 300
     tokensPerMinute: 500000
 
-  # Fallback chain. If this provider is unavailable or budget-blocked, the
-  # gateway tries the next provider in order. The gateway also walks each
-  # fallback provider's own fallback chain, up to the gateway-level
-  # maxFallbackDepth setting (default 3). Referenced providers must also
-  # allow the namespace.
+  # Fallback chain. If this provider is unavailable (network error, 5xx,
+  # timeout), the gateway tries the next provider in order. A budget-blocked
+  # primary does NOT trigger fallback — the gateway returns 429
+  # budget_exhausted immediately. The gateway walks each fallback provider's
+  # own fallback chain, up to the gateway-level maxFallbackDepth setting
+  # (default 3). Referenced providers must also allow the namespace.
   fallback:
     - name: openai-fallback
 
@@ -467,6 +468,7 @@ status:
 - **`exitCode` does not support artifact collection.** Artifacts are collected via the `POST /v1/task/complete` payload, which is only used by `agentReported` mode. Declaring `spec.artifacts` with `completion.condition: exitCode` is rejected by CRD schema validation. Tasks using `exitCode` that need to produce output should write results to an external system (e.g., a Git repository, object storage) and rely on the container logs for status.
 - **`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.
 - **Concurrency**: unlike Job, AgentTask is always parallelism=1 in v1. Parallel fan-out tasks would be a separate future resource (`AgentTaskSet`) rather than a field on AgentTask.
+- **Runtime-contract guarantees (same as Agent)**: the AgentTaskReconciler injects the full `$AGENTRY_*` environment-variable set on the task Pod (`$AGENTRY_HEALTH_PORT`, `$AGENTRY_GATEWAY_ENDPOINT`, `$AGENTRY_CA_CERT`, `$AGENTRY_TLS_CERT`, `$AGENTRY_TLS_KEY`) and creates a per-task cert-manager `Certificate` (`{taskName}-tls`) with `usages: [client auth]`. The output Secret mounts at `/var/run/agentry/` so the task image presents a valid mTLS client cert on every call to `$AGENTRY_GATEWAY_ENDPOINT` (LLM requests, heartbeats, `POST /v1/task/complete`). The Certificate's SAN is `{taskName}.{namespace}.task.agentry.io` — a non-Service shape, since tasks have no Service. See [AgentTaskReconciler](./CONTROLLER_RECONCILERS.md#agenttaskreconciler) and [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full flow.
 
 ---
 

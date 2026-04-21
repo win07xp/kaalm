@@ -117,7 +117,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 
 **LLM Gateway** (outbound, agent → provider)
 - Serves TLS on port 8443; agent containers connect via `$AGENTRY_GATEWAY_ENDPOINT` (HTTPS, always injected)
-- Identifies the source namespace via source IP → Pod resolution from the Pod informer cache (unforgeable)
+- Identifies the source namespace via mTLS client-cert SAN (Agentry-managed Agent/AgentTask Pods) or `TokenReview`-validated ServiceAccount bearer token (gateway-only tier), with a source-IP → Pod cross-check from the informer cache as defense in depth — see [Namespace Identification](./GATEWAY_LLM.md#namespace-identification)
 - Resolves the target ModelProvider from the qualified `provider/model` name in the request and the Agent's `spec.providers`
 - Detects the request format from the URL path (`/v1/messages` for Anthropic, `/v1/chat/completions` for OpenAI-compatible)
 - Validates the requested model and checks namespace access
@@ -128,7 +128,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 
 **User Gateway** (inbound, channel → agent)
 - Watches `AgentChannel` resources directly to determine message routing
-- Listens for inbound webhook events on port 8080 (plaintext HTTP, behind Ingress with TLS termination)
+- Listens for inbound webhook events on port 8080 over TLS (serves `agentry-gateway-tls`; Ingress is configured for backend re-encrypt or TLS pass-through)
 - Normalizes webhook payloads into the standard Agentry message envelope
 - Looks up the AgentChannel resource to find the target Agent and its endpoint
 - If the agent is `Hibernated`, the gateway signals the controller to wake it via the authenticated activator endpoint and waits until the Pod is ready (bounded by `wakeTimeout`)
@@ -149,7 +149,7 @@ Agentry is BYO-image, but containers must satisfy a minimal contract to particip
    Two TLS requirements apply to all calls to `$AGENTRY_GATEWAY_ENDPOINT`:
    - **Server verification**: the agent must trust the Agentry CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`) to verify the gateway's TLS certificate. The CA is managed by cert-manager (see [Deployment Model](#deployment-model)).
    - **Client authentication**: one of two modes, depending on how the workload was provisioned:
-     - **mTLS** (Agentry-managed Pods) — the AgentReconciler creates a cert-manager `Certificate` for the Pod; the cert and key are mounted at `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`. The agent must present this client certificate on every request to the gateway. The gateway extracts the agent's namespace from the SAN. This is the only mode accepted for Pods managed by Agentry — see [Namespace Identification](./GATEWAY_LLM.md#namespace-identification).
+     - **mTLS** (Agentry-managed Pods) — the AgentReconciler (for Agents) and the AgentTaskReconciler (for AgentTasks) create a cert-manager `Certificate` for the Pod; the cert and key are mounted at `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`. The agent must present this client certificate on every request to the gateway. The gateway extracts the agent's namespace from the SAN — `{name}.{namespace}.svc.cluster.local` for Agents, `{name}.{namespace}.task.agentry.io` for AgentTasks (the latter avoids implying a Service the task does not have). This is the only mode accepted for Pods managed by Agentry — see [Namespace Identification](./GATEWAY_LLM.md#namespace-identification).
      - **ServiceAccount bearer token** (gateway-only tier) — for workloads that are not managed by an Agent resource, the HTTP client presents a projected ServiceAccount token in the `Authorization: Bearer <jwt>` header. The gateway validates the token via the Kubernetes `TokenReview` API and extracts the namespace from the validated `status.user.username`. No client cert is required.
      The starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) handle both modes. Custom images must configure their HTTP client for the appropriate mode.
 4. **Message endpoint** (optional) — if the agent uses an AgentChannel, it exposes `POST /v1/message` on `$AGENTRY_HEALTH_PORT` over TLS, accepting the standard Agentry message envelope and returning a response envelope. The agent serves TLS using the cert-manager-issued certificate at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) and key at `$AGENTRY_TLS_KEY` (`/var/run/agentry/tls.key`). Agents without an AgentChannel do not need to implement this. Agents must also **watch the cert and key files for changes** (the kubelet automatically updates projected volume contents when the backing Secret is rotated — see [Lifecycle of an agent TLS serving certificate](./SECURITY.md#lifecycle-of-an-agent-tls-serving-certificate)) and reload their TLS configuration for new connections without dropping existing ones. Standard approaches: Go's `tls.Config.GetCertificate` callback (re-reads from disk on each new TLS handshake), Python's `SSLContext` reload on `inotify` event. The starter templates implement this reload pattern — see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md).
@@ -203,12 +203,14 @@ Agentry ships as a Helm chart that installs:
 - A default set of AgentClasses (e.g., `standard`, `sandboxed`) that platform teams can customize or delete.
 - Optional: a sample ModelProvider manifest stub (keys not included) as a starting template.
 
-**cert-manager is a required dependency.** The chart does not install the cert-manager controller itself (teams with an existing cert-manager deployment reuse it); it ships an `Issuer` and the `Certificate` resources Agentry needs:
+**cert-manager and trust-manager are required dependencies.** The chart does not install the cert-manager or trust-manager controllers themselves (teams with an existing cert-manager deployment reuse them); it ships the `Issuer`, `Certificate`, and `Bundle` resources Agentry needs:
 - A self-signed `ClusterIssuer` creates a `Certificate` for the Agentry CA.
 - An `Issuer` scoped to `agentry-system` signs all Agentry-issued leaf certs using the CA above.
-- A `Certificate` for the gateway serving cert (covers both the LLM listener on port 8443 and the User listener on port 8080 for internal traffic; external webhook traffic terminates at the Ingress).
+- A `Certificate` for the gateway serving cert (`agentry-gateway-tls`) used by both listeners — the LLM listener on port 8443 and the User listener on port 8080 — both serving TLS from the same cert. External webhook traffic arrives via Ingress configured for backend re-encrypt (or TLS pass-through); there is no plaintext listener on the gateway.
 - A `Certificate` for the controller's activator endpoint.
 - One `Certificate` per Agent, created by the AgentReconciler at provisioning time and owned by the Agent resource via ownerRef.
+- One `Certificate` per AgentTask, created by the AgentTaskReconciler at provisioning time and owned by the AgentTask resource via ownerRef.
+- A `trust-manager` `Bundle` resource that projects the Agentry CA as a ConfigMap into every namespace that hosts an Agent or AgentTask; agent Pods mount it at `/var/run/agentry/ca.crt` to verify the gateway's TLS cert.
 
 Admission webhooks are not used; the cert-manager dependency is solely for TLS lifecycle management.
 

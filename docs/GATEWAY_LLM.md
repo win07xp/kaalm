@@ -118,7 +118,12 @@ A source-IP cross-check runs against both modes — the Pod at the request's sou
 
 ### Mode 1 — mTLS client certificate (Agentry-managed Pods)
 
-The LLM Gateway listener requires a client certificate on connections from agent Pods created by the AgentReconciler. Agents present the cert at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) with key at `$AGENTRY_TLS_KEY`. The gateway verifies it against the Agentry CA (trust bundle from the cert-manager `Issuer` in `agentry-system`) and extracts identity from the certificate's SAN: `{name}.{namespace}.svc.cluster.local`. This produces a cryptographically attested (namespace, agent name) pair on every request.
+The LLM Gateway listener requires a client certificate on connections from Pods created by the AgentReconciler or AgentTaskReconciler. Agents and tasks present the cert at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) with key at `$AGENTRY_TLS_KEY`. The gateway verifies it against the Agentry CA (trust bundle from the cert-manager `Issuer` in `agentry-system`) and extracts identity from the certificate's SAN. Two SAN shapes are recognized:
+
+- `{name}.{namespace}.svc.cluster.local` — issued by the AgentReconciler (matches the Agent's Service DNS).
+- `{name}.{namespace}.task.agentry.io` — issued by the AgentTaskReconciler. AgentTasks have no Service, so a non-Service shape is used to make the workload type explicit.
+
+Namespace extraction is identical for both shapes (second label). The shape discriminates workload type for audit and metrics. This produces a cryptographically attested (namespace, workload name, workload kind) triple on every request.
 
 Starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) demonstrate client-cert presentation and the cert-file watch-and-reload pattern. Custom images must configure their HTTP client to present the cert when calling `$AGENTRY_GATEWAY_ENDPOINT`. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
@@ -183,7 +188,7 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the projected volume in any Pod that mounts it, and the consumer (gateway, controller, agent) reloads from disk. The gateway watches `agentry-gateway-tls` for changes; starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) demonstrate the inotify-based reload pattern that custom images must implement.
 
-**Agent trust bundle**: every agent Pod mounts the Agentry CA at `/var/run/agentry/ca.crt` (the `$AGENTRY_CA_CERT` env var points at this path). This is a projected volume sourced from the `agentry-ca`-owned Secret in `agentry-system` (made available in agent namespaces via a cert-manager `trust-manager` `Bundle` resource, or equivalently via the chart replicating the CA ConfigMap per namespace — v1 uses `trust-manager`). Agent HTTP clients must trust this CA when calling `$AGENTRY_GATEWAY_ENDPOINT`. Starter templates handle this.
+**Agent trust bundle**: every agent Pod mounts the Agentry CA at `/var/run/agentry/ca.crt` (the `$AGENTRY_CA_CERT` env var points at this path). This is a projected volume sourced from a ConfigMap projected into the agent's namespace by `trust-manager`. The Helm chart installs a `trust-manager` `Bundle` resource whose source is the `agentry-ca` Secret in `agentry-system` and whose target writes a ConfigMap named `agentry-ca` into every namespace selected by the bundle (all namespaces where Agents or AgentTasks run). Agent HTTP clients must trust this CA when calling `$AGENTRY_GATEWAY_ENDPOINT`. Starter templates handle this. `trust-manager` is a required dependency alongside cert-manager — see [Deployment Model](./ARCHITECTURE.md#deployment-model).
 
 **CA rotation**: cert-manager re-issues the root `agentry-ca` `Certificate` within `spec.renewBefore` of expiry. During the overlap window, the bundle Secret contains both the old and new CA certificates, so no leaf cert is ever trusted by only one side. Once cert-manager has rotated all leaves (gateway cert, controller cert, every per-agent cert) to be signed by the new root, the old CA falls out of the bundle automatically. No operator code is required for CA rotation — this was the main motivation for adopting cert-manager.
 
@@ -313,12 +318,12 @@ Pre-call token estimation is not used for budget gating (it adds latency and is 
 
 ## Fallback Logic
 
-When the primary provider fails (network error, 5xx, timeout, or budget-blocked), the gateway walks `ModelProvider.spec.fallback` in order:
+When the primary provider fails (network error, 5xx, timeout), the gateway walks `ModelProvider.spec.fallback` in order. A **budget-blocked primary does not trigger fallback** — the gateway returns `429 budget_exhausted` to the agent immediately (see Request Flow step 5). This keeps budget enforcement predictable: a namespace at its cap does not silently drain budget from a fallback provider.
 
 1. Verify the fallback provider has the **same `spec.type`** as the primary provider (e.g., both `anthropic`, or both `openai-compatible`). If the types differ, the fallback is skipped. This constraint exists because the gateway does not translate between API formats — see [Request Format Detection](#request-format-detection) above.
 2. Verify the namespace is in the fallback provider's `allowedNamespaces`.
 3. Verify the requested model exists in the fallback provider's `models`.
-4. Check the fallback provider's budget state for the agent's namespace. If the fallback is budget-blocked, skip it and try the next fallback in the list (or return an error if no more fallbacks remain).
+4. Check the fallback provider's budget state for the agent's namespace. If the fallback is budget-blocked, skip it and try the next fallback in the list (or return an error if no more fallbacks remain). This applies only while walking the chain after a non-budget primary failure — a budget-blocked *primary* never reaches this step (see above).
 5. Forward the request with the fallback provider's credentials.
 
 Fallback chains up to a configurable depth. If provider A's fallback is B, and B has a fallback to C, the gateway tries A -> B -> C. The maximum depth is controlled by the gateway-level `maxFallbackDepth` setting (default: 3), configured via the Helm value `gateway.maxFallbackDepth`, which sets the `AGENTRY_MAX_FALLBACK_DEPTH` environment variable on the gateway Deployment. If the chain is exhausted or the depth cap is reached without a successful response, the gateway returns an error. The depth cap prevents unbounded latency from long fallback chains. Circular references are rejected at reconcile time by the [ModelProviderReconciler](./CONTROLLER_RECONCILERS.md#modelproviderreconciler), so the gateway does not need runtime cycle detection.
@@ -361,7 +366,7 @@ These are gateway-level settings (not per-ModelProvider) because they typically 
 The gateway Pod's readiness probe (`GET /readyz` on the internal health port) returns `200` only when **all** of the following are true:
 
 1. The **LLM listener** on `:8443` is bound and accepting TLS connections. The probe performs a local dial to confirm.
-2. The **User listener** on `:8080` is bound and accepting connections. The probe performs a local dial to confirm.
+2. The **User listener** on `:8080` is bound and accepting TLS connections (both listeners use the `agentry-gateway-tls` certificate). The probe performs a local TLS dial to confirm.
 3. The **Pod informer** cache has completed its initial sync (`cache.WaitForCacheSync` returned true). Until this is true, namespace identification and provider routing would fail or misroute.
 4. The **gateway serving certificate** (`agentry-gateway-tls`) has been loaded from disk. On startup, the gateway reads the mounted Secret; if the Secret does not yet exist (cert-manager has not issued it), readiness fails. This matters on initial chart install where the Pod may start before cert-manager completes issuance.
 

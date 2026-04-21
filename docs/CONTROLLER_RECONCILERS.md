@@ -94,12 +94,21 @@ Owner references are set on all child resources pointing back to the Agent, so c
 
 ### AgentTaskReconciler
 
-Watches: `AgentTask`, plus owned `Pod`, `PVC`, `ConfigMap` (for artifacts). Also watches `AgentClass` via `handler.EnqueueRequestsFromMapFunc` — when an AgentClass changes, re-queue all AgentTasks referencing that class (via indexed lookup on `agentClassRef.name`).
+Watches: `AgentTask`, plus owned `Pod`, `PVC`, `ConfigMap` (for artifacts), and `cert-manager.io/v1/Certificate`. The cert-manager-managed `Secret` output is not owned by the reconciler — cert-manager owns it. Also watches `AgentClass` via `handler.EnqueueRequestsFromMapFunc` — when an AgentClass changes, re-queue all AgentTasks referencing that class (via indexed lookup on `agentClassRef.name`).
 
 Reconciliation steps:
 
 1. Resolve AgentClass and ModelProviders (same validation as Agent).
 1a. Ensure a per-task `Role` and `RoleBinding` exist in the task's namespace, granting the gateway ServiceAccount (`agentry-system/agentry-gateway`) `create, update` on the ConfigMap named `{taskName}-completion`. Both resources are owned by the AgentTask via ownerRef and cascade-delete when the task is cleaned up. This mirrors the per-channel Role pattern in [AgentChannelReconciler](#agentchannelreconciler) and avoids granting the gateway blanket ConfigMap write access. See [Gateway ServiceAccount](./SECURITY.md#gateway-serviceaccount) for the security rationale.
+1b. Inject controller-managed environment variables on Pod creation — the same set as [AgentReconciler step 5](#agentreconciler): `$AGENTRY_HEALTH_PORT`, `$AGENTRY_GATEWAY_ENDPOINT`, `$AGENTRY_CA_CERT`, `$AGENTRY_TLS_CERT`, `$AGENTRY_TLS_KEY`. `$AGENTRY_GATEWAY_ENDPOINT` is always injected so the task image can call `POST /v1/task/complete` and emit heartbeats even if the task makes no LLM calls. Readiness and liveness probes are **not** injected by the controller for AgentTasks: tasks have no Service and typically do not serve a message endpoint, so probe configuration is left to the task image (the image may declare probes in its own Pod spec fields, which the reconciler preserves).
+1c. Create a cert-manager `Certificate` resource for the AgentTask, named `{taskName}-tls` in the task's namespace, owner-referenced to the AgentTask so it is garbage-collected on deletion. Key fields:
+   - `spec.issuerRef`: `{ name: "agentry-issuer", kind: "Issuer" }` (cross-namespace resolution — same `Issuer` used by Agents).
+   - `spec.secretName`: `{taskName}-tls`.
+   - `spec.dnsNames`: `{taskName}.{namespace}.task.agentry.io` (single SAN). A non-Service shape is used deliberately — AgentTasks have no Service, so the Service-DNS shape used by Agents would be misleading. The shape is recognized by the gateway's SAN parser as an AgentTask identity — see [Namespace Identification](./GATEWAY_LLM.md#namespace-identification).
+   - `spec.usages`: `client auth` only (no `server auth` — tasks have no inbound TLS listener).
+   - `spec.duration`: `2160h` (90d), `spec.renewBefore`: `720h` (30d) — matches Agent defaults.
+
+   The reconciler mounts the cert-manager-managed Secret into the Pod as a projected volume at `/var/run/agentry/` (`tls.crt`, `tls.key`, `ca.crt` from the `trust-manager` bundle). cert-manager owns and rotates the Secret; the reconciler does not track rotation state. The task image uses the same cert-reload pattern as Agents (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)).
 2. Drive the [AgentTask State Machine](./CONTROLLER_LIFECYCLE.md#agenttask).
 3. On `Completing`: artifact values are read from a ConfigMap created by the gateway. When the agent calls `POST /v1/task/complete`, the gateway writes the completion payload to a ConfigMap named `{taskName}-completion` in the task's namespace. The ConfigMap is owned by the AgentTask (via ownerRef) for cascade deletion. The reconciler watches for this ConfigMap, reads artifact values, and populates `status.artifactValues`. No exec into the container is required, and the completion data survives Pod crashes or eviction.
 4. Honor `ttlSecondsAfterFinished` by scheduling deletion.

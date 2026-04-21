@@ -91,7 +91,7 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 
 ### Activity Detection
 
-Activity timestamps are maintained **in-memory in the gateway**, not in etcd. This is critical for scale — at hundreds of thousands of agents, per-request annotation writes would overwhelm the API server. Two signal sources feed the gateway's in-memory activity store — see [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api):
+Activity timestamps are maintained **in-memory in the gateway**, not in etcd. Per-request annotation writes would not scale as the Agent count grows: v1 targets 1000 Agents/AgentTasks per cluster, and the in-memory activity store is designed so future versions can reach an order of magnitude higher without a design change (at which point per-request etcd writes would dominate the API server). Two signal sources feed the gateway's in-memory activity store — see [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api):
 - **Gateway traffic**: the LLM Gateway and User Gateway record the timestamp of each request for an Agent in-memory.
 - **Agent heartbeat**: the agent calls `POST /v1/agent/heartbeat` on the gateway; the gateway updates the agent's timestamp in its in-memory store.
 
