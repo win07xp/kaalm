@@ -180,7 +180,7 @@ The gateway retries callback delivery up to 3 times with exponential backoff (1s
 }
 ```
 
-`controller_unavailable` is returned when a message arrives for a `Hibernated` agent and the gateway cannot reach the controller's activator endpoint (connection error, 5xx after retry, or HMAC rejection due to a key-rotation mismatch). The wake could not even be attempted, so the agent remains `Hibernated`:
+`controller_unavailable` is returned when a message arrives for a `Hibernated` agent and the gateway cannot reach the controller's activator endpoint (connection error, 5xx after retry, or mTLS handshake / SAN authorization failure). The wake could not even be attempted, so the agent remains `Hibernated`:
 
 ```json
 {
@@ -219,15 +219,15 @@ Stored responses are retained for 1 hour in the ConfigMap, after which they are 
 
 ## `GET /v1/channels/health` (internal — controller use only)
 
-Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated via the same HMAC scheme as the activator and activity endpoints (shared key from `agentry-activator-key` Secret) — see [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
+Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated via **mTLS** — the caller must present the controller's `agentry-controller-tls` client cert, verified against `agentry-ca`, with a SAN that matches the controller Service DNS. There is no bearer token or HMAC header. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
 
 **Request:**
 
 ```
 GET /v1/channels/health?namespace=team-support
-Authorization: Bearer <HMAC(timestamp:namespace)>
-X-Agentry-Timestamp: <unix-timestamp>
 ```
+
+The request carries no auth header; authentication is the mTLS client cert presented on the TLS handshake.
 
 **Response body:**
 
@@ -255,7 +255,7 @@ X-Agentry-Timestamp: <unix-timestamp>
 | `platformConnected` | boolean | `true` if the gateway considers the channel endpoint healthy and ready to receive messages |
 | `lastError` | string or null | Most recent error seen by the gateway for this channel; null if no error |
 
-**Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. `401 Unauthorized` if the HMAC signature is invalid or the timestamp is stale (>30s). Only channels whose target Agent is in the requested namespace are returned.
+**Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only channels whose target Agent is in the requested namespace are returned.
 
 ---
 

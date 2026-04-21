@@ -120,16 +120,20 @@ A source-IP cross-check runs against both modes — the Pod at the request's sou
 
 The LLM Gateway listener requires a client certificate on connections from Pods created by the AgentReconciler or AgentTaskReconciler. Agents and tasks present the cert at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) with key at `$AGENTRY_TLS_KEY`. The gateway verifies it against the Agentry CA (trust bundle from the cert-manager `Issuer` in `agentry-system`) and extracts identity from the certificate's SAN. Two SAN shapes are recognized:
 
-- `{name}.{namespace}.svc.cluster.local` — issued by the AgentReconciler (matches the Agent's Service DNS).
-- `{name}.{namespace}.task.agentry.io` — issued by the AgentTaskReconciler. AgentTasks have no Service, so a non-Service shape is used to make the workload type explicit.
+- `{name}.{namespace}.svc.cluster.local` — issued by the AgentReconciler (matches the Agent's Service DNS). Exactly **5 labels** when split on `.`.
+- `{name}.{namespace}.task.agentry.io` — issued by the AgentTaskReconciler. AgentTasks have no Service, so a non-Service shape is used to make the workload type explicit. Exactly **4 labels** when split on `.`.
 
 Namespace extraction is identical for both shapes (second label). The shape discriminates workload type for audit and metrics. This produces a cryptographically attested (namespace, workload name, workload kind) triple on every request.
+
+**Exact label-count enforcement**: the gateway requires the DNS SAN to have exactly the expected label count for its shape — 5 for `.svc.cluster.local`, 4 for `.task.agentry.io`. Any SAN with extra (or fewer) labels is rejected as `403 invalid_cert`. This is defense in depth against a dotted-name bypass: if the CRD CEL constraint restricting Agent/AgentTask `metadata.name` to DNS-1123 labels (see [API_RESOURCES.md § Agent design notes](./API_RESOURCES.md#design-notes)) were ever relaxed or bypassed, a name like `admin.svc` in namespace `team-a` would yield the SAN `admin.svc.team-a.svc.cluster.local` (6 labels) and be rejected by the gateway before the namespace extractor ran. Both layers must be breached for the bypass to succeed.
 
 Starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) demonstrate client-cert presentation and the cert-file watch-and-reload pattern. Custom images must configure their HTTP client to present the cert when calling `$AGENTRY_GATEWAY_ENDPOINT`. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
 This mode is **CNI-independent**: identity is cryptographically attested by the certificate, not by any network-layer header that an intermediate hop could modify. An agent cannot claim a different identity without a CA-signed certificate for that identity — and the CA key is not reachable from any agent Pod.
 
 **Agent/AgentTask Pods MUST use mTLS.** Their ServiceAccount tokens are deliberately not accepted by the gateway. If they were, a compromised agent could bypass certificate rotation by authenticating with its SA token instead, and an agent whose cert was revoked could continue calling the gateway indefinitely. See [Agent→Gateway Authentication](./SECURITY.md#agent-gateway-authentication) for the full analysis.
+
+Provider routing for Agentry-managed Pods runs the full chain — Agent/AgentClass `allowedProviders`, then ModelProvider `allowedNamespaces`/`models`. See [Provider Routing § mTLS tier](#provider-routing).
 
 ### Mode 2 — ServiceAccount bearer token (gateway-only tier)
 
@@ -149,6 +153,8 @@ On receipt, the gateway performs a `TokenReview`:
 The gateway's ServiceAccount needs `create` on `authentication.k8s.io/v1/tokenreviews` (cluster-scoped) — see [SECURITY.md § Gateway ServiceAccount](./SECURITY.md#gateway-serviceaccount-permissions).
 
 Token audiences are set by workloads via a `projected` volume with `audience: agentry-gateway`. Using an explicit audience prevents generic `kubernetes.default.svc` tokens from being accepted — a stolen kubelet token cannot be reused against the gateway.
+
+Provider routing for this tier is governed by `ModelProvider.spec.allowedNamespaces` and `spec.models` only — the gateway has no Agent or AgentClass to consult. See [Provider Routing § Gateway-only tier](#provider-routing).
 
 ### Source-IP cross-check (both modes)
 
@@ -175,9 +181,9 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 1. Chart installs a cluster-scoped self-signed `ClusterIssuer` named `agentry-selfsigned`.
 2. Chart installs a `Certificate` in `agentry-system` named `agentry-ca` whose `issuerRef` points at `agentry-selfsigned` and which has `isCA: true`. This is the Agentry root. Long-lived (default 5y).
-3. Chart installs a namespace-scoped `Issuer` in `agentry-system` named `agentry-issuer` whose `ca.secretName` is `agentry-ca`'s output Secret. All Agentry leaf certs are issued from this `Issuer`.
-4. Chart installs a `Certificate` for the gateway serving cert (`agentry-gateway-tls`) issued from `agentry-issuer`. SAN: `agentry-gateway.agentry-system.svc.cluster.local`, `agentry-gateway.agentry-system.svc`, `localhost`.
-5. Controller deployment ships with a `Certificate` for the activator/activity-API serving cert (see [CONTROLLER_RECONCILERS.md](./CONTROLLER_RECONCILERS.md)).
+3. Chart installs a cluster-scoped `ClusterIssuer` named `agentry-ca-issuer` whose `ca.secretName` is `agentry-ca`'s output Secret (read from `agentry-system`). All Agentry leaf certs — including the per-Agent and per-AgentTask certs created in user namespaces — are issued from this `ClusterIssuer`. A `ClusterIssuer` is used instead of a namespace-scoped `Issuer` because cert-manager's `issuerRef` on a `Certificate` does not resolve across namespaces to a namespaced `Issuer`; a `ClusterIssuer` is the idiomatic way to let `Certificate` resources in user namespaces reference a signing key that lives in `agentry-system`.
+4. Chart installs a `Certificate` for the gateway serving cert (`agentry-gateway-tls`) issued from `agentry-ca-issuer`. SAN: `agentry-gateway.agentry-system.svc.cluster.local`, `agentry-gateway.agentry-system.svc`, `localhost`. Usages: `server auth`, `client auth` (the gateway also presents this cert when dialing the controller's activator / activity / channels-health endpoints).
+5. Controller deployment ships with a `Certificate` for the activator / activity-API / channels-health serving cert (see [CONTROLLER_RECONCILERS.md](./CONTROLLER_RECONCILERS.md)). Usages: `server auth`, `client auth` (the controller also presents this cert when dialing the gateway's activity endpoint).
 6. The `AgentReconciler` creates a `Certificate` per Agent (owner-referenced from the Agent) — see [Agent Serving & Client TLS](#agent-serving--client-tls) below.
 
 **Certificate rotation**: cert-manager rotates each leaf continuously. Chart defaults:
@@ -194,13 +200,15 @@ When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the pr
 
 **Mutual TLS (mTLS)**: the LLM Gateway listener requires client certificates from agents in the Agentry-managed path. Agents present their per-agent TLS certificate (the same cert used for gateway→agent delivery) as the client cert when calling `$AGENTRY_GATEWAY_ENDPOINT`. The gateway verifies the client cert against `agentry-ca` and extracts the SAN to identify the agent and namespace. Starter templates configure client cert presentation automatically. Custom images must configure their HTTP client to use `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` as the client certificate. This is the primary identity mechanism for Agentry-managed Pods — see [Namespace Identification](#namespace-identification). Gateway-only-tier workloads do not present a client cert; they authenticate via `TokenReview` (see Mode 2 above), and client certs are optional on the TLS handshake for that path.
 
+**Activity API path also requires mTLS.** `GET /v1/activity` is served on the same gateway TLS listener but requires a client cert whose SAN matches the controller Service DNS (`agentry-controller.agentry-system.svc.cluster.local` or `.svc`). The controller presents its `agentry-controller-tls` cert. Agent/AgentTask certs are rejected on this path because their SANs do not match — defense in depth against a compromised agent using a valid CA-signed cert to query activity data across namespaces. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
+
 **Agent health probes and TLS**: because the agent serves HTTPS on `$AGENTRY_HEALTH_PORT` (using the same per-agent certificate), the readiness and liveness probes injected by the AgentReconciler must set `httpGet.scheme: HTTPS`. Kubernetes `httpGet` probes do not verify TLS certificates, so no additional CA configuration is required on the probe. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
 `$AGENTRY_GATEWAY_ENDPOINT` is an `https://` URL — TLS is not optional.
 
 ### Agent Serving & Client TLS
 
-The User Gateway's delivery to agent Services (`POST /v1/message`) is over HTTPS. The AgentReconciler creates a cert-manager `Certificate` per Agent named `{agentName}-tls` in the Agent's namespace, owner-referenced to the Agent (so it is garbage-collected on Agent deletion). Its `issuerRef` points at `agentry-issuer` in `agentry-system` (cert-manager supports cross-namespace `issuerRef` resolution when the `Issuer` explicitly opts in via `spec.ca.crossNamespace: true`; the chart sets this). The `spec.secretName` output Secret is mounted into the agent Pod at `/var/run/agentry/tls.crt` / `tls.key`. The certificate SAN list includes:
+The User Gateway's delivery to agent Services (`POST /v1/message`) is over HTTPS. The AgentReconciler creates a cert-manager `Certificate` per Agent named `{agentName}-tls` in the Agent's namespace, owner-referenced to the Agent (so it is garbage-collected on Agent deletion). Its `issuerRef` is `{ name: "agentry-ca-issuer", kind: "ClusterIssuer" }`. A `ClusterIssuer` is used because `Certificate` resources in user namespaces cannot reference a namespaced `Issuer` in `agentry-system` across the namespace boundary. The `spec.secretName` output Secret is mounted into the agent Pod at `/var/run/agentry/tls.crt` / `tls.key`. The certificate SAN list includes:
 
 - `{agentName}.{namespace}.svc.cluster.local` (Service DNS)
 - `{agentName}.{namespace}.svc`
@@ -228,15 +236,31 @@ This format uniquely identifies the (provider, model) pair and eliminates ambigu
 
 ## Provider Routing
 
-The gateway resolves which ModelProvider to use for each LLM request through the following chain:
+Provider routing differs between the two authentication tiers because the gateway-only tier has no Agent resource to consult. Both variants run after [Namespace Identification](#namespace-identification) has produced an authenticated namespace.
+
+### mTLS tier (Agentry-managed Pods)
+
+Agents and AgentTasks created by the controller have an Agent (or AgentTask) resource with `spec.providers` and an AgentClass with `allowedProviders`. The gateway walks the full chain:
 
 1. **Source IP -> Pod**: resolved from the Pod informer cache (see [Namespace Identification](#namespace-identification)).
 2. **Pod -> Agent**: the Pod's ownerRef identifies the Agent (or AgentTask) resource. The gateway maintains an Agent informer cache for this lookup.
-3. **Agent -> allowed providers**: the Agent's `spec.providers` lists the ModelProviders this agent may use.
+3. **Agent -> allowed providers**: the Agent's `spec.providers` lists the ModelProviders this agent may use. The referenced providers must also appear in the AgentClass's `allowedProviders`.
 4. **Model name -> ModelProvider**: the gateway parses the `provider/model` qualified name from the request body. The provider prefix must match a `providerRef` in the Agent's `spec.providers`. If it does not, the request is rejected.
-5. **ModelProvider -> upstream**: the gateway reads the ModelProvider's `spec.endpoint`, `spec.type`, and credentials to forward the request.
+5. **ModelProvider -> upstream**: the gateway reads the ModelProvider's `spec.endpoint`, `spec.type`, and credentials to forward the request. The namespace must also be in the ModelProvider's `allowedNamespaces`.
 
 This chain ensures that an agent can only reach ModelProviders explicitly listed in its spec, which in turn must be in the AgentClass's `allowedProviders` and must include the agent's namespace in `allowedNamespaces`. All three access checks (Agent -> ModelProvider -> Namespace) must pass.
+
+### Gateway-only tier (TokenReview)
+
+Existing workloads that authenticate with a projected ServiceAccount bearer token have **no Agent resource**, so steps 2–4 above do not apply. Routing is governed by the ModelProvider's own allowlist plus its model list:
+
+1. **Token -> namespace**: `TokenReview` yields the caller's authenticated namespace (see [Mode 2](#mode-2--serviceaccount-bearer-token-gateway-only-tier)).
+2. **Model name -> ModelProvider**: the gateway parses the `provider/model` qualified name from the request body. The provider prefix must resolve to an existing `ModelProvider` by `metadata.name`; if not, the request is rejected with `400 invalid_request`.
+3. **Namespace allowlist**: the caller's namespace must match a `ModelProvider.spec.allowedNamespaces` entry (exact name or glob). If not, the request is rejected with `403 access_denied`.
+4. **Model allowlist**: the requested model must appear in `ModelProvider.spec.models`. If not, the request is rejected with `400 invalid_request`.
+5. **Forward**: the gateway reads `spec.endpoint`, `spec.type`, and credentials and forwards the request.
+
+**AgentClass `allowedProviders` is deliberately not enforced in this tier.** AgentClass is the platform-team policy layer for the full-lifecycle tier; gateway-only workloads are not Agents and are not associated with any AgentClass. Platform teams who need class-scoped provider policy must onboard workloads through the full Agent lifecycle tier. The gateway-only tier trades that policy surface for a zero-CRD on-ramp — see [VISION.md § What Agentry Provides](./VISION.md#what-agentry-provides) and [ARCHITECTURE.md § Deployment Model](./ARCHITECTURE.md#deployment-model).
 
 ---
 
@@ -320,13 +344,50 @@ Pre-call token estimation is not used for budget gating (it adds latency and is 
 
 When the primary provider fails (network error, 5xx, timeout), the gateway walks `ModelProvider.spec.fallback` in order. A **budget-blocked primary does not trigger fallback** — the gateway returns `429 budget_exhausted` to the agent immediately (see Request Flow step 5). This keeps budget enforcement predictable: a namespace at its cap does not silently drain budget from a fallback provider.
 
-1. Verify the fallback provider has the **same `spec.type`** as the primary provider (e.g., both `anthropic`, or both `openai-compatible`). If the types differ, the fallback is skipped. This constraint exists because the gateway does not translate between API formats — see [Request Format Detection](#request-format-detection) above.
-2. Verify the namespace is in the fallback provider's `allowedNamespaces`.
-3. Verify the requested model exists in the fallback provider's `models`.
-4. Check the fallback provider's budget state for the agent's namespace. If the fallback is budget-blocked, skip it and try the next fallback in the list (or return an error if no more fallbacks remain). This applies only while walking the chain after a non-budget primary failure — a budget-blocked *primary* never reaches this step (see above).
-5. Forward the request with the fallback provider's credentials.
+For each candidate provider (primary or a fallback entry) the gateway performs these checks before forwarding:
 
-Fallback chains up to a configurable depth. If provider A's fallback is B, and B has a fallback to C, the gateway tries A -> B -> C. The maximum depth is controlled by the gateway-level `maxFallbackDepth` setting (default: 3), configured via the Helm value `gateway.maxFallbackDepth`, which sets the `AGENTRY_MAX_FALLBACK_DEPTH` environment variable on the gateway Deployment. If the chain is exhausted or the depth cap is reached without a successful response, the gateway returns an error. The depth cap prevents unbounded latency from long fallback chains. Circular references are rejected at reconcile time by the [ModelProviderReconciler](./CONTROLLER_RECONCILERS.md#modelproviderreconciler), so the gateway does not need runtime cycle detection.
+1. Verify the candidate provider has the **same `spec.type`** as the primary provider (e.g., both `anthropic`, or both `openai-compatible`). If the types differ, the candidate is skipped. This constraint exists because the gateway does not translate between API formats — see [Request Format Detection](#request-format-detection) above.
+2. Verify the namespace is in the candidate provider's `allowedNamespaces`.
+3. Verify the requested model exists in the candidate provider's `models`.
+4. Check the candidate provider's budget state for the agent's namespace. If the candidate is budget-blocked, skip it and continue the walk. This applies only while walking the chain after a non-budget primary failure — a budget-blocked *primary* never reaches this step (see above).
+5. Forward the request with the candidate provider's credentials.
+
+### Traversal algorithm
+
+`ModelProvider.spec.fallback` is a list, and each entry may carry its own `spec.fallback` list, so the chain is a tree rather than a flat sequence. The gateway walks it **depth-first in declared order**:
+
+```
+tryWithFallbacks(provider, request, attemptCount, visited):
+    if attemptCount >= maxFallbackDepth:       # cap on total providers tried
+        return error("fallback_depth_exhausted")
+    if provider.name in visited:               # runtime dedup, defense in depth
+        return error("cycle_detected")
+    visited.add(provider.name)
+    attemptCount += 1
+
+    if not eligible(provider, request):        # type, allowedNamespaces, models, budget (steps 1–4)
+        # skip without consuming another attempt slot is NOT correct:
+        # an eligibility-skipped provider still counts as an attempt so a long
+        # chain of ineligible fallbacks cannot silently balloon latency.
+        # The ineligible provider counted above; fall through to its children.
+    else:
+        response = forward(provider, request)
+        if response.ok:
+            return response
+
+    for next in provider.spec.fallback:        # declared order, depth-first
+        result = tryWithFallbacks(next, request, attemptCount, visited)
+        if result.ok:
+            return result
+
+    return error("all_fallbacks_exhausted")
+```
+
+### Depth cap semantics
+
+`maxFallbackDepth` (default `3`, set via Helm `gateway.maxFallbackDepth` → `AGENTRY_MAX_FALLBACK_DEPTH`) bounds the **total number of providers attempted per request, including the primary** — not the nesting depth of the tree. With the default, the gateway tries at most the primary plus two others before giving up, regardless of how the fallback tree is shaped. This is the latency guarantee: no single request can wait on more than `maxFallbackDepth` provider round-trips.
+
+If the chain is exhausted or the cap is reached without a successful response, the gateway returns `502 provider_error`. Circular references are rejected at reconcile time by the [ModelProviderReconciler](./CONTROLLER_RECONCILERS.md#modelproviderreconciler), so cycles should never reach the gateway; the runtime `visited` check is defense in depth.
 
 **Same-type constraint**: this is validated at reconcile time by the ModelProviderReconciler. Each provider in the fallback chain must have the same `spec.type` as the primary provider (e.g., all `anthropic` or all `openai-compatible`). A ModelProvider with `type: anthropic` cannot list a fallback with `type: openai`. Cross-format fallback may be considered for a future version if there is sufficient demand, but the translation surface area (streaming, tool use, system prompts, multimodal content) is large and error-prone.
 

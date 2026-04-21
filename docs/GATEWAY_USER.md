@@ -76,32 +76,23 @@ The `SendReply` method is used for async response delivery: when `responseMode: 
 When an Agent is in the `Hibernated` phase, its Service has no endpoints. The gateway serves as the activator:
 
 1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
-2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service) to signal a wake request. **This call is HTTPS.** The controller serves its activator endpoint with a cert-manager-issued `Certificate` (`agentry-controller-tls`) signed by the same `Issuer` (`agentry-issuer` in `agentry-system`) that signs the gateway cert, so the gateway verifies the controller's cert against the Agentry CA. HMAC auth (see [Activator Authentication](#activator-authentication)) runs inside the TLS tunnel.
-3. The controller transitions the Agent from `Hibernated` to `Resuming` and recreates the Pod. See [Agent State Machine](./CONTROLLER_LIFECYCLE.md#agent-persistent-mode) for the full lifecycle.
+2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service) to signal a wake request. **This call is mTLS over HTTPS.** The controller serves its activator endpoint with a cert-manager-issued `Certificate` (`agentry-controller-tls`) signed by the same `ClusterIssuer` (`agentry-ca-issuer`) that signs the gateway cert, so the gateway verifies the controller's cert against the Agentry CA and the controller verifies the gateway's client cert against the same CA. See [Activator Authentication](#activator-authentication).
+3. The activator handler (served on every controller replica) patches `agentry.io/wake=true` on the target Agent via the apiserver. The leader's existing Agent watch observes the annotation and runs the manual-wake path in `AgentReconciler` step 8, which transitions the Agent from `Hibernated` to `Resuming` and recreates the Pod. The handler does not need to be on the leader — any replica that receives the POST can patch the annotation, and the leader picks it up through the watch. See [Agent State Machine](./CONTROLLER_LIFECYCLE.md#agent-persistent-mode) for the full lifecycle and [CONTROLLER_RECONCILERS.md § Operator Structure](./CONTROLLER_RECONCILERS.md#operator-structure) for the handler wiring.
 4. The gateway waits for the Pod to become Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), then delivers the message. If the timeout is exceeded:
    - **Sync mode**: the gateway returns HTTP 504 to the webhook caller.
    - **Async mode**: the gateway delivers a `wake_timeout` error payload to `callbackUrl` (if configured, with retries) or stores it at the polling endpoint under the original `requestId`. The error expires after 1 hour, same as successful responses. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the error payload schema.
-5. **Controller unreachable**: if the gateway cannot reach the controller's activator endpoint at all (connection refused, TLS handshake fails, 5xx after one internal retry, or HMAC rejection from a key-rotation mismatch outside the transition window), the wake cannot be attempted. The Agent remains `Hibernated`. In sync mode, the gateway returns `504 Gateway Timeout` with an error body carrying `error.type: controller_unavailable` and `retryable: true`. In async mode, the gateway delivers a `controller_unavailable` error payload to `callbackUrl` (with retries) or stores it at the polling endpoint. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed). Already-`Running` agents are unaffected — this failure mode only impacts wake-on-demand.
+5. **Controller unreachable**: if the gateway cannot reach the controller's activator endpoint at all (connection refused, TLS handshake fails, client-cert authorization rejection, or 5xx after one internal retry), the wake cannot be attempted. The Agent remains `Hibernated`. In sync mode, the gateway returns `504 Gateway Timeout` with an error body carrying `error.type: controller_unavailable` and `retryable: true`. In async mode, the gateway delivers a `controller_unavailable` error payload to `callbackUrl` (with retries) or stores it at the polling endpoint. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed). Already-`Running` agents are unaffected — this failure mode only impacts wake-on-demand.
 
 **Sync-mode retry risk**: in sync mode, if the wake takes longer than the webhook caller's HTTP timeout (commonly 30-60s, shorter than the default `wakeTimeout` of 2 minutes), the caller receives 504 and will typically retry the webhook call. The gateway treats the retry as a new delivery and posts the message to the agent again — potentially with the same `messageId` if the caller preserves it. Agents with `hibernationEnabled: true` must deduplicate on `messageId` — see [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
 ### Activator Authentication
 
-The activator endpoint is authenticated to prevent unauthorized wake-ups from arbitrary Pods in the cluster. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api) for the full HMAC scheme.
+The activator endpoint authenticates callers via **mTLS** — there is no shared-secret layer on top of TLS. The controller's activator listener requires a client certificate on every connection:
 
-The operator generates a shared HMAC key on installation and stores it in a Secret in `agentry-system` (`agentry-activator-key`). Both the controller and gateway read this Secret:
+- The gateway presents its `agentry-gateway-tls` cert as the client cert when calling `POST /v1/activate/{namespace}/{agentName}`.
+- The controller verifies the client cert against the Agentry CA (`agentry-ca`) and authorizes the request only if the cert's SAN matches the gateway Service DNS (`agentry-gateway.agentry-system.svc.cluster.local` or `.svc`). Any other SAN — even one signed by `agentry-ca` — is rejected with `403 Forbidden`.
 
-- The gateway includes an `Authorization: Bearer <HMAC(timestamp:namespace:agentName)>` header with each activation request, plus an `X-Agentry-Timestamp` header.
-- The controller validates the HMAC signature and rejects requests with timestamps older than 30 seconds (replay window).
-
-This ensures only the gateway (which holds the shared key) can trigger agent wake-ups.
-
-**HMAC key rotation**: the `agentry-activator-key` Secret stores two fields: `current-key` and `previous-key` (base64-encoded random bytes). When the operator rotates the key (configurable interval, default: 30 days):
-1. The operator writes the new key to `current-key` and moves the old value to `previous-key`.
-2. Both the gateway and controller watch the Secret. When they pick up the change, they accept HMAC signatures validated against **either** key.
-3. After a configurable transition window (default: 60 seconds, `hmacKeyTransitionWindow`), the operator removes `previous-key`.
-
-This key-ring approach eliminates the failure window that would otherwise occur between the two components independently picking up the new Secret — during the transition window, either key is valid. If `previous-key` is absent (first install or after the transition window has elapsed), only `current-key` is used for both signing and verification.
+cert-manager rotates both certs continuously from `agentry-ca-issuer`; there is no separate Secret to manage or rotate. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api) for the matching SAN authorization rules on the reverse direction (controller → gateway activity API).
 
 ---
 
@@ -109,7 +100,7 @@ This key-ring approach eliminates the failure window that would otherwise occur 
 
 The gateway maintains per-agent activity timestamps in-memory, updated on every LLM request, channel message delivery, and agent heartbeat. This avoids per-request etcd writes: v1 targets 1000 Agents/AgentTasks per cluster, and the in-memory store is deliberately designed to scale an order of magnitude higher without a design change as future versions grow the target. The controller uses this data to evaluate idle and hibernation transitions — see [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection).
 
-The gateway exposes an internal endpoint for the controller to query activity state. The endpoint serves **HTTPS** using the gateway's `agentry-gateway-tls` Certificate; the controller trusts the Agentry CA (`agentry-ca`) to verify. On top of TLS, the endpoint uses the same HMAC authentication as the activator endpoint (shared key from `agentry-activator-key` Secret) — see [Activator Authentication](#activator-authentication).
+The gateway exposes an internal endpoint for the controller to query activity state. The endpoint serves **HTTPS** using the gateway's `agentry-gateway-tls` Certificate and **requires an mTLS client cert on this path**. The controller presents its `agentry-controller-tls` cert; the gateway verifies against `agentry-ca` and authorizes only if the client cert's SAN matches the controller Service DNS (`agentry-controller.agentry-system.svc.cluster.local` or `.svc`). There is no separate shared-secret or bearer-token layer on top of the mTLS tunnel. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
 
 **`GET /v1/activity?namespace={ns}`**
 
