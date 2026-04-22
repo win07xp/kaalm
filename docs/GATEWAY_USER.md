@@ -36,11 +36,15 @@ On poll (`GET /v1/channels/responses/{requestId}?channelPath=...`), any gateway 
 7. **Response (sync mode, default)**: the agent returns a response envelope; the gateway returns it as the webhook HTTP response body.
 8. **Response (async mode)**: the agent returns a response envelope; the gateway POSTs it to the configured `callbackUrl` (with retries) or stores it for polling retrieval via `GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}` — see [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed).
 
+   **`callbackUrl` re-validation on delivery**: before each POST attempt to `callbackUrl` (both the initial attempt and each retry), the gateway re-resolves the host and re-checks it against the blocked IP ranges from [AgentChannel validation rule 22](./API_RESOURCES.md#cross-resource-validation). This defeats DNS rebinding between reconcile-time validation and delivery. If the host now resolves to a blocked range (loopback, link-local, RFC1918, unique-local IPv6, cloud metadata, or anything outside `gateway.callbackUrl.allowlist` when set), the delivery attempt is not dialed — the gateway instead stores a `callback_invalid` error payload at the polling endpoint (or drops the callback if polling is unavailable) and records the AgentChannel `Warning` event `reason=CallbackInvalid`. The error is delivered to the polling endpoint per async rules; retries are not attempted for a host that fails validation.
+
 ---
 
 ## TLS and Ingress
 
 The User Gateway listener on `:8080` serves TLS using the same `agentry-gateway-tls` Certificate as the LLM listener — both listeners share a single cert whose SAN set covers the gateway's in-cluster Service DNS names. No plaintext path exists on the gateway; all webhook, activator, activity, and async-polling traffic is TLS end-to-end.
+
+**Listener separation**: port 8080 serves only externally-reachable channel traffic — webhook intake under `/channels/*` and the async polling fallback under `/v1/channels/responses/*`. All internal mTLS-authenticated endpoints (`/v1/activity`, `/v1/channels/health`) live on the LLM Gateway listener on `:8443`. This split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert. See [GATEWAY_LLM.md § TLS on the LLM Gateway Listener](./GATEWAY_LLM.md#tls-on-the-llm-gateway-listener) for the 8443 endpoint set.
 
 **Recommended Ingress configuration**: external webhook traffic arrives at a cluster Ingress that terminates TLS with the cluster's public certificate and then connects to the gateway backend. Two Ingress modes are supported; operators pick one:
 
@@ -68,6 +72,8 @@ type ChannelAdapter interface {
 ```
 
 The `SendReply` method is used for async response delivery: when `responseMode: async`, the gateway calls `SendReply` to POST the agent's response to the configured `callbackUrl` after the agent has processed the message. For sync mode, `SendReply` is not called — the response is returned inline as the HTTP response body. Discord and WhatsApp adapters (v1.1) will use `SendReply` for all responses since those platforms are inherently asynchronous.
+
+The webhook adapter's `SendReply` applies the `callbackUrl` allowlist/blocklist check before dialing — see step 8 in [Request Flow](#user-gateway--request-flow) and [rule 22](./API_RESOURCES.md#cross-resource-validation). The check is inside `SendReply` (not in a shared middleware) so each adapter can apply transport-appropriate rules if v1.1 adapters call into non-HTTP destinations.
 
 ---
 

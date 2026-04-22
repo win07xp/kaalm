@@ -193,13 +193,23 @@ egress:
     ports:
       - port: 8443      # All agent→gateway TLS traffic (LLM calls, heartbeats, task completion)
         protocol: TCP
-  - to:                    # DNS
-    - namespaceSelector: {}
+  - to:                    # DNS — scoped to kube-dns in kube-system
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
     ports:
       - port: 53
+        protocol: UDP
+      - port: 53
+        protocol: TCP
 ```
 
 Agent containers that attempt to call LLM providers directly are blocked at the NetworkPolicy level. No service mesh or L7-capable CNI is required for this guarantee — standard Kubernetes NetworkPolicy is sufficient because the enforcement is cross-Pod. Both gateway listeners serve TLS using the same `agentry-gateway-tls` certificate: the LLM Gateway on port 8443 and the User Gateway on port 8080. External webhook traffic arrives via Ingress configured for backend re-encrypt or TLS pass-through, so there is no plaintext hop anywhere in the data path.
+
+The DNS egress rule above is scoped to `kubernetes.io/metadata.name: kube-system` + `k8s-app: kube-dns`, which matches the upstream kube-dns/CoreDNS labelling used by kubeadm, EKS, GKE, AKS, and the standard CoreDNS chart. Clusters whose DNS Pod uses a different namespace or label set (custom CoreDNS chart, NodeLocal DNSCache only) must override the selector — the reconciler exposes this as the Helm value `controller.networkPolicy.dnsSelector` (an object with `namespaceLabels` and `podLabels` keys) on the synthesized per-agent NetworkPolicy. An untrusted agent must not be able to reach arbitrary Pods on port 53; the previous `namespaceSelector: {}` rule allowed exactly that and is no longer acceptable.
 
 ---
 
@@ -288,6 +298,7 @@ Agentry does **not** log prompts or completions. LLM payloads are sensitive (may
 | Budget guardrails exceeded under high concurrency | Budgets are documented as soft limits with bounded overspend; hard caps at the provider account level recommended for strict requirements |
 | Compromised gateway writes malicious ConfigMaps to user namespaces | Per-task dynamic Roles scope gateway ConfigMap write access to only `{taskName}-completion` in the task's namespace, for the task's lifetime. No blanket namespace access — a compromised gateway cannot write arbitrary ConfigMaps. |
 | Malicious message from channel platform | Webhook adapter authenticates inbound events (bearer token, HMAC signature) before processing |
+| Developer uses `AgentChannel.spec.webhook.callbackUrl` as SSRF against internal cluster services (e.g., `kubernetes-dashboard.kube-system`, cloud metadata at 169.254.169.254) | The gateway has stronger egress than any user namespace, so an unrestricted `callbackUrl` would let the developer turn the gateway into a confused deputy. The AgentChannelReconciler enforces at admission/reconcile time that `callbackUrl` uses `https://` and that its host does not resolve to loopback, link-local, RFC1918, unique-local IPv6, or cloud-metadata IPs (see [API_RESOURCES.md § Cross-Resource Validation rule 22](./API_RESOURCES.md#cross-resource-validation)). The gateway re-resolves the host and re-applies the check on every delivery attempt to defeat DNS rebinding (see [GATEWAY_USER.md § Request Flow step 8](./GATEWAY_USER.md#user-gateway--request-flow)). Platform teams may replace the deny-internal default with an explicit allowlist via the Helm value `gateway.callbackUrl.allowlist`. |
 | Agent spoofs namespace to bypass budget/access controls (mTLS tier) | Namespace is extracted from the cert SAN, signed by `agentry-ca`. Agents use `{name}.{namespace}.svc.cluster.local`; AgentTasks use `{name}.{namespace}.task.agentry.io`. An agent cannot forge a cert for a different namespace (the CA key is not reachable from any agent Pod). Two additional defenses specifically prevent a dotted-name label-shift bypass: (1) Agent and AgentTask `metadata.name` are restricted to DNS-1123 **label** form (no dots) by CRD CEL — see [API_RESOURCES.md § Cross-Resource Validation rule 21](./API_RESOURCES.md#cross-resource-validation); and (2) the gateway's SAN parser requires the exact label count for each shape (5 for Service-DNS, 4 for `.task.agentry.io`) and rejects any cert whose SAN has extra labels — see [GATEWAY_LLM.md § Namespace Identification § Mode 1](./GATEWAY_LLM.md#mode-1--mtls-client-certificate-agentry-managed-pods). Source-IP → Pod cross-check validates the cert identity against the actual source Pod; all checks must agree. |
 | Agent spoofs namespace (gateway-only-tier, token auth) | Namespace is extracted from the token's `status.user.username` returned by `TokenReview`, which the apiserver signs. An agent cannot forge a token for a different namespace — the token's signature is checked by the apiserver, not the gateway. Source-IP → Pod cross-check validates the Pod's actual namespace matches. Both cryptographic (apiserver signature) and topological (source IP) attestation must agree. |
 | Gateway-only tenant uses a provider their AgentClass would have denied in the mTLS tier | **Expected behavior, not a vulnerability.** The gateway-only tier is deliberately not gated by AgentClass — those workloads have no Agent resource and therefore no `allowedProviders` to consult. Access control reduces to `ModelProvider.spec.allowedNamespaces` plus `spec.models`. Platform teams who need class-scoped provider policy must onboard workloads through the full Agent lifecycle tier. See [Provider Routing § Gateway-only tier](./GATEWAY_LLM.md#provider-routing). |

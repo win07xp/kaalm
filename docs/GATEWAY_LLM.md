@@ -202,6 +202,8 @@ When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the pr
 
 **Activity API path also requires mTLS.** `GET /v1/activity` is served on the same gateway TLS listener but requires a client cert whose SAN matches the controller Service DNS (`agentry-controller.agentry-system.svc.cluster.local` or `.svc`). The controller presents its `agentry-controller-tls` cert. Agent/AgentTask certs are rejected on this path because their SANs do not match — defense in depth against a compromised agent using a valid CA-signed cert to query activity data across namespaces. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
 
+**`/v1/channels/health` is served on this listener too.** Like `/v1/activity`, it requires an mTLS client cert whose SAN matches the controller Service DNS, and the same SAN-authorization rule applies (requests from gateway, agent, or AgentTask certs are rejected). It lives on port 8443 — **not** the externally-exposed User listener on 8080 — so that Ingress fronting 8080 cannot route an untrusted caller to this endpoint. See [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress) for the listener-split rationale and [API_ENDPOINTS.md § GET /v1/channels/health](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only).
+
 **Agent health probes and TLS**: because the agent serves HTTPS on `$AGENTRY_HEALTH_PORT` (using the same per-agent certificate), the readiness and liveness probes injected by the AgentReconciler must set `httpGet.scheme: HTTPS`. Kubernetes `httpGet` probes do not verify TLS certificates, so no additional CA configuration is required on the probe. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
 `$AGENTRY_GATEWAY_ENDPOINT` is an `https://` URL — TLS is not optional.
@@ -342,7 +344,23 @@ Pre-call token estimation is not used for budget gating (it adds latency and is 
 
 ## Fallback Logic
 
-When the primary provider fails (network error, 5xx, timeout), the gateway walks `ModelProvider.spec.fallback` in order. A **budget-blocked primary does not trigger fallback** — the gateway returns `429 budget_exhausted` to the agent immediately (see Request Flow step 5). This keeps budget enforcement predictable: a namespace at its cap does not silently drain budget from a fallback provider.
+When the primary provider returns a **fallbackable** response, the gateway walks `ModelProvider.spec.fallback` in order. A **budget-blocked primary does not trigger fallback** — the gateway returns `429 budget_exhausted` to the agent immediately (see Request Flow step 5). This keeps budget enforcement predictable: a namespace at its cap does not silently drain budget from a fallback provider.
+
+### Fallback triggers
+
+Not every upstream error is a fallback signal — a malformed prompt sent to provider A will fail identically on provider B, so forwarding it just wastes latency and budget. The gateway classifies upstream outcomes as follows:
+
+| Upstream response | Action | Rationale |
+|---|---|---|
+| Connection error / DNS failure / TLS handshake failure | Fall back | Upstream is unreachable; a different provider may be reachable. |
+| Timeout before any response bytes | Fall back | Treated like a connection error — the request never landed. |
+| `5xx` | Fall back | Upstream-side failure; retrying the same upstream would hit the same failure. |
+| `429` (upstream-side rate limit) | Fall back | Distinct from the gateway's own `429 rate_limited`, which is returned to the caller without fallback. Upstream 429 indicates the primary's capacity is exhausted, and a different provider will often succeed. |
+| `401` / `403` from upstream | Fall back **and** emit a `Warning` event with `reason=CredentialsInvalid` on the primary ModelProvider. If a subsequent health probe still sees 401/403, the reconciler sets `Ready=False, reason=CredentialsInvalid`. | Upstream refuses the credential. Falling back preserves availability while signalling to the platform team that rotation or re-issuance is needed. |
+| `400` / `422` (malformed or unprocessable request) | Return to caller unchanged; **do not fall back** | The request itself is malformed; fallback will fail for the same reason. Consumes one attempt slot. |
+| Other `4xx` | Return to caller unchanged; do not fall back | Client-side error surface — the caller should fix the request. |
+
+The distinction matters most at the `4xx` boundary: `429` (transient capacity) and `401/403` (credential problem, often fixable by switching provider) fall back; `400/422` (caller-driven) do not. This avoids turning a bad-prompt bug into a cross-provider retry storm that drains budget across every fallback.
 
 For each candidate provider (primary or a fallback entry) the gateway performs these checks before forwarding:
 
@@ -374,6 +392,8 @@ tryWithFallbacks(provider, request, attemptCount, visited):
         response = forward(provider, request)
         if response.ok:
             return response
+        if not isFallbackable(response):        # see Fallback triggers table above
+            return response                      # pass 400/422/other 4xx back to caller
 
     for next in provider.spec.fallback:        # declared order, depth-first
         result = tryWithFallbacks(next, request, attemptCount, visited)
@@ -382,6 +402,8 @@ tryWithFallbacks(provider, request, attemptCount, visited):
 
     return error("all_fallbacks_exhausted")
 ```
+
+`isFallbackable(response)` encapsulates the table above: it returns true for connection/DNS/TLS errors, pre-stream timeouts, any `5xx`, upstream `429`, and upstream `401`/`403` (with the credential-warning side effect); false for `400`, `422`, and other `4xx`. Non-fallbackable responses are passed through to the caller verbatim and do not consume additional chain attempts, because continuing the walk would both waste latency and be wrong — no other provider will succeed with the same bad request.
 
 ### Depth cap semantics
 

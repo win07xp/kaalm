@@ -10,7 +10,7 @@ Agent→gateway endpoints authenticate via **mTLS** (Agentry-managed Agent/Agent
 
 The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints (served on the LLM Gateway listener at port 8443 for agent-initiated calls, and reserved on the User Gateway listener to prevent webhook path collisions):
 
-- `/v1/` — all current and future gateway-internal endpoints (task completion, heartbeat, async polling, channel health, activator)
+- `/v1/` — all current and future gateway-internal endpoints (task completion, heartbeat, async polling, channel health, activity). The controller's `POST /v1/activate/{namespace}/{agentName}` lives on the controller Service (port 9443), not the gateway, and is therefore unreachable from a webhook path regardless of this rule.
 
 AgentChannels whose `spec.webhook.path` begins with `/v1/` are rejected at reconcile time with `Ready=False, reason=ReservedPath`. The recommended developer convention is to use `/channels/` as a prefix (e.g., `/channels/team-support/support-assistant`).
 
@@ -203,7 +203,14 @@ Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s 
 
 Served over HTTPS on the User Gateway listener (port 8080, TLS using `agentry-gateway-tls` — same certificate used by the LLM listener). External callers reach it through the cluster Ingress that fronts port 8080; see [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress).
 
-Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel (i.e., the value of `channelId` from the 202 response body). The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request via the same mechanism as the original webhook (`AgentChannel.spec.webhook.auth`). Callers must preserve the `channelId` value from the 202 response and pass it as `channelPath` on poll — it should not be constructed independently.
+Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel (i.e., the value of `channelId` from the 202 response body). The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request. Callers must preserve the `channelId` value from the 202 response and pass it as `channelPath` on poll — it should not be constructed independently.
+
+Poll requests carry no body, so the auth contract differs slightly from the original webhook:
+
+- **`auth.type: bearer`** — the poll request presents the same bearer token in `Authorization: Bearer …` as configured on the AgentChannel (`AgentChannel.spec.webhook.auth.bearerToken`).
+- **`auth.type: hmac`** — the poll request computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}"` (unix seconds, no trailing newline), sends the hex-encoded digest in the configured `header` (same header name as the original webhook), and presents the timestamp in a dedicated `X-Agentry-Timestamp` header. The HMAC input is **not** the request body (poll GETs have none). Requests with clock skew greater than 300s against the gateway's wall clock are rejected with `401 Unauthorized`.
+
+`401 Unauthorized` is returned on any auth failure; `403 Forbidden` is returned if the presented credentials are valid for a different channel than `channelPath`.
 
 Any gateway replica accepts this request. The replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`.
 
@@ -218,6 +225,8 @@ Stored responses are retained for 1 hour in the ConfigMap, after which they are 
 ---
 
 ## `GET /v1/channels/health` (internal — controller use only)
+
+**Served on the LLM Gateway listener (port 8443), not the User listener.** Port 8080 only serves inbound webhook traffic (`/channels/*`) and the async polling fallback (`/v1/channels/responses/*`); mTLS-authenticated internal endpoints live on 8443 alongside `/v1/activity`. This listener split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert.
 
 Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated via **mTLS** — the caller must present the controller's `agentry-controller-tls` client cert, verified against `agentry-ca`, with a SAN that matches the controller Service DNS. There is no bearer token or HMAC header. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
 
