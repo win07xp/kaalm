@@ -210,7 +210,9 @@ Poll requests carry no body, so the auth contract differs slightly from the orig
 - **`auth.type: bearer`** — the poll request presents the same bearer token in `Authorization: Bearer …` as configured on the AgentChannel (`AgentChannel.spec.webhook.auth.bearerToken`).
 - **`auth.type: hmac`** — the poll request computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}"` (unix seconds, no trailing newline), sends the hex-encoded digest in the configured `header` (same header name as the original webhook), and presents the timestamp in a dedicated `X-Agentry-Timestamp` header. The HMAC input is **not** the request body (poll GETs have none). Requests with clock skew greater than 300s against the gateway's wall clock are rejected with `401 Unauthorized`.
 
-`401 Unauthorized` is returned on any auth failure; `403 Forbidden` is returned if the presented credentials are valid for a different channel than `channelPath`.
+**Channel-match assertion on response retrieval:** after authenticating the caller against the AgentChannel identified by `channelPath`, and *before* returning the stored payload, the gateway asserts that the `agentry-async-{requestId}` ConfigMap's `agentry.io/channel-namespace` and `agentry.io/channel-name` labels match that same AgentChannel. This prevents a caller authenticated for channel A from retrieving a response that was stored by channel B — `requestId`s are UUIDs but are not secrets, so without this check an attacker holding channel A's credentials plus any channel B `requestId` could read B's response. A mismatch returns `403 Forbidden` with no body.
+
+`401 Unauthorized` is returned on any auth failure; `403 Forbidden` is returned if the presented credentials are valid for a different channel than `channelPath`, **or** if the `requestId`'s stored response was originated by a different channel than `channelPath`.
 
 Any gateway replica accepts this request. The replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`.
 

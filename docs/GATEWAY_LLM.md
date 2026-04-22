@@ -362,12 +362,19 @@ Not every upstream error is a fallback signal — a malformed prompt sent to pro
 
 The distinction matters most at the `4xx` boundary: `429` (transient capacity) and `401/403` (credential problem, often fixable by switching provider) fall back; `400/422` (caller-driven) do not. This avoids turning a bad-prompt bug into a cross-provider retry storm that drains budget across every fallback.
 
-For each candidate provider (primary or a fallback entry) the gateway performs these checks before forwarding:
+For each candidate provider (primary or a fallback entry) the gateway performs these checks before forwarding. The checks split into two kinds with different effects on the `attemptCount` budget:
+
+**Static eligibility** — derived from configuration alone, unchanged between requests:
 
 1. Verify the candidate provider has the **same `spec.type`** as the primary provider (e.g., both `anthropic`, or both `openai-compatible`). If the types differ, the candidate is skipped. This constraint exists because the gateway does not translate between API formats — see [Request Format Detection](#request-format-detection) above.
 2. Verify the namespace is in the candidate provider's `allowedNamespaces`.
 3. Verify the requested model exists in the candidate provider's `models`.
-4. Check the candidate provider's budget state for the agent's namespace. If the candidate is budget-blocked, skip it and continue the walk. This applies only while walking the chain after a non-budget primary failure — a budget-blocked *primary* never reaches this step (see above).
+
+A static-eligibility failure is a misconfiguration (usually discoverable at reconcile time). The gateway **skips the candidate without consuming an `attemptCount` slot** and emits a `Warning` event with `reason=FallbackIneligible` on the primary `ModelProvider`, naming the offender and the specific failure (e.g., `"fallback 'openai-backup' skipped: namespace 'team-ml' not in allowedNamespaces"`). Silently burning attempt slots on misconfigured fallbacks hides the problem and makes the misconfiguration indistinguishable from upstream outages in metrics; surfacing it as a status event makes it fixable.
+
+**Runtime gating** — derived from request-time state:
+
+4. Check the candidate provider's budget state for the agent's namespace. If the candidate is budget-blocked, skip it and **do** consume an `attemptCount` slot. This applies only while walking the chain after a non-budget primary failure — a budget-blocked *primary* never reaches this step (see above). Budget state is legitimately runtime, and slot-bounded latency still matters.
 5. Forward the request with the candidate provider's credentials.
 
 ### Traversal algorithm
@@ -376,18 +383,28 @@ For each candidate provider (primary or a fallback entry) the gateway performs t
 
 ```
 tryWithFallbacks(provider, request, attemptCount, visited):
-    if attemptCount >= maxFallbackDepth:       # cap on total providers tried
-        return error("fallback_depth_exhausted")
     if provider.name in visited:               # runtime dedup, defense in depth
         return error("cycle_detected")
     visited.add(provider.name)
+
+    if not staticallyEligible(provider, request):   # type, allowedNamespaces, models (checks 1–3)
+        # Static misconfiguration. Do NOT consume an attempt slot.
+        # Emit Warning event reason=FallbackIneligible on the PRIMARY
+        # (not this provider) so the platform team sees the misconfig on
+        # the ModelProvider they own.
+        emitFallbackIneligible(primary, provider, reason)
+        # Do not walk children of a type-mismatched provider either —
+        # validation guarantees same-type chains, so children should be
+        # reachable via an eligible ancestor.
+        return error("statically_ineligible")
+
+    if attemptCount >= maxFallbackDepth:       # cap on total providers tried
+        return error("fallback_depth_exhausted")
     attemptCount += 1
 
-    if not eligible(provider, request):        # type, allowedNamespaces, models, budget (steps 1–4)
-        # skip without consuming another attempt slot is NOT correct:
-        # an eligibility-skipped provider still counts as an attempt so a long
-        # chain of ineligible fallbacks cannot silently balloon latency.
-        # The ineligible provider counted above; fall through to its children.
+    if budgetBlocked(provider, request.namespace):  # runtime gate (check 4)
+        # Consumed a slot; fall through to children.
+        pass
     else:
         response = forward(provider, request)
         if response.ok:
@@ -404,6 +421,8 @@ tryWithFallbacks(provider, request, attemptCount, visited):
 ```
 
 `isFallbackable(response)` encapsulates the table above: it returns true for connection/DNS/TLS errors, pre-stream timeouts, any `5xx`, upstream `429`, and upstream `401`/`403` (with the credential-warning side effect); false for `400`, `422`, and other `4xx`. Non-fallbackable responses are passed through to the caller verbatim and do not consume additional chain attempts, because continuing the walk would both waste latency and be wrong — no other provider will succeed with the same bad request.
+
+`FallbackIneligible` is surfaced as a Kubernetes `Warning` event on the primary `ModelProvider`, not returned to the caller as a 5xx — the caller's request continues walking the tree. The event exists so platform teams see the misconfiguration on the `ModelProvider` resource (`kubectl describe modelprovider …`) rather than discovering it only via an elevated fallback failure rate in metrics. The `ModelProviderReconciler` also emits this event at reconcile time when it detects static eligibility violations in the declared chain — see [ModelProviderReconciler step 5](./CONTROLLER_RECONCILERS.md#modelproviderreconciler).
 
 ### Depth cap semantics
 
@@ -450,12 +469,12 @@ The gateway Pod's readiness probe (`GET /readyz` on the internal health port) re
 
 1. The **LLM listener** on `:8443` is bound and accepting TLS connections. The probe performs a local dial to confirm.
 2. The **User listener** on `:8080` is bound and accepting TLS connections (both listeners use the `agentry-gateway-tls` certificate). The probe performs a local TLS dial to confirm.
-3. The **Pod informer** cache has completed its initial sync (`cache.WaitForCacheSync` returned true). Until this is true, namespace identification and provider routing would fail or misroute.
+3. **All informer caches** the request path depends on have completed their initial sync (`cache.WaitForCacheSync` returned true for each): `Pod` (source-IP → namespace resolution), `Agent` and `AgentTask` (provider-routing ownerRef resolution, hibernation-state checks), `AgentChannel` (webhook path → target Agent lookup), `ModelProvider` (model validation, `allowedNamespaces`, fallback chain traversal). Until every cache is synced, namespace identification, provider routing, and channel routing would either fail or return spurious `404` / `403` / `invalid_request` responses while caches hydrate.
 4. The **gateway serving certificate** (`agentry-gateway-tls`) has been loaded from disk. On startup, the gateway reads the mounted Secret; if the Secret does not yet exist (cert-manager has not issued it), readiness fails. This matters on initial chart install where the Pod may start before cert-manager completes issuance.
 
-Any single failure above returns `503 Service Unavailable` with a body listing which checks failed. Kubernetes retries the probe per the Pod's `readinessProbe.periodSeconds` (default 10s) until the gateway is fully ready, which keeps the gateway Pod out of the Service's endpoints during the startup window. The same four checks feed the "Gateway not ready" row in [Failure Modes](#failure-modes).
+Any single failure above returns `503 Service Unavailable` with a body listing which checks failed. Kubernetes retries the probe per the Pod's `readinessProbe.periodSeconds` (default 10s) until the gateway is fully ready, which keeps the gateway Pod out of the Service's endpoints during the startup window. The same checks feed the "Gateway not ready" row in [Failure Modes](#failure-modes).
 
-Because both listeners and the informer must be green for the probe to pass, the Service never receives traffic for a listener that would error at connection time or for a Pod that cannot yet resolve source IPs to namespaces.
+Because both listeners and every dependent informer must be green for the probe to pass, the Service never receives traffic for a listener that would error at connection time or for a Pod that cannot yet resolve source IPs to namespaces, map ownerRefs to Agents/AgentTasks, look up AgentChannels, or validate requested models.
 
 ---
 
@@ -480,7 +499,7 @@ For User Gateway metrics, see [GATEWAY_USER.md](./GATEWAY_USER.md#observability)
 |---|---|
 | Gateway replica crashes | Other replicas continue; Kubernetes restarts the crashed replica |
 | All gateway replicas down | LLM calls from agents fail; up to 10s of spend data may be lost (see [Budget State Management](#budget-state-management)) |
-| Gateway replica not ready (listener dial fails, informer not synced, or cert not yet issued) | Readiness probe returns 503; replica excluded from Service endpoints until all checks pass. See [Gateway Readiness](#gateway-readiness) |
+| Gateway replica not ready (listener dial fails, any of the dependent informers not synced — Pod, Agent, AgentTask, AgentChannel, ModelProvider — or cert not yet issued) | Readiness probe returns 503; replica excluded from Service endpoints until all checks pass. See [Gateway Readiness](#gateway-readiness) |
 | Provider API down | Fallback chain walked (same-type providers only, up to `maxFallbackDepth` depth); if all providers in the chain fail, request fails with `502 provider_error` |
 | Budget exhausted | Request blocked (`429 budget_exhausted` with `Retry-After` header) or degraded per policy; Warning event emitted on ModelProvider |
 | `TokenReview` apiserver unreachable (mode 2 only) | Gateway returns `503 Service Unavailable` to the caller for requests that miss the token cache; mTLS requests and cached-token requests are unaffected |

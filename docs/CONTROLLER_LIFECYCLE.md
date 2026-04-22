@@ -76,8 +76,8 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 
 | From -> To | Trigger |
 |---|---|
-| Pending -> Provisioning | References validated, AgentClass resolved |
-| Provisioning -> Running | Pod reports Ready, Service endpoint populated |
+| Pending -> Provisioning | References validated, AgentClass resolved, per-Agent `Certificate` created |
+| Provisioning -> Running | Per-Agent `Certificate` reaches `Ready=True`, Pod is created and reports Ready, Service endpoint populated. Provisioning waits on the `Certificate` before creating the Pod so the Pod never hangs on a missing projected Secret — see [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 4. |
 | Running -> Idle | `lastActivityTime` older than `idleTimeout` |
 | Idle -> Running | Activity observed (see [Activity Detection](#activity-detection)) |
 | Idle -> Hibernating | Idle for `hibernationDelay` (defaults from AgentClass) AND `hibernationEnabled` |
@@ -119,7 +119,7 @@ Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On w
 When an Agent is `Hibernated`, its ClusterIP Service has no endpoints — traffic is not routed. The gateway serves as the activator:
 1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
 2. The gateway calls `POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service over HTTPS (the controller's activator endpoint is TLS-protected using a cert-manager-issued `Certificate` signed by the Agentry `ClusterIssuer`; the gateway verifies it against the Agentry CA). See [CONTROLLER_RECONCILERS.md § Controller TLS](./CONTROLLER_RECONCILERS.md#operator-structure).
-3. The activator handler (served on every controller replica) patches `agentry.io/wake=true` on the target Agent via the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` runs the manual-wake path (step 8) to transition the Agent to `Resuming` and recreate the Pod. The Service round-robins the POST across replicas, but any replica that receives it can drive the wake because the signal is an annotation on the resource rather than an in-memory call on the leader. See [CONTROLLER_RECONCILERS.md § Operator Structure](./CONTROLLER_RECONCILERS.md#operator-structure).
+3. The activator handler (served on every controller replica) patches `agentry.io/wake=true` on the target Agent via the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` runs the manual-wake path (step 9) to transition the Agent to `Resuming` and recreate the Pod. The Service round-robins the POST across replicas, but any replica that receives it can drive the wake because the signal is an annotation on the resource rather than an in-memory call on the leader. See [CONTROLLER_RECONCILERS.md § Operator Structure](./CONTROLLER_RECONCILERS.md#operator-structure).
 4. The gateway holds the message and sends a "typing" or "processing" indicator to the channel platform while waiting. Once the Pod is Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), the gateway delivers the message. If the timeout is exceeded, the gateway returns an appropriate error to the channel platform.
 5. **Controller unreachable**: if the gateway cannot reach the controller's activator endpoint at all, the wake is not attempted and the Agent remains `Hibernated`. The gateway surfaces this to the caller as an HTTP `504` (sync) or a `controller_unavailable` async error — see [GATEWAY_USER.md § Failure Modes](./GATEWAY_USER.md#failure-modes) for the full behavior.
 
@@ -127,7 +127,7 @@ Manual wake is also supported via annotation: `kubectl annotate agent foo agentr
 - If the agent is in any non-`Hibernated` phase, the annotation is removed immediately and a Warning event (`reason=WakeIgnored`) is emitted without changing phase.
 - If the agent is `Hibernated`, the reconciler transitions it to `Resuming` and recreates the Pod. The annotation is removed **only after** the transition to `Resuming` has been committed. If the status update or the subsequent Pod recreation fails and the reconcile is requeued, the annotation is left in place so the next reconcile pass can re-observe the wake intent.
 
-See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 8 for the implementation detail.
+See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 9 for the implementation detail.
 
 ### Spec change handling (Running Agent)
 
@@ -224,7 +224,7 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
 
 **Finalizer duties:**
 
-- **Agent**: on delete, gracefully terminate the Pod (send SIGTERM, wait up to `terminationGracePeriodSeconds`), optionally delete PVC per AgentClass reclaim policy.
+- **Agent**: on delete, gracefully terminate the Pod (send SIGTERM, wait up to `terminationGracePeriodSeconds`), then delete or retain the PVC per `AgentClass.spec.persistence.pvcRetention`. This field controls what happens to the per-Agent PVC when the Agent is deleted; it is distinct from `PersistentVolume.persistentVolumeReclaimPolicy` (which governs PV fate on PVC deletion) and the two operate independently.
 - **AgentTask**: on delete, terminate the Pod, clean up ConfigMaps.
 - **ModelProvider**: on delete, reject if any Agent or AgentTask still references it (reference resolution rules in [Cross-Resource Validation](./API_RESOURCES.md#cross-resource-validation)); otherwise remove gateway credential configuration.
 - **AgentClass**: on delete, reject if any Agent or AgentTask still references it.
@@ -232,6 +232,7 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
   1. The reconciler sets `status.phase = Terminating` on the AgentChannel.
   2. The gateway sees the phase change via its watch and drops the platform connection.
   3. The gateway writes an `agentry.io/channel-disconnected: "true"` annotation on the AgentChannel to confirm disconnection.
-  4. The reconciler watches for this annotation. Once observed (or after a bounded timeout of 30s if the gateway is unavailable), the reconciler removes the finalizer and the resource is deleted. The timeout prevents indefinite blocking if the gateway is down.
+  4. The reconciler deletes all `agentry-async-*` ConfigMaps in `agentry-system` matching label selector `agentry.io/channel-namespace={ns},agentry.io/channel-name={name}`. This is explicit because cross-namespace ownerRefs do not trigger Kubernetes GC, so without this sweep the channel's stored async responses would be orphaned until their 1-hour annotation expiry.
+  5. The reconciler watches for the disconnect annotation from step 3. Once observed (or after a bounded timeout of 30s if the gateway is unavailable), the reconciler removes the finalizer and the resource is deleted. The timeout prevents indefinite blocking if the gateway is down.
 
 Finalizers prevent accidental deletion of cluster-scoped resources that would break running workloads.

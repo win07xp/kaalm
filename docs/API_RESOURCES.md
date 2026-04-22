@@ -65,7 +65,10 @@ spec:
     defaultSizeGi: 5
     maxSizeGi: 50
     storageClassName: "standard"   # k8s StorageClass
-    reclaimPolicy: Delete          # Delete | Retain
+    # What happens to the per-Agent PVC when the Agent is deleted. Distinct from
+    # PersistentVolume.persistentVolumeReclaimPolicy (which governs PV fate on
+    # PVC deletion) — this field controls PVC fate on Agent deletion.
+    pvcRetention: Delete           # Delete | Retain
 
   # Provider access: which ModelProviders may agents of this class reference?
   # Empty list = no providers allowed.
@@ -501,9 +504,12 @@ spec:
   webhook:
     # The gateway exposes this path externally (requires an Ingress pointing
     # at the gateway Service in agentry-system).
-    # Must begin with /channels/{namespace}/ — enforced by CRD schema:
+    # Must begin with /channels/{namespace}/ — enforced by CRD schema via a
+    # root-scoped CEL validation (Kubernetes CEL cannot read metadata.namespace
+    # from a field-scoped rule, so the validation is attached at the object
+    # root):
     #   x-kubernetes-validations:
-    #     - rule: "self.webhook.path.startsWith('/channels/' + self.__namespace__ + '/')"
+    #     - rule: "self.spec.webhook.path.startsWith('/channels/' + self.metadata.namespace + '/')"
     #       message: "webhook path must begin with /channels/{namespace}/"
     path: /channels/team-support/support-assistant
     # Auth type: "bearer" or "hmac". CRD schema enforces:
@@ -615,7 +621,7 @@ status:
 - **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
 - **Webhook auth types**: `bearer` validates a static token from the `Authorization` header against the value in `secretRef`. `hmac` validates a request body signature: the gateway reads the signature from the configured `header` (e.g., `X-Hub-Signature-256`), computes `HMAC(algorithm, secret, request_body)` using the shared secret from `hmac.secretRef`, and compares the values using constant-time comparison. HMAC is preferred for integrations where the calling platform signs payloads (GitHub, Stripe, Twilio) — it avoids exposing a static token in every request.
 - **Poll-endpoint auth** (async response mode): `GET /v1/channels/responses/{requestId}` reuses the same `webhook.auth` configuration, but the HMAC input differs because poll GETs have no body. For `auth.type: hmac`, the caller computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}"` (unix seconds, LF delimiter, no trailing newline), sends the hex-encoded digest in the configured `header`, and presents the timestamp in `X-Agentry-Timestamp`. The gateway rejects requests whose timestamp differs from its wall clock by more than 300s to bound replay. For `auth.type: bearer`, the poll presents the same bearer token in `Authorization: Bearer …`. See [Async Webhook Response § polling fallback](./API_ENDPOINTS.md#async-webhook-response-gateway-managed).
-- **Webhook path namespace scoping**: `spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` is the AgentChannel's own namespace. This is enforced at apply time via CEL, eliminating cross-tenant path conflicts by construction. Within a namespace, paths must be unique (see validation rules 15-16 in [Cross-Resource Validation](#cross-resource-validation)).
+- **Webhook path namespace scoping**: `spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` is the AgentChannel's own namespace. This is enforced at apply time via a root-scoped CEL rule (`self.spec.webhook.path.startsWith('/channels/' + self.metadata.namespace + '/')`) — attached at the object root because Kubernetes CEL cannot reach `metadata.namespace` from a field-scoped rule. Namespace-scoping eliminates cross-tenant path conflicts by construction. Within a namespace, paths must be unique (see validation rules 15-16 in [Cross-Resource Validation](#cross-resource-validation)). The gateway routes webhook traffic only to AgentChannels with `status.conditions[type=Ready].status == True` — `Ready=False` channels (including the `PathConflict` loser) receive no traffic; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow).
 - **Delivery counts are not in status.** Per-message counters require either a status patch on every delivery (high etcd write pressure at scale) or a separate in-memory accumulation mechanism. Instead, delivery volume is tracked via the Prometheus metric `agentry_channel_messages_total{channel_type,namespace,status}` exposed by the gateway. Status reflects channel health (phase, conditions) — not traffic volume.
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
 - **Credentials stay in the agent's namespace.** Unlike LLM provider credentials (which live in `agentry-system`), channel credentials (webhook auth tokens, etc.) are stored in the agent's namespace for organizational isolation. They are typically created by the platform team or a provisioning service, not by the developer. The gateway reads them via scoped RBAC and holds them in-process for the channel adapter.
@@ -648,7 +654,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 12. `ModelProvider.spec.fallback` entries must have the same `spec.type` as the primary provider (no cross-format fallback).
 13. `AgentChannel.spec.agentRef` must resolve to an existing Agent.
 14. The referenced Agent must have `spec.service.enabled: true` for an AgentChannel to be valid.
-15. `AgentChannel.spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` matches the AgentChannel's own namespace. This is enforced at apply time via CEL (`self.webhook.path.startsWith('/channels/' + self.__namespace__ + '/')`). Namespace-scoping eliminates cross-tenant path conflicts by construction — two namespaces cannot claim the same path prefix. Within a namespace, paths must still be unique; on conflict, the reconciler marks the newer AgentChannel (by `creationTimestamp`) as `Ready=False, reason=PathConflict`.
+15. `AgentChannel.spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` matches the AgentChannel's own namespace. This is enforced at apply time via a root-scoped CEL rule (`self.spec.webhook.path.startsWith('/channels/' + self.metadata.namespace + '/')`) — the rule is attached at the object root rather than on the `spec.webhook.path` field, because Kubernetes CEL validations can only reach `metadata.namespace` when scoped at the object root. Namespace-scoping eliminates cross-tenant path conflicts by construction — two namespaces cannot claim the same path prefix. Within a namespace, paths must still be unique; on conflict, the reconciler marks the newer AgentChannel (by `creationTimestamp`) as `Ready=False, reason=PathConflict`, and the gateway routes webhook traffic only to AgentChannels whose `status.conditions[type=Ready].status == True` (see [GATEWAY_USER.md § Request Flow step 4](./GATEWAY_USER.md#user-gateway--request-flow)).
 16. `AgentChannel.spec.webhook.path` must not begin with `/v1/`. This is subsumed by rule 15 (the enforced `/channels/` prefix inherently avoids `/v1/`), but retained as an explicit validation for defense in depth. See [Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths).
 17. `AgentTask` with `spec.completion.condition: exitCode` must not declare `spec.artifacts`. Artifact collection requires the `POST /v1/task/complete` payload, which is only available in `agentReported` mode. Enforced via CRD schema validation (CEL).
 18. `ModelProvider.budget.policies[x].degradeTo` must match a model `id` in the same ModelProvider's `spec.models` list. A missing target model would cause silent routing failures when the budget threshold is crossed.

@@ -86,7 +86,7 @@ Dev's team hits their monthly Anthropic budget on the 25th. The gateway starts r
 
 ### S11: Clean teardown on delete
 
-Dev `kubectl delete agent my-support-agent`. The controller drains in-flight requests, gracefully shuts down the Pod with SIGTERM, runs the finalizer, and only then removes the resource. The PVC is deleted if `persistentVolumeReclaimPolicy: Delete` is set; otherwise it is retained.
+Dev `kubectl delete agent my-support-agent`. The controller drains in-flight requests, gracefully shuts down the Pod with SIGTERM, runs the finalizer, and only then removes the resource. The PVC is deleted if `AgentClass.spec.persistence.pvcRetention: Delete` is set; otherwise it is retained. (This is Agentry's PVC-on-Agent-delete policy and is independent of any `PersistentVolume.persistentVolumeReclaimPolicy` on the underlying PV.)
 
 ---
 
@@ -123,7 +123,7 @@ These scenarios drive specific design requirements:
 - **S8** requires AgentTask with a defined completion condition (agent-reported via gateway), timeout, and artifact collection in the completion payload.
 - **S9** is not a v1 acceptance criterion but informs the resource model — task and persistent agents should be built from shared primitives.
 - **S10** requires the controller to surface ModelProvider errors as Agent status conditions.
-- **S11** requires finalizers and configurable PVC reclaim policy.
+- **S11** requires finalizers and the configurable `AgentClass.spec.persistence.pvcRetention` field (`Delete | Retain`), which is distinct from the Kubernetes `PersistentVolume.persistentVolumeReclaimPolicy` and operates independently.
 - **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener. Discord and WhatsApp adapters are deferred to v1.1. For S12 specifically, the recommended v1 path is to start from one of the starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) and replace the agent logic — the template already implements the runtime contract (HTTPS serving, client-cert mTLS, cert-file reload, `messageId` dedup).
 - **S14** requires the gateway's authenticated activator to integrate with the User Gateway path for wake-on-demand of hibernated agents.
 - **S15** requires the User Gateway to support async webhook response mode with callback delivery and a polling fallback endpoint.
