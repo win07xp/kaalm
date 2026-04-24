@@ -212,7 +212,7 @@ Agentry ships as a Helm chart that installs:
 - A `Certificate` for the controller's activator endpoint (`agentry-controller-tls`).
 - One `Certificate` per Agent, created by the AgentReconciler at provisioning time and owned by the Agent resource via ownerRef.
 - One `Certificate` per AgentTask, created by the AgentTaskReconciler at provisioning time and owned by the AgentTask resource via ownerRef.
-- A `trust-manager` `Bundle` resource that projects the Agentry CA as a ConfigMap into every namespace that hosts an Agent or AgentTask; agent Pods mount it at `/var/run/agentry/ca.crt` to verify the gateway's TLS cert.
+- A `trust-manager` `Bundle` resource (`agentry-ca`) that projects the Agentry CA as a ConfigMap into every namespace selected by `target.namespaceSelector.matchExpressions: [{ key: kubernetes.io/metadata.name, operator: NotIn, values: [kube-system, kube-public, kube-node-lease] }]`. This default covers all user namespaces (including future ones added after install) without requiring the operator to label namespaces. Agent and AgentTask Pods mount this ConfigMap at `/var/run/agentry/ca.crt` to verify the gateway's TLS cert. Platform teams that need a tighter projection (specific namespaces only) can override the selector via the Helm value `trustManager.bundleSelector` (an object with `matchLabels` / `matchExpressions` keys passed verbatim into the `Bundle`'s `target.namespaceSelector`).
 
 Admission webhooks are not used; the cert-manager dependency is solely for TLS lifecycle management.
 

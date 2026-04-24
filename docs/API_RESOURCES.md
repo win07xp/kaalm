@@ -454,14 +454,12 @@ status:
   startTime: "2026-04-05T11:05:12Z"
   completionTime: "2026-04-05T11:30:42Z"
   podName: "fix-issue-342-xk9p2"
-  # Artifact values captured into status (small) or referenced by ConfigMap name (large).
+  # Artifact values captured inline. Oversize artifacts are rejected by the
+  # gateway with HTTP 413; agents must externalize large outputs and pass a
+  # reference URL inline (see design notes below).
   artifactValues:
     pr-url: "https://github.com/acme/widgets/pull/587"
     summary: "Fixed null pointer in WidgetService.get(). Added regression test."
-  # For large artifacts, a ConfigMap or ObjectRef is used instead:
-  # artifactRefs:
-  #   - name: build-log
-  #     configMapRef: { name: fix-issue-342-build-log }
   agentReportedStatus: "success"
   agentReportedMessage: "PR opened successfully"
 ```
@@ -470,7 +468,7 @@ status:
 
 - **`metadata.name` must be a DNS-1123 label** — same constraint and rationale as [Agent](#design-notes). Enforced via CRD CEL: `x-kubernetes-validations: [{rule: "self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')", message: "AgentTask name must be a DNS-1123 label (no dots)"}]`. The gateway extracts namespace from the `{name}.{namespace}.task.agentry.io` SAN shape by splitting on `.` and reading label index 1; a dotted task name would shift the namespace label and defeat identification. See [Namespace Identification § Mode 1](./GATEWAY_LLM.md#namespace-identification).
 - **`completion.condition: agentReported` is the v1 default.** The agent container calls the gateway's completion endpoint with a status payload that may include artifact key-value pairs. This is more flexible than exit codes alone because the agent can report structured metadata and artifacts in a single call. See [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) for the endpoint spec.
-- **Artifact collection via completion payload**: artifacts are declared by name in the spec. The agent includes artifact values (keyed by name) in the `POST /v1/task/complete` body. The controller validates that all declared artifact names are present in the payload. This eliminates race conditions, removes the need for `pods/exec` RBAC, and keeps the artifact contract simple. Artifact size limits still apply (4 KiB per artifact, 32 KiB total inline; larger artifacts use ConfigMap references).
+- **Artifact collection via completion payload**: artifacts are declared by name in the spec. The agent includes artifact values (keyed by name) in the `POST /v1/task/complete` body. The controller validates that all declared artifact names are present in the payload. This eliminates race conditions, removes the need for `pods/exec` RBAC, and keeps the artifact contract simple. Artifact size limits apply: 4 KiB per artifact, 32 KiB total. Oversize payloads are rejected at the gateway with HTTP 413; agents must externalize large outputs (object storage, Git, etc.) and place a reference URL in the artifact value. There is no auto-spill into ConfigMaps — the inline payload is the only delivery path.
 - **`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done. The CRD schema enforces this: `spec.completion.condition` accepts only `agentReported` and `exitCode` in v1 via `x-kubernetes-validations: [{rule: "self in ['agentReported', 'exitCode']", message: "webhook completion condition is not supported in v1"}]` — invalid values are rejected at apply time.
 - **`exitCode` does not support artifact collection.** Artifacts are collected via the `POST /v1/task/complete` payload, which is only used by `agentReported` mode. Declaring `spec.artifacts` with `completion.condition: exitCode` is rejected by CRD schema validation. Tasks using `exitCode` that need to produce output should write results to an external system (e.g., a Git repository, object storage) and rely on the container logs for status.
 - **`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.

@@ -84,7 +84,8 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 | Hibernating -> Hibernated | Pod scaled to 0, PVC retained, Service remains |
 | Hibernated -> Resuming | Gateway [Activator](./GATEWAY_USER.md#activator) calls `POST /v1/activate/{namespace}/{name}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
-| any -> Degraded | Provider unavailable, quota exhausted, other recoverable issue. The controller records the current phase in `status.preDegradedPhase` before transitioning. |
+| Running -> Provisioning | Spec drift (Agent or AgentClass) re-derives a Pod spec that differs in immutable Pod fields. See [Spec change handling](#spec-change-handling-running-agent) and [AgentClass change handling](#agentclass-change-handling-running-agent). |
+| any -> Degraded | Provider unavailable, quota exhausted, other recoverable issue, OR AgentClass change introduces a constraint that the Agent's spec violates (image no longer in `allowedImages`, provider no longer in `allowedProviders`). The controller records the current phase in `status.preDegradedPhase` before transitioning. |
 | Degraded -> {pre-degradation phase} | Underlying condition resolved. The controller restores the phase the Agent was in before entering Degraded (tracked in `status.preDegradedPhase`). The idle clock is not reset — the controller evaluates idleness against the gateway's activity timestamp, which is continuous through the Degraded period. If the pre-degradation phase was `Idle` and `hibernationDelay` has since elapsed, the agent transitions to `Hibernating` on the next reconcile. |
 | any -> Failed | Unrecoverable error (image pull failure after retries, invalid config, persistent crash loop) |
 | any -> Terminating | Deletion requested |
@@ -144,6 +145,18 @@ Changes to mutable fields (labels, annotations, non-structural metadata) are pat
 
 If the Agent is `Hibernated`, spec changes are applied on the next wake — no Pod exists to recreate.
 
+### AgentClass change handling (Running Agent)
+
+When an AgentClass field that affects already-provisioned child resources is changed (e.g., `resources.maxLimits` lowered, `security.podSecurityContext` tightened, `network.egress.allowedCIDRs` reduced, `image.allowedImages` narrowed, `allowedProviders` reduced), the AgentReconciler re-queues every Agent and AgentTask referencing the class via the existing `EnqueueRequestsFromMapFunc` watch (see [CONTROLLER_RECONCILERS.md § AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler)). For each affected workload the reconciler chooses one of two paths:
+
+**Recreate-and-clamp (default).** If the new AgentClass invariants can be applied by re-deriving the desired Pod spec — for example, clamping `resources.limits` down to the new `maxLimits`, applying tighter `securityContext`, regenerating the per-Agent `NetworkPolicy` from the new egress rules — the reconciler transitions the Agent to `Provisioning`, deletes the existing Pod (graceful SIGTERM honoring `terminationGracePeriodSeconds`), and creates a new Pod with the adjusted spec. The PVC, Service, ConfigMap, and Certificate are preserved. This mirrors the existing Agent spec-drift behavior; agents must tolerate restart.
+
+**Degrade-when-irreconcilable.** If the new invariants exclude the Agent's spec rather than just constrain its derived Pod spec — the workload's `spec.image` no longer matches `image.allowedImages`, or its `spec.providers` references a ModelProvider no longer in `allowedProviders` — the reconciler does not recreate the Pod. It transitions the Agent to `Degraded` with `reason=ClassConstraintViolation` and a message naming the offending field. The developer must update the Agent spec to comply; the controller resumes normal operation on the next reconcile after the Agent spec is reconciled with the class. The pre-Degraded phase is preserved in `status.preDegradedPhase` per the standard Degraded handling.
+
+Hibernated Agents apply the new invariants on their next wake — recreation happens automatically as the wake path provisions a new Pod from the (now-clamped) desired spec. AgentTasks in `Running` or `Provisioning` follow the same logic; tasks already in `Succeeded`, `Failed`, or `TimedOut` are unaffected.
+
+Bulk impact: tightening AgentClass policy on a class with many Agents triggers a rolling Pod restart of every affected workload that falls into the recreate-and-clamp path. Platform teams that need staged rollouts should split tightening across multiple AgentClasses (e.g., `standard-v2`) and migrate Agents incrementally rather than mutating an in-use class.
+
 ---
 
 ## AgentTask
@@ -200,7 +213,7 @@ Any state → Terminating (on delete or after TTL)
 - `agentReported`: the gateway receives [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) from the agent container. The gateway writes the completion payload (status, message, and artifact key-values) to a ConfigMap named `{taskName}-completion` in the task's namespace. The reconciler watches for this ConfigMap and transitions to `Completing`. Using a ConfigMap (rather than a Pod annotation) ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass.
 - `exitCode`: the reconciler watches Pod phase; exit 0 -> Succeeded, non-zero -> Failed.
 
-**Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required. Artifacts exceeding the inline size limit (4 KiB per artifact, 32 KiB total) are stored in a separate auto-created ConfigMap and referenced by name in `status.artifactRefs`.
+**Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required. Oversize artifacts (>4 KiB per artifact or >32 KiB total) are rejected at the gateway with HTTP 413; agents must externalize large outputs (object storage, Git, etc.) and pass a reference URL inline. There is no auto-spill mechanism and no `status.artifactRefs` field.
 
 **Retry mechanics**: when `spec.completion.backoffLimit > 0` and the task transitions to `Failed` with `status.retries` below the limit:
 1. The reconciler increments `status.retries`.

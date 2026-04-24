@@ -194,7 +194,7 @@ The LLM Gateway listener serves TLS to protect LLM request and response payloads
 
 When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the projected volume in any Pod that mounts it, and the consumer (gateway, controller, agent) reloads from disk. The gateway watches `agentry-gateway-tls` for changes; starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) demonstrate the inotify-based reload pattern that custom images must implement.
 
-**Agent trust bundle**: every agent Pod mounts the Agentry CA at `/var/run/agentry/ca.crt` (the `$AGENTRY_CA_CERT` env var points at this path). This is a projected volume sourced from a ConfigMap projected into the agent's namespace by `trust-manager`. The Helm chart installs a `trust-manager` `Bundle` resource whose source is the `agentry-ca` Secret in `agentry-system` and whose target writes a ConfigMap named `agentry-ca` into every namespace selected by the bundle (all namespaces where Agents or AgentTasks run). Agent HTTP clients must trust this CA when calling `$AGENTRY_GATEWAY_ENDPOINT`. Starter templates handle this. `trust-manager` is a required dependency alongside cert-manager — see [Deployment Model](./ARCHITECTURE.md#deployment-model).
+**Agent trust bundle**: every agent Pod mounts the Agentry CA at `/var/run/agentry/ca.crt` (the `$AGENTRY_CA_CERT` env var points at this path). This is a projected volume sourced from a ConfigMap projected into the agent's namespace by `trust-manager`. The Helm chart installs a `trust-manager` `Bundle` resource whose source is the `agentry-ca` Secret in `agentry-system` and whose target writes a ConfigMap named `agentry-ca` into every non-system namespace selected by the bundle's `target.namespaceSelector` (default excludes `kube-system`, `kube-public`, `kube-node-lease`; overridable via the Helm value `trustManager.bundleSelector`) — see [ARCHITECTURE.md § Deployment Model](./ARCHITECTURE.md#deployment-model). Agent HTTP clients must trust this CA when calling `$AGENTRY_GATEWAY_ENDPOINT`. Starter templates handle this. `trust-manager` is a required dependency alongside cert-manager.
 
 **CA rotation**: cert-manager re-issues the root `agentry-ca` `Certificate` within `spec.renewBefore` of expiry. During the overlap window, the bundle Secret contains both the old and new CA certificates, so no leaf cert is ever trusted by only one side. Once cert-manager has rotated all leaves (gateway cert, controller cert, every per-agent cert) to be signed by the new root, the old CA falls out of the bundle automatically. No operator code is required for CA rotation — this was the main motivation for adopting cert-manager.
 
@@ -207,6 +207,21 @@ When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the pr
 **Agent health probes and TLS**: because the agent serves HTTPS on `$AGENTRY_HEALTH_PORT` (using the same per-agent certificate), the readiness and liveness probes injected by the AgentReconciler must set `httpGet.scheme: HTTPS`. Kubernetes `httpGet` probes do not verify TLS certificates, so no additional CA configuration is required on the probe. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
 
 `$AGENTRY_GATEWAY_ENDPOINT` is an `https://` URL — TLS is not optional.
+
+### Per-path client-auth enforcement
+
+The LLM listener on `:8443` serves three authentication regimes on a single TLS socket:
+
+1. **mTLS-required** for Agentry-managed Agent/AgentTask requests (Mode 1 — see [Namespace Identification](#namespace-identification)).
+2. **mTLS-optional** for gateway-only-tier `TokenReview` callers (Mode 2) who do not present a client cert.
+3. **mTLS-required-with-SAN-authorization** for the controller's `/v1/activity` and `/v1/channels/health` calls.
+
+A single `tls.Config.ClientAuth` value cannot express path-conditional requirements. The gateway therefore configures `ClientAuth: tls.VerifyClientCertIfGiven` at the handshake layer (so callers without a client cert can still complete the TLS handshake) and enforces per-path requirements in HTTP middleware:
+
+- `/v1/messages`, `/v1/chat/completions`, `/v1/completions`, `/v1/agent/heartbeat`, `/v1/task/complete`: if `r.TLS.PeerCertificates` is non-empty, follow the mTLS path (Mode 1 — extract namespace from SAN, enforce the SAN-shape and label-count rules). If empty, follow the bearer-token path (Mode 2 — `TokenReview`-validate the `Authorization: Bearer <token>` header). If both auth materials are absent, return `401 Unauthorized`. If both are present, the mTLS path wins and the bearer header is ignored — see [Namespace Identification](#namespace-identification).
+- `/v1/activity`, `/v1/channels/health`: require a client cert whose SAN matches the controller Service DNS. Empty `r.TLS.PeerCertificates` returns `401 Unauthorized`; a present-but-non-matching SAN returns `403 Forbidden`. There is no fallback to bearer-token auth on these paths — they are controller-only.
+
+Path-conditional middleware is the only correct way to express this on Go's `crypto/tls`: setting `RequireAndVerifyClientCert` on the listener would lock out gateway-only-tier callers (the TLS handshake would fail before the request reached the path router), and setting `NoClientCert` would silently downgrade the mTLS tier (cert presented but never verified).
 
 ### Agent Serving & Client TLS
 
