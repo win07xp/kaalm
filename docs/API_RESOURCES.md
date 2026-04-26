@@ -61,6 +61,10 @@ spec:
 
   # Persistence defaults
   persistence:
+    # When false, Agents and AgentTasks of this class cannot request a PVC —
+    # an Agent/AgentTask spec with persistence.enabled=true is rejected with
+    # Ready=False, reason=PersistenceNotAllowed at reconcile time. See rule 24
+    # in Cross-Resource Validation.
     enabled: true
     defaultSizeGi: 5
     maxSizeGi: 50
@@ -317,6 +321,8 @@ spec:
     limits:   { cpu: "1",    memory: "2Gi" }
 
   # Persistence: request a PVC mounted into the agent container.
+  # Setting enabled=true requires the referenced AgentClass to also have
+  # persistence.enabled=true — see rule 24 in Cross-Resource Validation.
   persistence:
     enabled: true
     sizeGi: 10
@@ -358,6 +364,7 @@ status:
   podName: "support-assistant-7d4b9f"
   pvcName: "support-assistant-memory"
   lastActivityTime: "2026-04-05T11:58:22Z"
+  phaseTransitionTime: "2026-04-05T08:00:00Z"   # set on every status.phase change
   hibernatedAt: null
   preDegradedPhase: null   # set on entry to Degraded, cleared on recovery
 ```
@@ -366,9 +373,10 @@ status:
 
 - **`metadata.name` must be a DNS-1123 label** — lowercase alphanumerics and `-` only, no dots, starting and ending with an alphanumeric. Enforced via CRD CEL: `x-kubernetes-validations: [{rule: "self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')", message: "Agent name must be a DNS-1123 label (no dots)"}]` on `metadata.name`. This is required so the gateway's cert-SAN namespace extraction is unambiguous: the gateway parses `{name}.{namespace}.svc.cluster.local` by splitting on `.` and reading label index 1. If a dotted name were allowed, a developer naming their Agent `admin.svc` in namespace `team-a` would produce the SAN `admin.svc.team-a.svc.cluster.local`, and label[1] would be `svc` rather than `team-a` — a namespace-identification bypass. The label-count check in the gateway (see [Namespace Identification § Mode 1](./GATEWAY_LLM.md#namespace-identification)) is defense in depth against this same pattern.
 - **Persistent is the only agent mode in v1.** AgentTask serves the ephemeral use case. If future modes (e.g., `scheduled` for cron-style agents) are needed, a `mode` field will be added to the Agent spec.
+- **`status.phaseTransitionTime`** is updated by the AgentReconciler on every `status.phase` change, in the same status patch that commits the new phase. It is distinct from the various `conditions[*].lastTransitionTime` fields, which can change on non-phase events (Ready toggling on PodNotReady, ProvidersReady changes, etc.) and so are not a reliable witness for "when did this Agent last change phase." The controller compares this timestamp against the gateway's `startedAt` to decide whether missing activity data should be treated as "unknown" versus genuine "no activity" — see [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) and [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api).
 - **`providers` is optional**. Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through `$AGENTRY_GATEWAY_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](./GATEWAY_LLM.md#provider-routing) for the full routing chain.
-- **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol.
-- **`service` is always ClusterIP**. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
+- **`activitySource`**: agents may not always have meaningful LLM traffic (could be polling, waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for the heartbeat protocol. **`agentHeartbeat` and `both` are intended for custom agent images that gate heartbeat emission on actual work.** Starter-template-based images should leave this at the default `gatewayTraffic` — the templates' unconditional 30s heartbeat would otherwise keep the agent's last-activity timestamp permanently fresh and prevent any `Idle`/`Hibernated` transition. See [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md).
+- **`service` is always ClusterIP.** `spec.service.port` is the Service-facing port (default 8080) and is the only field a developer can override. The synthesized Service's `targetPort` is **always** the value of `$AGENTRY_HEALTH_PORT` injected into the Pod (default 8080), which is the port the agent process actually binds. The two are decoupled deliberately: the agent only knows about `$AGENTRY_HEALTH_PORT`, and overriding `spec.service.port` to expose a different cluster-facing port (e.g., 80) does not require any agent-side change. Setting them to different values is supported and works correctly. The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 - **TLS environment variables**: the controller injects `$AGENTRY_CA_CERT` (path to the Agentry CA trust bundle), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the cert-manager-issued per-Agent cert and key) into every agent Pod. These cert/key files serve a dual purpose:
   - **Server TLS** (gateway→agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against `agentry-ca` on message delivery.
   - **Client TLS / mTLS** (agent→gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (LLM requests, heartbeats, and task completion), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
@@ -408,6 +416,8 @@ spec:
     limits:   { cpu: "2", memory: "4Gi" }
 
   # Scratch persistence for the task. Lifecycle is tied to the AgentTask.
+  # Setting enabled=true requires the referenced AgentClass to also have
+  # persistence.enabled=true — see rule 24 in Cross-Resource Validation.
   persistence:
     enabled: true
     sizeGi: 10
@@ -661,6 +671,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 21. `Agent.metadata.name` and `AgentTask.metadata.name` must be DNS-1123 **labels** — `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, no dots. Enforced at apply time via CRD CEL on both kinds. Kubernetes allows DNS-1123 *subdomain* names (which permit dots) on most namespaced resources; Agentry restricts Agent and AgentTask to the stricter label form so the gateway's cert-SAN namespace extraction (which reads label index 1 of the `.`-split SAN) cannot be tricked by a dotted name. See the Agent and AgentTask design notes above for the threat scenario and [Namespace Identification § Mode 1](./GATEWAY_LLM.md#namespace-identification) for the gateway's defense-in-depth label-count check.
 22. `AgentChannel.spec.webhook.callbackUrl`, when set, must use the `https://` scheme, and its host must not resolve to loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16, fe80::/10), RFC1918 private ranges (10/8, 172.16/12, 192.168/16), unique-local IPv6 (fc00::/7), or the cloud-metadata IPs 169.254.169.254 / fd00:ec2::254. Violations set `Ready=False, reason=InvalidCallbackUrl`. The AgentChannelReconciler performs the check at admission/reconcile time, and the gateway re-resolves the host and repeats the check on every delivery attempt to prevent DNS rebinding — see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow). The deny-internal default may be replaced with an explicit allowlist via the Helm value `gateway.callbackUrl.allowlist`.
 23. `AgentClass.spec.image.imagePullSecrets[*].name`, when referenced by an Agent or AgentTask, must exist as a Secret in the **referencing workload's namespace** at reconcile time. AgentClass is cluster-scoped but Secrets are namespace-scoped; the controller does not copy Secrets across namespaces. Missing Secrets set `Ready=False, reason=ImagePullSecretMissing` on the Agent/AgentTask with a message naming the namespace and secret, and the Pod is not created. Checked in AgentReconciler and AgentTaskReconciler — see [AgentClass design notes](#design-notes).
+24. `Agent.spec.persistence.enabled` and `AgentTask.spec.persistence.enabled` must not be `true` if the referenced AgentClass has `spec.persistence.enabled: false`. The class is the authority on whether persistence is allowed for workloads of that category — a developer cannot opt in to a PVC that the class disallows. Violations set `Ready=False, reason=PersistenceNotAllowed` on the Agent/AgentTask with a message naming the AgentClass, and the Pod is not created. Enforced at reconcile time by AgentReconciler and AgentTaskReconciler. CRD CEL cannot express this rule because it spans two resources and Kubernetes CEL validations on Agent cannot read AgentClass fields.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 

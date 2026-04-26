@@ -143,11 +143,12 @@ Existing workloads running in user namespaces (Deployments, StatefulSets, Jobs t
 Authorization: Bearer <projected-sa-token>
 ```
 
-On receipt, the gateway performs a `TokenReview`:
+On receipt, the gateway runs a Pod-ownership precheck **before** any token validation, then performs a `TokenReview`:
 
+0. **Pod-ownership precheck.** The gateway resolves the request's source IP to a Pod via its Pod informer cache. If the Pod has an `ownerRef` pointing to an `Agent` or `AgentTask` resource (or carries the Agentry-managed label set), the request is rejected with `401 Unauthorized` regardless of the bearer token presented. Agentry-managed Pods are required to use mTLS — SA-token auth is reserved for the gateway-only tier. This is what makes cert rotation the single revocation mechanism for the mTLS tier: a compromised Agent/AgentTask Pod cannot fall back to its projected ServiceAccount token to bypass cert revocation. The precheck runs before the `TokenReview` apiserver call so a hostile Pod cannot exploit `TokenReview` latency or unavailability.
 1. POST the token to `authentication.k8s.io/v1/tokenreviews`. Include the expected audience (`agentry-gateway`) so the apiserver rejects tokens minted for a different audience.
 2. On `status.authenticated: true`, parse `status.user.username`. It has the form `system:serviceaccount:<namespace>:<sa>`; the middle segment is the authoritative namespace.
-3. Cache the validation result keyed by the token's SHA-256 hash for the token's remaining lifetime (`status.expirationTimestamp` minus a 60s safety margin). Subsequent requests from the same token hit the cache and skip the apiserver roundtrip.
+3. Cache the validation result keyed by the token's SHA-256 hash for the token's remaining lifetime (`status.expirationTimestamp` minus a 60s safety margin). Subsequent requests from the same token hit the cache and skip the apiserver roundtrip. The Pod-ownership precheck is **not** cached — it re-runs on every request, since Pod identity at a given source IP can change.
 4. Perform the source-IP cross-check: the Pod at the request's source IP (from the Pod informer) must be in the namespace returned by `TokenReview`. This closes the gap where a stolen token could be used from a different Pod.
 
 The gateway's ServiceAccount needs `create` on `authentication.k8s.io/v1/tokenreviews` (cluster-scoped) — see [SECURITY.md § Gateway ServiceAccount](./SECURITY.md#gateway-serviceaccount-permissions).
@@ -218,7 +219,7 @@ The LLM listener on `:8443` serves three authentication regimes on a single TLS 
 
 A single `tls.Config.ClientAuth` value cannot express path-conditional requirements. The gateway therefore configures `ClientAuth: tls.VerifyClientCertIfGiven` at the handshake layer (so callers without a client cert can still complete the TLS handshake) and enforces per-path requirements in HTTP middleware:
 
-- `/v1/messages`, `/v1/chat/completions`, `/v1/completions`, `/v1/agent/heartbeat`, `/v1/task/complete`: if `r.TLS.PeerCertificates` is non-empty, follow the mTLS path (Mode 1 — extract namespace from SAN, enforce the SAN-shape and label-count rules). If empty, follow the bearer-token path (Mode 2 — `TokenReview`-validate the `Authorization: Bearer <token>` header). If both auth materials are absent, return `401 Unauthorized`. If both are present, the mTLS path wins and the bearer header is ignored — see [Namespace Identification](#namespace-identification).
+- `/v1/messages`, `/v1/chat/completions`, `/v1/completions`, `/v1/agent/heartbeat`, `/v1/task/complete`: if `r.TLS.PeerCertificates` is non-empty, follow the mTLS path (Mode 1 — extract namespace from SAN, enforce the SAN-shape and label-count rules). If empty, follow the bearer-token path (Mode 2 — first run the Pod-ownership precheck described in [Mode 2 § step 0](#mode-2--serviceaccount-bearer-token-gateway-only-tier) to reject Agent/AgentTask Pods, then `TokenReview`-validate the `Authorization: Bearer <token>` header). If both auth materials are absent, return `401 Unauthorized`. If both are present, the mTLS path wins and the bearer header is ignored — see [Namespace Identification](#namespace-identification).
 - `/v1/activity`, `/v1/channels/health`: require a client cert whose SAN matches the controller Service DNS. Empty `r.TLS.PeerCertificates` returns `401 Unauthorized`; a present-but-non-matching SAN returns `403 Forbidden`. There is no fallback to bearer-token auth on these paths — they are controller-only.
 
 Path-conditional middleware is the only correct way to express this on Go's `crypto/tls`: setting `RequireAndVerifyClientCert` on the listener would lock out gateway-only-tier callers (the TLS handshake would fail before the request reached the path router), and setting `NoClientCert` would silently downgrade the mTLS tier (cert presented but never verified).
@@ -397,9 +398,20 @@ A static-eligibility failure is a misconfiguration (usually discoverable at reco
 `ModelProvider.spec.fallback` is a list, and each entry may carry its own `spec.fallback` list, so the chain is a tree rather than a flat sequence. The gateway walks it **depth-first in declared order**:
 
 ```
-tryWithFallbacks(provider, request, attemptCount, visited):
+# Top-level entry called by the request handler:
+#   tryWithFallbacks(primary=primary, provider=primary, request, attemptCount=0, visited={})
+# `primary` is threaded unchanged through every recursive call so the
+# FallbackIneligible event is always emitted on the primary ModelProvider
+# (the resource the platform team owns and watches).
+# `attemptCount` is returned from every call so increments inside one subtree
+# are visible to the next sibling iteration — the depth cap counts attempts
+# across the entire tree, not per path. Without this thread-back, sibling
+# fallbacks would each restart from the caller's local count and the cap
+# could be violated along the breadth dimension.
+
+tryWithFallbacks(primary, provider, request, attemptCount, visited) -> (result, attemptCount):
     if provider.name in visited:               # runtime dedup, defense in depth
-        return error("cycle_detected")
+        return error("cycle_detected"), attemptCount
     visited.add(provider.name)
 
     if not staticallyEligible(provider, request):   # type, allowedNamespaces, models (checks 1–3)
@@ -411,10 +423,10 @@ tryWithFallbacks(provider, request, attemptCount, visited):
         # Do not walk children of a type-mismatched provider either —
         # validation guarantees same-type chains, so children should be
         # reachable via an eligible ancestor.
-        return error("statically_ineligible")
+        return error("statically_ineligible"), attemptCount
 
     if attemptCount >= maxFallbackDepth:       # cap on total providers tried
-        return error("fallback_depth_exhausted")
+        return error("fallback_depth_exhausted"), attemptCount
     attemptCount += 1
 
     if budgetBlocked(provider, request.namespace):  # runtime gate (check 4)
@@ -423,16 +435,16 @@ tryWithFallbacks(provider, request, attemptCount, visited):
     else:
         response = forward(provider, request)
         if response.ok:
-            return response
+            return response, attemptCount
         if not isFallbackable(response):        # see Fallback triggers table above
-            return response                      # pass 400/422/other 4xx back to caller
+            return response, attemptCount       # pass 400/422/other 4xx back to caller
 
     for next in provider.spec.fallback:        # declared order, depth-first
-        result = tryWithFallbacks(next, request, attemptCount, visited)
+        result, attemptCount = tryWithFallbacks(primary, next, request, attemptCount, visited)
         if result.ok:
-            return result
+            return result, attemptCount
 
-    return error("all_fallbacks_exhausted")
+    return error("all_fallbacks_exhausted"), attemptCount
 ```
 
 `isFallbackable(response)` encapsulates the table above: it returns true for connection/DNS/TLS errors, pre-stream timeouts, any `5xx`, upstream `429`, and upstream `401`/`403` (with the credential-warning side effect); false for `400`, `422`, and other `4xx`. Non-fallbackable responses are passed through to the caller verbatim and do not consume additional chain attempts, because continuing the walk would both waste latency and be wrong — no other provider will succeed with the same bad request.

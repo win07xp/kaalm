@@ -109,7 +109,7 @@ The reconciler updates `status.lastActivityTime` on the Agent only when a phase 
 
 **Gateway unavailability**: if all gateway replicas are unreachable, the controller preserves the Agent's current phase — no idle or hibernation transitions are made without activity data. The reconciler sets a `GatewayReachable=False` condition on affected Agents and requeues with backoff until the gateway recovers. If only some replicas are unreachable, the controller uses the data available from the reachable replicas.
 
-**Gateway restart**: each replica's `/v1/activity` response includes a `startedAt` timestamp. If a replica's `startedAt` is more recent than the Agent's last known phase transition time (i.e., that replica restarted while the agent was Running), the controller treats that replica's missing activity data as "unknown" — it uses data from other replicas, or defers if all replicas have restarted. No idle or hibernation transitions are made until at least one replica has been running for `idleTimeout`, at which point missing activity data from that replica can be interpreted as genuine inactivity.
+**Gateway restart**: each replica's `/v1/activity` response includes a `startedAt` timestamp. The controller compares this against the Agent's `status.phaseTransitionTime` (set by the AgentReconciler on every phase change — see [API_RESOURCES.md § Agent design notes](./API_RESOURCES.md#design-notes)). If a replica's `startedAt` is more recent than `status.phaseTransitionTime` (i.e., that replica restarted while the agent was Running), the controller treats that replica's missing activity data as "unknown" — it uses data from other replicas, or defers if all replicas have restarted. No idle or hibernation transitions are made until at least one replica has been running for `idleTimeout`, at which point missing activity data from that replica can be interpreted as genuine inactivity.
 
 ### Hibernation mechanics
 
@@ -210,7 +210,7 @@ Any state → Terminating (on delete or after TTL)
 | Succeeded/Failed/TimedOut -> Terminating | TTL expired OR deletion requested |
 
 **Completion detection** depends on `spec.completion.condition`:
-- `agentReported`: the gateway receives [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) from the agent container. The gateway writes the completion payload (status, message, and artifact key-values) to a ConfigMap named `{taskName}-completion` in the task's namespace. The reconciler watches for this ConfigMap and transitions to `Completing`. Using a ConfigMap (rather than a Pod annotation) ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass.
+- `agentReported`: the gateway receives [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) from the agent container. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace (created by the AgentTaskReconciler at provisioning time) with the completion payload (status, message, and artifact key-values). The reconciler watches the ConfigMap for changes and transitions to `Completing` once the payload is populated. Using a ConfigMap (rather than a Pod annotation) ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass.
 - `exitCode`: the reconciler watches Pod phase; exit 0 -> Succeeded, non-zero -> Failed.
 
 **Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required. Oversize artifacts (>4 KiB per artifact or >32 KiB total) are rejected at the gateway with HTTP 413; agents must externalize large outputs (object storage, Git, etc.) and pass a reference URL inline. There is no auto-spill mechanism and no `status.artifactRefs` field.
@@ -218,7 +218,7 @@ Any state → Terminating (on delete or after TTL)
 **Retry mechanics**: when `spec.completion.backoffLimit > 0` and the task transitions to `Failed` with `status.retries` below the limit:
 1. The reconciler increments `status.retries`.
 2. The existing Pod is deleted (it has already exited or will be terminated).
-3. The `{taskName}-completion` ConfigMap is deleted to clear stale completion data.
+3. The `{taskName}-completion` ConfigMap is reset to `data: {}` (the reconciler patches it back to empty rather than deleting and re-creating, so the existing ownerRef and the gateway's name-scoped `update, patch` Role remain valid for the retry).
 4. The PVC is retained — the retry runs with the same scratch storage.
 5. The task transitions back to `Provisioning` and a new Pod is created.
 6. If the retry also fails and `status.retries` equals `backoffLimit`, the task remains in `Failed` as a terminal state.

@@ -18,7 +18,7 @@ AgentChannels whose `spec.webhook.path` begins with `/v1/` are rejected at recon
 
 ## `POST /v1/task/complete` (AgentTask only)
 
-Called by the agent container to report task completion. The gateway writes the payload to a ConfigMap named `{taskName}-completion` in the task's namespace (owned by the AgentTask for cascade deletion). The AgentTaskReconciler watches for this ConfigMap to drive the Completing transition — see [AgentTask State Machine](./CONTROLLER_LIFECYCLE.md#agenttask).
+Called by the agent container to report task completion. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace — created by the AgentTaskReconciler at task provisioning time, owned by the AgentTask for cascade deletion — using the `update, patch`-only RBAC scoped to that exact ConfigMap name (see [Gateway ServiceAccount permissions](./SECURITY.md#gateway-serviceaccount-permissions)). The AgentTaskReconciler watches the ConfigMap for changes to drive the Completing transition — see [AgentTask State Machine](./CONTROLLER_LIFECYCLE.md#agenttask).
 
 **Request body:**
 
@@ -126,12 +126,18 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "channelId": "/channels/team-support/support-assistant",
   "status": "accepted",
   "message": "Message accepted for processing"
 }
 ```
 
-The `requestId` is a UUID identifying this async request. Callers must treat it as an opaque string — it should be used as-is in poll requests and must not be parsed or constructed independently.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `requestId` | string (UUID) | yes | Opaque identifier for this async request. Callers must use it as-is in poll requests and must not parse or construct it independently. |
+| `channelId` | string | yes | The webhook path of the originating AgentChannel. Callers must preserve this value and pass it (URL-encoded) as the `channelPath` query parameter on poll requests — see [polling fallback](#async-webhook-response-gateway-managed) below. |
+| `status` | string | yes | Always `"accepted"` for the immediate 202. |
+| `message` | string | no | Human-readable acknowledgement. |
 
 **Callback delivery** (gateway POSTs to `spec.webhook.callbackUrl`):
 
