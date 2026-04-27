@@ -16,6 +16,7 @@ This document describes the high-level architecture of Agentry: the control plan
 | [CONTROLLER_RECONCILERS.md](./CONTROLLER_RECONCILERS.md) | Operator structure, five reconcilers, error handling |
 | [CONTROLLER_LIFECYCLE.md](./CONTROLLER_LIFECYCLE.md) | State machines for Agent and AgentTask, finalizers |
 | [SECURITY.md](./SECURITY.md) | Trust model, RBAC, credential lifecycle, TLS, isolation |
+| [RUNTIME_CONTRACT.md](./RUNTIME_CONTRACT.md) | The contract a container image must satisfy to run as an Agent or AgentTask |
 | [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md) | Go and Python starter templates implementing the runtime contract |
 
 ## System Topology
@@ -28,53 +29,60 @@ This document describes the high-level architecture of Agentry: the control plan
                                            │ watches / reconciles
                                            │
         ┌──────────────────────────────────┴──────────────────────────────────┐
-        │                      Agentry Controller                             │
+        │             Agentry Controller   (agentry-system namespace)         │
         │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
         │  │ Agent Reconciler │  │ AgentTask Reconc │  │ Provider Reconc  │   │
         │  └──────────────────┘  └──────────────────┘  └──────────────────┘   │
-        │  ┌──────────────────┐  ┌──────────────────┐                         │
-        │  │AgentClass Reconc │  │AgentChannel Reconc                         │
-        │  └──────────────────┘  └──────────────────┘                         │
+        │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
+        │  │AgentClass Reconc │  │AgentChannel Rec. │  │ Activator :9443  │   │
+        │  └──────────────────┘  └──────────────────┘  │     (mTLS)       │   │
+        │                                              └──────────────────┘   │
         └───────────────────────────────┬─────────────────────────────────────┘
                                         │ creates/updates
                                         ▼
         ┌──────────────────────────────────────────────────────────────────┐
-        │                    Kubernetes Primitives                         │
-        │         Pods / PVCs / Services / Secrets / ConfigMaps            │
+        │                     Kubernetes Primitives                        │
+        │  Pods / PVCs / Services / Secrets / ConfigMaps / NetworkPolicies │
         └──────────────────────────────────────────────────────────────────┘
-                                        │
-                                        ▼
-        ┌──────────────────────────────────────────────────────────────────┐
-        │                       Agent Pod                                  │
-        │  ┌──────────────────────────────────────────────────────────┐    │
-        │  │                  Agent Container (user image)            │    │
-        │  │                                                          │    │
-        │  │  • $AGENTRY_GATEWAY_ENDPOINT  → Gateway (always)        │    │
-        │  │  • POST /v1/message           → receives channel msgs    │    │
-        │  │  • GET  /health               → liveness / readiness     │    │
-        │  └──────────────────────────────────────────────────────────┘    │
-        └──────────────────────────────────────────────────────────────────┘
-                │ calls (LLM traffic)              ▲ delivers (channel msgs)
-                ▼                                  │
+                            │                            │
+                            ▼                            ▼
+        ┌────────────────────────────────┐  ┌────────────────────────────────┐
+        │           Agent Pod            │  │   Existing workload Pod        │
+        │       (Agentry-managed)        │  │     (gateway-only tier)        │
+        │  ┌──────────────────────────┐  │  │  ┌──────────────────────────┐  │
+        │  │ Agent Container          │  │  │  │ Workload (BYO Deployment)│  │
+        │  │ • mTLS client cert       │  │  │  │ • Projected SA token     │  │
+        │  │ • $AGENTRY_GATEWAY_ENDPT │  │  │  │   (audience:             │  │
+        │  │ • POST /v1/message       │  │  │  │    agentry-gateway)      │  │
+        │  │ • GET  /health (HTTPS)   │  │  │  │ • Calls gateway LLM only │  │
+        │  └──────────────────────────┘  │  │  └──────────────────────────┘  │
+        └────────────┬───────────────────┘  └────────────┬───────────────────┘
+                  │ LLM (mTLS)        ▲ delivery       │ LLM (Bearer token,
+                  ▼                   │ (TLS)          ▼   TokenReview-validated)
         ┌──────────────────────────────────────────────────────────────────┐
         │              Agentry Gateway (agentry-system namespace)          │
         │                                                                  │
         │   ┌─────────────────────────┐  ┌───────────────────────────┐    │
-        │   │   LLM Gateway (TLS)    │  │     User Gateway           │    │
+        │   │ LLM Gateway :8443 (TLS) │  │  User Gateway :8080 (TLS) │    │
         │   │                         │  │                            │    │
-        │   │  Request validation     │  │  Webhook adapter           │    │
-        │   │  Budget check           │  │  (v1: webhook only;        │    │
-        │   │  Rate limiting          │  │   Discord, WhatsApp v1.1)  │    │
-        │   │  Fallback routing       │  │                            │    │
-        │   │  Provider adapters      │  │  Message normalization     │    │
-        │   │  Token counting         │  │  Agent delivery            │    │
-        │   │  Spend reporting        │  │  Response translation      │    │
+        │   │  Auth (mTLS / Bearer)   │  │  Webhook adapter           │    │
+        │   │  Request validation     │  │  (v1: webhook only;        │    │
+        │   │  Budget check           │  │   Discord, WhatsApp v1.1)  │    │
+        │   │  Rate limiting          │  │                            │    │
+        │   │  Fallback routing       │  │  Message normalization     │    │
+        │   │  Provider adapters      │  │  Agent delivery            │    │
+        │   │  Token counting         │  │  Response translation      │    │
+        │   │  Spend reporting        │  │                            │    │
         │   └──────────┬──────────────┘  └───────────┬───────────────┘    │
         │              │                              │                    │
         │              ▼ (egress)                     ▲ (inbound)         │
         │       LLM Provider APIs              Webhook Callers              │
         │   (Anthropic, OpenAI, etc.)     (external systems, bots, etc.)  │
         └──────────────────────────────────────────────────────────────────┘
+
+        Control-plane interactions between Controller and Gateway (both mTLS):
+          Gateway → Controller :9443  — wake hibernated agents (activator)
+          Controller → Gateway :8443  — query in-memory activity timestamps
 ```
 
 ## Control Plane
@@ -93,9 +101,11 @@ The Agentry control plane consists of a single operator (Go, built on `controlle
 
 The controller does **not** host admission webhooks. Field-level validation uses CEL expressions in CRD schemas. Cross-resource validation (reference resolution, image allowlists, provider access) is handled at reconcile time and surfaced as status conditions rather than admission errors.
 
-The controller exposes an internal ClusterIP Service (`agentry-controller.agentry-system.svc.cluster.local`, default port 9443) for the activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) and health/readiness probes. The activator endpoint serves HTTPS using a certificate issued by the Agentry cert-manager `ClusterIssuer` (see [Deployment Model](#deployment-model)); the gateway trusts the Agentry CA to verify it. The activator handler is served on **every** controller replica, not only the leader: the handler patches `agentry.io/wake=true` on the target Agent, and the leader's existing Agent watch fires the manual-wake path in the reconciler. This keeps the Service round-robin behavior correct without any leader-aware endpoint plumbing. The gateway uses this Service to send wake requests when a channel message arrives for a hibernated agent.
+The controller exposes an internal ClusterIP Service (`agentry-controller.agentry-system.svc.cluster.local`, default port 9443) for the activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) and health/readiness probes. The activator endpoint requires **mTLS**: the controller serves TLS with the `agentry-controller-tls` certificate, and the gateway must present its `agentry-gateway-tls` client cert with a SAN matching the gateway Service DNS — any other CA-signed cert is rejected. Both certificates are issued by the `agentry-ca-issuer` `ClusterIssuer` (see [Deployment Model](#deployment-model)) and rotated by cert-manager. See [SECURITY.md § Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api). The activator handler is served on **every** controller replica, not only the leader: the handler patches `agentry.io/wake=true` on the target Agent, and the leader's existing Agent watch fires the manual-wake path in the reconciler. This keeps the Service round-robin behavior correct without any leader-aware endpoint plumbing. The gateway uses this Service to send wake requests when a channel message arrives for a hibernated agent.
 
 Leader election is enabled so the operator can run with multiple replicas for availability.
+
+The controller's RBAC surface (cluster-scoped CRD watches, internal-endpoint authentication) is documented in [SECURITY.md § Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
 
 ## Data Plane
 
@@ -104,8 +114,9 @@ The data plane is what actually runs when an Agent is created. For each Agent in
 - **One Pod** containing the user's agent container. The Pod runs under the RuntimeClass specified by its AgentClass (runc, gVisor, or Kata).
 - **One PVC** if the Agent spec requests persistence, mounted into the agent container at a configured path.
 - **One Service** (ClusterIP) exposing the agent's HTTPS endpoint for intra-cluster traffic. The gateway uses this Service to deliver channel messages over TLS; direct external exposure remains the developer's responsibility.
-- **One cert-manager `Certificate`** (and the Secret it writes) containing a per-agent serving certificate and key, signed by the Agentry CA via the `agentry-system` `Issuer`. Mounted into the Pod for the agent's HTTPS listener. cert-manager handles rotation continuously; the Agentry CA certificate is projected into Pods at `/var/run/agentry/ca.crt` and kubelet refreshes the volume on Secret change.
+- **One cert-manager `Certificate`** (and the Secret it writes) containing a per-agent serving certificate and key, signed by the `agentry-ca-issuer` `ClusterIssuer` (a `ClusterIssuer` is required because `Certificate` resources in user namespaces cannot reference a namespaced `Issuer` in `agentry-system` — see [Deployment Model](#deployment-model)). Mounted into the Pod for the agent's HTTPS listener. cert-manager handles rotation continuously; the Agentry CA bundle is projected into Pods at `/var/run/agentry/ca.crt` from the `agentry-ca` ConfigMap maintained by trust-manager, and kubelet refreshes the volume when the ConfigMap changes.
 - **One ConfigMap** holding non-sensitive agent configuration (gateway endpoint, feature flags).
+- **One NetworkPolicy** synthesized from the AgentClass network policy and the gateway's egress allow rule. This is the load-bearing primitive cited in the gateway architecture analysis ([GATEWAY_LLM.md § Architecture Option Analysis](./GATEWAY_LLM.md#architecture-option-analysis)) for keeping LLM credentials inside `agentry-system` — see [CONTROLLER_RECONCILERS.md § AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 6 for the full rule set.
 
 There is no sidecar container. The **Agentry Gateway** in `agentry-system` handles all LLM traffic and inbound channel messages as a shared cluster-level service.
 
@@ -131,35 +142,20 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 - Listens for inbound webhook events on port 8080 over TLS (serves `agentry-gateway-tls`; Ingress is configured for backend re-encrypt or TLS pass-through)
 - Normalizes webhook payloads into the standard Agentry message envelope
 - Looks up the AgentChannel resource to find the target Agent and its endpoint
-- If the agent is `Hibernated`, the gateway signals the controller to wake it via the authenticated activator endpoint and waits until the Pod is ready (bounded by `wakeTimeout`)
+- If the agent is `Hibernated`, the gateway signals the controller to wake it via the mTLS-authenticated activator endpoint and waits until the Pod is ready (bounded by `wakeTimeout`)
 - Delivers the message to the agent container via `POST /v1/message`
 - Supports both synchronous and asynchronous response modes per AgentChannel: sync (default) returns the agent's response as the webhook HTTP response; async returns 202 Accepted immediately and delivers the response via callback URL or polling endpoint
 - v1 supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1
 
 LLM provider credentials are stored as Secrets in `agentry-system` and read directly by the gateway. They never leave `agentry-system` namespace.
 
+The gateway's RBAC surface — including cluster-scoped `create` on `tokenreviews` for the gateway-only tier and the Pod/AgentChannel watches for routing — is documented in [SECURITY.md § Gateway ServiceAccount permissions](./SECURITY.md#gateway-serviceaccount-permissions).
+
 ## Agent Runtime Contract
 
-Agentry is BYO-image, but containers must satisfy a minimal contract to participate in the lifecycle:
+Agentry is BYO-image: any container can be an Agent provided it implements a small contract — an HTTPS health endpoint on `$AGENTRY_HEALTH_PORT`, graceful SIGTERM handling, authenticated calls to `$AGENTRY_GATEWAY_ENDPOINT` (mTLS for Agentry-managed Pods, `TokenReview`-validated SA token for the gateway-only tier), an optional `POST /v1/message` handler when an AgentChannel is in use, and `messageId`-based deduplication when hibernation is enabled.
 
-1. **HTTPS health endpoint** on a known port (`$AGENTRY_HEALTH_PORT`, default 8080) returning 200 when ready. The agent serves TLS on this port using the cert-manager-issued per-Agent certificate (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`), so liveness and readiness probes must be configured with `httpGet.scheme: HTTPS`. Kubernetes does not verify TLS certificates for httpGet probes, so the cert works without any additional CA configuration on the probe.
-2. **Graceful SIGTERM handling** — on receiving SIGTERM, the agent should finish in-flight work and exit within the configured `terminationGracePeriodSeconds`.
-3. **Gateway communication** — the controller injects `$AGENTRY_GATEWAY_ENDPOINT`: an HTTPS URL pointing to the gateway's LLM listener (port 8443). This is the base URL for **all** agent→gateway calls: LLM requests, heartbeats (`POST /v1/agent/heartbeat`), and task completion (`POST /v1/task/complete`). Always injected regardless of whether `spec.providers` is set, so provider-less agents can still reach the gateway for heartbeats and task completion.
-
-   Two TLS requirements apply to all calls to `$AGENTRY_GATEWAY_ENDPOINT`:
-   - **Server verification**: the agent must trust the Agentry CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`) to verify the gateway's TLS certificate. The CA is managed by cert-manager (see [Deployment Model](#deployment-model)).
-   - **Client authentication**: one of two modes, depending on how the workload was provisioned:
-     - **mTLS** (Agentry-managed Pods) — the AgentReconciler (for Agents) and the AgentTaskReconciler (for AgentTasks) create a cert-manager `Certificate` for the Pod; the cert and key are mounted at `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`. The agent must present this client certificate on every request to the gateway. The gateway extracts the agent's namespace from the SAN — `{name}.{namespace}.svc.cluster.local` for Agents, `{name}.{namespace}.task.agentry.io` for AgentTasks (the latter avoids implying a Service the task does not have). This is the only mode accepted for Pods managed by Agentry — see [Namespace Identification](./GATEWAY_LLM.md#namespace-identification).
-     - **ServiceAccount bearer token** (gateway-only tier) — for workloads that are not managed by an Agent resource, the HTTP client presents a projected ServiceAccount token in the `Authorization: Bearer <jwt>` header. The gateway validates the token via the Kubernetes `TokenReview` API and extracts the namespace from the validated `status.user.username`. No client cert is required.
-     The starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) handle both modes. Custom images must configure their HTTP client for the appropriate mode.
-4. **Message endpoint** (optional) — if the agent uses an AgentChannel, it exposes `POST /v1/message` on `$AGENTRY_HEALTH_PORT` over TLS, accepting the standard Agentry message envelope and returning a response envelope. The agent serves TLS using the cert-manager-issued certificate at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) and key at `$AGENTRY_TLS_KEY` (`/var/run/agentry/tls.key`). Agents without an AgentChannel do not need to implement this. Agents must also **watch the cert and key files for changes** (the kubelet automatically updates projected volume contents when the backing Secret is rotated — see [Lifecycle of an agent TLS serving certificate](./SECURITY.md#lifecycle-of-an-agent-tls-serving-certificate)) and reload their TLS configuration for new connections without dropping existing ones. Standard approaches: Go's `tls.Config.GetCertificate` callback (re-reads from disk on each new TLS handshake), Python's `SSLContext` reload on `inotify` event. The starter templates implement this reload pattern — see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md).
-5. **Optional activity signal** — for idle detection, the agent may emit activity heartbeats by calling `POST /v1/agent/heartbeat` on the gateway. The gateway tracks these timestamps in-memory (no etcd writes). Alternatively, the gateway infers activity from observed LLM and channel traffic.
-6. **Optional completion signal** (AgentTask only) — the agent reports completion to the gateway via `POST /v1/task/complete` with a status payload that may include artifact key-value pairs.
-7. **Message deduplication** (required when `hibernationEnabled: true`) — each message delivered via `POST /v1/message` carries a unique `messageId`. In sync mode, if a wake takes longer than the webhook caller's HTTP timeout, the caller receives 504 and commonly retries, which the gateway delivers as a new message (see [Activator](./GATEWAY_USER.md#activator)). Agents with `hibernationEnabled: true` MUST implement `messageId`-based deduplication — buffer received IDs (scoped to the session or a rolling time window) and return a cached response for duplicates without reprocessing. The starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) implement this as an in-memory LRU over the last 1024 `messageId`s; adopters can layer PVC-backed persistence on top if stronger-than-process-lifetime dedup is needed.
-
-All agent↔gateway communication is over TLS. Agent→gateway traffic (LLM requests, heartbeats, task completion) is authenticated via mTLS for Agentry-managed Pods or via a `TokenReview`-validated ServiceAccount bearer token for gateway-only-tier workloads, with source-IP → Pod cross-check in both modes (see [GATEWAY_LLM.md § Namespace Identification](./GATEWAY_LLM.md#namespace-identification)). Gateway→agent traffic (channel message delivery) uses the agent's cert-manager-issued TLS certificate, verified against the Agentry CA (`agentry-ca`). Activity timestamps are maintained in-memory in the gateway — the controller queries them via an internal API endpoint rather than reading Pod annotations, avoiding per-request etcd writes at scale.
-
-Agentry ships **starter templates** (one Go, one Python) under `examples/starter-go/` and `examples/starter-python/` as part of v1. Each template implements the full runtime contract end-to-end: HTTPS serving on `$AGENTRY_HEALTH_PORT`, mTLS client certificate presentation on gateway calls (with a `TokenReview` token-auth path available for gateway-only tenants), cert-file watch and reload, `/v1/message` handler skeleton, and `messageId`-based deduplication. Adopters copy the template and replace the agent logic — the boilerplate stays. See [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md). Full-featured reference base images (published container images that embed and wrap the contract) are planned for a future release.
+The full contract — required env vars, TLS reload semantics, dedup buffer, optional heartbeat and task-completion endpoints — is specified in [RUNTIME_CONTRACT.md](./RUNTIME_CONTRACT.md). Working implementations of the contract ship as Go and Python starter templates — see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md).
 
 ## Integration Points
 

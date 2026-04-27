@@ -127,7 +127,7 @@ Namespace extraction is identical for both shapes (second label). The shape disc
 
 **Exact label-count enforcement**: the gateway requires the DNS SAN to have exactly the expected label count for its shape — 5 for `.svc.cluster.local`, 4 for `.task.agentry.io`. Any SAN with extra (or fewer) labels is rejected as `403 invalid_cert`. This is defense in depth against a dotted-name bypass: if the CRD CEL constraint restricting Agent/AgentTask `metadata.name` to DNS-1123 labels (see [API_RESOURCES.md § Agent design notes](./API_RESOURCES.md#design-notes)) were ever relaxed or bypassed, a name like `admin.svc` in namespace `team-a` would yield the SAN `admin.svc.team-a.svc.cluster.local` (6 labels) and be rejected by the gateway before the namespace extractor ran. Both layers must be breached for the bypass to succeed.
 
-Starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) demonstrate client-cert presentation and the cert-file watch-and-reload pattern. Custom images must configure their HTTP client to present the cert when calling `$AGENTRY_GATEWAY_ENDPOINT`. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
+Starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) demonstrate client-cert presentation and the cert-file watch-and-reload pattern. Custom images must configure their HTTP client to present the cert when calling `$AGENTRY_GATEWAY_ENDPOINT`. See [Agent Runtime Contract](./RUNTIME_CONTRACT.md).
 
 This mode is **CNI-independent**: identity is cryptographically attested by the certificate, not by any network-layer header that an intermediate hop could modify. An agent cannot claim a different identity without a CA-signed certificate for that identity — and the CA key is not reachable from any agent Pod.
 
@@ -205,7 +205,7 @@ When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the pr
 
 **`/v1/channels/health` is served on this listener too.** Like `/v1/activity`, it requires an mTLS client cert whose SAN matches the controller Service DNS, and the same SAN-authorization rule applies (requests from gateway, agent, or AgentTask certs are rejected). It lives on port 8443 — **not** the externally-exposed User listener on 8080 — so that Ingress fronting 8080 cannot route an untrusted caller to this endpoint. See [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress) for the listener-split rationale and [API_ENDPOINTS.md § GET /v1/channels/health](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only).
 
-**Agent health probes and TLS**: because the agent serves HTTPS on `$AGENTRY_HEALTH_PORT` (using the same per-agent certificate), the readiness and liveness probes injected by the AgentReconciler must set `httpGet.scheme: HTTPS`. Kubernetes `httpGet` probes do not verify TLS certificates, so no additional CA configuration is required on the probe. See [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract).
+**Agent health probes and TLS**: because the agent serves HTTPS on `$AGENTRY_HEALTH_PORT` (using the same per-agent certificate), the readiness and liveness probes injected by the AgentReconciler must set `httpGet.scheme: HTTPS`. Kubernetes `httpGet` probes do not verify TLS certificates, so no additional CA configuration is required on the probe. See [Agent Runtime Contract](./RUNTIME_CONTRACT.md).
 
 `$AGENTRY_GATEWAY_ENDPOINT` is an `https://` URL — TLS is not optional.
 

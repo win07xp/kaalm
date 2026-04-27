@@ -1,6 +1,6 @@
 # Agentry — Starter Templates
 
-This document describes the starter templates that ship with Agentry v1. Starter templates are minimal, working implementations of the [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract) intended to be copied and modified. They are **not** a framework and not a published base image — developers own the copy after `cp`.
+This document describes the starter templates that ship with Agentry v1. Starter templates are minimal, working implementations of the [Agent Runtime Contract](./RUNTIME_CONTRACT.md) intended to be copied and modified. They are **not** a framework and not a published base image — developers own the copy after `cp`.
 
 Two templates ship with v1:
 
@@ -11,7 +11,7 @@ Both templates implement the same runtime contract and have feature parity.
 
 ## What the templates implement automatically
 
-A custom agent image has to satisfy every bullet in the [Agent Runtime Contract](./ARCHITECTURE.md#agent-runtime-contract). The template handles the repetitive/error-prone parts so developers can replace the agent logic without rebuilding the contract:
+A custom agent image has to satisfy every bullet in the [Agent Runtime Contract](./RUNTIME_CONTRACT.md). The template handles the repetitive/error-prone parts so developers can replace the agent logic without rebuilding the contract:
 
 1. **HTTPS serving on `$AGENTRY_HEALTH_PORT`** — loads `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`, configures the HTTP server with the loaded cert, and binds on the port the controller injected.
 2. **mTLS client-cert presentation** — pre-configures the outbound HTTP client used to call `$AGENTRY_GATEWAY_ENDPOINT` with the same cert pair as the client certificate, so LLM requests, heartbeats, and task completion calls satisfy mTLS identity without per-call plumbing.
