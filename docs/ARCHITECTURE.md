@@ -1,6 +1,6 @@
 # Agentry — Architecture Overview
 
-This document describes the high-level architecture of Agentry: the control plane, the data plane, and the integration points with the surrounding ecosystem.
+This document describes the high-level architecture of Agentry: the control plane, the data plane, and the integration points with the surrounding ecosystem. Agentry is single-cluster in v1; multi-cluster federation is out of scope.
 
 ## Documentation Map
 
@@ -18,6 +18,7 @@ This document describes the high-level architecture of Agentry: the control plan
 | [SECURITY.md](./SECURITY.md) | Trust model, RBAC, credential lifecycle, TLS, isolation |
 | [RUNTIME_CONTRACT.md](./RUNTIME_CONTRACT.md) | The contract a container image must satisfy to run as an Agent or AgentTask |
 | [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md) | Go and Python starter templates implementing the runtime contract |
+| [OBSERVABILITY.md](./OBSERVABILITY.md) | Aggregated metrics catalog, dashboards, alerting (TODO) |
 
 ## System Topology
 
@@ -57,8 +58,8 @@ This document describes the high-level architecture of Agentry: the control plan
         │  │ • GET  /health (HTTPS)   │  │  │  │ • Calls gateway LLM only │  │
         │  └──────────────────────────┘  │  │  └──────────────────────────┘  │
         └────────────┬───────────────────┘  └────────────┬───────────────────┘
-                  │ LLM (mTLS)        ▲ delivery       │ LLM (Bearer token,
-                  ▼                   │ (TLS)          ▼   TokenReview-validated)
+                  │ LLM (mTLS)        ▲ delivery (TLS) │ LLM (Bearer SA token)
+                  ▼                   │                ▼
         ┌──────────────────────────────────────────────────────────────────┐
         │              Agentry Gateway (agentry-system namespace)          │
         │                                                                  │
@@ -138,7 +139,7 @@ The gateway is a replicated Deployment in `agentry-system` that serves two disti
 - Returns structured error responses (JSON with `error.type`) on failure — see [LLM Gateway Error Responses](./API_ENDPOINTS.md#llm-gateway-error-responses)
 
 **User Gateway** (inbound, channel → agent) — see [GATEWAY_USER.md § User Gateway — Request Flow](./GATEWAY_USER.md#user-gateway--request-flow) for the end-to-end pipeline.
-- Watches `AgentChannel` resources directly to determine message routing
+- Watches `AgentChannel` resources directly (rather than reading routing data published by the controller) so inbound webhook routing reflects channel changes without controller-mediated propagation latency
 - Listens on port 8080 over TLS — see [TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress) for backend re-encrypt vs TLS pass-through
 - Normalizes inbound webhook payloads into the Agentry message envelope and resolves the target Agent via the AgentChannel resource
 - If the agent is `Hibernated`, signals the controller to wake it via the mTLS-authenticated activator endpoint and waits until the Pod is ready (bounded by `wakeTimeout`) — see [Activator](./GATEWAY_USER.md#activator)
@@ -154,7 +155,17 @@ The gateway's RBAC surface — including cluster-scoped `create` on `tokenreview
 
 - **Spend counters**: each replica server-side-applies its partials to the `agentry-budget-{providerName}` ConfigMap in `agentry-system` (keyed by Pod name); the ModelProviderReconciler sums partials, prunes stale-replica entries, and writes a `_canonical` total that replicas re-initialize from on startup. Bounded overspend is accepted as a soft-guardrail trade-off. See [GATEWAY_LLM.md § Budget State Management](./GATEWAY_LLM.md#budget-state-management) and [CONTROLLER_RECONCILERS.md § ModelProviderReconciler](./CONTROLLER_RECONCILERS.md#modelproviderreconciler) step 3.
 - **Rate-limit token buckets**: each replica divides the configured cluster-wide ceiling by the live replica count from its Pod informer and adjusts on the next refill cycle when replicas scale. See [GATEWAY_LLM.md § Rate Limiting](./GATEWAY_LLM.md#rate-limiting).
-- **Activity timestamps**: kept in-memory per replica (no etcd writes per request); the AgentReconciler fans out to every gateway Pod IP for the namespace, takes the most-recent timestamp per agent, and caches the result in a short reconciler-local window to bound query load. See [CONTROLLER_RECONCILERS.md § AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 8 and [GATEWAY_USER.md § Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api).
+- **Activity timestamps**: kept in-memory per replica (no etcd writes per request); "activity" is defined as LLM-gateway requests, inbound channel-message deliveries, and agent heartbeats. The AgentReconciler enumerates gateway Pods via its Pod informer in `agentry-system` and fans out one `GET /v1/activity?namespace={ns}` per Pod IP, takes the most-recent timestamp per agent, and caches the result in a short reconciler-local window to bound query load. Activity state is ephemeral — lost on full gateway restart; the gateway exposes its `startedAt` so the controller can defer idle and hibernation transitions until at least `idleTimeout` of post-restart runtime, avoiding premature hibernation of agents that were active before the restart. See [CONTROLLER_RECONCILERS.md § AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 8 and [GATEWAY_USER.md § Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api).
+
+## Observability
+
+Both the controller and the gateway expose Prometheus metrics on dedicated ports. The metric catalogs and emit-points are documented per-component:
+
+- Controller metrics (reconcile counts/duration/queue depth, agent/task phase counts, hibernation/wake/budget events) — see [CONTROLLER_RECONCILERS.md § Observability](./CONTROLLER_RECONCILERS.md#observability).
+- LLM Gateway metrics (request counts/duration, token usage, spend, fallback events, budget utilization) — see [GATEWAY_LLM.md § Observability](./GATEWAY_LLM.md#observability).
+- User Gateway metrics (channel message counts/duration, hibernation wakes triggered) — see [GATEWAY_USER.md § Observability](./GATEWAY_USER.md#observability).
+
+Aggregated dashboards, alerting recommendations, and log/trace conventions will live in [OBSERVABILITY.md](./OBSERVABILITY.md) (TODO).
 
 ## Agent Runtime Contract
 
@@ -193,6 +204,7 @@ The User Gateway ships with a **generic webhook adapter** in v1 (inbound HTTP PO
 | Channel message routing | User Gateway in agentry-system (shared) |
 | Tool access | MCP (external, not managed by Agentry in v1) |
 | External exposure | Ingress/Gateway (user-managed, not Agentry) |
+| Observability | Controller + Gateway Prometheus metrics; see Observability section |
 
 ## Deployment Model
 
