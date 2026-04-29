@@ -24,55 +24,63 @@ This document describes the high-level architecture of Agentry: the control plan
 ## System Topology
 
 ```mermaid
-flowchart TB
-    apiserver["Kubernetes API"]
+flowchart LR
+    %% ── Inbound external ─────────────────────────────────
+    webhooks["📨 Webhook Callers<br/>(external systems, bots)"]
 
-    subgraph controller["Agentry Controller (agentry-system namespace)"]
-        agentR["Agent<br/>Reconciler"]
-        taskR["AgentTask<br/>Reconciler"]
-        provR["Provider<br/>Reconciler"]
-        classR["AgentClass<br/>Reconciler"]
-        chanR["AgentChannel<br/>Reconciler"]
-        activator["Activator :9443<br/>(mTLS)"]
+    %% ── Agentry Gateway (agentry-system) ─────────────────
+    subgraph gw["🌐 Agentry Gateway · agentry-system"]
+        direction TB
+        usergw["<b>User Gateway</b> :8080 (TLS)<br/>Webhook adapter • Normalize<br/>Wake on hibernate"]
+        llmgw["<b>LLM Gateway</b> :8443 (TLS)<br/>Auth (mTLS / SA Bearer)<br/>Budget • Rate limits • Fallback<br/>Provider adapters"]
     end
 
-    primitives["Kubernetes Primitives<br/>Pods / PVCs / Services / Secrets / ConfigMaps / NetworkPolicies"]
-
-    subgraph agentpod["Agent Pod (Agentry-managed)"]
-        agentC["Agent Container<br/>• mTLS client cert<br/>• $AGENTRY_GATEWAY_ENDPOINT<br/>• POST /v1/message<br/>• GET /health (HTTPS)"]
+    %% ── User namespaces (agent + workload pods) ──────────
+    subgraph users["👥 User namespaces"]
+        direction TB
+        agentC["🤖 <b>Agent Pod</b><br/>(Agentry-managed)<br/>mTLS client cert<br/>POST /v1/message · GET /health"]
+        workloadC["📦 <b>Workload Pod</b><br/>(gateway-only, BYO)<br/>Projected SA token<br/>Calls LLM Gateway only"]
     end
 
-    subgraph workloadpod["Existing workload Pod (gateway-only tier)"]
-        workloadC["Workload (BYO Deployment)<br/>• Projected SA token<br/>&nbsp;&nbsp;(audience: agentry-gateway)<br/>• Calls gateway LLM only"]
+    %% ── Outbound external ────────────────────────────────
+    providers["☁️ LLM Provider APIs<br/>(Anthropic, OpenAI, …)"]
+
+    %% ── Controller + apiserver (control plane) ───────────
+    subgraph ctrl["⚙️ Agentry Controller · agentry-system"]
+        direction TB
+        recs["<b>Reconcilers</b><br/>Agent • AgentTask<br/>ModelProvider • AgentClass<br/>AgentChannel"]
+        activator["<b>Activator</b> :9443 (mTLS)"]
     end
+    apiserver[("🗄️ Kubernetes API")]
 
-    subgraph gateway["Agentry Gateway (agentry-system namespace)"]
-        llmgw["LLM Gateway :8443 (TLS)<br/>Auth (mTLS / Bearer)<br/>Request validation<br/>Budget check<br/>Rate limiting<br/>Fallback routing<br/>Provider adapters<br/>Token counting<br/>Spend reporting"]
-        usergw["User Gateway :8080 (TLS)<br/>Webhook adapter<br/>(v1: webhook only;<br/>Discord, WhatsApp v1.1)<br/>Message normalization<br/>Agent delivery<br/>Response translation"]
-    end
+    %% ── Data plane (thick) ───────────────────────────────
+    webhooks == "inbound" ==> usergw
+    usergw == "deliver (mTLS)<br/>POST /v1/message" ==> agentC
+    agentC == "LLM (mTLS)" ==> llmgw
+    workloadC == "LLM (SA Bearer)" ==> llmgw
+    llmgw == "egress" ==> providers
 
-    providers["LLM Provider APIs<br/>(Anthropic, OpenAI, etc.)"]
-    webhooks["Webhook Callers<br/>(external systems, bots, etc.)"]
+    %% ── Lifecycle (thin) ─────────────────────────────────
+    ctrl -- "watches / reconciles" --> apiserver
+    apiserver -- "Pods • PVCs • Services • Secrets<br/>ConfigMaps • NetworkPolicies" --> agentC
 
-    %% Resource lifecycle
-    controller -- "watches / reconciles" --> apiserver
-    controller -- "creates / updates" --> primitives
-    primitives --> agentpod
-    primitives --> workloadpod
+    %% ── Internal mTLS RPCs (dashed) ──────────────────────
+    gw -. "POST /v1/activate (mTLS)" .-> activator
+    ctrl -. "GET /v1/activity (mTLS)" .-> llmgw
+    ctrl -. "GET /v1/channels/health (mTLS)" .-> llmgw
 
-    %% Data plane
-    agentpod -- "LLM (mTLS)" --> llmgw
-    workloadpod -- "LLM (Bearer SA token)" --> llmgw
-    usergw -- "delivery (mTLS)" --> agentpod
+    %% ── Styling (high contrast) ──────────────────────────
+    classDef extNode fill:#FFE4B5,stroke:#8B4513,stroke-width:2px,color:#3a1f00
+    classDef gwNode  fill:#90EE90,stroke:#1B5E20,stroke-width:2px,color:#0b3d0b
+    classDef ctlNode fill:#87CEEB,stroke:#0D47A1,stroke-width:2px,color:#0a2540
+    classDef podNode fill:#E6E6FA,stroke:#4A148C,stroke-width:2px,color:#2a0a4a
+    classDef k8sNode fill:#FFD580,stroke:#7a3f00,stroke-width:2px,color:#3a1f00
 
-    %% External
-    llmgw -- "egress" --> providers
-    webhooks -- "inbound" --> usergw
-
-    %% Control-plane mTLS RPCs (Controller ↔ Gateway), all mTLS-with-SAN
-    gateway -. "POST /v1/activate (mTLS)" .-> activator
-    controller -. "GET /v1/activity (mTLS)" .-> llmgw
-    controller -. "GET /v1/channels/health (mTLS)" .-> llmgw
+    class webhooks,providers extNode
+    class usergw,llmgw gwNode
+    class recs,activator ctlNode
+    class agentC,workloadC podNode
+    class apiserver k8sNode
 ```
 
 The dashed edges are the three internal control-plane RPCs between Controller and Gateway. All three are mTLS with SAN-based authorization — see [SECURITY.md § Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
