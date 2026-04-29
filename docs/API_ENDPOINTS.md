@@ -250,20 +250,28 @@ The request carries no auth header; authentication is the mTLS client cert prese
 
 ```json
 {
+  "windowSeconds": 300,
+  "replicaStartedAt": "2026-04-29T12:00:00Z",
   "channels": {
     "/channels/team-support/support-assistant": {
       "phase": "Active",
-      "platformConnected": true,
+      "state": "success",
+      "reason": "WebhookReady",
+      "timestamp": "2026-04-29T12:48:11Z",
       "lastError": null
     },
     "/channels/team-support/personal-assistant": {
       "phase": "Degraded",
-      "platformConnected": false,
+      "state": "failure",
+      "reason": "WebhookAuthFailed",
+      "timestamp": "2026-04-29T12:46:02Z",
       "lastError": "webhook auth validation failed: 401 Unauthorized"
     },
     "/channels/team-support/new-channel": {
       "phase": "Active",
-      "platformConnected": true,
+      "state": "empty",
+      "reason": null,
+      "timestamp": null,
       "lastError": null
     }
   }
@@ -272,12 +280,16 @@ The request carries no auth header; authentication is the mTLS client cert prese
 
 | Field | Type | Description |
 |---|---|---|
-| `channels` | map | Keys are webhook paths as registered in the gateway; values are health records for each channel |
+| `windowSeconds` | int | Length of the rolling health window observed by this replica, sourced from the Helm value `gateway.channelHealthWindow` (default `300`). Echoed in every response so the controller does not need a separate channel for the value |
+| `replicaStartedAt` | timestamp | When this gateway replica started. Used by the controller to determine whether `state: "empty"` means "no in-window traffic" (replica has been up the full window) or "insufficient observation time" (replica started less than `windowSeconds` ago) |
+| `channels` | map | Keys are webhook paths as registered in the gateway; values are per-channel health records as observed by this replica |
 | `phase` | string | `"Active"` \| `"Degraded"` \| `"Failed"` — mirrors `AgentChannel.status.phase` as seen from the gateway |
-| `platformConnected` | boolean | Latest-result-wins indicator of the channel's recent inbound delivery health (per replica, this response). For v1 webhook channels, `true` means the most recent inbound request succeeded (auth passed + message dispatched to the agent) or no inbound traffic has been seen since the replica's startup; `false` means the most recent inbound request failed (auth rejected, agent not Ready, dispatch failed). For v1.1+ persistent-connection channels, `true` means the gateway-to-platform connection is healthy. See [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking) for the per-replica state model and how the controller reduces across replicas |
-| `lastError` | string or null | Most recent error seen by the gateway for this channel; null if no error |
+| `state` | string | `"success"` \| `"failure"` \| `"empty"`. Computed from the replica's in-window observation list: `success` if any in-window observation succeeded; `failure` if the in-window list is non-empty and contains only failures; `empty` if no in-window observations exist on this replica |
+| `reason` | string or null | For `success`, the most recent success's reason (typically `WebhookReady`). For `failure`, the most recent failure's reason — one of `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`. `null` when `state: "empty"` |
+| `timestamp` | timestamp or null | Time of the most recent in-window observation contributing to `state` (most recent success for `success`; most recent failure for `failure`). `null` when `state: "empty"` |
+| `lastError` | string or null | Most recent error message seen by the gateway for this channel within the window; `null` if no error |
 
-The third channel in the example (`new-channel`) shows the no-traffic-yet case: a freshly-created channel that has not yet received any inbound requests reports `platformConnected: true` so it does not appear unhealthy by default. Each replica answers from its own observations; the controller fans out and reduces by most-recent observation timestamp.
+The third channel in the example (`new-channel`) shows `state: "empty"`: this replica has no in-window observations for that path. The controller decides whether this means the channel is genuinely silent (`Unknown` with `reason=NoRecentTraffic`) or whether observation is incomplete (preserve existing condition) by comparing `replicaStartedAt` to the window length and checking other replicas — see [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking) and [CONTROLLER_RECONCILERS.md § AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) step 4.
 
 **Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only channels whose target Agent is in the requested namespace are returned.
 

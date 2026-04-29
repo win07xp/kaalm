@@ -39,6 +39,7 @@ flowchart LR
     subgraph users["👥 User namespaces"]
         direction TB
         agentC["🤖 <b>Agent Pod</b><br/>(Agentry-managed)<br/>mTLS client cert<br/>POST /v1/message · GET /health"]
+        agentTaskC["📋 <b>AgentTask Pod</b><br/>(Agentry-managed)<br/>mTLS client cert<br/>Ephemeral · no inbound endpoint"]
         workloadC["📦 <b>Workload Pod</b><br/>(gateway-only, BYO)<br/>Projected SA token<br/>Calls LLM Gateway only"]
     end
 
@@ -68,7 +69,8 @@ flowchart LR
     gw -. "POST /v1/activate (mTLS)" .-> activator
     ctrl -. "GET /v1/activity (mTLS)" .-> llmgw
     ctrl -. "GET /v1/channels/health (mTLS)" .-> llmgw
-    agentC -. "POST /v1/task/complete<br/>POST /v1/agent/heartbeat (mTLS)" .-> llmgw
+    agentC -. "POST /v1/agent/heartbeat (mTLS)" .-> llmgw
+    agentTaskC -. "POST /v1/task/complete (mTLS)" .-> llmgw
 
     %% ── Styling (high contrast) ──────────────────────────
     classDef extNode fill:#FFE4B5,stroke:#8B4513,stroke-width:2px,color:#3a1f00
@@ -80,11 +82,11 @@ flowchart LR
     class webhooks,providers extNode
     class usergw,llmgw gwNode
     class recs,activator ctlNode
-    class agentC,workloadC podNode
+    class agentC,agentTaskC,workloadC podNode
     class apiserver k8sNode
 ```
 
-The dashed edges are internal mTLS RPCs with a stricter security envelope than the LLM proxy. Four are served on the Gateway's `:8443` listener (activity, channel health, `/v1/task/complete`, `/v1/agent/heartbeat`); the activator wake is served on the Controller's `:9443` (see [Control Plane](#control-plane)). All are [mTLS with SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api); the consolidated path → auth mapping for the gateway listener appears under [The Agentry Gateway](#the-agentry-gateway).
+The dashed edges are internal mTLS RPCs. Unlike the LLM proxy — which accepts either an Agent/AgentTask client cert or a `TokenReview`-validated SA bearer token (gateway-only tier) — these endpoints reject the SA-bearer path entirely and require a specific identity SAN per path: controller for `/v1/activity` and `/v1/channels/health`, Agent/AgentTask for `/v1/task/complete` and `/v1/agent/heartbeat`, gateway for the activator. Four are served on the Gateway's `:8443` listener (activity, channel health, `/v1/task/complete`, `/v1/agent/heartbeat`); the activator wake is served on the Controller's `:9443` (see [Control Plane](#control-plane)). [SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api) is implemented as per-path middleware; the consolidated path → auth mapping for the gateway listener appears under [The Agentry Gateway](#the-agentry-gateway).
 
 ## Control Plane
 
@@ -98,7 +100,7 @@ The Agentry control plane consists of a single operator (Go, built on `controlle
 
 4. [**AgentClass Reconciler**](./CONTROLLER_RECONCILERS.md#agentclassreconciler) — watches `AgentClass` resources. Validates that referenced ModelProviders exist, maintains usage counts, and updates status conditions.
 
-5. [**AgentChannel Reconciler**](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) — watches `AgentChannel` resources. Validates that the referenced Agent exists and has a Service, validates channel credentials, and monitors channel health (the controller polls the gateway via [`GET /v1/channels/health`](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on the gateway's `:8443` listener). The gateway watches AgentChannel resources directly for platform connection management. The poll populates `status.conditions[type=PlatformConnected]` (observational only) — for v1 webhook channels this tracks recent inbound delivery health (auth + dispatch result of the most recent inbound request observed by any gateway replica); v1.1+ persistent-connection channels will use the same condition for connection liveness. `status.conditions[type=Ready]` is set independently by controller-local validation (path conflict, reference resolution, credential format), and the gateway gates webhook routing on `Ready` alone — `PlatformConnected` is for user/operator visibility (see [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking)).
+5. [**AgentChannel Reconciler**](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) — watches `AgentChannel` resources. Validates that the referenced Agent exists and has a Service, validates channel credentials, and monitors channel health (the controller polls the gateway via [`GET /v1/channels/health`](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on the gateway's `:8443` listener). The gateway watches AgentChannel resources directly for platform connection management. The poll populates `status.conditions[type=PlatformConnected]` (observational only) using a tri-state, rolling-window contract — for v1 webhook channels, the condition is `True` if any in-window inbound request succeeded (auth passed + message dispatched), `False` if the window holds only failures, and `Unknown` (`reason=NoRecentTraffic`) if no in-window observations exist on at least one replica that has been up the full window. The window length is configurable via the Helm value `gateway.channelHealthWindow` (default `5m`). v1.1+ persistent-connection channels will reuse the same tri-state condition for connection liveness with platform-specific reasons. `status.conditions[type=Ready]` is set independently by controller-local validation (path conflict, reference resolution, credential format), and the gateway gates webhook routing on `Ready` alone — `PlatformConnected` is for user/operator visibility (see [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking)).
 
 The controller does **not** host admission webhooks. Field-level validation uses CEL expressions in CRD schemas; [cross-resource validation](./API_RESOURCES.md#cross-resource-validation) (reference resolution, image allowlists, provider access) is handled at reconcile time and surfaced as status conditions rather than admission errors.
 
@@ -108,7 +110,7 @@ The activator handler is served on **every** controller replica, not only the le
 
 The gateway uses this Service to send wake requests when a channel message arrives for a hibernated agent. The activator returns 202 Accepted as soon as the wake annotation patch is committed; the gateway observes wake completion by polling the agent's Service for readiness, not by waiting on the [activator response](./GATEWAY_USER.md#activator) (steps 3–4).
 
-The reverse direction — controller → gateway — is the [**activity API**](./GATEWAY_USER.md#activity-tracking-api) (`GET /v1/activity?namespace={ns}`), used by the AgentReconciler to read per-namespace last-activity timestamps for idle and hibernation transitions. It is served on the gateway's `:8443` LLM listener (**not** the User listener on `:8080`, so an Ingress fronting `:8080` cannot route untrusted traffic to it). Per-path middleware on this listener enforces [mTLS-with-SAN](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on `/v1/activity` — the controller presents `agentry-controller-tls`, and only client certs whose SAN matches the controller Service DNS are admitted (Agent/AgentTask certs are rejected with 403). The controller dials each gateway Pod IP directly rather than the Service, since [activity timestamps are in-memory per replica](#the-agentry-gateway).
+The reverse direction — controller → gateway — is the [**activity API**](./GATEWAY_USER.md#activity-tracking-api) (`GET /v1/activity?namespace={ns}`), used by the AgentReconciler to read per-namespace last-activity timestamps for idle and hibernation transitions. It is served on the gateway's `:8443` LLM listener (**not** the User listener on `:8080`, so an Ingress fronting `:8080` cannot route untrusted traffic to it). Per-path middleware on this listener enforces [mTLS-with-SAN](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on `/v1/activity` — the controller presents `agentry-controller-tls`, and only client certs whose SAN matches the controller Service DNS are admitted (Agent/AgentTask certs are rejected with 403). The controller dials each gateway Pod IP directly rather than the Service, since [activity timestamps are in-memory per replica](#the-agentry-gateway). To keep TLS verification working when the dial address is a Pod IP rather than a name, the controller sets `ServerName` on the TLS handshake to the gateway Service DNS (`agentry-gateway.agentry-system.svc`); the gateway's `agentry-gateway-tls` cert SAN covers the Service DNS only, not per-Pod IPs. The same pattern is reused by the channel-health fan-out — see [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking).
 
 Leader election is enabled so the operator can run with multiple replicas for availability.
 
@@ -129,7 +131,16 @@ The data plane is what actually runs when an Agent is created. For each Agent in
 
 There is no sidecar container. The **Agentry Gateway** in `agentry-system` handles all LLM traffic and inbound channel messages as a shared cluster-level service.
 
-For AgentTask, the data plane is the same minus the Service (tasks do not typically receive channel messages); a `{taskName}-completion` ConfigMap is pre-created when [`completion.condition: agentReported`](./CONTROLLER_LIFECYCLE.md#agenttask) so the gateway can write the completion payload.
+For each AgentTask, the controller provisions a parallel set of resources tailored to its ephemeral, no-inbound nature (see [AgentTaskReconciler](./CONTROLLER_RECONCILERS.md#agenttaskreconciler) for the authoritative step list):
+
+- **One Pod** containing the user's task container, under the AgentClass [RuntimeClass](./SECURITY.md#runtimeclass).
+- **One PVC** if the task spec requests persistence.
+- **One [cert-manager `Certificate`](./SECURITY.md#lifecycle-of-an-agenttask-tls-client-certificate)** (and its Secret) holding a per-task TLS cert with `usages: client auth` only — the task uses it to authenticate outbound calls (LLM proxy, `/v1/task/complete`); there is no server-auth EKU because the task does not expose an HTTPS listener.
+- **One ServiceAccount** (the Pod's identity for any in-cluster API access).
+- **One NetworkPolicy** synthesized from the AgentClass and the gateway's egress allow rule.
+- When [`completion.condition: agentReported`](./CONTROLLER_LIFECYCLE.md#agenttask), additionally: a pre-created `{taskName}-completion` ConfigMap (initial `data: {}`) where the gateway writes the completion payload, plus a per-task `Role` and `RoleBinding` granting the gateway ServiceAccount name-scoped `update`/`patch` on that ConfigMap.
+
+There is no Service (tasks do not receive channel messages and have no stable endpoint) and no generic configuration ConfigMap (task config is delivered via env vars and Pod spec). All resources are owner-referenced to the AgentTask for cascade GC.
 
 ## The Agentry Gateway
 
@@ -242,4 +253,4 @@ At a type level, the chart deploys:
 - A trust-manager `Bundle` projecting the `agentry-ca` ConfigMap into non-system namespaces
 - A default `standard` AgentClass and an optional `sandboxed` AgentClass example
 
-For the full chart contents, the certificate inventory, the operational Helm values (`gateway.replicas`, `gateway.callbackUrl.allowlist`, `controller.networkPolicy.dnsSelector`, `gateway.externalHostnames`, `gateway.maxFallbackDepth`, `trustManager.bundleSelector`), and the per-tier setup details, see [DEPLOYMENT.md](./DEPLOYMENT.md).
+For the full chart contents, the certificate inventory, the operational Helm values (`gateway.replicas`, `gateway.callbackUrl.allowlist`, `controller.networkPolicy.dnsSelector`, `gateway.externalHostnames`, `gateway.maxFallbackDepth`, `gateway.channelHealthWindow`, `trustManager.bundleSelector`), and the per-tier setup details, see [DEPLOYMENT.md](./DEPLOYMENT.md).

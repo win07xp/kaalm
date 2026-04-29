@@ -621,10 +621,16 @@ status:
     - type: PlatformConnected
       status: "True"
       reason: WebhookReady
-      message: "Webhook endpoint /channels/team-support/support-assistant is active"
+      message: "1 successful inbound request in the last 5m"
 ```
 
-`PlatformConnected` reflects the gateway's view of the channel's recent inbound delivery health (latest-result-wins, reduced across gateway replicas by the `AgentChannelReconciler`). For v1 webhook channels, typical reasons are `WebhookReady` (most recent inbound request succeeded, or no traffic yet), `WebhookAuthFailed` (auth check rejected), `AgentNotReady` (target Agent unavailable at delivery time), and `DispatchFailed` (delivery to the agent failed). For v1.1+ persistent-connection channels, the same condition will reflect platform-connection liveness using platform-specific reasons. See [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking) for the per-replica state model and cross-replica reduction.
+`PlatformConnected` is a **tri-state** condition reflecting the gateway's view of the channel's recent inbound delivery health, evaluated over a rolling window (`gateway.channelHealthWindow`, default `5m`):
+
+- `status: "True"`, `reason: WebhookReady` — at least one in-window inbound request succeeded (auth passed + message dispatched to the agent).
+- `status: "False"` with `reason` ∈ {`WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`} — the in-window observations are all failures; the reason reflects the most recent failure.
+- `status: "Unknown"`, `reason: NoRecentTraffic` — no in-window observations exist on any replica that has been up the full window. Distinguishes a truly idle channel from one that was last known healthy hours ago.
+
+The reduction across gateway replicas is performed by the `AgentChannelReconciler`. v1.1+ persistent-connection channels will reuse the same tri-state contract, with reasons sourced from gateway-side connection events. See [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking) for the per-replica state model and cross-replica reduction.
 
 ### Design notes
 

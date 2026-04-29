@@ -151,13 +151,28 @@ Activity data is ephemeral: it is lost on gateway restart. The gateway includes 
 
 The gateway maintains per-channel inbound-delivery health in-memory (per replica), populated as the gateway processes incoming webhook requests. The controller queries this state via `GET /v1/channels/health` to populate `status.conditions[type=PlatformConnected]` on each AgentChannel — see [API_ENDPOINTS.md § GET /v1/channels/health](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only) for the endpoint shape.
 
-Each replica records, per registered channel path, the result of the most recent inbound request it observed: `{ result: success | failure, reason, timestamp, lastError? }`. A successful observation requires both: webhook auth validation passed **and** the message was dispatched to the target agent (`POST /v1/message` returned 2xx, or — in async mode — was queued for the retry pipeline). Failures past the auth step but before agent dispatch (e.g., agent not Ready, route resolution failed) are recorded as `failure` with the corresponding reason. No etcd writes are performed per request.
+`PlatformConnected` is a **rolling-window** condition, not a "last result" condition: it reflects whether the channel has had observed inbound activity in the last `N` (a Helm-configured window, `gateway.channelHealthWindow`, default `5m`). This avoids a long-silent channel appearing permanently healthy purely on the strength of a successful delivery hours or days ago.
 
-For channels with no observed inbound traffic since the replica's startup, the replica returns `{ result: success, reason: NoTrafficYet, timestamp: <replica startedAt> }` so a freshly-started replica does not appear unhealthy by default.
+**Per-replica observation list.** Each replica keeps a bounded list of in-window observations per registered channel path, each shaped `{ result: success | failure, reason, timestamp, lastError? }`. Entries older than the window are dropped on insertion or on read. A successful observation requires both: webhook auth validation passed **and** the message was dispatched to the target agent (`POST /v1/message` returned 2xx, or — in async mode — was queued for the retry pipeline). Failures past the auth step but before agent dispatch (e.g., agent not Ready, route resolution failed) are recorded as `failure` with the corresponding reason. No etcd writes are performed per request.
 
-**Multi-replica fan-out**: the `AgentChannelReconciler` queries every gateway Pod IP in parallel — same shape as the [activity-API fan-out](#activity-tracking-api), including the per-Pod-IP TLS handling (`ServerName` override against the gateway Service DNS) and the unreachable-replica skip. The controller reduces per-channel records across replicas by most-recent `timestamp` (latest-result-wins) and writes the result to `status.conditions[type=PlatformConnected]`. If all replicas are unreachable, the existing condition is preserved.
+**Per-replica state.** From its in-window list, each replica computes one of three states per channel:
 
-For v1.1+ persistent-connection channels (Discord, WhatsApp), the same record shape will reflect the gateway-side connection liveness rather than per-request inbound delivery; the endpoint contract and condition semantics do not change.
+- `success` — at least one in-window observation has `result: success`. Reported alongside the most recent success's `reason`/`timestamp` and the most recent failure's `lastError` if any (informational).
+- `failure` — the in-window list is non-empty and contains only failures. Reported with the most recent failure's `reason`/`lastError`/`timestamp`.
+- `empty` — no in-window observations.
+
+**Replica-startup handling.** Each replica reports its `startedAt` in the response. A replica with `now - startedAt < N` has not been alive long enough to observe a full window; its `empty` state is therefore not evidence that the channel is silent — only that this replica cannot prove silence. The controller treats the `startedAt` flag the same way the activity-API path does (see above) — `empty` from a not-yet-full-window replica does not contribute to a silence determination.
+
+**Multi-replica fan-out and reduction.** The `AgentChannelReconciler` queries every gateway Pod IP in parallel — same shape as the [activity-API fan-out](#activity-tracking-api), including the per-Pod-IP TLS handling (`ServerName` override against the gateway Service DNS) and the unreachable-replica skip. The controller reduces the per-replica states into the AgentChannel condition as follows:
+
+1. Any replica reports `success` ⇒ `PlatformConnected = True` with `reason = WebhookReady` and the most recent success's metadata.
+2. Else any replica reports `failure` ⇒ `PlatformConnected = False` with the most recent failure's reason (`WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`).
+3. Else at least one replica has been up the full window AND every reachable replica reports `empty` ⇒ `PlatformConnected = Unknown` with `reason = NoRecentTraffic`.
+4. Else (no replica has full-window coverage AND no in-window observations exist anywhere) ⇒ preserve the existing condition. This mirrors the activity-API "all replicas unreachable" rule and avoids flapping during a coordinated gateway restart.
+
+If all replicas are unreachable, the existing condition is preserved (rule 4 path).
+
+For v1.1+ persistent-connection channels (Discord, WhatsApp), the same per-replica list and reduction will be reused: gateway-side connection liveness produces `success`/`failure` observations on connection events (handshake completed, disconnect with reason) rather than per-request inbound deliveries; the tri-state condition semantics and reason-code shape do not change.
 
 ---
 
