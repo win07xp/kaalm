@@ -68,6 +68,7 @@ flowchart LR
     gw -. "POST /v1/activate (mTLS)" .-> activator
     ctrl -. "GET /v1/activity (mTLS)" .-> llmgw
     ctrl -. "GET /v1/channels/health (mTLS)" .-> llmgw
+    agentC -. "POST /v1/task/complete<br/>POST /v1/agent/heartbeat (mTLS)" .-> llmgw
 
     %% ── Styling (high contrast) ──────────────────────────
     classDef extNode fill:#FFE4B5,stroke:#8B4513,stroke-width:2px,color:#3a1f00
@@ -83,7 +84,7 @@ flowchart LR
     class apiserver k8sNode
 ```
 
-The dashed edges are the three internal control-plane RPCs between Controller and Gateway. All three are [mTLS with SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
+The dashed edges are internal mTLS RPCs that share the Gateway's `:8443` listener but have a stricter security envelope than the LLM proxy: three control-plane RPCs between Controller and Gateway (activator wake, activity, channel health) and the agent-emitted `/v1/task/complete` and `/v1/agent/heartbeat` calls. All are [mTLS with SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api); the consolidated path → auth mapping appears under [The Agentry Gateway](#the-agentry-gateway).
 
 ## Control Plane
 
@@ -97,7 +98,7 @@ The Agentry control plane consists of a single operator (Go, built on `controlle
 
 4. [**AgentClass Reconciler**](./CONTROLLER_RECONCILERS.md#agentclassreconciler) — watches `AgentClass` resources. Validates that referenced ModelProviders exist, maintains usage counts, and updates status conditions.
 
-5. [**AgentChannel Reconciler**](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) — watches `AgentChannel` resources. Validates that the referenced Agent exists and has a Service, validates channel credentials, and monitors channel health (the controller polls the gateway via [`GET /v1/channels/health`](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on the gateway's `:8443` listener). The gateway watches AgentChannel resources directly for platform connection management.
+5. [**AgentChannel Reconciler**](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) — watches `AgentChannel` resources. Validates that the referenced Agent exists and has a Service, validates channel credentials, and monitors channel health (the controller polls the gateway via [`GET /v1/channels/health`](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on the gateway's `:8443` listener). The gateway watches AgentChannel resources directly for platform connection management. The poll populates `status.conditions[type=PlatformConnected]` (observational only); `status.conditions[type=Ready]` is set independently by controller-local validation (path conflict, reference resolution, credential format), and the gateway gates webhook routing on `Ready` alone — `PlatformConnected` is for user/operator visibility (see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow), step 4).
 
 The controller does **not** host admission webhooks. Field-level validation uses CEL expressions in CRD schemas; [cross-resource validation](./API_RESOURCES.md#cross-resource-validation) (reference resolution, image allowlists, provider access) is handled at reconcile time and surfaced as status conditions rather than admission errors.
 
@@ -112,6 +113,8 @@ The reverse direction — controller → gateway — is the [**activity API**](.
 Leader election is enabled so the operator can run with multiple replicas for availability.
 
 The controller's [RBAC surface](./SECURITY.md#operator-serviceaccount) covers cluster-scoped CRD watches, child-resource management, and dynamic per-channel roles.
+
+**Multi-tenancy.** v1 assumes a single platform team owns the cluster-scoped policy resources (AgentClass, ModelProvider) while individual tenants operate at namespace boundaries via Agent, AgentTask, and AgentChannel. Cross-tenant access to providers is gated by `ModelProvider.allowedNamespaces` and `AgentClass.allowedProviders` — both must pass for an Agent to use a provider (see [API_RESOURCES.md § AgentClass](./API_RESOURCES.md#agentclass)). Webhook paths on AgentChannel are namespace-prefixed by a CRD-level CEL rule (`/channels/{namespace}/...`), so cross-tenant path collisions are impossible by construction (see [API_RESOURCES.md § AgentChannel](./API_RESOURCES.md#agentchannel)).
 
 ## Data Plane
 
@@ -156,7 +159,15 @@ The gateway is a replicated Deployment in `agentry-system`. It exposes two TLS l
 - [`GET /v1/activity?namespace={ns}`](./GATEWAY_USER.md#activity-tracking-api) (controller → gateway): per-namespace activity timestamps for idle and hibernation transitions.
 - [`GET /v1/channels/health`](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only) (controller → gateway): per-channel platform-connection health.
 
-All four enforce [mTLS-with-SAN at the path layer](./GATEWAY_LLM.md#per-path-client-auth-enforcement).
+**`:8443` listener auth profile** (consolidated; all paths share the same listener and serve TLS, while client-auth requirements vary per path):
+
+| Path family | Client auth |
+|---|---|
+| LLM proxy (`/v1/messages`, `/v1/chat/completions`, provider-specific paths) | mTLS with Agent/AgentTask SAN, **or** `TokenReview`-validated SA bearer token (gateway-only tier) |
+| `POST /v1/task/complete`, `POST /v1/agent/heartbeat` | mTLS, Agent/AgentTask SAN required |
+| `GET /v1/activity`, `GET /v1/channels/health` | mTLS, Controller SAN required (Agent/AgentTask certs rejected with 403) |
+
+The mTLS-with-SAN enforcement is implemented as [per-path middleware on the listener](./GATEWAY_LLM.md#per-path-client-auth-enforcement); a routing bug here would let agent-cert holders reach controller-only paths, so the path → auth mapping is the most security-load-bearing detail in the gateway.
 
 [LLM provider credentials](./SECURITY.md#lifecycle-of-an-llm-api-key) are stored as Secrets in `agentry-system` and read directly by the gateway. They never leave the `agentry-system` namespace.
 
@@ -216,6 +227,8 @@ The User Gateway ships with a **generic webhook adapter** in v1 (inbound HTTP PO
 | Tool access | MCP (external, not managed by Agentry in v1) |
 | External exposure | Ingress/Gateway (user-managed, not Agentry) |
 | Observability | Controller + Gateway Prometheus metrics; see Observability section |
+| In-cluster TLS issuance | cert-manager + trust-manager (prerequisite); see [DEPLOYMENT.md](./DEPLOYMENT.md) |
+| Network policy enforcement | NP-capable CNI (prerequisite); see [SECURITY.md § Network Policy](./SECURITY.md#network-policy) |
 
 ## Deployment Model
 
