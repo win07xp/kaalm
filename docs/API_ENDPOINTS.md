@@ -260,6 +260,11 @@ The request carries no auth header; authentication is the mTLS client cert prese
       "phase": "Degraded",
       "platformConnected": false,
       "lastError": "webhook auth validation failed: 401 Unauthorized"
+    },
+    "/channels/team-support/new-channel": {
+      "phase": "Active",
+      "platformConnected": true,
+      "lastError": null
     }
   }
 }
@@ -269,8 +274,10 @@ The request carries no auth header; authentication is the mTLS client cert prese
 |---|---|---|
 | `channels` | map | Keys are webhook paths as registered in the gateway; values are health records for each channel |
 | `phase` | string | `"Active"` \| `"Degraded"` \| `"Failed"` — mirrors `AgentChannel.status.phase` as seen from the gateway |
-| `platformConnected` | boolean | `true` if the gateway considers the channel endpoint healthy and ready to receive messages |
+| `platformConnected` | boolean | Latest-result-wins indicator of the channel's recent inbound delivery health (per replica, this response). For v1 webhook channels, `true` means the most recent inbound request succeeded (auth passed + message dispatched to the agent) or no inbound traffic has been seen since the replica's startup; `false` means the most recent inbound request failed (auth rejected, agent not Ready, dispatch failed). For v1.1+ persistent-connection channels, `true` means the gateway-to-platform connection is healthy. See [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking) for the per-replica state model and how the controller reduces across replicas |
 | `lastError` | string or null | Most recent error seen by the gateway for this channel; null if no error |
+
+The third channel in the example (`new-channel`) shows the no-traffic-yet case: a freshly-created channel that has not yet received any inbound requests reports `platformConnected: true` so it does not appear unhealthy by default. Each replica answers from its own observations; the controller fans out and reduces by most-recent observation timestamp.
 
 **Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only channels whose target Agent is in the requested namespace are returned.
 

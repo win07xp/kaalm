@@ -624,6 +624,8 @@ status:
       message: "Webhook endpoint /channels/team-support/support-assistant is active"
 ```
 
+`PlatformConnected` reflects the gateway's view of the channel's recent inbound delivery health (latest-result-wins, reduced across gateway replicas by the `AgentChannelReconciler`). For v1 webhook channels, typical reasons are `WebhookReady` (most recent inbound request succeeded, or no traffic yet), `WebhookAuthFailed` (auth check rejected), `AgentNotReady` (target Agent unavailable at delivery time), and `DispatchFailed` (delivery to the agent failed). For v1.1+ persistent-connection channels, the same condition will reflect platform-connection liveness using platform-specific reasons. See [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking) for the per-replica state model and cross-replica reduction.
+
 ### Design notes
 
 - **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.

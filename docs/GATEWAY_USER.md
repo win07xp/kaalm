@@ -147,6 +147,20 @@ Activity data is ephemeral: it is lost on gateway restart. The gateway includes 
 
 ---
 
+## Channel Health Tracking
+
+The gateway maintains per-channel inbound-delivery health in-memory (per replica), populated as the gateway processes incoming webhook requests. The controller queries this state via `GET /v1/channels/health` to populate `status.conditions[type=PlatformConnected]` on each AgentChannel — see [API_ENDPOINTS.md § GET /v1/channels/health](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only) for the endpoint shape.
+
+Each replica records, per registered channel path, the result of the most recent inbound request it observed: `{ result: success | failure, reason, timestamp, lastError? }`. A successful observation requires both: webhook auth validation passed **and** the message was dispatched to the target agent (`POST /v1/message` returned 2xx, or — in async mode — was queued for the retry pipeline). Failures past the auth step but before agent dispatch (e.g., agent not Ready, route resolution failed) are recorded as `failure` with the corresponding reason. No etcd writes are performed per request.
+
+For channels with no observed inbound traffic since the replica's startup, the replica returns `{ result: success, reason: NoTrafficYet, timestamp: <replica startedAt> }` so a freshly-started replica does not appear unhealthy by default.
+
+**Multi-replica fan-out**: the `AgentChannelReconciler` queries every gateway Pod IP in parallel — same shape as the [activity-API fan-out](#activity-tracking-api), including the per-Pod-IP TLS handling (`ServerName` override against the gateway Service DNS) and the unreachable-replica skip. The controller reduces per-channel records across replicas by most-recent `timestamp` (latest-result-wins) and writes the result to `status.conditions[type=PlatformConnected]`. If all replicas are unreachable, the existing condition is preserved.
+
+For v1.1+ persistent-connection channels (Discord, WhatsApp), the same record shape will reflect the gateway-side connection liveness rather than per-request inbound delivery; the endpoint contract and condition semantics do not change.
+
+---
+
 ## Observability
 
 The gateway exposes Prometheus metrics on `:9090/metrics`:

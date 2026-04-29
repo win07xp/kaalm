@@ -84,7 +84,7 @@ flowchart LR
     class apiserver k8sNode
 ```
 
-The dashed edges are internal mTLS RPCs that share the Gateway's `:8443` listener but have a stricter security envelope than the LLM proxy: three control-plane RPCs between Controller and Gateway (activator wake, activity, channel health) and the agent-emitted `/v1/task/complete` and `/v1/agent/heartbeat` calls. All are [mTLS with SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api); the consolidated path → auth mapping appears under [The Agentry Gateway](#the-agentry-gateway).
+The dashed edges are internal mTLS RPCs with a stricter security envelope than the LLM proxy. Four are served on the Gateway's `:8443` listener (activity, channel health, `/v1/task/complete`, `/v1/agent/heartbeat`); the activator wake is served on the Controller's `:9443` (see [Control Plane](#control-plane)). All are [mTLS with SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api); the consolidated path → auth mapping for the gateway listener appears under [The Agentry Gateway](#the-agentry-gateway).
 
 ## Control Plane
 
@@ -98,7 +98,7 @@ The Agentry control plane consists of a single operator (Go, built on `controlle
 
 4. [**AgentClass Reconciler**](./CONTROLLER_RECONCILERS.md#agentclassreconciler) — watches `AgentClass` resources. Validates that referenced ModelProviders exist, maintains usage counts, and updates status conditions.
 
-5. [**AgentChannel Reconciler**](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) — watches `AgentChannel` resources. Validates that the referenced Agent exists and has a Service, validates channel credentials, and monitors channel health (the controller polls the gateway via [`GET /v1/channels/health`](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on the gateway's `:8443` listener). The gateway watches AgentChannel resources directly for platform connection management. The poll populates `status.conditions[type=PlatformConnected]` (observational only); `status.conditions[type=Ready]` is set independently by controller-local validation (path conflict, reference resolution, credential format), and the gateway gates webhook routing on `Ready` alone — `PlatformConnected` is for user/operator visibility (see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow), step 4).
+5. [**AgentChannel Reconciler**](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) — watches `AgentChannel` resources. Validates that the referenced Agent exists and has a Service, validates channel credentials, and monitors channel health (the controller polls the gateway via [`GET /v1/channels/health`](./GATEWAY_LLM.md#per-path-client-auth-enforcement) on the gateway's `:8443` listener). The gateway watches AgentChannel resources directly for platform connection management. The poll populates `status.conditions[type=PlatformConnected]` (observational only) — for v1 webhook channels this tracks recent inbound delivery health (auth + dispatch result of the most recent inbound request observed by any gateway replica); v1.1+ persistent-connection channels will use the same condition for connection liveness. `status.conditions[type=Ready]` is set independently by controller-local validation (path conflict, reference resolution, credential format), and the gateway gates webhook routing on `Ready` alone — `PlatformConnected` is for user/operator visibility (see [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking)).
 
 The controller does **not** host admission webhooks. Field-level validation uses CEL expressions in CRD schemas; [cross-resource validation](./API_RESOURCES.md#cross-resource-validation) (reference resolution, image allowlists, provider access) is handled at reconcile time and surfaced as status conditions rather than admission errors.
 
@@ -112,7 +112,7 @@ The reverse direction — controller → gateway — is the [**activity API**](.
 
 Leader election is enabled so the operator can run with multiple replicas for availability.
 
-The controller's [RBAC surface](./SECURITY.md#operator-serviceaccount) covers cluster-scoped CRD watches, child-resource management, and dynamic per-channel roles.
+The controller's [RBAC surface](./SECURITY.md#operator-serviceaccount) covers cluster-scoped CRD watches, child-resource management, dynamic per-channel roles, and Pod read/list/watch in `agentry-system` for the activity-API fan-out.
 
 **Multi-tenancy.** v1 assumes a single platform team owns the cluster-scoped policy resources (AgentClass, ModelProvider) while individual tenants operate at namespace boundaries via Agent, AgentTask, and AgentChannel. Cross-tenant access to providers is gated by `ModelProvider.allowedNamespaces` and `AgentClass.allowedProviders` — both must pass for an Agent to use a provider (see [API_RESOURCES.md § AgentClass](./API_RESOURCES.md#agentclass)). Webhook paths on AgentChannel are namespace-prefixed by a CRD-level CEL rule (`/channels/{namespace}/...`), so cross-tenant path collisions are impossible by construction (see [API_RESOURCES.md § AgentChannel](./API_RESOURCES.md#agentchannel)).
 
@@ -171,7 +171,7 @@ The mTLS-with-SAN enforcement is implemented as [per-path middleware on the list
 
 [LLM provider credentials](./SECURITY.md#lifecycle-of-an-llm-api-key) are stored as Secrets in `agentry-system` and read directly by the gateway. They never leave the `agentry-system` namespace.
 
-The gateway's [RBAC surface](./SECURITY.md#gateway-serviceaccount-permissions) covers cluster-scoped `create` on `tokenreviews` for the gateway-only tier and the Pod/AgentChannel watches for routing.
+The gateway's [RBAC surface](./SECURITY.md#gateway-serviceaccount-permissions) covers cluster-scoped `create` on `tokenreviews` for the gateway-only tier, the Pod/AgentChannel watches for routing, and per-task `Role`/`RoleBinding`s granting name-scoped `update`/`patch` on each `{taskName}-completion` ConfigMap (issued at AgentTask reconcile time, cascade-deleted with the task).
 
 **Multi-replica state.** The gateway runs as multiple replicas, and each piece of per-namespace state has a defined cross-replica reconciliation path rather than living per-replica only:
 
