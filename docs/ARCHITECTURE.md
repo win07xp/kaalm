@@ -57,7 +57,7 @@ flowchart LR
     %% ── Data plane (thick) ───────────────────────────────
     webhooks == "inbound" ==> usergw
     usergw == "deliver (mTLS)<br/>POST /v1/message" ==> agentC
-    agentC == "LLM (mTLS)" ==> llmgw
+    agentC & agentTaskC == "LLM (mTLS)" ==> llmgw
     workloadC == "LLM (SA Bearer)" ==> llmgw
     llmgw == "egress" ==> providers
 
@@ -86,7 +86,7 @@ flowchart LR
     class apiserver k8sNode
 ```
 
-The dashed edges are internal mTLS RPCs. Unlike the LLM proxy — which accepts either an Agent/AgentTask client cert or a `TokenReview`-validated SA bearer token (gateway-only tier) — these endpoints reject the SA-bearer path entirely and require a specific identity SAN per path: controller for `/v1/activity` and `/v1/channels/health`, AgentTask for `/v1/task/complete`, Agent for `/v1/agent/heartbeat`, gateway for the activator. Four are served on the Gateway's `:8443` listener (activity, channel health, `/v1/task/complete`, `/v1/agent/heartbeat`); the activator wake is served on the Controller's `:9443` (see [Control Plane](#control-plane)). [SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api) is implemented as per-path middleware; the consolidated path → auth mapping for the gateway listener appears under [The Agentry Gateway](#the-agentry-gateway).
+The dashed edges are internal mTLS RPCs. Unlike the LLM proxy — which accepts either an Agent/AgentTask client cert or a `TokenReview`-validated SA bearer token (gateway-only tier) — these endpoints reject the SA-bearer path entirely. Listener middleware enforces a controller SAN on `/v1/activity` and `/v1/channels/health`, an Agent-or-AgentTask SAN on `/v1/task/complete` and `/v1/agent/heartbeat` (with handler-level caller-type checks layered on — e.g., `/v1/task/complete` returns `400` if the calling Pod is not an AgentTask), and a gateway SAN on the activator. Four are served on the Gateway's `:8443` listener (activity, channel health, `/v1/task/complete`, `/v1/agent/heartbeat`); the activator wake is served on the Controller's `:9443` (see [Control Plane](#control-plane)). [SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator--activity-api) is implemented as per-path middleware; the consolidated path → auth mapping for the gateway listener appears under [The Agentry Gateway](#the-agentry-gateway).
 
 ## Control Plane
 
@@ -161,7 +161,7 @@ The gateway is a replicated Deployment in `agentry-system`. It exposes two TLS l
 - Listens on port 8080 over [TLS](./GATEWAY_USER.md#tls-and-ingress) (backend re-encrypt vs TLS pass-through)
 - Hosts two path families on `:8080`: webhook intake under `/channels/{namespace}/...` and the async polling fallback at `GET /v1/channels/responses/{requestId}` — see [API_ENDPOINTS.md § Reserved Gateway Paths](./API_ENDPOINTS.md#reserved-gateway-paths) and [§ Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed)
 - Normalizes inbound webhook payloads into the Agentry message envelope and resolves the target Agent via the AgentChannel resource
-- If the agent is `Hibernated`, signals the controller to wake it via the [mTLS-authenticated activator endpoint](./GATEWAY_USER.md#activator) and waits until the Pod is ready (bounded by `wakeTimeout`)
+- On delivery, resolves the Agent's Service endpoints; if the Service has no endpoints (a hibernated Agent's Service is retained but unpopulated — the gateway uses endpoint-absence as the hibernation signal rather than watching Agent resources, see [CONTROLLER_LIFECYCLE.md § Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) and [GATEWAY_USER.md § Activator](./GATEWAY_USER.md#activator)), signals the controller to wake the agent via the [mTLS-authenticated activator endpoint](./GATEWAY_USER.md#activator) and waits until the Pod is ready (bounded by `wakeTimeout`)
 - Delivers the message to the agent container via [`POST /v1/message`](./API_ENDPOINTS.md#post-v1message-agent-only--agent-implemented)
 - Supports per-AgentChannel sync (default) and async response modes — [configuration](./API_RESOURCES.md#spec-4) and [callback/polling protocol](./API_ENDPOINTS.md#async-webhook-response-gateway-managed)
 - v1 supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1
