@@ -63,7 +63,7 @@ flowchart LR
 
     %% ── Lifecycle (thin) ─────────────────────────────────
     ctrl -- "watches / reconciles" --> apiserver
-    apiserver -- "Pods • PVCs • Services • ConfigMaps<br/>NetworkPolicies • ServiceAccounts" --> users
+    apiserver -- "Pods • PVCs • Services • ConfigMaps<br/>NetworkPolicies • ServiceAccounts • Certificates" --> users
 
     %% ── Internal mTLS RPCs (dashed) ──────────────────────
     gw -. "POST /v1/activate/{ns}/{name} (mTLS)" .-> activator
@@ -138,7 +138,7 @@ For each AgentTask, the controller provisions a parallel set of resources tailor
 - **One PVC** if the task spec requests persistence.
 - **One [cert-manager `Certificate`](./SECURITY.md#lifecycle-of-an-agenttask-tls-client-certificate)** (and its Secret) holding a per-task TLS cert with `usages: client auth` only — the task uses it to authenticate outbound calls (LLM proxy, `/v1/task/complete`); there is no server-auth EKU because the task does not expose an HTTPS listener.
 - **One ServiceAccount** (the Pod's identity for any in-cluster API access).
-- **One NetworkPolicy** synthesized from the AgentClass and the gateway's egress allow rule. AgentTask Pods have no listener and no Service, so the synthesized policy is **egress-only** — the Pod-selector scoping implies a default-deny ingress posture, and there is no per-Pod ingress allow (in contrast to Agent Pods, which receive `/v1/message` from the gateway).
+- **One NetworkPolicy** synthesized from the AgentClass and the gateway's egress allow rule. AgentTask Pods have no listener and no Service, so the synthesized policy carries the standard egress allow set with **no ingress allow rules** — `policyTypes: [Ingress, Egress]` with `ingress: []` makes the default-deny ingress posture explicit (relying on `policyTypes` inference here would default to `[Egress]` only and leave ingress allow-all). In contrast, Agent Pods receive `/v1/message` from the gateway and thus carry an explicit gateway → agent ingress allow rule on `$AGENTRY_HEALTH_PORT`.
 - When [`completion.condition: agentReported`](./CONTROLLER_LIFECYCLE.md#agenttask), additionally: a pre-created `{taskName}-completion` ConfigMap (initial `data: {}`) where the gateway writes the completion payload, plus a per-task `Role` and `RoleBinding` granting the gateway ServiceAccount name-scoped `update`/`patch` on that ConfigMap.
 
 There is no Service (tasks do not receive channel messages and have no stable endpoint) and no generic configuration ConfigMap (task config is delivered via env vars and Pod spec). All resources are owner-referenced to the AgentTask for cascade GC.

@@ -174,6 +174,9 @@ Because the gateway is a separate Pod in `agentry-system`, NetworkPolicy can cle
 
 ```yaml
 # NetworkPolicy for agent Pods
+policyTypes:
+  - Ingress
+  - Egress
 ingress:
   - from:
     - namespaceSelector:
