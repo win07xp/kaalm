@@ -559,18 +559,32 @@ spec:
     # If omitted in async mode, responses are stored and retrievable via polling
     # at GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}.
     #
-    # Constraints (enforced by AgentChannelReconciler; see rule 22 below):
+    # Constraints (enforced by AgentChannelReconciler; see rules 22 and 25 below):
     #   - scheme must be https://
     #   - the host must not resolve to loopback (127.0.0.0/8, ::1),
     #     link-local (169.254.0.0/16, fe80::/10), RFC1918 private ranges
     #     (10/8, 172.16/12, 192.168/16), unique-local IPv6 (fc00::/7), or
     #     cloud metadata IPs (169.254.169.254, fd00:ec2::254)
+    #   - callbackAuth (below) must also be set — every callback POST is signed
     # The check is re-run at each delivery attempt (DNS is re-resolved then to
     # defeat rebinding) — see GATEWAY_USER.md § Request Flow. Platform teams
     # that need callbacks into the cluster can override this deny-internal
     # default with an explicit allowlist via the Helm value
     # gateway.callbackUrl.allowlist (DNS-name suffixes or CIDR blocks).
     # callbackUrl: "https://my-service.example.com/agent-responses"
+    #
+    # Required when callbackUrl is set (enforced by rule 25 below). Defines the
+    # signing material the gateway applies to every callback POST so receivers
+    # can reject forged callbacks. Same shape as `auth` above; bearer adds an
+    # Authorization header, hmac signs a canonical string of
+    # "{requestId}\n{timestamp}\n{sha256(body)}" — see API_ENDPOINTS.md
+    # § Callback delivery for the wire contract.
+    # callbackAuth:
+    #   type: hmac
+    #   hmac:
+    #     header: "X-Agentry-Signature"
+    #     algorithm: sha256
+    #     secretRef: { name: callback-signing-secret, key: secret }
     # Maximum number of in-flight async responses before the gateway rejects
     # new async requests with HTTP 503. Bounds ConfigMap creation in agentry-system.
     maxPendingAsyncResponses: 100
@@ -680,6 +694,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 22. `AgentChannel.spec.webhook.callbackUrl`, when set, must use the `https://` scheme, and its host must not resolve to loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16, fe80::/10), RFC1918 private ranges (10/8, 172.16/12, 192.168/16), unique-local IPv6 (fc00::/7), or the cloud-metadata IPs 169.254.169.254 / fd00:ec2::254. Violations set `Ready=False, reason=InvalidCallbackUrl`. The AgentChannelReconciler performs the check at admission/reconcile time, and the gateway re-resolves the host and repeats the check on every delivery attempt to prevent DNS rebinding — see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow). The deny-internal default may be replaced with an explicit allowlist via the Helm value `gateway.callbackUrl.allowlist`.
 23. `AgentClass.spec.image.imagePullSecrets[*].name`, when referenced by an Agent or AgentTask, must exist as a Secret in the **referencing workload's namespace** at reconcile time. AgentClass is cluster-scoped but Secrets are namespace-scoped; the controller does not copy Secrets across namespaces. Missing Secrets set `Ready=False, reason=ImagePullSecretMissing` on the Agent/AgentTask with a message naming the namespace and secret, and the Pod is not created. Checked in AgentReconciler and AgentTaskReconciler — see [AgentClass design notes](#design-notes).
 24. `Agent.spec.persistence.enabled` and `AgentTask.spec.persistence.enabled` must not be `true` if the referenced AgentClass has `spec.persistence.enabled: false`. The class is the authority on whether persistence is allowed for workloads of that category — a developer cannot opt in to a PVC that the class disallows. Violations set `Ready=False, reason=PersistenceNotAllowed` on the Agent/AgentTask with a message naming the AgentClass, and the Pod is not created. Enforced at reconcile time by AgentReconciler and AgentTaskReconciler. CRD CEL cannot express this rule because it spans two resources and Kubernetes CEL validations on Agent cannot read AgentClass fields.
+25. When `AgentChannel.spec.webhook.callbackUrl` is set, `AgentChannel.spec.webhook.callbackAuth` must also be set. Enforced at apply time via CRD CEL on AgentChannel (`has(self.spec.webhook.callbackUrl) ? has(self.spec.webhook.callbackAuth) : true`). Outbound callbacks must be cryptographically attributable to the gateway so receivers can reject forged POSTs; an unsigned `callbackUrl` would let any third party that learns the URL deliver fake response or error payloads. The AgentChannelReconciler additionally validates that the referenced Secret exists and contains the configured `data` key — same shape as the inbound `auth` validation. Violations set `Ready=False, reason=CallbackAuthMissing` (CEL bypass case) or `reason=CallbackAuthInvalid` (Secret not found / key missing). See [API_ENDPOINTS.md § Callback delivery](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the wire contract and [SECURITY.md threat model](./SECURITY.md#threat-model) for the forgery row.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 

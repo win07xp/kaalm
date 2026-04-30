@@ -38,6 +38,8 @@ On poll (`GET /v1/channels/responses/{requestId}?channelPath=...`), any gateway 
 
    **`callbackUrl` re-validation on delivery**: before each POST attempt to `callbackUrl` (both the initial attempt and each retry), the gateway re-resolves the host and re-checks it against the blocked IP ranges from [AgentChannel validation rule 22](./API_RESOURCES.md#cross-resource-validation). This defeats DNS rebinding between reconcile-time validation and delivery. If the host now resolves to a blocked range (loopback, link-local, RFC1918, unique-local IPv6, cloud metadata, or anything outside `gateway.callbackUrl.allowlist` when set), the delivery attempt is not dialed — the gateway instead stores a `callback_invalid` error payload at the polling endpoint (or drops the callback if polling is unavailable) and records the AgentChannel `Warning` event `reason=CallbackInvalid`. The error is delivered to the polling endpoint per async rules; retries are not attempted for a host that fails validation.
 
+   **Callback signing**: after the IP-allowlist re-check passes and before dialing, `SendReply` constructs the signed callback per [API_ENDPOINTS.md § Callback authentication](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) using the channel's `spec.webhook.callbackAuth` (required by [rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). Signing happens on every attempt — initial and each retry — using a fresh timestamp, so a delayed retry doesn't ship a stale `X-Agentry-Timestamp`. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` via the same per-channel scoped Role used for inbound `auth` (see [SECURITY.md § Gateway ServiceAccount permissions](./SECURITY.md#gateway-serviceaccount-permissions)).
+
 ---
 
 ## TLS and Ingress
@@ -73,7 +75,7 @@ type ChannelAdapter interface {
 
 The `SendReply` method is used for async response delivery: when `responseMode: async`, the gateway calls `SendReply` to POST the agent's response to the configured `callbackUrl` after the agent has processed the message. For sync mode, `SendReply` is not called — the response is returned inline as the HTTP response body. Discord and WhatsApp adapters (v1.1) will use `SendReply` for all responses since those platforms are inherently asynchronous.
 
-The webhook adapter's `SendReply` applies the `callbackUrl` allowlist/blocklist check before dialing — see step 8 in [Request Flow](#user-gateway--request-flow) and [rule 22](./API_RESOURCES.md#cross-resource-validation). The check is inside `SendReply` (not in a shared middleware) so each adapter can apply transport-appropriate rules if v1.1 adapters call into non-HTTP destinations.
+The webhook adapter's `SendReply` applies the `callbackUrl` allowlist/blocklist check before dialing and then applies the `callbackAuth` signing step — see step 8 in [Request Flow](#user-gateway--request-flow), [rule 22](./API_RESOURCES.md#cross-resource-validation) (URL constraints), [rule 25](./API_RESOURCES.md#cross-resource-validation) (signing required), and [API_ENDPOINTS.md § Callback authentication](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) (wire contract). Both checks live inside `SendReply` (not in shared middleware) so each adapter can apply transport-appropriate rules if v1.1 adapters call into non-HTTP destinations.
 
 ---
 

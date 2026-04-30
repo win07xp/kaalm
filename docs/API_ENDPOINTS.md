@@ -156,6 +156,13 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 
 The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the response is stored for polling retrieval.
 
+**Callback authentication** — every callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (required by [API_RESOURCES.md § Cross-Resource Validation rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). The signing contract mirrors the [polling endpoint's caller-auth contract](#async-webhook-response-gateway-managed) below — same auth types, same `X-Agentry-Timestamp` header, with a body-hash component added because callbacks have a body where polls do not. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` (or `callbackAuth.hmac.secretRef`), held by the gateway via the per-channel scoped Role created by AgentChannelReconciler:
+
+- **`callbackAuth.type: bearer`** — gateway sends `Authorization: Bearer <secret>` on the callback POST.
+- **`callbackAuth.type: hmac`** — gateway computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}\n{sha256(body)}"` (unix seconds, no trailing newline; body hash is the lowercase hex sha256 of the raw POST body bytes). The hex-encoded digest goes in the configured `callbackAuth.hmac.header`; `timestamp` goes in `X-Agentry-Timestamp`. Receivers should reject timestamps with skew greater than 300s against their own wall clock.
+
+This contract applies uniformly to success payloads (above) and to every error payload (`delivery_failed`, `wake_timeout`, `controller_unavailable`, `response_too_large`, `callback_invalid`) — error payloads are signed identically so a forged POST cannot impersonate a delivery error.
+
 **Error callback payload** (sent to `callbackUrl` or stored at the polling endpoint on failure):
 
 ```json
