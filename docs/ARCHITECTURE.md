@@ -1,6 +1,6 @@
 # Agentry — Architecture Overview
 
-This document describes the high-level architecture of Agentry: the control plane, the data plane, and the integration points with the surrounding ecosystem. Agentry is single-cluster in v1; multi-cluster federation is out of scope.
+This document describes the high-level architecture of Agentry: the control plane, the per-Agent and per-Task workload resources, the shared Agentry Gateway, and the integration points with the surrounding ecosystem. Agentry is single-cluster in v1; multi-cluster federation is out of scope.
 
 ## Documentation Map
 
@@ -8,7 +8,7 @@ This document describes the high-level architecture of Agentry: the control plan
 |---|---|
 | [VISION.md](./VISION.md) | Problem statement, design principles, v1 scope |
 | [STORIES.md](./STORIES.md) | Personas and user scenarios driving the design |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | This file — system topology, control/data plane, deployment |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | This file — system topology, control plane, per-Agent/per-Task resources, gateway, deployment |
 | [API_RESOURCES.md](./API_RESOURCES.md) | CRD specs: AgentClass, ModelProvider, Agent, AgentTask, AgentChannel |
 | [API_ENDPOINTS.md](./API_ENDPOINTS.md) | Gateway HTTP endpoints and agent-implemented contracts |
 | [GATEWAY_LLM.md](./GATEWAY_LLM.md) | LLM Gateway: routing, budget, fallback, TLS, credentials |
@@ -68,7 +68,7 @@ flowchart LR
     apiserver -- "Pods • PVCs • Services • ConfigMaps<br/>NetworkPolicies • ServiceAccounts • Certificates" --> users
 
     %% ── Internal mTLS RPCs (dashed) ──────────────────────
-    gw -. "POST /v1/activate/{ns}/{name} (mTLS)" .-> activator
+    usergw -. "POST /v1/activate/{ns}/{name} (mTLS)" .-> activator
     ctrl -. "GET /v1/activity (mTLS)" .-> llmgw
     ctrl -. "GET /v1/channels/health (mTLS)" .-> llmgw
     agentC -. "POST /v1/agent/heartbeat (mTLS)" .-> llmgw
@@ -88,7 +88,7 @@ flowchart LR
     class apiserver k8sNode
 ```
 
-The dashed edges are internal mTLS RPCs. Unlike the LLM proxy — which accepts either an Agent/AgentTask client cert or a `TokenReview`-validated SA bearer token (gateway-only tier) — these endpoints reject the SA-bearer path entirely. Listener middleware enforces a controller SAN on `/v1/activity` and `/v1/channels/health`, an Agent-or-AgentTask SAN on `/v1/task/complete` and `/v1/agent/heartbeat`, and a gateway SAN on the activator. Four are served on the Gateway's `:8443` listener (activity, channel health, `/v1/task/complete`, `/v1/agent/heartbeat`); the activator wake is served on the Controller's `:9443` (see [Control Plane](#control-plane)). [SAN-based authorization](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health) is implemented as per-path middleware. The consolidated path → auth mapping for the gateway listener — including the handler-level Agent-vs-AgentTask check layered on top of the shared SAN admission — appears under [The Agentry Gateway](#the-agentry-gateway).
+The dashed edges are internal mTLS RPCs — all require mTLS-with-SAN at the listener and reject the LLM proxy's `TokenReview`-validated SA-bearer alternative. Four are served on the Gateway's `:8443` listener (`/v1/activity`, `/v1/channels/health`, `/v1/task/complete`, `/v1/agent/heartbeat`); the activator wake is served on the Controller's `:9443`. See [The Agentry Gateway](#the-agentry-gateway) for the consolidated path → SAN mapping on `:8443` (including the handler-level Agent-vs-AgentTask split layered on the shared admission), [Control Plane](#control-plane) for the activator's SAN policy, and [SECURITY.md](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health) for the underlying [per-path middleware](./GATEWAY_LLM.md#per-path-client-auth-enforcement) pattern.
 
 ## Control Plane
 
@@ -120,9 +120,9 @@ The controller's [RBAC surface](./SECURITY.md#operator-serviceaccount) covers cl
 
 **Multi-tenancy.** v1 assumes a single platform team owns the cluster-scoped policy resources (AgentClass, ModelProvider) while individual tenants operate at namespace boundaries via Agent, AgentTask, and AgentChannel. Cross-tenant access to providers is gated by `ModelProvider.allowedNamespaces` and `AgentClass.allowedProviders` — both must pass for an Agent to use a provider (see [API_RESOURCES.md § AgentClass](./API_RESOURCES.md#agentclass)). Gateway-only-tier callers (no Agent or AgentClass involved) are gated by `ModelProvider.allowedNamespaces` alone — see [The Agentry Gateway](#the-agentry-gateway). Webhook paths on AgentChannel are namespace-prefixed by a CRD-level CEL rule (`/channels/{namespace}/...`), so cross-tenant path collisions are impossible by construction (see [API_RESOURCES.md § AgentChannel](./API_RESOURCES.md#agentchannel)).
 
-## Data Plane
+## Per-Agent and Per-Task Resources
 
-The data plane is what actually runs when an Agent is created. For each Agent in `Running` state, the controller provisions:
+For each Agent in `Running` state, the controller provisions:
 
 - **One Pod** containing the user's agent container. The Pod runs under the [RuntimeClass](./SECURITY.md#runtimeclass) specified by its AgentClass (runc, gVisor, or Kata).
 - **One PVC** if the [Agent spec requests persistence](./API_RESOURCES.md#spec-2), mounted into the agent container at a configured path.
@@ -131,6 +131,8 @@ The data plane is what actually runs when an Agent is created. For each Agent in
 - **One ConfigMap** holding non-sensitive agent configuration (gateway endpoint, feature flags).
 - **One ServiceAccount** (`agent-{agentName}`, no RoleBindings by default — the agent has no Kubernetes API access unless the platform team or developer explicitly grants it; see [SECURITY.md § Agent Pod ServiceAccount](./SECURITY.md#agent-pod-serviceaccount)).
 - **One NetworkPolicy** synthesized from the AgentClass network policy and the gateway's egress allow rule. This is the load-bearing primitive cited in the [gateway architecture analysis](./GATEWAY_LLM.md#architecture-option-analysis) for keeping LLM credentials inside `agentry-system` — see the [full rule set](./CONTROLLER_RECONCILERS.md#agentreconciler) (AgentReconciler step 6). **NetworkPolicy enforcement by the cluster CNI is a required prerequisite of Agentry's trust model.** On the message path, the synthesized ingress rule is **layered with the [agent-side mTLS check on `POST /v1/message`](./SECURITY.md#in-cluster-tls-bidirectional)** (specified in [RUNTIME_CONTRACT.md](./RUNTIME_CONTRACT.md), bullet 4) — a misconfigured per-Agent NP does not open delivery to arbitrary in-cluster callers. The synthesized egress rule remains the sole control preventing agents from calling provider IPs directly, which is why CNI enforcement of NetworkPolicy is still a hard prerequisite. Clusters running default kindnet or default flannel do not enforce NetworkPolicy and are not supported deployment targets. See also [Recommendation #4](./SECURITY.md#recommendations-for-deployment).
+
+All of the above resources live in the same namespace as the Agent CR and carry an ownerRef back to it; full Agent deletion cascade-GCs them.
 
 On `Hibernated`, only the Pod is deleted; the PVC, per-Agent `Certificate` (and its Secret), Service (with no endpoints), ConfigMap, ServiceAccount, and NetworkPolicy are retained so wake-on-demand can recreate the Pod against unchanged identity and storage. See [CONTROLLER_LIFECYCLE.md § Hibernation mechanics](./CONTROLLER_LIFECYCLE.md#hibernation-mechanics).
 
@@ -172,7 +174,7 @@ The gateway is a replicated Deployment in `agentry-system`. It exposes two TLS l
 - v1 supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1
 
 **Gateway-Internal API** (mTLS on `:8443`) — these endpoints are not part of the LLM proxy or webhook flows but share the LLM Gateway listener so that mTLS-authenticated callers (agents, AgentTasks, controller) reach them without standing up a separate listener. [Reserved](./API_ENDPOINTS.md#reserved-gateway-paths) under the `/v1/` prefix.
-- [`POST /v1/task/complete`](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) (agent → gateway): the AgentTask agent reports completion; the gateway updates the pre-existing `{taskName}-completion` ConfigMap referenced under [Data Plane](#data-plane).
+- [`POST /v1/task/complete`](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) (agent → gateway): the AgentTask agent reports completion; the gateway updates the pre-existing `{taskName}-completion` ConfigMap referenced under [Per-Agent and Per-Task Resources](#per-agent-and-per-task-resources).
 - [`POST /v1/agent/heartbeat`](./API_ENDPOINTS.md#post-v1agentheartbeat-agent-only) (agent → gateway): liveness signal feeding the `agentHeartbeat` activity source.
 - [`GET /v1/activity?namespace={ns}`](./GATEWAY_USER.md#activity-tracking-api) (controller → gateway): per-namespace activity timestamps for idle and hibernation transitions.
 - [`GET /v1/channels/health`](./API_ENDPOINTS.md#get-v1channelshealth-internal--controller-use-only) (controller → gateway): per-channel platform-connection health.
@@ -256,21 +258,21 @@ The User Gateway ships with a **generic webhook adapter** in v1 (inbound HTTP PO
 | LLM traffic / spend tracking | LLM Gateway in agentry-system (shared) |
 | Channel message routing | User Gateway in agentry-system (shared) |
 | Tool access | MCP (external, not managed by Agentry in v1) |
-| External exposure | Ingress/Gateway (user-managed, not Agentry) |
+| External exposure | Kubernetes Ingress / Gateway API (user-managed, not Agentry) |
 | Observability | Controller + Gateway Prometheus metrics; see Observability section |
 | In-cluster TLS issuance | cert-manager + trust-manager (prerequisite); see [DEPLOYMENT.md](./DEPLOYMENT.md) |
 | Network policy enforcement | NP-capable CNI (prerequisite); see [SECURITY.md § Network Policy](./SECURITY.md#network-policy) |
 
 ## Deployment Model
 
-Agentry ships as a Helm chart. **cert-manager, trust-manager, and an NP-enforcing CNI are required prerequisites** — see [SECURITY.md § Network Policy](./SECURITY.md#network-policy) and the NetworkPolicy bullet under [Data Plane](#data-plane). The chart supports a two-tier on-ramp: a **gateway-only** tier (existing workloads point at the gateway via projected ServiceAccount tokens for LLM traffic and spend tracking, with no AgentClass or Agent resources; provider access is gated by `ModelProvider.allowedNamespaces` alone — see [LLM Gateway](#the-agentry-gateway)) and a **full agent lifecycle** tier (Agents, AgentTasks, AgentChannels, hibernation and wake-on-demand, mTLS via per-agent certificates).
+Agentry ships as a Helm chart. **cert-manager, trust-manager, and an NP-enforcing CNI are required prerequisites** — see [SECURITY.md § Network Policy](./SECURITY.md#network-policy) and the NetworkPolicy bullet under [Per-Agent and Per-Task Resources](#per-agent-and-per-task-resources). The chart supports a two-tier on-ramp: a **gateway-only** tier (existing workloads point at the gateway via projected ServiceAccount tokens for LLM traffic and spend tracking, with no AgentClass or Agent resources; provider access is gated by `ModelProvider.allowedNamespaces` alone — see [LLM Gateway](#the-agentry-gateway)) and a **full agent lifecycle** tier (Agents, AgentTasks, AgentChannels, hibernation and wake-on-demand, mTLS via per-agent certificates).
 
-**Gateway-only-tier egress is the platform team's responsibility.** Agentry synthesizes per-Pod NetworkPolicies only for Agentry-managed Pods (Agent, AgentTask). Workload Pods in the gateway-only tier are not Agentry-managed, so the egress NetworkPolicy that the [Data Plane](#data-plane) section identifies as the sole control preventing direct LLM-provider egress is not synthesized for them. Budget enforcement, rate limiting, and provider-access gating only hold for tier-1 workloads if the platform team applies their own NetworkPolicies in those namespaces denying egress to provider IPs except via the gateway Service. Tier-2 (full lifecycle) is unaffected — its NetworkPolicies are synthesized.
+**Gateway-only-tier egress is the platform team's responsibility.** Agentry synthesizes per-Pod NetworkPolicies only for Agentry-managed Pods (Agent, AgentTask). Workload Pods in the gateway-only tier are not Agentry-managed, so the egress NetworkPolicy that the [Per-Agent and Per-Task Resources](#per-agent-and-per-task-resources) section identifies as the sole control preventing direct LLM-provider egress is not synthesized for them. Budget enforcement, rate limiting, and provider-access gating only hold for tier-1 workloads if the platform team applies their own NetworkPolicies in those namespaces denying egress to provider IPs except via the gateway Service. Tier-2 (full lifecycle) is unaffected — its NetworkPolicies are synthesized.
 
 At a type level, the chart deploys:
 
 - 5 CRDs (AgentClass, ModelProvider, Agent, AgentTask, AgentChannel)
-- Controller and Gateway Deployments — both default to `replicas: 2` with a PodDisruptionBudget (`minAvailable: 1`), a `maxUnavailable: 1` rolling-update strategy, and pod anti-affinity (`topologyKey: kubernetes.io/hostname`) so the two replicas land on different nodes. The Controller's two-replica default is what makes the wake-on-demand "hard control-plane dependency" claim under [The Agentry Gateway](#the-agentry-gateway) survive both voluntary disruptions (drains) and single-replica involuntary failures: the activator handler runs on every replica, so the surviving replica continues serving wake requests while the failed one reschedules. The Gateway enforces a ≥2 floor (the multi-replica state model assumes it); the Controller does not enforce a floor — single-replica is functionally valid since leader election and the activator both work with one replica, but HA is operator-elected. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the chart's enforcement and override values. Plus their ServiceAccounts, ClusterRoles, and ClusterRoleBindings
+- Controller and Gateway Deployments — both default to `replicas: 2` with a PodDisruptionBudget (`minAvailable: 1`), a `maxUnavailable: 1` rolling-update strategy, and pod anti-affinity (`topologyKey: kubernetes.io/hostname`) so the two replicas land on different nodes. The Controller's two-replica default is what makes the wake-on-demand "hard control-plane dependency" claim under [The Agentry Gateway](#the-agentry-gateway) survive both voluntary disruptions (drains) and single-replica involuntary failures: the activator handler runs on every replica, so the surviving replica continues serving wake requests while the failed one reschedules. The Gateway enforces a ≥2 floor — at one replica `minAvailable: 1` blocks all voluntary eviction (drains stall) and `maxUnavailable: 1` rolling updates have no headroom, so chart upgrades would briefly take the gateway offline for both LLM and inbound webhook traffic; the Controller does not enforce a floor — single-replica is functionally valid since leader election and the activator both work with one replica, but HA is operator-elected. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the chart's enforcement and override values. Plus their ServiceAccounts, ClusterRoles, and ClusterRoleBindings
 - cert-manager `ClusterIssuer`s (a self-signed root and `agentry-ca-issuer`) and `Certificate`s for the gateway and controller serving certs (per-Agent and per-AgentTask `Certificate`s are issued at reconcile time, not by the chart)
 - A trust-manager `Bundle` projecting the `agentry-ca` ConfigMap into non-system namespaces
 - A default `standard` AgentClass and an optional `sandboxed` AgentClass example
