@@ -111,6 +111,8 @@ The reconciler updates `status.lastActivityTime` on the Agent only when a phase 
 
 **Gateway restart**: each replica's `/v1/activity` response includes a `startedAt` timestamp. The controller compares this against the Agent's `status.phaseTransitionTime` (set by the AgentReconciler on every phase change — see [API_RESOURCES.md § Agent design notes](./API_RESOURCES.md#design-notes)). If a replica's `startedAt` is more recent than `status.phaseTransitionTime` (i.e., that replica restarted while the agent was Running), the controller treats that replica's missing activity data as "unknown" — it uses data from other replicas, or defers if all replicas have restarted. No idle or hibernation transitions are made until at least one replica has been running for `idleTimeout`, at which point missing activity data from that replica can be interpreted as genuine inactivity.
 
+**Operational consequence:** a synchronized gateway restart (rollout, image deploy, chart upgrade) defers all idle and hibernation transitions for `idleTimeout`, since no replica satisfies the "up for `idleTimeout`" condition until that long has elapsed post-restart. Operators choosing multi-hour `idleTimeout` values should expect a corresponding window of deferred hibernation after every gateway restart.
+
 ### Hibernation mechanics
 
 Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. The Service remains (with no endpoints) while the Agent is hibernated. Wake is triggered by the [User Gateway](./GATEWAY_USER.md#activator) (on channel message arrival) or manual annotation, not by traffic to the Service.

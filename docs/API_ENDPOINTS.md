@@ -39,7 +39,7 @@ Called by the agent container to report task completion. The gateway updates the
 | `message` | string | no | Human-readable completion message |
 | `artifacts` | map[string]string | no | Key-value pairs matching the names declared in `spec.artifacts`. The reconciler validates that all declared artifact names are present. |
 
-**Response:** `200 OK` with empty body on success. `400 Bad Request` if the calling Pod is not associated with an AgentTask. `413 Payload Too Large` if any single artifact value exceeds 4 KiB or total artifacts exceed 32 KiB (large artifacts should be stored externally and referenced by URL in the value).
+**Response:** `200 OK` with empty body on success. `403 Forbidden` if the calling Pod is not associated with an AgentTask. `413 Payload Too Large` if any single artifact value exceeds 4 KiB or total artifacts exceed 32 KiB (large artifacts should be stored externally and referenced by URL in the value).
 
 ---
 
@@ -49,7 +49,7 @@ Called by the agent container to signal liveness for idle detection. Only meanin
 
 **Request body:** empty or `{}`.
 
-**Response:** `200 OK` with empty body. `400 Bad Request` if the calling Pod is not associated with an Agent.
+**Response:** `200 OK` with empty body. `403 Forbidden` if the calling Pod is not associated with an Agent.
 
 Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 seconds. The gateway coalesces rapid heartbeats in memory — no etcd or API server writes occur per heartbeat.
 
