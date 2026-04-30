@@ -79,7 +79,9 @@ The webhook adapter's `SendReply` applies the `callbackUrl` allowlist/blocklist 
 
 ## Activator
 
-When an Agent is in the `Hibernated` phase, its Service has no endpoints. The gateway serves as the activator:
+When an Agent is in the `Hibernated` phase, its Service has no endpoints. The gateway detects this lazily, on delivery: a fast connect-failure (kube-proxy `REJECT`/`RST` against a ClusterIP Service with empty endpoints) is the hibernation signal — there is no separate Endpoint or EndpointSlice watch on the gateway. Transient network failures take the same path; the resulting wake patch is a no-op against a still-Running Agent, since the manual-wake handler in [`AgentReconciler` step 9](./CONTROLLER_RECONCILERS.md#agentreconciler) acts only on `Hibernated` phase.
+
+The gateway serves as the activator:
 
 1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
 2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service) to signal a wake request. **This call is mTLS over HTTPS.** The controller serves its activator endpoint with a cert-manager-issued `Certificate` (`agentry-controller-tls`) signed by the same `ClusterIssuer` (`agentry-ca-issuer`) that signs the gateway cert, so the gateway verifies the controller's cert against the Agentry CA and the controller verifies the gateway's client cert against the same CA. See [Activator Authentication](#activator-authentication).
