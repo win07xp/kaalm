@@ -116,7 +116,7 @@ The reverse direction — controller → gateway — is the [**activity API**](.
 
 Leader election is enabled so the operator can run with multiple replicas for availability.
 
-The controller's [RBAC surface](./SECURITY.md#operator-serviceaccount) covers cluster-scoped CRD watches, child-resource management (including cluster-wide Pod read/list/watch for managing Agent/AgentTask Pods in user namespaces and for fanning out activity and channel-health queries to gateway Pods in `agentry-system`), and dynamic per-channel and per-task `Role`/`RoleBinding`s in user namespaces.
+The controller's [RBAC surface](./SECURITY.md#operator-serviceaccount) covers cluster-scoped CRD watches, child-resource management (including cluster-wide Pod read/list/watch for managing Agent/AgentTask Pods in user namespaces and for fanning out activity and channel-health queries to gateway Pods in `agentry-system`), scoped ConfigMap read/write/delete in `agentry-system` (ModelProviderReconciler reconciles the per-provider budget ConfigMap; AgentChannelReconciler prunes expired `agentry-async-*` response ConfigMaps and sweeps the channel's remaining ones in its finalizer, since cross-namespace ownerRefs do not trigger Kubernetes GC), and dynamic per-channel and per-task `Role`/`RoleBinding`s in user namespaces.
 
 **Multi-tenancy.** v1 assumes a single platform team owns the cluster-scoped policy resources (AgentClass, ModelProvider) while individual tenants operate at namespace boundaries via Agent, AgentTask, and AgentChannel. Cross-tenant access to providers is gated by `ModelProvider.allowedNamespaces` and `AgentClass.allowedProviders` — both must pass for an Agent to use a provider (see [API_RESOURCES.md § AgentClass](./API_RESOURCES.md#agentclass)). Gateway-only-tier callers (no Agent or AgentClass involved) are gated by `ModelProvider.allowedNamespaces` alone — see [The Agentry Gateway](#the-agentry-gateway). Webhook paths on AgentChannel are namespace-prefixed by a CRD-level CEL rule (`/channels/{namespace}/...`), so cross-tenant path collisions are impossible by construction (see [API_RESOURCES.md § AgentChannel](./API_RESOURCES.md#agentchannel)).
 
@@ -149,7 +149,7 @@ There is no Service (tasks do not receive channel messages and have no stable en
 
 ## The Agentry Gateway
 
-The gateway is a replicated Deployment in `agentry-system`. It exposes two TLS listeners — `:8443` for the LLM proxy and internal mTLS endpoints (agent/controller → gateway), `:8080` for inbound channel webhooks and the async response polling endpoint — together hosting three classes of traffic, grouped below by call class:
+The gateway is a replicated Deployment in `agentry-system`. It exposes two TLS listeners — `:8443` for the LLM proxy and internal mTLS endpoints, `:8080` for inbound channel webhooks and the async response polling endpoint — together hosting three classes of traffic, grouped below by call class:
 
 [**LLM Gateway**](./GATEWAY_LLM.md#llm-gateway--request-flow) (outbound, agent → provider).
 - Serves TLS on port 8443; agent containers connect via `$AGENTRY_GATEWAY_ENDPOINT` (HTTPS, always injected)
