@@ -98,7 +98,7 @@ The activator endpoint authenticates callers via **mTLS** — there is no shared
 - The gateway presents its `agentry-gateway-tls` cert as the client cert when calling `POST /v1/activate/{namespace}/{agentName}`.
 - The controller verifies the client cert against the Agentry CA (`agentry-ca`) and authorizes the request only if the cert's SAN matches the gateway Service DNS (`agentry-gateway.agentry-system.svc.cluster.local` or `.svc`). Any other SAN — even one signed by `agentry-ca` — is rejected with `403 Forbidden`.
 
-cert-manager rotates both certs continuously from `agentry-ca-issuer`; there is no separate Secret to manage or rotate. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api) for the matching SAN authorization rules on the reverse direction (controller → gateway activity API).
+cert-manager rotates both certs continuously from `agentry-ca-issuer`; there is no separate Secret to manage or rotate. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health) for the matching SAN authorization rules on the reverse direction (controller → gateway activity API).
 
 ---
 
@@ -106,7 +106,7 @@ cert-manager rotates both certs continuously from `agentry-ca-issuer`; there is 
 
 The gateway maintains per-agent activity timestamps in-memory, updated on every LLM request, channel message delivery, and agent heartbeat. This avoids per-request etcd writes: v1 targets 1000 Agents/AgentTasks per cluster, and the in-memory store is deliberately designed to scale an order of magnitude higher without a design change as future versions grow the target. The controller uses this data to evaluate idle and hibernation transitions — see [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection).
 
-The gateway exposes an internal endpoint for the controller to query activity state. The endpoint serves **HTTPS** using the gateway's `agentry-gateway-tls` Certificate and **requires an mTLS client cert on this path**. The controller presents its `agentry-controller-tls` cert; the gateway verifies against `agentry-ca` and authorizes only if the client cert's SAN matches the controller Service DNS (`agentry-controller.agentry-system.svc.cluster.local` or `.svc`). There is no separate shared-secret or bearer-token layer on top of the mTLS tunnel. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator--activity-api).
+The gateway exposes an internal endpoint for the controller to query activity state. The endpoint serves **HTTPS** using the gateway's `agentry-gateway-tls` Certificate and **requires an mTLS client cert on this path**. The controller presents its `agentry-controller-tls` cert; the gateway verifies against `agentry-ca` and authorizes only if the client cert's SAN matches the controller Service DNS (`agentry-controller.agentry-system.svc.cluster.local` or `.svc`). There is no separate shared-secret or bearer-token layer on top of the mTLS tunnel. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health).
 
 **`GET /v1/activity?namespace={ns}`**
 
