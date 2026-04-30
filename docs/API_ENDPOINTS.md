@@ -228,7 +228,7 @@ Any gateway replica accepts this request. The replica reads the response from th
 | 202 | Request is still being processed |
 | 404 | Unknown requestId or response expired (1-hour TTL) |
 
-Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the AgentChannelReconciler. This is a polling fallback, not a durable queue — webhook callers that need guaranteed delivery should configure `callbackUrl`.
+Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the AgentChannelReconciler. Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
 
 ---
 
