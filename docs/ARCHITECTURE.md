@@ -27,13 +27,11 @@ Agentry workloads come in two shapes. An **Agent** is a long-lived workload that
 
 | Kind | Scope | Tier | Purpose |
 |---|---|---|---|
-| AgentClass | Cluster | Both† | Policy template — runtime, isolation, allowed providers, network egress |
+| AgentClass | Cluster | Full lifecycle only (chart default in both) | Policy template — runtime, isolation, allowed providers, network egress |
 | ModelProvider | Cluster | Both | LLM provider config — credentials Secret, allowed namespaces, fallback chain |
 | Agent | Namespace | Full lifecycle only | Long-lived agent workload |
 | AgentTask | Namespace | Full lifecycle only | Ephemeral task workload |
 | AgentChannel | Namespace | Full lifecycle only | Inbound webhook channel binding to an Agent |
-
-† The chart ships a default `standard` AgentClass in both tiers, but no gateway-only-tier workload references it. See [Adoption Tiers](#adoption-tiers).
 
 Spec details for each CRD are in [API_RESOURCES.md](./API_RESOURCES.md).
 
@@ -45,7 +43,7 @@ flowchart LR
     webhooks["📨 Webhook Callers<br/>(external systems, bots)"]
 
     %% ── Agentry Gateway (agentry-system) ─────────────────
-    gw["🌐 <b>Agentry Gateway Pod</b> · agentry-system<br/>(single process, two listeners)<br/>:8080 — User Gateway (webhooks, async polling)<br/>:8443 — LLM Gateway + internal mTLS RPCs"]
+    gw["🌐 <b>Agentry Gateway Pod</b> · agentry-system<br/>(single process, three listeners)<br/>:8080 — User Gateway (webhooks, async polling)<br/>:8443 — LLM Gateway + internal mTLS RPCs<br/>internal health port — kubelet probes (no client auth)"]
 
     %% ── User namespaces (agent + workload pods) ──────────
     subgraph users["👥 User namespaces"]
@@ -80,7 +78,7 @@ flowchart LR
     apiserver -- "Pods • PVCs • Services • ConfigMaps<br/>NetworkPolicies • ServiceAccounts • Certificates" --> users
 
     %% ── Internal mTLS RPCs (dashed) ──────────────────────
-    gw -. "POST /v1/activate/{namespace}/{agentName} (mTLS)" .-> activator
+    gw -. "POST /v1/activate/{namespace}/{agentName} (mTLS, :9443)" .-> activator
     ctrl -. "GET /v1/activity (mTLS, :8443)" .-> gw
     ctrl -. "GET /v1/channels/health (mTLS, :8443)" .-> gw
     agentC -. "POST /v1/agent/heartbeat (mTLS, :8443)" .-> gw
@@ -190,7 +188,7 @@ All of the above resources live in the same namespace as the Agent CR and carry 
 
 On `Hibernated`, only the Pod is deleted; the PVC, per-Agent `Certificate` (and its Secret), Service (with no endpoints), ConfigMap, ServiceAccount, and NetworkPolicy are retained so wake-on-demand can recreate the Pod against unchanged identity and storage. See [CONTROLLER_LIFECYCLE.md § Hibernation mechanics](./CONTROLLER_LIFECYCLE.md#hibernation-mechanics).
 
-**AgentClass changes propagate to live workloads.** When the platform team mutates an in-use AgentClass, the controller re-derives the [child-resource set](#per-agent-and-per-task-child-resources) for every Agent referencing the class — recreate-and-clamp where the new invariants can be applied, or transition to `Degraded` where they cannot (e.g., the Agent's `image` is no longer in `allowedImages`). In-flight AgentTasks are not interrupted: they finish under their original class spec, and the new invariants apply only when the task next provisions a Pod (a backoff retry or a subsequent AgentTask CR). This makes AgentClass a live policy lever for Agents without disrupting one-shot task work. Bulk-impact and rollout guidance: [CONTROLLER_LIFECYCLE.md § AgentClass change handling](./CONTROLLER_LIFECYCLE.md#agentclass-change-handling-running-agent).
+**AgentClass changes propagate to live workloads.** When the platform team mutates an in-use AgentClass, the controller re-derives the [child-resource set](#per-agent-and-per-task-child-resources) for every Agent referencing the class — recreate-and-clamp (re-derive the Pod spec under the new invariants — e.g., clamping `resources.limits` to the new `maxLimits` — then delete and recreate the Pod, preserving PVC, Service, ConfigMap, and Certificate) where the new invariants can be applied, or transition to `Degraded` where they cannot (e.g., the Agent's `image` is no longer in `allowedImages`). In-flight AgentTasks are not interrupted: they finish under their original class spec, and the new invariants apply only when the task next provisions a Pod (a backoff retry or a subsequent AgentTask CR). This makes AgentClass a live policy lever for Agents without disrupting one-shot task work. Bulk-impact and rollout guidance: [CONTROLLER_LIFECYCLE.md § AgentClass change handling](./CONTROLLER_LIFECYCLE.md#agentclass-change-handling-running-agent).
 
 By contrast, **ModelProvider mutations propagate via the gateway's CRD and Secret watches** and take effect per-request — `allowedNamespaces`, `spec.models`, fallback-chain edits, and credential rotations on `secretRef` apply on the next routed call without any Pod-level side effect. No `Degraded` transition or recreate-and-clamp is involved because ModelProvider governs routing rather than Pod identity (see [GATEWAY_LLM.md](./GATEWAY_LLM.md) for routing and credential mechanics).
 
