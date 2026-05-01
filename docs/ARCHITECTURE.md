@@ -43,7 +43,7 @@ flowchart LR
     webhooks["📨 Webhook Callers<br/>(external systems, bots)"]
 
     %% ── Agentry Gateway (agentry-system) ─────────────────
-    gw["🌐 <b>Agentry Gateway Pod</b> · agentry-system<br/>(single process, three listeners)<br/>:8080 — User Gateway (webhooks, async polling)<br/>:8443 — LLM Gateway + internal mTLS RPCs<br/>internal health port — kubelet probes (no client auth)"]
+    gw["🌐 <b>Agentry Gateway Pod</b> · agentry-system<br/>(single process, three listeners)<br/>:8080 — User Gateway (webhooks, async polling)<br/>:8443 — LLM Gateway + internal mTLS RPCs<br/>internal health port — kubelet probes (TLS, no client auth)"]
 
     %% ── User namespaces (agent + workload pods) ──────────
     subgraph users["👥 User namespaces"]
@@ -207,7 +207,7 @@ There is no Service (tasks do not receive channel messages and have no stable en
 
 ## The Agentry Gateway
 
-The gateway is a replicated Deployment in `agentry-system`. It exposes two TLS listeners — `:8443` for the LLM proxy and internal mTLS endpoints, `:8080` for inbound channel webhooks and the async response polling endpoint — together hosting three call surfaces, grouped below by call surface:
+The gateway is a replicated Deployment in `agentry-system`. It exposes two TLS listeners — `:8443` for the LLM proxy and internal mTLS endpoints, `:8080` for inbound channel webhooks and the async response polling endpoint — plus a separate internal health port for kubelet probes (described at the end of this section), together hosting three call surfaces, grouped below by call surface:
 
 [**LLM Gateway**](./GATEWAY_LLM.md#llm-gateway--request-flow) (outbound, agent → provider).
 - Serves TLS on port 8443; the gateway endpoint is injected into Agent and AgentTask Pods so agent containers always reach it over HTTPS
@@ -257,7 +257,7 @@ The mTLS-with-SAN enforcement is implemented as [per-path middleware on the list
 
 See [API_ENDPOINTS.md § Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the polling endpoint's channel-match check. No mTLS-authenticated paths live on `:8080`; the listener split keeps an Ingress fronting `:8080` from routing untrusted traffic to controller-only endpoints.
 
-Kubelet liveness/readiness probes for the gateway terminate on a separate **internal health port** (`GET /healthz`, `GET /readyz`) rather than on `:8443` or `:8080`, so they sit outside the listener auth profiles above. The gateway uses a dedicated health port — rather than handshake-mode coexistence on `:8443`/`:8080`, the pattern used by the controller's `:9443` (see [Control Plane](#control-plane)) — because both gateway listeners are reachable beyond the trust boundary that makes cert-less probe coexistence safe on the controller's purely internal `:9443`: `:8080` sits behind a user-provisioned Ingress in the full-lifecycle tier, and `:8443` is reachable by every mTLS-authenticated agent. See [GATEWAY_LLM.md § Gateway Readiness](./GATEWAY_LLM.md#gateway-readiness).
+Kubelet liveness/readiness probes for the gateway terminate on a separate **internal health port** (TLS, no client auth; `GET /healthz`, `GET /readyz`) rather than on `:8443` or `:8080`, so they sit outside the listener auth profiles above. The gateway uses a dedicated health port — rather than handshake-mode coexistence on `:8443`/`:8080`, the pattern used by the controller's `:9443` (see [Control Plane](#control-plane)) — because both gateway listeners are reachable beyond the trust boundary that makes cert-less probe coexistence safe on the controller's purely internal `:9443`: `:8080` sits behind a user-provisioned Ingress in the full-lifecycle tier, and `:8443` is reachable by every mTLS-authenticated agent. See [GATEWAY_LLM.md § Gateway Readiness](./GATEWAY_LLM.md#gateway-readiness).
 
 [LLM provider credentials](./SECURITY.md#lifecycle-of-an-llm-api-key) are stored as Secrets in `agentry-system` and read directly by the gateway. They never leave the `agentry-system` namespace.
 
