@@ -43,14 +43,14 @@ flowchart LR
     webhooks["📨 Webhook Callers<br/>(external systems, bots)"]
 
     %% ── Agentry Gateway (agentry-system) ─────────────────
-    gw["🌐 <b>Agentry Gateway Pod</b> · agentry-system<br/>(single process, three listeners)<br/>:8080 — User Gateway (webhooks, async polling)<br/>:8443 — LLM Gateway + internal mTLS RPCs<br/>internal health port — kubelet probes (TLS, no client auth)"]
+    gw["🌐 <b>Agentry Gateway Pod</b><br/>agentry-system"]
 
     %% ── User namespaces (agent + workload pods) ──────────
     subgraph users["👥 User namespaces"]
         direction TB
-        agentC["🤖 <b>Agent Pod</b><br/>(Agentry-managed)<br/>mTLS client cert<br/>POST /v1/message · GET /health"]
-        agentTaskC["📋 <b>AgentTask Pod</b><br/>(Agentry-managed)<br/>mTLS client cert<br/>Ephemeral · no inbound endpoint"]
-        workloadC["📦 <b>Workload Pod</b><br/>(gateway-only, BYO)<br/>Projected SA token<br/>Calls LLM Gateway only"]
+        agentC["🤖 <b>Agent Pod</b><br/>(Agentry-managed)"]
+        agentTaskC["📋 <b>AgentTask Pod</b><br/>(Agentry-managed, ephemeral)"]
+        workloadC["📦 <b>Workload Pod</b><br/>(gateway-only, BYO)"]
     end
 
     %% ── Outbound external ────────────────────────────────
@@ -61,7 +61,7 @@ flowchart LR
     subgraph ctrl["⚙️ Agentry Controller · agentry-system"]
         direction TB
         recs["<b>Reconcilers</b><br/>Agent • AgentTask<br/>ModelProvider • AgentClass<br/>AgentChannel"]
-        activator["<b>Activator</b> :9443 (mTLS)"]
+        activator["<b>Activator</b>"]
     end
     apiserver[("🗄️ Kubernetes API")]
 
@@ -78,7 +78,7 @@ flowchart LR
     apiserver -- "Pods • PVCs • Services • ConfigMaps<br/>NetworkPolicies • ServiceAccounts • Certificates" --> users
 
     %% ── Internal mTLS RPCs (dashed) ──────────────────────
-    gw -. "POST /v1/activate/{namespace}/{agentName} (mTLS, :9443)" .-> activator
+    gw -. "POST /v1/activate (mTLS, :9443)" .-> activator
     ctrl -. "GET /v1/activity (mTLS, :8443)" .-> gw
     ctrl -. "GET /v1/channels/health (mTLS, :8443)" .-> gw
     agentC -. "POST /v1/agent/heartbeat (mTLS, :8443)" .-> gw
@@ -140,7 +140,7 @@ The Agentry control plane consists of a single operator (Go, built on `controlle
 
 The controller does **not** host admission webhooks. Field-level validation uses CEL expressions in CRD schemas; [cross-resource validation](./API_RESOURCES.md#cross-resource-validation) (reference resolution, image allowlists, provider access) is handled at reconcile time and surfaced as status conditions rather than admission errors.
 
-The controller exposes an internal ClusterIP Service for the activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) on port `:9443`. The same listener on each controller Pod also serves `/healthz` and `/readyz` for kubelet probes, which target the Pod directly rather than going through the Service. The activator endpoint requires [**mTLS**](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health); the controller admits only client certificates whose SAN matches the gateway Service DNS. Both controller and gateway present per-Pod TLS certs issued by the Agentry CA `ClusterIssuer` (see [Deployment Model](#deployment-model)) and rotated by cert-manager. The handshake mode (which lets cert-less kubelet probes coexist with the mTLS-with-SAN gate) and the per-path middleware are documented in [SECURITY.md § Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health) and [GATEWAY_LLM.md § Per-path client-auth enforcement](./GATEWAY_LLM.md#per-path-client-auth-enforcement).
+The controller exposes an internal ClusterIP Service for the activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) on port `:9443`. The same listener on each controller Pod also serves `/healthz` and `/readyz` for kubelet probes, which target the Pod directly rather than going through the Service. The activator endpoint requires [**mTLS**](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health); the controller admits only client certificates whose SAN matches the gateway Service DNS. Both controller and gateway present TLS certs (one `Certificate` per Deployment, shared across replicas, with Service DNS in the SAN) issued by the Agentry CA `ClusterIssuer` (see [Deployment Model](#deployment-model)) and rotated by cert-manager. The handshake mode (which lets cert-less kubelet probes coexist with the mTLS-with-SAN gate) and the per-path middleware are documented in [SECURITY.md § Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health) and [GATEWAY_LLM.md § Per-path client-auth enforcement](./GATEWAY_LLM.md#per-path-client-auth-enforcement).
 
 The activator handler is served on **every** controller replica, not only the leader: the handler patches a wake annotation on the target Agent, and the leader's existing Agent watch fires the manual-wake path in the reconciler. This keeps the Service round-robin behavior correct without any leader-aware endpoint plumbing.
 
