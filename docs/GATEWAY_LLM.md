@@ -155,7 +155,7 @@ The gateway's ServiceAccount needs `create` on `authentication.k8s.io/v1/tokenre
 
 Token audiences are set by workloads via a `projected` volume with `audience: agentry-gateway`. Using an explicit audience prevents generic `kubernetes.default.svc` tokens from being accepted — a stolen kubelet token cannot be reused against the gateway.
 
-Provider routing for this tier is governed by `ModelProvider.spec.allowedNamespaces` and `spec.models` only — the gateway has no Agent or AgentClass to consult. See [Provider Routing § Gateway-only tier](#provider-routing).
+Provider routing for this tier is governed by `ModelProvider.spec.allowedNamespaces` and `spec.models` only — the gateway has no Agent, AgentTask, or AgentClass to consult. See [Provider Routing § Gateway-only tier](#provider-routing).
 
 ### Source-IP cross-check (both modes)
 
