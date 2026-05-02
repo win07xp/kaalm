@@ -98,7 +98,7 @@ Events are the primary surface for status changes that platform teams discover v
 Architecturally-significant Event groups, with the reasons attached:
 
 - **Phase transitions** on Agent and AgentTask (`Normal`, `PhaseChanged`).
-- **Hibernation / wake** on Agent (`Normal`, `Hibernated` / `Woken`; `Warning`, `WakeIgnored`).
+- **Hibernation / wake** on Agent (`Normal`, `Hibernated` / `Woken`; `Warning`, `WakeIgnored`) — see [CONTROLLER_LIFECYCLE.md § Hibernation mechanics](./CONTROLLER_LIFECYCLE.md#hibernation-mechanics) and [Wake trigger](./CONTROLLER_LIFECYCLE.md#wake-trigger).
 - **Provider health and budget** on ModelProvider (`Warning`, `ProviderUnhealthy` / `BudgetExhausted`).
 - **Validation failures** on any CRD (`Warning`, `InvalidReference` plus reconciler-specific reasons).
 - **Fallback misconfiguration** on ModelProvider (`Warning`, `FallbackIneligible` from both reconcile-time and runtime paths; `DegradeTargetNotCheapest` advisory).
@@ -118,10 +118,10 @@ A v1 alert set tied to architectural failure modes already named in the doc set.
 | LLM error rate elevated for a provider | Warn | Provider degraded; consider promoting fallback |
 | Sustained fallback rate to a backup provider | Warn | Primary provider effectively down |
 | Budget threshold `degrade` or `block` triggered | Warn / Page | Tenant or provider crossed the configured spend ceiling |
-| Hibernation / wake churn for a single Agent | Warn | Likely idle-timeout misconfig |
-| Per-namespace rate-limit saturation | Warn | Tenant hitting the per-(namespace, model) ceiling |
-| Wake duration p95 elevated | Warn | Activator path slow — `agentry_channel_wake_duration_seconds` |
-| Async-callback exhaustion rate elevated | Warn | Receivers' `callbackUrl` repeatedly unreachable; receivers should poll |
+| Hibernation / wake churn for a single Agent | Warn | Likely idle-timeout misconfig — see [Agent (persistent mode)](./CONTROLLER_LIFECYCLE.md#agent-persistent-mode) |
+| Per-namespace rate-limit saturation | Warn | Tenant hitting the per-(namespace, model) ceiling — see [Rate Limiting](./GATEWAY_LLM.md#rate-limiting) |
+| Wake duration p95 elevated | Warn | [Activator](./GATEWAY_USER.md#activator) path slow — `agentry_channel_wake_duration_seconds` |
+| Async-callback exhaustion rate elevated | Warn | Receivers' `callbackUrl` repeatedly unreachable; receivers should [poll](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) |
 
 ## Recommended dashboards
 

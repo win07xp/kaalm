@@ -18,7 +18,7 @@ AgentChannels whose `spec.webhook.path` begins with `/v1/` are rejected at recon
 
 ## `POST /v1/task/complete` (AgentTask only)
 
-Called by the agent container to report task completion. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace — created by the AgentTaskReconciler at task provisioning time, owned by the AgentTask for cascade deletion — using the `update, patch`-only RBAC scoped to that exact ConfigMap name (see [Gateway ServiceAccount permissions](./SECURITY.md#gateway-serviceaccount-permissions)). The AgentTaskReconciler watches the ConfigMap for changes to drive the Completing transition — see [AgentTask State Machine](./CONTROLLER_LIFECYCLE.md#agenttask).
+Called by the agent container to report task completion. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace — created by the [AgentTaskReconciler](./CONTROLLER_RECONCILERS.md#agenttaskreconciler) at task provisioning time, owned by the AgentTask for cascade deletion — using the `update, patch`-only RBAC scoped to that exact ConfigMap name (see [Gateway ServiceAccount permissions](./SECURITY.md#gateway-serviceaccount-permissions)). The AgentTaskReconciler watches the ConfigMap for changes to drive the Completing transition — see [AgentTask State Machine](./CONTROLLER_LIFECYCLE.md#agenttask).
 
 **Request body:**
 
@@ -45,7 +45,7 @@ Called by the agent container to report task completion. The gateway updates the
 
 ## `POST /v1/agent/heartbeat` (Agent only)
 
-Called by the agent container to signal liveness for idle detection. Only meaningful when `spec.lifecycle.activitySource` is `agentHeartbeat` or `both`. The gateway updates the agent's last-activity timestamp in its in-memory activity store. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for how the controller uses activity data.
+Called by the agent container to signal liveness for idle detection. Only meaningful when [`spec.lifecycle.activitySource`](./API_RESOURCES.md#agent) is `agentHeartbeat` or `both`. The gateway updates the agent's last-activity timestamp in its in-memory activity store. See [Activity Detection](./CONTROLLER_LIFECYCLE.md#activity-detection) for how the controller uses activity data.
 
 **Request body:** empty or `{}`.
 
@@ -63,7 +63,7 @@ Agents in the `Hibernated` phase can be manually woken by applying the annotatio
 kubectl annotate agent <name> agentry.io/wake=true
 ```
 
-The AgentReconciler watches for this annotation. When observed on a `Hibernated` Agent, the reconciler transitions the Agent to `Resuming`, recreates the Pod, and removes the annotation after processing. This provides an escape hatch when no AgentChannel is configured or for operational use cases (e.g., pre-warming an agent before business hours).
+The [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) watches for this annotation. When observed on a `Hibernated` Agent, the reconciler transitions the Agent to `Resuming`, recreates the Pod, and removes the annotation after processing — see [Wake trigger](./CONTROLLER_LIFECYCLE.md#wake-trigger). This provides an escape hatch when no AgentChannel is configured or for operational use cases (e.g., pre-warming an agent before business hours).
 
 ---
 
@@ -156,7 +156,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 
 The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the response is stored for polling retrieval.
 
-**Callback authentication** — every callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (required by [API_RESOURCES.md § Cross-Resource Validation rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). The signing contract mirrors the [polling endpoint's caller-auth contract](#async-webhook-response-gateway-managed) below — same auth types, same `X-Agentry-Timestamp` header, with a body-hash component added because callbacks have a body where polls do not. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` (or `callbackAuth.hmac.secretRef`), held by the gateway via the per-channel scoped Role created by AgentChannelReconciler:
+**Callback authentication** — every callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (required by [API_RESOURCES.md § Cross-Resource Validation rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). The signing contract mirrors the [polling endpoint's caller-auth contract](#async-webhook-response-gateway-managed) below — same auth types, same `X-Agentry-Timestamp` header, with a body-hash component added because callbacks have a body where polls do not. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` (or `callbackAuth.hmac.secretRef`), held by the gateway via the per-channel scoped Role created by [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler):
 
 - **`callbackAuth.type: bearer`** — gateway sends `Authorization: Bearer <secret>` on the callback POST.
 - **`callbackAuth.type: hmac`** — gateway computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}\n{sha256(body)}"` (unix seconds, no trailing newline; body hash is the lowercase hex sha256 of the raw POST body bytes). The hex-encoded digest goes in the configured `callbackAuth.hmac.header`; `timestamp` goes in `X-Agentry-Timestamp`. Receivers should reject timestamps with skew greater than 300s against their own wall clock.
@@ -235,7 +235,7 @@ Any gateway replica accepts this request. The replica reads the response from th
 | 202 | Request is still being processed |
 | 404 | Unknown requestId or response expired (1-hour TTL) |
 
-Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the AgentChannelReconciler. Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
+Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
 
 ---
 
@@ -304,7 +304,7 @@ The third channel in the example (`new-channel`) shows `state: "empty"`: this re
 
 ## LLM Gateway Error Responses
 
-When the LLM Gateway cannot fulfill a request, it returns a structured error response so agents can handle failures programmatically. For the full LLM Gateway request flow including budget checks and fallback that produce these errors, see [GATEWAY_LLM.md](./GATEWAY_LLM.md#llm-gateway--request-flow).
+When the LLM Gateway cannot fulfill a request, it returns a structured error response so agents can handle failures programmatically. For the full LLM Gateway request flow including budget checks and fallback that produce these errors, see [GATEWAY_LLM.md § Request Flow](./GATEWAY_LLM.md#llm-gateway--request-flow); the underlying enforcement points live at [Rate Limiting](./GATEWAY_LLM.md#rate-limiting), [Budget State Management](./GATEWAY_LLM.md#budget-state-management), and [Fallback Logic](./GATEWAY_LLM.md#fallback-logic).
 
 **Error response body:**
 

@@ -125,13 +125,13 @@ The LLM Gateway listener requires a client certificate on connections from Pods 
 
 Namespace extraction is identical for both shapes (second label). The shape discriminates workload type for audit and metrics. This produces a cryptographically attested (namespace, workload name, workload kind) triple on every request.
 
-**Exact label-count enforcement**: the gateway requires the DNS SAN to have exactly the expected label count for its shape — 5 for `.svc.cluster.local`, 4 for `.task.agentry.io`. Any SAN with extra (or fewer) labels is rejected as `403 invalid_cert`. This is defense in depth against a dotted-name bypass: if the CRD CEL constraint restricting Agent/AgentTask `metadata.name` to DNS-1123 labels (see [API_RESOURCES.md § Agent design notes](./API_RESOURCES.md#design-notes)) were ever relaxed or bypassed, a name like `admin.svc` in namespace `team-a` would yield the SAN `admin.svc.team-a.svc.cluster.local` (6 labels) and be rejected by the gateway before the namespace extractor ran. Both layers must be breached for the bypass to succeed.
+**Exact label-count enforcement**: the gateway requires the DNS SAN to have exactly the expected label count for its shape — 5 for `.svc.cluster.local`, 4 for `.task.agentry.io`. Any SAN with extra (or fewer) labels is rejected as `403 invalid_cert`. This is defense in depth against a dotted-name bypass: if the CRD CEL constraint restricting Agent/AgentTask `metadata.name` to DNS-1123 labels (see the [Agent CRD design notes](./API_RESOURCES.md#agent)) were ever relaxed or bypassed, a name like `admin.svc` in namespace `team-a` would yield the SAN `admin.svc.team-a.svc.cluster.local` (6 labels) and be rejected by the gateway before the namespace extractor ran. Both layers must be breached for the bypass to succeed.
 
 Starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) demonstrate client-cert presentation and the cert-file watch-and-reload pattern. Custom images must configure their HTTP client to present the cert when calling `$AGENTRY_GATEWAY_ENDPOINT`. See [Agent Runtime Contract](./RUNTIME_CONTRACT.md).
 
 This mode is **CNI-independent**: identity is cryptographically attested by the certificate, not by any network-layer header that an intermediate hop could modify. An agent cannot claim a different identity without a CA-signed certificate for that identity — and the CA key is not reachable from any agent Pod.
 
-**Agent/AgentTask Pods MUST use mTLS.** Their ServiceAccount tokens are deliberately not accepted by the gateway. If they were, a compromised agent could bypass certificate rotation by authenticating with its SA token instead, and an agent whose cert was revoked could continue calling the gateway indefinitely. See [Agent→Gateway Authentication](./SECURITY.md#agent-gateway-authentication) for the full analysis.
+**Agent/AgentTask Pods MUST use mTLS.** Their ServiceAccount tokens are deliberately not accepted by the gateway. If they were, a compromised agent could bypass certificate rotation by authenticating with its SA token instead, and an agent whose cert was revoked could continue calling the gateway indefinitely. See [Agent→Gateway Authentication](./SECURITY.md#agentgateway-authentication) for the full analysis.
 
 Provider routing for Agentry-managed Pods runs the full chain — Agent/AgentClass `allowedProviders`, then ModelProvider `allowedNamespaces`/`models`. See [Provider Routing § mTLS tier](#provider-routing).
 
@@ -168,7 +168,7 @@ The gateway maintains a Pod informer cache for this lookup and for provider-rout
 
 **Pod IP reassignment**: when a Pod is deleted and a new Pod receives the same IP (common in small CIDR ranges), the informer cache may briefly map the old Pod. The gateway MUST process Pod delete events before accepting traffic from recycled IPs. In practice, the watch event for Pod deletion arrives before the new Pod is scheduled, so the window is negligible.
 
-See [Agent→Gateway Authentication](./SECURITY.md#agent-gateway-authentication) for the full security analysis of both modes, including threat-model coverage.
+See [Agent→Gateway Authentication](./SECURITY.md#agentgateway-authentication) for the full security analysis of both modes, including threat-model coverage.
 
 ---
 

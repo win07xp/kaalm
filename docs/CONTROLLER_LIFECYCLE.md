@@ -94,7 +94,7 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 
 Activity timestamps are maintained **in-memory in the gateway**, not in etcd. Per-request annotation writes would not scale as the Agent count grows: v1 targets 1000 Agents/AgentTasks per cluster, and the in-memory activity store is designed so future versions can reach an order of magnitude higher without a design change (at which point per-request etcd writes would dominate the API server). Two signal sources feed the gateway's in-memory activity store — see [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api):
 - **Gateway traffic**: the LLM Gateway and User Gateway record the timestamp of each request for an Agent in-memory.
-- **Agent heartbeat**: the agent calls `POST /v1/agent/heartbeat` on the gateway; the gateway updates the agent's timestamp in its in-memory store.
+- **Agent heartbeat**: the agent calls [`POST /v1/agent/heartbeat`](./API_ENDPOINTS.md#post-v1agentheartbeat-agent-only) on the gateway; the gateway updates the agent's timestamp in its in-memory store.
 
 The gateway exposes `GET /v1/activity?namespace={ns}` returning a map of agent names to last-activity timestamps. Because each gateway replica maintains its own in-memory store (updated only by the traffic it handles), the controller fans out this query to **all gateway Pod IPs in parallel** (enumerating them via its Pod informer) rather than hitting the ClusterIP Service, which would round-robin to one replica and miss activity recorded by the others. The controller takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection. See [Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) for the full fan-out protocol.
 
@@ -109,7 +109,7 @@ The reconciler updates `status.lastActivityTime` on the Agent only when a phase 
 
 **Gateway unavailability**: if all gateway replicas are unreachable, the controller preserves the Agent's current phase — no idle or hibernation transitions are made without activity data. The reconciler sets a `GatewayReachable=False` condition on affected Agents and requeues with backoff until the gateway recovers. If only some replicas are unreachable, the controller uses the data available from the reachable replicas.
 
-**Gateway restart**: each replica's `/v1/activity` response includes a `startedAt` timestamp. The controller compares this against the Agent's `status.phaseTransitionTime` (set by the AgentReconciler on every phase change — see [API_RESOURCES.md § Agent design notes](./API_RESOURCES.md#design-notes)). If a replica's `startedAt` is more recent than `status.phaseTransitionTime` (i.e., that replica restarted while the agent was Running), the controller treats that replica's missing activity data as "unknown" — it uses data from other replicas, or defers if all replicas have restarted. No idle or hibernation transitions are made until at least one replica has been running for `idleTimeout`, at which point missing activity data from that replica can be interpreted as genuine inactivity.
+**Gateway restart**: each replica's `/v1/activity` response includes a `startedAt` timestamp. The controller compares this against the Agent's `status.phaseTransitionTime` (set by the AgentReconciler on every phase change — see the [Agent CRD design notes](./API_RESOURCES.md#agent)). If a replica's `startedAt` is more recent than `status.phaseTransitionTime` (i.e., that replica restarted while the agent was Running), the controller treats that replica's missing activity data as "unknown" — it uses data from other replicas, or defers if all replicas have restarted. No idle or hibernation transitions are made until at least one replica has been running for `idleTimeout`, at which point missing activity data from that replica can be interpreted as genuine inactivity.
 
 **Operational consequence:** a synchronized gateway restart (rollout, image deploy, chart upgrade) defers all idle and hibernation transitions for `idleTimeout`, since no replica satisfies the "up for `idleTimeout`" condition until that long has elapsed post-restart. Operators choosing multi-hour `idleTimeout` values should expect a corresponding window of deferred hibernation after every gateway restart.
 
@@ -217,7 +217,7 @@ Any state → Terminating (on delete or after TTL)
 
 **Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required. Oversize artifacts (>4 KiB per artifact or >32 KiB total) are rejected at the gateway with HTTP 413; agents must externalize large outputs (object storage, Git, etc.) and pass a reference URL inline. There is no auto-spill mechanism and no `status.artifactRefs` field.
 
-**Retry mechanics**: when `spec.completion.backoffLimit > 0` and the task transitions to `Failed` with `status.retries` below the limit:
+**Retry mechanics**: when [`spec.completion.backoffLimit`](./API_RESOURCES.md#agenttask) `> 0` and the task transitions to `Failed` with `status.retries` below the limit:
 1. The reconciler increments `status.retries`.
 2. The existing Pod is deleted (it has already exited or will be terminated).
 3. The `{taskName}-completion` ConfigMap is reset to `data: {}` (the reconciler patches it back to empty rather than deleting and re-creating, so the existing ownerRef and the gateway's name-scoped `update, patch` Role remain valid for the retry).
@@ -239,9 +239,9 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
 
 **Finalizer duties:**
 
-- **Agent**: on delete, gracefully terminate the Pod (send SIGTERM, wait up to `terminationGracePeriodSeconds`), then delete or retain the PVC per `AgentClass.spec.persistence.pvcRetention`. This field controls what happens to the per-Agent PVC when the Agent is deleted; it is distinct from `PersistentVolume.persistentVolumeReclaimPolicy` (which governs PV fate on PVC deletion) and the two operate independently.
+- **Agent**: on delete, gracefully terminate the Pod (send SIGTERM, wait up to `terminationGracePeriodSeconds`), then delete or retain the PVC per [`AgentClass.spec.persistence.pvcRetention`](./API_RESOURCES.md#agentclass). This field controls what happens to the per-Agent PVC when the Agent is deleted; it is distinct from `PersistentVolume.persistentVolumeReclaimPolicy` (which governs PV fate on PVC deletion) and the two operate independently.
 - **AgentTask**: on delete, terminate the Pod, clean up ConfigMaps.
-- **ModelProvider**: on delete, reject if any Agent or AgentTask still references it (reference resolution rules in [Cross-Resource Validation](./API_RESOURCES.md#cross-resource-validation)); otherwise remove gateway credential configuration.
+- **ModelProvider**: on delete, reject if any Agent or AgentTask still references it (reference resolution rules in [Cross-Resource Validation](./API_RESOURCES.md#cross-resource-validation)); otherwise remove [gateway credential configuration](./GATEWAY_LLM.md#credential-handling).
 - **AgentClass**: on delete, reject if any Agent or AgentTask still references it.
 - **AgentChannel**: on delete, the reconciler coordinates with the gateway (see [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler)):
   1. The reconciler sets `status.phase = Terminating` on the AgentChannel.
