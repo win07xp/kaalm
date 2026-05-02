@@ -19,7 +19,7 @@ This document describes the high-level architecture of Agentry: the control plan
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Helm chart contents, prerequisites, certificate lifecycle, Adoption Tiers |
 | [RUNTIME_CONTRACT.md](./RUNTIME_CONTRACT.md) | The contract a container image must satisfy to run as an Agent or AgentTask |
 | [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md) | Go and Python starter templates implementing the runtime contract |
-| [OBSERVABILITY.md](./OBSERVABILITY.md) | Aggregated metrics catalog, dashboards, alerting (TODO) |
+| [OBSERVABILITY.md](./OBSERVABILITY.md) | Aggregated metrics catalog, log conventions, recommended alerts and dashboards |
 
 ## Custom Resources
 
@@ -281,7 +281,7 @@ Both the controller and the gateway expose Prometheus metrics on dedicated ports
 - [LLM Gateway metrics](./GATEWAY_LLM.md#observability) — request counts/duration, token usage, spend, fallback events, budget utilization.
 - [User Gateway metrics](./GATEWAY_USER.md#observability) — channel message counts/duration, hibernation wakes triggered.
 
-Aggregated dashboards, alerting recommendations, and log/trace conventions will live in [OBSERVABILITY.md](./OBSERVABILITY.md) (TODO).
+For the aggregated catalog, log conventions, recommended alerts, and dashboard sketches, see [OBSERVABILITY.md](./OBSERVABILITY.md).
 
 ## Agent Runtime Contract
 

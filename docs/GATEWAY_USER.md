@@ -187,6 +187,9 @@ The gateway exposes Prometheus metrics on `:9090/metrics`:
 - `agentry_channel_messages_total{channel_type,namespace,status}`
 - `agentry_channel_message_duration_seconds{channel_type}`
 - `agentry_channel_wake_total{namespace}` (count of hibernation wakes triggered)
+- `agentry_channel_wake_duration_seconds{namespace,result}` — histogram of time from `POST /v1/activate` to either Agent ready or wake timeout (`result ∈ {ready, controller_unavailable, wake_timeout}`). Pairs with `agentry_channel_wake_total` to make wake-on-demand latency observable end-to-end — the metric to SLO the "hard control-plane dependency" called out in [ARCHITECTURE.md § The Agentry Gateway](./ARCHITECTURE.md#the-agentry-gateway).
+- `agentry_channel_callback_total{namespace,status}` and `agentry_channel_callback_duration_seconds{namespace}` — counter and histogram for async-callback delivery. `status ∈ {delivered, exhausted}` covers the best-effort callback semantic (callback retry exhausted ⇒ response stored at the polling endpoint). See [Request Flow steps 5a, 6a, 8](#user-gateway--request-flow).
+- `agentry_channel_response_too_large_total{namespace,mode}` — counter of agent responses rejected for exceeding the configured size limit. `mode ∈ {sync, async}` separates the size-limit signal by response mode.
 
 For LLM Gateway metrics, see [GATEWAY_LLM.md](./GATEWAY_LLM.md#observability).
 

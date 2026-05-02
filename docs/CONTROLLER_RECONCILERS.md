@@ -202,6 +202,8 @@ Standard controller-runtime metrics (reconcile counts, duration, queue depth) ar
 
 - `agentry_agents_total{phase,namespace}` — gauge of Agent count by phase and namespace
 - `agentry_tasks_total{phase,namespace}` — gauge of AgentTask count by phase and namespace
+- `agentry_channels_total{namespace,ready,platform_connected}` — gauge of AgentChannel count rolled up by `status.conditions[type=Ready]` and `status.conditions[type=PlatformConnected]` (each label value `true` | `false` | `unknown`). Surfaces the tri-state `PlatformConnected` condition computed by [AgentChannelReconciler step 4](#agentchannelreconciler).
+- `agentry_provider_budget_canonical_usd{provider,namespace,period}` — gauge of the reconciler-summed canonical spend total written by [ModelProviderReconciler step 3](#modelproviderreconciler) after pruning stale-replica partials. Distinct from the gateway's per-replica `agentry_llm_spend_usd_total` (the partials before reconciliation) — dashboards plot this gauge to show authoritative spend without summing across replicas.
 - `agentry_hibernations_total{namespace}` — counter of hibernation events
 - `agentry_wakes_total{namespace,trigger}` — counter of wake events (trigger = `channel` | `annotation`)
 - `agentry_budget_threshold_events_total{provider,namespace,action}` — counter of budget policy triggers (action = `degrade` | `block` | `warn`)
