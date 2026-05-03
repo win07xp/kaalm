@@ -55,18 +55,6 @@ Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 s
 
 ---
 
-## Manual Wake Annotation
-
-Agents in the `Hibernated` phase can be manually woken by applying the annotation:
-
-```
-kubectl annotate agent <name> agentry.io/wake=true
-```
-
-The [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) watches for this annotation. When observed on a `Hibernated` Agent, the reconciler transitions the Agent to `Resuming`, recreates the Pod, and removes the annotation after processing — see [Wake trigger](./CONTROLLER_LIFECYCLE.md#wake-trigger). This provides an escape hatch when no AgentChannel is configured or for operational use cases (e.g., pre-warming an agent before business hours).
-
----
-
 ## `POST /v1/message` (Agent only — agent-implemented)
 
 This endpoint is **implemented by the agent container**, not by the gateway. The User Gateway calls it to deliver normalized channel messages — see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow). Agents that use AgentChannel must expose this endpoint on `$AGENTRY_HEALTH_PORT` (default 8080).
@@ -113,7 +101,9 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 | `attachments` | array | no | Attachments to send in the reply |
 | `metadata` | map | no | Optional platform-specific reply metadata |
 
-**Response codes:** `200 OK` with the response envelope. In sync mode, the gateway returns the response body as the webhook HTTP response. Non-200 responses are treated as delivery failures and recorded in AgentChannel status conditions.
+**Agent → gateway:** `200 OK` with the response envelope is expected. Any other status (including 5xx and connection errors) is a `delivery_failed` signal that feeds the gateway's retry pipeline (sync) or the callback / polling error flow (async), and is recorded in AgentChannel status conditions.
+
+**Gateway → webhook caller (sync mode only):** the gateway returns the agent's response body verbatim with `200 OK` on success. On failure it returns a structured error envelope using the [User Gateway Error Responses](#user-gateway-error-responses) status mapping below: `502` for `delivery_failed`, `504` for `wake_timeout` and `controller_unavailable`, `413` for `response_too_large`.
 
 ---
 
@@ -135,7 +125,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `requestId` | string (UUID) | yes | Opaque identifier for this async request. Callers must use it as-is in poll requests and must not parse or construct it independently. |
-| `channelId` | string | yes | The webhook path of the originating AgentChannel. Callers must preserve this value and pass it (URL-encoded) as the `channelPath` query parameter on poll requests — see [polling fallback](#async-webhook-response-gateway-managed) below. |
+| `channelId` | string | yes | The webhook path of the originating AgentChannel. Callers must preserve this value and pass it (URL-encoded) as the `channelPath` query parameter on poll requests — see [Polling Fallback](#polling-fallback) below. |
 | `status` | string | yes | Always `"accepted"` for the immediate 202. |
 | `message` | string | no | Human-readable acknowledgement. |
 
@@ -156,7 +146,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 
 The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the response is stored for polling retrieval.
 
-**Callback authentication** — every callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (required by [API_RESOURCES.md § Cross-Resource Validation rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). The signing contract mirrors the [polling endpoint's caller-auth contract](#async-webhook-response-gateway-managed) below — same auth types, same `X-Agentry-Timestamp` header, with a body-hash component added because callbacks have a body where polls do not. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` (or `callbackAuth.hmac.secretRef`), held by the gateway via the per-channel scoped Role created by [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler):
+**Callback authentication** — every callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (required by [API_RESOURCES.md § Cross-Resource Validation rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). The signing contract mirrors the [polling endpoint's caller-auth contract](#polling-fallback) below — same auth types, same `X-Agentry-Timestamp` header, with a body-hash component added because callbacks have a body where polls do not. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` (or `callbackAuth.hmac.secretRef`), held by the gateway via the per-channel scoped Role created by [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler):
 
 - **`callbackAuth.type: bearer`** — gateway sends `Authorization: Bearer <secret>` on the callback POST.
 - **`callbackAuth.type: hmac`** — gateway computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}\n{sha256(body)}"` (unix seconds, no trailing newline; body hash is the lowercase hex sha256 of the raw POST body bytes). The hex-encoded digest goes in the configured `callbackAuth.hmac.header`; `timestamp` goes in `X-Agentry-Timestamp`. Receivers should reject timestamps with skew greater than 300s against their own wall clock.
@@ -208,11 +198,43 @@ This contract applies uniformly to success payloads (above) and to every error p
 }
 ```
 
-Unlike `wake_timeout` (agent was asked to wake but did not become ready in time), `controller_unavailable` indicates the wake request itself never reached the controller — retrying the original webhook is expected to succeed once the controller recovers, hence `retryable: true`. The sync-webhook equivalent is HTTP `504 Gateway Timeout` with the same error body; see [GATEWAY_USER.md § Failure Modes](./GATEWAY_USER.md#failure-modes).
+Unlike `wake_timeout` (agent was asked to wake but did not become ready in time), `controller_unavailable` indicates the wake request itself never reached the controller — retrying the original webhook is expected to succeed once the controller recovers, hence `retryable: true`. The sync-webhook equivalent is HTTP `504 Gateway Timeout` with the same error body and a `Retry-After: 5` header (5 seconds, fixed in v1, sized to typical controller-restart and probe intervals); see [GATEWAY_USER.md § Failure Modes](./GATEWAY_USER.md#failure-modes).
 
-Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour.
+`response_too_large` is returned when the agent's response body exceeds `gateway.maxAsyncResponseBytes` (default 900 KiB; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow) step 6a for the size cap rationale). The cap exists because async responses are persisted to ConfigMaps in `agentry-system`, which have a Kubernetes object cap near 1 MiB. Agents that need to return large outputs should externalize them and reference by URL:
 
-**`GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`** (polling fallback):
+```json
+{
+  "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "channelId": "/channels/team-support/support-assistant",
+  "error": {
+    "type": "response_too_large",
+    "message": "Agent response body exceeded gateway.maxAsyncResponseBytes (900 KiB); externalize large outputs and reference by URL",
+    "retryable": false
+  },
+  "failedAt": "2026-04-05T12:13:14Z"
+}
+```
+
+`callback_invalid` is returned when the configured `callbackUrl` host fails re-resolution against the deny ranges (loopback, link-local, RFC1918, unique-local IPv6, cloud metadata) or the configured `gateway.callbackUrl.allowlist` immediately before a delivery attempt — defeating DNS rebinding between reconcile-time validation and delivery (see [AgentChannel rule 22](./API_RESOURCES.md#cross-resource-validation)). Because the URL itself is rejected, this payload is **delivered only via the polling endpoint** — there is no callback target to POST to. The AgentChannel additionally receives a `Warning` event with `reason=CallbackInvalid`:
+
+```json
+{
+  "requestId": "550e8400-e29b-41d4-a716-446655440001",
+  "channelId": "/channels/team-support/support-assistant",
+  "error": {
+    "type": "callback_invalid",
+    "message": "callbackUrl host failed re-resolution against blocked IP ranges; delivery skipped",
+    "retryable": false
+  },
+  "failedAt": "2026-04-05T12:13:42Z"
+}
+```
+
+Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured — or if delivery is `callback_invalid` — errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour.
+
+### Polling Fallback
+
+**`GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`**
 
 Served over HTTPS on the User Gateway listener (port 8080, TLS using `agentry-gateway-tls` — same certificate used by the LLM listener). External callers reach it through the cluster Ingress that fronts port 8080; see [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress).
 
@@ -223,9 +245,9 @@ Poll requests carry no body, so the auth contract differs slightly from the orig
 - **`auth.type: bearer`** — the poll request presents the same bearer token in `Authorization: Bearer …` as the inbound webhook. The token is read from the Secret referenced by `AgentChannel.spec.webhook.auth.secretRef` (`name`, `key`); there is no inline token field on the AgentChannel spec.
 - **`auth.type: hmac`** — the poll request computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}"` (unix seconds, no trailing newline), sends the hex-encoded digest in the configured `header` (same header name as the original webhook), and presents the timestamp in a dedicated `X-Agentry-Timestamp` header. The HMAC input is **not** the request body (poll GETs have none). Requests with clock skew greater than 300s against the gateway's wall clock are rejected with `401 Unauthorized`.
 
-**Channel-match assertion on response retrieval:** after authenticating the caller against the AgentChannel identified by `channelPath`, and *before* returning the stored payload, the gateway asserts that the `agentry-async-{requestId}` ConfigMap's `agentry.io/channel-namespace` and `agentry.io/channel-name` labels match that same AgentChannel. This prevents a caller authenticated for channel A from retrieving a response that was stored by channel B — `requestId`s are UUIDs but are not secrets, so without this check an attacker holding channel A's credentials plus any channel B `requestId` could read B's response. A mismatch returns `403 Forbidden` with no body.
+**Channel-match assertion on response retrieval:** after authenticating the caller against the AgentChannel identified by `channelPath`, and *before* returning the stored payload, the gateway asserts that the `agentry-async-{requestId}` ConfigMap's `agentry.io/channel-namespace` and `agentry.io/channel-name` labels match that same AgentChannel. This prevents a caller authenticated for channel A from retrieving a response that was stored by channel B — `requestId`s are UUIDs but are not secrets, so without this check an attacker holding channel A's credentials plus any channel B `requestId` could read B's response. On the wire a mismatch is indistinguishable from "unknown `requestId`" — both return `404 Not Found` — so the endpoint does not leak the existence of cross-channel responses to a credentialed attacker. Channel mismatches are logged at the gateway with `reason=ChannelMismatch` for operator debugging.
 
-`401 Unauthorized` is returned on any auth failure; `403 Forbidden` is returned if the presented credentials are valid for a different channel than `channelPath`, **or** if the `requestId`'s stored response was originated by a different channel than `channelPath`.
+`401 Unauthorized` is returned on any auth failure (missing or malformed credentials, signature mismatch, clock skew). `403 Forbidden` is returned only when the presented credentials are valid for a different channel than `channelPath` (i.e., the auth check itself succeeded but against the wrong channel). When the credentials authenticate correctly against `channelPath` but the stored `requestId` was originated by a different channel, the response is `404 Not Found` — same code as "unknown `requestId`".
 
 Any gateway replica accepts this request. The replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`.
 
@@ -233,7 +255,9 @@ Any gateway replica accepts this request. The replica reads the response from th
 |---|---|
 | 200 | Response or error payload available; body contains the callback payload above |
 | 202 | Request is still being processed |
-| 404 | Unknown requestId or response expired (1-hour TTL) |
+| 401 | Auth failed (missing or malformed credentials, signature mismatch, clock skew > 300s) |
+| 403 | Credentials valid for a different channel than `channelPath` |
+| 404 | Unknown `requestId`, response expired (1-hour TTL), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above) |
 
 Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
 
@@ -333,3 +357,32 @@ When the LLM Gateway cannot fulfill a request, it returns a structured error res
 | 504 | `provider_timeout` | Upstream provider timed out after exhausting fallback chain |
 
 The `error.retryable` field indicates whether the agent should retry the request. Rate-limited requests are retryable (short backoff). Budget-exhausted requests include a `Retry-After` header indicating when the next budget period starts, but `retryable` is `false` — the agent should not retry before that time. Access-denied requests are not retryable.
+
+---
+
+## User Gateway Error Responses
+
+When the User Gateway cannot deliver a webhook in **sync mode**, it returns a structured error envelope to the webhook caller. The same error shapes are used in async mode but are delivered to `callbackUrl` or stored at the polling endpoint — see [Async Webhook Response](#async-webhook-response-gateway-managed) above for the async wire format and [GATEWAY_USER.md § Failure Modes](./GATEWAY_USER.md#failure-modes) for the operational behavior behind each error type.
+
+**Error response body** (sync mode):
+
+```json
+{
+  "error": {
+    "type": "controller_unavailable",
+    "message": "Controller activator endpoint unreachable; wake could not be triggered",
+    "retryable": true
+  }
+}
+```
+
+**HTTP status code mapping (sync mode):**
+
+| Status | `error.type` | Retryable | Notes |
+|---|---|---|---|
+| 413 | `response_too_large` | no | Agent reply exceeded `gateway.maxAsyncResponseBytes` (default 900 KiB). Externalize large outputs and reference by URL |
+| 502 | `delivery_failed` | no | Agent unreachable after 3 retries (1s, 5s, 25s backoff) |
+| 504 | `wake_timeout` | no | Hibernated agent did not reach Ready within `wakeTimeout` |
+| 504 | `controller_unavailable` | yes | Activator endpoint unreachable; gateway sets `Retry-After: 5` |
+
+`callback_invalid` does not appear above because it is **async-only** by construction: the failure mode is "the configured `callbackUrl` is rejected before dial", which has no sync analogue (sync responses do not use `callbackUrl`). The async `callback_invalid` payload is delivered exclusively via the polling endpoint — see [Async Webhook Response § callback_invalid](#async-webhook-response-gateway-managed).
