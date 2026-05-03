@@ -39,7 +39,7 @@ Called by the agent container to report task completion. The gateway updates the
 | `message` | string | no | Human-readable completion message |
 | `artifacts` | map[string]string | no | Key-value pairs matching the names declared in `spec.artifacts`. The reconciler validates that all declared artifact names are present. |
 
-**Response:** `200 OK` with empty body on success. `403 Forbidden` if the calling Pod is not associated with an AgentTask. `413 Payload Too Large` if any single artifact value exceeds 4 KiB or total artifacts exceed 32 KiB (large artifacts should be stored externally and referenced by URL in the value).
+**Response:** `200 OK` with empty body on success. `403 Forbidden` if the calling Pod is not associated with an AgentTask. `413 Payload Too Large` if any single artifact value exceeds 4 KiB or the sum of all value bytes exceeds 32 KiB. Sizes are measured in UTF-8 bytes against the value strings only; key bytes are not counted (keys are bounded by Kubernetes ConfigMap key naming rules). Large artifacts should be stored externally and referenced by URL in the value.
 
 ---
 
@@ -59,6 +59,8 @@ Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 s
 
 This endpoint is **implemented by the agent container**, not by the gateway. The User Gateway calls it to deliver normalized channel messages — see [User Gateway Request Flow](./GATEWAY_USER.md#user-gateway--request-flow). Agents that use AgentChannel must expose this endpoint on `$AGENTRY_HEALTH_PORT` (default 8080).
 
+**Agent-side auth contract.** The agent's `/v1/message` listener must terminate TLS using its cert-manager-issued cert (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`), require a client certificate (`tls.RequireAndVerifyClientCert` or equivalent) with `ClientCAs` loaded from `$AGENTRY_CA_CERT`, and reject any peer cert whose SAN does not match the gateway Service DNS — `agentry-gateway.agentry-system.svc.cluster.local` or `agentry-gateway.agentry-system.svc`. Cert-less connections fail at the TLS handshake; cert-bearing connections with a mismatched SAN return `403 Forbidden` before the handler runs. Layered with the synthesized NetworkPolicy gateway → agent ingress allow rule, this is what keeps the message path safe under a misconfigured per-Agent NetworkPolicy. See [RUNTIME_CONTRACT.md bullet 4](./RUNTIME_CONTRACT.md) and [SECURITY.md § In-cluster TLS](./SECURITY.md#in-cluster-tls-bidirectional).
+
 **Request body (sent by the gateway):**
 
 ```json
@@ -76,7 +78,7 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `messageId` | string (UUID) | yes | Unique identifier for this message, for deduplication |
+| `messageId` | string (UUID) | yes | Unique identifier for this message. Agents with `hibernationEnabled: true` MUST deduplicate on this value — the gateway may redeliver the same `messageId` after a sync-mode caller retry. See [RUNTIME_CONTRACT.md item 7](./RUNTIME_CONTRACT.md). |
 | `channelType` | string | yes | Platform type: `"webhook"` in v1 (Discord, WhatsApp in v1.1) |
 | `channelId` | string | yes | Platform-specific channel identifier |
 | `userId` | string | yes | Platform-specific user identifier. Extracted per `AgentChannel.spec.webhook.userId` config (`fromHeader` or `fromBody`); falls back to the configured `fallback` value (or empty string if unconfigured). When `session.enabled: true` and userId is empty, all unattributed requests share a session. |
@@ -200,7 +202,7 @@ This contract applies uniformly to success payloads (above) and to every error p
 
 Unlike `wake_timeout` (agent was asked to wake but did not become ready in time), `controller_unavailable` indicates the wake request itself never reached the controller — retrying the original webhook is expected to succeed once the controller recovers, hence `retryable: true`. The sync-webhook equivalent is HTTP `504 Gateway Timeout` with the same error body and a `Retry-After: 5` header (5 seconds, fixed in v1, sized to typical controller-restart and probe intervals); see [GATEWAY_USER.md § Failure Modes](./GATEWAY_USER.md#failure-modes).
 
-`response_too_large` is returned when the agent's response body exceeds `gateway.maxAsyncResponseBytes` (default 900 KiB; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow) step 6a for the size cap rationale). The cap exists because async responses are persisted to ConfigMaps in `agentry-system`, which have a Kubernetes object cap near 1 MiB. Agents that need to return large outputs should externalize them and reference by URL:
+`response_too_large` is returned when the agent's response body exceeds `gateway.maxAsyncResponseBytes` (default 900 KiB; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow) step 6a for the size cap rationale). The cap exists for two reasons: async responses are persisted to ConfigMaps in `agentry-system` (Kubernetes object cap near 1 MiB), **and** all webhook responses — sync and async alike — are buffered in gateway memory before forwarding, so an unbounded agent reply could OOM the gateway. The same 900 KiB ceiling therefore applies in both modes; the config knob name (`maxAsyncResponseBytes`) reflects when the cap was first introduced for the ConfigMap-storage path and is preserved for backwards compatibility. Agents that need to return large outputs should externalize them and reference by URL:
 
 ```json
 {
@@ -247,7 +249,7 @@ Poll requests carry no body, so the auth contract differs slightly from the orig
 
 **Channel-match assertion on response retrieval:** after authenticating the caller against the AgentChannel identified by `channelPath`, and *before* returning the stored payload, the gateway asserts that the `agentry-async-{requestId}` ConfigMap's `agentry.io/channel-namespace` and `agentry.io/channel-name` labels match that same AgentChannel. This prevents a caller authenticated for channel A from retrieving a response that was stored by channel B — `requestId`s are UUIDs but are not secrets, so without this check an attacker holding channel A's credentials plus any channel B `requestId` could read B's response. On the wire a mismatch is indistinguishable from "unknown `requestId`" — both return `404 Not Found` — so the endpoint does not leak the existence of cross-channel responses to a credentialed attacker. Channel mismatches are logged at the gateway with `reason=ChannelMismatch` for operator debugging.
 
-`401 Unauthorized` is returned on any auth failure (missing or malformed credentials, signature mismatch, clock skew). `403 Forbidden` is returned only when the presented credentials are valid for a different channel than `channelPath` (i.e., the auth check itself succeeded but against the wrong channel). When the credentials authenticate correctly against `channelPath` but the stored `requestId` was originated by a different channel, the response is `404 Not Found` — same code as "unknown `requestId`".
+`401 Unauthorized` is returned on any auth failure (missing or malformed credentials, signature mismatch, clock skew). When the credentials authenticate correctly against `channelPath` but the stored `requestId` was originated by a different channel, the response is `404 Not Found` — same code as "unknown `requestId`".
 
 Any gateway replica accepts this request. The replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`.
 
@@ -255,8 +257,8 @@ Any gateway replica accepts this request. The replica reads the response from th
 |---|---|
 | 200 | Response or error payload available; body contains the callback payload above |
 | 202 | Request is still being processed |
+| 400 | Missing or malformed `channelPath` query parameter |
 | 401 | Auth failed (missing or malformed credentials, signature mismatch, clock skew > 300s) |
-| 403 | Credentials valid for a different channel than `channelPath` |
 | 404 | Unknown `requestId`, response expired (1-hour TTL), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above) |
 
 Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
