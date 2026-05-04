@@ -108,7 +108,7 @@ Same flow as S7 from the channel perspective. The additional detail: if `wakeTim
 
 ### S15: Async webhook for a long-running coding agent
 
-Dev creates an `AgentChannel` for a coding agent that typically takes 5-10 minutes to process requests. He sets `spec.webhook.responseMode: async` and configures `spec.webhook.callbackUrl` pointing at his CI system's webhook receiver. When a ticket system POSTs a coding request, the gateway immediately returns HTTP 202 with a `requestId`. The coding agent processes the request, generates a fix, and responds. The gateway POSTs the agent's response (including the PR URL) to the CI system's callback URL. If the CI system is unreachable, Dev can poll `GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}` as a fallback (the `channelId` value from the 202 response is passed as `channelPath`).
+Dev creates an `AgentChannel` for a coding agent that typically takes 5-10 minutes to process requests. He sets `spec.webhook.responseMode: async` and configures `spec.webhook.callbackUrl` pointing at his CI system's webhook receiver. When a ticket system POSTs a coding request, the gateway immediately returns HTTP 202 with a `requestId`. The coding agent processes the request, generates a fix, and responds. The gateway POSTs the agent's response (including the PR URL) to the CI system's callback URL. If the CI system is unreachable, Dev can poll `GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}` as a fallback (the `channelPath` value from the 202 response is passed back as the `channelPath` query parameter on poll requests).
 
 ---
 

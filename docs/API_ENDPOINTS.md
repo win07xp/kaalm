@@ -118,7 +118,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/team-support/support-assistant",
+  "channelPath": "/channels/team-support/support-assistant",
   "status": "accepted",
   "message": "Message accepted for processing"
 }
@@ -127,7 +127,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `requestId` | string (UUID) | yes | Opaque identifier for this async request. Callers must use it as-is in poll requests and must not parse or construct it independently. |
-| `channelId` | string | yes | The webhook path of the originating AgentChannel. Callers must preserve this value and pass it (URL-encoded) as the `channelPath` query parameter on poll requests — see [Polling Fallback](#polling-fallback) below. |
+| `channelPath` | string | yes | The webhook path of the originating AgentChannel. Callers must preserve this value and pass it (URL-encoded) as the `channelPath` query parameter on poll requests — see [Polling Fallback](#polling-fallback) below. |
 | `status` | string | yes | Always `"accepted"` for the immediate 202. |
 | `message` | string | no | Human-readable acknowledgement. |
 
@@ -136,7 +136,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/team-support/support-assistant",
+  "channelPath": "/channels/team-support/support-assistant",
   "response": {
     "content": "I've analyzed the issue and opened a PR with the fix.",
     "attachments": [],
@@ -146,7 +146,7 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 }
 ```
 
-The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If all retries fail, the response is stored for polling retrieval.
+The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s). If no `callbackUrl` is configured on the AgentChannel, or all retries fail, the response is stored at the polling endpoint under the original `requestId` and expires after 1 hour — same mechanism as the error-payload storage described later in this section.
 
 **Callback authentication** — every callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (required by [API_RESOURCES.md § Cross-Resource Validation rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). The signing contract mirrors the [polling endpoint's caller-auth contract](#polling-fallback) below — same auth types, same `X-Agentry-Timestamp` header, with a body-hash component added because callbacks have a body where polls do not. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` (or `callbackAuth.hmac.secretRef`), held by the gateway via the per-channel scoped Role created by [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler):
 
@@ -160,7 +160,7 @@ This contract applies uniformly to success payloads (above) and to every error p
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/team-support/support-assistant",
+  "channelPath": "/channels/team-support/support-assistant",
   "error": {
     "type": "delivery_failed",
     "message": "Failed to deliver message to agent after 3 attempts",
@@ -175,7 +175,7 @@ This contract applies uniformly to success payloads (above) and to every error p
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/team-support/support-assistant",
+  "channelPath": "/channels/team-support/support-assistant",
   "error": {
     "type": "wake_timeout",
     "message": "Agent did not become ready within wakeTimeout (120s)",
@@ -190,7 +190,7 @@ This contract applies uniformly to success payloads (above) and to every error p
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/team-support/support-assistant",
+  "channelPath": "/channels/team-support/support-assistant",
   "error": {
     "type": "controller_unavailable",
     "message": "Controller activator endpoint unreachable; wake could not be triggered",
@@ -207,7 +207,7 @@ Unlike `wake_timeout` (agent was asked to wake but did not become ready in time)
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/team-support/support-assistant",
+  "channelPath": "/channels/team-support/support-assistant",
   "error": {
     "type": "response_too_large",
     "message": "Agent response body exceeded gateway.maxAsyncResponseBytes (900 KiB); externalize large outputs and reference by URL",
@@ -222,7 +222,7 @@ Unlike `wake_timeout` (agent was asked to wake but did not become ready in time)
 ```json
 {
   "requestId": "550e8400-e29b-41d4-a716-446655440001",
-  "channelId": "/channels/team-support/support-assistant",
+  "channelPath": "/channels/team-support/support-assistant",
   "error": {
     "type": "callback_invalid",
     "message": "callbackUrl host failed re-resolution against blocked IP ranges; delivery skipped",
@@ -240,7 +240,7 @@ Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s 
 
 Served over HTTPS on the User Gateway listener (port 8080, TLS using `agentry-gateway-tls` — same certificate used by the LLM listener). External callers reach it through the cluster Ingress that fronts port 8080; see [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress).
 
-Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel (i.e., the value of `channelId` from the 202 response body). The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request. Callers must preserve the `channelId` value from the 202 response and pass it as `channelPath` on poll — it should not be constructed independently.
+Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel — exactly the `channelPath` value the caller received in the 202 response body. The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request. Callers must preserve it verbatim from the 202 response; it should not be constructed independently.
 
 Poll requests carry no body, so the auth contract differs slightly from the original webhook:
 
@@ -262,6 +262,51 @@ Any gateway replica accepts this request. The replica reads the response from th
 | 404 | Unknown `requestId`, response expired (1-hour TTL), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above) |
 
 Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
+
+---
+
+## `GET /v1/activity` (internal — controller use only)
+
+**Served on the LLM Gateway listener (port 8443), not the User listener.** Same listener-split rationale as `/v1/channels/health` below — an Ingress fronting `:8080` must not be able to route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert.
+
+Called by the [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) to read per-namespace last-activity timestamps for idle and hibernation transitions. Authenticated via **mTLS** — the caller must present the controller's `agentry-controller-tls` client cert, verified against `agentry-ca`, with a SAN that matches the controller Service DNS. There is no bearer-token or HMAC alternative. See [Internal Endpoint Authentication](./SECURITY.md#internal-endpoint-authentication-activator-activity-channel-health).
+
+**Request:**
+
+```
+GET /v1/activity?namespace=team-support
+```
+
+The request carries no auth header; authentication is the mTLS client cert presented on the TLS handshake.
+
+**Response body:**
+
+```json
+{
+  "startedAt": "2026-04-05T06:00:00Z",
+  "agents": {
+    "support-assistant": {
+      "gatewayTraffic": "2026-04-05T11:58:22Z",
+      "heartbeat": "2026-04-05T11:57:10Z"
+    },
+    "code-helper": {
+      "gatewayTraffic": "2026-04-05T11:45:10Z",
+      "heartbeat": null
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `startedAt` | timestamp | When this gateway replica started. The controller compares this to each Agent's `status.phaseTransitionTime` to detect post-restart "data is unknown" windows — see [GATEWAY_USER.md § Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) |
+| `agents` | map | Keys are Agent names in the requested namespace; values are per-source last-activity timestamps as observed by this replica |
+| `gatewayTraffic` | timestamp or null | Last LLM-gateway request or inbound channel-message delivery this replica observed for the agent. `null` if no traffic since the replica started |
+| `heartbeat` | timestamp or null | Last `POST /v1/agent/heartbeat` this replica received from the agent. `null` if none since the replica started |
+
+Both signal sources are always returned. The controller applies the `Agent.spec.lifecycle.activitySource` filter (selecting `gatewayTraffic`, `heartbeat`, or the max of both) **after** merging timestamps across replicas — see [GATEWAY_USER.md § Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) for the per-Pod-IP fan-out, the per-replica restart-detection logic, and the `tls.Config.ServerName` override required to make per-Pod-IP dialing work against a Service-DNS-scoped SAN.
+
+**Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only agents in the requested namespace are returned.
 
 ---
 
