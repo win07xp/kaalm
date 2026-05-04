@@ -8,11 +8,25 @@ The LLM proxy endpoints accept either **mTLS** (Agentry-managed Agent/AgentTask 
 
 ## Reserved Gateway Paths
 
-The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints — `/v1/` is served on the LLM Gateway listener at `:8443` for agent-initiated internal calls and on the User Gateway listener at `:8080` for the async polling endpoint, and is otherwise reserved on `:8080` against webhook path collisions:
+The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints — `/v1/` is served on the LLM Gateway listener at `:8443` for gateway-internal calls and on the User Gateway listener at `:8080` for the async polling endpoint, and is otherwise reserved on `:8080` against webhook path collisions:
 
 - `/v1/` — all current and future gateway-internal endpoints (LLM proxy paths, task completion, heartbeat, async polling, channel health, activity). The controller's `POST /v1/activate/{namespace}/{agentName}` lives on the controller Service (port 9443), not the gateway, and is therefore unreachable from a webhook path regardless of this rule.
 
 AgentChannels whose `spec.webhook.path` begins with `/v1/` are rejected at reconcile time with `Ready=False, reason=ReservedPath`. The recommended developer convention is to use `/channels/` as a prefix (e.g., `/channels/team-support/support-assistant`).
+
+---
+
+## LLM Proxy Endpoints
+
+The LLM proxy accepts agent requests on the upstream provider's native API paths and forwards them to the resolved ModelProvider. Recognized path patterns:
+
+- `/v1/messages` — Anthropic format
+- `/v1/chat/completions` — OpenAI / OpenAI-compatible format (also vLLM, Ollama, LiteLLM)
+- Provider-specific paths — see [GATEWAY_LLM.md § Request Format Detection](./GATEWAY_LLM.md#request-format-detection) for the full mapping
+
+Request and response bodies are passthrough to the upstream provider's native format — Agentry adds no envelope of its own. The gateway injects the provider API key, strips the `provider/` prefix from the model name, and relays the response (including SSE streams transparently). Errors returned by the gateway itself (budget exhaustion, rate limit, fallback exhaustion) use the structured envelope documented in [LLM Gateway Error Responses](#llm-gateway-error-responses) below.
+
+Auth, namespace identification, provider routing, budget enforcement, fallback, and streaming behavior are documented in [GATEWAY_LLM.md](./GATEWAY_LLM.md). The per-path auth profile for these endpoints is consolidated in [ARCHITECTURE.md § The Agentry Gateway](./ARCHITECTURE.md#the-agentry-gateway) (`:8443` listener auth profile table).
 
 ---
 
@@ -170,7 +184,7 @@ This contract applies uniformly to success payloads (above) and to every error p
 }
 ```
 
-`delivery_failed` is returned when all 3 attempts to `POST /v1/message` to the agent's Service fail (connection error, non-200 response). `wake_timeout` is returned when the agent is `Hibernated` and fails to become Ready within `wakeTimeout`:
+`delivery_failed` is returned when all 3 attempts to `POST /v1/message` to the agent's Service fail (connection error, non-200 response). The agent-delivery retry schedule is 1s, 5s, 25s backoff between attempts; this pipeline runs in both sync and async modes (see [GATEWAY_USER.md § Activator](./GATEWAY_USER.md#activator)) and is independent of the callback-delivery retry pipeline that uses the same numbers by coincidence. `wake_timeout` is returned when the agent is `Hibernated` and fails to become Ready within `wakeTimeout`:
 
 ```json
 {
