@@ -2,13 +2,13 @@
 
 This document defines the HTTP endpoints exposed by the Agentry Gateway and the contract for agent-implemented endpoints. For CRD specifications, see [API_RESOURCES.md](./API_RESOURCES.md).
 
-Agent→gateway endpoints authenticate via **mTLS** (Agentry-managed Agent/AgentTask Pods) or a **`TokenReview`-validated ServiceAccount bearer token** (gateway-only tier). A **source-IP → Pod cross-check** runs in both modes as defense in depth. See [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full flow and [Agent→Gateway Authentication](./SECURITY.md#agentgateway-authentication) for the threat-model analysis.
+The LLM proxy endpoints accept either **mTLS** (Agentry-managed Agent/AgentTask Pods) or a **`TokenReview`-validated ServiceAccount bearer token** (gateway-only tier), with a **source-IP → Pod cross-check** in both modes. The agent-only internal endpoints below — `POST /v1/task/complete` and `POST /v1/agent/heartbeat` — are **mTLS-only**: there is no SA-bearer alternative, and gateway-only-tier workloads (which have no AgentTask or Agent identity) cannot reach them. See [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full flow and [Agent→Gateway Authentication](./SECURITY.md#agentgateway-authentication) for the threat-model analysis.
 
 ---
 
 ## Reserved Gateway Paths
 
-The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints (served on the LLM Gateway listener at port 8443 for agent-initiated calls, and reserved on the User Gateway listener to prevent webhook path collisions):
+The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints — `/v1/` is served on the LLM Gateway listener at `:8443` for agent-initiated internal calls and on the User Gateway listener at `:8080` for the async polling endpoint, and is otherwise reserved on `:8080` against webhook path collisions:
 
 - `/v1/` — all current and future gateway-internal endpoints (task completion, heartbeat, async polling, channel health, activity). The controller's `POST /v1/activate/{namespace}/{agentName}` lives on the controller Service (port 9443), not the gateway, and is therefore unreachable from a webhook path regardless of this rule.
 
@@ -232,7 +232,7 @@ Unlike `wake_timeout` (agent was asked to wake but did not become ready in time)
 }
 ```
 
-Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured — or if delivery is `callback_invalid` — errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour.
+Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, all 3 callback attempts fail, or delivery is rejected as `callback_invalid` — errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour. This mirrors the success-path retry-exhaustion behavior at the top of this section.
 
 ### Polling Fallback
 
@@ -249,7 +249,7 @@ Poll requests carry no body, so the auth contract differs slightly from the orig
 
 **Channel-match assertion on response retrieval:** after authenticating the caller against the AgentChannel identified by `channelPath`, and *before* returning the stored payload, the gateway asserts that the `agentry-async-{requestId}` ConfigMap's `agentry.io/channel-namespace` and `agentry.io/channel-name` labels match that same AgentChannel. This prevents a caller authenticated for channel A from retrieving a response that was stored by channel B — `requestId`s are UUIDs but are not secrets, so without this check an attacker holding channel A's credentials plus any channel B `requestId` could read B's response. On the wire a mismatch is indistinguishable from "unknown `requestId`" — both return `404 Not Found` — so the endpoint does not leak the existence of cross-channel responses to a credentialed attacker. Channel mismatches are logged at the gateway with `reason=ChannelMismatch` for operator debugging.
 
-`401 Unauthorized` is returned on any auth failure (missing or malformed credentials, signature mismatch, clock skew). When the credentials authenticate correctly against `channelPath` but the stored `requestId` was originated by a different channel, the response is `404 Not Found` — same code as "unknown `requestId`".
+`401 Unauthorized` is returned on any auth failure (missing or malformed credentials, signature mismatch, clock skew) **and on a well-formed but unregistered `channelPath`** — the gateway treats an unknown channel as an auth failure rather than a 404 to avoid revealing which webhook paths exist (and, by extension, which tenant namespaces are hosted, since paths are `/channels/{namespace}/...`-prefixed). This mirrors the channel-match assertion above and the [SECURITY.md threat-model row on cross-channel response retrieval](./SECURITY.md#threat-model). When the credentials authenticate correctly against `channelPath` but the stored `requestId` was originated by a different channel, the response is `404 Not Found` — same code as "unknown `requestId`".
 
 Any gateway replica accepts this request. The replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`.
 
@@ -258,7 +258,7 @@ Any gateway replica accepts this request. The replica reads the response from th
 | 200 | Response or error payload available; body contains the callback payload above |
 | 202 | Request is still being processed |
 | 400 | Missing or malformed `channelPath` query parameter |
-| 401 | Auth failed (missing or malformed credentials, signature mismatch, clock skew > 300s) |
+| 401 | Auth failed (missing or malformed credentials, signature mismatch, clock skew > 300s, or `channelPath` not registered to any AgentChannel) |
 | 404 | Unknown `requestId`, response expired (1-hour TTL), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above) |
 
 Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
@@ -351,7 +351,6 @@ When the LLM Gateway cannot fulfill a request, it returns a structured error res
 |---|---|---|
 | 400 | `invalid_request` | Malformed request, unknown model, missing provider prefix |
 | 403 | `access_denied` | Namespace not in `allowedNamespaces`, model not in Agent's providers |
-| 413 | `payload_too_large` | Artifact payload exceeds size limits (task completion only) |
 | 429 | `rate_limited` | Per-namespace rate limit exceeded; includes `Retry-After` header |
 | 429 | `budget_exhausted` | Budget blocked per policy; includes `Retry-After` header set to the start of the next budget period |
 | 502 | `provider_error` | Upstream provider returned an error after exhausting fallback chain |
