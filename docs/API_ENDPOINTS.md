@@ -162,7 +162,7 @@ The gateway creates the polling record before returning this response, so a `GET
 }
 ```
 
-The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s — 4 attempts total over ~31s). If no `callbackUrl` is configured on the AgentChannel, or all retries fail, the response is stored at the polling endpoint under the original `requestId` and expires after 1 hour — same mechanism as the error-payload storage described later in this section.
+The gateway retries callback delivery up to 3 times with exponential backoff (1s, 5s, 25s — 4 attempts total over ~31s). If no `callbackUrl` is configured on the AgentChannel, or all retries fail, the response is stored at the polling endpoint under the original `requestId`. The polling-record TTL is bounded at 1 hour from 202-acceptance (the placeholder `Create` timestamp — not from when the payload is patched in), so the remaining retrievable window after the patch is `1h − (delivery time + agent processing + callback-retry budget)` — same TTL semantics as the error-payload storage described later in this section.
 
 **Callback authentication** — every callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (required by [API_RESOURCES.md § Cross-Resource Validation rule 25](./API_RESOURCES.md#cross-resource-validation) whenever `callbackUrl` is set). The signing contract mirrors the [polling endpoint's caller-auth contract](#polling-fallback) below — same auth types, same `X-Agentry-Timestamp` header, with a body-hash component added because callbacks have a body where polls do not. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` (or `callbackAuth.hmac.secretRef`), held by the gateway via the per-channel scoped Role created by [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler):
 
@@ -248,7 +248,7 @@ Unlike `wake_timeout` (agent was asked to wake but did not become ready in time)
 }
 ```
 
-Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, all 4 callback attempts fail (initial + 3 retries), or delivery is rejected as `callback_invalid` — errors are stored at the polling endpoint under the original `requestId` and expire after 1 hour. This mirrors the success-path retry-exhaustion behavior at the top of this section.
+Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s backoff as successful responses. If no `callbackUrl` is configured, all 4 callback attempts fail (initial + 3 retries), or delivery is rejected as `callback_invalid` — errors are stored at the polling endpoint under the original `requestId`, sharing the same 1-hour-from-202-acceptance TTL as the success path (see the [callback-retry exhaustion paragraph above](#async-webhook-response-gateway-managed) for the clock-origin detail). This mirrors the success-path retry-exhaustion behavior at the top of this section.
 
 ### Polling Fallback
 
@@ -256,7 +256,7 @@ Error payloads are delivered to `callbackUrl` with the same 3-retry / 1s-5s-25s 
 
 Served over HTTPS on the User Gateway listener (port 8080, TLS using `agentry-gateway-tls` — same certificate used by the LLM listener). External callers reach it through the cluster Ingress that fronts port 8080; see [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress).
 
-Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel — exactly the `channelPath` value the caller received in the 202 response body. The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request. Callers must preserve it verbatim from the 202 response; it should not be constructed independently.
+Returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel — exactly the `channelPath` value the caller received in the 202 response body. The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request. Callers must preserve the value verbatim from the 202 response and URL-encode it when assembling the query string; it should not be constructed independently.
 
 Poll requests carry no body, so the auth contract differs slightly from the original webhook:
 
@@ -267,7 +267,7 @@ Poll requests carry no body, so the auth contract differs slightly from the orig
 
 `401 Unauthorized` is returned on any auth failure (missing or malformed credentials, signature mismatch, clock skew) **and on a well-formed but unregistered `channelPath`** — the gateway treats an unknown channel as an auth failure rather than a 404 to avoid revealing which webhook paths exist (and, by extension, which tenant namespaces are hosted, since paths are `/channels/{namespace}/...`-prefixed). This mirrors the channel-match assertion above and the [SECURITY.md threat-model row on cross-channel response retrieval](./SECURITY.md#threat-model). When the credentials authenticate correctly against `channelPath` but the stored `requestId` was originated by a different channel, the response is `404 Not Found` — same code as "unknown `requestId`".
 
-Any gateway replica accepts this request. The replica reads the `agentry-async-{requestId}` ConfigMap in `agentry-system`: the ConfigMap is created as an empty placeholder when the originating replica returns `202` to the inbound webhook (so the polling record is queryable as soon as the caller has the `requestId`) and is patched with the response payload (or an error envelope) when the agent reply is ready. A `200` is returned only when the payload field is present and the channel-match assertion above passes; a missing payload field returns `202`; an absent ConfigMap returns `404`.
+Any gateway replica accepts this request. The replica reads the `agentry-async-{requestId}` ConfigMap in `agentry-system`: the ConfigMap is created as an empty placeholder when the originating replica returns `202` to the inbound webhook (so the polling record is queryable as soon as the caller has the `requestId`) and is patched with the response payload (or an error envelope) when the agent reply is ready. The channel-match assertion above fires on every ConfigMap-present branch — not just the payload-present one — so cross-channel `requestId` existence is never wire-observable: a present ConfigMap whose channel labels do not match `channelPath` returns `404` regardless of whether the payload field has been patched in. With the assertion passing, `200` is returned when the payload field is present; `202` when it is not. An absent ConfigMap returns `404`.
 
 | Status | Meaning |
 |---|---|
@@ -275,9 +275,9 @@ Any gateway replica accepts this request. The replica reads the `agentry-async-{
 | 202 | Request accepted; agent response not yet available |
 | 400 | Missing or malformed `channelPath` query parameter |
 | 401 | Auth failed (missing or malformed credentials, signature mismatch, clock skew > 300s, or `channelPath` not registered to any AgentChannel) |
-| 404 | Unknown `requestId`, response expired (1-hour TTL), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above) |
+| 404 | Unknown `requestId`, response expired (1-hour TTL from 202-acceptance), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above; applies whether the ConfigMap holds a placeholder or a patched response) |
 
-Stored responses are retained for 1 hour in the ConfigMap, after which they are pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
+Stored responses are retained for 1 hour from 202-acceptance — the polling-record TTL clock starts when the placeholder ConfigMap is created and is **not** reset by the payload `Patch`, so the per-`requestId` polling window is bounded at 1 hour regardless of how long the agent takes to reply. Past the TTL the entry is pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
 
 ---
 
