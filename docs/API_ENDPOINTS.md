@@ -117,7 +117,7 @@ This endpoint is **implemented by the agent container**, not by the gateway. The
 | `attachments` | array | no | Attachments to send in the reply |
 | `metadata` | map | no | Optional platform-specific reply metadata |
 
-**Agent → gateway:** `200 OK` with the response envelope is expected. Any other status (including 5xx and connection errors) is a `delivery_failed` signal that feeds the gateway's retry pipeline (sync) or the callback / polling error flow (async), and is recorded in AgentChannel status conditions.
+**Agent → gateway:** `200 OK` with the response envelope is expected. Any other status (including 5xx and connection errors) is a `delivery_failed` signal that feeds the gateway's agent-delivery retry pipeline (same schedule in both sync and async modes — see [`delivery_failed`](#async-webhook-response-gateway-managed)); on retry exhaustion, sync callers receive `502` with the `delivery_failed` envelope and async callers receive the same payload via callback or polling. Failures are recorded in AgentChannel status conditions in either case.
 
 **Gateway → webhook caller (sync mode only):** the gateway returns the agent's response body verbatim with `200 OK` on success. On failure it returns a structured error envelope using the [User Gateway Error Responses](#user-gateway-error-responses) status mapping below: `502` for `delivery_failed`, `504` for `wake_timeout` and `controller_unavailable`, `413` for `response_too_large`.
 
@@ -144,6 +144,8 @@ When an AgentChannel has `spec.webhook.responseMode: async`, the gateway handles
 | `channelPath` | string | yes | The webhook path of the originating AgentChannel. Callers must preserve this value and pass it (URL-encoded) as the `channelPath` query parameter on poll requests — see [Polling Fallback](#polling-fallback) below. |
 | `status` | string | yes | Always `"accepted"` for the immediate 202. |
 | `message` | string | no | Human-readable acknowledgement. |
+
+The gateway creates the polling record before returning this response, so a `GET /v1/channels/responses/{requestId}` issued immediately afterward will return `202` until the agent's response or a delivery error is ready (then `200`). A `5xx` from the inbound webhook means the polling record was not created — callers must not retain the `requestId` from a non-`202` response.
 
 **Callback delivery** (gateway POSTs to `spec.webhook.callbackUrl`):
 
@@ -265,12 +267,12 @@ Poll requests carry no body, so the auth contract differs slightly from the orig
 
 `401 Unauthorized` is returned on any auth failure (missing or malformed credentials, signature mismatch, clock skew) **and on a well-formed but unregistered `channelPath`** — the gateway treats an unknown channel as an auth failure rather than a 404 to avoid revealing which webhook paths exist (and, by extension, which tenant namespaces are hosted, since paths are `/channels/{namespace}/...`-prefixed). This mirrors the channel-match assertion above and the [SECURITY.md threat-model row on cross-channel response retrieval](./SECURITY.md#threat-model). When the credentials authenticate correctly against `channelPath` but the stored `requestId` was originated by a different channel, the response is `404 Not Found` — same code as "unknown `requestId`".
 
-Any gateway replica accepts this request. The replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`.
+Any gateway replica accepts this request. The replica reads the `agentry-async-{requestId}` ConfigMap in `agentry-system`: the ConfigMap is created as an empty placeholder when the originating replica returns `202` to the inbound webhook (so the polling record is queryable as soon as the caller has the `requestId`) and is patched with the response payload (or an error envelope) when the agent reply is ready. A `200` is returned only when the payload field is present and the channel-match assertion above passes; a missing payload field returns `202`; an absent ConfigMap returns `404`.
 
 | Status | Meaning |
 |---|---|
 | 200 | Response or error payload available; body contains the callback payload above |
-| 202 | Request is still being processed |
+| 202 | Request accepted; agent response not yet available |
 | 400 | Missing or malformed `channelPath` query parameter |
 | 401 | Auth failed (missing or malformed credentials, signature mismatch, clock skew > 300s, or `channelPath` not registered to any AgentChannel) |
 | 404 | Unknown `requestId`, response expired (1-hour TTL), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above) |
