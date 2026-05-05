@@ -55,7 +55,7 @@ Routing is gated on `AgentChannel.status.conditions[type=Ready].status == True` 
 
 The error envelope shape for `401`/`413`/`502`/`504` is the structured `{ "error": { "type", "message", "retryable" } }` object documented in [User Gateway Error Responses](#user-gateway-error-responses).
 
-**Response — async mode** (`AgentChannel.spec.webhook.responseMode: async`): the gateway returns `202 Accepted` with a `requestId` envelope as soon as the per-request placeholder ConfigMap is created, and handles delivery, callback, and polling in the background. Full contract — 202 body, callback signing, polling endpoint, per-error-type payloads, TTL semantics — in [Async Webhook Response](#async-webhook-response-gateway-managed). Sync-mode error codes (`401`/`413`) still apply in async mode at the inbound POST, before the 202 is returned (auth and body-size checks run on every inbound request regardless of `responseMode`).
+**Response — async mode** (`AgentChannel.spec.webhook.responseMode: async`): the gateway returns `202 Accepted` with a `requestId` envelope as soon as the per-request placeholder ConfigMap is created, and handles delivery, callback, and polling in the background. Full contract — 202 body, callback signing, polling endpoint, per-error-type payloads, TTL semantics — in [Async Webhook Response](#async-webhook-response-gateway-managed). Sync-mode inbound-only error codes (`401` and `413` `request_too_large`) still apply in async mode at the inbound POST, before the 202 is returned — auth and body-size checks run on every inbound request regardless of `responseMode`. The agent-reply `413` `response_too_large` condition does not reach the inbound POST in async mode by construction (the agent has not yet been dispatched when the 202 is returned); when it fires later in the async flow it is delivered via callback or polling per [Async Webhook Response](#async-webhook-response-gateway-managed).
 
 ---
 
@@ -306,6 +306,8 @@ Any gateway replica accepts this request. The replica reads the `agentry-async-{
 | 401 | Auth failed (missing or malformed credentials, signature mismatch, clock skew > 300s, or `channelPath` not registered to any AgentChannel) |
 | 404 | Unknown `requestId`, response expired (1-hour TTL from 202-acceptance), **or** stored `requestId` originated by a different channel than `channelPath` (channel-match failure — see assertion above; applies whether the ConfigMap holds a placeholder or a patched response) |
 
+The `401` response carries the structured `{ "error": { "type", "message", "retryable" } }` envelope documented in [User Gateway Error Responses](#user-gateway-error-responses) — same `unauthorized` `error.type` and same generic-`message` / no-cause-disambiguation contract as the inbound-webhook `401`, by design (the threat-model rationale in this section's `401` paragraph above applies on both surfaces).
+
 Stored responses are retained for 1 hour from 202-acceptance — the polling-record TTL clock starts when the placeholder ConfigMap is created and is **not** reset by the payload `Patch`, so the per-`requestId` polling window is bounded at 1 hour regardless of how long the agent takes to reply. Past the TTL the entry is pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
 
 ---
@@ -471,6 +473,7 @@ When the User Gateway cannot deliver a webhook in **sync mode**, it returns a st
 
 | Status | `error.type` | Retryable | Notes |
 |---|---|---|---|
+| 401 | `unauthorized` | no | Authentication rejected (missing or malformed credentials, signature mismatch, clock skew > 300s on HMAC) **or** the path / `channelPath` is not registered to a `Ready=True` AgentChannel. The cause is deliberately not disambiguated — see [Polling Fallback § 401](#polling-fallback) for the threat-model rationale. The gateway MUST emit a generic `message` (e.g. `"authentication failed"`) and MUST NOT differentiate causes via `error.type`, `message`, response headers, or response timing |
 | 413 | `request_too_large` | no | Inbound webhook body exceeded `gateway.maxMessageBodyBytes` (default 1 MiB). Reduce body size or split the message |
 | 413 | `response_too_large` | no | Agent reply exceeded `gateway.maxAsyncResponseBytes` (default 900 KiB). Externalize large outputs and reference by URL |
 | 502 | `delivery_failed` | no | Agent unreachable after 3 retries (1s, 5s, 25s backoff; 4 attempts total) |
