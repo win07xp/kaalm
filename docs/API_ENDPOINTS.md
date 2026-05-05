@@ -12,7 +12,7 @@ The following path prefixes are reserved for gateway-internal use and must not b
 
 - `/v1/` — all current and future gateway-internal endpoints (LLM proxy paths, task completion, heartbeat, async polling, channel health, activity). The controller's `POST /v1/activate/{namespace}/{agentName}` lives on the controller Service (port 9443), not the gateway, and is therefore unreachable from a webhook path regardless of this rule.
 
-AgentChannels whose `spec.webhook.path` begins with `/v1/` are rejected at reconcile time with `Ready=False, reason=ReservedPath`. The recommended developer convention is to use `/channels/` as a prefix (e.g., `/channels/team-support/support-assistant`).
+AgentChannels whose `spec.webhook.path` begins with `/v1/` are rejected at apply time by the CRD CEL validation in [Cross-Resource Validation rule 16](./API_RESOURCES.md#cross-resource-validation). Rule 16 is subsumed by rule 15 (the enforced `/channels/{namespace}/` prefix already excludes `/v1/`) and is retained as defense in depth — the resource is rejected at the API server before the AgentChannelReconciler ever observes it, so no `Ready=False` status is set. The recommended developer convention is to use `/channels/` as a prefix (e.g., `/channels/team-support/support-assistant`).
 
 ---
 
@@ -27,6 +27,35 @@ The LLM proxy accepts agent requests on the upstream provider's native API paths
 Request and response bodies are passthrough to the upstream provider's native format — Agentry adds no envelope of its own. The gateway injects the provider API key, strips the `provider/` prefix from the model name, and relays the response (including SSE streams transparently). Errors returned by the gateway itself (budget exhaustion, rate limit, fallback exhaustion) use the structured envelope documented in [LLM Gateway Error Responses](#llm-gateway-error-responses) below.
 
 Auth, namespace identification, provider routing, budget enforcement, fallback, and streaming behavior are documented in [GATEWAY_LLM.md](./GATEWAY_LLM.md). The per-path auth profile for these endpoints is consolidated in [ARCHITECTURE.md § The Agentry Gateway](./ARCHITECTURE.md#the-agentry-gateway) (`:8443` listener auth profile table).
+
+---
+
+## `POST /channels/{namespace}/{channel-path}` (external — webhook caller)
+
+The inbound webhook entry point. External webhook callers (other systems, bots, platform integrations) POST to this URL to deliver a message to an Agent via the bound AgentChannel. The path shape is fixed by CRD CEL: `spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` is the AgentChannel's own namespace, and must not begin with `/v1/` — see [Cross-Resource Validation rules 15-16](./API_RESOURCES.md#cross-resource-validation) and [Reserved Gateway Paths](#reserved-gateway-paths). Served on the User Gateway listener (`:8080`) with TLS using `agentry-gateway-tls`; external callers reach it through the cluster Ingress that fronts `:8080` (see [GATEWAY_USER.md § TLS and Ingress](./GATEWAY_USER.md#tls-and-ingress)).
+
+Routing is gated on `AgentChannel.status.conditions[type=Ready].status == True` — channels that fail validation (path conflict, bad agentRef, missing auth Secret, invalid `callbackUrl`) receive no traffic and POSTs to their paths return `401` (see status table below; rationale identical to [polling-endpoint § 401](#polling-fallback)).
+
+**Auth.** Per-AgentChannel `spec.webhook.auth`:
+
+- **`auth.type: bearer`** — caller sends `Authorization: Bearer <secret>`. The token is read from the Secret referenced by `auth.secretRef` (`name`, `key`).
+- **`auth.type: hmac`** — caller computes `HMAC(algorithm, secret, body)` over the **raw POST body bytes** and sends the hex-encoded digest in the configured `auth.hmac.header`. Unlike the [callback signing contract](#async-webhook-response-gateway-managed) and the [polling contract](#polling-fallback), the inbound HMAC input is the body alone — no `requestId` or timestamp prefix — because the inbound POST has no gateway-issued correlation ID yet. Field-level wire spec in [API_RESOURCES.md § AgentChannel](./API_RESOURCES.md#agentchannel).
+
+**Request body.** Opaque to the gateway — the caller's raw payload is passed through unchanged. The gateway extracts `userId` per `AgentChannel.spec.webhook.userId` (`fromHeader` or `fromBody`, with optional `fallback`) and normalizes the request into the [`POST /v1/message`](#post-v1message-agent-only--agent-implemented) envelope before delivery to the agent. Body bytes above `gateway.maxMessageBodyBytes` (Helm-configurable; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow) step 2a) are rejected with `413` before normalization or auth.
+
+**Response — sync mode** (`AgentChannel.spec.webhook.responseMode: sync`, the default):
+
+| Status | Meaning |
+|---|---|
+| 200 | Agent returned `200`; gateway forwards the agent's response body verbatim — see [`POST /v1/message`](#post-v1message-agent-only--agent-implemented) for the response envelope shape |
+| 401 | Auth failed (missing or malformed credentials, signature mismatch) **or** the path is not registered to a `Ready=True` AgentChannel — same code for both, mirroring the [polling-endpoint 401 contract](#polling-fallback), to avoid revealing which webhook paths and tenant namespaces are hosted |
+| 413 | Inbound body exceeded `gateway.maxMessageBodyBytes` **or** agent reply exceeded `gateway.maxAsyncResponseBytes` (the same 900 KiB ceiling applies in both sync and async modes — see [`response_too_large`](#async-webhook-response-gateway-managed)) |
+| 502 | `delivery_failed` — agent unreachable after 3 retries (1s, 5s, 25s backoff; 4 attempts total) |
+| 504 | `wake_timeout` (hibernated agent did not reach Ready within `wakeTimeout`) **or** `controller_unavailable` (activator endpoint unreachable; gateway sets `Retry-After: 5`) |
+
+The error envelope shape for `401`/`413`/`502`/`504` is the structured `{ "error": { "type", "message", "retryable" } }` object documented in [User Gateway Error Responses](#user-gateway-error-responses).
+
+**Response — async mode** (`AgentChannel.spec.webhook.responseMode: async`): the gateway returns `202 Accepted` with a `requestId` envelope as soon as the per-request placeholder ConfigMap is created, and handles delivery, callback, and polling in the background. Full contract — 202 body, callback signing, polling endpoint, per-error-type payloads, TTL semantics — in [Async Webhook Response](#async-webhook-response-gateway-managed). Sync-mode error codes (`401`/`413`) still apply in async mode at the inbound POST, before the 202 is returned (auth and body-size checks run on every inbound request regardless of `responseMode`).
 
 ---
 
@@ -411,7 +440,7 @@ When the LLM Gateway cannot fulfill a request, it returns a structured error res
 | Status | `error.type` | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Malformed request, unknown model, missing provider prefix |
-| 403 | `access_denied` | Namespace not in `allowedNamespaces`, model not in Agent's providers |
+| 403 | `access_denied` | Provider denied by any of: workload `spec.providers` (Agent or AgentTask), `AgentClass.allowedProviders`, or `ModelProvider.allowedNamespaces` — see [ARCHITECTURE.md § Multi-tenancy](./ARCHITECTURE.md#multi-tenancy) for the three-gate chain |
 | 429 | `rate_limited` | Per-namespace rate limit exceeded; includes `Retry-After` header |
 | 429 | `budget_exhausted` | Budget blocked per policy; includes `Retry-After` header set to the start of the next budget period |
 | 502 | `provider_error` | Upstream provider returned an error after exhausting fallback chain |
