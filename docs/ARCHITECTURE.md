@@ -285,7 +285,7 @@ For the aggregated catalog, log conventions, recommended alerts, and dashboard s
 
 ## Agent Runtime Contract
 
-Agentry is BYO-image: any container can be an Agent provided it implements a small contract — an HTTPS health endpoint on the injected health port, graceful SIGTERM handling, authenticated mTLS calls to the injected gateway endpoint, an optional `POST /v1/message` handler when an AgentChannel is in use, and `messageId`-based deduplication when hibernation is enabled.
+Agentry is BYO-image: any container can be an Agent provided it implements a small contract — an HTTPS health endpoint on the injected health port, graceful SIGTERM handling, authenticated mTLS calls to the injected gateway endpoint, an optional `POST /v1/message` handler when an AgentChannel is in use, and `messageId`-based deduplication on `/v1/message` (in-memory for non-hibernated agents; persisted across pod restarts when hibernation is enabled).
 
 The full contract — required env vars, TLS reload semantics, dedup buffer, optional heartbeat and task-completion endpoints — is specified in [RUNTIME_CONTRACT.md](./RUNTIME_CONTRACT.md). Working implementations of the contract ship as [Go and Python starter templates](./STARTER_TEMPLATES.md).
 
