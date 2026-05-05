@@ -41,7 +41,7 @@ Routing is gated on `AgentChannel.status.conditions[type=Ready].status == True` 
 - **`auth.type: bearer`** — caller sends `Authorization: Bearer <secret>`. The token is read from the Secret referenced by `auth.secretRef` (`name`, `key`).
 - **`auth.type: hmac`** — caller computes `HMAC(algorithm, secret, body)` over the **raw POST body bytes** and sends the hex-encoded digest in the configured `auth.hmac.header`. Unlike the [callback signing contract](#async-webhook-response-gateway-managed) and the [polling contract](#polling-fallback), the inbound HMAC input is the body alone — no `requestId` or timestamp prefix — because the inbound POST has no gateway-issued correlation ID yet. Field-level wire spec in [API_RESOURCES.md § AgentChannel](./API_RESOURCES.md#agentchannel).
 
-**Request body.** Opaque to the gateway — the caller's raw payload is passed through unchanged. The gateway extracts `userId` per `AgentChannel.spec.webhook.userId` (`fromHeader` or `fromBody`, with optional `fallback`) and normalizes the request into the [`POST /v1/message`](#post-v1message-agent-only--agent-implemented) envelope before delivery to the agent. Body bytes above `gateway.maxMessageBodyBytes` (Helm-configurable; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow) step 2a) are rejected with `413` before normalization or auth.
+**Request body.** Opaque to the gateway — the caller's raw payload is passed through unchanged. The gateway extracts `userId` per `AgentChannel.spec.webhook.userId` (`fromHeader` or `fromBody`, with optional `fallback`) and normalizes the request into the [`POST /v1/message`](#post-v1message-agent-only--agent-implemented) envelope before delivery to the agent. Body bytes above `gateway.maxMessageBodyBytes` (Helm-configurable; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow) step 2a) are rejected with `413` before normalization or auth. The size check is applied at the listener level on the raw request frame, **before path resolution** — so oversized POSTs to any path on `:8080` (registered or not) yield `413`, preserving the path-existence threat model documented in [Polling Fallback § 401](#polling-fallback) (an attacker must not be able to distinguish "registered channel" from "unregistered path" by sending oversize bodies and observing `413` vs `401`).
 
 **Response — sync mode** (`AgentChannel.spec.webhook.responseMode: sync`, the default):
 
@@ -49,7 +49,7 @@ Routing is gated on `AgentChannel.status.conditions[type=Ready].status == True` 
 |---|---|
 | 200 | Agent returned `200`; gateway forwards the agent's response body verbatim — see [`POST /v1/message`](#post-v1message-agent-only--agent-implemented) for the response envelope shape |
 | 401 | Auth failed (missing or malformed credentials, signature mismatch) **or** the path is not registered to a `Ready=True` AgentChannel — same code for both, mirroring the [polling-endpoint 401 contract](#polling-fallback), to avoid revealing which webhook paths and tenant namespaces are hosted |
-| 413 | Inbound body exceeded `gateway.maxMessageBodyBytes` **or** agent reply exceeded `gateway.maxAsyncResponseBytes` (the same 900 KiB ceiling applies in both sync and async modes — see [`response_too_large`](#async-webhook-response-gateway-managed)) |
+| 413 | `request_too_large` — inbound body exceeded `gateway.maxMessageBodyBytes` (default 1 MiB; see [User Gateway Error Responses](#user-gateway-error-responses)); **or** `response_too_large` — agent reply exceeded `gateway.maxAsyncResponseBytes` (default 900 KiB; same ceiling in sync and async modes — see [`response_too_large`](#async-webhook-response-gateway-managed)) |
 | 502 | `delivery_failed` — agent unreachable after 3 retries (1s, 5s, 25s backoff; 4 attempts total) |
 | 504 | `wake_timeout` (hibernated agent did not reach Ready within `wakeTimeout`) **or** `controller_unavailable` (activator endpoint unreachable; gateway sets `Retry-After: 5`) |
 
@@ -440,7 +440,7 @@ When the LLM Gateway cannot fulfill a request, it returns a structured error res
 | Status | `error.type` | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Malformed request, unknown model, missing provider prefix |
-| 403 | `access_denied` | Provider denied by any of: workload `spec.providers` (Agent or AgentTask), `AgentClass.allowedProviders`, or `ModelProvider.allowedNamespaces` — see [ARCHITECTURE.md § Multi-tenancy](./ARCHITECTURE.md#multi-tenancy) for the three-gate chain |
+| 403 | `access_denied` | Provider denied. **Full-lifecycle workloads (Agent / AgentTask):** rejected by any of `spec.providers` (workload), `AgentClass.allowedProviders`, or `ModelProvider.allowedNamespaces`. **Gateway-only-tier callers:** rejected by `ModelProvider.allowedNamespaces` alone (no Agent / AgentTask / AgentClass to consult) — see [ARCHITECTURE.md § Multi-tenancy](./ARCHITECTURE.md#multi-tenancy) for the canonical tenancy chain |
 | 429 | `rate_limited` | Per-namespace rate limit exceeded; includes `Retry-After` header |
 | 429 | `budget_exhausted` | Budget blocked per policy; includes `Retry-After` header set to the start of the next budget period |
 | 502 | `provider_error` | Upstream provider returned an error after exhausting fallback chain |
@@ -471,6 +471,7 @@ When the User Gateway cannot deliver a webhook in **sync mode**, it returns a st
 
 | Status | `error.type` | Retryable | Notes |
 |---|---|---|---|
+| 413 | `request_too_large` | no | Inbound webhook body exceeded `gateway.maxMessageBodyBytes` (default 1 MiB). Reduce body size or split the message |
 | 413 | `response_too_large` | no | Agent reply exceeded `gateway.maxAsyncResponseBytes` (default 900 KiB). Externalize large outputs and reference by URL |
 | 502 | `delivery_failed` | no | Agent unreachable after 3 retries (1s, 5s, 25s backoff; 4 attempts total) |
 | 504 | `wake_timeout` | no | Hibernated agent did not reach Ready within `wakeTimeout` |
