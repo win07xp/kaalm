@@ -92,7 +92,7 @@ Called by the agent container to signal liveness for idle detection. Only meanin
 
 **Request body:** empty or `{}`.
 
-**Response:** `200 OK` with empty body. `403 Forbidden` if the calling Pod is not associated with an Agent.
+**Response:** `200 OK` with empty body. `403 Forbidden` if the calling Pod is not associated with an Agent (which includes the AgentTask-SAN-at-listener / Agent-only-at-handler case — see [ARCHITECTURE.md § The Agentry Gateway](./ARCHITECTURE.md#the-agentry-gateway)). Error responses carry the structured `{ "error": { "type", "message", "retryable" } }` envelope — `error.type: access_denied`, `retryable: false` — reusing the type vocabulary from [`/v1/task/complete`](#post-v1taskcomplete-agenttask-only) and the [User Gateway error table](#user-gateway-error-responses).
 
 Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 seconds. The gateway coalesces rapid heartbeats in memory — no etcd or API server writes occur per heartbeat.
 
@@ -325,7 +325,7 @@ The request carries no auth header; authentication is the mTLS client cert prese
 
 ```json
 {
-  "startedAt": "2026-04-05T06:00:00Z",
+  "replicaStartedAt": "2026-04-05T06:00:00Z",
   "agents": {
     "support-assistant": {
       "gatewayTraffic": "2026-04-05T11:58:22Z",
@@ -341,7 +341,7 @@ The request carries no auth header; authentication is the mTLS client cert prese
 
 | Field | Type | Description |
 |---|---|---|
-| `startedAt` | timestamp | When this gateway replica started. The controller compares this to each Agent's `status.phaseTransitionTime` to detect post-restart "data is unknown" windows — see [GATEWAY_USER.md § Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) |
+| `replicaStartedAt` | timestamp | When this gateway replica started. The controller compares this to each Agent's `status.phaseTransitionTime` to detect post-restart "data is unknown" windows — see [GATEWAY_USER.md § Activity Tracking API](./GATEWAY_USER.md#activity-tracking-api) |
 | `agents` | map | Keys are Agent names in the requested namespace; values are per-source last-activity timestamps as observed by this replica |
 | `gatewayTraffic` | timestamp or null | Last LLM-gateway request or inbound channel-message delivery this replica observed for the agent. `null` if no traffic since the replica started |
 | `heartbeat` | timestamp or null | Last `POST /v1/agent/heartbeat` this replica received from the agent. `null` if none since the replica started |

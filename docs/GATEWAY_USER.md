@@ -118,7 +118,7 @@ Returns a JSON object containing the gateway's startup timestamp and a map of ag
 
 ```json
 {
-  "startedAt": "2026-04-05T06:00:00Z",
+  "replicaStartedAt": "2026-04-05T06:00:00Z",
   "agents": {
     "support-assistant": {
       "gatewayTraffic": "2026-04-05T11:58:22Z",
@@ -136,16 +136,16 @@ The gateway tracks both signal sources (gateway-observed LLM and channel traffic
 
 A `null` value for a source means the gateway has no record of that signal type for the agent since its last restart.
 
-The `startedAt` field indicates when the gateway started. The controller uses this to detect gateway restarts — if the gateway started more recently than an agent's `status.phaseTransitionTime` (a dedicated Agent status field set by the AgentReconciler on every phase change — see the [Agent CRD design notes](./API_RESOURCES.md#agent)), missing activity data is treated as "unknown" rather than "no activity".
+The `replicaStartedAt` field indicates when the gateway started. The controller uses this to detect gateway restarts — if the gateway started more recently than an agent's `status.phaseTransitionTime` (a dedicated Agent status field set by the AgentReconciler on every phase change — see the [Agent CRD design notes](./API_RESOURCES.md#agent)), missing activity data is treated as "unknown" rather than "no activity".
 
-**Multi-replica fan-out**: because each gateway replica maintains its own in-memory activity store (updated only by the traffic it handles), querying the gateway ClusterIP Service (which round-robins to one replica) would return only that replica's view — agents whose last request landed on a different replica would appear idle. The controller instead queries all gateway Pod IPs directly in parallel: it enumerates gateway Pods via its Pod informer (matching the gateway label selector in `agentry-system`) and issues one `GET /v1/activity?namespace={ns}` request per Pod IP. It takes the **most recent timestamp per agent per source** across all responses. Replicas that are unreachable (connection refused, timeout) are skipped; data from the remaining replicas is used. The `startedAt` field in each response is evaluated per-replica for restart detection — if one replica has restarted more recently than an agent's `status.phaseTransitionTime`, only that replica's data is treated as unknown. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) for the reconciler implementation detail.
+**Multi-replica fan-out**: because each gateway replica maintains its own in-memory activity store (updated only by the traffic it handles), querying the gateway ClusterIP Service (which round-robins to one replica) would return only that replica's view — agents whose last request landed on a different replica would appear idle. The controller instead queries all gateway Pod IPs directly in parallel: it enumerates gateway Pods via its Pod informer (matching the gateway label selector in `agentry-system`) and issues one `GET /v1/activity?namespace={ns}` request per Pod IP. It takes the **most recent timestamp per agent per source** across all responses. Replicas that are unreachable (connection refused, timeout) are skipped; data from the remaining replicas is used. The `replicaStartedAt` field in each response is evaluated per-replica for restart detection — if one replica has restarted more recently than an agent's `status.phaseTransitionTime`, only that replica's data is treated as unknown. See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) for the reconciler implementation detail.
 
 **TLS verification on per-Pod-IP dials**: the gateway cert's SAN list covers the gateway's Service DNS (`agentry-gateway.agentry-system.svc.cluster.local`, `.svc`, `localhost`) — not Pod IPs, which would be impractical to enroll. The controller's HTTP transport sets `tls.Config.ServerName = "agentry-gateway.agentry-system.svc.cluster.local"` for these per-Pod-IP dials, so SAN verification succeeds against the Service DNS while the dial target remains the Pod IP. Cert authenticity is unchanged — verification chains to `agentry-ca` and the SAN match is performed against the explicit `ServerName`. Without this override, every fan-out dial would fail TLS verification because the Pod IP does not appear in the cert's SAN.
 
 The controller queries all replica Pod IPs on each reconcile for agents in `Running` or `Idle` phase to evaluate idle and hibernation transitions. If all replicas are unreachable, the controller preserves the agent's current phase — no idle transitions are made without activity data.
 
-Activity data is ephemeral: it is lost on gateway restart. The gateway includes its `startedAt` timestamp in the `/v1/activity` response so the controller can detect this condition. After a gateway restart:
-- The controller defers idle and hibernation transitions for agents whose last phase transition predates the gateway's `startedAt`, treating missing data as "unknown" until the gateway has been running for at least `idleTimeout`.
+Activity data is ephemeral: it is lost on gateway restart. The gateway includes its `replicaStartedAt` timestamp in the `/v1/activity` response so the controller can detect this condition. After a gateway restart:
+- The controller defers idle and hibernation transitions for agents whose last phase transition predates the gateway's `replicaStartedAt`, treating missing data as "unknown" until the gateway has been running for at least `idleTimeout`.
 - Agents that are actively sending traffic re-establish their activity timestamps immediately.
 - Agents that are truly idle will transition to `Idle` after `idleTimeout` elapses from the gateway's startup, which is the correct behavior.
 
@@ -165,7 +165,7 @@ The gateway maintains per-channel inbound-delivery health in-memory (per replica
 - `failure` — the in-window list is non-empty and contains only failures. Reported with the most recent failure's `reason`/`lastError`/`timestamp`.
 - `empty` — no in-window observations.
 
-**Replica-startup handling.** Each replica reports its `startedAt` in the response. A replica with `now - startedAt < N` has not been alive long enough to observe a full window; its `empty` state is therefore not evidence that the channel is silent — only that this replica cannot prove silence. The controller treats the `startedAt` flag the same way the activity-API path does (see above) — `empty` from a not-yet-full-window replica does not contribute to a silence determination.
+**Replica-startup handling.** Each replica reports its `replicaStartedAt` in the response. A replica with `now - replicaStartedAt < N` has not been alive long enough to observe a full window; its `empty` state is therefore not evidence that the channel is silent — only that this replica cannot prove silence. The controller treats the `replicaStartedAt` flag the same way the activity-API path does (see above) — `empty` from a not-yet-full-window replica does not contribute to a silence determination.
 
 **Multi-replica fan-out and reduction.** The `AgentChannelReconciler` queries every gateway Pod IP in parallel — same shape as the [activity-API fan-out](#activity-tracking-api), including the per-Pod-IP TLS handling (`ServerName` override against the gateway Service DNS) and the unreachable-replica skip. The controller reduces the per-replica states into the AgentChannel condition as follows:
 
