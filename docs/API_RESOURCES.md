@@ -557,6 +557,20 @@ spec:
       fromHeader: "X-User-Id"       # read userId from this request header
       # fromBody: ".user.id"        # alternative: jq-style path into the JSON body
       fallback: "anonymous"         # value when userId cannot be resolved
+    # How the webhook adapter extracts the message content for delivery to
+    # the agent's /v1/message envelope. At most one of fromHeader / fromBody
+    # may be set; both are optional. When neither is set, the gateway uses
+    # the raw inbound body, JSON-encoded as a string, as `content` —
+    # preserving the generic-webhook story for senders whose body shape
+    # Agentry has no a-priori knowledge of. CRD schema enforces the mutex
+    # via the same CEL pattern used for userId above:
+    #   x-kubernetes-validations:
+    #     - rule: "!has(self.fromHeader) || !has(self.fromBody)"
+    #       message: "at most one of fromHeader or fromBody may be set"
+    content:
+      fromHeader: "X-Message-Text"        # read content from this request header
+      # fromBody: ".message.text"         # alternative: jq-style path into the JSON body
+      # fallback: ""                      # value when extraction fails (header absent or path does not resolve)
     # Response mode: "sync" (default) or "async".
     # sync: gateway blocks until the agent responds and returns the response
     #   as the webhook HTTP response body.
@@ -668,6 +682,7 @@ The reduction across gateway replicas is performed by the `AgentChannelReconcile
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: agentry-session-ns, name: channelId + ":" + userId)`, where `agentry-session-ns` is the fixed constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` — a purpose-generated UUID published as part of the Agentry API specification, identical across all installations and versions. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope. **This constant must not change after v1 ships** — any change would invalidate existing session state in agent PVCs.
 - **userId extraction**: the webhook adapter resolves `userId` using `webhook.userId` config (`fromHeader` or `fromBody`). At most one may be set — the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), rejecting invalid combinations at apply time. If both are absent, the adapter uses the empty string. When `session.enabled: true`, this means all requests that cannot be attributed to a user share a single session — set `fallback` explicitly to control this behavior. See the `webhook.userId` spec block above.
+- **content extraction**: the webhook adapter resolves `content` using `webhook.content` config (`fromHeader` or `fromBody`). At most one may be set — the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), mirroring the `userId` rule, rejecting invalid combinations at apply time. **If neither is configured**, the gateway uses the raw inbound body, JSON-encoded as a string, as `content` — preserving the generic-webhook story for callers whose body shape Agentry has no a-priori knowledge of (this is the structural reason the design supports any third-party webhook sender out of the box). **If `fromBody` is configured but the inbound body cannot be parsed as JSON**, the gateway rejects the request with `400 Bad Request` and `error.type: invalid_request`; this applies symmetrically to `userId.fromBody`, since both extractions share the parse step. **If `fromBody` is configured and the body parses but the path does not resolve, or `fromHeader` is configured and the header is absent**, the configured `fallback` is used (empty string if omitted). Per-channel `attachments` and `metadata` extraction are out of scope in v1: the generic webhook adapter populates them as `[]` and `{}` respectively; v1.1 platform-specific adapters (Discord, WhatsApp) populate them via adapter code, not per-channel CRD config. See [API_ENDPOINTS.md § POST /channels/{namespace}/{channel-path}](./API_ENDPOINTS.md#post-channelsnamespacechannel-path-external--webhook-caller) for the wire contract.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
 - **Async response mode** (`spec.webhook.responseMode: async`): designed for agents that take minutes to respond (e.g., coding agents, research agents). The async/sync distinction is handled entirely by the gateway. See [Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the response schemas.
