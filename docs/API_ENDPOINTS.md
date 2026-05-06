@@ -303,7 +303,7 @@ Any gateway replica accepts this request. The replica reads the `agentry-async-{
 
 The `401` response carries the structured `{ "error": { "type", "message", "retryable" } }` envelope documented in [User Gateway Error Responses](#user-gateway-error-responses) — same `unauthorized` `error.type` and same generic-`message` / no-cause-disambiguation contract as the inbound-webhook `401`, by design (the threat-model rationale in this section's `401` paragraph above applies on both surfaces). The `400` response carries the same envelope with `error.type: invalid_request` and `retryable: false`, reusing the type name from the [LLM Gateway Error Responses](#llm-gateway-error-responses) table; `404` follows standard HTTP semantics with an empty body.
 
-Stored responses are retained for 1 hour from 202-acceptance — the polling-record TTL clock starts when the placeholder ConfigMap is created and is **not** reset by the payload `Patch`, so the per-`requestId` polling window is bounded at 1 hour regardless of how long the agent takes to reply. Past the TTL the entry is pruned by the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
+Stored responses are retained for 1 hour from 202-acceptance — the polling-record TTL clock starts when the placeholder ConfigMap is created and is **not** reset by the payload `Patch`, so the per-`requestId` polling window is bounded at 1 hour regardless of how long the agent takes to reply. The gateway enforces this on every poll read — `404` is returned when `now − placeholder.creationTimestamp > 1h`, regardless of whether the [AgentChannelReconciler](./CONTROLLER_RECONCILERS.md#agentchannelreconciler) has yet pruned the ConfigMap. Reconciler pruning is storage cleanup, not the mechanism that drives the `200`/`202` → `404` transition observed by polling callers. Neither path is a durable queue: callback delivery is best-effort (3 retries with 1s/5s/25s backoff), and the polling endpoint is the receiver-driven fallback within the same 1-hour TTL — receivers that miss the callback retries can still recover the response by polling on timeout, but past the TTL the response is gone.
 
 ---
 
@@ -437,6 +437,7 @@ When the LLM Gateway cannot fulfill a request, it returns a structured error res
 | Status | `error.type` | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Malformed request, unknown model, missing provider prefix |
+| 401 | `unauthorized` | Authentication rejected at the gateway: bearer-token `TokenReview` rejection (gateway-only tier) or source-IP → Pod cross-check failure (both auth modes; defense-in-depth check after auth succeeds — see [GATEWAY_LLM.md § Namespace Identification](./GATEWAY_LLM.md#namespace-identification)). mTLS handshake failures terminate at the TLS layer with no HTTP response and do not appear in this table |
 | 403 | `access_denied` | Provider denied. **Full-lifecycle workloads (Agent / AgentTask):** rejected by any of `spec.providers` (workload), `AgentClass.allowedProviders`, or `ModelProvider.allowedNamespaces`. **Gateway-only-tier callers:** rejected by `ModelProvider.allowedNamespaces` alone (no Agent / AgentTask / AgentClass to consult) — see [ARCHITECTURE.md § Multi-tenancy](./ARCHITECTURE.md#multi-tenancy) for the canonical tenancy chain |
 | 429 | `rate_limited` | Per-namespace rate limit exceeded; includes `Retry-After` header |
 | 429 | `budget_exhausted` | Budget blocked per policy; includes `Retry-After` header set to the start of the next budget period |
@@ -444,7 +445,7 @@ When the LLM Gateway cannot fulfill a request, it returns a structured error res
 | 503 | `provider_unavailable` | All providers (primary + fallback) unreachable |
 | 504 | `provider_timeout` | Upstream provider timed out after exhausting fallback chain |
 
-The `error.retryable` field indicates whether the agent should retry the request. Rate-limited requests are retryable (short backoff). Budget-exhausted requests include a `Retry-After` header indicating when the next budget period starts, but `retryable` is `false` — the agent should not retry before that time. Access-denied requests are not retryable.
+The `error.retryable` field indicates whether the agent should retry the request. Rate-limited requests are retryable (short backoff). Budget-exhausted requests include a `Retry-After` header indicating when the next budget period starts, but `retryable` is `false` — the agent should not retry before that time. Access-denied and authentication-failure (`401 unauthorized`) requests are not retryable.
 
 ---
 
