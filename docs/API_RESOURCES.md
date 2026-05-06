@@ -529,12 +529,22 @@ spec:
     auth:
       type: bearer                              # "bearer" | "hmac"
       secretRef: { name: webhook-secret, key: token }   # required for bearer
-      # For HMAC signature verification (e.g., GitHub, Stripe, Twilio webhooks):
+      # For HMAC signature verification (e.g., GitHub, Stripe, Shopify, Twilio):
       # type: hmac
       # hmac:
       #   header: "X-Hub-Signature-256"         # request header containing the signature
       #   algorithm: sha256                      # "sha256" | "sha1"
       #   secretRef: { name: webhook-hmac-secret, key: secret }
+      #   # Optional. Literal prefix the gateway strips off the header value
+      #   # before decoding the digest (default ""). Set to "sha256=" for
+      #   # GitHub's X-Hub-Signature-256: sha256=<hex> shape.
+      #   signaturePrefix: "sha256="
+      #   # Optional. Digest encoding in the header (default "hex", lowercase
+      #   # case-insensitive compare). Use "base64" (standard, not URL-safe)
+      #   # for senders like Shopify's X-Shopify-Hmac-Sha256. These two fields
+      #   # apply to inbound webhook verification only — the polling endpoint
+      #   # always uses bare hex (see API_ENDPOINTS.md § Polling Fallback).
+      #   encoding: hex                          # "hex" | "base64"
     # How the webhook adapter extracts the userId for session tracking.
     # At most one of fromHeader / fromBody may be set; both are optional.
     # When omitted, userId defaults to the empty string — all unattributed
@@ -649,8 +659,8 @@ The reduction across gateway replicas is performed by the `AgentChannelReconcile
 ### Design notes
 
 - **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
-- **Webhook auth types**: `bearer` validates a static token from the `Authorization` header against the value in `secretRef`. `hmac` validates a request body signature: the gateway reads the signature from the configured `header` (e.g., `X-Hub-Signature-256`), computes `HMAC(algorithm, secret, request_body)` using the shared secret from `hmac.secretRef`, and compares the values using constant-time comparison. HMAC is preferred for integrations where the calling platform signs payloads (GitHub, Stripe, Twilio) — it avoids exposing a static token in every request.
-- **Poll-endpoint auth** (async response mode): `GET /v1/channels/responses/{requestId}` reuses the same `webhook.auth` configuration, but the HMAC input differs because poll GETs have no body. For `auth.type: hmac`, the caller computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}"` (unix seconds, LF delimiter, no trailing newline), sends the hex-encoded digest in the configured `header`, and presents the timestamp in `X-Agentry-Timestamp`. The gateway rejects requests whose timestamp differs from its wall clock by more than 300s to bound replay. For `auth.type: bearer`, the poll presents the same bearer token in `Authorization: Bearer …`. See [Async Webhook Response § polling fallback](./API_ENDPOINTS.md#async-webhook-response-gateway-managed).
+- **Webhook auth types**: `bearer` validates a static token from the `Authorization` header against the value in `secretRef`. `hmac` validates a request body signature: the gateway reads the signature from the configured `header` (e.g., `X-Hub-Signature-256`), strips any configured `hmac.signaturePrefix` (e.g., `"sha256="` for GitHub), decodes per `hmac.encoding` (`hex` default; `base64` for senders like Shopify), computes `HMAC(algorithm, secret, request_body)` using the shared secret from `hmac.secretRef`, and constant-time-compares the values. HMAC is preferred for integrations where the calling platform signs payloads (GitHub, Stripe, Shopify, Twilio) — it avoids exposing a static token in every request.
+- **Poll-endpoint auth** (async response mode): `GET /v1/channels/responses/{requestId}` reuses the same `webhook.auth` configuration, but the HMAC input differs because poll GETs have no body. For `auth.type: hmac`, the caller computes `HMAC(algorithm, secret, canonicalString)` where `canonicalString = "{requestId}\n{timestamp}"` (unix seconds, LF delimiter, no trailing newline), sends the bare lowercase hex digest in the configured `header` (the `hmac.signaturePrefix` and `hmac.encoding` fields apply to inbound verification only — polling is an Agentry-canonical surface and always uses bare hex with no prefix), and presents the timestamp in `X-Agentry-Timestamp`. The gateway rejects requests whose timestamp differs from its wall clock by more than 300s to bound replay. For `auth.type: bearer`, the poll presents the same bearer token in `Authorization: Bearer …`. See [Async Webhook Response § polling fallback](./API_ENDPOINTS.md#async-webhook-response-gateway-managed).
 - **Webhook path namespace scoping**: `spec.webhook.path` must begin with `/channels/{namespace}/` where `{namespace}` is the AgentChannel's own namespace. This is enforced at apply time via a root-scoped CEL rule (`self.spec.webhook.path.startsWith('/channels/' + self.metadata.namespace + '/')`) — attached at the object root because Kubernetes CEL cannot reach `metadata.namespace` from a field-scoped rule. Namespace-scoping eliminates cross-tenant path conflicts by construction. Within a namespace, paths must be unique (see validation rules 15-16 in [Cross-Resource Validation](#cross-resource-validation)). The gateway routes webhook traffic only to AgentChannels with `status.conditions[type=Ready].status == True` — `Ready=False` channels (including the `PathConflict` loser) receive no traffic; see [GATEWAY_USER.md § Request Flow](./GATEWAY_USER.md#user-gateway--request-flow).
 - **Delivery counts are not in status.** Per-message counters require either a status patch on every delivery (high etcd write pressure at scale) or a separate in-memory accumulation mechanism. Instead, delivery volume is tracked via the Prometheus metric `agentry_channel_messages_total{channel_type,namespace,status}` exposed by the gateway. Status reflects channel health (phase, conditions) — not traffic volume.
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
