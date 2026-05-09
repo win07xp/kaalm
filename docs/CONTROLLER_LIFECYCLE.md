@@ -212,18 +212,20 @@ Any state → Terminating (on delete or after TTL)
 | Succeeded/Failed/TimedOut -> Terminating | TTL expired OR deletion requested |
 
 **Completion detection** depends on `spec.completion.condition`:
-- `agentReported`: the gateway receives [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) from the agent container. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace (created by the AgentTaskReconciler at provisioning time) with the completion payload (status, message, and artifact key-values). The reconciler watches the ConfigMap for changes and transitions to `Completing` once the payload is populated. Using a ConfigMap (rather than a Pod annotation) ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass.
+- `agentReported`: the gateway receives [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) from the agent container. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace (created by the AgentTaskReconciler at provisioning time) with the completion payload (status, message, and artifact key-values). The reconciler watches the ConfigMap for changes and transitions to `Completing` once the payload is populated. Using a ConfigMap (rather than a Pod annotation) ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass. The reconciler stamps `AgentTask.status.currentPodUID = Pod.UID` whenever the agent's Pod is created (initial provisioning and `backoffLimit` retries); the gateway's `/v1/task/complete` admission uses this field as the identity gate (see [API_ENDPOINTS.md § POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) 403 cases (c) `StalePodCompletion` and (d) `TaskAlreadyCompleted`).
 - `exitCode`: the reconciler watches Pod phase; exit 0 -> Succeeded, non-zero -> Failed.
 
 **Artifact collection** in `agentReported` mode: artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required. Artifact-name conformance against `spec.artifacts` is enforced synchronously at the gateway (`400 invalid_request` returned to the agent before the ConfigMap is patched — see [API_ENDPOINTS.md § POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only)); the reconciler re-checks defensively when reading the ConfigMap as belt-and-suspenders against any future RBAC drift on the per-task `update, patch` Role, but under normal operation the re-check is a no-op. Oversize artifacts (>4 KiB per artifact or >32 KiB total) are rejected at the gateway with HTTP 413; agents must externalize large outputs (object storage, Git, etc.) and pass a reference URL inline. There is no auto-spill mechanism and no `status.artifactRefs` field.
 
 **Retry mechanics**: when [`spec.completion.backoffLimit`](./API_RESOURCES.md#agenttask) `> 0` and the task transitions to `Failed` with `status.retries` below the limit:
 1. The reconciler increments `status.retries`.
-2. The existing Pod is deleted (it has already exited or will be terminated).
-3. The `{taskName}-completion` ConfigMap is reset to `data: {}` (the reconciler patches it back to empty rather than deleting and re-creating, so the existing ownerRef and the gateway's name-scoped `update, patch` Role remain valid for the retry).
-4. The PVC is retained — the retry runs with the same scratch storage.
-5. The task transitions back to `Provisioning` and a new Pod is created.
-6. If the retry also fails and `status.retries` equals `backoffLimit`, the task remains in `Failed` as a terminal state.
+2. The reconciler clears `status.currentPodUID = ""` — this closes the in-flight stale-write window. Any `/v1/task/complete` from the terminated old Pod arriving after this point fails the gateway's identity gate with `403 StalePodCompletion` instead of overwriting the new Pod's data.
+3. The existing Pod is deleted (it has already exited or will be terminated).
+4. The `{taskName}-completion` ConfigMap is reset to `data: {}` (the reconciler patches it back to empty rather than deleting and re-creating, so the existing ownerRef and the gateway's name-scoped `update, patch` Role remain valid for the retry).
+5. The PVC is retained — the retry runs with the same scratch storage.
+6. The task transitions back to `Provisioning` and a new Pod is created.
+7. The reconciler observes the new Pod via the informer and stamps `status.currentPodUID = newPod.UID` — this re-opens the gate for the new Pod. There is a narrow informer-lag window (typically <100ms vs. seconds of agent startup) where the new Pod's first `/v1/task/complete` may race the stamp and receive `403 StalePodCompletion`; agents handle this per [RUNTIME_CONTRACT.md § /v1/task/complete](./RUNTIME_CONTRACT.md) (bounded retry on `StalePodCompletion`).
+8. If the retry also fails and `status.retries` equals `backoffLimit`, the task remains in `Failed` as a terminal state.
 
 ---
 
