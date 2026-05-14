@@ -726,7 +726,7 @@ The two can disagree without contradiction: a channel can be `phase: Degraded` (
 
 ## Cross-Resource Validation
 
-The following constraints are enforced at reconcile time. Failed validation results in a `Ready=False` status condition with a clear message rather than an admission rejection.
+The following constraints are enforced via a mix of CRD CEL `x-kubernetes-validations` (apply-time, rejected by the apiserver) and reconcile-time checks in the relevant reconciler. Reconcile-time violations surface in status — most as `Ready=False` with a specific `reason`; AgentClass-vs-Agent-spec mismatches (rules 24 and 26) follow the established class-mismatch handling and transition the Agent to `phase=Degraded` (or the AgentTask to `phase=Failed`); a small subset (rule 20) emit only a `Warning` event without affecting `Ready`. None are surfaced via admission webhook — Agentry has no admission webhook server.
 
 1. `Agent.spec.agentClassRef` and `AgentTask.spec.agentClassRef` must resolve to an existing AgentClass.
 2. `Agent.spec.image` and `AgentTask.spec.image` must match at least one pattern in `AgentClass.spec.image.allowedImages` (if the list is non-empty).
