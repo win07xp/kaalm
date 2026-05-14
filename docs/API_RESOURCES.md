@@ -120,7 +120,11 @@ spec:
   lifecycle:
     defaultIdleTimeout: "30m"
     maxIdleTimeout: "24h"
-    hibernationEnabled: true
+    # Hard policy lever. When false, Agents of this class cannot opt in to
+    # hibernation — an Agent with lifecycle.hibernationEnabled=true is rejected
+    # with Ready=False, reason=HibernationNotAllowed at reconcile time. See
+    # rule 26 in Cross-Resource Validation.
+    hibernationAllowed: true
     defaultHibernationDelay: "30m"  # how long an agent stays Idle before hibernating
     maxHibernationDelay: "2h"      # cap on per-Agent hibernationDelay overrides
     defaultWakeTimeout: "2m"       # default time gateway waits for Pod Ready on wake
@@ -152,6 +156,7 @@ status:
 ### Design notes
 
 - `allowedImages` is mandatory in practice for real clusters; an empty list means "any image" and validation will emit a warning.
+- **`pvcRetention: Retain` mechanism**: AgentClass-derived per-Agent PVCs carry an ownerRef back to the Agent like other [child resources](./ARCHITECTURE.md#per-agent-and-per-task-child-resources), so the default cascade GC removes the PVC on Agent deletion. To honor `Retain`, the Agent finalizer strips the PVC's ownerRef before the Agent's own finalizer is removed; cascade GC then leaves the PVC untouched. When `Delete`, the finalizer leaves the ownerRef in place and cascade GC removes the PVC. See [CONTROLLER_LIFECYCLE.md § Finalizers](./CONTROLLER_LIFECYCLE.md#finalizers).
 - **Image pattern glob semantics**: patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules. The `*` wildcard matches any sequence of non-`/` characters — it does **not** cross path separators. Examples: `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo:latest` but NOT `registry.internal.corp/agents/team/foo:latest`. Use explicit multi-segment patterns (e.g., `registry.internal.corp/agents/team/*`) for nested paths. Digest references (`sha256:...`) are not matched by glob and must be listed explicitly.
 - **Network egress — `allowedCIDRs` vs. `allowedHosts`**: `allowedCIDRs` is the portable primitive and maps directly to `NetworkPolicy.egress.to.ipBlock.cidr`, which every CNI implementing Kubernetes NetworkPolicy supports. `allowedHosts` (DNS names) cannot be expressed in standard `NetworkPolicy` — it requires a CNI with FQDN egress policies (Cilium via `CiliumNetworkPolicy`, Calico Enterprise). The AgentClassReconciler detects the cluster CNI on startup; if `allowedHosts` is set but no supported FQDN-policy CRD is present, a `Warning` event is emitted and `allowedHosts` is ignored. Prefer `allowedCIDRs` for egress governance; layer `allowedHosts` on top only when the CNI supports it.
 - `allowedProviders` is the primary access control mechanism for LLM providers at the class level. ModelProvider itself has `allowedNamespaces` for namespace-level control. Both must pass for an Agent to use a provider.
@@ -177,6 +182,11 @@ spec:
   type: anthropic
 
   # Endpoint override (for self-hosted or custom gateways). Optional for known types.
+  # Must use https:// — the gateway forwards provider credentials to this URL;
+  # a non-TLS scheme would leak them in cleartext. CRD schema enforces this via
+  # x-kubernetes-validations:
+  #   - rule: "self.startsWith('https://')"
+  #     message: "endpoint must use https"
   endpoint: "https://api.anthropic.com"
 
   # Credentials: a reference to a Secret in the operator's namespace.
@@ -188,6 +198,11 @@ spec:
 
   # Models offered through this provider. The gateway validates that requested
   # models are in this list; unknown models are rejected.
+  # Each entry's `id` must be unique within the provider — the gateway routes
+  # by the qualified name `{providerRef}/{modelId}`, so duplicates would silently
+  # win-last. CRD schema enforces uniqueness via x-kubernetes-validations:
+  #   - rule: "self.all(m, self.exists_one(n, n.id == m.id))"
+  #     message: "model id must be unique within a provider"
   models:
     - id: "claude-opus-4-6"
       displayName: "Claude Opus 4.6"
@@ -231,9 +246,14 @@ spec:
   # Fallback chain. If this provider is unavailable (network error, 5xx,
   # timeout), the gateway tries the next provider in order. A budget-blocked
   # primary does NOT trigger fallback — the gateway returns 429
-  # budget_exhausted immediately. The gateway walks each fallback provider's
-  # own fallback chain, up to the gateway-level maxFallbackDepth setting
-  # (default 3). Referenced providers must also allow the namespace.
+  # budget_exhausted immediately. A budget-blocked *fallback* candidate is
+  # skipped (an attempt slot IS consumed) and its own `spec.fallback` children
+  # are walked. If the entire walk is exhausted by error, budget-block, or
+  # maxFallbackDepth, the gateway returns 502 provider_error (not 429). The
+  # gateway walks each fallback provider's own fallback chain, up to the
+  # gateway-level maxFallbackDepth setting (default 3). Referenced providers
+  # must also allow the namespace. See GATEWAY_LLM.md § Fallback Logic for the
+  # traversal algorithm.
   fallback:
     - name: openai-fallback
 
@@ -276,6 +296,7 @@ status:
 
 - **Secret scoping**: credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers.
 - **Budget state**: persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy. See [Budget State Management](./GATEWAY_LLM.md#budget-state-management).
+- **Budget period boundaries**: budget periods reset at midnight UTC. `monthly` = first day of the UTC calendar month at 00:00; `weekly` = Monday 00:00 UTC; `daily` = 00:00 UTC. Per-replica rollover detection, archival of previous-period totals to status, and the rollover-window underestimate window are documented in [GATEWAY_LLM.md § Budget State Management](./GATEWAY_LLM.md#budget-state-management). The `Retry-After` header on `429 budget_exhausted` ([API_ENDPOINTS.md § LLM Gateway error responses](./API_ENDPOINTS.md#llm-gateway-error-responses)) is the delta-seconds to the next reset.
 - **Glob in `allowedNamespaces`**: supports common patterns like `team-*`. Uses Go's [`path.Match`](https://pkg.go.dev/path#Match) rules — `*` matches any sequence of non-`/` characters and does not cross path separators. Since Kubernetes namespace names are DNS labels (no `/`), `*` behaves as expected: `sandbox-*` matches `sandbox-foo` but not `sandbox-foo-bar/sub`. Exact match is preferred where possible.
 - **Fallback chains** form a tree (each provider may have its own `spec.fallback` list) that the gateway walks **depth-first in declared order**. The gateway-level `maxFallbackDepth` cap (default 3) bounds the **total number of providers attempted per request, including the primary** — not the nesting depth of the tree. With the default, the gateway tries at most three providers before giving up, regardless of the tree's shape. Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1 — the gateway does not translate between API formats. The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster. See [Fallback Logic](./GATEWAY_LLM.md#fallback-logic) for the traversal pseudocode.
 - **Cost fields are strings** (not floats) to avoid precision issues. The gateway parses them as decimals.
@@ -330,6 +351,9 @@ spec:
 
   lifecycle:
     idleTimeout: "30m"           # transition to Idle after this much inactivity
+    # Setting hibernationEnabled=true requires the referenced AgentClass to
+    # also have lifecycle.hibernationAllowed=true — see rule 26 in
+    # Cross-Resource Validation.
     hibernationEnabled: true
     hibernationDelay: "30m"      # how long to stay Idle before hibernating; defaults from AgentClass
     activitySource: gatewayTraffic   # "gatewayTraffic" | "agentHeartbeat" | "both"
@@ -471,7 +495,7 @@ status:
   artifactValues:
     pr-url: "https://github.com/acme/widgets/pull/587"
     summary: "Fixed null pointer in WidgetService.get(). Added regression test."
-  agentReportedStatus: "success"
+  agentReportedStatus: "success"   # "success" | "failure"
   agentReportedMessage: "PR opened successfully"
 ```
 
@@ -483,6 +507,7 @@ status:
 - **Gateway↔reconciler completion protocol**: the per-task `{taskName}-completion` ConfigMap is the **data** channel — the gateway patches it with the completion payload, the reconciler watches it for changes. `status.currentPodUID` is the **identity gate** — the AgentTaskReconciler stamps it with the current Pod's UID on every Pod creation (initial provisioning and `backoffLimit` retries) and clears it (`""`) during the retry-reset window; the gateway resolves the calling Pod's UID at `/v1/task/complete` admission and rejects mismatched callers with `403 access_denied` `reason=StalePodCompletion`. Combined with a terminal-phase rejection (`reason=TaskAlreadyCompleted` when `status.phase ∈ {Succeeded, Failed, TimedOut}`), this prevents stale writes from a terminated Pod (in-flight after retry) and silent drops from a delayed second call against a completed task — both of which the data-channel reset alone cannot close. See [API_ENDPOINTS.md § /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) 403 cases (c) and (d) for the wire-level contract and [CONTROLLER_LIFECYCLE.md § Retry mechanics](./CONTROLLER_LIFECYCLE.md#agenttask) for the clear/reset/create/restamp ordering.
 - **`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done. The CRD schema enforces this: `spec.completion.condition` accepts only `agentReported` and `exitCode` in v1 via `x-kubernetes-validations: [{rule: "self in ['agentReported', 'exitCode']", message: "webhook completion condition is not supported in v1"}]` — invalid values are rejected at apply time.
 - **`exitCode` does not support artifact collection.** Artifacts are collected via the `POST /v1/task/complete` payload, which is only used by `agentReported` mode. Declaring `spec.artifacts` with `completion.condition: exitCode` is rejected by CRD schema validation. Tasks using `exitCode` that need to produce output should write results to an external system (e.g., a Git repository, object storage) and rely on the container logs for status.
+- **`agentReportedStatus`** mirrors the `status` field from the agent's [`POST /v1/task/complete`](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) payload — `"success"` or `"failure"`. The gateway rejects other values with `400 invalid_request` synchronously, so `agentReportedStatus` always settles to one of those two when populated.
 - **`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.
 - **Concurrency**: unlike Job, AgentTask is always parallelism=1 in v1. Parallel fan-out tasks would be a separate future resource (`AgentTaskSet`) rather than a field on AgentTask.
 - **Runtime-contract guarantees (same as Agent)**: the AgentTaskReconciler injects the full `$AGENTRY_*` environment-variable set on the task Pod (`$AGENTRY_HEALTH_PORT`, `$AGENTRY_GATEWAY_ENDPOINT`, `$AGENTRY_CA_CERT`, `$AGENTRY_TLS_CERT`, `$AGENTRY_TLS_KEY`) and creates a per-task cert-manager `Certificate` (`{taskName}-tls`) with `usages: [client auth]`. The output Secret mounts at `/var/run/agentry/` so the task image presents a valid mTLS client cert on every call to `$AGENTRY_GATEWAY_ENDPOINT` (LLM requests, heartbeats, `POST /v1/task/complete`). The Certificate's SAN is `{taskName}.{namespace}.task.agentry.io` — a non-Service shape, since tasks have no Service. See [AgentTaskReconciler](./CONTROLLER_RECONCILERS.md#agenttaskreconciler) and [Namespace Identification](./GATEWAY_LLM.md#namespace-identification) for the full flow.
@@ -557,7 +582,7 @@ spec:
     #       message: "at most one of fromHeader or fromBody may be set"
     userId:
       fromHeader: "X-User-Id"       # read userId from this request header
-      # fromBody: ".user.id"        # alternative: jq-style path into the JSON body
+      # fromBody: ".user.id"        # alternative: dotted JSON path into the body (see design notes)
       fallback: "anonymous"         # value when userId cannot be resolved
     # How the webhook adapter extracts the message content for delivery to
     # the agent's /v1/message envelope. At most one of fromHeader / fromBody
@@ -574,7 +599,7 @@ spec:
     #       message: "at most one of fromHeader or fromBody may be set"
     content:
       fromHeader: "X-Message-Text"        # read content from this request header
-      # fromBody: ".message.text"         # alternative: jq-style path into the JSON body
+      # fromBody: ".message.text"         # alternative: dotted JSON path into the body (see design notes)
       # fallback: ""                      # value when extraction fails (header absent or path does not resolve)
     # Response mode: "sync" (default) or "async".
     # sync: gateway blocks until the agent responds and returns the response
@@ -617,13 +642,6 @@ spec:
     # Maximum number of in-flight async responses before the gateway rejects
     # new async requests with HTTP 503. Bounds ConfigMap creation in agentry-system.
     maxPendingAsyncResponses: 100
-
-  # Optional: override how the gateway delivers messages to the agent.
-  # By default the gateway posts to POST /v1/message on the agent's Service port.
-  # Use this to accommodate agents with a custom endpoint.
-  agentEndpoint:
-    path: /v1/message          # default
-    port: 8080                 # default ($AGENTRY_HEALTH_PORT)
 
   # Optional: session configuration. When enabled, the gateway generates a
   # deterministic sessionId from (channelId, userId) and includes it in the
@@ -675,6 +693,13 @@ status:
 
 The reduction across gateway replicas is performed by the `AgentChannelReconciler`. v1.1+ persistent-connection channels will reuse the same tri-state contract, with reasons sourced from gateway-side connection events. See [GATEWAY_USER.md § Channel Health Tracking](./GATEWAY_USER.md#channel-health-tracking) for the per-replica state model and cross-replica reduction.
 
+**`status.phase` vs `conditions[type=PlatformConnected]`** — these signals are orthogonal:
+
+- `phase: Degraded` reflects the **bound Agent's** state. The `AgentChannelReconciler` sets it when the referenced Agent transitions to a non-serving phase (e.g., `Failed`) — see [AgentChannelReconciler step 5](./CONTROLLER_RECONCILERS.md#agentchannelreconciler). A channel whose Agent is broken cannot deliver messages regardless of inbound auth state.
+- `conditions[type=PlatformConnected]` reflects **inbound webhook** delivery health (auth pass/fail, dispatch success/failure), evaluated over the rolling window described above.
+
+The two can disagree without contradiction: a channel can be `phase: Degraded` (Agent broken) while `PlatformConnected=Unknown` (no recent inbound to observe), and a channel with a healthy Agent (`phase: Active`) can still report `PlatformConnected=False` if recent inbound requests failed auth or dispatch.
+
 ### Design notes
 
 - **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
@@ -687,6 +712,7 @@ The reduction across gateway replicas is performed by the `AgentChannelReconcile
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **Session management is opt-in.** When `session.enabled: true`, the gateway generates a **deterministic `sessionId`** from the message's `channelId` and `userId`: `sessionId = UUIDv5(namespace: agentry-session-ns, name: channelId + ":" + userId)`, where `agentry-session-ns` is the fixed constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` — a purpose-generated UUID published as part of the Agentry API specification, identical across all installations and versions. This ID is stable across gateway replicas and restarts — no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope. **This constant must not change after v1 ships** — any change would invalidate existing session state in agent PVCs.
 - **userId extraction**: the webhook adapter resolves `userId` using `webhook.userId` config (`fromHeader` or `fromBody`). At most one may be set — the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), rejecting invalid combinations at apply time. If both are absent, the adapter uses the empty string. When `session.enabled: true`, this means all requests that cannot be attributed to a user share a single session — set `fallback` explicitly to control this behavior. See the `webhook.userId` spec block above.
+- **`fromBody` syntax — dotted JSON path**: `webhook.userId.fromBody` and `webhook.content.fromBody` accept a **strict subset** of jq-style paths, not the full jq language. Supported: object property access (`.foo.bar.baz`, leading dot required, property names match `[a-zA-Z_][a-zA-Z0-9_]*`) and numeric array indexing (`.foo[0]`). **Not supported**: filters, slicing, `[]` flatten, recursive descent (`..`), pipes, comparisons, or any jq expression. Invalid paths are rejected at apply time via CRD CEL on both fields (`x-kubernetes-validations` with `rule: "self.matches('^(\\\\.([a-zA-Z_][a-zA-Z0-9_]*)|\\\\.[a-zA-Z_][a-zA-Z0-9_]*(\\\\[[0-9]+\\\\])?)+$')"`, message `"fromBody must be a dotted JSON path: .foo.bar or .foo[0]"`). The narrow grammar keeps the extraction implementation small and unambiguous across language ports; senders whose payloads require richer extraction should pre-process upstream or configure `fromHeader` instead.
 - **content extraction**: the webhook adapter resolves `content` using `webhook.content` config (`fromHeader` or `fromBody`). At most one may be set — the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), mirroring the `userId` rule, rejecting invalid combinations at apply time. **If neither is configured**, the gateway uses the raw inbound body, JSON-encoded as a string, as `content` — preserving the generic-webhook story for callers whose body shape Agentry has no a-priori knowledge of (this is the structural reason the design supports any third-party webhook sender out of the box). The raw-body path requires valid UTF-8: bodies containing invalid UTF-8 bytes are rejected with `400 Bad Request` and `error.type: invalid_request` (`error.message` names the invalid byte offset). Operators with binary senders (e.g., protobuf-payload webhooks) must configure `webhook.content` explicitly — typically `fromHeader` — so the gateway never tries to UTF-8-decode the body. **If `fromBody` is configured but the inbound body cannot be parsed as JSON**, the gateway rejects the request with `400 Bad Request` and `error.type: invalid_request`; this applies symmetrically to `userId.fromBody`, since both extractions share the parse step. **If `fromBody` is configured and the body parses but the path does not resolve, or `fromHeader` is configured and the header is absent**, the configured `fallback` is used (empty string if omitted). Per-channel `attachments` and `metadata` extraction are out of scope in v1: the generic webhook adapter populates them as `[]` and `{}` respectively; v1.1 platform-specific adapters (Discord, WhatsApp) populate them via adapter code, not per-channel CRD config. See [API_ENDPOINTS.md § POST /channels/{namespace}/{channel-path}](./API_ENDPOINTS.md#post-channelsnamespacechannel-path-external--webhook-caller) for the wire contract.
 - **The agent's Service must be enabled** (`spec.service.enabled: true`) for AgentChannel to function — the gateway delivers messages via the ClusterIP Service.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
@@ -725,6 +751,7 @@ The following constraints are enforced at reconcile time. Failed validation resu
 23. `AgentClass.spec.image.imagePullSecrets[*].name`, when referenced by an Agent or AgentTask, must exist as a Secret in the **referencing workload's namespace** at reconcile time. AgentClass is cluster-scoped but Secrets are namespace-scoped; the controller does not copy Secrets across namespaces. Missing Secrets set `Ready=False, reason=ImagePullSecretMissing` on the Agent/AgentTask with a message naming the namespace and secret, and the Pod is not created. Checked in AgentReconciler and AgentTaskReconciler — see [AgentClass design notes](#design-notes).
 24. `Agent.spec.persistence.enabled` and `AgentTask.spec.persistence.enabled` must not be `true` if the referenced AgentClass has `spec.persistence.enabled: false`. The class is the authority on whether persistence is allowed for workloads of that category — a developer cannot opt in to a PVC that the class disallows. Violations set `Ready=False, reason=PersistenceNotAllowed` on the Agent/AgentTask with a message naming the AgentClass, and the Pod is not created. Enforced at reconcile time by AgentReconciler and AgentTaskReconciler. CRD CEL cannot express this rule because it spans two resources and Kubernetes CEL validations on Agent cannot read AgentClass fields.
 25. When `AgentChannel.spec.webhook.callbackUrl` is set, `AgentChannel.spec.webhook.callbackAuth` must also be set. Enforced at apply time via CRD CEL on AgentChannel (`has(self.spec.webhook.callbackUrl) ? has(self.spec.webhook.callbackAuth) : true`). Outbound callbacks must be cryptographically attributable to the gateway so receivers can reject forged POSTs; an unsigned `callbackUrl` would let any third party that learns the URL deliver fake response or error payloads. The AgentChannelReconciler additionally validates that the referenced Secret exists and contains the configured `data` key — same shape as the inbound `auth` validation. Violations set `Ready=False, reason=CallbackAuthMissing` (CEL bypass case) or `reason=CallbackAuthInvalid` (Secret not found / key missing). See [API_ENDPOINTS.md § Callback delivery](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) for the wire contract and [SECURITY.md threat model](./SECURITY.md#threat-model) for the forgery row.
+26. `Agent.spec.lifecycle.hibernationEnabled` must not be `true` if the referenced AgentClass has `spec.lifecycle.hibernationAllowed: false`. The class is the authority on whether hibernation is allowed for workloads of that category — a developer cannot opt in to hibernation that the class disallows. Violations set `Ready=False, reason=HibernationNotAllowed` on the Agent with a message naming the AgentClass, and the standard idle→hibernate transition is skipped. Enforced at reconcile time by AgentReconciler. CRD CEL cannot express this rule because it spans two resources — same reasoning as rule 24.
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 
@@ -739,4 +766,4 @@ AgentClass defaults are applied at reconcile time when Agent/AgentTask fields ar
 - `lifecycle.hibernationDelay` defaults from `AgentClass.spec.lifecycle.defaultHibernationDelay`
 - `lifecycle.wakeTimeout` defaults from `AgentClass.spec.lifecycle.defaultWakeTimeout`
 
-Defaults are applied at reconcile time rather than admission. The stored spec reflects what the developer wrote; effective configuration is reflected in the Agent's status. This avoids a mutating webhook dependency while keeping the behavior predictable.
+Defaults are applied at reconcile time rather than admission. The stored spec reflects what the developer wrote. Effective values can be derived by merging the AgentClass defaults at read time. This avoids a mutating webhook dependency while keeping the behavior predictable.

@@ -241,7 +241,11 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
 
 **Finalizer duties:**
 
-- **Agent**: on delete, gracefully terminate the Pod (send SIGTERM, wait up to `terminationGracePeriodSeconds`), then delete or retain the PVC per [`AgentClass.spec.persistence.pvcRetention`](./API_RESOURCES.md#agentclass). This field controls what happens to the per-Agent PVC when the Agent is deleted; it is distinct from `PersistentVolume.persistentVolumeReclaimPolicy` (which governs PV fate on PVC deletion) and the two operate independently.
+- **Agent**: on delete, gracefully terminate the Pod (send SIGTERM, wait up to `terminationGracePeriodSeconds`), then apply [`AgentClass.spec.persistence.pvcRetention`](./API_RESOURCES.md#agentclass). The per-Agent PVC carries an ownerRef back to the Agent like other [child resources](./ARCHITECTURE.md#per-agent-and-per-task-child-resources), so the default cascade GC removes it on Agent deletion. The finalizer toggles that outcome by mutating the ownerRef *before* removing its own finalizer entry:
+  - `pvcRetention: Retain` — the finalizer **strips the PVC's ownerRef** (apiserver `Patch`) and then removes the Agent finalizer; the apiserver completes Agent deletion, but the PVC has no remaining owner and cascade GC leaves it in place.
+  - `pvcRetention: Delete` (default) — the finalizer leaves the ownerRef intact and removes the Agent finalizer; cascade GC subsequently removes the PVC alongside the Agent.
+
+  This field controls what happens to the per-Agent PVC when the Agent is deleted; it is distinct from `PersistentVolume.persistentVolumeReclaimPolicy` (which governs PV fate on PVC deletion) and the two operate independently.
 - **AgentTask**: on delete, terminate the Pod, clean up ConfigMaps.
 - **ModelProvider**: on delete, reject if any Agent or AgentTask still references it (reference resolution rules in [Cross-Resource Validation](./API_RESOURCES.md#cross-resource-validation)); otherwise remove [gateway credential configuration](./GATEWAY_LLM.md#credential-handling).
 - **AgentClass**: on delete, reject if any Agent or AgentTask still references it.
