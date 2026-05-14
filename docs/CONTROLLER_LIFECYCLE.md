@@ -64,14 +64,19 @@ For reconciler responsibilities (what each reconciler does and how it converges 
    │ Terminating │ → (resource removed after finalizers run)
    └─────────────┘
 
-     transient provider error, OR AgentClass-vs-Agent-spec mismatch
-     (at Pending on initial provisioning, OR introduced by class drift
-     while in Running/Idle/Hibernated/Resuming) at any point
+     AgentClass-vs-Agent-spec mismatch
+     (at Pending on initial provisioning, OR introduced by class or
+     ModelProvider drift while in Running/Idle/Hibernated/Resuming)
+     at any point
          │
          ▼
     ┌──────────┐
     │ Degraded │ → (re-enters status.preDegradedPhase when resolved)
     └──────────┘
+
+     transient provider unhealthy / budget exhaustion: Degraded
+     CONDITION set on Agent, status.phase preserved (no phase change)
+     — see CONTROLLER_RECONCILERS.md § Error Handling
 
      spec drift (Agent or AgentClass) while in Running or Idle
          │
@@ -94,8 +99,8 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 | Hibernated -> Resuming | Gateway [Activator](./GATEWAY_USER.md#activator) calls `POST /v1/activate/{namespace}/{agentName}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
 | Running -> Provisioning | Spec drift (Agent or AgentClass) re-derives a Pod spec that differs in immutable Pod fields. See [Spec change handling](#spec-change-handling) and [AgentClass change handling](#agentclass-change-handling). |
-| any -> Degraded | Provider unavailable, quota exhausted, other recoverable issue, OR an AgentClass-vs-Agent-spec mismatch — `spec.image` not in `image.allowedImages`, `spec.providers` references a ModelProvider not in `allowedProviders`, `spec.persistence.enabled: true` while the class has `persistence.enabled: false`, or `spec.lifecycle.hibernationEnabled: true` while the class has `lifecycle.hibernationAllowed: false`. The mismatch may be present at initial provisioning or introduced by class drift on an already-running Agent. The controller records the current phase in `status.preDegradedPhase` before transitioning; the `reason` names the specific mismatch (`ClassConstraintViolation` for image/provider, `PersistenceNotAllowed` for persistence, `HibernationNotAllowed` for hibernation). See [Degrade-when-irreconcilable](#agentclass-change-handling). |
-| Degraded -> {pre-degradation phase} | Underlying condition resolved. The controller restores the phase the Agent was in before entering Degraded (tracked in `status.preDegradedPhase`). The same status write that restores `status.phase` also sets `status.preDegradedPhase = null` atomically, so a subsequent `any -> Degraded` transition cannot reuse a stale value. The idle clock is not reset — the controller evaluates idleness against the gateway's activity timestamp, which is continuous through the Degraded period. If the pre-degradation phase was `Idle` and `hibernationDelay` has since elapsed, the agent transitions to `Hibernating` on the next reconcile. |
+| any -> Degraded | **AgentClass-vs-Agent-spec mismatch** — `spec.image` not in `image.allowedImages`, `spec.providers` references a ModelProvider not in `allowedProviders` or whose `allowedNamespaces` no longer includes the Agent's namespace, `spec.persistence.enabled: true` while the class has `persistence.enabled: false`, or `spec.lifecycle.hibernationEnabled: true` while the class has `lifecycle.hibernationAllowed: false`. The mismatch may be present at initial provisioning or introduced by class or ModelProvider drift on an already-running Agent. On the first transition into `Degraded` from a non-Degraded phase, the controller records the current phase in `status.preDegradedPhase`; if a new Degraded-triggering condition arises while the Agent is already in `Degraded`, only `reason` and `message` are updated and `preDegradedPhase` is preserved. The `reason` names the specific mismatch (`ClassConstraintViolation` for image/provider/namespace, `PersistenceNotAllowed` for persistence, `HibernationNotAllowed` for hibernation). **Recoverable runtime issues** (transient provider unhealthy, budget exhaustion) set a `Degraded` *condition* on the Agent without changing `status.phase` — see [CONTROLLER_RECONCILERS.md § Error Handling](./CONTROLLER_RECONCILERS.md#error-handling). See [Degrade-when-irreconcilable](#agentclass-change-handling) for the phase-transition path. |
+| Degraded -> {pre-degradation phase} | Underlying condition resolved. The controller restores the phase the Agent was in before entering Degraded (tracked in `status.preDegradedPhase`). When multiple Degraded-triggering conditions have arisen during a single Degraded period, recovery is per-condition: the controller clears the current `reason` when its condition resolves and, if other conditions remain outstanding, swaps `reason` to the next one without leaving `Degraded`. The Agent only exits `Degraded` (restoring `status.phase` from `preDegradedPhase` and setting `preDegradedPhase = null` atomically in the same status write, so a subsequent `any -> Degraded` transition cannot reuse a stale value) once every outstanding Degraded-triggering condition has cleared. The idle clock is not reset — the controller evaluates idleness against the gateway's activity timestamp, which is continuous through the Degraded period. If the pre-degradation phase was `Idle` and `hibernationDelay` has since elapsed, the agent transitions to `Hibernating` on the next reconcile. |
 | any -> Failed | Unrecoverable error (image pull failure after retries, invalid config, persistent crash loop) |
 | any -> Terminating | Deletion requested |
 
