@@ -64,12 +64,21 @@ For reconciler responsibilities (what each reconciler does and how it converges 
    │ Terminating │ → (resource removed after finalizers run)
    └─────────────┘
 
-     transient provider error
+     transient provider error, OR AgentClass-vs-Agent-spec mismatch
+     (at Pending on initial provisioning, OR introduced by class drift
+     while in Running/Idle/Hibernated/Resuming) at any point
          │
          ▼
     ┌──────────┐
-    │ Degraded │ → (re-enters Running when provider recovers)
+    │ Degraded │ → (re-enters status.preDegradedPhase when resolved)
     └──────────┘
+
+     spec drift (Agent or AgentClass) while in Running or Idle
+         │
+         ▼
+    ┌──────────────┐
+    │ Provisioning │ (recreate-and-clamp: Pod replaced,
+    └──────────────┘  PVC/Service/ConfigMap/Certificate preserved)
 ```
 
 **Transition triggers:**
@@ -82,11 +91,11 @@ For reconciler responsibilities (what each reconciler does and how it converges 
 | Idle -> Running | Activity observed (see [Activity Detection](#activity-detection)) |
 | Idle -> Hibernating | Idle for `hibernationDelay` (defaults from AgentClass) AND `hibernationEnabled` |
 | Hibernating -> Hibernated | Pod scaled to 0, PVC retained, Service remains |
-| Hibernated -> Resuming | Gateway [Activator](./GATEWAY_USER.md#activator) calls `POST /v1/activate/{namespace}/{name}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
+| Hibernated -> Resuming | Gateway [Activator](./GATEWAY_USER.md#activator) calls `POST /v1/activate/{namespace}/{agentName}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
 | Running -> Provisioning | Spec drift (Agent or AgentClass) re-derives a Pod spec that differs in immutable Pod fields. See [Spec change handling](#spec-change-handling-running-agent) and [AgentClass change handling](#agentclass-change-handling-running-agent). |
 | any -> Degraded | Provider unavailable, quota exhausted, other recoverable issue, OR an AgentClass-vs-Agent-spec mismatch — `spec.image` not in `image.allowedImages`, `spec.providers` references a ModelProvider not in `allowedProviders`, `spec.persistence.enabled: true` while the class has `persistence.enabled: false`, or `spec.lifecycle.hibernationEnabled: true` while the class has `lifecycle.hibernationAllowed: false`. The mismatch may be present at initial provisioning or introduced by class drift on an already-running Agent. The controller records the current phase in `status.preDegradedPhase` before transitioning; the `reason` names the specific mismatch (`ClassConstraintViolation` for image/provider, `PersistenceNotAllowed` for persistence, `HibernationNotAllowed` for hibernation). See [Degrade-when-irreconcilable](#agentclass-change-handling-running-agent). |
-| Degraded -> {pre-degradation phase} | Underlying condition resolved. The controller restores the phase the Agent was in before entering Degraded (tracked in `status.preDegradedPhase`). The idle clock is not reset — the controller evaluates idleness against the gateway's activity timestamp, which is continuous through the Degraded period. If the pre-degradation phase was `Idle` and `hibernationDelay` has since elapsed, the agent transitions to `Hibernating` on the next reconcile. |
+| Degraded -> {pre-degradation phase} | Underlying condition resolved. The controller restores the phase the Agent was in before entering Degraded (tracked in `status.preDegradedPhase`). The same status write that restores `status.phase` also sets `status.preDegradedPhase = null` atomically, so a subsequent `any -> Degraded` transition cannot reuse a stale value. The idle clock is not reset — the controller evaluates idleness against the gateway's activity timestamp, which is continuous through the Degraded period. If the pre-degradation phase was `Idle` and `hibernationDelay` has since elapsed, the agent transitions to `Hibernating` on the next reconcile. |
 | any -> Failed | Unrecoverable error (image pull failure after retries, invalid config, persistent crash loop) |
 | any -> Terminating | Deletion requested |
 
@@ -126,13 +135,17 @@ When an Agent is `Hibernated`, its ClusterIP Service has no endpoints — traffi
 4. The gateway holds the message and sends a "typing" or "processing" indicator to the channel platform while waiting. Once the Pod is Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from AgentClass), the gateway delivers the message. If the timeout is exceeded, the gateway returns an appropriate error to the channel platform.
 5. **Controller unreachable**: if the gateway cannot reach the controller's activator endpoint at all, the wake is not attempted and the Agent remains `Hibernated`. The gateway surfaces this to the caller as an HTTP `504` (sync) or a `controller_unavailable` async error — see [GATEWAY_USER.md § Failure Modes](./GATEWAY_USER.md#failure-modes) for the full behavior.
 
+**Wake-failure state machine.** `wakeTimeout` is purely a gateway-side caller-facing deadline (504 sync / `wake_timeout` async — see [GATEWAY_USER.md § Activator](./GATEWAY_USER.md#activator)). The controller has no wake deadline of its own: per [AgentReconciler step 9](./CONTROLLER_RECONCILERS.md#agentreconciler), a failed Pod recreation simply requeues the reconcile with the wake annotation still in place. An Agent stays in `Resuming` until one of three outcomes: the Pod becomes Ready (→ `Running`); an unrecoverable Pod-creation error trips `any -> Failed`; or the pre-Pod cross-check in [AgentReconciler step 5](./CONTROLLER_RECONCILERS.md#agentreconciler) finds the class no longer admits the Agent's stored spec (→ `Degraded` with `preDegradedPhase = Resuming`, recovering through the standard Degraded path when the developer aligns the spec). A gateway-side `wakeTimeout` exhaustion does not interrupt this; the next channel message simply triggers another activator call, which is idempotent.
+
 Manual wake is also supported via annotation: `kubectl annotate agent foo agentry.io/wake=true`. Operational uses include pre-warming an agent before expected traffic or forcing a wake when no AgentChannel is configured. The AgentReconciler handles this annotation with phase-dependent removal so a failed reconcile cannot silently drop the wake:
 - If the agent is in any non-`Hibernated` phase, the annotation is removed immediately and a Warning event (`reason=WakeIgnored`) is emitted without changing phase.
 - If the agent is `Hibernated`, the reconciler transitions it to `Resuming` and recreates the Pod. The annotation is removed **only after** the transition to `Resuming` has been committed. If the status update or the subsequent Pod recreation fails and the reconcile is requeued, the annotation is left in place so the next reconcile pass can re-observe the wake intent.
 
+An operator manually annotating during the transient `Hibernating` phase will see `WakeIgnored` per the first bullet (it is a non-`Hibernated` phase); they should re-annotate after observing `status.phase = Hibernated`. Channel-driven wakes are unaffected — the gateway re-attempts the activator call on the next inbound message, so a wake racing an in-progress hibernation is recovered automatically when the next message arrives.
+
 See [AgentReconciler](./CONTROLLER_RECONCILERS.md#agentreconciler) step 9 for the implementation detail.
 
-### Spec change handling (Running Agent)
+### Spec change handling
 
 When a developer updates an Agent's spec while it is in `Running` or `Idle` phase, the controller detects spec drift by comparing the desired Pod spec (derived from the current Agent spec and AgentClass) against the existing Pod's spec. If drift is detected in immutable Pod fields (image, resources, command, args, env, providers), the controller recreates the Pod:
 
@@ -146,6 +159,8 @@ The PVC, Service, and ConfigMap are preserved — only the Pod is replaced. This
 Changes to mutable fields (labels, annotations, non-structural metadata) are patched in-place without Pod recreation.
 
 If the Agent is `Hibernated`, spec changes are applied on the next wake — no Pod exists to recreate.
+
+For non-`Running`/`Idle` phases, the AgentReconciler's converge pass (see [step 6](./CONTROLLER_RECONCILERS.md#agentreconciler)) picks up spec edits on every reconcile, but the user-visible effect is bounded by which phase the Agent is in: edits during `Provisioning` or `Resuming` are applied to the Pod being created (no recreate needed since the Pod is not yet `Ready`); edits during `Hibernating` apply on the next wake's Pod creation (the in-progress hibernation completes first); edits during `Hibernated` apply on the next wake as already specified above. Edits during `Degraded` are evaluated on every reconcile — that is the recovery path, and aligning the Agent or AgentClass spec is the documented way out of `Degraded` (see [AgentReconciler step 5](./CONTROLLER_RECONCILERS.md#agentreconciler)). The user-facing contract is therefore: a spec edit's effect is guaranteed visible only after `status.phase` next stabilizes at `Running`, `Hibernated`, or — for class-recovery — the restored `preDegradedPhase`.
 
 ### AgentClass change handling (Running Agent)
 
@@ -196,6 +211,8 @@ Bulk impact: tightening AgentClass policy on a class with many Agents triggers a
                                   └──────────┘
 
 Any state → Terminating (on delete or after TTL)
+Pending → Failed (spec irreconcilable: PersistenceNotAllowed / ClassConstraintViolation)
+Failed → Provisioning (backoffLimit retry: status.retries < backoffLimit)
 ```
 
 **Transition triggers:**
@@ -211,6 +228,8 @@ Any state → Terminating (on delete or after TTL)
 | Completing -> TimedOut | Timeout hit before completion reported |
 | Pending -> Failed | Reconcile-time validation determines the AgentTask spec is irreconcilable with its referenced AgentClass — `reason=PersistenceNotAllowed` per [rule 24](./API_RESOURCES.md#cross-resource-validation), or `reason=ClassConstraintViolation` for an image/provider mismatch detected during initial provisioning (the same conditions that send an Agent to `Degraded`). Terminal because AgentTask has no `Degraded` phase. Mirrors the existing class-drift handling for backoff retries against a tightened class (see [AgentClass change handling](#agentclass-change-handling-running-agent) and [AgentTaskReconciler](./CONTROLLER_RECONCILERS.md#agenttaskreconciler)). |
 | Succeeded/Failed/TimedOut -> Terminating | TTL expired OR deletion requested |
+
+`Completing` is a brief artifact-collection state — the eventual terminal phase (`Succeeded` / `Failed` / `TimedOut`) is determined by the trigger that caused the `Running -> Completing` transition, not by a separate event inside `Completing`. Timeout-triggered transitions still pass through `Completing` so any partial agent-reported payload can be picked up best-effort before settling in `TimedOut`.
 
 **Completion detection** depends on `spec.completion.condition`:
 - `agentReported`: the gateway receives [POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) from the agent container. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace (created by the AgentTaskReconciler at provisioning time) with the completion payload (status, message, and artifact key-values). The reconciler watches the ConfigMap for changes and transitions to `Completing` once the payload is populated. Using a ConfigMap (rather than a Pod annotation) ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass. The reconciler stamps `AgentTask.status.currentPodUID = Pod.UID` whenever the agent's Pod is created (initial provisioning and `backoffLimit` retries); the gateway's `/v1/task/complete` admission uses this field as the identity gate (see [API_ENDPOINTS.md § POST /v1/task/complete](./API_ENDPOINTS.md#post-v1taskcomplete-agenttask-only) 403 cases (c) `StalePodCompletion` and (d) `TaskAlreadyCompleted`).
@@ -242,7 +261,7 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
 
 **Finalizer duties:**
 
-- **Agent**: on delete, gracefully terminate the Pod (send SIGTERM, wait up to `terminationGracePeriodSeconds`), then apply [`AgentClass.spec.persistence.pvcRetention`](./API_RESOURCES.md#agentclass). The per-Agent PVC carries an ownerRef back to the Agent like other [child resources](./ARCHITECTURE.md#per-agent-and-per-task-child-resources), so the default cascade GC removes it on Agent deletion. The finalizer toggles that outcome by mutating the ownerRef *before* removing its own finalizer entry:
+- **Agent**: on delete, if a Pod exists, gracefully terminate it (send SIGTERM, wait up to `terminationGracePeriodSeconds`); if no Pod exists (`Hibernated`, `Pending` pre-Pod-creation, or `Failed` before the first Pod started), skip this step. Then apply [`AgentClass.spec.persistence.pvcRetention`](./API_RESOURCES.md#agentclass). The per-Agent PVC carries an ownerRef back to the Agent like other [child resources](./ARCHITECTURE.md#per-agent-and-per-task-child-resources), so the default cascade GC removes it on Agent deletion. The finalizer toggles that outcome by mutating the ownerRef *before* removing its own finalizer entry:
   - `pvcRetention: Retain` — the finalizer **strips the PVC's ownerRef** (apiserver `Patch`) and then removes the Agent finalizer; the apiserver completes Agent deletion, but the PVC has no remaining owner and cascade GC leaves it in place.
   - `pvcRetention: Delete` (default) — the finalizer leaves the ownerRef intact and removes the Agent finalizer; cascade GC subsequently removes the PVC alongside the Agent.
 
