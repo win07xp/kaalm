@@ -40,7 +40,7 @@ His concerns:
 
 ### S1: Install Agentry and offer a standard agent class
 
-Priya installs the Agentry operator into her cluster via a Helm chart. She creates an `AgentClass` named `standard` for general-purpose agents: standard runc runtime, 1 CPU / 2Gi memory defaults, allowed images restricted to the company's internal registry, and the `anthropic-shared` ModelProvider available. She publishes internal docs pointing developers to this AgentClass.
+Priya installs the Agentry operator into her cluster via a Helm chart. She creates an `AgentClass` named `standard` for general-purpose agents: the cluster's default container runtime (no `runtimeClassName` pinned), 1 CPU / 2Gi memory defaults, allowed images restricted to the company's internal registry, and the `anthropic-shared` ModelProvider available. She publishes internal docs pointing developers to this AgentClass.
 
 ### S2: Offer a sandboxed class for code-execution agents
 
@@ -56,7 +56,7 @@ Priya creates a second `ModelProvider` of the same type (e.g., a second `anthrop
 
 ### S5: Revoke access for a team
 
-A team is decommissioned. Priya removes their namespace from the `allowedNamespaces` list on the relevant ModelProviders. Existing agents in that namespace continue running until their next LLM call, at which point the gateway denies the request. Priya then deletes the namespace.
+A team is decommissioned. Priya removes their namespace from the `allowedNamespaces` list on the relevant ModelProviders. Two things happen: the gateway denies the namespace's next LLM call, and the controller — re-queued event-driven via its ModelProvider watch — transitions the affected Agents to `phase=Degraded, reason=ClassConstraintViolation` so the revocation is visible in `kubectl get agents` (see [CONTROLLER_LIFECYCLE.md § AgentClass change handling](./CONTROLLER_LIFECYCLE.md#agentclass-change-handling)). The Pods keep running, but LLM access is gone. Priya then deletes the namespace.
 
 ---
 
@@ -68,9 +68,9 @@ Dev writes an `Agent` manifest for his customer support agent. He references `ag
 
 ### S7: Hibernate an idle agent and wake it automatically on the first incoming message
 
-Dev's customer support agent is quiet overnight. The Agent spec has `idleTimeout: 30m`. After 30 minutes without traffic, the controller transitions the Agent to `Hibernating` and deletes the Pod, retaining the PVC.
+Dev's customer support agent is quiet overnight. The Agent spec has `idleTimeout: 30m`. After 30 minutes without traffic, the controller transitions the Agent to `Idle`; after a further `hibernationDelay` (defaults from the AgentClass, 30m) it transitions through `Hibernating` — deleting the Pod, retaining the PVC — to `Hibernated`.
 
-The next morning, the ticketing system sends a webhook message to the agent. The webhook request arrives at the Agentry User Gateway. The gateway looks up the AgentChannel, finds the target Agent, and discovers it is `Hibernated`. The gateway calls the controller's authenticated activator endpoint to trigger a wake. While the Pod is starting (the `Resuming` phase), the webhook caller blocks waiting for a response. Once the Pod is `Ready`, the gateway delivers the message and the agent responds. Dev's conversation memory is intact because the PVC persisted through hibernation.
+The next morning, the ticketing system sends a webhook message to the agent. The webhook request arrives at the Agentry User Gateway. The gateway looks up the AgentChannel, finds the target Agent, and discovers it is `Hibernated`. Because the channel backs a hibernation-enabled Agent, Dev configured it with `responseMode: async` — the recommended mode for hibernation-backed channels, since under defaults sync mode's `syncDeliveryDeadline` (30s) expires long before the `wakeTimeout` budget (120s). The ticketing system receives `202 Accepted` with a `requestId` immediately; in the background the gateway calls the controller's authenticated activator endpoint to trigger the wake, waits for the Pod to become `Ready` (the `Resuming` phase), delivers the message, and POSTs the agent's reply to the channel's `callbackUrl` (or stores it for polling). Dev's conversation memory is intact because the PVC persisted through hibernation.
 
 ### S8: Run an ephemeral coding agent on an issue
 
@@ -78,11 +78,11 @@ Dev has an AI coding agent that fixes GitHub issues. He creates an `AgentTask` m
 
 ### S9: Promote a task agent to persistent for human takeover
 
-Dev's coding agent task completes, but the PR needs human review. He wants the agent's sandbox to stick around so a human can jump in via an IDE. He creates a new persistent `Agent` from the same image, mounts a snapshot of the task's PVC, and labels it for IDE attachment (the IDE-attachment capability itself is out of scope for v1, but the lifecycle primitive supports the pattern).
+Dev's coding agent task completes, but the PR needs human review. He wants the agent's sandbox to stick around so a human can jump in via an IDE. Before the task's `ttlSecondsAfterFinished` cleanup removes its PVC, he snapshots it (standard `VolumeSnapshot`), creates a PVC from the snapshot, and creates a new persistent `Agent` from the same image with [`spec.persistence.existingClaim`](./API_RESOURCES.md#agent) pointing at that PVC. He labels it for IDE attachment (the IDE-attachment capability itself is out of scope for v1, but the lifecycle primitives support the pattern).
 
 ### S10: Watch an agent fail gracefully when budget is exhausted
 
-Dev's team hits their monthly Anthropic budget on the 25th. The gateway starts returning budget-exhausted errors to Dev's agent. The Agent transitions to a `Degraded` state with a clear status condition explaining the reason. Dev sees it in `kubectl describe agent` and pings Priya for a budget increase or model downgrade.
+Dev's team hits their monthly Anthropic budget on the 25th. The gateway starts returning budget-exhausted errors to Dev's agent. The controller sets a `Degraded` **condition** on the Agent with a clear reason — `status.phase` is preserved, because budget exhaustion is a recoverable runtime issue, not a phase transition (see [CONTROLLER_RECONCILERS.md § Error Handling](./CONTROLLER_RECONCILERS.md#error-handling)). Dev sees it in `kubectl describe agent` and pings Priya for a budget increase or model downgrade.
 
 ### S11: Clean teardown on delete
 
@@ -104,7 +104,7 @@ Dev's customer support team uses an internal ticketing system that can POST to w
 
 ### S14: Webhook message arrives for a hibernated agent
 
-Same flow as S7 from the channel perspective. The additional detail: if `wakeTimeout` is exceeded before the Pod becomes Ready, the gateway returns HTTP 504 to the webhook caller rather than holding the connection indefinitely.
+Same flow as S7 from the channel perspective. The additional detail: if `wakeTimeout` is exceeded before the Pod becomes Ready, the gateway delivers a `wake_timeout` error payload to the channel's `callbackUrl` or polling endpoint (async mode — the recommended configuration for hibernation-backed channels) rather than waiting indefinitely. A sync-mode channel would instead observe `504 sync_deadline_exceeded` first under defaults, since `gateway.syncDeliveryDeadline` (30s) is tighter than `wakeTimeout` (120s) — see the reachability callout in [API_ENDPOINTS.md](./API_ENDPOINTS.md#post-channelsnamespacechannel-path-external--webhook-caller).
 
 ### S15: Async webhook for a long-running coding agent
 
@@ -121,7 +121,7 @@ These scenarios drive specific design requirements:
 - **S5** requires `allowedNamespaces` on ModelProvider and graceful handling of mid-session access revocation.
 - **S6, S7, S14** require a persistent agent lifecycle with `idleTimeout`, hibernation state transitions, PVC retention across pod restarts, and gateway-driven wake-on-demand.
 - **S8** requires AgentTask with a defined completion condition (agent-reported via gateway), timeout, and artifact collection in the completion payload.
-- **S9** is not a v1 acceptance criterion but informs the resource model — task and persistent agents should be built from shared primitives.
+- **S9** is not a v1 acceptance criterion but informs the resource model — task and persistent agents should be built from shared primitives. v1 ships the enabling mount primitive: [`Agent.spec.persistence.existingClaim`](./API_RESOURCES.md#agent) (validation rule 27); snapshotting itself is standard Kubernetes `VolumeSnapshot`, not Agentry machinery.
 - **S10** requires the controller to surface ModelProvider errors as Agent status conditions.
 - **S11** requires finalizers and the configurable `AgentClass.spec.persistence.pvcRetention` field (`Delete | Retain`), which is distinct from the Kubernetes `PersistentVolume.persistentVolumeReclaimPolicy` and operates independently.
 - **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener. Discord and WhatsApp adapters are deferred to v1.1. For S12 specifically, the recommended v1 path is to start from one of the starter templates (see [STARTER_TEMPLATES.md](./STARTER_TEMPLATES.md)) and replace the agent logic — the template already implements the runtime contract (HTTPS serving, client-cert mTLS, cert-file reload, `messageId` dedup).

@@ -37,7 +37,7 @@ Agentry tracks LLM token usage and spend per namespace through the LLM Gateway. 
 
 Budget enforcement in Agentry is **intentionally approximate**. The gateway maintains an in-process counter and updates it synchronously on each request, but in a multi-replica gateway deployment, counters are reconciled periodically rather than on every request. As a result, spend can exceed configured limits by a bounded amount under high concurrency near a budget threshold. This is the right tradeoff for most teams: hard enforcement at the cost of per-request aggregator synchronization adds latency that is rarely worth it.
 
-Agentry's budget feature is best understood as **spend visibility and soft guardrails** rather than a hard financial cap. Teams that require hard caps should implement them at the provider level (Anthropic, OpenAI, and Vertex all support account-level spend limits).
+Agentry's budget feature is best understood as **spend visibility and soft guardrails** rather than a hard financial cap. Teams that require hard caps should implement them at the provider level (Anthropic and OpenAI support account-level spend limits; on Vertex, GCP budgets natively provide alerts only — a hard stop requires additional automation).
 
 ## Landscape Positioning
 

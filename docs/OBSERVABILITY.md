@@ -34,9 +34,9 @@ Standard controller-runtime reconcile metrics (counts, duration, queue depth, wo
 
 | Source | Metric | Type | Labels |
 |---|---|---|---|
-| Controller | `agentry_agents_total` | gauge | `phase`, `namespace` |
-| Controller | `agentry_tasks_total` | gauge | `phase`, `namespace` |
-| Controller | `agentry_channels_total` | gauge | `namespace`, `ready`, `platform_connected` |
+| Controller | `agentry_agents` | gauge | `phase`, `namespace` |
+| Controller | `agentry_tasks` | gauge | `phase`, `namespace` |
+| Controller | `agentry_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` |
 | Controller | `agentry_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` |
 | Controller | `agentry_hibernations_total` | counter | `namespace` |
 | Controller | `agentry_wakes_total` | counter | `namespace`, `trigger` |
@@ -54,6 +54,7 @@ Standard controller-runtime reconcile metrics (counts, duration, queue depth, wo
 | User Gateway | `agentry_channel_callback_total` | counter | `namespace`, `status` |
 | User Gateway | `agentry_channel_callback_duration_seconds` | histogram | `namespace` |
 | User Gateway | `agentry_channel_response_too_large_total` | counter | `namespace`, `mode` |
+| User Gateway | `agentry_channel_async_patch_failed_total` | counter | `namespace` |
 
 For full semantics — when each metric increments, what each label value means, retention and reset behavior — see the per-component canonical sections:
 
@@ -93,7 +94,7 @@ This keeps the production wire format provably PII-clean while leaving developer
 
 ## Kubernetes Events
 
-Events are the primary surface for status changes that platform teams discover via `kubectl describe`. The canonical Events list lives at [CONTROLLER_RECONCILERS.md § Event Emission](./CONTROLLER_RECONCILERS.md#event-emission); reconciler-specific reasons (`FQDNPolicyUnsupported`, `WakeIgnored`, `FallbackIneligible`, `DegradeTargetNotCheapest`, `InvalidDegradeTarget`) are documented at the relevant reconciler step. The gateway also emits a runtime `FallbackIneligible` Warning at request time — see [GATEWAY_LLM.md § Fallback Logic](./GATEWAY_LLM.md#fallback-logic).
+Events are the primary surface for status changes that platform teams discover via `kubectl describe`. The canonical Events list lives at [CONTROLLER_RECONCILERS.md § Event Emission](./CONTROLLER_RECONCILERS.md#event-emission); reconciler-specific reasons (`FQDNPolicyUnsupported`, `WakeIgnored`, `FallbackIneligible`, `DegradeTargetNotCheapest`) are documented at the relevant reconciler step. (`InvalidDegradeTarget` is a `Ready=False` condition reason, not an Event — see [CONTROLLER_RECONCILERS.md § ModelProviderReconciler](./CONTROLLER_RECONCILERS.md#modelproviderreconciler) step 6.) The gateway also emits a runtime `FallbackIneligible` Warning at request time — see [GATEWAY_LLM.md § Fallback Logic](./GATEWAY_LLM.md#fallback-logic).
 
 Architecturally-significant Event groups, with the reasons attached:
 
@@ -102,6 +103,7 @@ Architecturally-significant Event groups, with the reasons attached:
 - **Provider health and budget** on ModelProvider (`Warning`, `ProviderUnhealthy` / `BudgetExhausted`).
 - **Validation failures** on any CRD (`Warning`, `InvalidReference` plus reconciler-specific reasons).
 - **Fallback misconfiguration** on ModelProvider (`Warning`, `FallbackIneligible` from both reconcile-time and runtime paths; `DegradeTargetNotCheapest` advisory).
+- **Callback failures** on AgentChannel (`Warning`, `CallbackInvalid` when the `callbackUrl` fails the pre-dial deny-range / allowlist re-check; `CallbackRejected` when the receiver terminally rejects the POST) — the per-occurrence signal paired with the persistent `PlatformConnected=False` condition; see [API_ENDPOINTS.md § Async Webhook Response](./API_ENDPOINTS.md#async-webhook-response-gateway-managed).
 - **AgentClass propagation cascade** on each affected Agent during recreate-and-clamp or `Degraded` transitions — see [ARCHITECTURE.md § Per-Agent and Per-Task Child Resources](./ARCHITECTURE.md#per-agent-and-per-task-child-resources).
 
 Events persist per the cluster's standard Event retention. For long-term audit, see [SECURITY.md § Audit trail](./SECURITY.md#audit-trail).
@@ -122,12 +124,13 @@ A v1 alert set tied to architectural failure modes already named in the doc set.
 | Per-namespace rate-limit saturation | Warn | Tenant hitting the per-(namespace, model) ceiling — see [Rate Limiting](./GATEWAY_LLM.md#rate-limiting) |
 | Wake duration p95 elevated | Warn | [Activator](./GATEWAY_USER.md#activator) path slow — `agentry_channel_wake_duration_seconds` |
 | Async-callback exhaustion rate elevated | Warn | Receivers' `callbackUrl` repeatedly unreachable; receivers should [poll](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) |
+| `agentry_channel_async_patch_failed_total` nonzero | Warn | The v1 async silent-loss limitation fired — a response was dropped after `Patch` retry exhaustion; pollers see `202` → `404` with no stored envelope. See [API_ENDPOINTS.md § Response-Patch failure semantics](./API_ENDPOINTS.md#async-webhook-response-gateway-managed) |
 
 ## Recommended dashboards
 
 Three top-level panels cover v1 visibility. Concrete Grafana JSON ships in v1.1.
 
-1. **Per-namespace.** Agent and AgentTask phase counts, spend (`agentry_provider_budget_canonical_usd`), rate-limit utilization, channel message rate, channel condition rollup (`agentry_channels_total` by `ready` / `platform_connected`).
+1. **Per-namespace.** Agent and AgentTask phase counts, spend (`agentry_provider_budget_canonical_usd`), rate-limit utilization, channel message rate, channel condition rollup (`agentry_channels` by `ready` / `platform_connected`).
 2. **Per-provider.** Request rate, error rate, latency p50/p95, fallback events, budget utilization.
 3. **Cluster.** Controller and gateway replica readiness, reconcile error rate, hibernation and wake counts, wake-duration distribution, async-callback delivery state.
 
