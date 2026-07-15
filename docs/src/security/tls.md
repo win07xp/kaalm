@@ -42,6 +42,10 @@ The default selector is broad on purpose. CA bundle material is non-secret, and 
 
 Agent and AgentTask Pods mount the projected ConfigMap at `/var/run/agentry/ca.crt` (the `$AGENTRY_CA_CERT` env var points at this path) and use it to verify the gateway's certificate on `$AGENTRY_GATEWAY_ENDPOINT`. The CA ConfigMap and the workload's own cert-manager Secret (`tls.crt`, `tls.key`) are delivered together as a single projected volume at `/var/run/agentry/`; the agent container must watch that directory and reload on rotation, as specified in [the runtime contract](../runtime/contract.md).
 
+![The Agentry trust chain drawn across three namespace frames. A cluster-scoped agentry-selfsigned ClusterIssuer signs the agentry-ca Certificate (isCA, 5y, rotationPolicy Never), which cert-manager writes as the agentry-ca Secret into cert-manager's cluster resource namespace. Two readers consume that one Secret: the agentry-ca-issuer ClusterIssuer, which resolves ca.secretName only in that namespace, and the trust-manager agentry-ca Bundle, which reads sources only from its trust namespace. The issuer signs four leaf families: agentry-gateway-tls and agentry-controller-tls in agentry-system, and the per-Agent and per-AgentTask certificates in user namespaces, each with its own SANs and usages. The Bundle projects an agentry-ca ConfigMap into every non-system namespace, mounted at /var/run/agentry/ca.crt.](../diagrams/trust-chain.svg)
+
+**Reading the diagram.** Follow the chain top to bottom: self-signed issuer, CA `Certificate`, CA `Secret`, CA issuer, leaves. The one thing to take away is horizontal, not vertical: the `agentry-ca` Secret sits in **cert-manager's namespace**, and both consumers resolve it only there. The amber boxes are the material (a Secret and the ConfigMap projected from it); the grey boxes are cert-manager and trust-manager machinery; the leaves are coloured by who consumes them. The red edge is the constraint that breaks clusters when it is violated.
+
 ### Traffic Directions
 
 - **Agent → Gateway (LLM traffic)**: the LLM Gateway listener serves TLS using the `agentry-gateway-tls` Secret. Agents verify it against the projected Agentry CA. See [TLS on the LLM Gateway Listener](../gateways/llm/listener-tls.md).
@@ -81,6 +85,10 @@ The runbook's dual-trust window is finite. Whenever the CA bundle changes (routi
 
 The starter templates do this by watching `$AGENTRY_CA_CERT`, making CA rotation transparent to long-lived agent processes in both directions. An agent that misses the CA-bundle change eventually breaks in both directions once gateway leaves are re-issued under the new key.
 
+![A sequence diagram of the CA re-key runbook across a platform engineer, cert-manager, trust-manager, the projected agentry-ca ConfigMap, an Agent process holding both trust pools, and the gateway. Step 1 adds the new CA as a second Bundle source, opening the dual-trust window; trust-manager re-projects the bundle, kubelet swaps the ..data symlink, and both the agent and the gateway rebuild their ClientCAs and RootCAs pools. Step 2 runs cmctl renew, re-issuing the gateway and agent leaves under the new CA key. Step 3 removes the old source, closing the window. An agent that rebuilt both pools keeps working in both directions; an agent that missed the change fails outbound, because RootCAs still holds only the old CA, and inbound, because ClientCAs does too.](../diagrams/ca-rekey-window.svg)
+
+**Reading the diagram.** The window opens at step 1 and closes at step 3, but the failure it guards against does not appear at either boundary: it appears at **step 2**, when leaves are re-issued under the new key. That deferral is what makes a missed reload hard to catch, and because the failure lands on both pools at once, it presents as total loss of connectivity rather than as a one-directional error.
+
 No operator code implements either the renewal path or the re-key path. That was the main motivation for adopting cert-manager. This decision supersedes an earlier self-managed-CA design, and the earlier operator-managed 4-step rotation sequence has been removed. The earlier design was rejected because the operator code needed to manage CA generation, bundle rotation, staged leaf re-issuance, and cross-namespace cert distribution was large, had no analogue to borrow from, and duplicated functionality that cert-manager and trust-manager already provide correctly.
 
 ### Containment, Not Revocation
@@ -98,6 +106,8 @@ Both controllers are cluster-critical dependencies and should be monitored as su
 
 ## Lifecycle of an Agent TLS Serving Certificate
 
+This certificate and the [AgentTask client certificate](#lifecycle-of-an-agenttask-tls-client-certificate) below run the same six steps. [The figure at the end of this page](#the-two-lifecycles-side-by-side) walks both through that skeleton at once, with the differences called out.
+
 1. **Created**: by the AgentReconciler when provisioning the agent's Pod. The reconciler creates a cert-manager `Certificate` resource named `{agentName}-tls` in the Agent's namespace, owner-referenced to the Agent. Its `issuerRef` is `{ name: "agentry-ca-issuer", kind: "ClusterIssuer" }`; the SAN list covers `{name}.{namespace}.svc.cluster.local`, `{name}.{namespace}.svc`, and `{name}.{namespace}`; usages are `server auth` and `client auth` (the same cert serves both directions).
 2. **Stored**: cert-manager writes the output Secret (name = `Certificate.spec.secretName`, e.g. `team-support/support-assistant-tls`) in the Agent's namespace.
 3. **Mounted**: into the agent Pod at `/var/run/agentry/tls.crt` and `/var/run/agentry/tls.key`. The agent serves HTTPS using this certificate and presents it as a client cert on agent→gateway calls.
@@ -113,3 +123,9 @@ Both controllers are cluster-critical dependencies and should be monitored as su
 4. **Verified**: the gateway verifies the task's cert against the Agentry CA on every inbound mTLS call and extracts the namespace from the SAN.
 5. **Rotated**: same mechanism as Agent certs. cert-manager re-issues within `spec.renewBefore`, kubelet propagates the update to the projected volume, and the task's HTTP client reloads via cert-file watch.
 6. **Deleted**: the `Certificate` is owner-referenced to the AgentTask, so task cleanup cascade-deletes it and cert-manager removes the output Secret.
+
+### The two lifecycles side by side
+
+![A sequence diagram comparing the Agent serving certificate and the AgentTask client certificate across the same six steps. Both reconcilers create a {workload}-tls Certificate in the workload's own namespace from agentry-ca-issuer; the Agent's carries Service DNS SANs and server auth plus client auth usages, while the AgentTask's carries a single {taskName}.{namespace}.task.agentry.io SAN and client auth only. cert-manager writes the output Secret, and a Ready-gate loop blocks Pod creation, requeueing until the Certificate reports Ready. Both mount at /var/run/agentry/tls.crt and tls.key, but only the Agent has a listener and an inbound POST /v1/message edge from the gateway; the AgentTask has no Service, no inbound edge, and is rejected 403 on /v1/agent/heartbeat. A rotation loop re-issues both leaves within renewBefore, and ownerRef cascade-deletion removes both.](../diagrams/cert-lifecycles.svg)
+
+**Reading the diagram.** The skeleton is shared, so read the deltas. All four of them (SAN shape, usages, listener, inbound edge) fall out of one fact: an Agent has a Service and is a delivery target, and an AgentTask is neither. The Ready-gate in the middle is identical on both paths, and it is what keeps a Pod from ever starting against a Secret cert-manager has not written yet.

@@ -1,0 +1,73 @@
+@startuml trust-boundaries
+' The eight traffic classes, and which of them cross Agentry's trust boundary.
+' Source of truth: docs/src/security/model.md
+!include _style.puml
+
+skinparam wrapWidth 360
+skinparam nodesep 20
+skinparam ranksep 42
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "**inside the cluster**\nthe network perimeter, not a statement of trust" as TB #line:B71C1C;line.bold;text:B71C1C {
+
+  rectangle "namespace: **agentry-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+    rectangle "**Agentry Gateway**" as GW #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+    rectangle "**Agentry Controller**" as CTRL #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  }
+
+  rectangle "**user namespaces**" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
+    rectangle "**Agent** Pod\n**trust tier 4: not trusted**,\neven though it sits inside the perimeter" as AG #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  }
+
+  database "**Kubernetes API server**" as API #back:FFD580;line:7a3f00;text:3a1f00
+}
+
+rectangle "**outside the cluster**" as OUT #line:8B4513;line.dashed;text:3a1f00 {
+  rectangle "**Channel platform**" as PLAT #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+  rectangle "**LLM Provider**" as LLM #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+  rectangle "**callbackUrl receiver**\nchosen by the channel owner.\n**Agentry does not trust it.**" as CB #back:FFE4B5;line:B71C1C;line.bold;text:3a1f00
+}
+
+' ---------- classes that stay inside the boundary ----------
+AG -[#1B5E20,bold]-> GW : **1. Agent to LLM Gateway**\nprompts and completions\nin-cluster HTTPS, terminated\nat the gateway
+
+GW -[#1B5E20,bold]-> AG : **4. User Gateway to Agent**\nnormalized message envelope\nPOST /v1/message,\n**bidirectional mTLS**
+
+CTRL -[#4A148C,bold]-> GW : **6. Controller to Gateway**\nactivity timestamps, GET /v1/activity\nmTLS, SAN-based authorization
+
+GW -[#7a3f00]-> API : **7. Gateway to API server**\ntask completion, async payloads,\nbudget partials: all ConfigMaps
+
+CTRL -[#7a3f00]-> API : **8. Controller to and from API server**\nwatches in, CRD updates, Pod creation,\nevents out. Standard apiserver channels.
+API -[#7a3f00]-> CTRL
+
+' ---------- inbound across the boundary ----------
+PLAT -[#8B4513,bold]-> GW : **3. Channel platform to User Gateway**\ninbound webhook messages\nHTTPS via Ingress\n**inbound: crosses in, never out**
+
+' ---------- the only two edges that leave ----------
+GW -[#B71C1C,bold]-> LLM : **2. LLM Gateway to LLM Provider**\nprompts and completions\nHTTPS egress\n**LEAVES THE BOUNDARY**
+
+GW -[#B71C1C,bold]-> CB : **5. User Gateway to callbackUrl**\nasync response and error payloads\nHTTPS, every POST signed (rule 25)\n**LEAVES THE BOUNDARY, and ends at**\n**a receiver Agentry does not trust**
+
+PLAT -[hidden]down- CB
+
+legend bottom
+  **Exactly two of the eight classes leave Agentry's trust boundary: 2 (provider egress) and 5 (callbackUrl).**
+  Both are outbound from the gateway, both are always HTTPS, and both carry prompt or reply content. Class 3
+  crosses the boundary inbound. The other five never leave the cluster at all.
+  ====
+  **Class 5 is the one to reason about hardest.** Its payloads carry agent replies, which may contain PII, and its
+  receiver is chosen by the channel owner rather than by Agentry, so it terminates outside the trust boundary by
+  construction. That is why it is signed, allowlist-constrained, and re-resolved before dial with the checked IP
+  pinned into the connection: see the SSRF row of the threat model.
+  ====
+  **Detail the edges above compress.** Class 2 supports custom CA bundles for enterprise environments. Class 5
+  is constrained by the deny-internal ranges or gateway.callbackUrl.allowlist, with pre-dial host re-resolution and
+  the checked IP pinned into the dial. Class 7 writes per-task completion ConfigMaps into **user namespaces**, and
+  async response payloads plus per-replica budget partials into **agentry-system**.
+  ====
+  Agentry does **not** log prompts or completions on any of these classes. This figure is about boundaries only:
+  for component responsibilities and the wiring between them, see System Architecture.
+endlegend
+@enduml

@@ -1,0 +1,81 @@
+@startuml task-completion-protocol
+' How an agentReported AgentTask's completion is admitted, recorded, and observed.
+' Source of truth: docs/src/gateways/api/task-complete.md
+!include _style.puml
+' Notes here carry full sentences; give them room so they do not wrap ragged.
+skinparam wrapWidth 400
+
+participant "AgentTask\nReconciler" as R $ctrlBg
+participant "apiserver" as K $mutedBg
+participant "{taskName}-completion\nConfigMap" as CM $storeBg
+participant "Gateway" as GW $gwBg
+participant "Task Pod" as P $agentBg
+
+== Provisioning (agentReported mode only) ==
+
+R -> CM : Create, data: {}\nownerRef: AgentTask
+R -> K : Create Role + RoleBinding\nverbs: update, patch\nresourceNames: {taskName}-completion
+
+note over R, CM
+  **No create verb.** RBAC resourceNames does not constrain
+  create, so granting it would silently widen the gateway to
+  every ConfigMap in the namespace. Pre-creating the mailbox
+  here is what makes the name-scoping enforceable.
+end note
+
+R -> K : stamp status.currentPodUID = newPod.UID\n(once the Pod is observed via the informer)
+
+== Completion ==
+
+P -> GW : POST /v1/task/complete (mTLS)
+
+GW -> GW : resolve source IP to Pod UID\nvia the Pod informer
+alt informer-cache miss (new-Pod startup window)
+  GW -> K : live List Pods in the cert-SAN namespace,\nfiltered by source IP
+end
+
+note over GW
+  spec.artifacts, status.currentPodUID and status.phase
+  are read from the gateway's existing AgentTask watch,
+  so every gate below runs synchronously.
+end note
+
+alt no Pod resolved, even after the live fallback
+  GW --> P : **401** unauthorized (retryable: false)
+else calling Pod is not an AgentTask Pod
+  GW --> P : **403** access_denied\nreason=NotAgentTaskPod (retryable: false)
+else task has completion.condition: exitCode
+  GW --> P : **403** access_denied\nreason=TaskNotAgentReported (retryable: false)
+else UID != status.currentPodUID
+  GW --> P : **403** access_denied\nreason=StalePodCompletion\n(retryable: **true**)
+else status.phase already terminal
+  GW --> P : **403** access_denied\nreason=TaskAlreadyCompleted (retryable: false)
+else admitted
+
+  GW -> GW : validate artifact names vs spec.artifacts\nsuccess: exact set | failure: no undeclared
+  GW -> GW : validate sizes\n4 KiB per artifact | 32 KiB combined
+
+  alt artifact-name rule violated
+    GW --> P : **400** invalid_request (retryable: false)
+  else size cap exceeded
+    GW --> P : **413** request_too_large (retryable: false)
+  else body valid
+    GW -> CM : Patch payload\n(via the per-task scoped Role)
+    alt Patch fails
+      GW --> P : **503** internal_unavailable\n(retryable: true, Retry-After: 1)
+    else patched
+      GW --> P : **200** OK (empty body)
+      CM -> R : ConfigMap watch fires
+      R -> R : defensive artifact re-check\n(same per-status rule)
+      R -> K : status.phase = Completing
+    end
+  end
+end
+
+note over R, P
+  The informer fallback collapses new-Pod informer lag into the
+  retryable **403 StalePodCompletion** path instead of leaking it
+  as a terminal **401**. The reconciler stays the final authority
+  on AgentTask state.
+end note
+@enduml

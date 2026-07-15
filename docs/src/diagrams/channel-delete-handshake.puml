@@ -1,0 +1,51 @@
+@startuml channel-delete-handshake
+' AgentChannel delete: the six-step disconnect handshake and the sweep race it closes.
+' Source of truth: docs/src/controller/finalizers.md
+!include _style.puml
+
+actor "kubectl" as K $extBg
+participant "apiserver" as API $mutedBg
+participant "AgentChannel\nReconciler" as R $ctrlBg
+participant "Gateway r1" as G1 $gwBg
+participant "Gateway r2" as G2 $gwBg
+
+K -> API : delete agentchannel
+API -> API : set deletionTimestamp;\nagentry.io/channel-finalizer blocks
+API -> R : watch event
+
+R -> API : 1. status.phase = Terminating
+API -> G1 : watch event
+API -> G2 : watch event
+G1 -> G1 : 2. drop the platform connection
+G2 -> G2 : 2. drop the platform connection
+G1 -> API : 3. annotate\nagentry.io/channel-disconnected: "true"
+
+alt annotation observed
+  API -> R : 4. disconnect confirmed
+else gateway unavailable
+  R -> R : 4. bounded 30s timeout
+end
+
+R -> API : 5. delete agentry-async-* ConfigMaps\nin agentry-system by label selector\nchannel-namespace + channel-name
+R -> API : 6. remove agentry.io/channel-finalizer
+API -> API : object deleted
+
+note over R, G2
+  Why step 4 exists.
+  Counterfactual: sweep at step 5
+  without waiting for the
+  disconnect, and an in-flight
+  async-response write from r2
+  lands after the sweep, orphaning
+  a ConfigMap until its 1-hour
+  expiry. These ConfigMaps sit in
+  agentry-system and cannot carry
+  an ownerRef back to the channel,
+  so cascade GC never sees them:
+  the sweep is their only cleanup.
+  The 30s timeout is the escape
+  hatch that stops a dead gateway
+  from wedging the delete.
+end note
+
+@enduml

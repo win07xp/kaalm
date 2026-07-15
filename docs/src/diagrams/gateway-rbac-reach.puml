@@ -1,0 +1,64 @@
+@startuml gateway-rbac-reach
+' Where the gateway ServiceAccount can reach, split by its three grant families.
+' Source of truth: docs/src/security/rbac.md
+!include _style.puml
+
+skinparam wrapWidth 350
+skinparam nodesep 18
+skinparam ranksep 34
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "**Gateway ServiceAccount**\nagentry-system/agentry-gateway" as GWSA #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+
+' ---------- family 1: ClusterRole ----------
+rectangle "**reach: every namespace in the cluster**\na ClusterRoleBinding cannot be namespace-limited" as band #line:B71C1C;line.dashed;text:B71C1C {
+  rectangle "**tokenreviews**.authentication.k8s.io\n**create**\ncluster-scoped virtual resource: no\nresourceName exists to scope it. Without it\nthe gateway cannot accept the gateway-only\ntier's bearer tokens." as tr #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**Agent**, **AgentTask**, **ModelProvider**, **AgentClass**\n**get, list, watch**\n**AgentChannel** get, list, watch **+ patch**\n(patch writes exactly one thing: the\nagentry.io/channel-disconnected annotation)\n....\n**Pods** get, list, watch\n(source-IP to namespace cache)\n**Services** get\n(resolve Agent endpoints for delivery)" as crds #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+}
+
+' ---------- family 2: namespaced Role ----------
+rectangle "namespace: **agentry-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**Secrets**\n**get, watch**\nLLM provider credentials" as secs #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**ConfigMaps**\n**get, list, watch, create, patch**\n//delete is deliberately absent//\nagentry-budget-{provider},\nagentry-async-{requestId}" as cms #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+
+' ---------- family 3: dynamic per-namespace Roles ----------
+rectangle "a user namespace, per AgentChannel / per AgentTask" as nsuser #line:7a3f00;line.dashed;text:3a1f00 {
+  rectangle "channel **Secret(s)**\n**get, watch**\nresourceNames-scoped to the Secret(s) named\nby the AgentChannel's inbound auth and\noutbound callbackAuth config. //list omitted//\n....\nminted by the AgentChannelReconciler,\nowned by the AgentChannel" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**{taskName}-completion** ConfigMap\n**get, update, patch**\nresourceNames-scoped to that one name.\n//create omitted//; the AgentTaskReconciler\npre-creates the object instead.\n....\nminted by the AgentTaskReconciler,\nowned by the AgentTask" as compcm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+
+' ---------- the three edge classes ----------
+GWSA -[#B71C1C,bold]-> tr : **ClusterRole**\n+ ClusterRoleBinding
+GWSA -[#B71C1C,bold]-> crds
+GWSA -[#1B5E20]-> secs : **Role** + RoleBinding\nin agentry-system
+GWSA -[#1B5E20]-> cms
+GWSA .[#7a3f00,bold].> chsec : **dynamic Role**\nper AgentChannel
+GWSA .[#7a3f00,bold].> compcm : **dynamic Role**\nper AgentTask
+
+tr -[hidden]down- crds
+secs -[hidden]down- cms
+chsec -[hidden]down- compcm
+
+legend bottom
+  **Three edge classes, and the two RBAC facts that force them.**
+  ====
+  **Fact 1: a ClusterRole bound with a ClusterRoleBinding applies in every namespace.** There is no way to say
+  "this grant, but only in agentry-system". So anything that must be namespace-limited ships as a separate
+  namespaced Role, which is why the gateway has a ClusterRole/Role **pair** rather than one object, and why
+  Services **get** is an honest cluster-wide grant: it cannot be narrowed to "user namespaces only". Service
+  objects carry no secret material, so the extra reach is benign.
+  ====
+  **Fact 2: resourceNames constrains get, update, patch, delete and watch, but NOT list and NOT create.** Both
+  dotted grants therefore omit a verb on purpose. **list** is dead weight on a name-scoped Secret read, and a
+  name-scoped **watch** must set fieldSelector metadata.name=<secret> to satisfy the check. **create** is the
+  load-bearing omission: granting create on a named ConfigMap would silently widen the gateway to **all**
+  ConfigMaps in that namespace, so the reconciler pre-creates the object and grants only get, update, patch.
+  ====
+  **delete on agentry-system ConfigMaps is absent for a different reason:** cleanup is controller-side. The
+  ModelProviderReconciler prunes stale budget keys; the AgentChannelReconciler prunes and finalizer-sweeps
+  the async response ConfigMaps.
+endlegend
+@enduml

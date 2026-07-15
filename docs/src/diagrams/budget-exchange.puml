@@ -1,0 +1,68 @@
+@startuml budget-exchange
+' The budget counter exchange: four data movements at four cadences, and what is not on the enforcement path.
+' Source of truth: docs/src/gateways/llm/budgets-and-rate-limits.md
+!include _style.puml
+
+participant "Gateway\nReplica-0" as r0 #90EE90
+participant "Gateway\nReplica-1" as r1 #90EE90
+participant "agentry-budget-{provider}\nConfigMap" as cm #FFD580
+participant "ModelProvider\nReconciler" as rec #87CEEB
+
+== Startup ==
+
+r0 -> cm : read **_canonical**
+cm --> r0 : the current period's spent value
+note over r0, cm
+  **This is the only time a replica reads _canonical.**
+  After startup it never reads that key again.
+end note
+
+== 1. Per request (in-memory) ==
+
+loop every LLM call
+  r0 -> r0 : increment the in-memory counter,\nsynchronously, per\n(provider, namespace, period)
+end
+
+== 2. Every 10s (server-side apply) ==
+
+loop every 10s
+  r0 -> cm : **SSA** key **"agentry-gateway-0"**\nfield manager = **its own Pod name**\n'{"period": "2026-04", "team-support": "142.50"}'
+  r1 -> cm : **SSA** key **"agentry-gateway-1"**\nfield manager = **its own Pod name**
+end
+note over cm
+  Each replica owns **exactly one key** via its own field
+  manager, so simultaneous writes never conflict. The
+  **period** tag lets the reducer drop stale entries during
+  rollover, when replicas transition independently.
+end note
+
+== 3. On every ConfigMap change (watch) ==
+
+loop watch event
+  cm --> r0 : changed
+  r0 -> r0 : fold **peers' current-period partials**\ninto its enforcement view
+end
+note over r0, cm #FFE4B5
+  **Load-bearing.** The value a replica enforces against is
+  its own live counter **plus every peer's latest partial**,
+  at most one 10s write interval stale. Without this fold,
+  a long-lived replica would never observe peer spend and
+  enforcement drift would grow **unbounded** within a period.
+end note
+
+== 4. Each reconcile (event-driven + 5m requeue) ==
+
+rec -> cm : read all keys
+cm --> rec : per-replica partials
+rec -> rec : **filter** out entries whose **period**\nis not the current period\n**prune** keys with no live gateway Pod name\n**sum** the remaining partials
+rec -> cm : write **_canonical**
+rec -> rec : update ModelProvider **status.budgetUsage**
+
+note over r0, rec #FFE4B5
+  **_canonical is NOT on the enforcement path.**
+  It is the durable roll-up: status reporting, and the value
+  a replica initializes from on (re)start. Per-request
+  enforcement reads peers' partials straight off the watch
+  and never waits on the reconciler.
+end note
+@enduml

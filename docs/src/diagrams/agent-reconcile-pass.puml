@@ -1,0 +1,87 @@
+@startuml agent-reconcile-pass
+' AgentReconciler: one reconciliation pass, showing which of the ten steps exit early.
+' Source of truth: docs/src/controller/reconcilers.md
+!include _style.puml
+
+start
+:Agent reconcile;
+
+if (1. namespace == agentry-system?) then (yes)
+  :Ready=False
+  reason=SystemNamespaceForbidden
+  no child resources created;<<$mutedBg>>
+  stop
+else (no)
+endif
+
+:1. resolve agentClassRef;
+if (AgentClass found?) then (no)
+  :Ready=False
+  reason names the
+  missing AgentClass;<<$mutedBg>>
+  stop
+else (yes)
+endif
+
+if (2. every providerRef resolves,\nis in allowedProviders, and\nadmits this namespace?) then (no)
+  :phase=Degraded
+  reason=ClassConstraintViolation
+  record preDegradedPhase;<<$ctrlBg>>
+  stop
+else (yes)
+endif
+
+:3. determine the desired phase\nfrom the state machine;
+
+repeat
+  :4. ensure the cert-manager\nCertificate {agentName}-tls;
+backward:requeue with backoff,\ndo NOT create the Pod;
+repeat while (Certificate Ready=True?) is (no) not (yes)
+
+if (5. every imagePullSecret exists\nin the Agent's namespace?) then (no)
+  :Ready=False
+  reason=ImagePullSecretMissing
+  Pod creation skipped;<<$mutedBg>>
+  stop
+else (yes)
+endif
+
+if (5. persistence and hibernation\ncross-checks pass?) then (no)
+  :phase=Degraded
+  record preDegradedPhase
+  Pod and PVC not created;<<$ctrlBg>>
+  note right
+    One reason per conflict:
+    PersistenceNotAllowed
+    HibernationNotAllowed
+    HibernationRequiresPersistence
+  end note
+  stop
+else (yes)
+endif
+
+:6. converge Pod, PVC, Service,\nServiceAccount, NetworkPolicy;
+:7. inject env vars and\nHTTPS probes at Pod creation;
+
+if (8. phase is Running or Idle?) then (yes)
+  :fan out to the gateway Pod IPs\nfor activity (15s cache);
+else (no)
+endif
+
+if (9. agentry.io/wake=true?) then (yes)
+  :Hibernated: go Resuming, then\nclear. Otherwise clear now;
+else (no)
+endif
+
+:10. write status. On a phase change\nalso set phaseTransitionTime = now();
+stop
+
+note right
+  Five exits end the pass before a Pod
+  exists, spread over three steps:
+  1 (twice), 2, and 5 (twice).
+  Step 4 is the odd one out: it does
+  not exit, it requeues and retries.
+end note
+
+@enduml

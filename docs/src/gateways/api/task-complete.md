@@ -2,6 +2,10 @@
 
 `POST /v1/task/complete` is the internal endpoint an AgentTask's agent container calls to report that its work is finished. It applies only to tasks with `completion.condition: agentReported`; tasks in `exitCode` mode signal completion through container exit and are rejected here (see [403 cases](#403-forbidden-four-reasons) below). Like the other agent-only internal endpoints, it is mTLS-only: there is no ServiceAccount-bearer alternative, and gateway-only-tier workloads cannot reach it (see [Namespace Identification](../llm/workload-identity.md) and [Agent to Gateway Authentication](../../security/rbac.md#agent-to-gateway-authentication)).
 
+![Sequence diagram of the task-completion protocol. At provisioning the AgentTaskReconciler creates the empty {taskName}-completion ConfigMap and a per-task Role scoped by resourceNames to that ConfigMap name with mutate verbs but no create verb, then stamps status.currentPodUID once the Pod is observed. At completion the Task Pod POSTs /v1/task/complete over mTLS; the gateway resolves the source IP to a Pod UID via its informer, falling back to a live List Pods on a cache miss, then rejects with 401 unauthorized or one of the four 403 access_denied reasons (NotAgentTaskPod, TaskNotAgentReported, StalePodCompletion which alone is retryable, and TaskAlreadyCompleted) before validating artifact names and the 4 KiB and 32 KiB size caps, patching the ConfigMap through the scoped Role, and returning 200. The reconciler's ConfigMap watch then fires, re-checks artifacts defensively, and moves the task to Completing.](../../diagrams/task-completion-protocol.svg)
+
+Reading the diagram: everything above the `Completion` divider happens once, at task provisioning. Every rejection arm fires before the ConfigMap `Patch` is attempted, so only a `503` implies the data-channel write itself failed.
+
 ## How completion is recorded
 
 The gateway does not update `AgentTask.status` directly. It updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace, which acts as a mailbox:

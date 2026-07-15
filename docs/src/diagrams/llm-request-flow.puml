@@ -1,0 +1,71 @@
+@startuml llm-request-flow
+' An LLM call end to end: auth, routing, budget, rate limit, forward, and usage extraction.
+' Source of truth: docs/src/gateways/llm/request-handling.md
+!include _style.puml
+
+participant "Agent\ncontainer" as agent
+participant "LLM Gateway\n:8443" as gw #90EE90
+participant "Informer cache\nPod / Agent /\nModelProvider" as inf #F5F5F5
+participant "Secret\n(agentry-system)" as sec #FFD580
+participant "Upstream\nprovider" as prov #FFE4B5
+
+agent -> gw : **1.** HTTPS to $AGENTRY_GATEWAY_ENDPOINT\nnative provider path + qualified\n{providerRef}/{modelId}
+opt body > maxLLMRequestBodyBytes (4 MiB)
+  gw --> agent : **413** request_too_large\n(at the listener, **before** namespace identification)
+end
+
+gw -> gw : **2a.** Authenticate:\nmTLS client-cert SAN (Mode 1)\nor TokenReview bearer (Mode 2)
+gw -> inf : **2b.** Cross-check: Pod at source IP
+inf --> gw : Pod namespace
+note over gw, inf
+  **Authenticate first, then cross-check.**
+  Authentication establishes the namespace claim.
+  The source-IP lookup confirms the claim came
+  from where it should have. It is defense in
+  depth, not the identity mechanism.
+end note
+
+gw -> inf : **3.** Pod ownerRef -> Agent,\nread spec.providers;\nparse provider/model
+gw -> inf : **4.** Validate: model in ModelProvider.models,\nnamespace in allowedNamespaces
+gw -> gw : **5.** Budget check\ndegrade -> rewrite model name\nblock -> error to agent
+gw -> gw : **6.** Rate limit: per-(namespace, model)\ntoken bucket, req/min + tokens/min
+
+gw -> sec : **7a.** read provider credential
+sec --> gw : API key, or Vertex OAuth2 token
+
+note over gw #FFE4B5
+  **7b. The forwarded-header contract**
+  ....
+  **STRIP before injecting the credential:**
+  Authorization, x-api-key, api-key.
+  Header names differ per provider and per tier,
+  so injection alone would leave a live SA token
+  in place and forward it to the provider.
+  ....
+  **DROP hop-by-hop, per RFC 7230 6.1:**
+  Connection, TE, Upgrade, Proxy-Authorization.
+  ....
+  **PIN Accept-Encoding: identity.**
+  Go only auto-decompresses gzip it negotiated
+  itself, so relaying a caller's gzip would make
+  step 9 unreadable and zero all spend silently.
+end note
+
+gw -> prov : **7c.** forward, provider prefix stripped\n(on failure: walk the fallback chain,\nup to maxFallbackDepth)
+prov --> gw : provider response\n(SSE chunks arrive incrementally)
+gw --> agent : **8.** response relayed to the agent\n(chunks forwarded as they arrive)
+
+note over gw, prov
+  **9. Usage extraction, on the return leg**
+  ....
+  Anthropic: usage.input_tokens / output_tokens
+  OpenAI: usage.prompt_tokens / completion_tokens
+  Vertex: usageMetadata.promptTokenCount
+  and candidatesTokenCount
+  ....
+  Actual usage from the response always beats
+  pre-call estimation. Streaming reads it from
+  the usage-bearing SSE events instead.
+end note
+gw -> gw : **10.** update the in-process\nspend counter for the namespace
+@enduml

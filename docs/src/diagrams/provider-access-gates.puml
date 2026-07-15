@@ -1,0 +1,89 @@
+@startuml provider-access-gates
+' The gate chain every LLM request passes, and the gate that does not exist in the gateway-only tier.
+' Source of truth: docs/src/concepts/tenancy-and-tiers.md
+!include _style.puml
+
+skinparam ConditionEndStyle hline
+
+|#F5F5F5|Both tiers|
+start
+:LLM request on the :8443 listener
+qualified model **{providerRef}/{modelId}**;
+
+if (caller identity?) then (mTLS client cert)
+  :cert SAN yields
+  (namespace, workload, kind)
+  **full lifecycle tier**;
+else (SA bearer token)
+  :TokenReview yields
+  namespace only
+  **gateway-only tier**;
+endif
+
+if (Pod at source IP in that namespace?) then (no)
+  :**401** unauthorized; <<#FFCDD2>>
+  kill
+else (yes)
+endif
+
+if (providerRef resolves to a ModelProvider?) then (no)
+  :**400** invalid_request; <<#FFCDD2>>
+  kill
+else (yes)
+endif
+
+if (which tier?) then (gateway-only)
+  :**Gate A does not exist here.**
+  No Agent, AgentTask or AgentClass to consult; <<#F5F5F5>>
+else (full lifecycle)
+  |#E6E6FA|Full lifecycle tier only|
+  if (**Gate A**\nproviderRef in workload spec.providers\n**and** in AgentClass.spec.allowedProviders?) then (no)
+    :**403** access_denied; <<#FFCDD2>>
+    kill
+  else (yes)
+  endif
+  |#F5F5F5|Both tiers|
+endif
+
+if (**Gate B**\ncalling namespace in\nModelProvider.spec.allowedNamespaces?\nexact name or glob) then (no)
+  :**403** access_denied; <<#FFCDD2>>
+  kill
+else (yes)
+endif
+
+if (**Gate C**\nmodelId in ModelProvider.spec.models?) then (no)
+  :**400** invalid_request; <<#FFCDD2>>
+  kill
+else (yes)
+endif
+
+if (budget state for this namespace?) then (block)
+  :**429** budget_exhausted
+  Retry-After: next period reset
+  **no fallback**; <<#FFCDD2>>
+  kill
+elseif (degrade) then
+  :rewrite model to degradeTo;
+else (warn / under cap)
+endif
+
+if (token bucket (namespace, model)?) then (empty)
+  :**429** rate_limited
+  Retry-After: short backoff; <<#FFCDD2>>
+  kill
+else (has tokens)
+endif
+
+:inject credential, strip prefix,
+forward upstream
+(fallback walk on upstream failure); <<#90EE90>>
+stop
+
+legend bottom
+  **Gate A is the only tier conditional gate.** It is the one that needs an Agent
+  and an AgentClass to read, so it has nothing to consult in the gateway-only tier.
+  Gates B and C run identically for both tiers.
+  **Gate C is not a tenancy boundary**: it resolves the model. An unknown modelId
+  is a bad request (400), not a denied one (403).
+endlegend
+@enduml

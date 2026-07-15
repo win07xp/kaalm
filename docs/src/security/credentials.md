@@ -17,6 +17,10 @@ TLS certificate material (agent serving certs, AgentTask client certs, and the C
 
 Step 6 is the reason rotation is a single Secret update: with no fan-out copies, there is exactly one place to change and one watch to fire.
 
+![A sequence diagram of the six-step LLM API key lifecycle, with a user namespace holding the Agent Pod and an agentry-system frame holding the Secret, the operator ServiceAccount and the gateway ServiceAccount, and the LLM provider outside the cluster. A platform engineer creates the Secret in agentry-system; exactly two ServiceAccounts may read it, both through a namespaced Role. The gateway loads it at startup and holds it in process memory; the operator reads it once per health probe and retains nothing between probes. On the used step the agent sends an LLM request carrying no credential, the gateway injects the API key on the upstream leg only, and the completion returns to the agent still carrying no credential; the agent cannot read agentry-system Secrets at all. Rotation is a single in-place Secret update that fires the gateway's watch.](../diagrams/llm-key-lifecycle.svg)
+
+**Reading the diagram.** The namespace frames are the argument. No credential-bearing arrow ever crosses out of `agentry-system`: the key reaches the provider on the gateway's upstream leg and nowhere else. Read the three holders by retention, too, since they differ: the gateway keeps the key in memory for the life of the process, the operator only for the length of one probe, and the agent never at all.
+
 ## Lifecycle of a Channel Credential (AgentChannel)
 
 1. **Stored**: in a Secret in the agent's namespace (e.g., `team-support/discord-bot-credentials`), created by the platform team or a provisioning service.
@@ -25,6 +29,10 @@ Step 6 is the reason rotation is a single Secret update: with no fan-out copies,
 4. **Rotated**: same watch-based mechanism as LLM credentials. The gateway watches the referenced Secret for changes and refreshes in-memory credentials without a restart.
 
 Channel credentials are namespace-scoped for organizational isolation: each namespace contains only the credentials for its own agents' channels. They are created by the platform team or a provisioning service; developers do not need Secret access in their namespace.
+
+![A sequence diagram of the channel credential lifecycle, drawn in the same grammar as the LLM API key figure but with the Secret sitting inside the agent's own namespace rather than agentry-system, and a second namespace holding its own separate Secret. The AgentChannel's webhook auth config names the Secrets, and the AgentChannelReconciler mints two resourceNames-scoped Roles in the agent's namespace, one granting the gateway get and watch and one granting the operator get and watch, both owned by the AgentChannel and torn down with it. The gateway holds the material in process, split by direction: the inbound auth material feeds the webhook adapter's verifier and the outbound callbackAuth material feeds its SendReply signer. The operator reads the same Secret only to validate that the configured data key exists and retains nothing.](../diagrams/channel-credential-lifecycle.svg)
+
+**Reading the diagram.** It is deliberately the mirror of [the LLM API key figure](#lifecycle-of-an-llm-api-key): same participants, same layout, one structural difference. The Secret has moved out of `agentry-system` and into the agent's namespace, and it fans out one per namespace. Every other contrast follows from that move, including why the grant has to be minted per channel and garbage-collected with the AgentChannel instead of shipping as a plain namespaced Role. One Secret feeds both directions: the same object backs the inbound verifier and the outbound `SendReply` signer.
 
 ## Protecting Agent Containers from LLM Provider Access
 

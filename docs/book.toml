@@ -4,3 +4,6 @@ description = "Design documentation for Agentry, a Kubernetes-native operator fo
 authors = ["Asad"]
 language = "en"
 src = "src"
+
+[output.html]
+additional-css = ["theme/custom.css"]

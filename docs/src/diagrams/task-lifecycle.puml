@@ -1,23 +1,7 @@
 @startuml task-lifecycle
 ' AgentTask state machine.
 ' Source of truth: docs/src/controller/task-lifecycle.md
-skinparam backgroundColor transparent
-skinparam shadowing false
-skinparam defaultFontName Helvetica
-skinparam defaultFontSize 13
-skinparam ArrowFontSize 11
-skinparam nodesep 30
-skinparam ranksep 45
-skinparam state {
-  BackgroundColor #E6E6FA
-  BorderColor #4A148C
-  FontColor #2a0a4a
-  ArrowColor #4A148C
-}
-skinparam NoteBackgroundColor #FFF8DC
-skinparam NoteBorderColor #8B7500
-skinparam NoteFontSize 11
-hide empty description
+!include _style.puml
 
 state "Pending" as Pending
 state "Provisioning" as Provisioning
@@ -27,9 +11,8 @@ state "Succeeded" as Succeeded
 state "Failed" as Failed
 state "TimedOut" as TimedOut
 state "Terminating" as Terminating
-state "any state" as AnyState #F5F5F5
+state "any state" as AnyState $mutedBg
 
-note right of Pending : initial
 note right of Provisioning : creating Pod/PVC
 note right of Completing : collecting artifacts,\nscheduling teardown
 
@@ -37,19 +20,30 @@ note right of Completing : collecting artifacts,\nscheduling teardown
 [*] --> Pending
 Pending --> Provisioning : references validated
 Provisioning --> Running : Pod Ready
-Running --> Completing : completion signal\nOR timeout OR exit
+Running --> Completing : completion signal,\ntimeout, or exit
 Completing --> Succeeded : success reported
 Completing --> Failed : failure reported
 Completing --> TimedOut : timeout hit
 
 ' ---- Failure and retry paths ----
-Pending -[#0D47A1]-> Failed : spec irreconcilable:\nPersistenceNotAllowed /\nClassConstraintViolation
-Provisioning -[#0D47A1]-> Failed : unrecoverable Pod-start error;\nretryable under backoffLimit
-Running -[#0D47A1]-> Failed : involuntary Pod disruption mid-run;\nretryable under backoffLimit
-Failed -[#0D47A1]-> Provisioning : backoffLimit retry:\nstatus.retries < backoffLimit
+Pending -[#0D47A1]-> Failed : spec irreconcilable
+Provisioning -[#0D47A1]-> Failed : Pod-start error
+Running -[#0D47A1]-> Failed : Pod disruption
+Failed -[#0D47A1]-> Provisioning : retry while\nstatus.retries < backoffLimit
 
 ' ---- Teardown ----
-AnyState --> Terminating : on delete or after TTL
+AnyState --> Terminating : deletion requested
+Succeeded -[#0D47A1]-> Terminating : ttlSecondsAfterFinished\nexpired
+Failed -[#0D47A1]-> Terminating : ttlSecondsAfterFinished\nexpired
+TimedOut -[#0D47A1]-> Terminating : ttlSecondsAfterFinished\nexpired
+
+note bottom of Failed
+  Pending: PersistenceNotAllowed or
+  ClassConstraintViolation. Not retried.
+  ....
+  Provisioning and Running failures are
+  retried under backoffLimit.
+end note
 
 ' ---- Layout hints ----
 Succeeded -[hidden]-> AnyState

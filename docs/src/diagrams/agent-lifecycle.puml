@@ -1,23 +1,7 @@
 @startuml agent-lifecycle
 ' Agent (persistent mode) state machine.
 ' Source of truth: docs/src/controller/agent-lifecycle.md
-skinparam backgroundColor transparent
-skinparam shadowing false
-skinparam defaultFontName Helvetica
-skinparam defaultFontSize 13
-skinparam ArrowFontSize 11
-skinparam nodesep 30
-skinparam ranksep 45
-skinparam state {
-  BackgroundColor #E6E6FA
-  BorderColor #4A148C
-  FontColor #2a0a4a
-  ArrowColor #4A148C
-}
-skinparam NoteBackgroundColor #FFF8DC
-skinparam NoteBorderColor #8B7500
-skinparam NoteFontSize 11
-hide empty description
+!include _style.puml
 
 ' ---- Happy path + idle/hibernate cycle ----
 state "Pending" as Pending

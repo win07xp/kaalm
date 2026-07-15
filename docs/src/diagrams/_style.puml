@@ -1,0 +1,136 @@
+' Shared style for every Agentry diagram.
+' Include from each diagram with:  !include _style.puml
+'
+' Visual language (keep it consistent, readers learn it once):
+'   purple  agents, AgentTasks, and internal mTLS RPC
+'   blue    the controller and anything lifecycle-driven
+'   green   the gateway and the data plane
+'   orange  systems outside the cluster
+'   cream   notes
+'   grey    pseudo-nodes and things deliberately de-emphasized
+'
+' House rules: no em-dashes or en-dashes in any label. Keep diagrams under
+' 900px wide (mdBook's content column is 750px), which in practice means at
+' most 5 or 6 participants and short message labels.
+
+skinparam backgroundColor transparent
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam ArrowFontSize 11
+skinparam nodesep 30
+skinparam ranksep 45
+skinparam wrapWidth 220
+skinparam maxMessageSize 160
+
+' ---- palette ------------------------------------------------------------
+!$agentBg    = "#E6E6FA"
+!$agentLine  = "#4A148C"
+!$agentText  = "#2a0a4a"
+!$ctrlBg     = "#87CEEB"
+!$ctrlLine   = "#0D47A1"
+!$ctrlText   = "#0a2540"
+!$gwBg       = "#90EE90"
+!$gwLine     = "#1B5E20"
+!$gwText     = "#0b3d0b"
+!$extBg      = "#FFE4B5"
+!$extLine    = "#8B4513"
+!$extText    = "#3a1f00"
+!$noteBg     = "#FFF8DC"
+!$noteLine   = "#8B7500"
+!$mutedBg    = "#F5F5F5"
+!$mutedLine  = "#9E9E9E"
+!$dangerLine = "#B71C1C"
+!$storeBg    = "#FFD580"
+!$storeLine  = "#7a3f00"
+!$storeText  = "#3a1f00"
+
+' Two PlantUML traps, both of which fail SILENTLY (the file parses, the SVG
+' renders, and only looking at the image reveals the damage):
+'
+' 1. In a skinparam block, always pass colors through these variables or write
+'    them as bare literals (BackgroundColor #FFD580). A *quoted* literal
+'    (BackgroundColor "#FFD580") is invalid and falls back to white, which
+'    renders white-on-white and makes the element vanish entirely.
+'
+' 2. In activity diagrams, colour a node with the stereotype suffix
+'    (:label;<<$storeBg>>), never the prefix form (#FFD580:label;). PlantUML
+'    1.2026.6 retired the prefix form: the node keeps its default fill, a
+'    deprecation banner is drawn into the image, and `kill` stops working, so
+'    denial arms flow on into the next step instead of terminating.
+'
+' 3. Escape a leading '--' in any label as '~--'. Creole reads --text-- as
+'    strikethrough, so a flag like --create-namespace renders struck through.
+'
+' diagram_check.py enforces all three.
+
+' ---- notes --------------------------------------------------------------
+skinparam NoteBackgroundColor $noteBg
+skinparam NoteBorderColor $noteLine
+skinparam NoteFontSize 11
+
+' ---- state diagrams -----------------------------------------------------
+skinparam state {
+  BackgroundColor $agentBg
+  BorderColor $agentLine
+  FontColor $agentText
+  ArrowColor $agentLine
+}
+hide empty description
+
+' ---- sequence diagrams --------------------------------------------------
+skinparam sequence {
+  ArrowColor $agentLine
+  LifeLineBorderColor $mutedLine
+  LifeLineBackgroundColor $mutedBg
+  ParticipantBorderColor $agentLine
+  ParticipantBackgroundColor $agentBg
+  ParticipantFontColor $agentText
+  ActorBorderColor $extLine
+  ActorBackgroundColor $extBg
+  BoxBorderColor $mutedLine
+  GroupBorderColor $ctrlLine
+  GroupBackgroundColor $mutedBg
+  DividerBackgroundColor $mutedBg
+}
+
+' ---- activity diagrams --------------------------------------------------
+skinparam activity {
+  BackgroundColor $agentBg
+  BorderColor $agentLine
+  FontColor $agentText
+  ArrowColor $agentLine
+  DiamondBackgroundColor $noteBg
+  DiamondBorderColor $noteLine
+  DiamondFontSize 12
+  StartColor $agentLine
+  EndColor $agentLine
+}
+
+' ---- structural diagrams ------------------------------------------------
+' Containers and grouping boxes are rectangles too, so do not give every
+' rectangle a fill here: it would paint grouping boxes the same colour as the
+' things inside them. Structural diagrams set their own per-element colours.
+skinparam rectangle {
+  FontColor $agentText
+}
+skinparam component {
+  FontColor $agentText
+  BorderColor $agentLine
+  BackgroundColor $agentBg
+}
+skinparam database {
+  BackgroundColor $storeBg
+  BorderColor $storeLine
+  FontColor $storeText
+}
+skinparam object {
+  BackgroundColor $agentBg
+  BorderColor $agentLine
+  FontColor $agentText
+  ArrowColor $agentLine
+}
+skinparam package {
+  BorderColor $mutedLine
+  FontColor $agentText
+}

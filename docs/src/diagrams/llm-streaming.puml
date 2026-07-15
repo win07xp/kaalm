@@ -1,0 +1,74 @@
+@startuml llm-streaming
+' Relaying an SSE stream: where usage arrives, and where fallback stops being available.
+' Source of truth: docs/src/gateways/llm/request-handling.md
+!include _style.puml
+
+participant "Agent\ncontainer" as agent
+participant "LLM Gateway" as gw #90EE90
+participant "Upstream\nprovider" as prov #FFE4B5
+
+agent -> gw : streaming LLM request
+
+note over gw
+  **Adapter fixups applied before forwarding**
+  ....
+  **OpenAI:** inject stream_options {"include_usage": true}
+  when absent, else no usage is emitted at all. The extra
+  terminal chunk has an empty choices array, which client
+  libraries tolerate, and is relayed to the agent unchanged.
+  ....
+  **Vertex:** append ?alt=sse to :streamGenerateContent when
+  absent, else Vertex returns a JSON-array stream and the
+  SSE relay never engages.
+end note
+
+gw -> prov : forward
+
+== Before the first chunk: fallback IS available ==
+
+alt #FFF8DC pre-stream failure
+  note over gw, prov : Connection error, timeout before the first\nbyte, or an error response returned before\nstreaming begins.
+  gw -> gw : walk the fallback chain
+end
+
+prov --> gw : SSE **message_start** (**input_tokens**)
+gw --> agent : relay
+
+== First chunk relayed: THE POINT OF NO RETURN ==
+
+loop content chunks (xN)
+  prov --> gw : SSE chunk
+  gw --> agent : relay immediately\n(no buffering)
+end
+
+alt #FFF8DC stream completes
+  prov --> gw : **message_delta**\n(**cumulative output_tokens**)
+  gw --> agent : relay
+  prov --> gw : **message_stop** (carries **no** usage)
+  gw --> agent : relay
+  gw -> gw : **spend update**, after the\nstream completes
+  note over gw
+    A stream that ends without usage metadata is
+    counted as **zero spend** and logged at warning
+    level: acceptable under the soft-guardrail model,
+    and the log keeps it visible to operators.
+  end note
+
+else mid-stream failure (after the first chunk)
+  gw --> agent : close the agent's SSE stream\nwith an error event
+  note over gw, prov #FFE4B5
+    **No fallback, and no retry.** The agent has already
+    received partial output. Replaying the request on
+    another provider would produce a different, possibly
+    contradictory continuation of what it already read.
+  end note
+end
+
+note over agent, prov
+  **Budget is checked pre-call only** (step 5), against the
+  last-known spend state. There is no mid-stream enforcement:
+  aborting mid-response would leave the agent with an unusable
+  partial answer while the provider still charges for the full
+  generation.
+end note
+@enduml

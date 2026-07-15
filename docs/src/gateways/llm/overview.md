@@ -42,37 +42,6 @@ Pros: Credentials never leave `agentry-system`. NetworkPolicy cleanly isolates a
 
 The gateway process hosts both listeners and the activator. The LLM Gateway listener runs the request pipeline shown below; the User Gateway listener and the activator are covered in [User Gateway](../user/overview.md).
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                    Agentry Gateway (agentry-system)                  │
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────────┐     │
-│  │                    LLM Gateway Listener                     │     │
-│  │                                                             │     │
-│  │  Request validator ──▶ Model allow-list check               │     │
-│  │                  ──▶ Namespace access check                 │     │
-│  │                  ──▶ Budget check + policy enforcement      │     │
-│  │                  ──▶ Rate limiter                           │     │
-│  │                  ──▶ Upstream router (with fallback)        │     │
-│  │                  ──▶ Provider adapter                       │     │
-│  │                  ◀── Response relay                         │     │
-│  │                  ──▶ Token counter (post-call)              │     │
-│  │                  ──▶ Spend state update                     │     │
-│  └─────────────────────────────────────────────────────────────┘     │
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────────┐     │
-│  │                   User Gateway Listener                     │     │
-│  │                     (see User Gateway)                      │     │
-│  └─────────────────────────────────────────────────────────────┘     │
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────────┐     │
-│  │              Activator / Activity Store                     │     │
-│  │                     (see User Gateway)                      │     │
-│  └─────────────────────────────────────────────────────────────┘     │
-└──────────────────────────────────────────────────────────────────────┘
-         │ (egress)
-         ▼
-  LLM Provider APIs
-  (Anthropic, OpenAI,
-   Vertex, etc.)
-```
+![The Agentry Gateway process in agentry-system, containing three subsystems. The LLM Gateway Listener runs a request pipeline that descends from request validator to model allow-list check, namespace access check, budget check and policy enforcement, rate limiter, upstream router with fallback, and provider adapter, which egresses to the LLM Provider APIs. The provider response returns into a second column: response relay, then token counter (post-call), then spend state update. The User Gateway Listener and the Activator / Activity Store share the same process and are covered in the User Gateway chapter.](../../diagrams/llm-gateway-pipeline.svg)
+
+Reading the diagram: the left column is the outbound request path and the right column is the return path. The provider adapter is the egress point, and everything after the response relay is post-call accounting, which is why token counting and the spend update sit outside the request's own latency path.

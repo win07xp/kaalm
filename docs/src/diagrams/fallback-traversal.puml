@@ -1,0 +1,91 @@
+@startuml fallback-traversal
+' One tryWithFallbacks invocation: which checks consume an attempt slot, and how attemptCount threads back out.
+' Source of truth: docs/src/gateways/llm/fallback.md
+!include _style.puml
+
+start
+:**tryWithFallbacks(primary, provider,**\n**request, attemptCount, visited)**\n**primary** is threaded unchanged\nthrough every recursive call;
+
+if (provider.name in **visited**?) then (yes)
+  :return **cycle_detected**\nRuntime dedup, defense in depth:\ncycles are already rejected at\nreconcile time;
+  stop
+else (no)
+endif
+
+:visited.add(provider.name);
+
+if (**staticallyEligible**? (checks 1-3)\nsame spec.type / namespace in\nallowedNamespaces / model in models) then (no)
+  :**emitFallbackIneligible**\n**(PRIMARY, provider, reason)**\nWarning event on the **primary**\nModelProvider, **not** on the\nprovider that failed the check;
+  :return **statically_ineligible**\n**NO attempt slot consumed**;
+  note right
+    Children of a type-mismatched provider are
+    **not** walked either: validation guarantees
+    same-type chains, so they stay reachable
+    through an eligible ancestor.
+  end note
+  stop
+else (yes)
+endif
+
+if (attemptCount >= **maxFallbackDepth**?\n(default 3)) then (yes)
+  :return **fallback_depth_exhausted**;
+  stop
+else (no)
+endif
+
+:**attemptCount += 1**;
+
+if (**budgetBlocked**(provider,\nnamespace)? (check 4)) then (yes)
+  :**The slot IS consumed.**\nFall through to the children\nwithout forwarding;
+  note right
+    A budget-blocked **primary** never reaches
+    here: it returns **429 budget_exhausted**
+    immediately, with no fallback at all, so a
+    namespace at its cap cannot drain budget
+    from a fallback provider.
+  end note
+else (no)
+  :**forward**(provider, request);
+  if (response.ok?) then (yes)
+    :**return** response, attemptCount;
+    stop
+  else (no)
+  endif
+  if (**isFallbackable**(response)?) then (no)
+    :**return** response verbatim\n(400 / 422 / other 4xx):\nno other provider will succeed\nwith the same bad request;
+    stop
+  else (yes)
+  endif
+endif
+
+while (next in **provider.spec.fallback**?\n(declared order, depth-first)) is (another)
+  :**result, attemptCount =**\n**tryWithFallbacks(primary, next,**\n**request, attemptCount, visited)**;
+  note right
+    **attemptCount is threaded BACK OUT.**
+    Increments inside one subtree are visible
+    to the next sibling iteration, so the cap
+    bounds the **breadth** of the walk and not
+    just its depth. Without the thread-back,
+    each sibling would restart from the
+    caller's local count and the cap could be
+    violated along the breadth dimension.
+  end note
+  if (result.ok?) then (yes)
+    :**return** result, attemptCount;
+    stop
+  else (no)
+  endif
+endwhile (none left)
+
+:return **all_fallbacks_exhausted**;
+stop
+
+legend bottom
+  **Three rules are braided here, and they pull in different directions.**
+  A **static** ineligibility skips the candidate and consumes **no** slot, because it is a
+  misconfiguration rather than an outage. A **budget** block **does** consume a slot,
+  because it is legitimately runtime state and slot-bounded latency still matters.
+  And the **FallbackIneligible** event fires on the **primary**, not on the offender,
+  because the primary is the resource the platform team owns and watches.
+endlegend
+@enduml

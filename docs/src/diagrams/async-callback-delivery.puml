@@ -1,0 +1,82 @@
+@startuml async-callback-delivery
+' How an async payload reaches callbackUrl, and the three outcome buckets.
+' Source of truth: docs/src/gateways/api/async-responses.md
+!include _style.puml
+skinparam wrapWidth 260
+
+start
+:payload ready
+(the agent's response, or an error
+envelope such as delivery_failed
+or wake_timeout);
+
+if (spec.webhook.callbackUrl set?) then (yes)
+
+  :**pre-dial re-check**
+  re-resolve the callbackUrl host against
+  the deny ranges and the configured
+  gateway.callbackUrl.allowlist
+  (defeats DNS rebinding since
+  reconcile-time validation);
+
+  if (host still passes?) then (yes)
+
+    repeat
+      :sign per spec.webhook.callbackAuth
+      (bearer, or HMAC over requestId,
+      timestamp, sha256(body))
+      **fresh timestamp every attempt**;
+      :POST to the **pinned IP:port**
+      (hostname kept for Host and TLS SNI);
+
+      if (attempt outcome?) then (delivered: 2xx)
+        :**DELIVERED**
+        receiver has the payload
+        nothing is stored for polling;
+        stop
+      elseif (**TERMINAL**\n401, 403, 404,\n405, 410, 415) then
+        :no retry
+        Warning event
+        reason=CallbackRejected; <<#FFE4B5>>
+        break
+      else (**RETRIED**\nconnect error, TLS failure,\nread timeout (10s),\n408, 429, 422, 5xx)
+      endif
+    repeat while (attempts < 4?) is (yes: back off 1s, 5s, 25s) not (no: budget exhausted)
+
+  else (no)
+    :**BYPASSED: callback_invalid**
+    no retry, and no fresh
+    callback_invalid envelope
+    Warning event
+    reason=CallbackInvalid; <<#FFE4B5>>
+  endif
+
+else (no)
+  :no callback target; <<#F5F5F5>>
+endif
+
+:**Patch** the payload into
+agentry-async-{requestId};
+
+if (Patch lands within its own\n1s/5s/25s, 4-attempt budget?) then (yes)
+  :polls return **200** until the
+  1h-from-202-acceptance TTL;
+  stop
+else (no)
+  :payload dropped silently
+  agentry_channel_async_patch_failed_total
+  pollers see **202** until
+  the TTL flips to **404**; <<#FFCDD2>>
+  stop
+endif
+
+legend bottom
+  **Three buckets, three behaviors.** RETRIED and TERMINAL both end at the
+  polling store; they differ only in whether the retry budget is spent first.
+  BYPASSED is the odd one: callback_invalid is **not** the stored error.type.
+  The URL is rejected before dial, so there is nothing to sign and nothing to
+  POST, and the **underlying** payload (the agent's response, or the
+  delivery_failed / wake_timeout envelope) is what reaches polling instead.
+endlegend
+
+@enduml

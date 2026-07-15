@@ -1,0 +1,62 @@
+@startuml task-retry-race
+' AgentTask retry: the currentPodUID gate, and the two races that both yield 403 StalePodCompletion.
+' Source of truth: docs/src/controller/task-lifecycle.md
+!include _style.puml
+
+participant "AgentTask\nReconciler" as R $ctrlBg
+participant "AgentTask\nstatus" as S $mutedBg
+participant "{taskName}-completion\nConfigMap" as CM $storeBg
+participant "Gateway" as G $gwBg
+participant "Old Pod" as OP $agentBg
+participant "New Pod" as NP $agentBg
+
+R -> S : 1. increment status.retries
+
+group #FFE4E1 gate closed: no Pod can write a completion
+  R -> S : 2. currentPodUID = ""
+  R -> OP : 3. delete Pod
+  OP ->> G : late in-flight\n/v1/task/complete
+  G -->> OP : 403 StalePodCompletion
+  note over G, OP
+    Step 2's security purpose: the
+    old Pod's result can no longer
+    overwrite the retry's data.
+  end note
+
+  R -> CM : 4. patch back to data: {}
+  note over R, CM
+    Patched, not deleted, so the
+    ownerRef and the gateway's
+    name-scoped update/patch Role
+    stay valid. Order matters:
+    clearing the UID (2) must
+    precede the reset (4), or the
+    old Pod could refill the
+    emptied mailbox.
+  end note
+
+  R -> NP : 5-6. PVC retained, phase=Provisioning,\ncreate the new Pod
+  NP ->> G : first /v1/task/complete,\nracing the stamp
+  G -->> NP : 403 StalePodCompletion
+end
+
+NP --> R : 7. informer reports the new Pod
+R -> S : 7. currentPodUID = newPod.UID\nGATE RE-OPENS
+
+NP -> G : /v1/task/complete
+G -> CM : write the result
+
+note over NP, G
+  The second 403 is benign and
+  retryable: the informer-lag
+  window is typically under 100ms
+  against seconds of agent startup,
+  and agents retry on
+  StalePodCompletion per the
+  runtime contract. Same status
+  code, opposite cause: one rejects
+  a stale writer, the other a
+  writer that is merely early.
+end note
+
+@enduml

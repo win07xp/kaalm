@@ -1,0 +1,77 @@
+@startuml fallback-tree
+' A concrete fallback tree, its depth-first visit order, and where maxFallbackDepth cuts it.
+' Source of truth: docs/src/resources/modelprovider.md
+!include _style.puml
+
+skinparam nodesep 24
+skinparam ranksep 40
+
+skinparam object<<attempted>> {
+  BackgroundColor $gwBg
+  BorderColor $gwLine
+  FontColor $gwText
+}
+skinparam object<<cut>> {
+  BackgroundColor $mutedBg
+  BorderColor $mutedLine
+  FontColor #555555
+}
+
+object "**anthropic-shared**" as p1 <<attempted>>
+p1 : **visit 1**, the primary
+p1 : type: anthropic
+p1 : attempt slot 1 of 3
+
+object "**anthropic-backup**" as p2 <<attempted>>
+p2 : **visit 2**
+p2 : type: anthropic
+p2 : attempt slot 2 of 3
+
+object "**anthropic-eu**" as p3 <<attempted>>
+p3 : **visit 3**
+p3 : type: anthropic
+p3 : attempt slot 3 of 3, the last
+
+object "**anthropic-apac**" as p4 <<cut>>
+p4 : **visit 4**, never attempted
+p4 : maxFallbackDepth reached
+
+object "**anthropic-overflow**" as p5 <<cut>>
+p5 : **visit 5**, never attempted
+p5 : maxFallbackDepth reached
+p5 : a child of the primary, yet cut
+p5 : while the deeper anthropic-eu ran
+
+p1 -[#1B5E20,bold]-> p2 : spec.fallback[0]
+p2 -[#1B5E20,bold]-> p3 : spec.fallback[0]
+p2 -[#9E9E9E,dashed]-> p4 : spec.fallback[1]
+p1 -[#9E9E9E,dashed]-> p5 : spec.fallback[1]
+
+note right of p1
+  **A budget-blocked primary never falls back.**
+  The gateway returns **429 budget_exhausted**
+  immediately: the walk below never starts.
+end note
+
+note right of p2
+  **A budget-blocked fallback behaves differently.**
+  It is skipped, but its attempt slot **is** consumed
+  and its own children are still walked. Contrast a
+  statically ineligible candidate, which consumes no
+  slot and whose children are not walked.
+end note
+
+legend bottom
+  **The cut is across the visit order, not the tree levels.** maxFallbackDepth (default 3)
+  bounds the total providers **attempted**, including the primary. Visits 1 to 3 take the
+  three slots, so visits 4 and 5 are never reached, even though anthropic-overflow sits one
+  level below the primary and anthropic-eu sits two.
+
+  **Exhaustion never returns 429.** Every attempt failed at the connect layer: 503
+  provider_unavailable. Every attempt timed out pre-stream: 504 provider_timeout. Anything
+  else, including a walk exhausted purely by budget-blocked candidates: 502 provider_error.
+
+  **Rule 11**: the tree must not be circular. **Rule 12**: every provider in it carries the
+  primary's spec.type. The traversal algorithm itself lives in Fallback Logic.
+endlegend
+@enduml

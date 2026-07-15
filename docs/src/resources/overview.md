@@ -20,3 +20,5 @@ All resources live in one API group and version:
 | `AgentChannel` | Namespace | Developer | A connection between a running Agent and a user-facing channel |
 
 The Owner column reflects the intended split of responsibility: platform teams manage the cluster-scoped policy resources (AgentClass, ModelProvider), while developers create the namespaced workload resources (Agent, AgentTask, AgentChannel) that reference them.
+
+For how these five resources reference each other, including which spec field carries each reference, see the [CRD reference graph](../concepts/core-concepts.md#the-five-custom-resources).

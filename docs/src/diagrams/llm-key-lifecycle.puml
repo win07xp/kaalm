@@ -1,0 +1,91 @@
+@startuml llm-key-lifecycle
+' The six-step life of an LLM API key: one namespace, two readers, never copied, never in an agent.
+' Source of truth: docs/src/security/credentials.md
+!include _style.puml
+
+skinparam wrapWidth 420
+skinparam maxMessageSize 340
+
+actor "Platform\nengineer" as PE #FFE4B5
+
+box "a user namespace" #FCFCFC
+  participant "**Agent** Pod" as AG #E6E6FA
+end box
+
+box "agentry-system" #F0F4F0
+  participant "**Secret**\nanthropic-api-key" as SEC #FFD580
+  participant "**Operator** SA\nagentry-controller" as OP #87CEEB
+  participant "**Gateway** SA\nagentry-gateway" as GW #90EE90
+end box
+
+participant "**LLM Provider**\n(outside the cluster)" as LLM #FFE4B5
+
+== 1. Stored ==
+
+PE -> SEC : create agentry-system/anthropic-api-key
+note over SEC #FFF8DC
+  Created and managed by platform engineers.
+end note
+
+== 2. Referenced ==
+
+note over AG, GW #FFF8DC
+  ModelProvider.spec.credentialsRef names this Secret. Read access
+  is limited to exactly **two** ServiceAccounts, and both grants are a
+  namespaced Role in agentry-system, never a ClusterRole:
+  **gateway** get, watch  |  **operator** get, list, watch
+end note
+
+== 3. Loaded ==
+
+GW -> SEC : get + watch, at startup
+SEC -> GW : key material
+note over GW #90EE90
+  Held in **process memory** for the
+  life of the process. The gateway
+  uses it on every proxied request.
+end note
+OP -> SEC : get, once per health probe
+SEC -> OP : key material
+OP -> LLM : GET /v1/models health probe\n(the probe needs the key: the\nendpoint requires authentication)
+note over OP #87CEEB
+  Held **transiently**, for the duration of one
+  probe. The operator retains no key material
+  between probes.
+end note
+
+== 4. Used ==
+
+AG -> GW : LLM request over mTLS,\ncarrying **no credential**
+GW -> LLM : upstream request: the gateway **injects** the\nAPI key on the agent's behalf, on this leg only
+LLM -> GW : completion
+GW -> AG : completion, **still no credential**
+AG -[#B71C1C]->x SEC : agent cannot read agentry-system Secrets:\nnot mounted, and no RBAC to fetch them
+note over AG #E6E6FA
+  **Retention: never.** The agent Pod
+  holds no key material at any point.
+end note
+
+== 5. Rotated ==
+
+PE -> SEC : update the Secret in place
+SEC -> GW : the gateway's Secret watch fires
+GW -> GW : refresh in-memory credentials,\n**no restart**, in-flight requests\nfinish on the old key
+
+== 6. Never copied ==
+
+note over AG, LLM #FFF8DC
+  There are no per-agent and no per-namespace copies. The Secret in
+  agentry-system is the single authoritative location. **That is why step 5**
+  **is one update and one watch:** with no fan-out copies there is exactly
+  one place to change and one watch to fire.
+end note
+
+legend bottom
+  **Read the negative space.** No credential-bearing arrow ever crosses out of agentry-system. The key
+  reaches the provider on the gateway's upstream leg and nowhere else, so the agent never holds it, and
+  the three holders retain it differently: **gateway** in memory for the process lifetime, **operator**
+  only for the length of a probe, **agent** never. Agent Pods are additionally blocked from calling
+  providers directly by NetworkPolicy: see Protecting Agent Containers from LLM Provider Access.
+endlegend
+@enduml

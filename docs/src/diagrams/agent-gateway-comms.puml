@@ -1,0 +1,79 @@
+@startuml agent-gateway-comms
+' Every call in and out of an agent container, and what authenticates each one.
+' Source of truth: docs/src/runtime/contract.md
+!include _style.puml
+
+' The notes below are hand-wrapped; raise the wrap width so those line
+' breaks are honoured rather than re-wrapped raggedly at 220px.
+skinparam wrapWidth 340
+
+participant "**kubelet**\n(node component)" as kubelet $mutedBg
+
+box "a user namespace" #FCFCFC
+  participant "**Agent** container\nserves $AGENTRY_HEALTH_PORT\n(default 8080)" as agent $agentBg
+  participant "**AgentTask**\ncontainer" as task $agentBg
+end box
+
+participant "**Gateway**\n:8443 LLM listener" as gw $gwBg
+participant "**Controller**" as ctrl $ctrlBg
+
+note over agent
+  One cert, both directions:
+  **$AGENTRY_TLS_CERT** is the **server**
+  cert below and the **client** cert on
+  every call to the gateway. Peers are
+  verified against $AGENTRY_CA_CERT.
+end note
+
+== Inbound: two auth regimes on the one port ==
+
+kubelet -[#9E9E9E]> agent : GET /readyz, GET /livez\nHTTPS, **no client cert**
+agent -[#9E9E9E]-> kubelet : 200 when healthy
+
+gw -[#1B5E20]> agent : POST /v1/message\nmTLS, gateway presents its client cert
+alt no peer certificate
+  agent -[#B71C1C]-> gw : 401 Unauthorized
+else SAN is not the gateway Service DNS
+  agent -[#B71C1C]-> gw : 403 Forbidden
+else SAN matches
+  agent -[#1B5E20]-> gw : 200 response envelope
+end
+
+note over kubelet, task
+  **Why enforcement is per path, not per handshake.**
+  The cert-less probes and the cert-required /v1/message
+  share $AGENTRY_HEALTH_PORT, so the socket must
+  **request** a client cert without **requiring** one:
+  ClientAuth = **VerifyClientCertIfGiven**.
+  RequireAndVerifyClientCert would fail every probe at the
+  handshake, before the router ran, leaving the agent
+  permanently unready. So the 401/403 above are decided at
+  the handler instead. The controller :9443 and gateway
+  :8443 listeners use this same pattern.
+end note
+
+== Outbound to $AGENTRY_GATEWAY_ENDPOINT: mTLS only ==
+
+agent -[#4A148C]> gw : LLM request\nmTLS, client cert $AGENTRY_TLS_CERT\nSAN {name}.{ns}.svc.cluster.local
+agent -[#4A148C]> gw : POST /v1/agent/heartbeat\nmTLS, **Agents only**
+task -[#4A148C]> gw : POST /v1/task/complete\nmTLS, **AgentTasks only**
+
+note over gw
+  No bearer-token fallback on the two
+  report paths. The listener admits
+  either SAN shape; the handler splits
+  by workload kind. An AgentTask cert on
+  /v1/agent/heartbeat, or an Agent cert
+  on /v1/task/complete, gets
+  **403 access_denied**.
+end note
+
+== Controller to gateway: dialed by Pod IP, not $AGENTRY_GATEWAY_ENDPOINT ==
+
+ctrl -[#0D47A1]> gw : GET /v1/activity?namespace=\nmTLS, **controller SAN required**
+gw -[#0D47A1]-> ctrl : in-memory activity timestamps\n(no etcd writes per request)
+
+legend bottom
+  Grey = no client cert | Purple = agent mTLS | Green = gateway mTLS | Blue = controller mTLS
+endlegend
+@enduml

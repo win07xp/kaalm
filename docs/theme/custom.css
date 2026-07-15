@@ -1,0 +1,22 @@
+/* Agentry book theme overrides. */
+
+/* Diagrams are figures, not prose: let them use more width than the text
+   column so their labels stay readable.
+
+   mdBook sets --content-max-width: 750px, which is right for prose (roughly
+   80 to 90 characters) but squeezes a sequence or component diagram down to
+   the point where its text is unreadable. On screens with room to spare, let
+   diagrams overhang the column symmetrically. Narrow screens fall back to the
+   default max-width: 100% and simply scale. */
+.content img[src*="/diagrams/"] {
+  display: block;
+  margin: 1.5rem auto;
+}
+
+@media (min-width: 1240px) {
+  .content img[src*="/diagrams/"] {
+    max-width: 145%;
+    margin-left: -22.5%;
+    margin-right: -22.5%;
+  }
+}

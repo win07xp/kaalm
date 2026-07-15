@@ -56,6 +56,8 @@ This is template item 4, and it is the part most likely to be broken by a well-i
 
 The kubelet rotates projected Secret and ConfigMap volumes by atomically renaming the `..data` symlink under the mount directory. The leaf files (`tls.crt`, `tls.key`, `ca.crt`) themselves are never written in place. An inotify watcher attached to a leaf path will therefore not see `IN_MODIFY` on rotation, and will silently miss every rotation event.
 
+![Inside the mount directory, tls.crt, tls.key and ca.crt are symlinks pointing one hop at a ..data symlink, which in turn points at a timestamped directory holding the real files. On rotation the kubelet writes a second timestamped directory first, then atomically renames ..data onto it, so no leaf file is ever modified and a leaf-path watch never fires.](../diagrams/projected-volume-rotation.svg)
+
 The templates instead watch the **mount directory** (`/var/run/agentry/`, the parent of `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` / `$AGENTRY_CA_CERT`) for `IN_CREATE` and `IN_MOVED_TO` events on the `..data` entry: fsnotify in Go, `watchdog`/`aionotify` in Python, both anchored to the parent directory.
 
 On each `..data` event the template re-reads the relevant leaf files and reloads accordingly:
@@ -63,7 +65,7 @@ On each `..data` event the template re-reads the relevant leaf files and reloads
 - A **TLS-cert/key event** reloads both the inbound server cert and the outbound client cert, without a process restart.
 - A **CA-bundle event** rebuilds **both** the inbound server's `ClientCAs` pool (Go: serve via `tls.Config.GetConfigForClient` returning a config with the fresh pool; Python: swap the server SSL context) **and** the outbound HTTP client's `RootCAs` pool from the new bundle.
 
-Both reloads are required. cert-manager rotates leaf certs continuously (see [Lifecycle of an agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)), and trust-manager re-projects the CA ConfigMap whenever the CA cert renews or a manual CA re-key adds or removes bundle sources (see [Certificate Lifecycle](../operations/deployment.md#certificate-lifecycle)). Without watching the CA bundle, a CA re-key eventually breaks both directions once gateway leaves are re-issued under the new key: outbound calls stop trusting the gateway's serving cert, and the inbound `ClientCAs` pool rejects the gateway's re-issued client cert on `/v1/message`. The re-key runbook's dual-trust window is finite, so this is a matter of when, not if (see [In-cluster TLS](../security/tls.md#in-cluster-tls)).
+Both reloads are required. cert-manager rotates leaf certs continuously (see [Lifecycle of an agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)), and trust-manager re-projects the CA ConfigMap whenever the CA cert renews or a manual CA re-key adds or removes bundle sources (see [Certificate Lifecycle](../operations/deployment.md#certificate-lifecycle)). Without watching the CA bundle, a CA re-key eventually breaks both directions once gateway leaves are re-issued under the new key: outbound calls stop trusting the gateway's serving cert, and the inbound `ClientCAs` pool rejects the gateway's re-issued client cert on `/v1/message`. The re-key runbook's dual-trust window is finite, so this is a matter of when, not if; [CA Renewal and Re-Key](../security/tls.md#ca-renewal-and-re-key) traces the window and both failure directions against the runbook.
 
 ### The heartbeat toggle and the hibernation footgun
 

@@ -2,6 +2,8 @@
 
 The gateway is a single replicated Deployment in `agentry-system`. It hosts two logical gateways: the [LLM Gateway](llm/request-handling.md#request-flow) for outbound agent-to-provider traffic and the [User Gateway](user/overview.md#request-flow) for inbound channel traffic. Together its two TLS listeners host three call surfaces: `:8443` serves the LLM proxy and the internal mTLS endpoints, `:8080` serves inbound channel webhooks and the async response polling endpoint, and a separate internal health port serves kubelet probes (see [Internal Endpoints and Ports](#internal-endpoints-and-ports)).
 
+![The single Agentry Gateway Deployment in agentry-system and its four ports, with a trust boundary separating untrusted callers from the cluster. Outside the boundary, external webhook callers reach a user-provisioned Ingress, which routes to :8080 (the User listener, per-AgentChannel auth, serving /channels/* and /v1/channels/responses/*). Inside the cluster, Agent and AgentTask Pods call :8443 (the LLM listener, VerifyClientCertIfGiven) using an mTLS SAN or an SA bearer token, and the controller calls the same port with a controller-SAN client cert to reach GET /v1/activity and GET /v1/channels/health. Kubelet probes terminate on :8081 (TLS, no client auth, /healthz and /readyz) and Prometheus scrapes :9090/metrics. A red line marks the route that does not exist: the Ingress cannot reach :8443, because the controller-only paths are not hosted on :8080.](../diagrams/gateway-listener-ports.svg)
+
 ## The Three Call Surfaces
 
 1. **LLM Gateway** (outbound, agent to provider) on `:8443`.

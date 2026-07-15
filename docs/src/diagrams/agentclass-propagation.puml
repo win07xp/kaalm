@@ -1,0 +1,102 @@
+@startuml agentclass-propagation
+' How an AgentClass or ModelProvider edit reaches Agents and AgentTasks: the three buckets.
+' Source of truth: docs/src/controller/change-propagation.md
+!include _style.puml
+
+start
+:AgentClass or ModelProvider\nspec edit;<<$ctrlBg>>
+:EnqueueRequestsFromMapFunc re-queues
+every referencing workload.
+AgentClass watch: indexed on
+agentClassRef.name. ModelProvider
+watch: indexed on providerRef.name;
+
+if (workload kind?) then (Agent)
+
+  if (does the change EXCLUDE\nthe Agent's stored spec?) then (yes)
+    :Bucket 2: degrade-when-irreconcilable
+    phase=Degraded, record preDegradedPhase
+    reason names the mismatch;<<$ctrlBg>>
+    note right
+      Excluded: image not in
+      allowedImages, provider not in
+      allowedProviders, provider
+      allowedNamespaces drops this
+      namespace, persistence, or
+      hibernation. Reason is one of
+      ClassConstraintViolation,
+      PersistenceNotAllowed,
+      HibernationNotAllowed,
+      HibernationRequiresPersistence.
+      The Pod is not recreated.
+    end note
+    stop
+  else (no)
+  endif
+
+  if (Pod-spec hash differs in a\nreplacement-triggering field?\nimage, resources, command,\nargs, env, provider wiring) then (no)
+    :Bucket 3: routing-concern change.
+    Gateway CRD and Secret watches
+    pick it up. No Agent-side effect,
+    no Pod-level transition;<<$gwBg>>
+    stop
+  else (yes)
+  endif
+
+  :Bucket 1: recreate-and-clamp;<<$agentBg>>
+  if (phase == Hibernated?) then (yes)
+    :defer to the next wake,\nwhich provisions from the\nalready-clamped spec;
+    stop
+  else (no)
+  endif
+  :phase=Provisioning;
+  :delete the Pod (SIGTERM, honoring\nterminationGracePeriodSeconds);
+  :create the new Pod from the clamped\nspec. PVC, Service, Certificate kept;
+  :phase=Running once the Pod is Ready;
+  stop
+
+else (AgentTask)
+
+  if (task phase?) then (terminal:\nSucceeded, Failed,\nTimedOut)
+    :ignore class drift,
+    proceed to TTL cleanup;<<$mutedBg>>
+    stop
+  else (non-terminal)
+  endif
+
+  if (in flight?\nRunning or\nProvisioning) then (yes)
+    :run to completion under the class
+    snapshot taken at task-Pod creation;<<$agentBg>>
+    stop
+  else (no: Failed, retrying\nunder backoffLimit)
+  endif
+
+  :increment status.retries, then re-validate\nthe stored spec against the new class;
+  if (still admitted?) then (no)
+    :phase=Failed
+    reason=ClassConstraintViolation;<<$mutedBg>>
+    stop
+  else (yes)
+    :provision the retry Pod\nunder the new invariants;
+    stop
+  endif
+
+endif
+
+note right
+  Bucket membership depends on
+  whether the change EXCLUDES a
+  stored spec value, not on the
+  field's nominal category. That is
+  why a restrictive allowedNamespaces
+  edit is bucket 2, even though
+  allowedNamespaces is listed under
+  bucket 3. So the exclusion test
+  runs first.
+  ....
+  AgentTask has no Degraded phase.
+  Where an Agent degrades, the task
+  uses Failed with the same reason.
+end note
+
+@enduml

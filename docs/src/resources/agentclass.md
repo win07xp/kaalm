@@ -173,9 +173,15 @@ Patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Matc
 
 Prefer `allowedCIDRs` for egress governance; layer `allowedHosts` on top only when the CNI supports it.
 
-### Provider access has two gates
+### `allowedProviders` is one gate in a chain, and only in the full lifecycle tier
 
-`allowedProviders` is the primary access control mechanism for LLM providers at the class level. ModelProvider itself has `allowedNamespaces` for namespace-level control. Both must pass for an Agent to use a provider.
+`allowedProviders` is the access control mechanism for LLM providers at the class level, but it is not the whole story in either direction.
+
+For a full-lifecycle Agent or AgentTask, the gateway enforces a chain, not a pair. Three tenancy layers must all admit the request: the workload's own `spec.providers`, this class's `allowedProviders`, and the target `ModelProvider.allowedNamespaces`. A fourth check, that the requested model exists in `ModelProvider.spec.models`, is a model-resolution prerequisite rather than a tenancy boundary, and it applies regardless.
+
+In the gateway-only tier the class layer **disappears entirely**. Those callers are not Agents and reference no AgentClass, so there is nothing for `allowedProviders` to gate; `ModelProvider.allowedNamespaces` is the only tenancy check they face. Platform teams who need class-scoped provider policy must onboard workloads through the full lifecycle tier.
+
+See [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating) for the enforced chain end to end, including which gate produces which error, and [Provider Routing](../gateways/llm/provider-routing.md) for how the gateway resolves each layer.
 
 ### Defaults vs. maxLimits
 

@@ -82,6 +82,10 @@ Eight traffic classes cross an Agentry boundary. Knowing which is which is the f
 - **Gateway → API Server**: task completion data written to per-task ConfigMaps in user namespaces; async response payloads and per-replica budget partials written to ConfigMaps in `agentry-system`.
 - **Controller ↔ API server**: CRD updates, Pod creation, events. Standard kubelet/apiserver channels.
 
+![A component diagram of the eight traffic classes framed by Agentry's trust boundary. Inside the boundary sit an agentry-system frame holding the gateway and controller, a user namespaces frame holding an Agent Pod, and the Kubernetes API server. Outside the cluster sit the channel platform, the LLM provider, and the callbackUrl receiver, which is marked as untrusted. Classes 1, 4, 6, 7 and 8 stay inside the boundary. Class 3, the inbound webhook, crosses in but never out. Only two edges leave the boundary, both drawn in red from the gateway: class 2 to the LLM provider, and class 5 to the callbackUrl receiver, which terminates at a receiver Agentry does not trust.](../diagrams/trust-boundaries.svg)
+
+**Reading the diagram.** Count the red edges. Two of the eight classes leave the trust boundary, both outbound from the gateway, and one of them (class 5) ends at a receiver Agentry does not choose and does not trust. That asymmetry is why class 5 carries the most machinery: signing, allowlisting, and pre-dial re-resolution with the checked IP pinned into the connection. The figure deliberately says nothing about component responsibilities or wiring; [System Architecture](../concepts/system-architecture.md) owns that.
+
 ### Audit Trail
 
 The operator emits Kubernetes Events for:

@@ -1,0 +1,97 @@
+@startuml helm-install-inventory
+' What the Helm chart installs, where each object lands, and the three prerequisites it does not install.
+' Source of truth: docs/src/operations/deployment.md
+!include _style.puml
+
+skinparam wrapWidth 360
+skinparam nodesep 16
+skinparam ranksep 32
+skinparam rectangle {
+  roundCorner 4
+}
+
+' ---------- the three hard prerequisites ----------
+rectangle "**NOT installed by the chart: three hard prerequisites**" as prereq #line:B71C1C;line.bold;text:B71C1C {
+  rectangle "**cert-manager** controller\nfor TLS lifecycle management.\nInstall fails fast if agentry-ca-issuer\ncannot be created." as pcm #back:F5F5F5;line:B71C1C;line.dashed;text:757575
+  rectangle "**trust-manager** controller\nto project the Agentry CA into user\nnamespaces. Install fails fast if the\nBundle cannot be created." as ptm #back:F5F5F5;line:B71C1C;line.dashed;text:757575
+  rectangle "**a NetworkPolicy-enforcing CNI**\nrequired alongside the other two.\nSynthesized per-agent NetworkPolicies\nare inert without one." as pcni #back:F5F5F5;line:B71C1C;line.dashed;text:757575
+}
+
+' ---------- cluster-scoped ----------
+rectangle "**cluster-scoped**" as band #line:9E9E9E;line.dashed;text:555555 {
+  rectangle "**the 5 CRDs**, from the chart's **crds/** directory\nAgentClass, ModelProvider, Agent,\nAgentTask, AgentChannel\n....\n//helm install applies crds/.//\n**helm upgrade never touches it**, so schema\n//changes need an explicit//\n//kubectl apply ~--server-side -f crds/ first.//\n....\n//Keeping them out of templates/ also means//\n//helm uninstall never deletes them, which//\n//would cascade-delete every CR of that kind//\n//cluster-wide.//" as crds #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+
+  rectangle "**2 ClusterIssuers**\nagentry-selfsigned (self-signed)\nagentry-ca-issuer (CA)" as issuers #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+
+  rectangle "**ClusterRoles + ClusterRoleBindings**\noperator and gateway (the cluster-wide half\nof each pair), agentry-platform-admin,\nagentry-catalog-reader" as clusterroles #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+
+  rectangle "**sample AgentClass**: standard\nruntimeClassName left unset, so Pods run under\nthe cluster's default runtime. Customize or delete.\n//A sandboxed (gVisor) example ships in examples/,//\n//not as a live default. A ModelProvider stub is optional.//" as sample #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+}
+
+' ---------- agentry-system ----------
+' The ~ escapes creole: a bare --x --y pair renders as strikethrough.
+rectangle "namespace: **agentry-system**   //(helm install ~--namespace agentry-system ~--create-namespace)//" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**Deployment** agentry-controller\nreplicas **2** (controller.replicas)\nPDB minAvailable: 1 | maxUnavailable: 1\n**anti-affinity: topologyKey**\n**kubernetes.io/hostname** (controller only)" as dctrl #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+
+  rectangle "**Deployment** agentry-gateway\nreplicas **2** (gateway.replicas)\nPDB minAvailable: 1 | maxUnavailable: 1\n//no anti-affinity//" as dgw #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+
+  rectangle "**Service** agentry-controller (ClusterIP)\n**:9443** activator | **:8080** metrics" as svcctrl #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+
+  rectangle "**Service** agentry-gateway (ClusterIP)\n**:8080** user listener | **:8443** LLM and\ninternal mTLS listener | **:9090** metrics" as svcgw #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+
+  rectangle "**ServiceAccounts + namespaced Roles**\nagentry-controller, agentry-gateway\n(the namespace-limited half of each pair)\nplus agentry-secrets-admin" as sas #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+
+  rectangle "**Lease**\ncontroller leader election\n//not templated: controller-runtime//\n//creates it at runtime//" as lease #back:F5F5F5;line:9E9E9E;line.dashed;text:3a1f00
+
+  rectangle "**Certificate** agentry-gateway-tls\n**Certificate** agentry-controller-tls" as leafcerts #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+
+' ---------- cert-manager namespace ----------
+rectangle "namespace: **cert-manager**\n//(certManager.clusterResourceNamespace)//" as nscm #line:7a3f00;line.dashed;text:3a1f00 {
+  rectangle "**Certificate** agentry-ca\nand the **Secret** agentry-ca it writes" as cacert #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**Bundle** agentry-ca (trust-manager)" as bundle #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+
+' ---------- user namespace ----------
+rectangle "every non-system **user namespace**" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "**ConfigMap** agentry-ca\nprojected by the Bundle, including into\nnamespaces created after install" as cacm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+
+' ---------- layout ----------
+crds -[hidden]down- issuers
+issuers -[hidden]down- clusterroles
+clusterroles -[hidden]down- sample
+dctrl -[hidden]right- dgw
+svcctrl -[hidden]right- svcgw
+dctrl -[hidden]down- svcctrl
+svcctrl -[hidden]down- sas
+sas -[hidden]right- lease
+lease -[hidden]right- leafcerts
+cacert -[hidden]right- bundle
+pcm -[hidden]right- ptm
+ptm -[hidden]right- pcni
+
+' There are no real edges in an inventory, so without these the five frames
+' fan out side by side. Chain them through child nodes to stack them.
+' Chain through the LEFTMOST child of each frame, or the frames cascade diagonally
+' rightwards and the figure doubles in width.
+pcm -[hidden]down- crds
+sample -[hidden]down- dctrl
+sas -[hidden]down- cacert
+cacert -[hidden]down- cacm
+
+legend bottom
+  **This is an inventory: what the chart installs and where it lands.** For how the CA, the issuers, the Bundle and
+  the leaf certs actually chain together, see the trust chain figure; that page owns it. The per-Agent and
+  per-AgentTask Certificates are absent here on purpose: reconcilers create them at provisioning time, not the chart.
+  ====
+  **The chart never installs the three prerequisites above,** so teams with an existing cert-manager reuse it. It ships
+  only the ClusterIssuer, Certificate and Bundle resources Agentry needs. Admission webhooks are not used: the
+  cert-manager dependency is solely for TLS lifecycle management.
+  ====
+  **Both Deployments have a hard floor of 2 replicas,** enforced by a Helm fail template guard that aborts rendering
+  below it. The floor is operational, not correctness-driven: the control plane's second replica keeps the activator
+  reachable across drains (the activator handler runs on every replica), and the gateway's gives rolling updates
+  headroom. Anti-affinity is specified for the controller only.
+endlegend
+@enduml

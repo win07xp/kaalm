@@ -22,7 +22,11 @@ In plain language:
 - **AgentTask** is the developer-facing, Job-like resource for a goal-driven agent that runs once, reports a defined completion condition, hands back artifacts, and goes away.
 - **AgentChannel** connects a running Agent to a user-facing communication channel, so people outside the cluster can message it.
 
-Full spec details for each CRD are in [Resource Overview](../resources/overview.md).
+The five resources form one reference graph, split along the scope boundary in the table above: the cluster-scoped policy resources the platform team owns, and the namespaced workload resources developers point at them.
+
+![Reference graph of the five Agentry CRDs. Cluster scope holds AgentClass and ModelProvider; namespace scope holds Agent, AgentTask, and AgentChannel. Agent and AgentTask each name an AgentClass through spec.agentClassRef and a ModelProvider through spec.providers[].providerRef, while AgentClass independently names ModelProviders through spec.allowedProviders, so two separate edges converge on the same ModelProvider. AgentChannel names an Agent through spec.agentRef, never an AgentTask. ModelProvider points at itself through spec.fallback and at a Secret in agentry-system through spec.credentialsRef.](../diagrams/crd-reference-graph.svg)
+
+Reading the diagram: the two red edges into ModelProvider are the shape that matters. They are **separate gates, not one list**. An Agent may only call a provider when its AgentClass lists that provider in `allowedProviders` (the platform team's decision) **and** the Agent itself names it in `providers[].providerRef` (the developer's decision) **and** the ModelProvider admits the Agent's namespace in `allowedNamespaces`. The grey self-edge is the other one: `spec.fallback` points at ModelProviders, so a provider chain is a tree that the gateway walks depth-first, and validation must reject cycles in it. Both facts are properties of the graph, so the per-resource specs cannot show them.
 
 ## The Two Gateways
 

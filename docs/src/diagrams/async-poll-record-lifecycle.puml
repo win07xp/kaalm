@@ -1,0 +1,61 @@
+@startuml async-poll-record-lifecycle
+' Lifecycle of the agentry-async-{requestId} ConfigMap, as seen by a poller.
+' Source of truth: docs/src/gateways/api/async-responses.md
+!include _style.puml
+skinparam wrapWidth 400
+
+state "Absent" as Absent $mutedBg
+state "Placeholder" as Placeholder
+state "Patched" as Patched
+state "Expired" as Expired $mutedBg
+
+Absent : GET returns **404**
+Placeholder : GET returns **202**\n+ backoff-aware Retry-After\n(2s, 4s, 8s, 16s, 30s, capped)
+Patched : GET returns **200**\nwith the callback payload
+Expired : GET returns **404**
+
+[*] --> Absent
+
+Absent --> Placeholder : placeholder **Create**, synchronously\nbefore the inbound 202 is returned\n(Create fails: caller sees 503, no requestId)
+
+Placeholder --> Patched : payload **Patch**\n(agent response, or an error envelope)
+
+Placeholder -[#B71C1C]-> Expired : **silent loss**\nnow - creationTimestamp > 1h
+Patched --> Expired : now - creationTimestamp > 1h
+
+Expired -up-> Absent : reconciler prune\n(expires-at annotation, live channels only)
+
+note bottom of Absent
+  **Channel deletion is the other way back to Absent,**
+  and it is not expiry-gated: the AgentChannel finalizer
+  sweeps every agentry-async-* record for that channel by
+  label selector, whatever state it is in. A Placeholder or
+  Patched record still inside its 1h TTL goes too.
+end note
+
+note right of Expired
+  **Read-side, not the pruner.** The 404 is
+  computed on every poll from the placeholder's
+  creationTimestamp. The ConfigMap may still sit
+  in etcd; pruning is storage cleanup only, and
+  never what a poller observes.
+end note
+
+note left of Absent
+  TTL clock starts at the placeholder
+  **Create** (202-acceptance) and is
+  **not** reset by the Patch, so the
+  window is 1h regardless of how long
+  the agent takes to reply.
+end note
+
+legend bottom
+  **The red edge is the silent-loss edge (v1).** A record that never gets its Patch
+  simply ages out. Both documented v1 limitations reach Expired along this **same** edge:
+  **Replica Failure** (the replica holding the in-memory delivery pipeline dies after the
+  202) and **Response-Patch Failure** (all 4 Patch attempts fail, raising
+  agentry_channel_async_patch_failed_total). Either way **no envelope is ever stored**:
+  pollers see 202 until the TTL flips them to 404, which is why callers should treat an
+  unanswered poll past 5 to 10 minutes as failed and resubmit for a fresh requestId.
+endlegend
+@enduml

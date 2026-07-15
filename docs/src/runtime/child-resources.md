@@ -8,6 +8,10 @@ The two workload kinds get different sets, and the difference follows from their
 
 For each Agent, the controller provisions the resources below. **The Pod is the only state-coupled resource:** it is created on the transition into `Running` and deleted on the transition into `Hibernated`. Every other resource is provisioned on first reconcile and persists across hibernation. Retention details follow the list.
 
+![An Agent with six children hanging off it by ownerRef: Pod, Service, ServiceAccount, NetworkPolicy, PVC, and Certificate. Two edges break that pattern. The Certificate points on to a Secret owned by cert-manager rather than by the reconciler, and a pre-existing existingClaim PVC hangs off a grey dashed reference edge carrying no ownership at all.](../diagrams/child-resource-ownership-agent.svg)
+
+Reading the diagram: the edge style is the whole point, because the ownerRef is what cascade GC follows. Purple edges are ownerRefs, so those children disappear with the Agent and need no cleanup code. The two non-purple edges are the resources the garbage collector will not handle for you, and each is explained below.
+
 - **One Pod** containing the user's agent container, present only while the Agent is `Running`. The Pod runs under the [RuntimeClass](../security/model.md#runtimeclass) specified by its AgentClass, if one is set (e.g. gVisor or Kata); when unset it runs under the cluster's default container runtime.
 - **One PVC** if the [Agent spec requests persistence](../resources/agent.md#spec), mounted into the agent container at a configured path. It is provisioned by the controller, or is a pre-existing claim referenced via `persistence.existingClaim` (no provisioning, no ownerRef; see [Agent](../resources/agent.md)).
 - **One Service** (ClusterIP) if [`spec.service.enabled`](../resources/agent.md#spec) (default `true`), exposing the agent's HTTPS endpoint for intra-cluster traffic. The gateway uses this Service to deliver channel messages via [`POST /v1/message`](../gateways/api/agent-endpoints.md#post-v1message) over TLS; direct external exposure remains the developer's responsibility. Agents with the Service disabled are outbound-only: they have no inbound delivery path and cannot be referenced by an AgentChannel (validated by AgentChannelReconciler with `Ready=False, reason=AgentServiceDisabled`).
@@ -28,7 +32,10 @@ Three caveats bound the guarantee. This synthesis applies only to Agentry-manage
 
 ### Ownership and deletion
 
-All of the resources above live in the same namespace as the Agent CR and carry an ownerRef back to it. Full Agent deletion cascade-GCs them. The one exception is a PVC referenced via `persistence.existingClaim`: the controller does not own it, so it survives.
+All of the resources above live in the same namespace as the Agent CR, and the reconciler gives each one an ownerRef back to it. Full Agent deletion cascade-GCs them. Two of them sit outside that rule:
+
+- A PVC referenced via `persistence.existingClaim` is never given an ownerRef by the reconciler, so it survives Agent deletion. It is also untouched by [`pvcRetention`](../resources/agentclass.md), which governs Agentry-provisioned PVCs only.
+- The Secret cert-manager writes for the per-Agent `Certificate` is **owned by cert-manager, not by the reconciler** (see [AgentReconciler](../controller/reconcilers.md#agentreconciler)). It is still cleaned up on Agent deletion, but one hop later and by a different mechanism: cascade GC removes the owned `Certificate`, and cert-manager then removes the Secret it had issued.
 
 **There is no per-Agent configuration ConfigMap.** Non-sensitive config (gateway endpoint, ports) is delivered as env vars injected at Pod creation, and config changes are Pod-replacing spec drift by design. The same model applies to AgentTask.
 
@@ -47,6 +54,10 @@ There is no sidecar container. The **Agentry Gateway** in `agentry-system` handl
 ## AgentTask Child Resources
 
 For each AgentTask, the controller provisions a parallel set of resources tailored to its ephemeral, no-inbound nature. See [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) for the authoritative step list.
+
+![An AgentTask owning a Pod, PVC, ServiceAccount, NetworkPolicy, and a client-auth-only Certificate, plus a completion ConfigMap and a per-task Role and RoleBinding that exist only in agentReported mode. Every edge is an ownerRef. There is no Service, and as with an Agent the Certificate's output Secret belongs to cert-manager.](../diagrams/child-resource-ownership-task.svg)
+
+Compared with the Agent figure above, this one is uniform: every child carries an ownerRef, so cascade GC removes all of them and the task finalizer never has to sweep anything. The differences from an Agent are the absent Service, the client-auth-only Certificate, and the three resources that appear only in `agentReported` mode.
 
 - **One Pod** containing the user's task container, under the AgentClass [RuntimeClass](../security/model.md#runtimeclass).
 - **One PVC** if the task spec requests persistence.
@@ -67,4 +78,14 @@ Alongside these, the AgentTaskReconciler stamps `AgentTask.status.currentPodUID 
 
 ### What AgentTasks do not get
 
-There is no Service (tasks do not receive channel messages and have no stable endpoint) and no generic configuration ConfigMap (task config is delivered via env vars and Pod spec). All resources are owner-referenced to the AgentTask for cascade GC.
+There is no Service (tasks do not receive channel messages and have no stable endpoint) and no generic configuration ConfigMap (task config is delivered via env vars and Pod spec). Every resource the reconciler creates is owner-referenced to the AgentTask for cascade GC, including the `agentReported` trio; as with an Agent, the only object it does not own is the Secret cert-manager writes for the task `Certificate`.
+
+## The one link that cannot be an ownerRef
+
+Everything above is provisioned into the same namespace as its parent, which is what makes the ownerRef available in the first place. One Agentry-managed resource does not have that option, and it is worth contrasting here because it is the case where ownership stops doing the work for you.
+
+The gateway stores each async webhook response in an `agentry-async-{requestId}` ConfigMap in `agentry-system`, while the AgentChannel that response belongs to lives in a user namespace. An ownerReference cannot cross that boundary, so these ConfigMaps carry none.
+
+![An AgentChannel in a user namespace linked to an async response ConfigMap in agentry-system by a red dashed edge representing label matching rather than ownership. A cross-namespace ownerReference is invalid, so nothing garbage-collects these ConfigMaps and the channel finalizer has to sweep them by label selector.](../diagrams/child-resource-ownership-async.svg)
+
+The consequence is the reason ownership is worth tracking at all: because cascade GC cannot see these ConfigMaps, they need two explicit cleanup paths instead. The AgentChannelReconciler prunes expired entries by label selector on every pass, and the channel finalizer sweeps the whole label-matched set on deletion. Both are described in [async webhook response](../gateways/api/async-responses.md), with the deletion handshake in [Finalizers](../controller/finalizers.md#agentchannel).

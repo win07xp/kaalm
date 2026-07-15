@@ -28,7 +28,7 @@ This table is the canonical list. Rows whose behavior needs more than a sentence
 | Hibernating -> Hibernated | Pod scaled to 0, PVC retained, Service remains |
 | Hibernated -> Resuming | Gateway [Activator](../gateways/user/activation-and-activity.md#the-activator) calls `POST /v1/activate/{namespace}/{agentName}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
-| Running -> Provisioning | Spec drift (Agent or AgentClass) re-derives a Pod spec that differs in replacement-triggering fields. See [AgentClass change handling](change-propagation.md#agentclass-change-handling). |
+| Running/Idle -> Provisioning | Spec drift (Agent or AgentClass) re-derives a Pod spec that differs in replacement-triggering fields. Drift is detected in both `Running` and `Idle`, since an idle Agent still has a Pod to replace. See [Spec change handling](change-propagation.md#spec-change-handling). |
 | Running/Idle -> Provisioning | **Involuntary Pod disruption**: the Pod was deleted out-of-band, or is present but terminal without kubelet recovery. See [Involuntary Pod disruption](#involuntary-pod-disruption). |
 | any -> Degraded | **AgentClass-vs-Agent-spec mismatch**, present at initial provisioning or introduced by class or ModelProvider drift on an already-running Agent. See [Entering Degraded](#entering-degraded). |
 | Degraded -> {pre-degradation phase} | Underlying condition resolved. The controller restores the phase recorded in `status.preDegradedPhase`. See [Leaving Degraded](#leaving-degraded). |

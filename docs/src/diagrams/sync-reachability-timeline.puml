@@ -1,0 +1,43 @@
+@startuml sync-reachability-timeline
+' Why sync callers see sync_deadline_exceeded and never delivery_failed or wake_timeout.
+' Source of truth: docs/src/gateways/api/async-responses.md
+!include _style.puml
+scale 1 as 7 pixels
+hide time-axis
+
+concise "Sync caller" as SYNC
+concise "Agent delivery" as DEL
+concise "Wake" as WAKE
+
+@SYNC
+0 is "request in flight" #90EE90
+30 is "**t=30s: 504 sync_deadline_exceeded**\nFIRES. The only error sync sees." #FFCDD2
+78 is {hidden}
+
+@DEL
+0 is "delivery: 4 attempts, 1s+5s+25s backoff" #E6E6FA
+31 is "**t=31s to 71s: 502 delivery_failed**\nDEAD CODE on sync" #F5F5F5
+78 is {hidden}
+
+@WAKE
+0 is "wake: waiting for Pod Ready" #FFE4B5
+78 is "**t=120s: 504 wake_timeout**\nDEAD CODE on sync" #F5F5F5
+120 is {hidden}
+
+legend bottom
+  One shared axis, t=0 at inbound webhook acceptance. The wake lane is cut short to fit;
+  its 120s marker sits where the label starts. The polling TTL (1h) is ~30x past the right
+  edge and is deliberately **not** drawn to scale.
+  ====
+  **Red fires. Grey is dead code on the sync path.** `syncDeliveryDeadline` (30s) expires
+  before the delivery budget can finish even its fastest possible pass (31s), and
+  `wakeTimeout` (120s) is 4x the deadline. So a sync caller always gets
+  `504 sync_deadline_exceeded` first, and never observes the other two.
+  ----
+  The delivery budget is ~31s at best (every attempt fails fast on a connect error or an
+  immediate non-2xx) and ~71s at worst (31s of backoff plus 4 attempts each burning the full
+  10s `agentReadTimeout`). Raising `syncDeliveryDeadline` above the delivery budget is what
+  makes `delivery_failed` reachable. Async mode applies no deadline, so both grey outcomes
+  are reachable there as error payloads.
+endlegend
+@enduml

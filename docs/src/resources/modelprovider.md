@@ -4,6 +4,8 @@ ModelProvider is a cluster-scoped resource that defines a managed LLM provider. 
 
 Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, but only the namespaces listed in `spec.allowedNamespaces` may do so. The gateway enforces every limit defined here (model allowlist, budgets, rate limits, fallback) on each request it routes.
 
+`allowedNamespaces` is the one tenancy gate that every caller faces, in both adoption tiers. For where it sits relative to the class-level and workload-level gates, and which error each one returns, see [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating).
+
 ## Spec
 
 The annotated example below shows every spec field.
@@ -102,10 +104,11 @@ spec:
   # semantics for the failure-class mapping). The
   # gateway walks each fallback provider's own fallback chain, up to the
   # gateway-level maxFallbackDepth setting (default 3). Referenced providers
-  # must also allow the namespace. See Fallback Logic for the
-  # traversal algorithm.
+  # must also allow the namespace, and must carry the same spec.type as this
+  # provider: there is no cross-format fallback (see Fallback trees below).
+  # See Fallback Logic for the traversal algorithm.
   fallback:
-    - name: openai-fallback
+    - name: anthropic-backup
 
   # Health check configuration.
   healthCheck:
@@ -173,6 +176,10 @@ Globs support common patterns like `team-*`, using Go's [`path.Match`](https://p
 ### Fallback trees
 
 Fallback chains form a tree (each provider may have its own `spec.fallback` list) that the gateway walks **depth-first in declared order**. The gateway-level `maxFallbackDepth` cap (default 3) bounds the **total number of providers attempted per request, including the primary**, not the nesting depth of the tree. With the default, the gateway tries at most three providers before giving up, regardless of the tree's shape.
+
+![A fallback tree rooted at the primary provider anthropic-shared, whose two declared fallbacks are anthropic-backup and anthropic-overflow, and where anthropic-backup itself declares anthropic-eu and anthropic-apac. Depth-first declared order numbers the nodes: anthropic-shared is visit 1, anthropic-backup visit 2, anthropic-eu visit 3, anthropic-apac visit 4 and anthropic-overflow visit 5. With maxFallbackDepth 3 the first three visits consume the attempt slots and are drawn as attempted, while visits 4 and 5 are drawn greyed out and never attempted, including anthropic-overflow despite it sitting only one level below the primary.](../diagrams/fallback-tree.svg)
+
+**Reading the diagram.** Follow the visit numbers, not the levels. `anthropic-overflow` is a direct child of the primary, one level up from `anthropic-eu`, and it is still cut, because the depth-first walk reaches it fifth and the three attempt slots are already gone. That is what "bounds the providers attempted, not the nesting depth" means in practice. The two notes cover the asymmetry that catches people out: a budget-blocked *primary* ends the request at `429 budget_exhausted` before the tree is walked at all, while a budget-blocked *fallback* silently costs an attempt slot and still has its children visited.
 
 Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1: the gateway does not translate between API formats.
 

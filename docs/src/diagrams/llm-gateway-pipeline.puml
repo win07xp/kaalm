@@ -1,0 +1,41 @@
+@startuml llm-gateway-pipeline
+' The gateway process: the LLM Gateway listener pipeline, the two subsystems sharing the process, and provider egress.
+' Source of truth: docs/src/gateways/llm/overview.md
+!include _style.puml
+
+rectangle "**Agentry Gateway** (agentry-system)" as gwproc {
+
+  rectangle "**LLM Gateway Listener**" as llml {
+    rectangle "Request validator" as v #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Model allow-list check" as m #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Namespace access check" as n #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Budget check +\npolicy enforcement" as b #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Rate limiter" as r #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Upstream router\n(with fallback)" as u #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Provider adapter" as a #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Response relay" as rr #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Token counter\n(post-call)" as tc #back:90EE90;line:1B5E20;text:0b3d0b
+    rectangle "Spend state update" as ss #back:90EE90;line:1B5E20;text:0b3d0b
+
+    v  -[#1B5E20,bold]-> m
+    m  -[#1B5E20,bold]-> n
+    n  -[#1B5E20,bold]-> b
+    b  -[#1B5E20,bold]-> r
+    r  -[#1B5E20,bold]-> u
+    u  -[#1B5E20,bold]-> a
+    rr -[#1B5E20,bold]-> tc
+    tc -[#1B5E20,bold]-> ss
+  }
+
+  rectangle "**User Gateway Listener**\n(see User Gateway)" as ugl #back:F5F5F5;line:9E9E9E;text:2a0a4a
+  rectangle "**Activator / Activity Store**\n(see User Gateway)" as act #back:F5F5F5;line:9E9E9E;text:2a0a4a
+}
+
+rectangle "**LLM Provider APIs**\nAnthropic, OpenAI, Vertex, etc." as prov #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+
+a  -[#8B4513,bold]-> prov : egress
+prov -[#8B4513,bold]-> rr : response
+
+llml -[hidden]-> ugl
+ugl -[hidden]-> act
+@enduml

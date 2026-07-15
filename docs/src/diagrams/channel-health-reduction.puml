@@ -1,0 +1,58 @@
+@startuml channel-health-reduction
+' How the AgentChannelReconciler reduces per-replica health states into PlatformConnected.
+' Source of truth: docs/src/gateways/user/platform-adapters.md
+!include _style.puml
+
+start
+:AgentChannelReconciler fans out
+**GET /v1/channels/health** to every gateway Pod IP;
+:Skip unreachable replicas;
+:Collect, per reachable replica:
+**{ state, replicaStartedAt }**
+state in { success, failure, empty };
+
+if (**Rule 1**: any reachable replica reports **success**?) then (yes)
+  :**PlatformConnected = True**
+  reason = WebhookReady
+  + the **most recent** success's metadata;
+  stop
+else (no)
+endif
+
+if (**Rule 2**: any reachable replica reports **failure**?) then (yes)
+  :**PlatformConnected = False**
+  reason + lastError from the **most recent** failure:
+  WebhookAuthFailed | AgentNotReady | DispatchFailed
+  | CallbackInvalid | CallbackRejected;
+  stop
+else (no)
+endif
+
+if (**Rule 3**: at least one replica up for the **full window**\n(gateway.channelHealthWindow, default 5m)\n**AND** every reachable replica reports **empty**?) then (yes)
+  :**PlatformConnected = Unknown**
+  reason = NoRecentTraffic;
+  note right
+    **Both halves are required.**
+    A replica with now - replicaStartedAt < window
+    has not been alive long enough to observe a
+    full window. Its **empty** is not evidence that
+    the channel is silent, only that this replica
+    cannot prove silence.
+  end note
+  stop
+else (no)
+endif
+
+:**Rule 4**: **preserve the existing condition**
+(write nothing);
+note right #FFE4B5
+  A deliberate no-op, not a gap. Reached when no
+  replica has full-window coverage and no in-window
+  observation exists anywhere.
+  ....
+  **This is also the all-replicas-unreachable path.**
+  Writing a state here would flap the condition on
+  every coordinated gateway restart.
+end note
+stop
+@enduml

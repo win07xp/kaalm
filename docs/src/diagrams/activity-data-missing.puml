@@ -1,0 +1,63 @@
+@startuml activity-data-missing
+' Why absence of activity data is not evidence of inactivity: silence vs unknown vs unreachable.
+' Source of truth: docs/src/controller/hibernation-and-wake.md
+!include _style.puml
+
+start
+:activity fan-out returns
+(GET /v1/activity, one call
+per gateway Pod IP);<<$gwBg>>
+
+if (any replica reachable?) then (no)
+  :UNREACHABLE
+  preserve the current phase
+  set GatewayReachable=False
+  requeue with backoff;<<$mutedBg>>
+  stop
+else (yes: use the reachable ones)
+endif
+
+:per reachable replica, compare its\nreplicaStartedAt against the Agent's\nstatus.phaseTransitionTime;
+
+if (replicaStartedAt is the more recent?) then (yes)
+  :UNKNOWN
+  the replica restarted while the
+  Agent was Running, so its empty
+  store is not evidence of silence;<<$mutedBg>>
+else (no)
+  :SILENCE
+  the replica covered the whole
+  period and recorded no activity;<<$agentBg>>
+endif
+
+if (all replicas unknown?) then (yes)
+  :defer, no idle or\nhibernation transition;<<$mutedBg>>
+  stop
+else (no)
+endif
+
+if (has some replica been up\nfor at least idleTimeout?) then (no)
+  :defer, no idle or\nhibernation transition;<<$mutedBg>>
+  stop
+else (yes)
+endif
+
+:missing data may now be read\nas genuine inactivity;
+:merge: most recent timestamp\nper agent across replicas;
+:then filter on\nspec.lifecycle.activitySource\n(gatewayTraffic, agentHeartbeat, both);
+:evaluate Running -> Idle -> Hibernating;<<$ctrlBg>>
+stop
+
+note right
+  Merge across replicas first,
+  then filter.
+  ....
+  Operational consequence: after a
+  synchronized gateway rollout no
+  replica has been up for
+  idleTimeout, so every idle and
+  hibernation transition is
+  deferred for idleTimeout.
+end note
+
+@enduml

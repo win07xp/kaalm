@@ -1,0 +1,53 @@
+@startuml internal-endpoint-san
+' The three internal endpoints authorize by SAN, so sharing the trust anchor is necessary but not sufficient.
+' Source of truth: docs/src/security/rbac.md
+!include _style.puml
+
+skinparam wrapWidth 360
+skinparam nodesep 20
+skinparam ranksep 40
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "**agentry-ca-issuer** (ClusterIssuer)\nthe one trust anchor: every cert below\nchains to agentry-ca and rotates continuously.\nThere is no shared secret to rotate separately." as CA #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+
+rectangle "namespace: **agentry-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**Agentry Gateway**\nlistener **:8443**\nserves /v1/activity and /v1/channels/health\nClientAuth: **tls.VerifyClientCertIfGiven**\nholds agentry-gateway-tls\nusages: server auth, **client auth**" as GW #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+
+  rectangle "**Agentry Controller**\nlistener **:9443**\nserves /v1/activate, and kubelet's\n/healthz + /readyz probes\nClientAuth: **tls.VerifyClientCertIfGiven**\nholds agentry-controller-tls\nusages: server auth, **client auth**" as CTRL #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+}
+
+rectangle "a user namespace" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "**a compromised Agent**\nholds {name}-tls: a **perfectly valid**\n**agentry-ca-signed cert**, same CA,\nsame rotation, real private key" as AG #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+
+' ---------- the shared trust anchor ----------
+CA -[#9E9E9E,bold]-> GW : issues\nagentry-gateway-tls
+CA -[#9E9E9E,bold]-> CTRL : issues\nagentry-controller-tls
+CA -[#9E9E9E,bold]-> AG : issues {name}-tls\n**the same anchor**
+
+' ---------- the two authorized RPCs ----------
+GW -[#4A148C,bold]-> CTRL : **POST /v1/activate/{namespace}/{agentName}** on **:9443**\npresents agentry-gateway-tls; the controller verifies it\nagainst agentry-ca, then authorizes **only** if the SAN is\nagentry-gateway.agentry-system.svc.cluster.local or .svc\n**allowed**
+
+CTRL -[#4A148C,bold]-> GW : **GET /v1/activity** and **GET /v1/channels/health** on **:8443**\npresents agentry-controller-tls; the gateway verifies it\nagainst agentry-ca, then authorizes **only** if the SAN is\nagentry-controller.agentry-system.svc.cluster.local or .svc\n**allowed**
+
+' ---------- the blocked edge ----------
+AG -[#B71C1C,bold]-> CTRL : **POST /v1/activate** on **:9443**\nthe TLS handshake **succeeds**: the cert chains to agentry-ca\nbut the SAN is {name}.{namespace}.svc.cluster.local\n**403 Forbidden**, at the authorization layer,\nbefore the handler runs
+
+legend bottom
+  **Sharing the trust anchor is necessary but not sufficient. Authorization is by SAN, not by mere possession**
+  **of a cert signed by agentry-ca.** Per-Agent certs are signed by the very same CA and differ only in their SAN,
+  so the SAN check is the whole control: it rejects the compromised agent before any handler runs. The same
+  agent cert earns the same 403 on the gateway's /v1/activity and /v1/channels/health.
+  ====
+  **Why the listeners do not simply require a client cert.** Neither can. The controller's :9443 is shared with
+  kubelet's cert-less /healthz and /readyz probes, and the gateway's :8443 must let gateway-only-tier callers
+  complete a handshake and authenticate with a bearer token on adjacent paths. Both therefore run
+  **tls.VerifyClientCertIfGiven** and enforce mTLS-with-SAN in **per-path middleware**. The handshake check
+  alone is not sufficient, precisely because both listeners accept cert-less connections by design.
+  ====
+  **Two distinct rejections at the handler:** no client cert at all gives **401 Unauthorized**; a valid cert whose
+  SAN does not match gives **403 Forbidden**.
+endlegend
+@enduml

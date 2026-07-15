@@ -49,6 +49,10 @@ The gateway retries callback delivery up to 3 times with exponential backoff (1s
 
 The polling-record TTL is bounded at 1 hour from 202-acceptance, meaning the placeholder `Create` timestamp, not the time the payload is patched in. The remaining retrievable window after the patch is therefore `1h - (delivery time + agent processing + callback-retry budget)`. Error-payload storage shares the same TTL semantics (see [Error Payloads](#error-payloads)).
 
+![Flowchart of async callback delivery. A ready payload with no callbackUrl configured goes straight to the polling store. Otherwise the gateway re-resolves the callbackUrl host against the deny ranges and allowlist before dialing; a host that now fails is BYPASSED as callback_invalid with no retry and no fresh envelope, emitting a CallbackInvalid Warning while the underlying payload still reaches polling. A host that passes is signed per callbackAuth with a fresh timestamp on every attempt and POSTed to the pinned IP:port, and the attempt lands in one of three buckets: delivered on 2xx, TERMINAL on 401, 403, 404, 405, 410 or 415 with a CallbackRejected Warning and no retry, or RETRIED on connect errors, TLS failures, read timeouts, 408, 429, 422 and 5xx, which backs off 1s, 5s and 25s for 4 attempts total. Every non-delivered path converges on patching the payload into the per-request ConfigMap, which has its own 4-attempt budget and drops the payload silently if exhausted.](../../diagrams/async-callback-delivery.svg)
+
+Reading the diagram: the three buckets differ in *behavior*, not in destination. `RETRIED` and `TERMINAL` both end at the polling store and differ only in whether the retry budget is spent first. `BYPASSED` is the asymmetric one: it is the only arm where the error type that triggers it (`callback_invalid`) is never the error type that gets stored.
+
 ### The Bounded Retry Schedule
 
 Three gateway pipelines share one bounded-retry vocabulary:
@@ -77,6 +81,8 @@ The backoff schedules and the 10s read timeouts are Helm-tunable defaults, not c
 ### Sync-Mode Reachability
 
 In sync mode, `gateway.syncDeliveryDeadline` (Helm value, default 30s) bounds the total caller-facing wall-clock. The clock starts at inbound webhook acceptance and includes activator wake time, delivery retries, and agent processing. When elapsed time would exceed the deadline, the gateway short-circuits the in-progress request, even mid-retry, with `504` carrying `error.type: sync_deadline_exceeded` and `retryable: true`. The failure is timing-related, not structural. Async mode applies no such deadline: the full retry budget runs to completion, and callback and polling are receiver-driven, not bounded by the original caller's HTTP timeout.
+
+![Timing diagram on a single time axis starting at inbound webhook acceptance. The sync caller's request is in flight for the first 30 seconds, at which point syncDeliveryDeadline fires 504 sync_deadline_exceeded. The agent-delivery lane runs its four attempts with 1s, 5s and 25s backoff, and 502 delivery_failed can only land in a band from about 31 seconds (every attempt failing fast) to about 71 seconds (every attempt burning its full 10s agentReadTimeout). The wake lane waits for Pod Ready until 504 wake_timeout at 120 seconds. Everything after the 30-second mark is shaded as unreachable on the sync path under defaults, because even the earliest possible delivery_failed arrives after the caller has already received sync_deadline_exceeded.](../../diagrams/sync-reachability-timeline.svg)
 
 Under default configuration the deadline (30s) is tighter than both the delivery retry budget (~31s to ~71s wall-clock) and the default `wakeTimeout` (120s, which exceeds the deadline by 4x). So `502 delivery_failed` and `504 wake_timeout` are practically unreachable on the sync path under defaults; `504 sync_deadline_exceeded` fires first. A sync caller under defaults will never observe `wake_timeout` and instead sees `sync_deadline_exceeded` mid-wake. `502 delivery_failed` becomes reachable in sync mode only when `syncDeliveryDeadline` is raised above the delivery-retry budget.
 
@@ -144,7 +150,7 @@ The caller's wire-level experience is identical to a replica death: pollers obse
 
 ### Callback Failure Buckets
 
-A callback POST's outcome is classified into one of three buckets:
+A callback POST's outcome is classified into one of three buckets. The figure under [Callback Delivery and Retries](#callback-delivery-and-retries) shows where each bucket is decided and where each one lands:
 
 | Bucket | Triggers | Behavior |
 |---|---|---|
@@ -264,6 +270,10 @@ This prevents a caller authenticated for channel A from probing channel B's `req
 Any gateway replica accepts this request. The replica reads the `agentry-async-{requestId}` ConfigMap in `agentry-system`: the ConfigMap is created as an empty placeholder when the originating replica returns `202` to the inbound webhook (so the polling record is queryable as soon as the caller has the `requestId`) and is patched with the response payload (or an error envelope) when the agent reply is ready. See [Response Persistence](#response-persistence) for the storage mechanics, including why the payload lives under `data` rather than `binaryData`.
 
 The channel-match assertion above fires on every ConfigMap-present branch, not just the payload-present one, so cross-channel `requestId` existence is never wire-observable. A present ConfigMap whose channel labels do not match `channelPath` returns `404` regardless of whether the payload field has been patched in. With the assertion passing, `200` is returned when the payload field is present; `202` when it is not. An absent ConfigMap returns `404`.
+
+![State diagram of one agentry-async-{requestId} polling record. From Absent, the placeholder Create at 202-acceptance moves it to Placeholder, where polls return 202 with a backoff-aware Retry-After. The payload Patch moves it to Patched, where polls return 200. Either state ages into Expired once now minus creationTimestamp exceeds one hour, which polls report as 404; this is enforced read-side on every poll, not by the reconciler's pruner. The reconciler prune or the finalizer sweep then returns the record to Absent. A red edge runs straight from Placeholder to Expired: the silent-loss path taken when the payload Patch never lands, whether because the accepting replica died or because all four Patch attempts failed.](../../diagrams/async-poll-record-lifecycle.svg)
+
+Reading the diagram: the two v1 silent-loss limitations ([Replica Failure](#replica-failure-v1-limitation) and [Response-Patch Failure](#response-patch-failure-v1-limitation)) are not separate transitions. They are the *same* red edge, reached whenever the `Patch` never lands, and they are indistinguishable on the wire.
 
 ### Polling Cadence
 

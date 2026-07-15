@@ -61,6 +61,10 @@ All three layers must pass. Gateway-only-tier callers have no Agent, AgentTask, 
 
 Separately, the requested model must exist in `ModelProvider.spec.models`. That check is a model-resolution prerequisite enforced at the gateway, not a tenancy boundary, and it applies to callers in both tiers: see [The Agentry Gateway](../gateways/overview.md).
 
+![The gate chain the LLM gateway applies to a request carrying a qualified model name: identify the caller's namespace from an mTLS certificate SAN (full lifecycle tier) or a TokenReview-verified bearer token (gateway-only tier), then Gate A checks the providerRef against the workload's spec.providers and the AgentClass allowedProviders, Gate B checks the calling namespace against ModelProvider allowedNamespaces, and Gate C resolves the modelId against ModelProvider models. Gate A sits in a lane of its own that gateway-only callers bypass entirely. Budget and rate-limit checks follow, and every denial arm is labelled with its status code and error type.](../diagrams/provider-access-gates.svg)
+
+**Reading the diagram.** The right-hand lane holds exactly one box. That is the point: Gate A is the only check that needs an Agent and an AgentClass to read, so it is the only one a gateway-only caller skips, and the `gateway-only` arrow routes around the lane rather than through it. Gates B and C, the budget check, and the rate limiter are identical for both tiers, which is why they all sit in the shared lane. Note the two different denial codes: Gates A and B are tenancy decisions and return `403 access_denied`, while Gate C is model resolution and returns `400 invalid_request`.
+
 See [AgentClass](../resources/agentclass.md) and [Cross-Resource Validation](../resources/validation-and-defaulting.md#cross-resource-validation) (rules 4-5).
 
 ### Per-namespace throughput and spend isolation

@@ -1,0 +1,82 @@
+@startuml user-webhook-flow
+' A webhook call through the User Gateway: size check, auth, normalize, lookup, activate, deliver, respond.
+' Source of truth: docs/src/gateways/user/overview.md
+!include _style.puml
+
+actor "Webhook\ncaller" as caller
+participant "User Gateway\n:8080" as gw #90EE90
+participant "apiserver" as api #FFD580
+participant "Controller\nactivator :9443" as ctrl #87CEEB
+participant "Agent Service\n/v1/message" as agent
+participant "callbackUrl\nreceiver" as cb #FFE4B5
+
+caller -> gw : **1.** POST /channels/{ns}/{path}
+
+group #F5F5F5 2. Payload size check (listener level, raw frame)
+  alt body > maxMessageBodyBytes (1 MiB)
+    gw --> caller : **413**
+  end
+end
+note over gw
+  Runs **before path resolution** and before
+  the path-not-registered **401**. So 413 fires
+  uniformly for any oversized POST to :8080,
+  registered path or not, and the 413-vs-401
+  distinction never leaks which paths exist.
+end note
+
+group #F5F5F5 2a. Authenticate (per-AgentChannel bearer or HMAC)
+  alt auth fails
+    gw --> caller : **401**
+  end
+end
+
+group #F5F5F5 3. Normalize to the Agentry envelope
+  alt fromBody configured and body is not JSON
+    gw --> caller : **400** invalid_request
+  end
+end
+
+group #F5F5F5 4. AgentChannel lookup
+  note over gw : Routes only to channels with\nReady=True. sessionId = UUIDv5\nwhen session.enabled.
+end
+
+alt #FFF8DC responseMode: async
+  gw -> api : Create placeholder ConfigMap\nagentry-async-{requestId}
+  alt Create fails
+    api --> gw : error
+    gw --> caller : **503** (no 202 without a\nqueryable polling record)
+  else created
+    gw --> caller : **5a. 202 Accepted**\n{requestId, channelPath}
+  end
+  note over caller, gw #FFE4B5
+    **The caller is now gone.**
+    Steps 5 to 7 below still execute,
+    with nobody waiting on them.
+  end note
+end
+
+group #F5F5F5 5. Activator check
+  opt Agent is Hibernated
+    gw -> ctrl : POST /v1/activate/{ns}/{name} (mTLS)
+    ctrl -> api : patch agentry.io/wake=true
+    gw -> agent : poll readiness, bounded by wakeTimeout (120s)
+    note over gw, agent : Full wake sequence: see "The Activator".
+  end
+end
+
+group #F5F5F5 6. Delivery (+ 6a. retry 3x, 1s / 5s / 25s)
+  gw -> agent : POST /v1/message (bidirectional mTLS)
+  agent --> gw : response envelope
+end
+
+alt #FFF8DC sync mode (default)
+  gw --> caller : **7. 200** inline, bounded by\nsyncDeliveryDeadline (30s)
+else async mode
+  alt callbackUrl configured
+    gw -> cb : **8.** POST signed reply (with retries)
+  else no callbackUrl, or callback retries exhausted
+    gw -> api : **8.** Patch ConfigMap with payload;\nserved at GET /v1/channels/responses/{requestId}
+  end
+end
+@enduml

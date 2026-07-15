@@ -1,0 +1,103 @@
+@startuml workload-auth-modes
+' How the gateway derives a trustworthy namespace: the mTLS path, the bearer path, and the shared cross-check.
+' Source of truth: docs/src/gateways/llm/workload-identity.md
+!include _style.puml
+
+start
+:LLM proxy request arrives on **:8443**;
+
+if (Client certificate presented?) then (**yes: Mode 1, mTLS**)
+
+  :Verified against **agentry-ca** at the handshake\n(a cert failing CA verification is rejected at the\nhandshake itself: no HTTP response, no error body);
+
+  :Scan the DNS SAN **list** for a recognized suffix:\n**.svc.cluster.local** or **.task.agentry.io**\n(short-form Service SANs match neither: ignored);
+
+  if (Exactly **one** recognized SAN, with **exactly**\nthe expected label count? **5** for .svc.cluster.local,\n**4** for .task.agentry.io) then (no)
+    :**403 invalid_cert**;
+    note left
+      Defense in depth against a
+      dotted-name bypass: if rule 21
+      were relaxed, name "admin.svc"
+      in namespace "team-a" gives a
+      6-label SAN, rejected **before**
+      the namespace extractor runs.
+    end note
+    stop
+  else (yes)
+  endif
+
+  :**namespace = SAN label at index 1**\n(the second label; identical for both shapes,\nwhich differ only in workload type);
+
+else (**no: Mode 2, bearer**)
+
+  :**Step 0: Pod-ownership precheck**\n**Runs FIRST. Never cached.**\nResolve the source IP to a Pod (informer cache);
+  note right #FFE4B5
+    **The ordering is the**
+    **security property.**
+    It precedes TokenReview, so
+    a hostile Pod cannot exploit
+    TokenReview latency or outage.
+    Uncached because Pod identity
+    at a source IP changes, so a
+    token-cache hit cannot skip it.
+  end note
+
+  if (Pod ownerRef -> **Agent** / **AgentTask**, or carries\nthe Agentry-managed label set?) then (yes)
+    :**401 unauthorized**\nregardless of the token presented;
+    note right
+      **This blocks the auth**
+      **downgrade.** Agentry-managed
+      Pods MUST use mTLS, so a
+      compromised Agent Pod cannot
+      fall back to its SA token as
+      a second credential.
+    end note
+    stop
+  else (no)
+  endif
+
+  if (Token cache hit? (SHA-256 of the token)) then (no)
+    :POST **TokenReview**, audience **agentry-gateway**;
+
+    if (apiserver reachable?) then (no)
+      :**503 internal_unavailable**\nretryable: true, **Retry-After: 1**\n(mTLS and cached-token callers unaffected);
+      stop
+    else (yes)
+    endif
+
+    if (status.authenticated?) then (no)
+      :**401 unauthorized**;
+      stop
+    else (yes)
+    endif
+
+    :**namespace = middle segment of**\n**status.user.username**\nsystem:serviceaccount:**<namespace>**:<sa>;
+    :**Cache the result.** TTL from the token's own\n**exp** claim, minus a 60s margin, capped at\n5 min (not a JWT: fixed 5 min);
+  else (yes)
+    :namespace from cache;
+  endif
+endif
+
+:**Source-IP-to-Pod cross-check (both modes)**\nThe Pod at the source IP must be in the\nnamespace authentication just established;
+note right
+  Runs **after** authentication,
+  never instead of it. Crypto and
+  topological attestation must
+  agree, catching a stolen cert or
+  token replayed from another Pod.
+end note
+
+if (namespace matches?) then (no)
+  :**401 unauthorized**;
+  stop
+else (yes)
+endif
+
+:Proceed to provider routing;
+stop
+
+legend bottom
+  **Neither** a client cert nor an Authorization header: **401**.
+  **Both**: the mTLS path wins and the bearer token is ignored.
+endlegend
+@enduml

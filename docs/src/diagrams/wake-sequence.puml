@@ -1,0 +1,73 @@
+@startuml wake-sequence
+' Waking a hibernated Agent: lazy connect-fail detection, the activator call, and the watch-driven reconcile.
+' Source of truth: docs/src/gateways/user/activation-and-activity.md
+!include _style.puml
+
+actor "Webhook\ncaller" as caller
+participant "User\nGateway" as gw #90EE90
+participant "Agent\nService" as agent
+participant "Controller\nactivator :9443\n**ANY replica**" as ctrl #87CEEB
+participant "apiserver" as api #FFD580
+participant "Controller **LEADER**\nAgentReconciler" as leader #87CEEB
+
+caller -> gw : channel message for a\nHibernated Agent
+gw ->x agent : dial POST /v1/message
+note over gw, agent
+  **Connect failure is the whole detection mechanism.**
+  TCP RST (iptables kube-proxy), or a connect timeout
+  within agentDeliveryConnectTimeout (1s) on paths that
+  drop to empty-endpoint ClusterIPs (IPVS, Cilium, eBPF).
+  There is no Endpoint or EndpointSlice watch.
+end note
+
+alt #FFF8DC controller reachable
+  gw -> ctrl : POST /v1/activate/{ns}/{name} (mTLS)
+  ctrl -> api : patch agentry.io/wake=true
+  ctrl --> gw : **202 Accepted**
+
+  note over gw, ctrl #FFE4B5
+    **The 202 precedes the wake.**
+    It confirms the annotation was written,
+    not that the Agent is coming up.
+  end note
+
+  api -> leader : Agent watch fires (**leader only**)
+  leader -> leader : step 9:\nHibernated\n-> Resuming
+  leader -> api : recreate Pod
+
+  note over ctrl, leader #FFE4B5
+    **The replica that took the call is not**
+    **the one that does the work.**
+    The apiserver is the message bus, which is
+    why the handler need not run on the leader.
+  end note
+
+  loop until Ready, bounded by wakeTimeout (120s)
+    gw -> agent : poll readiness
+  end
+  note over gw, agent
+    The gateway **polls the Agent Service** for readiness.
+    It does not learn it from the activator response.
+  end note
+
+  alt Pod Ready within wakeTimeout
+    gw -> agent : POST /v1/message (deliver)
+    agent --> gw : response envelope
+    gw --> caller : reply (sync inline, or async\nvia callbackUrl / polling)
+  else wakeTimeout (120s) exceeded
+    gw --> caller : **wake_timeout**\nsync: 504 | async: error payload to\ncallbackUrl or the polling endpoint
+  end
+
+else controller unreachable
+  note over gw, ctrl
+    Connection refused, TLS handshake failure, client-cert
+    SAN rejection, or 5xx after one internal retry.
+  end note
+  gw --> caller : **controller_unavailable**\nsync: 504 + **Retry-After: 5**\nasync: error payload
+  note over gw, ctrl
+    The wake was never attempted and the Agent stays
+    **Hibernated**. Retry is expected to succeed once
+    the controller recovers, hence retryable: true.
+  end note
+end
+@enduml

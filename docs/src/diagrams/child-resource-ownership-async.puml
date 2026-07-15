@@ -1,0 +1,38 @@
+@startuml child-resource-ownership-async
+' The one link that cannot be an ownerRef: async response ConfigMaps live in another namespace.
+' Source of truth: docs/src/runtime/child-resources.md
+!include _style.puml
+
+skinparam nodesep 18
+skinparam ranksep 40
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "namespace: **team-support**" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "**AgentChannel**\nsupport-slack\nfinalizer: agentry.io/channel-finalizer" as chan #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+
+rectangle "namespace: **agentry-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**ConfigMap** agentry-async-{requestId}\nlabels:\n  agentry.io/channel-namespace: team-support\n  agentry.io/channel-name: support-slack\nannotation: agentry.io/expires-at (1h)" as cm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+
+chan -[#B71C1C,dashed]-> cm : **linked by labels, not ownerRef**\nswept explicitly by the\nchannel finalizer
+
+note right of cm
+  **Why no ownerRef.** A cross-namespace ownerReference
+  is invalid. The GC resolves the owner in the //dependent's//
+  namespace, finds nothing, and deletes the ConfigMap
+  **immediately**, emitting OwnerRefInvalidNamespace.
+
+  So nothing collects these. Cleanup is two explicit paths:
+  the reconciler prunes expired entries by label selector on
+  every pass, and the channel finalizer sweeps the whole
+  label-matched set after the gateway confirms disconnect.
+end note
+
+legend bottom
+  **Red dashed** = label linkage with no owner: invisible to cascade GC,
+  and therefore the only child that needs an explicit finalizer sweep.
+endlegend
+@enduml

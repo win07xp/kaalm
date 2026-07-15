@@ -1,0 +1,60 @@
+@startuml agent-finalizer-pvc
+' Agent deletion: pvcRetention is implemented by editing the ownership graph before releasing the object.
+' Source of truth: docs/src/controller/finalizers.md
+!include _style.puml
+
+start
+:delete Agent requested;<<$extBg>>
+:apiserver sets deletionTimestamp.
+agentry.io/agent-finalizer blocks the
+delete; the object stays readable;
+
+if (does a Pod exist?) then (yes)
+  :send SIGTERM, wait up to\nterminationGracePeriodSeconds;
+else (no)
+  :nothing to terminate: Hibernated,
+  Pending before Pod creation, or
+  Failed before the first Pod started;<<$mutedBg>>
+endif
+
+if (was the PVC provisioned\nby Agentry?) then (no)
+  :spec.persistence.existingClaim was
+  never given an ownerRef, so it is
+  untouched under either setting;<<$mutedBg>>
+  :remove the finalizer;
+  :apiserver deletes the Agent;
+  stop
+else (yes: it carries an ownerRef to the Agent)
+endif
+
+if (AgentClass.spec.persistence.pvcRetention?) then (Retain)
+  :Patch the PVC to STRIP its ownerRef;<<$storeBg>>
+  :remove the finalizer;
+  :apiserver deletes the Agent;
+  :cascade GC finds no owner:\nthe PVC survives;<<$storeBg>>
+  stop
+else (Delete, the default)
+  :leave the ownerRef intact;
+  :remove the finalizer;
+  :apiserver deletes the Agent;
+  :cascade GC removes the PVC\nalongside the Agent;<<$mutedBg>>
+  stop
+endif
+
+note right
+  Ordering hazard: the ownerRef edit
+  must land BEFORE the finalizer is
+  removed. Once the finalizer entry
+  is gone the object can vanish at
+  any moment, taking the PVC with it.
+  ....
+  pvcRetention governs the PVC's fate
+  when the Agent is deleted. It is
+  distinct from, and independent of,
+  PersistentVolume
+  .persistentVolumeReclaimPolicy,
+  which governs the PV's fate when
+  the PVC is deleted.
+end note
+
+@enduml

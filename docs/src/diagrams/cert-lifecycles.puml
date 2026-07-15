@@ -1,0 +1,104 @@
+@startuml cert-lifecycles
+' The Agent serving cert and the AgentTask client cert share one 6-step lifecycle; the deltas are the subject.
+' Source of truth: docs/src/security/tls.md
+!include _style.puml
+
+' Manual line breaks below are deliberate; keep both limits above the longest
+' hand-broken line so PlantUML does not re-wrap them into ragged text.
+skinparam wrapWidth 420
+skinparam maxMessageSize 340
+
+participant "**AgentReconciler**\n**AgentTaskReconciler**" as R #87CEEB
+participant "cert-manager\n(agentry-ca-issuer)" as CM #F5F5F5
+participant "**Agent** Pod" as AP #E6E6FA
+participant "**AgentTask** Pod" as TP #E6E6FA
+participant "**Gateway**" as GW #90EE90
+
+note over R, GW #FFF8DC
+  Both certs run the same six steps: same issuer, same mount
+  path, same rotation mechanism, same ownerRef-driven teardown.
+  Four things differ, and every one of them follows from a
+  single fact: **an Agent has a Service and is a delivery target;**
+  **an AgentTask has neither.**
+end note
+
+== 1. Created ==
+
+note over R, CM #FFF8DC
+  Both reconcilers create a Certificate named {workload}-tls in the
+  workload's **own** namespace, owner-referenced to the workload, with
+  issuerRef: { name: agentry-ca-issuer, kind: ClusterIssuer }.
+  Only the SAN shape and the usages differ:
+end note
+R -> CM : **{name}-tls** (per Agent)\nSAN: {name}.{namespace}.svc.cluster.local,\n.svc, {name}.{namespace}\nusages: **server auth + client auth**\n(one cert, both directions)
+R -> CM : **{taskName}-tls** (per AgentTask)\nSAN: **{taskName}.{namespace}.task.agentry.io**\na single entry, non-Service shape,\nbecause tasks have no Service\nusages: **client auth only**
+
+== 2. Stored ==
+
+CM -> CM : issue, then write the output Secret\n(name = Certificate.spec.secretName) into\nthe workload's own namespace, e.g.\nteam-support/support-assistant-tls
+
+== Ready-gate: no Pod until the Certificate is Ready ==
+
+loop until Certificate.status.conditions[type=Ready] is True
+  R -> CM : read the Ready condition
+  R -> R : **requeue**, do not create the Pod
+end
+note over R, CM #FFF8DC
+  Identical on both paths. Gating Pod creation on issuance is
+  what stops a Pod hanging on a missing projected Secret.
+end note
+R -> AP : create the Agent Pod
+R -> TP : create the AgentTask Pod
+
+== 3. Mounted ==
+
+CM -> AP : /var/run/agentry/tls.crt + tls.key
+CM -> TP : /var/run/agentry/tls.crt + tls.key
+note over AP #E6E6FA
+  **Has a listener.** Serves HTTPS
+  with this cert, and presents the
+  same cert as a client cert on
+  agent to gateway calls.
+end note
+note over TP #E6E6FA
+  **No listener.** Presents the cert on
+  every call to $AGENTRY_GATEWAY_ENDPOINT
+  and never serves TLS with it.
+end note
+
+== 4. Verified ==
+
+AP -> GW : LLM request and heartbeat,\npresenting {name}-tls
+GW -> AP : **POST /v1/message** delivery,\nbidirectional mTLS. **Only the Agent**\n**has this inbound edge.**
+TP -> GW : LLM request and task completion,\npresenting {taskName}-tls
+TP -[#B71C1C]->x GW : POST /v1/agent/heartbeat: **403**.\nTasks do not send heartbeats.
+note over TP, GW #90EE90
+  On every inbound mTLS call the gateway
+  verifies the presented leaf against
+  agentry-ca and reads the namespace off
+  the SAN. Both cert shapes carry it.
+end note
+
+== 5. Rotated ==
+
+loop continuously, within spec.renewBefore (chart default 2160h / 720h, 90d / 30d)
+  CM -> AP : Secret re-issued, kubelet\nupdates the projected volume
+  AP -> AP : reload via cert-file watch
+  CM -> TP : Secret re-issued, kubelet\nupdates the projected volume
+  TP -> TP : HTTP client reloads via\ncert-file watch
+end
+
+== 6. Deleted ==
+
+R -> CM : Agent deleted, or AgentTask cleaned up:\nthe ownerRef cascade-deletes the Certificate
+CM -> CM : cert-manager removes the\noutput Secret in both cases
+
+legend bottom
+  **Agent:** Service DNS SANs | server auth + client auth | has a listener | inbound /v1/message edge | heartbeats
+  ====
+  **AgentTask:** one task.agentry.io SAN | client auth only | no listener, no Service | no inbound edge | heartbeat 403
+  ====
+  Step 5 rotates the leaf only. Both workloads must also watch $AGENTRY_CA_CERT and rebuild both trust
+  pools when the CA bundle itself changes: see CA Renewal and Re-Key.
+endlegend
+@enduml

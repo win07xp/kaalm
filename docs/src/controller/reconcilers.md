@@ -128,6 +128,10 @@ This is the most complex reconciler. It implements the persistent [Agent State M
 
 Owner references are set on all child resources pointing back to the Agent, so cascade deletion works naturally.
 
+![Activity diagram of one AgentReconciler pass. Step 1 exits to Ready=False, reason=SystemNamespaceForbidden for an Agent in agentry-system, and to a second Ready=False if the agentClassRef does not resolve. Step 2 exits to phase=Degraded, reason=ClassConstraintViolation when a providerRef is unresolvable, excluded from allowedProviders, or blocked by the provider's allowedNamespaces. Step 4 loops back on itself, requeueing with backoff without creating the Pod until the cert-manager Certificate reports Ready=True. Step 5 exits to Ready=False, reason=ImagePullSecretMissing when a pull Secret is absent from the Agent's namespace, and to phase=Degraded with one of PersistenceNotAllowed, HibernationNotAllowed, or HibernationRequiresPersistence when the persistence and hibernation cross-checks fail. Only after all five gates pass do steps 6 and 7 converge the child resources and create the Pod, followed by the conditional activity fan-out in step 8, the wake-annotation check in step 9, and the status write in step 10.](../diagrams/agent-reconcile-pass.svg)
+
+Reading the diagram: the numbered list above is flat, but the pass is not. Five exits can end it before a Pod ever exists, spread over three of the ten steps (1 twice, 2, and 5 twice), and step 4 is a loop rather than a step: Pod creation is gated on certificate readiness, so the reconciler requeues rather than proceeding. The two exit shapes are distinct. `Ready=False` (grey) leaves `status.phase` alone and reports a condition; `phase=Degraded` (blue) is a phase transition that records `preDegradedPhase` so the prior phase can be restored on recovery.
+
 ### Agent Certificate
 
 The Certificate is named `{agentName}-tls` in the Agent's namespace, owned by the Agent via `ownerReferences` so it is garbage-collected on Agent deletion. Key fields:

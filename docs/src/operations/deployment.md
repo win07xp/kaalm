@@ -12,6 +12,10 @@ Agentry has three hard prerequisites, none of which the chart installs for you:
 
 The chart targets the `agentry-system` namespace. Install with `--namespace agentry-system --create-namespace`.
 
+![A deployment inventory of the Helm chart, organised by where each object lands. A red frame at the top holds the three hard prerequisites the chart does not install: the cert-manager controller, the trust-manager controller, and a NetworkPolicy-enforcing CNI. A cluster-scoped frame holds the five CRDs from the chart's crds/ directory, which helm install applies and helm upgrade never touches, the two ClusterIssuers, the ClusterRoles and ClusterRoleBindings, and the sample standard AgentClass. An agentry-system frame holds the controller and gateway Deployments with their replica floors, PDBs and controller-only anti-affinity, the two ClusterIP Services with their ports, the ServiceAccounts and namespaced Roles, the leader-election Lease, and the gateway and controller leaf Certificates. A cert-manager frame holds the agentry-ca Certificate and Secret and the trust-manager Bundle. A user namespace frame holds the projected agentry-ca ConfigMap.](../diagrams/helm-install-inventory.svg)
+
+**Reading the diagram.** It answers "what lands where", not "how the pieces relate". The three dashed grey boxes in the red frame are prerequisites: everything else is chart-installed. The trust chain those cert-manager objects form is drawn once, on [In-cluster TLS](../security/tls.md#trust-chain).
+
 ### CRDs
 
 The five CRDs (AgentClass, ModelProvider, Agent, AgentTask, AgentChannel) ship in the chart's `crds/` directory. Helm applies that directory on `helm install` and **never touches it on `helm upgrade`**, so CRD schema changes need an explicit step. See [Upgrade and Migration](#upgrade-and-migration).
@@ -104,7 +108,7 @@ Prometheus metrics are served on dedicated ports: controller `:8080/metrics` and
 
 ## Certificate Lifecycle
 
-**cert-manager and trust-manager are required dependencies.** The chart does not install the cert-manager or trust-manager controllers themselves, so teams with an existing cert-manager deployment reuse them. It ships the `ClusterIssuer`, `Certificate`, and `Bundle` resources Agentry needs. The trust chain those resources form, and the mTLS topology built on it, are described in [In-cluster TLS](../security/tls.md#in-cluster-tls); this page covers only the resource inventory and the operational constraints.
+**cert-manager and trust-manager are required dependencies.** The chart does not install the cert-manager or trust-manager controllers themselves, so teams with an existing cert-manager deployment reuse them. It ships the `ClusterIssuer`, `Certificate`, and `Bundle` resources Agentry needs. The trust chain those resources form, and the mTLS topology built on it, are described in [In-cluster TLS](../security/tls.md#in-cluster-tls); this page covers only the resource inventory and the operational constraints. The [chart inventory figure](#helm-chart-contents) above shows where each of the resources below lands.
 
 Admission webhooks are not used. The cert-manager dependency is solely for TLS lifecycle management.
 

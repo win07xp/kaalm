@@ -1,0 +1,52 @@
+@startuml crd-reference-graph
+' How the five Agentry CRDs reference each other, partitioned by scope.
+' Source of truth: docs/src/concepts/core-concepts.md
+!include _style.puml
+
+skinparam nodesep 25
+skinparam ranksep 50
+skinparam rectangle {
+  roundCorner 4
+}
+
+' ---------- cluster-scoped: platform-owned policy ----------
+rectangle "**Cluster scope** (platform team owns)" as clusterband #line:9E9E9E;line.dashed;text:555555 {
+  rectangle "**AgentClass**\nspec.allowedProviders" as ac #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**ModelProvider**\nspec.credentialsRef\nspec.fallback" as mp #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+}
+
+' The credentials Secret is namespaced and is not an Agentry CRD, so it sits
+' outside both scope partitions.
+rectangle "**Secret**\nin agentry-system" as sec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+
+' ---------- namespace-scoped: developer-owned workloads ----------
+rectangle "**Namespace scope** (developer owns)" as nsband #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "**AgentChannel**\nspec.agentRef" as ch #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**Agent**\nspec.agentClassRef\nspec.providers[].providerRef" as ag #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentTask**\nspec.agentClassRef\nspec.providers[].providerRef" as at #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+
+' ---------- inside the cluster band ----------
+ac -[#B71C1C,bold]right-> mp : **allowedProviders**\n//the class permits it//
+mp -[#9E9E9E,bold]-> mp : **fallback**
+mp -[#7a3f00,bold]right---> sec : credentialsRef
+
+' ---------- inside the namespace band ----------
+' AgentChannel sits below Agent to keep the figure narrow.
+ag <-[#4A148C,bold]- ch : agentRef\n//name only, same namespace//\n//Agent only, never AgentTask//
+
+' ---------- workload to policy (arrows drawn upward) ----------
+ac <-[#4A148C,bold]- ag : agentClassRef
+ac <-[#4A148C,bold]- at : agentClassRef
+mp <-[#B71C1C,bold]- ag : **providerRef**\n//the agent asks//
+mp <-[#B71C1C,bold]- at : providerRef
+
+legend bottom
+  Grey = cluster-scoped policy | Purple = namespaced workload | Orange = not an Agentry CRD
+  Arrows point from a field to what it names
+  **Both red edges must pass:** the class must allow the provider //and// the workload must ask for it.
+  A third gate is not drawable here, because it is not a reference: the ModelProvider must also
+  admit the caller's namespace in //allowedNamespaces//.
+  **ModelProvider is recursive:** //fallback// is a tree, walked depth-first, and rule 11 forbids cycles
+endlegend
+@enduml

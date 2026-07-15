@@ -1,0 +1,79 @@
+@startuml ca-rekey-window
+' The CA re-key runbook, its finite dual-trust window, and the deferred bidirectional failure it can leave behind.
+' Source of truth: docs/src/security/tls.md
+!include _style.puml
+
+skinparam wrapWidth 340
+
+actor "Platform\nengineer" as PE #FFE4B5
+participant "cert-manager" as CM #F5F5F5
+participant "trust-manager\n**Bundle** agentry-ca" as TM #F5F5F5
+participant "projected **ConfigMap**\nagentry-ca\n/var/run/agentry/ca.crt" as CFG #FFD580
+participant "**Agent** process" as AG #E6E6FA
+participant "**Gateway**" as GW #90EE90
+
+note over AG
+  Holds **two** pools, both built
+  from the same CA bundle:
+  **ClientCAs** verifies callers (inbound)
+  **RootCAs** verifies peers it dials (outbound)
+end note
+
+note over PE, GW #FFF8DC
+  Routine **renewal** is not this. agentry-ca pins
+  privateKey.rotationPolicy: Never, so renewal re-uses the CA
+  key pair, every existing leaf keeps verifying, and no window
+  is needed. Only a **re-key** (compromise recovery) runs the
+  steps below, and it is a manual runbook: no operator code
+  implements either path.
+end note
+
+group dual-trust window: both the old and the new CA are trusted (finite)
+
+  == Runbook step 1: add the new CA as a second Bundle source ==
+  PE -> TM : add new CA alongside the old\nsources: [old CA, new CA]
+  hnote over TM #FFD580 : window **OPENS**
+  TM -> CFG : re-project bundle = old CA + new CA
+  CFG -> AG : kubelet swaps the ..data symlink
+  AG -> AG : rebuild **both** pools\n(ClientCAs and RootCAs)
+  CFG -> GW : kubelet swaps the ..data symlink
+  GW -> GW : rebuild **both** pools
+
+  == Runbook step 2: force leaf re-issuance ==
+  PE -> CM : cmctl renew on the leaf Certificates
+  CM -> GW : agentry-gateway-tls re-issued\nunder the **new** CA key
+  CM -> AG : {name}-tls re-issued\nunder the **new** CA key
+  note over AG, GW #FFF8DC
+    This is where a missed reload turns fatal, not step 1.
+    The failure is **deferred**: an agent that never reloaded
+    sailed through step 1, because the old leaves still
+    chained to the old CA it still trusted.
+  end note
+
+  == Runbook step 3: remove the old source ==
+  PE -> TM : remove old CA source, once no\nlive leaf chains to it
+  hnote over TM #FFD580 : window **CLOSES**
+  TM -> CFG : re-project bundle = new CA only
+end
+
+alt the agent rebuilt both pools inside the window
+  AG -> GW : LLM request: RootCAs verifies\nthe re-issued gateway leaf
+  GW -> AG : POST /v1/message: agent's re-issued\nleaf accepted by ClientCAs
+else the agent missed the CA-bundle change
+  AG -[#B71C1C]->x GW : **outbound** fails: RootCAs still holds only\nthe old CA, so the new gateway leaf\nfails verification
+  GW -[#B71C1C]->x AG : **inbound** fails: ClientCAs still holds only\nthe old CA, so the gateway's re-issued\nclient cert is rejected
+  note over AG, GW #FFF8DC
+    Broken in **both** directions at once. Rebuilding one pool
+    and not the other gives this same symptom in one direction
+    only. The window is finite, so the agent does not recover
+    on its own.
+  end note
+end
+
+legend bottom
+  Starter templates watch $AGENTRY_CA_CERT and rebuild both pools on change, which makes this
+  transparent. Custom images carry the same obligation: the inbound server rebuilds ClientCAs via a
+  tls.Config.GetConfigForClient callback returning a config with the fresh pool, and the outbound
+  HTTP client rebuilds RootCAs. A CA-bundle change MUST rebuild both.
+endlegend
+@enduml

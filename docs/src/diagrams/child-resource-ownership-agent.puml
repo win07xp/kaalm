@@ -1,0 +1,67 @@
+@startuml child-resource-ownership-agent
+' Who owns each Agent child resource, and therefore who cascade-GC collects it.
+' Source of truth: docs/src/runtime/child-resources.md
+!include _style.puml
+left to right direction
+
+skinparam nodesep 14
+skinparam ranksep 55
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "namespace: **team-support** (the Agent's own namespace)" as ns #line:4A148C;line.dashed;text:2a0a4a {
+
+  rectangle "**Agent**\nsupport-assistant\nfinalizer:\nagentry.io/agent-finalizer" as agent #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+
+  rectangle "**Pod**\n**the only state-coupled child:**\ncreated on Running,\ndeleted on Hibernated" as pod #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**Service** (ClusterIP)\nonly if spec.service.enabled\n(default true)" as svc #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**ServiceAccount**\nagent-{agentName}\nno RoleBindings by default" as sa #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**NetworkPolicy**\nsynthesized: gateway ingress\n+ egress allow set" as np #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**PVC** {name}\nonly if spec.persistence\nis requested" as pvc #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**PVC** (pre-existing)\nspec.persistence.existingClaim" as extpvc #back:F5F5F5;line:9E9E9E;line.bold;text:555555
+  rectangle "**Certificate** {name}-tls\nserver auth + client auth" as cert #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**Secret** {name}-tls\ntls.crt + tls.key" as secret #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+
+' ---- the baseline: ownerRef, collected by cascade GC ----
+agent -[#4A148C,bold]-> pod
+agent -[#4A148C,bold]-> svc
+agent -[#4A148C,bold]-> sa
+agent -[#4A148C,bold]-> np
+agent -[#4A148C,bold]-> pvc : **stripped** when\npvcRetention: Retain
+agent -[#4A148C,bold]-> cert
+
+' ---- exception 1: never owned at all ----
+agent -[#9E9E9E,dashed]-> extpvc : reference only
+
+' ---- exception 2: cert-manager owns the output Secret ----
+cert -[#7a3f00,bold]-> secret : writes + owns
+
+note bottom of extpvc
+  **Exception 1.** Referenced, never provisioned,
+  never given an ownerRef. Cascade GC leaves it,
+  and pvcRetention does not govern it either.
+end note
+
+note bottom of secret
+  **Exception 2.** The reconciler owns the Certificate;
+  **cert-manager owns the Secret.** Deleting the Agent
+  GCs the Certificate, and cert-manager then removes
+  the Secret one hop later.
+end note
+
+note bottom of agent
+  Only the Pod tracks phase. Every other child is
+  provisioned on first reconcile and
+  **survives hibernation**, so a wake-replacement
+  Pod returns to unchanged identity, storage,
+  and TLS material.
+end note
+
+legend bottom
+  **Solid purple** = ownerRef, so cascade GC collects it on Agent deletion
+  **Solid brown** = owned by cert-manager, one hop further out
+  **Grey dashed** = a reference, not ownership: nothing collects it
+endlegend
+@enduml

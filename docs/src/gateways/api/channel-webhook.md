@@ -65,7 +65,7 @@ The error envelope shape for `400`/`401`/`413`/`502`/`504` is the structured `{ 
 
 ### Reachability under default config
 
-`gateway.syncDeliveryDeadline` (default 30s) is tighter than both the agent-delivery retry budget and the default `wakeTimeout` (120s), so `502 delivery_failed` and `504 wake_timeout` are practically unreachable on the sync path under defaults: `504 sync_deadline_exceeded` fires first. The full budget arithmetic is worked through in [Async Webhook Response](async-responses.md).
+`gateway.syncDeliveryDeadline` (default 30s) is tighter than both the agent-delivery retry budget and the default `wakeTimeout` (120s), so `502 delivery_failed` and `504 wake_timeout` are practically unreachable on the sync path under defaults: `504 sync_deadline_exceeded` fires first. The full budget arithmetic is worked through, and drawn on a single time axis, in [Sync-Mode Reachability](async-responses.md#sync-mode-reachability).
 
 This is intentional positioning. Sync mode is for fast webhooks where the agent is `Running` (not hibernated) and replies within seconds. Channels backing hibernated agents (`hibernationEnabled: true`), slow-startup agents, or known-long agent processing should use `responseMode: async` with `callbackUrl` or polling, where the deadline does not apply and the full retry and wake budgets are reachable, with `delivery_failed` and `wake_timeout` delivered via the async error-payload schemas in [Async Webhook Response](async-responses.md). See [Request Flow step 6a](../user/overview.md#request-flow) for the deadline-enforcement mechanics.
 

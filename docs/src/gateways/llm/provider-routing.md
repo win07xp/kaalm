@@ -4,6 +4,8 @@ Once the gateway knows which namespace a request came from, it still has to answ
 
 Both variants of routing run only after [Namespace Identification](workload-identity.md) has produced an authenticated namespace. Routing itself differs between the two authentication tiers, because the gateway-only tier has no Agent resource to consult.
 
+The two variants below are the same gate chain with the class-level and workload-level gates removed; [Provider access gating](../../concepts/tenancy-and-tiers.md#provider-access-gating) draws both tiers as a single figure, with the denial code on every arm.
+
 ## mTLS tier (Agentry-managed Pods)
 
 Agents and AgentTasks created by the controller have an Agent (or AgentTask) resource with `spec.providers`, and an AgentClass with `allowedProviders`. The gateway walks the full chain:

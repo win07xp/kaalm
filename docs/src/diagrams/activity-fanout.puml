@@ -1,0 +1,63 @@
+@startuml activity-fanout
+' The controller's activity fan-out: the 15s per-namespace cache, the per-Pod-IP par fan-out, the merge, and the filter.
+' Source of truth: docs/src/gateways/user/activation-and-activity.md
+!include _style.puml
+
+participant "AgentReconciler" as rec #87CEEB
+participant "15s per-namespace\ncache (reconciler-local)" as cache #F5F5F5
+participant "Gateway\nPod A" as gwA #90EE90
+participant "Gateway\nPod B" as gwB #90EE90
+participant "Gateway\nPod C" as gwC #F5F5F5
+
+rec -> cache : activity for namespace X?
+
+alt #FFF8DC cache hit (inside the 15s window)
+  cache --> rec : per-agent timestamps, both sources
+  note over rec, cache
+    **Zero HTTP.** Every other agent reconcile
+    in namespace X within the window reads from here.
+  end note
+
+else cache miss or window expired
+  par #F5F5F5 fan-out, one call per gateway Pod IP
+    rec -> gwA : GET /v1/activity?namespace=X
+    gwA --> rec : {replicaStartedAt,\n agents{gatewayTraffic, heartbeat}}
+  else
+    rec -> gwB : GET /v1/activity?namespace=X
+    gwB --> rec : {replicaStartedAt, agents{...}}
+  else
+    rec ->x gwC : GET /v1/activity?namespace=X
+    note over gwC
+      Unreachable (connection refused
+      or timeout): **skipped**. Data from
+      the remaining replicas is used.
+    end note
+  end
+
+  note over rec, gwC #FFE4B5
+    Dialed **by Pod IP, not the Service**.
+    The Service round-robins, so it would return
+    a single replica's partial view.
+    ....
+    Pod IPs are not in the gateway cert's SAN, so the
+    transport pins tls.Config.ServerName to the gateway
+    Service DNS. SAN verification still passes, and the
+    chain is still checked against agentry-ca.
+  end note
+
+  rec -> rec : merge: **most recent timestamp**\n**per agent, per source**
+  rec -> cache : store for 15s
+end
+
+rec -> rec : **then** apply the activitySource filter:\ngatewayTraffic | heartbeat | max of both
+
+note over rec
+  The filter runs **after** the merge, and the controller owns it.
+  The gateway always returns both sources and never reads Agent specs.
+end note
+
+legend bottom
+  The cache is why this is affordable: it turns **O(agents x replicas)**
+  HTTP calls per window into **O(namespaces x replicas)**.
+endlegend
+@enduml
