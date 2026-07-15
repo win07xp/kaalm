@@ -44,7 +44,7 @@ The ten template items below map onto the contract as follows:
 
 8. **Graceful SIGTERM**: drains in-flight requests before exit, honoring `terminationGracePeriodSeconds`.
 
-9. **Heartbeat loop**: a background goroutine/task that POSTs to [`$AGENTRY_GATEWAY_ENDPOINT/v1/agent/heartbeat`](../gateways/api/agent-endpoints.md#post-v1agentheartbeat) every 30s, so the gateway's [activity tracker](../gateways/user/activation-and-activity.md#activity-tracking-api) has a non-traffic signal. See [The heartbeat toggle and the hibernation footgun](#the-heartbeat-toggle-and-the-hibernation-footgun) below.
+9. **Heartbeat loop**: a background goroutine/task that POSTs to [`$AGENTRY_GATEWAY_ENDPOINT/v1/agent/heartbeat`](../gateways/api/agent-endpoints.md#post-v1agentheartbeat) every 30s, so the gateway's [activity tracker](../gateways/user/activation-and-activity.md#activity-tracking-api) has a non-traffic signal. It runs in Agent mode only; the template detects AgentTask mode and does not start it. See [The heartbeat toggle and the hibernation footgun](#the-heartbeat-toggle-and-the-hibernation-footgun) below.
 
 10. **Task-completion helper**: a `completeTask(status, message, artifacts)` function that POSTs [`/v1/task/complete`](../gateways/api/task-complete.md) using the pre-configured mTLS client, retrying `403 access_denied` with `reason=StalePodCompletion` on the bounded backoff schedule from [The Runtime Contract item 6](contract.md) (100ms, 500ms, 2s) and treating `reason=TaskAlreadyCompleted` as terminal (log and exit). Only relevant when the image runs as an AgentTask with `completion.condition: agentReported`; Agent images ignore it.
 
@@ -73,7 +73,16 @@ This is template item 9.
 
 If a developer sets `activitySource: agentHeartbeat` or `both`, the unconditional 30s heartbeat will keep the agent's last-activity timestamp younger than any reasonable `idleTimeout`, and the agent will **never** transition to `Idle` or `Hibernated`. Either leave `activitySource` at the default, or modify the template's heartbeat loop to gate emission on actual work (for example, emit only while a request is in flight). The `activitySource` field is intended for custom agent images that emit a meaningful liveness signal; pairing it with the starter template's default heartbeat behavior breaks hibernation.
 
-Heartbeats are also an **Agent-only** signal. `/v1/agent/heartbeat` rejects AgentTask callers with `403` at the handler (see [POST /v1/agent/heartbeat](../gateways/api/agent-endpoints.md#post-v1agentheartbeat)). When the template is used as an AgentTask image, disable the heartbeat loop rather than letting it emit a `403` every 30 seconds: the templates expose an `AGENTRY_TEMPLATE_HEARTBEAT=off` env toggle for exactly this. Task liveness is governed by the task timeout, not idle detection.
+Heartbeats are also an **Agent-only** signal. `/v1/agent/heartbeat` rejects AgentTask callers with `403` at the handler (see [POST /v1/agent/heartbeat](../gateways/api/agent-endpoints.md#post-v1agentheartbeat)). The templates therefore **detect task mode and do not start the heartbeat loop at all**: an AgentTask's client certificate carries the SAN `{name}.{namespace}.task.agentry.io`, while an Agent's carries `{name}.{namespace}.svc.cluster.local` (see [Workload Identity](../gateways/llm/workload-identity.md)). The template already loads that certificate for mTLS, so the check needs no new configuration. A template image used as an AgentTask emits no heartbeats and never sees the `403`. Task liveness is governed by the task timeout, not idle detection.
+
+`AGENTRY_TEMPLATE_HEARTBEAT` overrides the detection:
+
+| Value | Behavior |
+|---|---|
+| `auto` (default) | Emit every 30s in Agent mode. Emit nothing in AgentTask mode. |
+| `off` | Never emit, in either mode. Use this when the image gates emission itself, which is the prerequisite for a non-default `activitySource`. |
+
+There is deliberately no value that forces heartbeats on in task mode: the endpoint rejects task callers by design, so the only effect would be a `403` every 30 seconds.
 
 ## Layout
 
@@ -97,7 +106,7 @@ examples/
 Each template's README contains:
 
 - The exact `kubectl apply` manifests to deploy a test Agent using the template image.
-- The environment variables the template expects: the runtime-contract set (`$AGENTRY_*`) plus one template-specific toggle, `AGENTRY_TEMPLATE_HEARTBEAT` (`on` default; set `off` for AgentTask images, see item 9).
+- The environment variables the template expects: the runtime-contract set (`$AGENTRY_*`) plus one template-specific toggle, `AGENTRY_TEMPLATE_HEARTBEAT` (`auto` default, which emits in Agent mode only; set `off` to suppress it entirely, see item 9).
 - A "what to change" checklist pointing at the single handler function.
 
 ## Relationship to published base images

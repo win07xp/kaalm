@@ -60,6 +60,8 @@ cert-manager rotates each leaf continuously. Chart defaults:
 
 When cert-manager updates a `Certificate`'s Secret, kubelet updates the projected volume in any Pod that mounts it, and the consumer (gateway, controller, or agent) reloads from disk. The gateway watches `agentry-gateway-tls` for changes itself; agent containers carry the same reload obligation under [the runtime contract](../runtime/contract.md), and the [starter templates](../runtime/starter-templates.md) demonstrate the inotify-based reload pattern that custom images must implement.
 
+Every Agentry component speaks mTLS in both directions, so each one holds two trust pools built from the same CA bundle: an inbound `ClientCAs` pool for verifying the certs of callers, and an outbound `RootCAs` pool for verifying the certs of peers it dials. **A CA-bundle change MUST rebuild both.** This applies to the gateway, the controller, and every agent. Rebuilding only one leaves the other stale, which surfaces during a re-key as a one-directional failure: calls in the refreshed direction keep working while the other side rejects certs re-issued under the new key. The dual-trust window described below is finite, so a component that misses the update does not recover on its own.
+
 ### CA Renewal and Re-Key
 
 The `agentry-ca` `Certificate` pins `spec.privateKey.rotationPolicy: Never`. That is cert-manager's default, made explicit because it is load-bearing. Renewal within `spec.renewBefore` re-uses the CA key pair, so all previously issued leaves keep verifying against the renewed CA cert. kubelet's projected-volume update of the new CA bytes is the only observable change, and no dual-trust window is needed.

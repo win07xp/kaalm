@@ -23,12 +23,14 @@ Two artifacts matter to the listener itself:
 
 ### Reload Mechanism
 
-When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the projected volume in any Pod that mounts it, and the consumer (gateway, controller, agent) reloads from disk. The gateway watches `agentry-gateway-tls` for changes. Starter templates (see [Starter Templates](../../runtime/starter-templates.md)) demonstrate the inotify-based reload pattern that custom images must implement.
+When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the projected volume in any Pod that mounts it, and the consumer (gateway, controller, agent) reloads from disk. The gateway watches both its serving-cert Secret (`agentry-gateway-tls`) and its projected `agentry-ca` trust bundle for changes. Starter templates (see [Starter Templates](../../runtime/starter-templates.md)) demonstrate the inotify-based reload pattern that custom images must implement.
 
 Two reload paths are distinct, and both are required:
 
 - A **cert/key change** reloads the serving certificate (and, since the same cert is used outbound, the client certificate) without a process restart.
-- A **CA-bundle change** affects **both** trust pools the gateway holds: the inbound server's `ClientCAs` pool (used to verify agent and controller client certs) and the outbound HTTP client's `RootCAs` pool (used to verify peers the gateway dials). Rebuilding only one leaves the other stale, and a CA re-key then breaks that direction once leaves are re-issued under the new key. The re-key runbook's dual-trust window is finite, so a component that misses the CA-bundle update does not recover on its own. The agent-side contract states this both-pools obligation explicitly for agent implementations; see [The Runtime Contract](../../runtime/contract.md) item 4 and [In-cluster TLS](../../security/tls.md#in-cluster-tls) for the re-key runbook.
+- A **CA-bundle change** MUST rebuild **both** trust pools the gateway holds: the inbound server's `ClientCAs` pool (used to verify agent and controller client certs) and the outbound HTTP client's `RootCAs` pool (used to verify peers the gateway dials). Rebuilding only one leaves the other stale, and a CA re-key then breaks that direction once leaves are re-issued under the new key. The re-key runbook's dual-trust window is finite, so a component that misses the CA-bundle update does not recover on its own.
+
+The both-pools rule applies to every Agentry component that speaks mTLS in both directions, which is all of them: the gateway, the controller, and each agent. The agent-side statement of the same obligation is [The Runtime Contract](../../runtime/contract.md) item 4; see [In-cluster TLS](../../security/tls.md#in-cluster-tls) for the re-key runbook that makes it matter.
 
 Note that kubelet rotates projected volumes by swapping the `..data` symlink rather than rewriting the leaf files, so a watcher must be anchored to the mount directory, not to `tls.crt` / `ca.crt` themselves. [Starter Templates](../../runtime/starter-templates.md) covers this.
 
