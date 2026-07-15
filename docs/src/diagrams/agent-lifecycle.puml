@@ -1,0 +1,76 @@
+@startuml agent-lifecycle
+' Agent (persistent mode) state machine.
+' Source of truth: docs/src/controller/agent-lifecycle.md
+skinparam backgroundColor transparent
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam ArrowFontSize 11
+skinparam nodesep 30
+skinparam ranksep 45
+skinparam state {
+  BackgroundColor #E6E6FA
+  BorderColor #4A148C
+  FontColor #2a0a4a
+  ArrowColor #4A148C
+}
+skinparam NoteBackgroundColor #FFF8DC
+skinparam NoteBorderColor #8B7500
+skinparam NoteFontSize 11
+hide empty description
+
+' ---- Happy path + idle/hibernate cycle ----
+state "Pending" as Pending
+state "Provisioning" as Provisioning
+state "Running" as Running
+state "Idle" as Idle
+state "Hibernating" as Hibernating
+state "Hibernated" as Hibernated
+state "Resuming" as Resuming
+
+[*] --> Pending
+Pending --> Provisioning : references validated,\nclass resolved
+Provisioning --> Running : Pod becomes Ready
+Running --> Idle : idleTimeout elapsed
+Idle --> Running : activity observed
+Idle --> Hibernating : hibernationEnabled=true\nAND idle for hibernationDelay
+Hibernating --> Hibernated : pod scaled to 0,\nPVC retained
+Hibernated --> Resuming : channel message via User Gateway\nOR manual wake annotation
+Resuming --> Running : pod Ready
+
+' ---- Re-provisioning (spec drift / disruption) ----
+Running -[#0D47A1]-> Provisioning : spec drift (Agent or AgentClass)\nOR involuntary Pod disruption
+Idle -[#0D47A1]-> Provisioning : spec drift (Agent or AgentClass)\nOR involuntary Pod disruption
+
+note left of Provisioning
+  creating Pod/PVC/Service
+  ....
+  re-provisioning is recreate-and-clamp:
+  Pod replaced, PVC/Service/Certificate
+  preserved
+end note
+note right of Hibernating : scaling pod to zero
+note right of Resuming : scaling pod back up
+
+' ---- Branches available from any phase ----
+state "any phase" as AnyPhase #F5F5F5
+state "Degraded" as Degraded
+state "Failed" as Failed
+state "Terminating" as Terminating
+
+AnyPhase --> Degraded : AgentClass-vs-Agent-spec mismatch\n(at Pending on initial provisioning, OR introduced\nby class or ModelProvider drift while in\nRunning/Idle/Resuming; Hibernated agents defer\nthe check to next wake) at any point
+AnyPhase --> Failed : irrecoverable error\nat any point
+AnyPhase --> Terminating : deletion requested\nat any point
+
+note right of Degraded : re-enters status.preDegradedPhase\nwhen resolved
+note right of Terminating : resource removed\nafter finalizers run
+note bottom of AnyPhase
+  Not a phase change: transient provider unhealthy
+  and budget exhaustion set a Degraded CONDITION
+  on the Agent with status.phase preserved.
+  See Errors, Events, and Testing.
+end note
+
+' ---- Layout hints ----
+Resuming -[hidden]-> AnyPhase
+@enduml

@@ -1,0 +1,103 @@
+# Gateway Overview
+
+The gateway is a single replicated Deployment in `agentry-system`. It hosts two logical gateways: the [LLM Gateway](llm/request-handling.md#request-flow) for outbound agent-to-provider traffic and the [User Gateway](user/overview.md#request-flow) for inbound channel traffic. Together its two TLS listeners host three call surfaces: `:8443` serves the LLM proxy and the internal mTLS endpoints, `:8080` serves inbound channel webhooks and the async response polling endpoint, and a separate internal health port serves kubelet probes (see [Internal Endpoints and Ports](#internal-endpoints-and-ports)).
+
+## The Three Call Surfaces
+
+1. **LLM Gateway** (outbound, agent to provider) on `:8443`.
+2. **User Gateway** (between channels and external callers, in both directions; webhook intake plus async callback delivery) on `:8080`.
+3. **Gateway-Internal API** (mTLS on `:8443`), described under [Internal Endpoints and Ports](#internal-endpoints-and-ports).
+
+### LLM Gateway
+
+The [LLM Gateway](llm/request-handling.md#request-flow) handles outbound traffic, agent to provider:
+
+- Serves TLS on port 8443. The gateway endpoint is injected into Agent and AgentTask Pods, so agent containers always reach it over HTTPS.
+- Identifies the caller in one of two modes: source namespace and workload (name and kind) via the mTLS client-cert SAN for Agentry-managed Agent and AgentTask Pods, or namespace only via a `TokenReview`-validated ServiceAccount bearer token for the gateway-only tier. A source-IP to Pod cross-check from the informer cache runs in both modes as defense in depth. The full mechanics of both modes are in [workload identity](llm/workload-identity.md). On `POST /v1/task/complete` only, the gateway adds a live API-server `List Pods` fallback when the informer cache misses, so the new-Pod startup race window collapses into the retryable `403 StalePodCompletion` path rather than leaking as a terminal `401` (see [POST /v1/task/complete](api/task-complete.md)). The fallback costs one List per cross-check miss. That cost is bounded by the AgentTask Pods in the namespace, rare in practice, and covered by the gateway's existing cluster-wide Pod read (see [Credentials and RBAC](#credentials-and-rbac)) without new permissions.
+- The workload-identity half of the SAN underpins downstream workload-level checks: `spec.providers`, the per-task ConfigMap targeting, and the Agent-vs-AgentTask handler-level split in [the :8443 listener profile](#the-8443-listener-profile). Gateway-only callers carry no workload identity. That is the structural reason their tenancy chain in [Multi-tenancy](../concepts/tenancy-and-tiers.md#multi-tenancy) reduces to `ModelProvider.allowedNamespaces` alone.
+- [Resolves the target ModelProvider](llm/provider-routing.md) from the qualified `provider/model` name. Three tenancy gates must admit the request: the workload's `spec.providers` (Agent or AgentTask), `AgentClass.allowedProviders`, and `ModelProvider.allowedNamespaces`. Gateway-only callers have no Agent, AgentTask, or AgentClass and are gated by `ModelProvider.allowedNamespaces` alone. Independent of tenancy, the requested model must exist in `ModelProvider.spec.models`; this model-resolution check applies to all callers. The model and namespace checks are described in [Request Format Detection](llm/request-handling.md#request-format-detection); see [Multi-tenancy](../concepts/tenancy-and-tiers.md#multi-tenancy) for the canonical tenancy chain.
+- Enforces soft budget guardrails and per-(namespace, model) rate limits.
+- Routes to the upstream provider; on failure, walks the [fallback chain](llm/fallback.md).
+- [Extracts token usage](llm/provider-routing.md#provider-adapters) and [updates spend counters](llm/budgets-and-rate-limits.md#budget-state-management).
+- Returns structured [error responses](api/errors.md#llm-gateway-error-responses) (JSON with `error.type`) on failure.
+
+### User Gateway
+
+The [User Gateway](user/overview.md#request-flow) handles traffic between channels and external callers in both directions: inbound webhook intake plus outbound async callback delivery.
+
+- Watches `AgentChannel` resources directly, rather than reading routing data published by the controller, so inbound webhook routing reflects channel changes without controller-mediated propagation latency. The gateway [routes only to channels](user/overview.md#request-flow) whose `status.conditions[Ready].status == True` (step 4), so controller validation (path conflicts, bad references) still gates traffic.
+- Listens on port 8080 over TLS. External webhook callers reach this listener via a user-provisioned Ingress or Gateway API resource fronting the gateway Service. This applies only in the full-lifecycle tier; the gateway-only tier has no inbound external path. Backend re-encrypt versus TLS pass-through trade-offs and the SAN configuration are in [TLS and Ingress](user/overview.md#tls-and-ingress).
+- Hosts two path families on `:8080`: webhook intake under `/channels/{namespace}/...` and the async polling endpoint at `GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`. See [Reserved Gateway Paths](api/overview.md#reserved-gateway-paths) and [Async Webhook Response](api/async-responses.md).
+- Normalizes inbound webhook payloads into the Agentry message envelope and resolves the target Agent via the AgentChannel resource.
+- On delivery, posts to the Agent's Service with a bounded connect timeout. Any connect-phase failure is treated as the hibernation signal. Response-phase failures (non-2xx from a reachable Pod) go to the delivery retry pipeline, not the activator. There is no separate Endpoint or EndpointSlice watch; the rationale is in [Activator](user/activation-and-activity.md#the-activator). On the hibernation signal the gateway calls the controller's [mTLS-authenticated activator endpoint](../concepts/system-architecture.md#control-plane) (served on the controller's `:9443`) and polls the Agent's Service for readiness, bounded by a wake timeout. Wake-on-demand is therefore a **hard control-plane dependency**: while the controller's activator endpoint is unreachable, hibernated Agents cannot receive new messages, and callers receive a `controller_unavailable` error (sync `504`, or an async error payload at `callbackUrl` or the polling endpoint). Already-`Running` Agents are unaffected. Full mechanics, including kube-proxy-mode connect-fail behavior, the manual-wake `WakeIgnored` path for transient failures, and the wire-level error contract, are in [Activator](user/activation-and-activity.md#the-activator) and [Activity Detection](../controller/hibernation-and-wake.md#activity-detection).
+- Delivers the message to the agent container via [`POST /v1/message`](api/agent-endpoints.md#post-v1message). Delivery is **bidirectional mTLS**. The gateway presents its per-Deployment cert as the client cert (the same cert used for [Control Plane](../concepts/system-architecture.md#control-plane) calls, shared across replicas with Service DNS in the SAN) and verifies the agent's per-Agent cert against the Agentry CA. The agent verifies the gateway's client cert via the same CA, requiring a SAN match on the gateway Service DNS (specified in [The Runtime Contract](../runtime/contract.md), bullet 4). This is layered with the synthesized [NetworkPolicy gateway-to-agent ingress allow rule](../runtime/child-resources.md). See [Request Flow step 6](user/overview.md#request-flow).
+- Supports per-AgentChannel sync (default) and async response modes. In async mode the gateway returns `202 Accepted` with a `requestId` immediately and runs delivery and response handling in the background: [configuration](../resources/agentchannel.md#spec), [request flow](user/overview.md#request-flow), [response schemas](api/async-responses.md). Sync mode is bounded by `gateway.syncDeliveryDeadline` (default 30s) and is positioned for fast webhooks where the agent is `Running` and replies within seconds. Async is the recommended mode when wake-on-demand or agent processing would routinely exceed that bound: the sync deadline is tighter than `wakeTimeout` (default 120s) and tighter than the agent-delivery retry budget, which makes `wake_timeout` and `delivery_failed` unreachable on the sync path under defaults. See the [sync-mode response table reachability note](api/channel-webhook.md).
+- Async responses are delivered via **callback** (the gateway POSTs the agent's reply to the AgentChannel's `spec.webhook.callbackUrl`) or **polling** (the gateway stores the reply in a per-request ConfigMap in `agentry-system`; callers GET `/v1/channels/responses/{requestId}`). Callback is the gateway's **third outbound traffic class**, alongside LLM provider egress and intra-cluster delivery to agent Services, and brings its own controls: `https://` only; deny-by-default to loopback, link-local, RFC1918, unique-local IPv6, and cloud-metadata addresses; an optional callback-URL allowlist; and DNS-rebinding defense via host re-resolve before every dial attempt (per [AgentChannel rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)). Each callback POST is signed using the AgentChannel's `spec.webhook.callbackAuth` (bearer or HMAC) so receivers can reject forged callbacks; `callbackAuth` is required by [rule 25](../resources/validation-and-defaulting.md#cross-resource-validation) whenever `callbackUrl` is set, and the wire contract is in [Callback authentication](api/async-responses.md). Callback delivery retries with a bounded backoff schedule. On permanent callback failure the response is stored at the polling endpoint, so callers whose `callbackUrl` was unreachable across all retries can recover it by polling within the response's bounded TTL. Callback is best-effort, not guaranteed delivery; the polling endpoint is the receiver-driven fallback (see [S15](../appendix/scenarios.md#s15-async-webhook-for-a-long-running-coding-agent)). See [Request Flow](user/overview.md#request-flow) (steps 5a, 6a, 8) for the full behavior.
+- v1 supports webhook channels only. Discord and WhatsApp adapters are planned for v1.1.
+
+## The :8443 Listener Profile
+
+All paths on `:8443` share the same listener and serve TLS; client-auth requirements vary per path.
+
+| Path family | Client auth |
+|---|---|
+| LLM proxy (`/v1/messages`, `/v1/chat/completions`, provider-specific paths) | mTLS with Agent/AgentTask SAN, **or** `TokenReview`-validated SA bearer token (gateway-only tier) |
+| `POST /v1/task/complete` | mTLS, Agent/AgentTask SAN admitted at listener; AgentTask only at handler (Agent callers rejected with 403) |
+| `POST /v1/agent/heartbeat` | mTLS, Agent/AgentTask SAN admitted at listener; Agent only at handler (AgentTask callers rejected with 403) |
+| `GET /v1/activity`, `GET /v1/channels/health` | mTLS, Controller SAN required (Agent/AgentTask certs rejected with 403) |
+
+See [/v1/task/complete](api/task-complete.md) and [§ /v1/agent/heartbeat](api/agent-endpoints.md#post-v1agentheartbeat) for the handler-level caller-type checks. `/v1/task/complete` additionally enforces a Pod-identity check (the calling Pod's UID must match `AgentTask.status.currentPodUID`; a mismatch is rejected with `403 StalePodCompletion`) and a terminal-phase check (`status.phase ∈ {Succeeded, Failed, TimedOut}` is rejected with `403 TaskAlreadyCompleted`). Both are gated **after** the AgentTask SAN admission and the `agentReported` mode check; see [Per-Agent and Per-Task Child Resources](../runtime/child-resources.md) for the field-stamping protocol.
+
+The mTLS-with-SAN enforcement is implemented as [per-path middleware on the listener](llm/listener-tls.md#per-path-client-auth-enforcement). The listener handshake uses `tls.Config.ClientAuth = tls.VerifyClientCertIfGiven`, so bearer-token callers on the LLM proxy paths can complete the TLS handshake without a client cert. The handlers on mTLS-required paths then reject a request missing a client cert with `401` and a cert whose SAN does not match with `403`. A routing bug here would let agent-cert holders reach controller-only paths, so the path-to-auth mapping is the most security-load-bearing detail in the gateway. The auth modes themselves (SAN shapes, the `TokenReview` flow, and the cross-checks) are explained under [workload identity](llm/workload-identity.md).
+
+## The :8080 Listener Profile
+
+The User Gateway listener serves only externally-reachable channel traffic and uses **per-AgentChannel** webhook auth (bearer or HMAC, configured on each AgentChannel) on both path families:
+
+| Path family | Client auth |
+|---|---|
+| Webhook intake (`/channels/{namespace}/{channel-path}`) | Per-AgentChannel `spec.webhook.auth` (bearer **or** HMAC) |
+| Async polling endpoint (`GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`) | The originating AgentChannel's `spec.webhook.auth` policy (see below) |
+
+For the polling endpoint, the caller supplies the originating AgentChannel's path. The gateway picks that channel's `spec.webhook.auth` policy and asserts it matches the stored response's channel labels; see [Async Webhook Response](api/async-responses.md) for the channel-match check. No mTLS-authenticated paths live on `:8080`; the listener split keeps an Ingress fronting `:8080` from routing untrusted traffic to controller-only endpoints.
+
+## Internal Endpoints and Ports
+
+The Gateway-Internal API endpoints are not part of the LLM proxy or webhook flows. They share the `:8443` LLM Gateway listener so that mTLS-authenticated callers (agents, AgentTasks, controller) reach them without standing up a separate listener. They are [reserved](api/overview.md#reserved-gateway-paths) under the `/v1/` prefix:
+
+- [`POST /v1/task/complete`](api/task-complete.md) (agent to gateway): the AgentTask agent reports completion; the gateway updates the pre-existing per-task completion ConfigMap referenced under [Per-Agent and Per-Task Child Resources](../runtime/child-resources.md).
+- [`POST /v1/agent/heartbeat`](api/agent-endpoints.md#post-v1agentheartbeat) (agent to gateway): liveness signal feeding the agent-heartbeat activity source.
+- [`GET /v1/activity?namespace={ns}`](user/activation-and-activity.md#activity-tracking-api) (controller to gateway): per-namespace activity timestamps for idle and hibernation transitions.
+- [`GET /v1/channels/health`](api/internal-endpoints.md#get-v1channelshealth) (controller to gateway): per-channel platform-connection health.
+
+Kubelet liveness and readiness probes for the gateway terminate on a separate **internal health port** (TLS, no client auth; `GET /healthz`, `GET /readyz`) rather than on `:8443` or `:8080`, so they sit outside the listener auth profiles above. The gateway uses a dedicated health port rather than handshake-mode coexistence on `:8443` or `:8080`, the pattern used by the controller's `:9443` (see [Control Plane](../concepts/system-architecture.md#control-plane)). The reason: both gateway listeners are reachable beyond the trust boundary that makes cert-less probe coexistence safe on the controller's purely internal `:9443`. `:8080` sits behind a user-provisioned Ingress in the full-lifecycle tier, and `:8443` is reachable by every mTLS-authenticated agent. See [Gateway Readiness](llm/operations.md#gateway-readiness).
+
+Prometheus metrics are served on a fourth, dedicated port: `:9090/metrics`, unauthenticated in-cluster and shared by the LLM Gateway and the User Gateway (single Deployment). See [Metrics](../operations/observability.md#metrics).
+
+## Credentials and RBAC
+
+[LLM provider credentials](../security/credentials.md#lifecycle-of-an-llm-api-key) are stored as Secrets in `agentry-system` and read directly by the gateway. They never leave the `agentry-system` namespace.
+
+The gateway's [RBAC surface](../security/rbac.md#gateway-serviceaccount-permissions) covers:
+
+- `create` on `tokenreviews` (for the gateway-only tier).
+- Cluster-wide watches on Agentry CRDs and Pods (provider routing, and the source-IP to Pod cross-check).
+- Scoped Secret and ConfigMap access in `agentry-system` (LLM credentials, internal config, async response storage).
+- Dynamic per-channel and per-task Roles in user namespaces, both issued at reconcile time and cascade-deleted with their owners. **Per-channel:** `get, watch`, `resourceNames`-scoped to the AgentChannel's webhook auth Secret(s): `spec.webhook.auth.secretRef` (inbound, bearer or HMAC) and, when `callbackUrl` is set, also `spec.webhook.callbackAuth.secretRef` (outbound callback signing, required by [rule 25](../resources/validation-and-defaulting.md#cross-resource-validation)). **Per-task:** `update, patch`, `resourceNames`-scoped to the per-task completion ConfigMap. The `create` verb is intentionally excluded: `resourceNames` does not constrain `create`, which would silently widen access to all ConfigMaps in the namespace.
+
+## Multi-Replica State
+
+The gateway runs as multiple replicas. Each piece of cross-replica state uses one of four reconciliation strategies:
+
+- Cross-replica ConfigMap with a controller-side reducer (spend).
+- Local recomputation against a cluster-wide ceiling (rate limits).
+- Per-replica in-memory state merged controller-side at read time (activity, channel health).
+- Per-request cross-replica ConfigMap with controller-side TTL pruning (async webhook responses).
+
+These strategies cover five pieces of state:
+
+- [**Spend counters**](llm/budgets-and-rate-limits.md#budget-state-management): each replica server-side-applies its partials to a per-provider budget ConfigMap in `agentry-system`. The [ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler) sums the partials, prunes stale-replica entries, and writes a canonical total that replicas re-initialize from on startup (step 3). Bounded overspend is accepted as a soft-guardrail trade-off.
+- [**Rate-limit token buckets**](llm/budgets-and-rate-limits.md#rate-limiting): each replica divides the configured cluster-wide ceiling by the live replica count from its Pod informer and adjusts on the next refill cycle when replicas scale.
+- [**Activity timestamps**](user/activation-and-activity.md#activity-tracking-api): kept in-memory per replica (no etcd writes per request). The gateway records two signal sources separately per agent: gateway-traffic (LLM-gateway requests and inbound channel-message deliveries observed by that replica) and agent-heartbeat (agent-emitted heartbeats). Each Agent selects which source or sources to use via its lifecycle spec. The [AgentReconciler](../controller/reconcilers.md#agentreconciler) (step 8) fans out one `GET /v1/activity?namespace={ns}` per gateway Pod IP and merges the per-source timestamps. Replica-restart awareness, partial-unreachability handling, and the synchronized-restart deferral semantics are documented in [Activity Detection](../controller/hibernation-and-wake.md#activity-detection).
+- [**Channel-health observations**](user/platform-adapters.md#channel-health-tracking): kept in-memory per replica using the same strategy as activity (no etcd writes per request). Each replica maintains a bounded in-window observation list per registered channel path. The [AgentChannelReconciler](../controller/reconcilers.md#agentchannelreconciler) (step 4) fans out `GET /v1/channels/health` to every gateway Pod IP and reduces the per-replica `success`, `failure`, and `empty` states into `status.conditions[type=PlatformConnected]` using the tri-state rule documented in [Channel Health Tracking](user/platform-adapters.md#channel-health-tracking). Replica-startup and all-replicas-unreachable handling mirror the activity path.
+- [**Async webhook responses**](user/overview.md#request-flow): the agent's reply (or a delivery error) is persisted in a per-request ConfigMap in `agentry-system` whenever it will not be delivered via callback, either because no `callbackUrl` is configured or because the bounded callback-retry schedule was exhausted. Persistence is required because any replica must be able to answer a [polling-endpoint GET](api/async-responses.md) by reading the ConfigMap; in-memory storage would not survive replica loss, and the shared ConfigMap keeps polling replica-agnostic with no in-memory routing. The gateway rejects agent responses above a configured size limit with a `response_too_large` error, returned to the caller in sync mode or delivered to `callbackUrl` or the polling endpoint in async mode. The placeholder lifecycle, expiry, channel labels, and the ownership and pruning rationale are documented in [async responses](api/async-responses.md), which is canonical.

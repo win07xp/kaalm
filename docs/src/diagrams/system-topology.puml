@@ -1,0 +1,66 @@
+@startuml system-topology
+' Agentry system topology.
+' Source of truth: docs/src/concepts/system-architecture.md
+skinparam backgroundColor transparent
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 12
+skinparam ArrowFontSize 11
+skinparam rectangle {
+  FontColor #2a0a4a
+}
+skinparam database {
+  BackgroundColor #FFD580
+  BorderColor #7a3f00
+  FontColor #3a1f00
+}
+left to right direction
+
+' -- Inbound external --------------------------------------
+rectangle "Webhook Callers\n(external systems, bots)" as webhooks #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+
+' -- Agentry Gateway (agentry-system) ----------------------
+rectangle "**Agentry Gateway Pod**\nagentry-system" as gw #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+
+' -- User namespaces (agent + workload pods) ---------------
+rectangle "User namespaces" as users {
+  rectangle "**Agent Pod**\n(Agentry-managed)" as agentC #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentTask Pod**\n(Agentry-managed, ephemeral)" as agentTaskC #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**Workload Pod**\n(gateway-only, BYO)" as workloadC #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+
+' -- Outbound external -------------------------------------
+rectangle "LLM Provider APIs\n(Anthropic, OpenAI, ...)" as providers #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+rectangle "Callback URLs\n(async webhook responses)" as callbacks #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+
+' -- Controller + apiserver (control plane) ----------------
+rectangle "Agentry Controller · agentry-system" as ctrl {
+  rectangle "**Reconcilers**\nAgent • AgentTask\nModelProvider • AgentClass\nAgentChannel" as recs #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  rectangle "**Activator**" as activator #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+}
+database "Kubernetes API" as apiserver
+
+' -- Data plane (thick) ------------------------------------
+webhooks -[#1B5E20,bold]-> gw : inbound (:8080)
+gw -[#1B5E20,bold]-> agentC : deliver (mTLS)\nPOST /v1/message
+gw -[#1B5E20,bold]-> callbacks : callback (HTTPS)\nPOST callbackUrl
+agentC -[#1B5E20,bold]-> gw : LLM (mTLS, :8443)
+agentTaskC -[#1B5E20,bold]-> gw : LLM (mTLS, :8443)
+workloadC -[#1B5E20,bold]-> gw : LLM (SA Bearer, :8443)
+gw -[#1B5E20,bold]-> providers : egress
+
+' -- Lifecycle (thin) --------------------------------------
+ctrl -[#0D47A1]-> apiserver : watches / reconciles
+apiserver -[#0D47A1]-> users : Pods • PVCs • Services • ConfigMaps\nNetworkPolicies • ServiceAccounts • Certificates
+
+' -- Internal mTLS RPCs (dashed) ---------------------------
+gw .[#4A148C].> activator : POST /v1/activate (mTLS, :9443)
+ctrl .[#4A148C].> gw : GET /v1/activity (mTLS, :8443)
+ctrl .[#4A148C].> gw : GET /v1/channels/health (mTLS, :8443)
+agentC .[#4A148C].> gw : POST /v1/agent/heartbeat (mTLS, :8443)
+agentTaskC .[#4A148C].> gw : POST /v1/task/complete (mTLS, :8443)
+
+legend bottom
+  Thick green = data plane | Thin blue = lifecycle | Dashed purple = internal mTLS RPC
+endlegend
+@enduml

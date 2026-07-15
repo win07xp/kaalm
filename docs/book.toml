@@ -1,0 +1,6 @@
+[book]
+title = "Agentry"
+description = "Design documentation for Agentry, a Kubernetes-native operator for AI agent workloads."
+authors = ["Asad"]
+language = "en"
+src = "src"
