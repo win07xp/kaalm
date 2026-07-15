@@ -28,8 +28,14 @@ Layout of `docs/src/`:
 - `security/` - trust model, RBAC, credentials, TLS, threat model
 - `operations/` - deployment (Helm), observability
 - `appendix/scenarios.md` - S1 to S15 acceptance scenarios
-- `diagrams/` - PlantUML sources plus rendered SVGs. Regenerate with:
+- `diagrams/` - 44 PlantUML sources plus rendered SVGs, both committed. Regenerate with:
   `java -jar ~/java/plantuml-1.2026.6.jar -tsvg docs/src/diagrams/*.puml`
+  Every diagram `!include _style.puml`, which carries the colour language (purple
+  agents, blue controller, green gateway, orange external) and documents three
+  PlantUML traps that fail silently. Read it before adding a diagram. Diagrams are
+  single-sourced like the prose: one figure per concept on its canonical page.
+  `theme/custom.css` lets figures overhang the 750px prose column; keep them under
+  ~1090px wide so they render at full size.
 
 Doc conventions: no em-dashes or en-dashes. Validation rules (1-29), runtime-contract
 items (1-7), and scenario IDs (S1-S15) are cited by number across pages, so their
