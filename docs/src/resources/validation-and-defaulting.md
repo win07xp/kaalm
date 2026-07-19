@@ -53,6 +53,16 @@ Reading the diagram: the vertical position of the `etcd` lane is the whole point
 
 Field-level schema validation uses CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema. No admission webhook server is required.
 
+### Enforcement points
+
+Many rules above state their enforcement point inline. The rest follow from one principle: a check that compares fields across two resources (a workload against its AgentClass or ModelProvider) cannot run in CRD CEL, because CEL on one object cannot read another, so it runs at reconcile time. The remaining rules resolve as follows.
+
+**Provider access (rules 3, 4, 5).** A referenced ModelProvider that does not resolve, does not admit the workload's namespace, or is not on the class allowlist is a cross-resource check. All three run at reconcile time and share one outcome: `phase=Degraded, reason=ClassConstraintViolation` on an Agent, `phase=Failed` on an AgentTask. A ModelProvider or AgentClass change can newly trigger any of them (see [Change Propagation](../controller/change-propagation.md#agentclass-change-handling)).
+
+**Class caps (rules 6, 7, 8, 9, 10).** Resource limits, volume size, and the three lifecycle timeouts are not rejected when they exceed the class maximum. They are **clamped**: the effective value is the smaller of the requested value and the class cap, computed at reconcile time. Clamping is what lets an AgentClass tighten a cap without degrading every workload that asked for more (see the resources.limits clamp in [Change Propagation](../controller/change-propagation.md#agentclass-change-handling)).
+
+**Other reconcile-time rejects.** These set `Ready=False` at reconcile time: rule 1 (an unresolvable `agentClassRef`), rules 11 and 12 (fallback chains, checked by walking the referenced ModelProviders), rule 13 (an unresolvable channel `agentRef`), rule 14 (a target Agent with `service.enabled: false`, `reason=AgentServiceDisabled`), and rule 18 (a `degradeTo` naming no real model, `reason=InvalidDegradeTarget`). Rules 11, 12, and 18 concern a single ModelProvider but still run at reconcile time: 11 and 12 must follow references to other providers, and 18 is enforced by the ModelProviderReconciler alongside the cost-sanity check (see [ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)).
+
 ## Defaulting
 
 AgentClass defaults are applied at reconcile time when Agent/AgentTask fields are absent:

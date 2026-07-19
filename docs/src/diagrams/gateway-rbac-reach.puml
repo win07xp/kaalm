@@ -27,7 +27,7 @@ rectangle "namespace: **agentry-system**" as nssys #line:1B5E20;line.dashed;text
 ' ---------- family 3: dynamic per-namespace Roles ----------
 rectangle "a user namespace, per AgentChannel / per AgentTask" as nsuser #line:7a3f00;line.dashed;text:3a1f00 {
   rectangle "channel **Secret(s)**\n**get, watch**\nresourceNames-scoped to the Secret(s) named\nby the AgentChannel's inbound auth and\noutbound callbackAuth config. //list omitted//\n....\nminted by the AgentChannelReconciler,\nowned by the AgentChannel" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
-  rectangle "**{taskName}-completion** ConfigMap\n**get, update, patch**\nresourceNames-scoped to that one name.\n//create omitted//; the AgentTaskReconciler\npre-creates the object instead.\n....\nminted by the AgentTaskReconciler,\nowned by the AgentTask" as compcm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**{taskName}-completion** ConfigMap\n**update, patch**\nresourceNames-scoped to that one name.\n//get omitted//: the write is a blind merge patch.\n//create omitted//: the AgentTaskReconciler\npre-creates the object instead.\n....\nminted by the AgentTaskReconciler,\nowned by the AgentTask" as compcm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 
 ' ---------- the three edge classes ----------
@@ -55,7 +55,7 @@ legend bottom
   dotted grants therefore omit a verb on purpose. **list** is dead weight on a name-scoped Secret read, and a
   name-scoped **watch** must set fieldSelector metadata.name=<secret> to satisfy the check. **create** is the
   load-bearing omission: granting create on a named ConfigMap would silently widen the gateway to **all**
-  ConfigMaps in that namespace, so the reconciler pre-creates the object and grants only get, update, patch.
+  ConfigMaps in that namespace, so the reconciler pre-creates the object and grants only update, patch.
   ====
   **delete on agentry-system ConfigMaps is absent for a different reason:** cleanup is controller-side. The
   ModelProviderReconciler prunes stale budget keys; the AgentChannelReconciler prunes and finalizer-sweeps

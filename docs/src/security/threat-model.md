@@ -58,7 +58,7 @@ These rows ask what an attacker gains by taking over Agentry's own control-plane
 
 Note the `escalate`/`bind` grants on `roles`/`rolebindings` (see [Operator ServiceAccount](rbac.md#operator-serviceaccount)) mean a fully compromised operator could widen those Roles and bind them to principals of its choosing. The per-channel scoping is an integrity control against drift and a least-privilege default, not a hard boundary against operator compromise.
 
-**Compromised gateway writes malicious ConfigMaps.** The `{taskName}-completion` ConfigMap is pre-created by the AgentTaskReconciler with the AgentTask as `ownerRef`; the gateway's per-task Role grants only `get, update, patch` on that exact name (`resourceNames`-scoped). The gateway has **no `create` verb** on user-namespace ConfigMaps, so a compromised gateway cannot introduce new ConfigMaps in user namespaces: it can mutate only the per-task and per-channel resources it has explicit name-scoped access to. See [§ Gateway ServiceAccount permissions](rbac.md#gateway-serviceaccount-permissions).
+**Compromised gateway writes malicious ConfigMaps.** The `{taskName}-completion` ConfigMap is pre-created by the AgentTaskReconciler with the AgentTask as `ownerRef`; the gateway's per-task Role grants only `update, patch` on that exact name (`resourceNames`-scoped, with `get` omitted since the write is a blind merge patch). The gateway has **no `create` verb** on user-namespace ConfigMaps, so a compromised gateway cannot introduce new ConfigMaps in user namespaces: it can mutate only the per-task and per-channel resources it has explicit name-scoped access to. See [§ Gateway ServiceAccount permissions](rbac.md#gateway-serviceaccount-permissions).
 
 ## Tenant Isolation and Budgets
 

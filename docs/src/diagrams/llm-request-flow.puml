@@ -26,7 +26,7 @@ note over gw, inf
 end note
 
 gw -> inf : **3.** Pod ownerRef -> Agent,\nread spec.providers;\nparse provider/model
-gw -> inf : **4.** Validate: model in ModelProvider.models,\nnamespace in allowedNamespaces
+gw -> inf : **4.** Validate: namespace in allowedNamespaces\n(else 403), then model in ModelProvider.models (else 400)
 gw -> gw : **5.** Budget check\ndegrade -> rewrite model name\nblock -> error to agent
 gw -> gw : **6.** Rate limit: per-(namespace, model)\ntoken bucket, req/min + tokens/min
 

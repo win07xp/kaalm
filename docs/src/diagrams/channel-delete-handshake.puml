@@ -16,8 +16,8 @@ API -> R : watch event
 R -> API : 1. status.phase = Terminating
 API -> G1 : watch event
 API -> G2 : watch event
-G1 -> G1 : 2. drop the platform connection
-G2 -> G2 : 2. drop the platform connection
+G1 -> G1 : 2. drop connection,\nstop creating async records
+G2 -> G2 : 2. drop connection,\nstop creating async records
 G1 -> API : 3. annotate\nagentry.io/channel-disconnected: "true"
 
 alt annotation observed
@@ -31,20 +31,23 @@ R -> API : 6. remove agentry.io/channel-finalizer
 API -> API : object deleted
 
 note over R, G2
-  Why step 4 exists.
-  Counterfactual: sweep at step 5
-  without waiting for the
-  disconnect, and an in-flight
-  async-response write from r2
-  lands after the sweep, orphaning
-  a ConfigMap until its 1-hour
-  expiry. These ConfigMaps sit in
-  agentry-system and cannot carry
-  an ownerRef back to the channel,
-  so cascade GC never sees them:
-  the sweep is their only cleanup.
-  The 30s timeout is the escape
-  hatch that stops a dead gateway
+  What closes the race.
+  Each replica gates async-record
+  creation on the channel being live
+  (step 2), so once it observes
+  Terminating it writes no more. The
+  disconnect annotation (step 3)
+  confirms that transition has
+  propagated, so by the sweep (step 5)
+  no replica is still producing records
+  to orphan. Without the gate, an
+  in-flight write from r2 could land
+  after the sweep: these ConfigMaps
+  sit in agentry-system, carry no
+  ownerRef to the channel, and are
+  invisible to cascade GC, so the
+  sweep is their only cleanup.
+  The 30s timeout stops a dead gateway
   from wedging the delete.
 end note
 

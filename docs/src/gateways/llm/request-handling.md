@@ -16,7 +16,7 @@ Reading the diagram: two orderings carry the weight. Authentication precedes the
 
 3. **Provider routing.** The gateway resolves the Pod's ownerRef to the Agent resource, reads `spec.providers` to determine which ModelProviders this agent is allowed to use, and parses the `provider/model` name from the request to identify the target ModelProvider. See [Provider Routing](provider-routing.md).
 
-4. **Gateway validates.** It confirms the requested model is listed in the target ModelProvider's `models` and that the namespace is in `allowedNamespaces`.
+4. **Gateway validates.** It checks the namespace allowlist first, then the model. The caller's namespace must appear in the target ModelProvider's `allowedNamespaces`, or the request is rejected with `403 access_denied`. Only then does it confirm the requested model is listed in `spec.models`, rejecting with `400 invalid_request` if not. The tenancy check runs before the existence check so that a namespace not authorized to use a provider never learns which models it hosts. See [Provider Routing](provider-routing.md) for the full ordered chain.
 
 5. **Budget check.** The gateway reads the current budget state for the agent's namespace. If a `degrade` policy applies, it rewrites the model name in the request. If `block` applies, it returns an error to the agent. See [Budget State Management](budgets-and-rate-limits.md#budget-state-management).
 

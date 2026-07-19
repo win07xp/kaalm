@@ -109,7 +109,7 @@ Drift is detected by comparing a hash of the derived Pod spec, stamped as a Pod 
 - `spec.persistence.enabled: true` against a class with `persistence.enabled: false`: `reason=PersistenceNotAllowed`.
 - `spec.lifecycle.hibernationEnabled: true` against a class with `lifecycle.hibernationAllowed: false`: `reason=HibernationNotAllowed`.
 
-The image, provider, persistence, and hibernation checks reuse cross-resource validation rules 2, 5, 24, and 26 in [Cross-Resource Validation](../resources/validation-and-defaulting.md#cross-resource-validation). They fail at reconcile and surface as `Degraded` rather than being silently re-applied to a recreated Pod.
+The image, provider, persistence, and hibernation checks reuse cross-resource validation rules 2, 4, 5, 24, and 26 in [Cross-Resource Validation](../resources/validation-and-defaulting.md#cross-resource-validation). Rule 4 (a ModelProvider dropping the workload's namespace from `allowedNamespaces`) is the canonical drift case, shown in [scenario S5](../appendix/scenarios.md). These checks fail at reconcile and surface as `Degraded` rather than being silently re-applied to a recreated Pod. Rule 29 (hibernation-requires-persistence) also degrades an Agent, but it is spec-internal, not a class comparison, so a class change can never introduce it; it is enforced in the [pre-Pod-creation checks](#pre-pod-creation-checks) on every reconcile.
 
 ### Reconciliation steps
 

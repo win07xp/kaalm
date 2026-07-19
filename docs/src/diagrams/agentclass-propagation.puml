@@ -24,11 +24,15 @@ if (workload kind?) then (Agent)
       allowedNamespaces drops this
       namespace, persistence, or
       hibernation. Reason is one of
-      ClassConstraintViolation,
-      PersistenceNotAllowed,
-      HibernationNotAllowed,
-      HibernationRequiresPersistence.
+      ClassConstraintViolation
+      (rules 2, 4, 5),
+      PersistenceNotAllowed (24),
+      HibernationNotAllowed (26).
       The Pod is not recreated.
+      ....
+      Rule 29 (HibernationRequiresPersistence)
+      also degrades, but it is spec-internal:
+      a class change cannot introduce it.
     end note
     stop
   else (no)
