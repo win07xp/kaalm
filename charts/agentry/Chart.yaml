@@ -1,0 +1,19 @@
+apiVersion: v2
+name: agentry
+description: >-
+  Agentry, a Kubernetes-native operator that makes AI agents a first-class
+  workload type. Installs the controller, the shared gateway, RBAC, and the
+  cert-manager and trust-manager resources. Requires cert-manager,
+  trust-manager, and a NetworkPolicy-enforcing CNI to be installed already.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.28.0-0"
+keywords:
+  - ai
+  - agents
+  - operator
+  - llm
+home: https://github.com/win07xp/kubeclaw
+sources:
+  - https://github.com/win07xp/kubeclaw

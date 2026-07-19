@@ -1,0 +1,10 @@
+# rule 25: callbackAuth required when callbackUrl set
+apiVersion: agentry.io/v1alpha1
+kind: AgentChannel
+metadata: {name: no-cbauth, namespace: default}
+spec:
+  agentRef: {name: support-assistant}
+  webhook:
+    path: /channels/default/no-cbauth
+    auth: {type: bearer, secretRef: {name: s, key: k}}
+    callbackUrl: https://hooks.example.com/reply

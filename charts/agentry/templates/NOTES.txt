@@ -1,0 +1,13 @@
+Agentry {{ .Chart.AppVersion }} installed into namespace {{ .Release.Namespace }}.
+
+This is an early build: the chart currently ships the CustomResourceDefinitions.
+The controller and gateway Deployments, RBAC, and cert-manager/trust-manager
+resources are added in later phases.
+
+Prerequisites (the chart does NOT install these):
+  1. cert-manager
+  2. trust-manager (with --trust-namespace matching certManager.clusterResourceNamespace)
+  3. a NetworkPolicy-enforcing CNI
+
+CRD upgrades are never applied by `helm upgrade`. Before upgrading, run:
+  kubectl apply --server-side -f charts/agentry/crds/

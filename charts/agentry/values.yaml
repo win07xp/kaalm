@@ -1,0 +1,67 @@
+# Agentry Helm values. Defaults match the design (docs/src/operations/deployment.md).
+# The controller and gateway both have a hard floor of 2 replicas, enforced by a
+# template guard; going below aborts rendering.
+
+controller:
+  replicas: 2
+  image:
+    repository: ghcr.io/win07xp/agentry-controller
+    tag: ""            # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  # Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy.
+  networkPolicy:
+    dnsSelector:
+      namespaceLabels:
+        kubernetes.io/metadata.name: kube-system
+      podLabels:
+        k8s-app: kube-dns
+
+gateway:
+  replicas: 2
+  image:
+    repository: ghcr.io/win07xp/agentry-gateway
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Maximum fallback-chain depth for LLM provider routing (AGENTRY_MAX_FALLBACK_DEPTH).
+  maxFallbackDepth: 3
+  # Additional DNS names appended to the agentry-gateway-tls certificate SANs.
+  # Required when the User listener is exposed via TLS pass-through Ingress.
+  externalHostnames: []
+  # DNS-name suffixes or CIDR blocks that replace the default deny-internal rule
+  # for AgentChannel.spec.webhook.callbackUrl. Empty keeps the deny-internal default.
+  callbackUrl:
+    allowlist: []
+  # Rolling window over which PlatformConnected is evaluated.
+  channelHealthWindow: 5m
+  # Bounds the TCP connect attempt when delivering POST /v1/message.
+  agentDeliveryConnectTimeout: 1s
+  # Total sync-mode wall-clock budget (wake + delivery retries + processing).
+  syncDeliveryDeadline: 30s
+  # Per-attempt upstream LLM-provider bound, connect to first byte, also the
+  # mid-stream idle-bytes bound.
+  providerFirstByteTimeout: 120s
+  # Per-attempt read of an agent's /v1/message response.
+  agentReadTimeout: 10s
+  # Per-attempt read of a callback receiver's response.
+  callbackReadTimeout: 10s
+  # Backoff schedules (4 attempts total).
+  agentDeliveryRetryBackoff: "1s,5s,25s"
+  callbackRetryBackoff: "1s,5s,25s"
+  # Body-size caps.
+  maxResponseBodyBytes: 900Ki
+  maxMessageBodyBytes: 1Mi
+  maxLLMRequestBodyBytes: 4Mi
+  # Dedicated health/readiness port (kubelet probes).
+  healthPort: 8081
+
+certManager:
+  # cert-manager's cluster resource namespace. The agentry-ca Certificate and its
+  # Secret MUST live here (not agentry-system), or issuance fails cluster-wide
+  # with SecretNotFound. Must match cert-manager's --cluster-resource-namespace
+  # and trust-manager's --trust-namespace.
+  clusterResourceNamespace: cert-manager
+
+trustManager:
+  # Optional namespaceSelector object passed verbatim into the CA Bundle's
+  # target.namespaceSelector. Empty projects into every non-system namespace.
+  bundleSelector: {}
