@@ -36,7 +36,7 @@ var _ = Describe("Golden path", Ordered, func() {
 		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/modelprovider.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func() (bool, error) {
-			return readyTrue("modelprovider", "", "e2e-openai")
+			return readyTrue("modelprovider", "", "e2e-vertex")
 		}, "60s", "3s").Should(BeTrue())
 	})
 
@@ -81,7 +81,10 @@ var _ = Describe("Golden path", Ordered, func() {
 			Content string `json:"content"`
 		}
 		Expect(json.Unmarshal([]byte(resp), &reply)).To(Succeed())
-		Expect(reply.Content).To(ContainSubstring("echo:"))
+		// The starter-go agent echoes the delivered message back in its reply,
+		// so the reply content must contain the text we sent ("ping"). This
+		// proves the full round trip without pinning the template's phrasing.
+		Expect(reply.Content).To(ContainSubstring("ping"))
 	})
 
 	It("blocks delivery from a disallowed namespace via the NetworkPolicy", func() {

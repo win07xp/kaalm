@@ -1,14 +1,20 @@
+# Hermetic e2e: google-vertex has no liveness probe implemented, so Probe
+# returns Skipped (no network) and Ready goes True on a dummy credential.
+# An openai-type provider would run a real authenticated health probe that
+# 401s on the dummy credential and blocks Ready; healthCheck.enabled:false
+# cannot currently disable it (the field is `bool,omitempty`, so false is
+# dropped and reconcile-time defaulting re-enables the probe).
 apiVersion: agentry.io/v1alpha1
 kind: ModelProvider
 metadata:
-  name: e2e-openai
+  name: e2e-vertex
 spec:
-  type: openai
-  endpoint: https://api.openai.com
+  type: google-vertex
+  endpoint: https://us-central1-aiplatform.googleapis.com
   credentialsRef:
-    name: e2e-openai-key
+    name: e2e-vertex-key
     key: token
   models:
-    - id: gpt-4o
-      costPer1MInputTokens: "2.50"
-      costPer1MOutputTokens: "10.00"
+    - id: gemini-1.5-pro
+      costPer1MInputTokens: "1.25"
+      costPer1MOutputTokens: "5.00"
