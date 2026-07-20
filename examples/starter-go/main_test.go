@@ -36,3 +36,15 @@ func TestShouldHeartbeat(t *testing.T) {
 		t.Error("off must never heartbeat")
 	}
 }
+
+func TestTaskAutocompleteStatus(t *testing.T) {
+	if got := taskAutocompleteStatus(false, "success"); got != "" {
+		t.Errorf("agent mode must never auto-complete, got %q", got)
+	}
+	if got := taskAutocompleteStatus(true, ""); got != "" {
+		t.Errorf("unset env must not auto-complete, got %q", got)
+	}
+	if got := taskAutocompleteStatus(true, "success"); got != "success" {
+		t.Errorf("task mode with env must return the status, got %q", got)
+	}
+}

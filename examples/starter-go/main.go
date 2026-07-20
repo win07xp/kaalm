@@ -113,6 +113,16 @@ func main() {
 		}
 	}()
 
+	if status := taskAutocompleteStatus(a.isTask, os.Getenv("AGENTRY_TASK_AUTOCOMPLETE")); status != "" {
+		go func() {
+			if err := a.completeTask(ctx, status, "auto-complete on startup", nil); err != nil {
+				log.Printf("task auto-complete failed: %v", err)
+			} else {
+				log.Printf("task auto-complete reported %q", status)
+			}
+		}()
+	}
+
 	<-ctx.Done()
 	log.Print("SIGTERM received; draining")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -275,4 +285,15 @@ func (d *dedupBuffer) put(id string, reply ResponseEnvelope) {
 		d.order.Remove(oldest)
 		delete(d.items, oldest.Value.(*dedupEntry).id)
 	}
+}
+
+// taskAutocompleteStatus returns the status an AgentTask should self-report on
+// startup, or "" to disable. Honored only in task mode; the value comes from
+// AGENTRY_TASK_AUTOCOMPLETE ("success" or "failure"). This is a smoke/e2e hook:
+// a real task reports completion from its own work, not on startup.
+func taskAutocompleteStatus(isTask bool, env string) string {
+	if !isTask {
+		return ""
+	}
+	return env
 }

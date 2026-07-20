@@ -78,3 +78,8 @@ Agent to route webhook traffic to `/v1/message`.
 The same image runs as an AgentTask. Call `a.completeTask(ctx, "success",
 "done", map[string]string{"result": "..."})` from your task logic. The template
 detects task mode from the cert SAN and does not start the heartbeat loop.
+
+For smoke and e2e runs, set `AGENTRY_TASK_AUTOCOMPLETE=success` (via the
+AgentTask `spec.env`) to have the task report that status on startup through
+`completeTask`. Leave it unset in real tasks, which report completion from
+their own work.
