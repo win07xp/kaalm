@@ -174,13 +174,17 @@ CHART_APP_VERSION := $(shell grep '^appVersion:' charts/agentry/Chart.yaml | awk
 CONTROLLER_IMG ?= ghcr.io/win07xp/agentry-controller:$(CHART_APP_VERSION)
 GATEWAY_IMG ?= ghcr.io/win07xp/agentry-gateway:$(CHART_APP_VERSION)
 AGENT_IMG ?= registry.test/agents/starter-go:e2e
+# Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
+# pull at test time, which would otherwise let that spec pass vacuously).
+CURL_IMG ?= curlimages/curl:8.10.1
 
 .PHONY: e2e-images
 e2e-images: ## Build the controller, gateway, and agent images and import them into k3d.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
 	docker build -t $(AGENT_IMG) examples/starter-go
-	k3d image import $(CONTROLLER_IMG) $(GATEWAY_IMG) $(AGENT_IMG) -c $(CLUSTER)
+	docker pull $(CURL_IMG)
+	k3d image import $(CONTROLLER_IMG) $(GATEWAY_IMG) $(AGENT_IMG) $(CURL_IMG) -c $(CLUSTER)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.

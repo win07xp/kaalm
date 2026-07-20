@@ -92,13 +92,20 @@ var _ = Describe("Golden path", Ordered, func() {
 		// already proven by the sync-webhook spec above.)
 		probe := []string{
 			"run", "np-deny-probe", "-n", "default", "--rm", "-i", "--restart=Never",
-			"--image=curlimages/curl:8.10.1", "--command", "--",
+			"--image=curlimages/curl:8.10.1", "--image-pull-policy=IfNotPresent",
+			"--command", "--",
 			"sh", "-c",
 			"curl -sk --max-time 6 -o /dev/null -w '%{http_code}' " +
 				"https://e2e-agent.e2e.svc.cluster.local:8080/readyz || true",
 		}
+		// A denied connection times out, so curl prints 000 (|| true swallows its
+		// non-zero exit). Assert that definite 000 token rather than mere absence
+		// of 200: it proves the probe pod actually ran and was blocked, instead of
+		// passing vacuously on an image-pull or scheduling failure. The curl image
+		// is preloaded into k3d (make e2e-images) and pinned IfNotPresent, so this
+		// runs hermetically with no Docker Hub pull.
 		Eventually(func() (string, error) {
 			return utils.Kubectl(probe...)
-		}, "60s", "5s").ShouldNot(ContainSubstring("200"))
+		}, "60s", "5s").Should(ContainSubstring("000"))
 	})
 })
