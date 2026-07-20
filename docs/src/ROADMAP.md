@@ -11,15 +11,15 @@ Vertex OAuth) behind interfaces so they land late and stay testable.
 
 ## Status at a glance
 
-Phases 0 through 2 are done. Phase 3 is next.
+Phases 0 through 3 are done. Phase 4 is next.
 
 | Phase | Status | Delivers |
 |---|---|---|
 | 0. Foundations | Done | Repo scaffold, dev loop (k3d with cert-manager and trust-manager), Makefile, CI, green build/test/lint |
 | 1. API types | Done | The 5 CRD Go types, apply-time CEL validation, generated CRDs, installable and schema-validated |
 | 2. Foundation reconcilers | Done | AgentClass and ModelProvider: validation, conditions, finalizers (the budget path deferred behind a seam) |
-| 3. AgentReconciler core | Next | Walking skeleton: an Agent becomes a Pod, PVC, Service, Certificate, and NetworkPolicy, with cert gating, drift detection, and a finalizer |
-| 4. AgentTaskReconciler | Planned | Run-to-completion, the completion mailbox and per-task Role, the currentPodUID identity gate, retry, and TTL |
+| 3. AgentReconciler core | Done | Walking skeleton: an Agent becomes a Pod, PVC, Service, Certificate, and NetworkPolicy, with cert gating, drift detection, and a finalizer |
+| 4. AgentTaskReconciler | Next | Run-to-completion, the completion mailbox and per-task Role, the currentPodUID identity gate, retry, and TTL |
 | 5. Gateway skeleton | Planned | The single `VerifyClientCertIfGiven` socket with per-path auth (mTLS SAN and TokenReview), plus the LLM proxy happy path |
 | 6. Controller and gateway | Planned | Activity fan-out, wake and the activator, the hibernation phases, and the budget ConfigMap exchange |
 | 7. User gateway and AgentChannel | Planned | The webhook flow (sync and async), the async response lifecycle, and the AgentChannel reconciler with its delete handshake |

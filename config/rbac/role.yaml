@@ -14,6 +14,30 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - get
@@ -23,6 +47,7 @@ rules:
   - agentry.io
   resources:
   - agentclasses
+  - agents
   - modelproviders
   verbs:
   - get
@@ -34,6 +59,7 @@ rules:
   - agentry.io
   resources:
   - agentclasses/finalizers
+  - agents/finalizers
   - modelproviders/finalizers
   verbs:
   - update
@@ -41,6 +67,7 @@ rules:
   - agentry.io
   resources:
   - agentclasses/status
+  - agents/status
   - modelproviders/status
   verbs:
   - get
@@ -49,9 +76,32 @@ rules:
 - apiGroups:
   - agentry.io
   resources:
-  - agents
   - agenttasks
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch

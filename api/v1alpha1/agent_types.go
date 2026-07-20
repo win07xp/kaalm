@@ -53,8 +53,10 @@ type AgentSpec struct {
 	// +optional
 	Lifecycle AgentLifecycle `json:"lifecycle,omitempty"`
 	// Service exposes the agent's HTTPS endpoint for intra-cluster delivery.
+	// A nil block defaults to an enabled Service on port 8080 at reconcile
+	// time (the CRD default on enabled only fires when the block is present).
 	// +optional
-	Service AgentService `json:"service,omitempty"`
+	Service *AgentService `json:"service,omitempty"`
 	// MCPServers are referenced only for NetworkPolicy egress scoping.
 	// +optional
 	MCPServers []AgentMCPServer `json:"mcpServers,omitempty"`

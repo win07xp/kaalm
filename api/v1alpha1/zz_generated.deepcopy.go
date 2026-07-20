@@ -663,7 +663,11 @@ func (in *AgentSpec) DeepCopyInto(out *AgentSpec) {
 	in.Resources.DeepCopyInto(&out.Resources)
 	in.Persistence.DeepCopyInto(&out.Persistence)
 	out.Lifecycle = in.Lifecycle
-	out.Service = in.Service
+	if in.Service != nil {
+		in, out := &in.Service, &out.Service
+		*out = new(AgentService)
+		**out = **in
+	}
 	if in.MCPServers != nil {
 		in, out := &in.MCPServers, &out.MCPServers
 		*out = make([]AgentMCPServer, len(*in))

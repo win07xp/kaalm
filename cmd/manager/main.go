@@ -39,6 +39,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
 	"github.com/win07xp/kubeclaw/internal/controller"
 	// +kubebuilder:scaffold:imports
@@ -53,6 +55,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(agentryv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(cmapi.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -235,6 +238,14 @@ func main() {
 		Health:            &controller.HTTPProviderHealthChecker{},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ModelProvider")
+		os.Exit(1)
+	}
+	if err := (&controller.AgentReconciler{
+		Client:            mgr.GetClient(),
+		Recorder:          mgr.GetEventRecorderFor("agent-controller"),
+		OperatorNamespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Agent")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

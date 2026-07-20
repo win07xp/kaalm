@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,7 +39,14 @@ import (
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
 )
 
-const testOperatorNamespace = "default"
+const (
+	testOperatorNamespace = "default"
+	// testSystemNamespace is the AgentReconciler's forbidden operator
+	// namespace; kept distinct from testOperatorNamespace so ModelProvider
+	// credential Secrets (in default) and Agent workloads (also in default)
+	// do not collide with the system-namespace guard.
+	testSystemNamespace = "agentry-system"
+)
 
 var (
 	testClient client.Client
@@ -75,7 +84,10 @@ func (f *fakeHealthChecker) Probe(
 
 func TestMain(m *testing.M) {
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "test", "crds"),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 	cfg, err := testEnv.Start()
@@ -90,6 +102,9 @@ func TestMain(m *testing.M) {
 	if err := agentryv1alpha1.AddToScheme(scheme); err != nil {
 		panic(err)
 	}
+	if err := cmapi.AddToScheme(scheme); err != nil {
+		panic(err)
+	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme,
@@ -98,6 +113,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("manager: " + err.Error())
 	}
+
+	// Recoverable gates poll fast in tests (production default is 30s).
+	gateRequeue = 500 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := SetupIndexers(ctx, mgr); err != nil {
@@ -119,6 +137,12 @@ func TestMain(m *testing.M) {
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}
+	if err := (&AgentReconciler{
+		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
+		OperatorNamespace: testSystemNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		panic(err)
+	}
 
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
@@ -129,6 +153,12 @@ func TestMain(m *testing.M) {
 		panic("cache sync failed")
 	}
 	testClient = mgr.GetClient()
+
+	// The system namespace must exist for the SystemNamespaceForbidden test.
+	sysNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testSystemNamespace}}
+	if err := testClient.Create(ctx, sysNS); err != nil {
+		panic("create system namespace: " + err.Error())
+	}
 
 	code := m.Run()
 	cancel()

@@ -347,8 +347,10 @@ spec:
                     type: object
                 type: object
               service:
-                description: Service exposes the agent's HTTPS endpoint for intra-cluster
-                  delivery.
+                description: |-
+                  Service exposes the agent's HTTPS endpoint for intra-cluster delivery.
+                  A nil block defaults to an enabled Service on port 8080 at reconcile
+                  time (the CRD default on enabled only fires when the block is present).
                 properties:
                   enabled:
                     default: true
