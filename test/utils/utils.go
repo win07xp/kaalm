@@ -143,6 +143,10 @@ func PortForward(namespace, svc, remotePort string) (int, func(), error) {
 		for scanner.Scan() {
 			if p, ok := parseForwardPort(scanner.Text()); ok {
 				portCh <- p
+				// Keep draining kubectl's combined stdout+stderr so a long-lived
+				// forward never blocks on a full OS pipe buffer. The pipe closes
+				// on EOF when stop() kills the process.
+				_, _ = io.Copy(io.Discard, stdout)
 				return
 			}
 		}
