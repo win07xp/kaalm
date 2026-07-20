@@ -32,9 +32,15 @@ NetworkPolicy boundary, and a task that runs to completion. Runs both locally
 - **One agent image** from `examples/starter-go`, tagged
   `registry.test/agents/starter-go:e2e` (matches the AgentClass
   `allowedImages: registry.test/agents/*`). The image auto-detects task vs agent
-  mode from its client-cert SAN (`.task.agentry.io` -> task mode), so a single
-  image serves both the channel and task specs. `imagePullPolicy: IfNotPresent`
-  plus `k3d image import` means the `registry.test` host is never contacted.
+  mode from its client-cert SAN (`.task.agentry.io` -> task mode). The stock
+  template does not self-complete a task (the README leaves the `completeTask`
+  call to the user), so this slice adds a small env-gated hook: in task mode,
+  when `AGENTRY_TASK_AUTOCOMPLETE` is set, the agent reports that status on
+  startup via the existing `completeTask` helper (with its StalePodCompletion
+  retry). Default behaviour is unchanged when the env is unset. The e2e AgentTask
+  sets `AGENTRY_TASK_AUTOCOMPLETE=success` through `spec.env`, so one image serves
+  both the channel and task specs. `imagePullPolicy: IfNotPresent` plus
+  `k3d image import` means the `registry.test` host is never contacted.
 - **Scope: golden path plus task lifecycle** (about 8 specs). Full S1-S15 mapping,
   multi-provider fallback, and budget enforcement are deferred to a later slice.
 - **Delivery: local and CI, one suite.** Public repo, so Actions minutes are free.
