@@ -5,7 +5,6 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -91,7 +90,6 @@ var _ = Describe("Golden path", Ordered, func() {
 		// A pod in `default` is not in the agent's ingress allow-list, so the
 		// synthesized NetworkPolicy must refuse it. (The allowed gateway path is
 		// already proven by the sync-webhook spec above.)
-		_ = time.Second
 		probe := []string{
 			"run", "np-deny-probe", "-n", "default", "--rm", "-i", "--restart=Never",
 			"--image=curlimages/curl:8.10.1", "--command", "--",
