@@ -78,17 +78,20 @@ func getWorkloadAgent(t *testing.T, name string) *agentryv1alpha1.Agent {
 // reconciler creates and flips its Ready condition to True.
 func markCertReady(t *testing.T, agentName string) {
 	t.Helper()
-	certName := agentName + "-tls"
-	eventually(t, func() error {
-		var cert cmapi.Certificate
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: certName}, &cert); err != nil {
-			return err
-		}
-		cert.Status.Conditions = []cmapi.CertificateCondition{{
-			Type: cmapi.CertificateConditionReady, Status: cmmeta.ConditionTrue, Reason: "Issued",
-		}}
-		return testClient.Status().Update(ctxT(), &cert)
-	})
+	eventually(t, func() error { return markCertReadyErr(agentName) })
+}
+
+// markCertReadyErr is the error-returning core, shared with the task suite.
+func markCertReadyErr(workloadName string) error {
+	var cert cmapi.Certificate
+	key := types.NamespacedName{Namespace: "default", Name: workloadName + "-tls"}
+	if err := testClient.Get(ctxT(), key, &cert); err != nil {
+		return err
+	}
+	cert.Status.Conditions = []cmapi.CertificateCondition{{
+		Type: cmapi.CertificateConditionReady, Status: cmmeta.ConditionTrue, Reason: "Issued",
+	}}
+	return testClient.Status().Update(ctxT(), &cert)
 }
 
 // agentPod fetches the Agent's current non-terminating Pod, or nil.
