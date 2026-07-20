@@ -19,6 +19,7 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,31 +126,37 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Budget check (pre-call, last-known spend state): degrade rewrites the
-	// model, block returns 429 with Retry-After set to the next period start.
+	// Budget check on the PRIMARY (last-known spend state): degrade rewrites
+	// the model, block returns 429 with no fallback (a capped namespace must
+	// not drain a fallback provider's budget).
 	if decision := s.Budget.Enforce(provider, c.Namespace); decision.Action != "" {
 		switch decision.Action {
 		case agentryv1alpha1.BudgetActionBlock:
+			s.Metrics.BudgetThreshold(providerName, c.Namespace, agentryv1alpha1.BudgetActionBlock)
 			writeError(w, http.StatusTooManyRequests, errorBody{
 				Type: "budget_exhausted", Provider: providerName, Retryable: true,
 				Message: fmt.Sprintf("budget for namespace %s on provider %s is exhausted (%d%% used)",
 					c.Namespace, providerName, decision.Percent)}, decision.RetryAfter)
 			return
 		case agentryv1alpha1.BudgetActionDegrade:
+			s.Metrics.BudgetThreshold(providerName, c.Namespace, agentryv1alpha1.BudgetActionDegrade)
 			if decision.DegradeTo != "" && decision.DegradeTo != modelID {
 				modelID = decision.DegradeTo
 			}
 		case agentryv1alpha1.BudgetActionWarn:
+			s.Metrics.BudgetThreshold(providerName, c.Namespace, agentryv1alpha1.BudgetActionWarn)
 			slog.Warn("budget threshold crossed", "namespace", c.Namespace,
 				"provider", providerName, "percent", decision.Percent)
 		}
 	}
 
-	credential, err := s.Store.Credential(r.Context(), provider)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, errorBody{
-			Type: errProviderUnavailable, Provider: providerName,
-			Message: "provider credential unavailable"}, 0)
+	// Rate limit per (namespace, model), sharing the configured ceiling
+	// across live replicas.
+	if !s.RateLimiter.Allow(provider, c.Namespace, modelID) {
+		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "rate_limited")
+		writeError(w, http.StatusTooManyRequests, errorBody{
+			Type: "rate_limited", Provider: providerName, Retryable: true,
+			Message: fmt.Sprintf("rate limit exceeded for namespace %s on model %s", c.Namespace, modelID)}, 1)
 		return
 	}
 
@@ -163,11 +170,80 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamURL := strings.TrimSuffix(provider.Spec.Endpoint, "/") + r.URL.Path
-	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(outBody))
-	if err != nil {
-		badRequest(w, err.Error())
+	// Gateway traffic counts as activity for Agent callers (task Pods do not
+	// hibernate, so their traffic is not tracked).
+	if c.Workload != nil && c.Workload.Kind == KindAgent {
+		s.Activity.RecordTraffic(c.Namespace, c.Workload.Name)
+	}
+
+	// Walk the fallback tree. Each attempt forwards to one candidate with its
+	// own credential and endpoint; the first 2xx (or a non-fallbackable 4xx)
+	// wins. observed collects the failure classes for the exhaustion mapping.
+	observed := map[failClass]bool{}
+	st := &walkState{
+		primary: provider, namespace: c.Namespace, modelID: modelID,
+		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
+	}
+	res, ok := s.tryWithFallbacks(r.Context(), provider, st, func(ctx context.Context, cand *agentryv1alpha1.ModelProvider) forwardResult {
+		fr := s.forwardOnce(ctx, r, cand, outBody, adapter, typeAdapter, modelID)
+		if fr.class != classNone {
+			observed[fr.class] = true
+		}
+		// Count every attempt on a non-primary candidate as a fallback,
+		// whatever its outcome (success is labeled "success").
+		if cand.Name != provider.Name {
+			reason := "success"
+			if fr.class != classNone {
+				reason = failClassName(fr.class)
+			}
+			s.Metrics.Fallback(provider.Name, cand.Name, reason)
+		}
+		return fr
+	})
+	if !ok {
+		status, body := exhaustionError(observed, providerName)
+		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "error")
+		writeError(w, status, body, 0)
 		return
+	}
+	defer func() { _ = res.resp.Body.Close() }()
+
+	// A non-fallbackable failure (400/422/other 4xx) is relayed verbatim.
+	if res.resp.StatusCode < 200 || res.resp.StatusCode > 299 {
+		s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "error")
+		copyDownstreamHeaders(w.Header(), res.resp.Header)
+		w.WriteHeader(res.resp.StatusCode)
+		_, _ = w.Write(res.body)
+		return
+	}
+
+	s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "ok")
+	if isSSE(res.resp) {
+		s.relayStream(w, res.resp, adapter, c.Namespace, res.chosen, modelID)
+		return
+	}
+	if usage, ok := adapter.extractUsage(res.body); ok {
+		s.recordUsage(res.chosen, c.Namespace, modelID, usage)
+	}
+	copyDownstreamHeaders(w.Header(), res.resp.Header)
+	w.WriteHeader(res.resp.StatusCode)
+	_, _ = w.Write(res.body)
+}
+
+// forwardOnce forwards the request to a single candidate provider under the
+// forwarded-header contract and classifies the outcome for the fallback walk.
+func (s *Server) forwardOnce(
+	ctx context.Context, r *http.Request, provider *agentryv1alpha1.ModelProvider,
+	outBody []byte, adapter, typeAdapter providerAdapter, modelID string,
+) forwardResult {
+	credential, err := s.Store.Credential(ctx, provider)
+	if err != nil {
+		return forwardResult{fallilable: true, class: classConnect, err: err}
+	}
+	upstreamURL := strings.TrimSuffix(provider.Spec.Endpoint, "/") + adapter.upstreamPath(r.URL.Path, modelID)
+	upReq, err := http.NewRequestWithContext(ctx, r.Method, upstreamURL, bytes.NewReader(outBody))
+	if err != nil {
+		return forwardResult{fallilable: true, class: classConnect, err: err}
 	}
 	copyForwardedHeaders(upReq.Header, r.Header)
 	typeAdapter.injectCredential(upReq.Header, credential)
@@ -175,39 +251,36 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.upstream().Do(upReq)
 	if err != nil {
-		status, errType := http.StatusServiceUnavailable, errProviderUnavailable
+		class := classConnect
 		if errors.Is(err, os.ErrDeadlineExceeded) || strings.Contains(err.Error(), "context deadline exceeded") {
-			status, errType = http.StatusGatewayTimeout, errProviderTimeout
+			class = classTimeout
 		}
-		writeError(w, status, errorBody{Type: errType, Provider: providerName, Message: err.Error()}, 0)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Gateway traffic counts as activity for Agent callers (task Pods do not
-	// hibernate, so their traffic is not tracked).
-	if c.Workload != nil && c.Workload.Kind == KindAgent {
-		s.Activity.RecordTraffic(c.Namespace, c.Workload.Name)
+		return forwardResult{fallilable: true, class: class, err: err}
 	}
 
+	fallback, class := isFallbackable(resp.StatusCode)
+	fr := forwardResult{resp: resp, fallilable: fallback, class: class, provider: provider.Name, chosen: provider}
 	if isSSE(resp) {
-		s.relayStream(w, resp, adapter, c.Namespace, provider, modelID)
-		return
+		// A streaming 2xx: relay begins after the walk; no body buffering.
+		return fr
 	}
-
-	respBody, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if err != nil {
-		writeError(w, http.StatusBadGateway,
-			errorBody{Type: errProviderError, Provider: providerName, Message: "reading upstream response: " + err.Error()}, 0)
-		return
+		return forwardResult{fallilable: true, class: classConnect, err: err}
 	}
-	if usage, ok := adapter.extractUsage(respBody); ok {
-		s.Spend.Record(c.Namespace, providerName, modelID, usage)
-		s.Budget.Add(provider, c.Namespace, costOf(provider, modelID, usage))
-	}
-	copyDownstreamHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(respBody)
+	// Re-wrap the buffered body so downstream reads still work.
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	fr.body = body
+	return fr
+}
+
+// recordUsage folds token usage into spend, budget, and metrics.
+func (s *Server) recordUsage(provider *agentryv1alpha1.ModelProvider, namespace, modelID string, usage Usage) {
+	s.Spend.Record(namespace, provider.Name, modelID, usage)
+	s.Budget.Add(provider, namespace, costOf(provider, modelID, usage))
+	s.Metrics.Tokens(provider.Name, modelID, namespace, usage)
+	s.Metrics.Spend(provider.Name, namespace, costOf(provider, modelID, usage))
 }
 
 // copyForwardedHeaders applies the forwarded-header contract: strip inbound

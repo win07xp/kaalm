@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // Usage is the token spend extracted from a provider response.
@@ -45,16 +46,25 @@ type providerAdapter interface {
 	// fixupRequestBody may rewrite the (already model-rewritten) request body
 	// map before forwarding, for example injecting stream_options.
 	fixupRequestBody(body map[string]any)
+	// upstreamPath rewrites the inbound request path for the upstream. Most
+	// adapters pass it through; Vertex embeds the model in the path and
+	// injects ?alt=sse.
+	upstreamPath(inboundPath, modelID string) string
 }
 
 // adapterForPath maps a request path to the adapter that registered it.
 // Unrecognized paths on the LLM listener are rejected with 400.
 func adapterForPath(urlPath string) (providerAdapter, bool) {
-	switch urlPath {
+	path, _, _ := strings.Cut(urlPath, "?") // strip any query string for matching
+	switch path {
 	case "/v1/messages":
 		return anthropicAdapter{}, true
 	case "/v1/chat/completions", "/v1/completions":
 		return openaiAdapter{}, true
+	}
+	// Vertex embeds project/location; match on the method suffix.
+	if isVertexPath(path) {
+		return vertexAdapter{}, true
 	}
 	return nil, false
 }
@@ -64,6 +74,7 @@ const (
 	providerTypeAnthropic        = "anthropic"
 	providerTypeOpenAI           = "openai"
 	providerTypeOpenAICompatible = "openai-compatible"
+	providerTypeVertex           = "google-vertex"
 )
 
 // adapterForProviderType returns the adapter that speaks a ModelProvider's
@@ -74,6 +85,8 @@ func adapterForProviderType(providerType string) (providerAdapter, bool) {
 		return anthropicAdapter{}, true
 	case providerTypeOpenAI, providerTypeOpenAICompatible:
 		return openaiAdapter{}, true
+	case providerTypeVertex:
+		return vertexAdapter{}, true
 	}
 	return nil, false
 }
@@ -133,6 +146,8 @@ func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 
 func (anthropicAdapter) fixupRequestBody(map[string]any) {}
 
+func (anthropicAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }
+
 // ---- OpenAI and OpenAI-compatible ----
 
 type openaiAdapter struct{}
@@ -191,3 +206,5 @@ func (openaiAdapter) fixupRequestBody(body map[string]any) {
 		body["stream_options"] = map[string]any{"include_usage": true}
 	}
 }
+
+func (openaiAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }

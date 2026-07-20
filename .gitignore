@@ -22,3 +22,7 @@ go.work
 examples/starter-go/starter-go
 __pycache__/
 *.pyc
+
+# Stray root-built binaries
+/gateway
+/manager

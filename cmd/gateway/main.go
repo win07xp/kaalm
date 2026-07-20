@@ -15,7 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"net/http"
+
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
 	"github.com/win07xp/kubeclaw/internal/gateway"
@@ -44,6 +48,8 @@ func main() {
 		userAddr             string
 		agentHostOverride    string
 		agentPortOverride    int
+		metricsAddr          string
+		maxFallbackDepth     int
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "LLM listener address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
@@ -58,6 +64,8 @@ func main() {
 	flag.StringVar(&userAddr, "user-addr", ":8080", "User Gateway listener address")
 	flag.StringVar(&agentHostOverride, "agent-host-override", "", "redirect agent delivery dials to this host (dev only)")
 	flag.IntVar(&agentPortOverride, "agent-port-override", 0, "redirect agent delivery dials to this port (dev only)")
+	flag.StringVar(&metricsAddr, "metrics-addr", ":9090", "Prometheus metrics listener address")
+	flag.IntVar(&maxFallbackDepth, "max-fallback-depth", 3, "total providers attempted per request, including the primary")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -127,9 +135,31 @@ func main() {
 		UserListenAddr:           userAddr,
 		AgentServiceHostOverride: agentHostOverride,
 		AgentServicePortOverride: int32(agentPortOverride),
+		MaxFallbackDepth:         maxFallbackDepth,
+		Replicas: func() int {
+			var pods corev1.PodList
+			if err := cl.GetClient().List(context.Background(), &pods,
+				client.InNamespace(operatorNamespace),
+				client.MatchingLabels{"app.kubernetes.io/component": "gateway"}); err != nil || len(pods.Items) == 0 {
+				return 1
+			}
+			return len(pods.Items)
+		},
 	}, store, tokens, gateway.NewMemorySpend())
 	server.Async = async
 	server.Completions = &gateway.KubeCompletionWriter{Client: clientset}
+	server.Metrics = gateway.NewMetrics(metrics.Registry)
+	server.Recorder = cl.GetEventRecorderFor("agentry-gateway")
+
+	// Prometheus metrics on a dedicated unauthenticated in-cluster port.
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
+		srv := &http.Server{Addr: metricsAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("metrics listener failed", "error", err)
+		}
+	}()
 	if activatorClient, err := gateway.NewControllerActivator(
 		operatorNamespace, certFile, keyFile, caFile); err == nil {
 		server.Activator = activatorClient

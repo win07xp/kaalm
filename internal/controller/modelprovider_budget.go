@@ -165,6 +165,9 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		clusterTotal += v
 	}
 	mp.Status.ClusterSpentUSD = strconv.FormatFloat(clusterTotal, 'f', 2, 64)
+	for ns, v := range current {
+		providerBudgetCanonical.WithLabelValues(mp.Name, ns, currentPeriod).Set(v)
+	}
 	return nil
 }
 

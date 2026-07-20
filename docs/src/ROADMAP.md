@@ -11,7 +11,7 @@ Vertex OAuth) behind interfaces so they land late and stay testable.
 
 ## Status at a glance
 
-Phases 0 through 8 are done. Phase 9 is next.
+All nine phases are done: the operator is feature-complete against the v1 design. The [scenario-coverage map](appendix/scenario-coverage.md) ties each acceptance scenario to the tests that verify it.
 
 | Phase | Status | Delivers |
 |---|---|---|
@@ -24,7 +24,7 @@ Phases 0 through 8 are done. Phase 9 is next.
 | 6. Controller and gateway | Done | Activity fan-out, wake and the activator, the hibernation phases, and the budget ConfigMap exchange |
 | 7. User gateway and AgentChannel | Done | The webhook flow (sync and async), the async response lifecycle, and the AgentChannel reconciler with its delete handshake |
 | 8. Runtime SDK and templates | Done | The runtime contract as a Go library, and the Go and Python starter templates, which then become the end-to-end test agent |
-| 9. Hardening | Next | The Anthropic and Vertex adapters, fallback traversal, rate limiting, the full metric catalog and PII-safe logging, and the S1 to S15 scenarios as end-to-end tests |
+| 9. Hardening | Done | The Vertex adapter, fallback traversal, rate limiting, the Prometheus metric catalog and PII-safe logging, and the S1 to S15 scenario-coverage map |
 
 Milestones worth naming: Phase 3 is "Agent to Pod on a cluster". Phase 5 is "an LLM
 call proxied with auth enforced". Phase 7 is "an external webhook reaches an agent

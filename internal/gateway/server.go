@@ -45,6 +45,12 @@ type Config struct {
 	CAFile string
 	// MaxBodyBytes caps inbound LLM request bodies (default 4 MiB).
 	MaxBodyBytes int64
+	// MaxFallbackDepth bounds the total providers attempted per request,
+	// including the primary (default 3).
+	MaxFallbackDepth int
+	// Replicas returns the live gateway replica count for rate-limit
+	// division; nil means a single replica.
+	Replicas func() int
 	// UpstreamTimeout bounds each upstream provider call.
 	UpstreamTimeout time.Duration
 	// UpstreamCAs, when set, replaces the system pool for upstream TLS
@@ -91,6 +97,11 @@ type Server struct {
 	Activity      *ActivityStore
 	Budget        *BudgetLedger
 	ChannelHealth *ChannelHealthStore
+	RateLimiter   *RateLimiter
+	Metrics       *Metrics
+	// Recorder emits Kubernetes Events (runtime FallbackIneligible,
+	// CredentialsInvalid). A nil recorder no-ops.
+	Recorder EventRecorder
 	// Activator wakes hibernated Agents via the controller (nil in tests or
 	// when the controller identity is not configured).
 	Activator ActivatorClient
@@ -145,6 +156,9 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 	if cfg.CallbackBackoff == nil {
 		cfg.CallbackBackoff = []time.Duration{time.Second, 5 * time.Second, 25 * time.Second}
 	}
+	if cfg.MaxFallbackDepth == 0 {
+		cfg.MaxFallbackDepth = 3
+	}
 	return &Server{
 		Config: cfg,
 		Store:  store,
@@ -157,6 +171,7 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 		Activity:      NewActivityStore(),
 		Budget:        NewBudgetLedger(),
 		ChannelHealth: NewChannelHealthStore(cfg.ChannelHealthWindow),
+		RateLimiter:   NewRateLimiter(cfg.Replicas),
 	}
 }
 

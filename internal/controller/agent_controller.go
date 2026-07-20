@@ -224,6 +224,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *agentryv1alpha1
 			return ctrl.Result{}, err
 		}
 		r.Recorder.Event(agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonWoken, "waking from hibernation")
+		wakesTotal.WithLabelValues(agent.Namespace, "activator").Inc()
 		delete(agent.Annotations, agentryv1alpha1.AnnotationWake)
 		if err := r.Update(ctx, agent); err != nil {
 			// The next reconcile observes the annotation on a Resuming agent
@@ -267,6 +268,7 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *agentryv1
 	r.setReady(agent, false, agentryv1alpha1.ReasonHibernated, "Pod deleted; PVC retained for wake")
 	r.Recorder.Event(agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonHibernated,
 		"hibernated: Pod deleted, state retained")
+	hibernationsTotal.WithLabelValues(agent.Namespace).Inc()
 	return ctrl.Result{}, r.Status().Update(ctx, agent)
 }
 
