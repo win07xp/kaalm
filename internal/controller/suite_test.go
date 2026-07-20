@@ -82,10 +82,14 @@ func (f *fakeActivityClient) NamespaceActivity(context.Context, string) ([]Repli
 type fakeHealthChecker struct {
 	mu      sync.Mutex
 	results map[string]ProviderProbeResult
+	calls   map[string]int
 }
 
 func newFakeHealth() *fakeHealthChecker {
-	return &fakeHealthChecker{results: map[string]ProviderProbeResult{}}
+	return &fakeHealthChecker{
+		results: map[string]ProviderProbeResult{},
+		calls:   map[string]int{},
+	}
 }
 
 func (f *fakeHealthChecker) set(name string, res ProviderProbeResult) {
@@ -94,11 +98,20 @@ func (f *fakeHealthChecker) set(name string, res ProviderProbeResult) {
 	f.results[name] = res
 }
 
+// count reports how many times Probe was invoked for a provider, so tests can
+// assert the probe was (or was not) reached.
+func (f *fakeHealthChecker) count(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[name]
+}
+
 func (f *fakeHealthChecker) Probe(
 	_ context.Context, provider *agentryv1alpha1.ModelProvider, _ string,
 ) ProviderProbeResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls[provider.Name]++
 	if res, ok := f.results[provider.Name]; ok {
 		return res
 	}

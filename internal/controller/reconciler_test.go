@@ -221,7 +221,7 @@ func TestModelProvider_CredentialsMissingIsNotReady(t *testing.T) {
 func TestModelProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 	mkSecret(t, "mp-ok-key")
 	mkProvider(t, "mp-ok", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.HealthCheck.Enabled = true
+		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: true}
 	})
 	get := func() []metav1.Condition {
 		var mp agentryv1alpha1.ModelProvider
@@ -242,13 +242,49 @@ func TestModelProvider_AuthFailedIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-auth-key")
 	fakeHealth.set("mp-auth", ProviderProbeResult{AuthFailed: true})
 	mkProvider(t, "mp-auth", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.HealthCheck.Enabled = true
+		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: true}
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp agentryv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-auth"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, agentryv1alpha1.ReasonCredentialsInvalid)
+}
+
+func TestModelProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
+	mkSecret(t, "mp-nohc-key")
+	// A probe result that WOULD block Ready if the probe ran, so a passing
+	// test proves the probe was genuinely skipped rather than merely healthy.
+	fakeHealth.set("mp-nohc", ProviderProbeResult{AuthFailed: true})
+	mkProvider(t, "mp-nohc", func(mp *agentryv1alpha1.ModelProvider) {
+		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: false}
+	})
+	expectReady(t, func() []metav1.Condition {
+		var mp agentryv1alpha1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nohc"}, &mp)
+		return mp.Status.Conditions
+	}, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	if n := fakeHealth.count("mp-nohc"); n != 0 {
+		t.Fatalf("healthCheck.enabled=false: expected probe to be skipped, called %d times", n)
+	}
+}
+
+func TestModelProvider_NilHealthCheckRunsProbe(t *testing.T) {
+	mkSecret(t, "mp-nilhc-key")
+	// Leave HealthCheck nil: reconcile-time defaulting must still run the probe.
+	mkProvider(t, "mp-nilhc", nil)
+	get := func() []metav1.Condition {
+		var mp agentryv1alpha1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nilhc"}, &mp)
+		return mp.Status.Conditions
+	}
+	expectReady(t, get, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	eventually(t, func() error {
+		if fakeHealth.count("mp-nilhc") == 0 {
+			return errString("nil healthCheck: expected probe to run, but it was never called")
+		}
+		return nil
+	})
 }
 
 func TestModelProvider_FallbackCycleIsNotReady(t *testing.T) {

@@ -1,9 +1,7 @@
 # Hermetic e2e: google-vertex has no liveness probe implemented, so Probe
 # returns Skipped (no network) and Ready goes True on a dummy credential.
-# An openai-type provider would run a real authenticated health probe that
-# 401s on the dummy credential and blocks Ready; healthCheck.enabled:false
-# cannot currently disable it (the field is `bool,omitempty`, so false is
-# dropped and reconcile-time defaulting re-enables the probe).
+# healthCheck.enabled:false now works too (the bool no longer carries omitempty),
+# but google-vertex is kept here because it needs no live endpoint at all.
 apiVersion: agentry.io/v1alpha1
 kind: ModelProvider
 metadata:

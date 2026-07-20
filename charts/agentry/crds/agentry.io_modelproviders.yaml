@@ -157,11 +157,17 @@ spec:
                   type: object
                 type: array
               healthCheck:
-                description: HealthCheck configures the periodic upstream liveness
-                  probe.
+                description: |-
+                  HealthCheck configures the periodic upstream liveness probe. A nil block
+                  defaults to an enabled probe at reconcile time (the CRD default on enabled
+                  only fires when the block is present).
                 properties:
                   enabled:
                     default: true
+                    description: |-
+                      Enabled runs the periodic upstream liveness probe. Set false to disable it.
+                      The json tag deliberately has no omitempty: a serialized explicit false
+                      must survive the wire, or the CRD default would overwrite it.
                     type: boolean
                   intervalSeconds:
                     format: int32

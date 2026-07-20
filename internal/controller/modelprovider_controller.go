@@ -124,7 +124,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Liveness probe.
 	requeue := ctrl.Result{}
-	if mp.Spec.HealthCheck.Enabled {
+	if healthCheckEnabled(&mp) {
 		res := r.Health.Probe(ctx, &mp, credential)
 		switch {
 		case res.AuthFailed:
@@ -309,9 +309,16 @@ func (r *ModelProviderReconciler) isReferenced(ctx context.Context, name string)
 	return len(classes.Items) > 0, nil
 }
 
+// healthCheckEnabled reports whether the periodic upstream probe should run. A
+// nil HealthCheck block defaults to enabled; an explicit enabled=false disables
+// it (the field carries no omitempty so a false survives the wire).
+func healthCheckEnabled(mp *agentryv1alpha1.ModelProvider) bool {
+	return mp.Spec.HealthCheck == nil || mp.Spec.HealthCheck.Enabled
+}
+
 func (r *ModelProviderReconciler) interval(mp *agentryv1alpha1.ModelProvider) time.Duration {
-	if s := mp.Spec.HealthCheck.IntervalSeconds; s > 0 {
-		return time.Duration(s) * time.Second
+	if hc := mp.Spec.HealthCheck; hc != nil && hc.IntervalSeconds > 0 {
+		return time.Duration(hc.IntervalSeconds) * time.Second
 	}
 	return defaultHealthInterval
 }

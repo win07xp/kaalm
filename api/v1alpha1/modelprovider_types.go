@@ -56,9 +56,11 @@ type ModelProviderSpec struct {
 	// this provider's type.
 	// +optional
 	Fallback []LocalObjectReference `json:"fallback,omitempty"`
-	// HealthCheck configures the periodic upstream liveness probe.
+	// HealthCheck configures the periodic upstream liveness probe. A nil block
+	// defaults to an enabled probe at reconcile time (the CRD default on enabled
+	// only fires when the block is present).
 	// +optional
-	HealthCheck ModelProviderHealthCheck `json:"healthCheck,omitempty"`
+	HealthCheck *ModelProviderHealthCheck `json:"healthCheck,omitempty"`
 }
 
 // ModelProviderModel is one entry in the catalog. Costs are decimal USD strings
@@ -123,9 +125,12 @@ type ModelProviderRateLimits struct {
 
 // ModelProviderHealthCheck configures the liveness probe.
 type ModelProviderHealthCheck struct {
+	// Enabled runs the periodic upstream liveness probe. Set false to disable it.
+	// The json tag deliberately has no omitempty: a serialized explicit false
+	// must survive the wire, or the CRD default would overwrite it.
 	// +kubebuilder:default=true
 	// +optional
-	Enabled bool `json:"enabled,omitempty"`
+	Enabled bool `json:"enabled"`
 	// +optional
 	IntervalSeconds int32 `json:"intervalSeconds,omitempty"`
 	// +optional
