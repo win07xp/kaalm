@@ -1,0 +1,34 @@
+{{/*
+A default AgentClass platform teams can customize or delete. It leaves
+runtimeClassName unset (the cluster default runtime), since stock clusters
+define no RuntimeClass and pinning a named one would fail Pod admission
+everywhere it is not installed. A sandboxed (gVisor) class is shipped as an
+example manifest, not a live default, for the same reason. See
+docs/src/operations/deployment.md.
+*/}}
+{{- if .Values.standardAgentClass.enabled }}
+apiVersion: agentry.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: standard
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+  annotations:
+    # helm keep: the class outlives an uninstall so running Agents are not
+    # orphaned; platform teams delete it explicitly.
+    helm.sh/resource-policy: keep
+spec:
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    defaults:
+      requests: { cpu: "500m", memory: "1Gi" }
+      limits: { cpu: "1", memory: "2Gi" }
+  lifecycle:
+    defaultIdleTimeout: 30m
+    maxIdleTimeout: 24h
+    defaultHibernationDelay: 30m
+    maxHibernationDelay: 2h
+    defaultWakeTimeout: 2m
+    maxWakeTimeout: 5m
+{{- end }}

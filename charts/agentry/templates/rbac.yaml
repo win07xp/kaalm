@@ -1,0 +1,165 @@
+{{/*
+ServiceAccounts and RBAC for the controller and the gateway. The controller
+ClusterRole rules are synced from config/rbac/role.yaml (controller-gen output)
+by `make chart-sync`; the gateway rules are hand-authored because the gateway
+is a plain binary, not a controller-gen target. See docs/src/security/rbac.md.
+*/}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentry-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentry-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+---
+# Controller ClusterRole (synced from the controller-gen manager-role).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentry-controller
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+rules:
+{{ .Files.Get "files/controller-rules.yaml" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentry-controller
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentry-controller
+subjects:
+  - kind: ServiceAccount
+    name: agentry-controller
+    namespace: {{ .Release.Namespace }}
+---
+# Leader-election and event RBAC for the manager, scoped to the release
+# namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentry-controller-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentry-controller-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentry-controller-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: agentry-controller
+    namespace: {{ .Release.Namespace }}
+---
+# Gateway ClusterRole. Reach is cluster-wide by necessity: a ClusterRoleBinding
+# cannot be scoped to one namespace, which is why the gateway gets a
+# ClusterRole/Role pair. Secret CRUD is deliberately NOT here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentry-gateway
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+rules:
+  # Mode 2 (gateway-only tier) bearer-token validation.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  # Provider routing, task completion, and the source-IP-to-Pod cross-check.
+  - apiGroups: ["agentry.io"]
+    resources: ["agents", "agenttasks", "agentclasses", "modelproviders"]
+    verbs: ["get", "list", "watch"]
+  # AgentChannel routing plus the channel-disconnected annotation in the
+  # delete handshake.
+  - apiGroups: ["agentry.io"]
+    resources: ["agentchannels"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # Agent Service endpoints for delivery. Cannot be namespace-scoped via a
+  # ClusterRoleBinding; benign because Services carry no secret material.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentry-gateway
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentry-gateway
+subjects:
+  - kind: ServiceAccount
+    name: agentry-gateway
+    namespace: {{ .Release.Namespace }}
+---
+# Gateway namespaced Role in agentry-system: LLM credential reads and the
+# budget/async ConfigMap surface. `delete` is absent (cleanup is
+# controller-side). Per-channel and per-task Secret/ConfigMap grants are
+# created dynamically by the reconcilers, not shipped here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentry-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentry-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentry-gateway
+subjects:
+  - kind: ServiceAccount
+    name: agentry-gateway
+    namespace: {{ .Release.Namespace }}

@@ -166,10 +166,12 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 CHART_DIR ?= charts/agentry
 
 .PHONY: chart-sync
-chart-sync: manifests ## Sync generated CRDs from config/crd/bases into the Helm chart's crds/.
+chart-sync: manifests ## Sync generated CRDs and controller RBAC into the Helm chart.
 	rm -f $(CHART_DIR)/crds/*.yaml
 	cp config/crd/bases/*.yaml $(CHART_DIR)/crds/
-	@echo "synced $$(ls $(CHART_DIR)/crds/*.yaml | wc -l) CRDs into $(CHART_DIR)/crds/"
+	@mkdir -p $(CHART_DIR)/files
+	@awk '/^rules:/{f=1;next} f' config/rbac/role.yaml > $(CHART_DIR)/files/controller-rules.yaml
+	@echo "synced $$(ls $(CHART_DIR)/crds/*.yaml | wc -l) CRDs and the controller RBAC into $(CHART_DIR)/"
 
 .PHONY: chart-lint
 chart-lint: chart-sync ## Lint the Helm chart (after syncing CRDs).

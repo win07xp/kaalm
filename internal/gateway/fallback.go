@@ -52,6 +52,10 @@ type forwardResult struct {
 	chosen     *agentryv1alpha1.ModelProvider // the candidate resource, for usage accounting
 }
 
+// fallbackReasonSuccess is the metric reason label for a fallback attempt that
+// succeeded (as opposed to the failClassName labels for failed attempts).
+const fallbackReasonSuccess = "success"
+
 // failClassName maps a failure class to a metric label.
 func failClassName(c failClass) string {
 	switch c {

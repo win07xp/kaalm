@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,6 +51,14 @@ func main() {
 		agentPortOverride    int
 		metricsAddr          string
 		maxFallbackDepth     int
+		maxMessageBodyBytes  int64
+		maxResponseBodyBytes int64
+		syncDeliveryDeadline time.Duration
+		agentReadTimeout     time.Duration
+		agentConnectTimeout  time.Duration
+		channelHealthWindow  time.Duration
+		deliveryBackoff      string
+		callbackBackoff      string
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "LLM listener address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
@@ -66,6 +75,14 @@ func main() {
 	flag.IntVar(&agentPortOverride, "agent-port-override", 0, "redirect agent delivery dials to this port (dev only)")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9090", "Prometheus metrics listener address")
 	flag.IntVar(&maxFallbackDepth, "max-fallback-depth", 3, "total providers attempted per request, including the primary")
+	flag.Int64Var(&maxMessageBodyBytes, "max-message-body-bytes", 1<<20, "inbound webhook body cap")
+	flag.Int64Var(&maxResponseBodyBytes, "max-response-body-bytes", 900<<10, "agent reply body cap")
+	flag.DurationVar(&syncDeliveryDeadline, "sync-delivery-deadline", 30*time.Second, "sync-mode wall-clock budget")
+	flag.DurationVar(&agentReadTimeout, "agent-read-timeout", 10*time.Second, "per-attempt agent/callback read timeout")
+	flag.DurationVar(&agentConnectTimeout, "agent-connect-timeout", time.Second, "agent-delivery connect timeout")
+	flag.DurationVar(&channelHealthWindow, "channel-health-window", 5*time.Minute, "rolling window for PlatformConnected")
+	flag.StringVar(&deliveryBackoff, "delivery-backoff", "1s,5s,25s", "agent-delivery retry backoff (comma-separated)")
+	flag.StringVar(&callbackBackoff, "callback-backoff", "1s,5s,25s", "callback retry backoff schedule (comma-separated)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -81,7 +98,18 @@ func main() {
 	utilruntime.Must(cmapi.AddToScheme(scheme))
 
 	restCfg := ctrl.GetConfigOrDie()
-	cl, err := cluster.New(restCfg, func(o *cluster.Options) { o.Scheme = scheme })
+	// Secrets are read uncached (direct GET), never through an informer. The
+	// gateway holds only get/watch on Secrets in agentry-system plus dynamic
+	// resourceNames-scoped grants on individual channel Secrets (no cluster-wide
+	// list), so a cached Secret informer would issue a forbidden cluster-scoped
+	// LIST and the read would hang waiting for a sync that never lands. See
+	// docs/src/security/rbac.md (gateway Secret access).
+	cl, err := cluster.New(restCfg, func(o *cluster.Options) {
+		o.Scheme = scheme
+		o.Client.Cache = &client.CacheOptions{
+			DisableFor: []client.Object{&corev1.Secret{}},
+		}
+	})
 	if err != nil {
 		logger.Error("building cluster cache", "error", err)
 		os.Exit(1)
@@ -136,6 +164,14 @@ func main() {
 		AgentServiceHostOverride: agentHostOverride,
 		AgentServicePortOverride: int32(agentPortOverride),
 		MaxFallbackDepth:         maxFallbackDepth,
+		MaxMessageBodyBytes:      maxMessageBodyBytes,
+		MaxResponseBodyBytes:     maxResponseBodyBytes,
+		SyncDeliveryDeadline:     syncDeliveryDeadline,
+		AgentReadTimeout:         agentReadTimeout,
+		AgentConnectTimeout:      agentConnectTimeout,
+		ChannelHealthWindow:      channelHealthWindow,
+		DeliveryBackoff:          parseBackoff(deliveryBackoff, logger),
+		CallbackBackoff:          parseBackoff(callbackBackoff, logger),
 		Replicas: func() int {
 			var pods corev1.PodList
 			if err := cl.GetClient().List(context.Background(), &pods,
@@ -237,4 +273,23 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("agentry gateway shut down")
+}
+
+// parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".
+// An empty or malformed value falls back to the Config default (nil).
+func parseBackoff(raw string, logger *slog.Logger) []time.Duration {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]time.Duration, 0, len(parts))
+	for _, part := range parts {
+		d, err := time.ParseDuration(strings.TrimSpace(part))
+		if err != nil {
+			logger.Warn("ignoring malformed backoff entry", "value", part, "error", err)
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }

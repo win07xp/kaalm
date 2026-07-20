@@ -65,3 +65,9 @@ trustManager:
   # Optional namespaceSelector object passed verbatim into the CA Bundle's
   # target.namespaceSelector. Empty projects into every non-system namespace.
   bundleSelector: {}
+
+# A default "standard" AgentClass for general-purpose agents. Set false to omit
+# it (platform teams often ship their own). It carries helm.sh/resource-policy:
+# keep so an uninstall does not orphan running Agents.
+standardAgentClass:
+  enabled: true

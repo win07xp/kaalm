@@ -190,9 +190,9 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 			observed[fr.class] = true
 		}
 		// Count every attempt on a non-primary candidate as a fallback,
-		// whatever its outcome (success is labeled "success").
+		// whatever its outcome (a succeeding attempt is labeled "success").
 		if cand.Name != provider.Name {
-			reason := "success"
+			reason := fallbackReasonSuccess
 			if fr.class != classNone {
 				reason = failClassName(fr.class)
 			}

@@ -1,0 +1,147 @@
+{{- include "agentry.replicaFloor" .Values.gateway.replicas -}}
+{{/*
+The gateway Deployment, Service, and PodDisruptionBudget. The two logical
+gateways (LLM proxy on :8443, User webhook on :8080) share one Deployment; the
+multi-replica state model degrades gracefully to one replica, so the floor is
+for upgrade/drain headroom rather than correctness. See
+docs/src/operations/deployment.md.
+*/}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentry-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentry
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "agentry.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: agentry-gateway
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          args:
+            - --listen-addr=:8443
+            - --user-addr=:8080
+            - --health-addr=:{{ .Values.gateway.healthPort }}
+            - --metrics-addr=:9090
+            - --tls-cert=/var/run/agentry/tls.crt
+            - --tls-key=/var/run/agentry/tls.key
+            - --tls-ca=/var/run/agentry/ca.crt
+            - --max-fallback-depth={{ .Values.gateway.maxFallbackDepth }}
+            - --max-llm-body-bytes={{ include "agentry.bytes" .Values.gateway.maxLLMRequestBodyBytes }}
+            - --max-message-body-bytes={{ include "agentry.bytes" .Values.gateway.maxMessageBodyBytes }}
+            - --max-response-body-bytes={{ include "agentry.bytes" .Values.gateway.maxResponseBodyBytes }}
+            - --sync-delivery-deadline={{ .Values.gateway.syncDeliveryDeadline }}
+            - --agent-read-timeout={{ .Values.gateway.agentReadTimeout }}
+            - --agent-connect-timeout={{ .Values.gateway.agentDeliveryConnectTimeout }}
+            - --channel-health-window={{ .Values.gateway.channelHealthWindow }}
+            - --delivery-backoff={{ .Values.gateway.agentDeliveryRetryBackoff }}
+            - --callback-backoff={{ .Values.gateway.callbackRetryBackoff }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: user
+              containerPort: 8080
+            - name: llm
+              containerPort: 8443
+            - name: metrics
+              containerPort: 9090
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.gateway.healthPort }}
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.gateway.healthPort }}
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: agentry-tls
+              mountPath: /var/run/agentry
+              readOnly: true
+      volumes:
+        - name: agentry-tls
+          projected:
+            sources:
+              - secret:
+                  name: agentry-gateway-tls
+                  items:
+                    - { key: tls.crt, path: tls.crt }
+                    - { key: tls.key, path: tls.key }
+              - configMap:
+                  name: agentry-ca
+                  items:
+                    - { key: ca.crt, path: ca.crt }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentry-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    app.kubernetes.io/name: agentry
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: user
+      port: 8080
+      targetPort: 8080
+    - name: llm
+      port: 8443
+      targetPort: 8443
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentry-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentry
+      app.kubernetes.io/component: gateway
