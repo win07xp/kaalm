@@ -1,0 +1,14 @@
+apiVersion: agentry.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: e2e-openai
+spec:
+  type: openai
+  endpoint: https://api.openai.com
+  credentialsRef:
+    name: e2e-openai-key
+    key: token
+  models:
+    - id: gpt-4o
+      costPer1MInputTokens: "2.50"
+      costPer1MOutputTokens: "10.00"

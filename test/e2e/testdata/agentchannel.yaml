@@ -1,0 +1,17 @@
+apiVersion: agentry.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: e2e-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: e2e-agent
+  type: webhook
+  webhook:
+    path: /channels/e2e/e2e-channel
+    responseMode: sync
+    auth:
+      type: bearer
+      secretRef:
+        name: e2e-hook
+        key: token
