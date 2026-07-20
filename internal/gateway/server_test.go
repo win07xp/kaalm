@@ -474,10 +474,11 @@ func TestAuthMatrix(t *testing.T) {
 		{"task cert on heartbeat", &taskCert, "/v1/agent/heartbeat", 403},
 		{"agent cert on controller path", &agentC, "/v1/activity", 403},
 		{"no cert on controller path", nil, "/v1/activity", 401},
-		{"controller cert on activity passes auth", &controllerCert, "/v1/activity", 501},
+		// 400 = past auth into the handler (missing namespace param).
+		{"controller cert on activity passes auth", &controllerCert, "/v1/activity", 400},
 		{"controller cert on channels-health passes auth", &controllerCert, "/v1/channels/health", 501},
 		{"task cert on task-complete passes auth", &taskCert, "/v1/task/complete", 501},
-		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 501},
+		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 200},
 		{"unknown path", &agentC, "/v2/other", 400},
 	}
 	for _, c := range cases {

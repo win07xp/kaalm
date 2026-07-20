@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	"github.com/win07xp/kubeclaw/internal/gateway"
 )
 
 const defaultHealthInterval = 60 * time.Second
@@ -110,6 +111,17 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 
+	// Budget reconciliation (the reducer over gateway partials) and the
+	// gateway-reachability mirror.
+	liveGateways, readyGateways, err := r.gatewayPods(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	r.setGatewayReachable(&mp, readyGateways)
+	if err := r.reconcileBudget(ctx, &mp, liveGateways); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Liveness probe.
 	requeue := ctrl.Result{}
 	if mp.Spec.HealthCheck.Enabled {
@@ -135,6 +147,11 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	r.setReady(&mp, true, agentryv1alpha1.ReasonCredentialsValid, "provider is valid")
+	// Budget-tracked providers re-reconcile on a short cadence so the spend
+	// roll-up and rollover stay fresh even without ConfigMap events.
+	if requeue.RequeueAfter == 0 && gateway.PeriodKey(mp.Spec.Budget.Period, time.Now()) != "" {
+		requeue = ctrl.Result{RequeueAfter: time.Minute}
+	}
 	logger.V(1).Info("reconciled ModelProvider", "type", mp.Spec.Type)
 	return r.finish(ctx, &mp, requeue)
 }
@@ -332,7 +349,22 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&agentryv1alpha1.Agent{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload)).
 		Watches(&agentryv1alpha1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload)).
 		Watches(&agentryv1alpha1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
 		Complete(r)
+}
+
+// providerForBudgetCM re-enqueues the ModelProvider owning an
+// agentry-budget-{name} ConfigMap in the operator namespace, so replica
+// partial writes drive the reducer event-driven.
+func (r *ModelProviderReconciler) providerForBudgetCM(_ context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != r.OperatorNamespace {
+		return nil
+	}
+	name, ok := strings.CutPrefix(obj.GetName(), "agentry-budget-")
+	if !ok || name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }
 
 func providersForWorkload(_ context.Context, obj client.Object) []reconcile.Request {

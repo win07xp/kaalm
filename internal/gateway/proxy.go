@@ -23,10 +23,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+
+	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
 )
 
 // SpendRecorder accumulates token usage per (namespace, provider, model). The
@@ -122,6 +125,26 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Budget check (pre-call, last-known spend state): degrade rewrites the
+	// model, block returns 429 with Retry-After set to the next period start.
+	if decision := s.Budget.Enforce(provider, c.Namespace); decision.Action != "" {
+		switch decision.Action {
+		case agentryv1alpha1.BudgetActionBlock:
+			writeError(w, http.StatusTooManyRequests, errorBody{
+				Type: "budget_exhausted", Provider: providerName, Retryable: true,
+				Message: fmt.Sprintf("budget for namespace %s on provider %s is exhausted (%d%% used)",
+					c.Namespace, providerName, decision.Percent)}, decision.RetryAfter)
+			return
+		case agentryv1alpha1.BudgetActionDegrade:
+			if decision.DegradeTo != "" && decision.DegradeTo != modelID {
+				modelID = decision.DegradeTo
+			}
+		case agentryv1alpha1.BudgetActionWarn:
+			slog.Warn("budget threshold crossed", "namespace", c.Namespace,
+				"provider", providerName, "percent", decision.Percent)
+		}
+	}
+
 	credential, err := s.Store.Credential(r.Context(), provider)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorBody{
@@ -161,8 +184,14 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Gateway traffic counts as activity for Agent callers (task Pods do not
+	// hibernate, so their traffic is not tracked).
+	if c.Workload != nil && c.Workload.Kind == KindAgent {
+		s.Activity.RecordTraffic(c.Namespace, c.Workload.Name)
+	}
+
 	if isSSE(resp) {
-		s.relayStream(w, resp, adapter, c.Namespace, providerName, modelID)
+		s.relayStream(w, resp, adapter, c.Namespace, provider, modelID)
 		return
 	}
 
@@ -174,6 +203,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if usage, ok := adapter.extractUsage(respBody); ok {
 		s.Spend.Record(c.Namespace, providerName, modelID, usage)
+		s.Budget.Add(provider, c.Namespace, costOf(provider, modelID, usage))
 	}
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -223,7 +253,7 @@ func isSSE(resp *http.Response) bool {
 // stream completes; a stream ending without usage counts as zero spend.
 func (s *Server) relayStream(
 	w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
-	namespace, providerName, modelID string,
+	namespace string, provider *agentryv1alpha1.ModelProvider, modelID string,
 ) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -245,6 +275,7 @@ func (s *Server) relayStream(
 		}
 	}
 	if usage != (Usage{}) {
-		s.Spend.Record(namespace, providerName, modelID, usage)
+		s.Spend.Record(namespace, provider.Name, modelID, usage)
+		s.Budget.Add(provider, namespace, costOf(provider, modelID, usage))
 	}
 }

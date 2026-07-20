@@ -83,6 +83,12 @@ type effectiveAgentSpec struct {
 	PodLabels        map[string]string
 	PodAnnotations   map[string]string
 	Providers        []string
+
+	// Lifecycle knobs, defaulted from the class and capped by it.
+	IdleTimeout        time.Duration
+	HibernationDelay   time.Duration
+	HibernationEnabled bool
+	ActivitySource     string
 }
 
 // deriveEffectiveSpec merges class defaults into the Agent's spec and clamps
@@ -134,6 +140,25 @@ func deriveEffectiveSpec(agent *agentryv1alpha1.Agent, class *agentryv1alpha1.Ag
 	}
 	for _, p := range agent.Spec.Providers {
 		eff.Providers = append(eff.Providers, p.ProviderRef.Name)
+	}
+
+	// Lifecycle: agent values default from the class and are capped by it.
+	pick := func(v, def, max time.Duration) time.Duration {
+		if v == 0 {
+			v = def
+		}
+		if max > 0 && v > max {
+			v = max
+		}
+		return v
+	}
+	lc, clc := agent.Spec.Lifecycle, class.Spec.Lifecycle
+	eff.IdleTimeout = pick(lc.IdleTimeout.Duration, clc.DefaultIdleTimeout.Duration, clc.MaxIdleTimeout.Duration)
+	eff.HibernationDelay = pick(lc.HibernationDelay.Duration, clc.DefaultHibernationDelay.Duration, clc.MaxHibernationDelay.Duration)
+	eff.HibernationEnabled = lc.HibernationEnabled
+	eff.ActivitySource = lc.ActivitySource
+	if eff.ActivitySource == "" {
+		eff.ActivitySource = "gatewayTraffic"
 	}
 	return eff
 }

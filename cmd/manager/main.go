@@ -69,6 +69,8 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+	var controllerTLSCert, controllerTLSKey, controllerTLSCA string
+	var activatorAddr string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -86,6 +88,12 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&controllerTLSCert, "controller-tls-cert", "",
+		"The controller's TLS certificate (agentry-controller-tls). "+
+			"Enables the activator listener and the gateway activity client when set.")
+	flag.StringVar(&controllerTLSKey, "controller-tls-key", "", "The controller's TLS key.")
+	flag.StringVar(&controllerTLSCA, "controller-tls-ca", "", "The Agentry CA bundle for mTLS with the gateway.")
+	flag.StringVar(&activatorAddr, "activator-addr", ":9443", "The activator/probe listener address.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -240,10 +248,38 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ModelProvider")
 		os.Exit(1)
 	}
+	// The controller TLS identity enables the gateway-facing pieces: the
+	// activity fan-out client and the activator listener. Without it, idle
+	// and hibernation transitions are deferred (no activity data).
+	var activityClient controller.ActivityClient
+	if controllerTLSCert != "" {
+		activityClient = &controller.GatewayActivityClient{
+			Reader:            mgr.GetClient(),
+			OperatorNamespace: operatorNamespace,
+			CertFile:          controllerTLSCert,
+			KeyFile:           controllerTLSKey,
+			CAFile:            controllerTLSCA,
+		}
+		if err := mgr.Add(&controller.ActivatorServer{
+			Client:            mgr.GetClient(),
+			OperatorNamespace: operatorNamespace,
+			Addr:              activatorAddr,
+			CertFile:          controllerTLSCert,
+			KeyFile:           controllerTLSKey,
+			CAFile:            controllerTLSCA,
+		}); err != nil {
+			setupLog.Error(err, "unable to add the activator server")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("controller TLS identity not configured; activator and activity client disabled")
+	}
+
 	if err := (&controller.AgentReconciler{
 		Client:            mgr.GetClient(),
 		Recorder:          mgr.GetEventRecorderFor("agent-controller"),
 		OperatorNamespace: operatorNamespace,
+		Activity:          activityClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Agent")
 		os.Exit(1)

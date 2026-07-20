@@ -56,10 +56,12 @@ type Config struct {
 
 // Server is the Agentry Gateway's :8443 surface.
 type Server struct {
-	Config Config
-	Store  Store
-	Auth   *Authenticator
-	Spend  SpendRecorder
+	Config   Config
+	Store    Store
+	Auth     *Authenticator
+	Spend    SpendRecorder
+	Activity *ActivityStore
+	Budget   *BudgetLedger
 
 	upstreamOnce   sync.Once
 	upstreamClient *http.Client
@@ -87,7 +89,9 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 			OperatorNamespace:    cfg.OperatorNamespace,
 			DisableSourceIPCheck: cfg.DisableSourceIPCheck,
 		},
-		Spend: spend,
+		Spend:    spend,
+		Activity: NewActivityStore(),
+		Budget:   NewBudgetLedger(),
 	}
 }
 
@@ -101,14 +105,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.Auth.LLMPaths(s.handleLLMProxy))
 	mux.HandleFunc("/v1/completions", s.Auth.LLMPaths(s.handleLLMProxy))
 
-	// Agent-report paths: mTLS-only, kind split at the handler. The handler
-	// bodies land with the controller-integration and user-gateway phases;
-	// the auth surface is complete now so the path-to-auth mapping is final.
-	mux.HandleFunc("/v1/agent/heartbeat", s.Auth.AgentReportPaths(KindAgent, notImplemented))
+	// Agent-report paths: mTLS-only, kind split at the handler. The
+	// task-complete body lands with the user-gateway phase.
+	mux.HandleFunc("/v1/agent/heartbeat", s.Auth.AgentReportPaths(KindAgent, s.handleHeartbeat))
 	mux.HandleFunc("/v1/task/complete", s.Auth.AgentReportPaths(KindAgentTask, notImplemented))
 
-	// Controller-only paths: controller SAN required.
-	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(notImplemented))
+	// Controller-only paths: controller SAN required. Channel health lands
+	// with the user-gateway phase.
+	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(s.handleActivity))
 	mux.HandleFunc("/v1/channels/health", s.Auth.ControllerPaths(notImplemented))
 
 	// Anything else on the LLM listener is an unrecognized path.

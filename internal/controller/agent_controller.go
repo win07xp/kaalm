@@ -68,6 +68,18 @@ type AgentReconciler struct {
 	// OperatorNamespace hosts the gateway and controller (agentry-system).
 	// Agents in this namespace are rejected to protect SAN integrity.
 	OperatorNamespace string
+	// Activity fetches per-namespace gateway activity for idle detection.
+	// nil disables idle and hibernation transitions (no data, no evidence).
+	Activity ActivityClient
+	// Clock is injectable for tests; nil means time.Now.
+	Clock func() time.Time
+}
+
+func (r *AgentReconciler) now() time.Time {
+	if r.Clock != nil {
+		return r.Clock()
+	}
+	return time.Now()
 }
 
 // +kubebuilder:rbac:groups=agentry.io,resources=agents,verbs=get;list;watch;update;patch
@@ -103,6 +115,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		r.setPhase(&agent, agentryv1alpha1.AgentPending)
 	}
 
+	// Step 9: wake-annotation handling, with phase-dependent removal so a
+	// failed reconcile cannot silently drop the wake.
+	if agent.Annotations[agentryv1alpha1.AnnotationWake] == agentryv1alpha1.AnnotationTrue {
+		return r.handleWake(ctx, &agent)
+	}
+
 	// Step 1: the system namespace is forbidden (SAN-integrity guard).
 	if agent.Namespace == r.OperatorNamespace {
 		r.setReady(&agent, false, agentryv1alpha1.ReasonSystemNamespaceForbidden,
@@ -126,22 +144,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Steps 2 and 5: the Degraded-triggering cross-checks (rules 2, 4, 5, 24,
 	// 26, 29). All outstanding reasons are evaluated together so recovery can
 	// be per-condition.
-	degradedReasons := r.degradedReasons(ctx, &agent, &class, eff)
-	if len(degradedReasons) > 0 {
-		return ctrl.Result{}, r.enterOrStayDegraded(ctx, &agent, degradedReasons)
+	if handled, res, err := r.reconcileDegraded(ctx, &agent, &class, eff); handled {
+		return res, err
 	}
-	if agent.Status.Phase == agentryv1alpha1.AgentDegraded {
-		// Every Degraded-triggering condition has cleared: restore the prior
-		// phase and null preDegradedPhase atomically in the same write.
-		restored := agent.Status.PreDegradedPhase
-		if restored == "" {
-			restored = agentryv1alpha1.AgentPending
-		}
-		r.setPhase(&agent, restored)
-		agent.Status.PreDegradedPhase = ""
-		r.Recorder.Event(&agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonPhaseChanged,
-			fmt.Sprintf("recovered from Degraded to %s", restored))
-		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, &agent)
+
+	// Hibernation phases: Hibernating drives the Pod down; Hibernated holds
+	// with no Pod (PVC, Service, Certificate, SA, and NetworkPolicy persist).
+	switch agent.Status.Phase {
+	case agentryv1alpha1.AgentHibernating:
+		return r.driveHibernating(ctx, &agent)
+	case agentryv1alpha1.AgentHibernated:
+		return ctrl.Result{}, r.Status().Update(ctx, &agent)
 	}
 
 	// Step 5: Ready=False gates that block Pod creation without degrading.
@@ -173,20 +186,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Step 6: converge the non-Pod children.
-	if err := r.ensureServiceAccount(ctx, &agent); err != nil {
-		return ctrl.Result{}, err
-	}
-	if eff.ServiceEnabled {
-		if err := r.ensureService(ctx, &agent, eff); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-	if eff.PersistenceOn && eff.ExistingClaim == "" {
-		if err := r.ensurePVC(ctx, &agent, &class, eff); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-	if err := r.ensureNetworkPolicy(ctx, &agent, &class, eff); err != nil {
+	if err := r.ensureChildren(ctx, &agent, &class, eff); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -195,11 +195,153 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// Step 8: activity evaluation for Running and Idle agents drives the
+	// idle and hibernation transitions.
+	res := ctrl.Result{}
+	if (agent.Status.Phase == agentryv1alpha1.AgentRunning || agent.Status.Phase == agentryv1alpha1.AgentIdle) &&
+		eff.IdleTimeout > 0 && r.Activity != nil {
+		res = r.evaluateActivity(ctx, &agent, eff)
+	}
+
 	if err := r.Status().Update(ctx, &agent); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("reconciled Agent", "phase", agent.Status.Phase)
-	return ctrl.Result{}, nil
+	return res, nil
+}
+
+// handleWake implements the phase-dependent wake-annotation protocol: on a
+// Hibernated agent the Resuming transition is committed BEFORE the annotation
+// is removed, so an apiserver failure between the two leaves the wake intent
+// observable; on any other phase the annotation is removed immediately, with
+// a WakeIgnored warning except in Resuming (a benign idempotent re-attempt).
+func (r *AgentReconciler) handleWake(ctx context.Context, agent *agentryv1alpha1.Agent) (ctrl.Result, error) {
+	if agent.Status.Phase == agentryv1alpha1.AgentHibernated {
+		r.setPhase(agent, agentryv1alpha1.AgentResuming)
+		agent.Status.HibernatedAt = nil
+		r.setReady(agent, false, agentryv1alpha1.ReasonWoken, "wake requested; recreating the Pod")
+		if err := r.Status().Update(ctx, agent); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.Recorder.Event(agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonWoken, "waking from hibernation")
+		delete(agent.Annotations, agentryv1alpha1.AnnotationWake)
+		if err := r.Update(ctx, agent); err != nil {
+			// The next reconcile observes the annotation on a Resuming agent
+			// and removes it silently.
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	phase := agent.Status.Phase
+	delete(agent.Annotations, agentryv1alpha1.AnnotationWake)
+	if err := r.Update(ctx, agent); err != nil {
+		return ctrl.Result{}, err
+	}
+	if phase != agentryv1alpha1.AgentResuming {
+		r.Recorder.Event(agent, corev1.EventTypeWarning, agentryv1alpha1.ReasonWakeIgnored,
+			"wake annotation observed on non-Hibernated agent; ignored")
+	}
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// driveHibernating deletes the Pod (gracefully) and settles Hibernated once
+// it is gone. Everything else survives for wake-on-demand.
+func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *agentryv1alpha1.Agent) (ctrl.Result, error) {
+	pod, err := r.ownedPod(ctx, agent)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if pod != nil {
+		if pod.DeletionTimestamp.IsZero() {
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, r.Status().Update(ctx, agent)
+	}
+	r.setPhase(agent, agentryv1alpha1.AgentHibernated)
+	now := metav1.NewTime(r.now())
+	agent.Status.HibernatedAt = &now
+	agent.Status.PodName = ""
+	r.setReady(agent, false, agentryv1alpha1.ReasonHibernated, "Pod deleted; PVC retained for wake")
+	r.Recorder.Event(agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonHibernated,
+		"hibernated: Pod deleted, state retained")
+	return ctrl.Result{}, r.Status().Update(ctx, agent)
+}
+
+// evaluateActivity reads the gateway activity data and drives Running <->
+// Idle and Idle -> Hibernating. Absence of data is not evidence of
+// inactivity: unreachable gateways preserve the phase, and silence counts
+// only once a replica has been up for idleTimeout.
+func (r *AgentReconciler) evaluateActivity(
+	ctx context.Context, agent *agentryv1alpha1.Agent, eff effectiveAgentSpec,
+) ctrl.Result {
+	now := r.now()
+	reachable, total, err := r.Activity.NamespaceActivity(ctx, agent.Namespace)
+	if err != nil || total == 0 || len(reachable) == 0 {
+		apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+			Type: agentryv1alpha1.ConditionGatewayReachable, Status: metav1.ConditionFalse,
+			Reason: "GatewayUnavailable", Message: "no gateway activity data; idle transitions deferred",
+		})
+		return ctrl.Result{RequeueAfter: 30 * time.Second}
+	}
+	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+		Type: agentryv1alpha1.ConditionGatewayReachable, Status: metav1.ConditionTrue,
+		Reason: "GatewayReady", Message: "gateway activity data available",
+	})
+
+	last := mergedActivity(reachable, agent.Name, eff.ActivitySource)
+	if last == nil {
+		// No recorded activity: genuine silence only if some replica has
+		// been watching for at least idleTimeout; otherwise a restart wiped
+		// the store and the data is unknown.
+		qualified := false
+		for _, replica := range reachable {
+			if now.Sub(replica.StartedAt) >= eff.IdleTimeout {
+				qualified = true
+				break
+			}
+		}
+		if !qualified || agent.Status.PhaseTransitionTime == nil {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}
+		}
+		t := agent.Status.PhaseTransitionTime.Time
+		last = &t
+	}
+
+	switch agent.Status.Phase {
+	case agentryv1alpha1.AgentRunning:
+		if now.Sub(*last) > eff.IdleTimeout {
+			r.setPhase(agent, agentryv1alpha1.AgentIdle)
+			lt := metav1.NewTime(*last)
+			agent.Status.LastActivityTime = &lt
+			r.Recorder.Event(agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonPhaseChanged,
+				fmt.Sprintf("idle: no activity for %s", eff.IdleTimeout))
+			// Re-enter promptly: an already-elapsed hibernationDelay should
+			// carry straight on to Hibernating on the next pass.
+			return ctrl.Result{Requeue: true}
+		}
+	case agentryv1alpha1.AgentIdle:
+		// Compare at second resolution: the stored timestamp lost its
+		// nanoseconds in the apiserver round-trip (metav1.Time marshals to
+		// RFC3339 seconds), and a raw comparison would misread the same
+		// instant as fresh activity on every pass.
+		if agent.Status.LastActivityTime != nil &&
+			last.Truncate(time.Second).After(agent.Status.LastActivityTime.Time) {
+			r.setPhase(agent, agentryv1alpha1.AgentRunning)
+			lt := metav1.NewTime(*last)
+			agent.Status.LastActivityTime = &lt
+			return ctrl.Result{Requeue: true}
+		}
+		if eff.HibernationEnabled && now.Sub(*last) > eff.IdleTimeout+eff.HibernationDelay {
+			r.setPhase(agent, agentryv1alpha1.AgentHibernating)
+			r.Recorder.Event(agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonPhaseChanged,
+				fmt.Sprintf("hibernating: idle for %s past the idle timeout", eff.HibernationDelay))
+			return ctrl.Result{Requeue: true}
+		}
+	}
+	return ctrl.Result{RequeueAfter: activityCacheWindow}
 }
 
 // readyGates evaluates the Ready=False conditions that block Pod creation
@@ -238,6 +380,32 @@ func (r *AgentReconciler) readyGates(
 		}
 	}
 	return false, ctrl.Result{}, nil
+}
+
+// reconcileDegraded runs the cross-checks and drives the Degraded enter/leave
+// protocol. handled=true means the pass ends here (either the agent is
+// Degraded, or it just recovered and requeues).
+func (r *AgentReconciler) reconcileDegraded(
+	ctx context.Context, agent *agentryv1alpha1.Agent, class *agentryv1alpha1.AgentClass, eff effectiveAgentSpec,
+) (bool, ctrl.Result, error) {
+	reasons := r.degradedReasons(ctx, agent, class, eff)
+	if len(reasons) > 0 {
+		return true, ctrl.Result{}, r.enterOrStayDegraded(ctx, agent, reasons)
+	}
+	if agent.Status.Phase != agentryv1alpha1.AgentDegraded {
+		return false, ctrl.Result{}, nil
+	}
+	// Every Degraded-triggering condition has cleared: restore the prior
+	// phase and null preDegradedPhase atomically in the same write.
+	restored := agent.Status.PreDegradedPhase
+	if restored == "" {
+		restored = agentryv1alpha1.AgentPending
+	}
+	r.setPhase(agent, restored)
+	agent.Status.PreDegradedPhase = ""
+	r.Recorder.Event(agent, corev1.EventTypeNormal, agentryv1alpha1.ReasonPhaseChanged,
+		fmt.Sprintf("recovered from Degraded to %s", restored))
+	return true, ctrl.Result{Requeue: true}, r.Status().Update(ctx, agent)
 }
 
 // degradedReasons evaluates every Degraded-triggering cross-check and returns
@@ -340,6 +508,27 @@ func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *agentryv
 		}
 	}
 	return false, nil
+}
+
+// ensureChildren converges the ServiceAccount, Service, PVC, and
+// NetworkPolicy (everything except the Certificate and the Pod).
+func (r *AgentReconciler) ensureChildren(
+	ctx context.Context, agent *agentryv1alpha1.Agent, class *agentryv1alpha1.AgentClass, eff effectiveAgentSpec,
+) error {
+	if err := r.ensureServiceAccount(ctx, agent); err != nil {
+		return err
+	}
+	if eff.ServiceEnabled {
+		if err := r.ensureService(ctx, agent, eff); err != nil {
+			return err
+		}
+	}
+	if eff.PersistenceOn && eff.ExistingClaim == "" {
+		if err := r.ensurePVC(ctx, agent, class, eff); err != nil {
+			return err
+		}
+	}
+	return r.ensureNetworkPolicy(ctx, agent, class, eff)
 }
 
 func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *agentryv1alpha1.Agent) error {
@@ -483,7 +672,11 @@ func (r *AgentReconciler) convergePod(
 
 	agent.Status.PodName = pod.Name
 	if podReady(pod) {
-		r.setPhase(agent, agentryv1alpha1.AgentRunning)
+		// Idle is a pod-bearing phase: a ready Pod does not promote an Idle
+		// agent back to Running; only fresh activity does.
+		if agent.Status.Phase != agentryv1alpha1.AgentIdle {
+			r.setPhase(agent, agentryv1alpha1.AgentRunning)
+		}
 		r.setReady(agent, true, agentryv1alpha1.ReasonPodRunning, "agent Pod is ready")
 	} else {
 		r.setPhase(agent, agentryv1alpha1.AgentProvisioning)

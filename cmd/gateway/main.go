@@ -130,6 +130,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The budget counter exchange: publish this replica's partials and fold
+	// peers' on a 10s cadence. POD_NAME comes from the downward API.
+	podName := os.Getenv("POD_NAME")
+	if podName == "" {
+		podName, _ = os.Hostname()
+	}
+	publisher := &gateway.BudgetPublisher{
+		Client: clientset, Store: store, Ledger: server.Budget,
+		OperatorNamespace: operatorNamespace, PodName: podName,
+		Providers: func(ctx context.Context) []*agentryv1alpha1.ModelProvider {
+			var list agentryv1alpha1.ModelProviderList
+			if err := cl.GetClient().List(ctx, &list); err != nil {
+				return nil
+			}
+			out := make([]*agentryv1alpha1.ModelProvider, 0, len(list.Items))
+			for i := range list.Items {
+				out = append(out, &list.Items[i])
+			}
+			return out
+		},
+	}
+	publisher.SeedFromCanonical(ctx)
+	go publisher.Run(ctx)
+
 	logger.Info("agentry gateway starting",
 		"listen", listenAddr, "health", healthAddr, "operator_namespace", operatorNamespace,
 		"source_ip_check_disabled", disableSourceIPCheck)

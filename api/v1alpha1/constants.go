@@ -120,6 +120,18 @@ const (
 	ReasonTaskFailed                 = "TaskFailed"
 )
 
+// Budget policy actions (ModelProvider.spec.budget.policies[].action) and the
+// per-namespace enforcement states reported in status.budgetUsage[].state.
+const (
+	BudgetActionWarn    = "warn"
+	BudgetActionDegrade = "degrade"
+	BudgetActionBlock   = "block"
+
+	BudgetStateNormal    = "Normal"
+	BudgetStateThrottled = "Throttled"
+	BudgetStateBlocked   = "Blocked"
+)
+
 // Finalizers, one per CRD. See docs/src/controller/finalizers.md.
 const (
 	AgentFinalizer    = "agentry.io/agent-finalizer"
@@ -132,7 +144,8 @@ const (
 // Well-known annotations and labels. See docs/src/controller/ and
 // gateways/api/async-responses.md.
 const (
-	AnnotationWake                = "agentry.io/wake"                 // "true" triggers a wake on a Hibernated Agent
+	AnnotationWake                = "agentry.io/wake"                 // AnnotationTrue triggers a wake on a Hibernated Agent
+	AnnotationTrue                = "true"                            // the value every boolean Agentry annotation carries
 	AnnotationChannelDisconnected = "agentry.io/channel-disconnected" // "true", written by the gateway in the channel-delete handshake
 	AnnotationExpiresAt           = "agentry.io/expires-at"           // RFC3339 TTL on async-response ConfigMaps (1h)
 

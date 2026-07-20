@@ -49,10 +49,33 @@ const (
 )
 
 var (
-	testClient client.Client
-	testEnv    *envtest.Environment
-	fakeHealth *fakeHealthChecker
+	testClient   client.Client
+	testEnv      *envtest.Environment
+	fakeHealth   *fakeHealthChecker
+	fakeActivity *fakeActivityClient
 )
+
+// fakeActivityClient serves canned gateway activity data. total 0 with no
+// error models "no gateway pods"; empty reachable with total > 0 models "all
+// replicas unreachable".
+type fakeActivityClient struct {
+	mu        sync.Mutex
+	reachable []ReplicaActivity
+	total     int
+}
+
+func (f *fakeActivityClient) set(reachable []ReplicaActivity, total int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reachable = reachable
+	f.total = total
+}
+
+func (f *fakeActivityClient) NamespaceActivity(context.Context, string) ([]ReplicaActivity, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reachable, f.total, nil
+}
 
 // fakeHealthChecker returns a canned probe result per provider name, defaulting to
 // Healthy, so ModelProvider tests never reach a real provider.
@@ -137,9 +160,11 @@ func TestMain(m *testing.M) {
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}
+	fakeActivity = &fakeActivityClient{}
 	if err := (&AgentReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
+		Activity:          fakeActivity,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}
