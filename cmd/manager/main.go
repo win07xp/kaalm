@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -28,6 +29,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
@@ -38,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	"github.com/win07xp/kubeclaw/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -201,6 +204,39 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := controller.SetupIndexers(context.Background(), mgr); err != nil {
+		setupLog.Error(err, "unable to set up field indexers")
+		os.Exit(1)
+	}
+
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to create discovery client")
+		os.Exit(1)
+	}
+
+	operatorNamespace := os.Getenv("POD_NAMESPACE")
+	if operatorNamespace == "" {
+		operatorNamespace = "agentry-system"
+	}
+
+	if err := (&controller.AgentClassReconciler{
+		Client:    mgr.GetClient(),
+		Recorder:  mgr.GetEventRecorderFor("agentclass-controller"),
+		Discovery: discoveryClient,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AgentClass")
+		os.Exit(1)
+	}
+	if err := (&controller.ModelProviderReconciler{
+		Client:            mgr.GetClient(),
+		Recorder:          mgr.GetEventRecorderFor("modelprovider-controller"),
+		OperatorNamespace: operatorNamespace,
+		Health:            &controller.HTTPProviderHealthChecker{},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ModelProvider")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {
