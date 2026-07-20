@@ -12,7 +12,7 @@ if (Client certificate presented?) then (**yes: Mode 1, mTLS**)
 
   :Scan the DNS SAN **list** for a recognized suffix:\n**.svc.cluster.local** or **.task.agentry.io**\n(short-form Service SANs match neither: ignored);
 
-  if (Exactly **one** recognized SAN, with **exactly**\nthe expected label count? **5** for .svc.cluster.local,\n**4** for .task.agentry.io) then (no)
+  if (Exactly **one** recognized SAN, with **exactly**\nthe expected label count of **5** for either shape) then (no)
     :**403 invalid_cert**;
     note left
       Defense in depth against a

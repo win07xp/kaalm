@@ -152,7 +152,7 @@ const SessionNamespaceUUID = "f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d"
 // dotted-name spoofing. See docs/src/gateways/llm/workload-identity.md.
 const (
 	AgentSANSuffix = "svc.cluster.local" // {name}.{namespace}.svc.cluster.local, 5 labels
-	TaskSANSuffix  = "task.agentry.io"   // {taskName}.{namespace}.task.agentry.io, 4 labels
+	TaskSANSuffix  = "task.agentry.io"   // {taskName}.{namespace}.task.agentry.io, 5 labels
 	AgentSANLabels = 5
-	TaskSANLabels  = 4
+	TaskSANLabels  = 5
 )

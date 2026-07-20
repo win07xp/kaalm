@@ -11,7 +11,7 @@ Vertex OAuth) behind interfaces so they land late and stay testable.
 
 ## Status at a glance
 
-Phases 0 through 4 are done. Phase 5 is next.
+Phases 0 through 5 are done. Phase 6 is next.
 
 | Phase | Status | Delivers |
 |---|---|---|
@@ -20,8 +20,8 @@ Phases 0 through 4 are done. Phase 5 is next.
 | 2. Foundation reconcilers | Done | AgentClass and ModelProvider: validation, conditions, finalizers (the budget path deferred behind a seam) |
 | 3. AgentReconciler core | Done | Walking skeleton: an Agent becomes a Pod, PVC, Service, Certificate, and NetworkPolicy, with cert gating, drift detection, and a finalizer |
 | 4. AgentTaskReconciler | Done | Run-to-completion, the completion mailbox and per-task Role, the currentPodUID identity gate, retry, and TTL |
-| 5. Gateway skeleton | Next | The single `VerifyClientCertIfGiven` socket with per-path auth (mTLS SAN and TokenReview), plus the LLM proxy happy path |
-| 6. Controller and gateway | Planned | Activity fan-out, wake and the activator, the hibernation phases, and the budget ConfigMap exchange |
+| 5. Gateway skeleton | Done | The single `VerifyClientCertIfGiven` socket with per-path auth (mTLS SAN and TokenReview), plus the LLM proxy happy path |
+| 6. Controller and gateway | Next | Activity fan-out, wake and the activator, the hibernation phases, and the budget ConfigMap exchange |
 | 7. User gateway and AgentChannel | Planned | The webhook flow (sync and async), the async response lifecycle, and the AgentChannel reconciler with its delete handshake |
 | 8. Runtime SDK and templates | Planned | The runtime contract as a Go library, and the Go and Python starter templates, which then become the end-to-end test agent |
 | 9. Hardening | Planned | The Anthropic and Vertex adapters, fallback traversal, rate limiting, the full metric catalog and PII-safe logging, and the S1 to S15 scenarios as end-to-end tests |
