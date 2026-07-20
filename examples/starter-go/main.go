@@ -132,6 +132,7 @@ func main() {
 				case <-time.After(5 * time.Second):
 				}
 			}
+			log.Printf("task auto-complete giving up after %d attempts; last status %q not reported", 6, status)
 		}()
 	}
 
