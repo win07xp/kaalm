@@ -77,8 +77,8 @@ Ready; the five CRDs present.
 ### Describe "golden path"
 
 1. AgentClass `e2e-standard` applied, becomes Ready.
-2. ModelProvider `e2e-openai` plus a dummy credential Secret, becomes Ready (the
-   credential is validated).
+2. ModelProvider `e2e-vertex` (google-vertex, hermetic Skipped probe) plus a
+   dummy credential Secret in `agentry-system`, becomes Ready.
 3. Agent `e2e-agent` applied. The reconciler synthesizes the Pod (cert-gated),
    Service, per-agent NetworkPolicy, and ServiceAccount; the Pod reaches Running.
 4. AgentChannel `e2e-channel` (sync webhook, bearer auth), becomes Active with
