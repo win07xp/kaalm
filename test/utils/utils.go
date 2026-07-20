@@ -32,10 +32,6 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:golint,revive
 )
 
-func warnError(err error) {
-	_, _ = fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
-}
-
 // Run executes the provided command within this context
 func Run(cmd *exec.Cmd) (string, error) {
 	dir, _ := GetProjectDir()
@@ -169,7 +165,8 @@ func PortForward(namespace, svc, remotePort string) (int, func(), error) {
 // PostJSON POSTs a JSON body over HTTPS, skipping cert verification (the target
 // is a localhost port-forward in the e2e suite only).
 func PostJSON(url, bearer string, body []byte) (int, string, error) {
-	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // localhost port-forward, e2e only
+	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // localhost port-forward only
+	tr := &http.Transport{TLSClientConfig: tlsCfg}
 	cli := &http.Client{Timeout: 45 * time.Second, Transport: tr}
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -187,4 +184,3 @@ func PostJSON(url, bearer string, body []byte) (int, string, error) {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	return resp.StatusCode, string(b), nil
 }
-
