@@ -37,6 +37,12 @@ type Store interface {
 	// PodByIP resolves a source IP to a Pod for the cross-check and the
 	// Mode 2 ownership precheck. ok is false when no Pod matches.
 	PodByIP(ctx context.Context, ip string) (*corev1.Pod, bool)
+	// ChannelByPath resolves a webhook path to its AgentChannel. Only
+	// channels with Ready=True are returned: Ready gates routing admission.
+	ChannelByPath(ctx context.Context, path string) (*agentryv1alpha1.AgentChannel, bool)
+	// SecretValue reads one key of a Secret in a user namespace (the
+	// per-channel scoped Role is what grants this in production).
+	SecretValue(ctx context.Context, namespace, name, key string) (string, error)
 }
 
 // isAgentryManagedPod reports whether the Pod belongs to an Agent or AgentTask

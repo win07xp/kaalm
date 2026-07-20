@@ -292,6 +292,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 		os.Exit(1)
 	}
+	if err := (&controller.AgentChannelReconciler{
+		Client:            mgr.GetClient(),
+		Recorder:          mgr.GetEventRecorderFor("agentchannel-controller"),
+		OperatorNamespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AgentChannel")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

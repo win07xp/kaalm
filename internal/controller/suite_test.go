@@ -174,6 +174,13 @@ func TestMain(m *testing.M) {
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}
+	disconnectTimeout = 3 * time.Second
+	if err := (&AgentChannelReconciler{
+		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
+		OperatorNamespace: testSystemNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		panic(err)
+	}
 
 	go func() {
 		if err := mgr.Start(ctx); err != nil {

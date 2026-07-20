@@ -11,7 +11,7 @@ Vertex OAuth) behind interfaces so they land late and stay testable.
 
 ## Status at a glance
 
-Phases 0 through 6 are done. Phase 7 is next.
+Phases 0 through 7 are done. Phase 8 is next.
 
 | Phase | Status | Delivers |
 |---|---|---|
@@ -22,8 +22,8 @@ Phases 0 through 6 are done. Phase 7 is next.
 | 4. AgentTaskReconciler | Done | Run-to-completion, the completion mailbox and per-task Role, the currentPodUID identity gate, retry, and TTL |
 | 5. Gateway skeleton | Done | The single `VerifyClientCertIfGiven` socket with per-path auth (mTLS SAN and TokenReview), plus the LLM proxy happy path |
 | 6. Controller and gateway | Done | Activity fan-out, wake and the activator, the hibernation phases, and the budget ConfigMap exchange |
-| 7. User gateway and AgentChannel | Next | The webhook flow (sync and async), the async response lifecycle, and the AgentChannel reconciler with its delete handshake |
-| 8. Runtime SDK and templates | Planned | The runtime contract as a Go library, and the Go and Python starter templates, which then become the end-to-end test agent |
+| 7. User gateway and AgentChannel | Done | The webhook flow (sync and async), the async response lifecycle, and the AgentChannel reconciler with its delete handshake |
+| 8. Runtime SDK and templates | Next | The runtime contract as a Go library, and the Go and Python starter templates, which then become the end-to-end test agent |
 | 9. Hardening | Planned | The Anthropic and Vertex adapters, fallback traversal, rate limiting, the full metric catalog and PII-safe logging, and the S1 to S15 scenarios as end-to-end tests |
 
 Milestones worth naming: Phase 3 is "Agent to Pod on a cluster". Phase 5 is "an LLM

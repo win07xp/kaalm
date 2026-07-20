@@ -42,6 +42,11 @@ const (
 	errProviderError       = "provider_error"
 	errProviderUnavailable = "provider_unavailable"
 	errProviderTimeout     = "provider_timeout"
+	errDeliveryFailed      = "delivery_failed"
+	errWakeTimeout         = "wake_timeout"
+	errControllerDown      = "controller_unavailable"
+	errResponseTooLarge    = "response_too_large"
+	errSyncDeadline        = "sync_deadline_exceeded"
 )
 
 // writeError emits the envelope with the given status. retryAfter > 0 adds a

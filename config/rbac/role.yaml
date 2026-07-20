@@ -47,6 +47,7 @@ rules:
 - apiGroups:
   - agentry.io
   resources:
+  - agentchannels
   - agentclasses
   - agents
   - modelproviders
@@ -59,6 +60,7 @@ rules:
 - apiGroups:
   - agentry.io
   resources:
+  - agentchannels/finalizers
   - agentclasses/finalizers
   - agents/finalizers
   - agenttasks/finalizers
@@ -68,6 +70,7 @@ rules:
 - apiGroups:
   - agentry.io
   resources:
+  - agentchannels/status
   - agentclasses/status
   - agents/status
   - agenttasks/status

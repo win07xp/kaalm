@@ -52,19 +52,57 @@ type Config struct {
 	UpstreamCAs *x509.CertPool
 	// DisableSourceIPCheck skips the source-IP cross-check (dev/test only).
 	DisableSourceIPCheck bool
+
+	// UserListenAddr is the User Gateway listener (default :8080).
+	UserListenAddr string
+	// MaxMessageBodyBytes caps inbound webhook bodies (default 1 MiB).
+	MaxMessageBodyBytes int64
+	// MaxResponseBodyBytes caps agent replies (default 900 KiB, headroom
+	// under the ~1 MiB ConfigMap object cap).
+	MaxResponseBodyBytes int64
+	// AgentReadTimeout bounds each delivery attempt (default 10s).
+	AgentReadTimeout time.Duration
+	// AgentConnectTimeout is the hibernation-detection connect bound (1s).
+	AgentConnectTimeout time.Duration
+	// SyncDeliveryDeadline bounds sync-mode wall-clock (default 30s).
+	SyncDeliveryDeadline time.Duration
+	// DeliveryBackoff is the agent-delivery retry schedule (1s, 5s, 25s).
+	DeliveryBackoff []time.Duration
+	// CallbackBackoff is the callback retry schedule (1s, 5s, 25s).
+	CallbackBackoff []time.Duration
+	// ChannelHealthWindow is the rolling health window (default 5m).
+	ChannelHealthWindow time.Duration
+	// AgentServiceHostOverride / AgentServicePortOverride redirect agent
+	// delivery dials (dev/test only).
+	AgentServiceHostOverride string
+	AgentServicePortOverride int32
+	// InsecureSkipAgentVerify disables agent cert verification (dev only).
+	InsecureSkipAgentVerify bool
+	// CallbackCAs, when set, replaces the system pool for callback TLS (tests).
+	CallbackCAs *x509.CertPool
 }
 
 // Server is the Agentry Gateway's :8443 surface.
 type Server struct {
-	Config   Config
-	Store    Store
-	Auth     *Authenticator
-	Spend    SpendRecorder
-	Activity *ActivityStore
-	Budget   *BudgetLedger
+	Config        Config
+	Store         Store
+	Auth          *Authenticator
+	Spend         SpendRecorder
+	Activity      *ActivityStore
+	Budget        *BudgetLedger
+	ChannelHealth *ChannelHealthStore
+	// Activator wakes hibernated Agents via the controller (nil in tests or
+	// when the controller identity is not configured).
+	Activator ActivatorClient
+	// Async persists async webhook response records.
+	Async AsyncRecords
 
 	upstreamOnce   sync.Once
 	upstreamClient *http.Client
+
+	agentClientOnce   sync.Once
+	agentClientLoader *certLoader
+	agentClientErr    error
 }
 
 // NewServer wires a Server from its parts, applying defaults.
@@ -81,6 +119,30 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 	if cfg.UpstreamTimeout == 0 {
 		cfg.UpstreamTimeout = 120 * time.Second
 	}
+	if cfg.UserListenAddr == "" {
+		cfg.UserListenAddr = ":8080"
+	}
+	if cfg.MaxMessageBodyBytes == 0 {
+		cfg.MaxMessageBodyBytes = 1 << 20
+	}
+	if cfg.MaxResponseBodyBytes == 0 {
+		cfg.MaxResponseBodyBytes = 900 << 10
+	}
+	if cfg.AgentReadTimeout == 0 {
+		cfg.AgentReadTimeout = 10 * time.Second
+	}
+	if cfg.AgentConnectTimeout == 0 {
+		cfg.AgentConnectTimeout = time.Second
+	}
+	if cfg.SyncDeliveryDeadline == 0 {
+		cfg.SyncDeliveryDeadline = 30 * time.Second
+	}
+	if cfg.DeliveryBackoff == nil {
+		cfg.DeliveryBackoff = []time.Duration{time.Second, 5 * time.Second, 25 * time.Second}
+	}
+	if cfg.CallbackBackoff == nil {
+		cfg.CallbackBackoff = []time.Duration{time.Second, 5 * time.Second, 25 * time.Second}
+	}
 	return &Server{
 		Config: cfg,
 		Store:  store,
@@ -89,9 +151,10 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 			OperatorNamespace:    cfg.OperatorNamespace,
 			DisableSourceIPCheck: cfg.DisableSourceIPCheck,
 		},
-		Spend:    spend,
-		Activity: NewActivityStore(),
-		Budget:   NewBudgetLedger(),
+		Spend:         spend,
+		Activity:      NewActivityStore(),
+		Budget:        NewBudgetLedger(),
+		ChannelHealth: NewChannelHealthStore(cfg.ChannelHealthWindow),
 	}
 }
 
@@ -110,10 +173,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/agent/heartbeat", s.Auth.AgentReportPaths(KindAgent, s.handleHeartbeat))
 	mux.HandleFunc("/v1/task/complete", s.Auth.AgentReportPaths(KindAgentTask, notImplemented))
 
-	// Controller-only paths: controller SAN required. Channel health lands
-	// with the user-gateway phase.
+	// Controller-only paths: controller SAN required.
 	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(s.handleActivity))
-	mux.HandleFunc("/v1/channels/health", s.Auth.ControllerPaths(notImplemented))
+	mux.HandleFunc("/v1/channels/health", s.Auth.ControllerPaths(s.handleChannelsHealth))
 
 	// Anything else on the LLM listener is an unrecognized path.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -185,9 +247,16 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	errCh := make(chan error, 2)
+	user := &http.Server{
+		Addr: s.Config.UserListenAddr, Handler: s.UserHandler(),
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: tlsCfg.GetCertificate},
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	errCh := make(chan error, 3)
 	go func() { errCh <- main.ListenAndServeTLS("", "") }()
 	go func() { errCh <- health.ListenAndServeTLS("", "") }()
+	go func() { errCh <- user.ListenAndServeTLS("", "") }()
 
 	select {
 	case <-ctx.Done():
@@ -195,6 +264,7 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 		_ = main.Shutdown(shutdownCtx)
 		_ = health.Shutdown(shutdownCtx)
+		_ = user.Shutdown(shutdownCtx)
 		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {

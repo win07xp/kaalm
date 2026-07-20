@@ -357,6 +357,8 @@ spec:
                     description: |-
                       Enabled creates a ClusterIP Service. An agent with the Service disabled is
                       outbound-only and cannot be targeted by an AgentChannel.
+                      The json tag deliberately has no omitempty: a serialized explicit
+                      false must survive the wire, or the CRD default would overwrite it.
                     type: boolean
                   port:
                     description: Port is the Service port exposing the agent's health/message

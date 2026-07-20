@@ -117,6 +117,8 @@ type fakeStore struct {
 	providers map[string]*agentryv1alpha1.ModelProvider
 	creds     map[string]string
 	podsByIP  map[string]*corev1.Pod
+	channels  map[string]*agentryv1alpha1.AgentChannel // key: webhook path
+	secrets   map[string]string                        // key: ns/name/key
 }
 
 func newFakeStore() *fakeStore {
@@ -127,6 +129,8 @@ func newFakeStore() *fakeStore {
 		providers: map[string]*agentryv1alpha1.ModelProvider{},
 		creds:     map[string]string{},
 		podsByIP:  map[string]*corev1.Pod{},
+		channels:  map[string]*agentryv1alpha1.AgentChannel{},
+		secrets:   map[string]string{},
 	}
 }
 
@@ -156,6 +160,17 @@ func (f *fakeStore) Credential(_ context.Context, p *agentryv1alpha1.ModelProvid
 func (f *fakeStore) PodByIP(_ context.Context, ip string) (*corev1.Pod, bool) {
 	p, ok := f.podsByIP[ip]
 	return p, ok
+}
+func (f *fakeStore) ChannelByPath(_ context.Context, path string) (*agentryv1alpha1.AgentChannel, bool) {
+	ch, ok := f.channels[path]
+	return ch, ok
+}
+func (f *fakeStore) SecretValue(_ context.Context, ns, name, key string) (string, error) {
+	v, ok := f.secrets[ns+"/"+name+"/"+key]
+	if !ok {
+		return "", fmt.Errorf("secret %s/%s key %s not found", ns, name, key)
+	}
+	return v, nil
 }
 
 // ---- harness ----
@@ -476,7 +491,7 @@ func TestAuthMatrix(t *testing.T) {
 		{"no cert on controller path", nil, "/v1/activity", 401},
 		// 400 = past auth into the handler (missing namespace param).
 		{"controller cert on activity passes auth", &controllerCert, "/v1/activity", 400},
-		{"controller cert on channels-health passes auth", &controllerCert, "/v1/channels/health", 501},
+		{"controller cert on channels-health passes auth", &controllerCert, "/v1/channels/health", 400},
 		{"task cert on task-complete passes auth", &taskCert, "/v1/task/complete", 501},
 		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 200},
 		{"unknown path", &agentC, "/v2/other", 400},

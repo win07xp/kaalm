@@ -112,9 +112,11 @@ type AgentLifecycle struct {
 type AgentService struct {
 	// Enabled creates a ClusterIP Service. An agent with the Service disabled is
 	// outbound-only and cannot be targeted by an AgentChannel.
+	// The json tag deliberately has no omitempty: a serialized explicit
+	// false must survive the wire, or the CRD default would overwrite it.
 	// +kubebuilder:default=true
 	// +optional
-	Enabled bool `json:"enabled,omitempty"`
+	Enabled bool `json:"enabled"`
 	// Port is the Service port exposing the agent's health/message listener.
 	// +optional
 	Port int32 `json:"port,omitempty"`

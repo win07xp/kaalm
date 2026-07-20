@@ -19,6 +19,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -87,6 +88,50 @@ func (k *KubeStore) Credential(ctx context.Context, provider *agentryv1alpha1.Mo
 	val, ok := sec.Data[provider.Spec.CredentialsRef.Key]
 	if !ok || len(val) == 0 {
 		return "", fmt.Errorf("key %q missing in Secret %s", provider.Spec.CredentialsRef.Key, key)
+	}
+	return string(val), nil
+}
+
+// ChannelByPath scans AgentChannels for a Ready channel registered at path.
+// The prefix defense (the path must begin with the channel's own
+// /channels/{namespace}/ prefix) is enforced here, independent of the
+// reconciler's InvalidPath status.
+func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*agentryv1alpha1.AgentChannel, bool) {
+	var channels agentryv1alpha1.AgentChannelList
+	if err := k.Reader.List(ctx, &channels); err != nil {
+		return nil, false
+	}
+	for i := range channels.Items {
+		ch := &channels.Items[i]
+		if ch.Spec.Webhook.Path != path {
+			continue
+		}
+		if !channelPathAllowed(ch) {
+			continue
+		}
+		for _, c := range ch.Status.Conditions {
+			if c.Type == agentryv1alpha1.ConditionReady && c.Status == "True" {
+				return ch, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// channelPathAllowed is the gateway-side half of validation rule 15.
+func channelPathAllowed(ch *agentryv1alpha1.AgentChannel) bool {
+	return strings.HasPrefix(ch.Spec.Webhook.Path, "/channels/"+ch.Namespace+"/")
+}
+
+// SecretValue reads one Secret key from a user namespace.
+func (k *KubeStore) SecretValue(ctx context.Context, namespace, name, key string) (string, error) {
+	var sec corev1.Secret
+	if err := k.Reader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &sec); err != nil {
+		return "", err
+	}
+	val, ok := sec.Data[key]
+	if !ok || len(val) == 0 {
+		return "", fmt.Errorf("key %q missing in Secret %s/%s", key, namespace, name)
 	}
 	return string(val), nil
 }
