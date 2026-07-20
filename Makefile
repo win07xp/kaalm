@@ -61,22 +61,6 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
-.PHONY: test-e2e
-test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	@command -v $(KIND) >/dev/null 2>&1 || { \
-		echo "Kind is not installed. Please install Kind manually."; \
-		exit 1; \
-	}
-	@$(KIND) get clusters | grep -q 'kind' || { \
-		echo "No Kind cluster is running. Please start a Kind cluster before running the e2e tests."; \
-		exit 1; \
-	}
-	go test ./test/e2e/ -v -ginkgo.v
-
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run
@@ -185,9 +169,30 @@ k3d-up: ## Create a local k3d cluster with cert-manager and trust-manager for e2
 k3d-down: ## Delete the local k3d cluster.
 	k3d cluster delete agentry-dev
 
+CLUSTER ?= agentry-dev
+CHART_APP_VERSION := $(shell grep '^appVersion:' charts/agentry/Chart.yaml | awk '{print $$2}' | tr -d '"')
+CONTROLLER_IMG ?= ghcr.io/win07xp/agentry-controller:$(CHART_APP_VERSION)
+GATEWAY_IMG ?= ghcr.io/win07xp/agentry-gateway:$(CHART_APP_VERSION)
+AGENT_IMG ?= registry.test/agents/starter-go:e2e
+
+.PHONY: e2e-images
+e2e-images: ## Build the controller, gateway, and agent images and import them into k3d.
+	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
+	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
+	docker build -t $(AGENT_IMG) examples/starter-go
+	k3d image import $(CONTROLLER_IMG) $(GATEWAY_IMG) $(AGENT_IMG) -c $(CLUSTER)
+
+.PHONY: e2e-deploy
+e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
+	helm upgrade --install agentry charts/agentry -n agentry-system --create-namespace \
+		--set certManager.clusterResourceNamespace=cert-manager --wait --timeout 5m
+
 .PHONY: e2e
-e2e: ## Run the e2e suite against the current kube context (expects k3d-up first).
-	go test ./test/e2e/... -tags e2e -v
+e2e: ## One-shot k3d e2e: bring up the cluster, build+import images, install the chart, run the suite.
+	hack/k3d-up.sh
+	$(MAKE) e2e-images
+	$(MAKE) e2e-deploy
+	go test ./test/e2e/... -tags e2e -v -timeout 20m
 
 ##@ Dependencies
 
@@ -198,7 +203,6 @@ $(LOCALBIN):
 
 ## Tool Binaries
 KUBECTL ?= kubectl
-KIND ?= kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
