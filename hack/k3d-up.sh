@@ -26,10 +26,16 @@ kubectl config use-context "k3d-${CLUSTER}" >/dev/null
 echo ">> installing cert-manager ${CERT_MANAGER_VERSION}"
 helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
 helm repo update jetstack >/dev/null
+# --enable-certificate-owner-ref makes cert-manager delete a Certificate's
+# output Secret when the Certificate goes away. Agentry relies on this for
+# per-workload cert Secrets: cascade GC removes the Certificate on Agent or
+# AgentTask deletion, and this flag is what removes the Secret one hop later.
+# Without it, deleted workloads orphan their TLS Secrets.
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace "${TRUST_NAMESPACE}" --create-namespace \
   --version "${CERT_MANAGER_VERSION}" \
   --set crds.enabled=true \
+  --set 'extraArgs={--enable-certificate-owner-ref=true}' \
   --wait
 
 echo ">> installing trust-manager ${TRUST_MANAGER_VERSION} (trust namespace: ${TRUST_NAMESPACE})"

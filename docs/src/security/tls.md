@@ -8,6 +8,8 @@ All traffic between agent containers and the gateway is encrypted with TLS in bo
 
 The Helm chart ships the Agentry-specific `ClusterIssuer`, `Certificate`, and `Bundle` resources, never the cert-manager or trust-manager controllers themselves. Both controllers must already be present in the cluster; teams with existing deployments reuse them. Admission webhooks are not used; the cert-manager dependency is solely for TLS lifecycle management.
 
+cert-manager must run with **`--enable-certificate-owner-ref=true`** (Helm: `extraArgs={--enable-certificate-owner-ref=true}`). Agentry's per-workload Secret cleanup depends on it: deleting an Agent or AgentTask cascade-GCs its owned `Certificate`, and this flag is what makes cert-manager delete the output Secret one hop later. The flag is off by default, and without it every deleted workload orphans a TLS Secret in its namespace. Teams reusing an existing cert-manager deployment must verify the flag is set.
+
 ### Trust Chain
 
 1. The chart installs a cluster-scoped self-signed `ClusterIssuer` named `agentry-selfsigned`.

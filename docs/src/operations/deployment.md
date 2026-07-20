@@ -4,7 +4,7 @@ This page covers how Agentry is packaged and installed: the Helm chart contents,
 
 Agentry has three hard prerequisites, none of which the chart installs for you:
 
-1. **cert-manager**, for TLS lifecycle management.
+1. **cert-manager**, for TLS lifecycle management. It must run with `--enable-certificate-owner-ref=true`; see [In-cluster TLS](../security/tls.md#in-cluster-tls) for why.
 2. **trust-manager**, to project the Agentry CA into user namespaces.
 3. **A NetworkPolicy-enforcing CNI** (see [Network Policy Prerequisite](#network-policy-prerequisite)).
 
