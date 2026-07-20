@@ -44,6 +44,10 @@ var _ = AfterSuite(func() {
 	} {
 		_, _ = utils.Kubectl("delete", "-f", f, "--ignore-not-found", "--wait=false")
 	}
+	// Block until the namespace is fully gone so a rapid re-run's BeforeSuite
+	// does not re-apply into a still-Terminating namespace (which fails, and
+	// --ignore-not-found does not help a terminating-not-absent namespace).
+	_, _ = utils.Kubectl("wait", "--for=delete", "namespace/e2e", "--timeout=120s")
 })
 
 var _ = Describe("Deployment", func() {
