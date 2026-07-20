@@ -74,15 +74,27 @@ func taskAutocompleteStatus(isTask bool, env string) string {
 }
 ```
 
-In `main.go`, immediately after the server-start goroutine and before `<-ctx.Done()`, insert:
+In `main.go`, immediately after the server-start goroutine and before `<-ctx.Done()`, insert (the retry absorbs a startup race: completing at pod start can 401 the gateway's source-IP check before its Pod informer has indexed this pod):
 
 ```go
 	if status := taskAutocompleteStatus(a.isTask, os.Getenv("AGENTRY_TASK_AUTOCOMPLETE")); status != "" {
 		go func() {
-			if err := a.completeTask(ctx, status, "auto-complete on startup", nil); err != nil {
-				log.Printf("task auto-complete failed: %v", err)
-			} else {
-				log.Printf("task auto-complete reported %q", status)
+			// Completing at pod startup can race the gateway's source-IP check:
+			// its Pod informer may not have indexed this pod's IP yet, so the
+			// first attempt can transiently 401. A real task does work before
+			// reporting, avoiding this; the smoke hook retries a few times.
+			for attempt := 1; attempt <= 6; attempt++ {
+				err := a.completeTask(ctx, status, "auto-complete on startup", nil)
+				if err == nil {
+					log.Printf("task auto-complete reported %q (attempt %d)", status, attempt)
+					return
+				}
+				log.Printf("task auto-complete attempt %d failed: %v", attempt, err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
 			}
 		}()
 	}
