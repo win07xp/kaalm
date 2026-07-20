@@ -56,3 +56,31 @@ jobs:
         run: |
           make chart-sync
           helm lint charts/agentry
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install k3d
+        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.7.4 bash
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Run e2e suite
+        run: make e2e
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl describe pods -n agentry-system || true
+          kubectl describe pods -n e2e || true
+          kubectl logs -n agentry-system -l app.kubernetes.io/component=controller --tail=200 || true
+          kubectl logs -n agentry-system -l app.kubernetes.io/component=gateway --tail=200 || true
