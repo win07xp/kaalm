@@ -492,7 +492,7 @@ func TestAuthMatrix(t *testing.T) {
 		// 400 = past auth into the handler (missing namespace param).
 		{"controller cert on activity passes auth", &controllerCert, "/v1/activity", 400},
 		{"controller cert on channels-health passes auth", &controllerCert, "/v1/channels/health", 400},
-		{"task cert on task-complete passes auth", &taskCert, "/v1/task/complete", 501},
+		{"task cert on task-complete reaches handler", &taskCert, "/v1/task/complete", 403},
 		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 200},
 		{"unknown path", &agentC, "/v2/other", 400},
 	}

@@ -96,6 +96,8 @@ type Server struct {
 	Activator ActivatorClient
 	// Async persists async webhook response records.
 	Async AsyncRecords
+	// Completions patches per-task completion mailboxes.
+	Completions CompletionWriter
 
 	upstreamOnce   sync.Once
 	upstreamClient *http.Client
@@ -171,7 +173,7 @@ func (s *Server) Handler() http.Handler {
 	// Agent-report paths: mTLS-only, kind split at the handler. The
 	// task-complete body lands with the user-gateway phase.
 	mux.HandleFunc("/v1/agent/heartbeat", s.Auth.AgentReportPaths(KindAgent, s.handleHeartbeat))
-	mux.HandleFunc("/v1/task/complete", s.Auth.AgentReportPaths(KindAgentTask, notImplemented))
+	mux.HandleFunc("/v1/task/complete", s.Auth.AgentReportPaths(KindAgentTask, s.handleTaskComplete))
 
 	// Controller-only paths: controller SAN required.
 	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(s.handleActivity))
@@ -182,11 +184,6 @@ func (s *Server) Handler() http.Handler {
 		badRequest(w, "unrecognized path "+r.URL.Path)
 	})
 	return mux
-}
-
-func notImplemented(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented,
-		errorBody{Type: "not_implemented", Message: "this endpoint lands in a later phase"}, 0)
 }
 
 // TLSConfig builds the listener TLS configuration: VerifyClientCertIfGiven so

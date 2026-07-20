@@ -129,6 +129,7 @@ func main() {
 		AgentServicePortOverride: int32(agentPortOverride),
 	}, store, tokens, gateway.NewMemorySpend())
 	server.Async = async
+	server.Completions = &gateway.KubeCompletionWriter{Client: clientset}
 	if activatorClient, err := gateway.NewControllerActivator(
 		operatorNamespace, certFile, keyFile, caFile); err == nil {
 		server.Activator = activatorClient

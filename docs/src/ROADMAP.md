@@ -11,7 +11,7 @@ Vertex OAuth) behind interfaces so they land late and stay testable.
 
 ## Status at a glance
 
-Phases 0 through 7 are done. Phase 8 is next.
+Phases 0 through 8 are done. Phase 9 is next.
 
 | Phase | Status | Delivers |
 |---|---|---|
@@ -23,8 +23,8 @@ Phases 0 through 7 are done. Phase 8 is next.
 | 5. Gateway skeleton | Done | The single `VerifyClientCertIfGiven` socket with per-path auth (mTLS SAN and TokenReview), plus the LLM proxy happy path |
 | 6. Controller and gateway | Done | Activity fan-out, wake and the activator, the hibernation phases, and the budget ConfigMap exchange |
 | 7. User gateway and AgentChannel | Done | The webhook flow (sync and async), the async response lifecycle, and the AgentChannel reconciler with its delete handshake |
-| 8. Runtime SDK and templates | Next | The runtime contract as a Go library, and the Go and Python starter templates, which then become the end-to-end test agent |
-| 9. Hardening | Planned | The Anthropic and Vertex adapters, fallback traversal, rate limiting, the full metric catalog and PII-safe logging, and the S1 to S15 scenarios as end-to-end tests |
+| 8. Runtime SDK and templates | Done | The runtime contract as a Go library, and the Go and Python starter templates, which then become the end-to-end test agent |
+| 9. Hardening | Next | The Anthropic and Vertex adapters, fallback traversal, rate limiting, the full metric catalog and PII-safe logging, and the S1 to S15 scenarios as end-to-end tests |
 
 Milestones worth naming: Phase 3 is "Agent to Pod on a cluster". Phase 5 is "an LLM
 call proxied with auth enforced". Phase 7 is "an external webhook reaches an agent
@@ -67,7 +67,7 @@ kubeclaw/
   config/          kubebuilder kustomize; the controller-gen target
   charts/agentry/  the Helm chart, which is the deploy artifact; crds/ is synced
                    from config/crd
-  examples/        the starter templates (Phase 8)
+  examples/        the Go and Python starter templates
   hack/            k3d-up.sh and pinned tool versions
   test/            the CEL fixtures and suite, and the e2e suite
   docs/            this book

@@ -17,3 +17,8 @@ go.work
 *.swp
 *.swo
 *~
+
+# Starter-template build artifacts
+examples/starter-go/starter-go
+__pycache__/
+*.pyc

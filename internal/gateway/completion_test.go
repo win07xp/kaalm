@@ -1,0 +1,183 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package gateway
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ktypes "k8s.io/apimachinery/pkg/types"
+
+	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+)
+
+type fakeCompletions struct {
+	mu      sync.Mutex
+	patched map[string]map[string]string // ns/task -> data
+	fail    bool
+}
+
+func newFakeCompletions() *fakeCompletions {
+	return &fakeCompletions{patched: map[string]map[string]string{}}
+}
+
+func (f *fakeCompletions) PatchMailbox(_ context.Context, ns, task string, data map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail {
+		return context.DeadlineExceeded
+	}
+	f.patched[ns+"/"+task] = data
+	return nil
+}
+
+// seedTask installs an agentReported task whose Pod UID matches the harness
+// source IP (127.0.0.1).
+func seedTask(h *harness, name string, mutate func(*agentryv1alpha1.AgentTask)) {
+	task := &agentryv1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"},
+		Spec: agentryv1alpha1.AgentTaskSpec{
+			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "std"},
+			Artifacts:     []agentryv1alpha1.AgentTaskArtifact{{Name: "pr-url"}},
+		},
+		Status: agentryv1alpha1.AgentTaskStatus{
+			Phase:         agentryv1alpha1.TaskRunning,
+			CurrentPodUID: "uid-live",
+		},
+	}
+	if mutate != nil {
+		mutate(task)
+	}
+	h.store.tasks["team-a/"+name] = task
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name + "-pod", Namespace: "team-a", UID: ktypes.UID("uid-live")},
+	}
+}
+
+// bodyContains drains the response and reports whether it contains needle.
+func bodyContains(t *testing.T, resp *http.Response, needle string) bool {
+	t.Helper()
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return strings.Contains(string(raw), needle)
+}
+
+func TestTaskComplete_HappyPath(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	completions := newFakeCompletions()
+	h.server.Completions = completions
+	seedTask(h, "fix-42", nil)
+	cert := h.ca.issue(t, "fix-42.team-a.task.agentry.io")
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{
+		"status": "success", "message": "PR opened",
+		"artifacts": map[string]string{"pr-url": "https://example.com/pr/1"},
+	}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	data := completions.patched["team-a/fix-42"]
+	if data[CompletionKeyStatus] != CompletionStatusSuccess || data["artifact.pr-url"] == "" || data[CompletionKeyMessage] != "PR opened" {
+		t.Errorf("mailbox data wrong: %v", data)
+	}
+}
+
+func TestTaskComplete_Gates(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	completions := newFakeCompletions()
+	h.server.Completions = completions
+
+	// exitCode task: TaskNotAgentReported.
+	seedTask(h, "exit-task", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Completion.Condition = "exitCode"
+	})
+	cert := h.ca.issue(t, "exit-task.team-a.task.agentry.io")
+	resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
+	if resp.StatusCode != 403 || !bodyContains(t, resp, "TaskNotAgentReported") {
+		t.Errorf("exitCode task = %d", resp.StatusCode)
+	}
+
+	// Terminal phase: TaskAlreadyCompleted.
+	seedTask(h, "done-task", func(task *agentryv1alpha1.AgentTask) {
+		task.Status.Phase = agentryv1alpha1.TaskSucceeded
+		task.Spec.Artifacts = nil
+	})
+	cert = h.ca.issue(t, "done-task.team-a.task.agentry.io")
+	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
+	if resp.StatusCode != 403 || !bodyContains(t, resp, "TaskAlreadyCompleted") {
+		t.Errorf("terminal task = %d", resp.StatusCode)
+	}
+
+	// Stale UID: StalePodCompletion, retryable.
+	seedTask(h, "stale-task", func(task *agentryv1alpha1.AgentTask) {
+		task.Status.CurrentPodUID = "uid-other"
+		task.Spec.Artifacts = nil
+	})
+	cert = h.ca.issue(t, "stale-task.team-a.task.agentry.io")
+	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
+	if resp.StatusCode != 403 || !bodyContains(t, resp, "StalePodCompletion") {
+		t.Errorf("stale pod = %d", resp.StatusCode)
+	}
+
+	// Artifact validation: success missing a declared artifact is 400.
+	seedTask(h, "arts-task", nil)
+	cert = h.ca.issue(t, "arts-task.team-a.task.agentry.io")
+	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
+	if resp.StatusCode != 400 || !bodyContains(t, resp, "missing declared artifact") {
+		t.Errorf("missing artifact = %d", resp.StatusCode)
+	}
+	// Failure with a subset passes.
+	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"),
+		map[string]any{"status": "failure", "message": "boom"}, nil)
+	if resp.StatusCode != 200 {
+		t.Errorf("failure subset = %d, want 200", resp.StatusCode)
+	}
+
+	// Oversized artifact: 413.
+	seedTask(h, "big-task", nil)
+	cert = h.ca.issue(t, "big-task.team-a.task.agentry.io")
+	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{
+		"status": "success", "artifacts": map[string]string{"pr-url": strings.Repeat("x", 5<<10)},
+	}, nil)
+	if resp.StatusCode != 413 {
+		t.Errorf("oversized artifact = %d, want 413", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+}
+
+func TestValidateCompletionArtifacts(t *testing.T) {
+	declared := []agentryv1alpha1.AgentTaskArtifact{{Name: "a"}, {Name: "b"}}
+	if msg := ValidateCompletionArtifacts(CompletionStatusSuccess, map[string]string{"a": "1", "b": "2"}, declared); msg != "" {
+		t.Errorf("complete success set must pass: %s", msg)
+	}
+	if msg := ValidateCompletionArtifacts(CompletionStatusSuccess, map[string]string{"a": "1"}, declared); msg == "" {
+		t.Error("missing declared must fail on success")
+	}
+	if msg := ValidateCompletionArtifacts("failure", map[string]string{"a": "1"}, declared); msg != "" {
+		t.Errorf("subset must pass on failure: %s", msg)
+	}
+	if msg := ValidateCompletionArtifacts("failure", map[string]string{"rogue": "1"}, declared); msg == "" {
+		t.Error("undeclared must fail in both branches")
+	}
+}

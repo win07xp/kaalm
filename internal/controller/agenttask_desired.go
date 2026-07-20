@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/win07xp/kubeclaw/internal/gateway"
+
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -37,12 +39,12 @@ const (
 	// completion Role is bound to it.
 	gatewayServiceAccount = "agentry-gateway"
 
-	// Completion mailbox data layout. The gateway (Phase 5+) writes these keys
-	// when handling POST /v1/task/complete; the reconciler reads them. An
-	// empty mailbox has no status key.
-	completionKeyStatus      = "status"  // "success" | "failure"
-	completionKeyMessage     = "message" // optional human-readable text
-	completionArtifactPrefix = "artifact."
+	// Completion mailbox data layout, canonical in the gateway package (the
+	// gateway writes these keys on POST /v1/task/complete; the reconciler
+	// reads them). An empty mailbox has no status key.
+	completionKeyStatus      = gateway.CompletionKeyStatus
+	completionKeyMessage     = gateway.CompletionKeyMessage
+	completionArtifactPrefix = gateway.CompletionArtifactPrefix
 
 	// Completion condition and onTimeout enum values.
 	completionAgentReported = "agentReported"
@@ -50,7 +52,7 @@ const (
 	onTimeoutSucceed        = "Succeed"
 
 	// Reported status values on the wire and in status.agentReportedStatus.
-	completionStatusSuccess = "success"
+	completionStatusSuccess = gateway.CompletionStatusSuccess
 )
 
 // effectiveTaskSpec is the AgentTask spec after merging AgentClass defaults at

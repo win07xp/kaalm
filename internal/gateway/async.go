@@ -136,6 +136,23 @@ func (k *KubeAsyncRecords) CountPending(ctx context.Context, channelNamespace, c
 	return len(list.Items), nil
 }
 
+// KubeCompletionWriter patches per-task mailboxes through the clientset (in
+// production the per-task Role scopes this to update/patch on the named CM).
+type KubeCompletionWriter struct {
+	Client kubernetes.Interface
+}
+
+// PatchMailbox merges the completion payload into {taskName}-completion.
+func (k *KubeCompletionWriter) PatchMailbox(ctx context.Context, namespace, taskName string, data map[string]string) error {
+	patch, err := json.Marshal(map[string]any{"data": data})
+	if err != nil {
+		return err
+	}
+	_, err = k.Client.CoreV1().ConfigMaps(namespace).Patch(
+		ctx, CompletionMailboxName(taskName), types.MergePatchType, patch, metav1.PatchOptions{})
+	return err
+}
+
 // asyncAcceptResponse is the 202 body.
 type asyncAcceptResponse struct {
 	RequestID   string `json:"requestId"`
