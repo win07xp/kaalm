@@ -340,15 +340,20 @@ metadata:
 `test/e2e/testdata/secrets.yaml`:
 
 ```yaml
+# ModelProvider credential Secrets are resolved in the operator namespace
+# (modelprovider_controller.go reads credentialsRef from OperatorNamespace),
+# so this one lives in agentry-system, not e2e.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: e2e-openai-key
-  namespace: e2e
+  name: e2e-vertex-key
+  namespace: agentry-system
 type: Opaque
 stringData:
-  token: sk-e2e-dummy-not-used
+  token: dummy-not-used-probe-skipped
 ---
+# The channel webhook bearer Secret lives alongside the AgentChannel in e2e;
+# the reconciler grants the gateway a scoped read there.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -384,20 +389,26 @@ spec:
 `test/e2e/testdata/modelprovider.yaml`:
 
 ```yaml
+# Hermetic e2e: google-vertex has no liveness probe implemented, so Probe
+# returns Skipped (no network) and Ready goes True on a dummy credential.
+# An openai-type provider would run a real authenticated health probe that
+# 401s on the dummy credential and blocks Ready; healthCheck.enabled:false
+# cannot currently disable it (the field is `bool,omitempty`, so false is
+# dropped and reconcile-time defaulting re-enables the probe).
 apiVersion: agentry.io/v1alpha1
 kind: ModelProvider
 metadata:
-  name: e2e-openai
+  name: e2e-vertex
 spec:
-  type: openai
-  endpoint: https://api.openai.com
+  type: google-vertex
+  endpoint: https://us-central1-aiplatform.googleapis.com
   credentialsRef:
-    name: e2e-openai-key
+    name: e2e-vertex-key
     key: token
   models:
-    - id: gpt-4o
-      costPer1MInputTokens: "2.50"
-      costPer1MOutputTokens: "10.00"
+    - id: gemini-1.5-pro
+      costPer1MInputTokens: "1.25"
+      costPer1MOutputTokens: "5.00"
 ```
 
 `test/e2e/testdata/agent.yaml`:
@@ -601,9 +612,9 @@ var _ = BeforeSuite(func() {
 	Expect(utils.WaitRollout("agentry-system", "agentry-gateway", "150s")).To(Succeed())
 
 	By("seeding the e2e namespace and secrets")
-	_, err := utils.Kubectl("apply", "-f", "testdata/namespace.yaml")
+	_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/namespace.yaml")
 	Expect(err).NotTo(HaveOccurred())
-	_, err = utils.Kubectl("apply", "-f", "testdata/secrets.yaml")
+	_, err = utils.Kubectl("apply", "-f", "test/e2e/testdata/secrets.yaml")
 	Expect(err).NotTo(HaveOccurred())
 })
 
@@ -611,13 +622,13 @@ var _ = AfterSuite(func() {
 	By("tearing down e2e objects (chart and cluster are left in place)")
 	// Order: workloads first, then cluster-scoped, then the namespace.
 	for _, f := range []string{
-		"testdata/agenttask.yaml",
-		"testdata/agentchannel.yaml",
-		"testdata/agent.yaml",
-		"testdata/modelprovider.yaml",
-		"testdata/agentclass.yaml",
-		"testdata/secrets.yaml",
-		"testdata/namespace.yaml",
+		"test/e2e/testdata/agenttask.yaml",
+		"test/e2e/testdata/agentchannel.yaml",
+		"test/e2e/testdata/agent.yaml",
+		"test/e2e/testdata/modelprovider.yaml",
+		"test/e2e/testdata/agentclass.yaml",
+		"test/e2e/testdata/secrets.yaml",
+		"test/e2e/testdata/namespace.yaml",
 	} {
 		_, _ = utils.Kubectl("delete", "-f", f, "--ignore-not-found", "--wait=false")
 	}
@@ -675,7 +686,6 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -695,7 +705,7 @@ func readyTrue(kind, namespace, name string) (bool, error) {
 
 var _ = Describe("Golden path", Ordered, func() {
 	It("reconciles the AgentClass to Ready", func() {
-		_, err := utils.Kubectl("apply", "-f", "testdata/agentclass.yaml")
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/agentclass.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func() (bool, error) {
 			return readyTrue("agentclass", "", "e2e-standard")
@@ -703,15 +713,15 @@ var _ = Describe("Golden path", Ordered, func() {
 	})
 
 	It("reconciles the ModelProvider to Ready", func() {
-		_, err := utils.Kubectl("apply", "-f", "testdata/modelprovider.yaml")
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/modelprovider.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func() (bool, error) {
-			return readyTrue("modelprovider", "", "e2e-openai")
+			return readyTrue("modelprovider", "", "e2e-vertex")
 		}, "60s", "3s").Should(BeTrue())
 	})
 
 	It("provisions the Agent Pod to Running with its child resources", func() {
-		_, err := utils.Kubectl("apply", "-f", "testdata/agent.yaml")
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/agent.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agent", "e2e", "e2e-agent", "{.status.phase}")
@@ -725,7 +735,7 @@ var _ = Describe("Golden path", Ordered, func() {
 	})
 
 	It("reconciles the AgentChannel to Active", func() {
-		_, err := utils.Kubectl("apply", "-f", "testdata/agentchannel.yaml")
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/agentchannel.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agentchannel", "e2e", "e2e-channel", "{.status.phase}")
@@ -747,18 +757,20 @@ var _ = Describe("Golden path", Ordered, func() {
 			return status, err
 		}, "60s", "3s").Should(Equal(200))
 
+		// The starter-go agent echoes the delivered message back in its reply,
+		// so the reply content must contain the text we sent ("ping"). This
+		// proves the full round trip without pinning the template's phrasing.
 		var reply struct {
 			Content string `json:"content"`
 		}
 		Expect(json.Unmarshal([]byte(resp), &reply)).To(Succeed())
-		Expect(reply.Content).To(ContainSubstring("echo:"))
+		Expect(reply.Content).To(ContainSubstring("ping"))
 	})
 
 	It("blocks delivery from a disallowed namespace via the NetworkPolicy", func() {
 		// A pod in `default` is not in the agent's ingress allow-list, so the
 		// synthesized NetworkPolicy must refuse it. (The allowed gateway path is
 		// already proven by the sync-webhook spec above.)
-		_ = time.Second
 		probe := []string{
 			"run", "np-deny-probe", "-n", "default", "--rm", "-i", "--restart=Never",
 			"--image=curlimages/curl:8.10.1", "--command", "--",
@@ -827,11 +839,11 @@ import (
 var _ = Describe("Task lifecycle", Ordered, func() {
 	BeforeAll(func() {
 		// Ensure the class exists even when this spec runs in isolation.
-		_, _ = utils.Kubectl("apply", "-f", "testdata/agentclass.yaml")
+		_, _ = utils.Kubectl("apply", "-f", "test/e2e/testdata/agentclass.yaml")
 	})
 
 	It("runs an agentReported AgentTask to Succeeded", func() {
-		_, err := utils.Kubectl("apply", "-f", "testdata/agenttask.yaml")
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/agenttask.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agenttask", "e2e", "e2e-task", "{.status.phase}")
