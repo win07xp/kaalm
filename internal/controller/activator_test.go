@@ -39,7 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // activatorPKI mints a throwaway CA plus leaves for the activator TLS test.
@@ -121,7 +121,7 @@ func (p *activatorPKI) writeFiles(t *testing.T, serving tls.Certificate) (certFi
 
 func TestActivator_WritesWakeAnnotation(t *testing.T) {
 	pki := newActivatorPKI(t)
-	serving := pki.issue(t, "agentry-controller.agentry-system.svc.cluster.local", "localhost")
+	serving := pki.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local", "localhost")
 	certFile, keyFile, caFile := pki.writeFiles(t, serving)
 
 	// A hibernatable agent to activate.
@@ -163,7 +163,7 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 	}
 	waitUp()
 
-	gatewayCert := pki.issue(t, "agentry-gateway."+testSystemNamespace+".svc.cluster.local")
+	gatewayCert := pki.issue(t, "kaalm-gateway."+testSystemNamespace+".svc.cluster.local")
 	agentCert := pki.issue(t, "sup.team-a.svc.cluster.local")
 
 	post := func(c *http.Client, path string) int {
@@ -194,11 +194,11 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 	// and emits WakeIgnored. Seeing either the annotation or that event
 	// proves the activator's write landed.
 	eventually(t, func() error {
-		var ag agentryv1alpha1.Agent
+		var ag kaalmv1alpha1.Agent
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "act-agent"}, &ag); err != nil {
 			return err
 		}
-		if ag.Annotations[agentryv1alpha1.AnnotationWake] == agentryv1alpha1.AnnotationTrue {
+		if ag.Annotations[kaalmv1alpha1.AnnotationWake] == kaalmv1alpha1.AnnotationTrue {
 			return nil
 		}
 		var events corev1.EventList
@@ -206,7 +206,7 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 			return err
 		}
 		for _, e := range events.Items {
-			if e.Reason == agentryv1alpha1.ReasonWakeIgnored && e.InvolvedObject.Name == "act-agent" {
+			if e.Reason == kaalmv1alpha1.ReasonWakeIgnored && e.InvolvedObject.Name == "act-agent" {
 				return nil
 			}
 		}
@@ -217,10 +217,10 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 // TestHandleActivate_Guards drives handleActivate directly, exercising the
 // method, client-cert, SAN, and path-shape guards without a live listener.
 func TestHandleActivate_Guards(t *testing.T) {
-	s := &ActivatorServer{OperatorNamespace: "agentry-system"}
+	s := &ActivatorServer{OperatorNamespace: "kaalm-system"}
 
 	gatewayTLS := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
-		{DNSNames: []string{"agentry-gateway.agentry-system.svc.cluster.local"}},
+		{DNSNames: []string{"kaalm-gateway.kaalm-system.svc.cluster.local"}},
 	}}
 	agentTLS := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
 		{DNSNames: []string{"sup.team-a.svc.cluster.local"}},
@@ -256,7 +256,7 @@ func TestHandleActivate_AgentNotFound(t *testing.T) {
 	s := &ActivatorServer{Client: testClient, OperatorNamespace: testSystemNamespace}
 	req := httptest.NewRequest(http.MethodPost, "/v1/activate/default/no-such-agent-xyz", strings.NewReader(""))
 	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
-		{DNSNames: []string{"agentry-gateway." + testSystemNamespace + ".svc.cluster.local"}},
+		{DNSNames: []string{"kaalm-gateway." + testSystemNamespace + ".svc.cluster.local"}},
 	}}
 	w := httptest.NewRecorder()
 	s.handleActivate(w, req)
@@ -266,9 +266,9 @@ func TestHandleActivate_AgentNotFound(t *testing.T) {
 }
 
 func TestIsGatewayCert_ShortSAN(t *testing.T) {
-	s := &ActivatorServer{OperatorNamespace: "agentry-system"}
+	s := &ActivatorServer{OperatorNamespace: "kaalm-system"}
 	// The short svc SAN form is also accepted.
-	if !s.isGatewayCert(&x509.Certificate{DNSNames: []string{"agentry-gateway.agentry-system.svc"}}) {
+	if !s.isGatewayCert(&x509.Certificate{DNSNames: []string{"kaalm-gateway.kaalm-system.svc"}}) {
 		t.Error("short svc SAN must be recognized as the gateway identity")
 	}
 	if s.isGatewayCert(&x509.Certificate{DNSNames: []string{"unrelated.example.com"}}) {
@@ -295,7 +295,7 @@ func TestActivatorStart_Errors(t *testing.T) {
 	}
 
 	pki := newActivatorPKI(t)
-	serving := pki.issue(t, "agentry-controller.agentry-system.svc.cluster.local")
+	serving := pki.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
 	certFile, keyFile, caFile := pki.writeFiles(t, serving)
 
 	badKeyPair := &ActivatorServer{

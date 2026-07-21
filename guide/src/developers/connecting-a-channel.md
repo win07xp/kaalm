@@ -9,7 +9,7 @@ comes back synchronously or through a callback, your choice per channel.
 The e2e suite's own fixture, from `test/e2e/testdata/agentchannel.yaml`:
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentChannel
 metadata:
   name: e2e-channel
@@ -45,7 +45,7 @@ kubectl get agentchannels
 ## Calling it
 
 The webhook listens on the user gateway, port 8080 (TLS), Service
-`agentry-gateway` in `agentry-system`. In-cluster or through your ingress:
+`kaalm-gateway` in `kaalm-system`. In-cluster or through your ingress:
 
 ```bash
 curl -sS --cacert ca.crt \
@@ -57,7 +57,7 @@ curl -sS --cacert ca.crt \
 
 In `sync` mode the agent's reply is the HTTP response body. The caller
 identity can be threaded through per request (the sample channel in
-`config/samples/agentry_v1alpha1_agentchannel.yaml` maps it from an
+`config/samples/kaalm_v1alpha1_agentchannel.yaml` maps it from an
 `X-User-Id` header), which is what gives each user a stable conversation
 session with the agent.
 

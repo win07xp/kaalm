@@ -2,9 +2,9 @@
 
 These scenarios are concrete enough to double as acceptance criteria for v1: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. S1 through S5 belong to Priya, the platform engineer who provisions the capability. S6 through S11 belong to Dev, the application developer who deploys agents. S12 through S15 cover channel integration, where external systems talk to agents through the User Gateway. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
 
-## S1: Install Agentry and Offer a Standard Agent Class
+## S1: Install Kaalm and Offer a Standard Agent Class
 
-Priya installs the Agentry operator into her cluster via a Helm chart. She creates an `AgentClass` named `standard` for general-purpose agents: the cluster's default container runtime (no `runtimeClassName` pinned), 1 CPU / 2Gi memory defaults, allowed images restricted to the company's internal registry, and the `anthropic-shared` ModelProvider available. She publishes internal docs pointing developers to this AgentClass.
+Priya installs the Kaalm operator into her cluster via a Helm chart. She creates an `AgentClass` named `standard` for general-purpose agents: the cluster's default container runtime (no `runtimeClassName` pinned), 1 CPU / 2Gi memory defaults, allowed images restricted to the company's internal registry, and the `anthropic-shared` ModelProvider available. She publishes internal docs pointing developers to this AgentClass.
 
 ## S2: Offer a Sandboxed Class for Code-Execution Agents
 
@@ -32,7 +32,7 @@ Dev writes an `Agent` manifest for his customer support agent. He references `ag
 
 Dev's customer support agent is quiet overnight. The Agent spec has `idleTimeout: 30m`. After 30 minutes without traffic, the controller transitions the Agent to `Idle`; after a further `hibernationDelay` (defaults from the AgentClass, 30m) it transitions through `Hibernating`, deleting the Pod while retaining the PVC, to `Hibernated`.
 
-The next morning, the ticketing system sends a webhook message to the agent. The webhook request arrives at the Agentry User Gateway. The gateway looks up the AgentChannel, finds the target Agent, and discovers it is `Hibernated`. Because the channel backs a hibernation-enabled Agent, Dev configured it with `responseMode: async`, the recommended mode for hibernation-backed channels, since under defaults sync mode's `syncDeliveryDeadline` (30s) expires long before the `wakeTimeout` budget (120s). The ticketing system receives `202 Accepted` with a `requestId` immediately; in the background the gateway calls the controller's authenticated activator endpoint to trigger the wake, waits for the Pod to become `Ready` (the `Resuming` phase), delivers the message, and POSTs the agent's reply to the channel's `callbackUrl` (or stores it for polling). Dev's conversation memory is intact because the PVC persisted through hibernation.
+The next morning, the ticketing system sends a webhook message to the agent. The webhook request arrives at the Kaalm User Gateway. The gateway looks up the AgentChannel, finds the target Agent, and discovers it is `Hibernated`. Because the channel backs a hibernation-enabled Agent, Dev configured it with `responseMode: async`, the recommended mode for hibernation-backed channels, since under defaults sync mode's `syncDeliveryDeadline` (30s) expires long before the `wakeTimeout` budget (120s). The ticketing system receives `202 Accepted` with a `requestId` immediately; in the background the gateway calls the controller's authenticated activator endpoint to trigger the wake, waits for the Pod to become `Ready` (the `Resuming` phase), delivers the message, and POSTs the agent's reply to the channel's `callbackUrl` (or stores it for polling). Dev's conversation memory is intact because the PVC persisted through hibernation.
 
 The wake half of this scenario is drawn step by step in [The wake sequence](../gateways/user/activation-and-activity.md#the-wake-sequence).
 
@@ -50,7 +50,7 @@ Dev's team hits their monthly Anthropic budget on the 25th. The gateway starts r
 
 ## S11: Clean Teardown on Delete
 
-Dev `kubectl delete agent my-support-agent`. The controller drains in-flight requests, gracefully shuts down the Pod with SIGTERM, runs the finalizer, and only then removes the resource. The PVC is deleted if `AgentClass.spec.persistence.pvcRetention: Delete` is set; otherwise it is retained. (This is Agentry's PVC-on-Agent-delete policy and is independent of any `PersistentVolume.persistentVolumeReclaimPolicy` on the underlying PV.)
+Dev `kubectl delete agent my-support-agent`. The controller drains in-flight requests, gracefully shuts down the Pod with SIGTERM, runs the finalizer, and only then removes the resource. The PVC is deleted if `AgentClass.spec.persistence.pvcRetention: Delete` is set; otherwise it is retained. (This is Kaalm's PVC-on-Agent-delete policy and is independent of any `PersistentVolume.persistentVolumeReclaimPolicy` on the underlying PV.)
 
 ## S12: Connect a Personal Assistant via Webhook (v1) / Discord (v1.1)
 
@@ -79,7 +79,7 @@ These scenarios drive specific design requirements:
 - **S5** requires `allowedNamespaces` on ModelProvider and graceful handling of mid-session access revocation.
 - **S6, S7, S14** require a persistent agent lifecycle with `idleTimeout`, hibernation state transitions, PVC retention across pod restarts, and gateway-driven wake-on-demand.
 - **S8** requires AgentTask with a defined completion condition (agent-reported via gateway), timeout, and artifact collection in the completion payload.
-- **S9** is not a v1 acceptance criterion but informs the resource model: task and persistent agents should be built from shared primitives. v1 ships the enabling mount primitive, [`Agent.spec.persistence.existingClaim`](../resources/agent.md) (validation rule 27); snapshotting itself is standard Kubernetes `VolumeSnapshot`, not Agentry machinery.
+- **S9** is not a v1 acceptance criterion but informs the resource model: task and persistent agents should be built from shared primitives. v1 ships the enabling mount primitive, [`Agent.spec.persistence.existingClaim`](../resources/agent.md) (validation rule 27); snapshotting itself is standard Kubernetes `VolumeSnapshot`, not Kaalm machinery.
 - **S10** requires the controller to surface ModelProvider errors as Agent status conditions.
 - **S11** requires finalizers and the configurable `AgentClass.spec.persistence.pvcRetention` field (`Delete | Retain`), which is distinct from the Kubernetes `PersistentVolume.persistentVolumeReclaimPolicy` and operates independently.
 - **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener. Discord and WhatsApp adapters are deferred to v1.1. For S12 specifically, the recommended v1 path is to start from one of the starter templates (see [Starter Templates](../runtime/starter-templates.md)) and replace the agent logic: the template already implements the runtime contract (HTTPS serving, client-cert mTLS, cert-file reload, `messageId` dedup).

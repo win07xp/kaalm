@@ -28,7 +28,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // callbackServer starts a TLS server signed by ca for the given DNS name,
@@ -71,12 +71,12 @@ func TestDialCallbackOnce_SuccessAndSigning(t *testing.T) {
 
 	s := callbackClientServer(t, ca)
 	parsed, _ := url.Parse("https://callback.test:" + port + "/cb")
-	ch := &agentryv1alpha1.AgentChannel{
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentChannelSpec{Webhook: agentryv1alpha1.AgentChannelWebhook{
-			CallbackAuth: &agentryv1alpha1.ChannelAuth{
+		Spec: kaalmv1alpha1.AgentChannelSpec{Webhook: kaalmv1alpha1.AgentChannelWebhook{
+			CallbackAuth: &kaalmv1alpha1.ChannelAuth{
 				Type: authTypeHMAC,
-				HMAC: &agentryv1alpha1.ChannelHMAC{Header: "X-Sig", Algorithm: "sha256"},
+				HMAC: &kaalmv1alpha1.ChannelHMAC{Header: "X-Sig", Algorithm: "sha256"},
 			},
 		}},
 	}
@@ -114,9 +114,9 @@ func TestDialCallbackOnce_SuccessAndSigning(t *testing.T) {
 
 func TestSendCallback_Rejections(t *testing.T) {
 	s := &Server{ChannelHealth: NewChannelHealthStore(0)}
-	base := &agentryv1alpha1.AgentChannel{
+	base := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "team-a"},
-		Spec:       agentryv1alpha1.AgentChannelSpec{Webhook: agentryv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
+		Spec:       kaalmv1alpha1.AgentChannelSpec{Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
 	}
 
 	// Non-HTTPS callback URL is invalid.
@@ -139,7 +139,7 @@ func TestSendCallback_Rejections(t *testing.T) {
 	httpsURL := "https://8.8.8.8/cb"
 	ch3 := base.DeepCopy()
 	ch3.Spec.Webhook.CallbackURL = &httpsURL
-	ch3.Spec.Webhook.CallbackAuth = &agentryv1alpha1.ChannelAuth{Type: authTypeBearer} // no secretRef
+	ch3.Spec.Webhook.CallbackAuth = &kaalmv1alpha1.ChannelAuth{Type: authTypeBearer} // no secretRef
 	s.Store = newFakeStore()
 	if s.sendCallback(context.Background(), ch3, "r3", []byte(`{}`)) {
 		t.Error("unresolvable callbackAuth secret must not deliver")

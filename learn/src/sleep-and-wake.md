@@ -2,7 +2,7 @@
 
 *Stub: written after v0.2.0.*
 
-The finale: the moment Agentry stops looking like a fancy way to run a
+The finale: the moment Kaalm stops looking like a fancy way to run a
 container.
 
 - Watching the idle agent hibernate: the Pod disappears, the agent resource

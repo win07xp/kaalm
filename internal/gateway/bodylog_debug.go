@@ -1,4 +1,4 @@
-//go:build agentry_debug_logs
+//go:build kaalm_debug_logs
 
 /*
 Copyright 2026.
@@ -20,7 +20,7 @@ package gateway
 
 import "log/slog"
 
-// This is the DEBUG build, gated by the `agentry_debug_logs` build tag. It logs
+// This is the DEBUG build, gated by the `kaalm_debug_logs` build tag. It logs
 // prompt and response bodies for contract bring-up and integration debugging.
 // The official Helm chart only ships default builds; debug images carry a
 // `-debug` tag suffix and emit a startup banner (see init). Never ship this to
@@ -28,7 +28,7 @@ import "log/slog"
 const DebugBodyLogging = true
 
 func init() {
-	slog.Warn("AGENTRY DEBUG BUILD: prompt and response bodies WILL be logged. " +
+	slog.Warn("KAALM DEBUG BUILD: prompt and response bodies WILL be logged. " +
 		"Do not run this image in production.")
 }
 

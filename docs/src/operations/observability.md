@@ -1,10 +1,10 @@
 # Observability
 
-Agentry's v1 observability surface has three pillars:
+Kaalm's v1 observability surface has three pillars:
 
 1. **Prometheus metrics** scraped from the controller and the gateway.
 2. **Structured JSON logs** from both.
-3. **Kubernetes Events** on the Agentry CRDs and their child resources.
+3. **Kubernetes Events** on the Kaalm CRDs and their child resources.
 
 Both the controller and the gateway expose Prometheus metrics on dedicated ports. Each component owns its own metric catalog and documents its own emit-points:
 
@@ -22,7 +22,7 @@ Detailed Grafana dashboards, distributed tracing, and an audit-export pipeline a
 
 - Prometheus metrics on dedicated ports (controller `:8080/metrics`, gateway `:9090/metrics`)
 - Structured JSON logs from controller and gateway with a hard PII-safety rule
-- Kubernetes Events on all five Agentry CRDs
+- Kubernetes Events on all five Kaalm CRDs
 - A small recommended-alerts set tied to architectural failure modes
 - Dashboard topology sketches (per-namespace, per-provider, cluster)
 
@@ -50,31 +50,31 @@ The chart documents the scrape ports but does not ship `ServiceMonitor` / `PodMo
 
 Standard controller-runtime reconcile metrics (counts, duration, queue depth, work-queue saturation) are emitted automatically by the controller. See [Observability](../controller/operations.md#observability) for the per-component canonical list.
 
-The Agentry-specific metrics across all three components:
+The Kaalm-specific metrics across all three components:
 
 | Source | Metric | Type | Labels |
 |---|---|---|---|
-| Controller | `agentry_agents` | gauge | `phase`, `namespace` |
-| Controller | `agentry_tasks` | gauge | `phase`, `namespace` |
-| Controller | `agentry_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` |
-| Controller | `agentry_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` |
-| Controller | `agentry_hibernations_total` | counter | `namespace` |
-| Controller | `agentry_wakes_total` | counter | `namespace`, `trigger` |
-| Controller | `agentry_budget_threshold_events_total` | counter | `provider`, `namespace`, `action` |
-| LLM Gateway | `agentry_llm_requests_total` | counter | `provider`, `model`, `namespace`, `status` |
-| LLM Gateway | `agentry_llm_request_duration_seconds` | histogram | `provider`, `model` |
-| LLM Gateway | `agentry_llm_tokens_total` | counter | `provider`, `model`, `namespace`, `direction` |
-| LLM Gateway | `agentry_llm_spend_usd_total` | counter | `provider`, `namespace` |
-| LLM Gateway | `agentry_llm_fallback_total` | counter | `from_provider`, `to_provider`, `reason` |
-| LLM Gateway | `agentry_llm_budget_utilization` | gauge | `provider`, `namespace`, `period` |
-| User Gateway | `agentry_channel_messages_total` | counter | `channel_type`, `namespace`, `status` |
-| User Gateway | `agentry_channel_message_duration_seconds` | histogram | `channel_type` |
-| User Gateway | `agentry_channel_wake_total` | counter | `namespace` |
-| User Gateway | `agentry_channel_wake_duration_seconds` | histogram | `namespace`, `result` |
-| User Gateway | `agentry_channel_callback_total` | counter | `namespace`, `status` |
-| User Gateway | `agentry_channel_callback_duration_seconds` | histogram | `namespace` |
-| User Gateway | `agentry_channel_response_too_large_total` | counter | `namespace`, `mode` |
-| User Gateway | `agentry_channel_async_patch_failed_total` | counter | `namespace` |
+| Controller | `kaalm_agents` | gauge | `phase`, `namespace` |
+| Controller | `kaalm_tasks` | gauge | `phase`, `namespace` |
+| Controller | `kaalm_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` |
+| Controller | `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` |
+| Controller | `kaalm_hibernations_total` | counter | `namespace` |
+| Controller | `kaalm_wakes_total` | counter | `namespace`, `trigger` |
+| Controller | `kaalm_budget_threshold_events_total` | counter | `provider`, `namespace`, `action` |
+| LLM Gateway | `kaalm_llm_requests_total` | counter | `provider`, `model`, `namespace`, `status` |
+| LLM Gateway | `kaalm_llm_request_duration_seconds` | histogram | `provider`, `model` |
+| LLM Gateway | `kaalm_llm_tokens_total` | counter | `provider`, `model`, `namespace`, `direction` |
+| LLM Gateway | `kaalm_llm_spend_usd_total` | counter | `provider`, `namespace` |
+| LLM Gateway | `kaalm_llm_fallback_total` | counter | `from_provider`, `to_provider`, `reason` |
+| LLM Gateway | `kaalm_llm_budget_utilization` | gauge | `provider`, `namespace`, `period` |
+| User Gateway | `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` |
+| User Gateway | `kaalm_channel_message_duration_seconds` | histogram | `channel_type` |
+| User Gateway | `kaalm_channel_wake_total` | counter | `namespace` |
+| User Gateway | `kaalm_channel_wake_duration_seconds` | histogram | `namespace`, `result` |
+| User Gateway | `kaalm_channel_callback_total` | counter | `namespace`, `status` |
+| User Gateway | `kaalm_channel_callback_duration_seconds` | histogram | `namespace` |
+| User Gateway | `kaalm_channel_response_too_large_total` | counter | `namespace`, `mode` |
+| User Gateway | `kaalm_channel_async_patch_failed_total` | counter | `namespace` |
 
 For full semantics (when each metric increments, what each label value means, retention and reset behavior) see the per-component canonical sections:
 
@@ -107,7 +107,7 @@ This is a hard rule because logs are typically shipped to lower-trust aggregatio
 
 ### Debug-build escape hatch
 
-A separate **debug build**, gated by the Go build tag `agentry_debug_logs` at compile time, can log prompt and response bodies for contract bring-up and integration debugging. The escape hatch exists at the build layer only:
+A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies for contract bring-up and integration debugging. The escape hatch exists at the build layer only:
 
 - The official Helm chart only ships default builds. Debug-build images carry the `-debug` tag suffix and emit a startup banner, so an operator who accidentally pulls one notices.
 - There is **no runtime Helm value, environment variable, feature flag, or admin endpoint** that flips body logging on in a default build. The gate is build-time only.
@@ -136,7 +136,7 @@ A v1 alert set tied to architectural failure modes already named in the doc set.
 
 | Alert | Severity | Architectural hook |
 |---|---|---|
-| Controller all replicas unready | Page | Wake-on-demand is a hard control-plane dependency. See [The Agentry Gateway](../gateways/overview.md) |
+| Controller all replicas unready | Page | Wake-on-demand is a hard control-plane dependency. See [The Kaalm Gateway](../gateways/overview.md) |
 | Gateway all replicas unready | Page | LLM and webhook traffic blocked cluster-wide |
 | Reconcile error rate elevated | Warn | Reconciler is stuck. Surface before the work queue backs up |
 | LLM error rate elevated for a provider | Warn | Provider degraded; consider promoting fallback |
@@ -144,17 +144,17 @@ A v1 alert set tied to architectural failure modes already named in the doc set.
 | Budget threshold `degrade` or `block` triggered | Warn / Page | Tenant or provider crossed the configured spend ceiling |
 | Hibernation / wake churn for a single Agent | Warn | Likely idle-timeout misconfig. See [Agent (persistent mode)](../controller/agent-lifecycle.md) |
 | Per-namespace rate-limit saturation | Warn | Tenant hitting the per-(namespace, model) ceiling. See [Rate Limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting) |
-| Wake duration p95 elevated | Warn | [Activator](../gateways/user/activation-and-activity.md#the-activator) path slow. Watch `agentry_channel_wake_duration_seconds` |
+| Wake duration p95 elevated | Warn | [Activator](../gateways/user/activation-and-activity.md#the-activator) path slow. Watch `kaalm_channel_wake_duration_seconds` |
 | Async-callback exhaustion rate elevated | Warn | Receivers' `callbackUrl` repeatedly unreachable; receivers should [poll](../gateways/api/async-responses.md) |
-| `agentry_channel_async_patch_failed_total` nonzero | Warn | The v1 async silent-loss limitation fired. See below |
+| `kaalm_channel_async_patch_failed_total` nonzero | Warn | The v1 async silent-loss limitation fired. See below |
 
-The last alert deserves a note. A nonzero `agentry_channel_async_patch_failed_total` means a response was dropped after `Patch` retry exhaustion: pollers see `202` followed by `404` with no stored envelope. See [Response-Patch failure semantics](../gateways/api/async-responses.md).
+The last alert deserves a note. A nonzero `kaalm_channel_async_patch_failed_total` means a response was dropped after `Patch` retry exhaustion: pollers see `202` followed by `404` with no stored envelope. See [Response-Patch failure semantics](../gateways/api/async-responses.md).
 
 ## Recommended dashboards
 
 Three top-level panels cover v1 visibility. Concrete Grafana JSON ships in v1.1.
 
-1. **Per-namespace.** Agent and AgentTask phase counts, spend (`agentry_provider_budget_canonical_usd`), rate-limit utilization, channel message rate, channel condition rollup (`agentry_channels` by `ready` / `platform_connected`).
+1. **Per-namespace.** Agent and AgentTask phase counts, spend (`kaalm_provider_budget_canonical_usd`), rate-limit utilization, channel message rate, channel condition rollup (`kaalm_channels` by `ready` / `platform_connected`).
 2. **Per-provider.** Request rate, error rate, latency p50/p95, fallback events, budget utilization.
 3. **Cluster.** Controller and gateway replica readiness, reconcile error rate, hibernation and wake counts, wake-duration distribution, async-callback delivery state.
 

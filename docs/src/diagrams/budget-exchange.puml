@@ -5,7 +5,7 @@
 
 participant "Gateway\nReplica-0" as r0 #90EE90
 participant "Gateway\nReplica-1" as r1 #90EE90
-participant "agentry-budget-{provider}\nConfigMap" as cm #FFD580
+participant "kaalm-budget-{provider}\nConfigMap" as cm #FFD580
 participant "ModelProvider\nReconciler" as rec #87CEEB
 
 == Startup ==
@@ -26,8 +26,8 @@ end
 == 2. Every 10s (server-side apply) ==
 
 loop every 10s
-  r0 -> cm : **SSA** key **"agentry-gateway-0"**\nfield manager = **its own Pod name**\n'{"period": "2026-04", "team-support": "142.50"}'
-  r1 -> cm : **SSA** key **"agentry-gateway-1"**\nfield manager = **its own Pod name**
+  r0 -> cm : **SSA** key **"kaalm-gateway-0"**\nfield manager = **its own Pod name**\n'{"period": "2026-04", "team-support": "142.50"}'
+  r1 -> cm : **SSA** key **"kaalm-gateway-1"**\nfield manager = **its own Pod name**
 end
 note over cm
   Each replica owns **exactly one key** via its own field

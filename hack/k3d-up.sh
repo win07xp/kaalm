@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create a local k3d cluster for Agentry development and e2e, and install the two
+# Create a local k3d cluster for Kaalm development and e2e, and install the two
 # hard prerequisites the chart does not: cert-manager and trust-manager. The
 # third prerequisite, a NetworkPolicy-enforcing CNI, is provided by k3d's default
 # flannel for basic policies; FQDN egress (allowedHosts) needs Cilium/Calico and
@@ -8,7 +8,7 @@
 # Idempotent: re-running reuses an existing cluster and upgrades the charts.
 set -euo pipefail
 
-CLUSTER="${CLUSTER:-agentry-dev}"
+CLUSTER="${CLUSTER:-kaalm-dev}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.2}"
 TRUST_MANAGER_VERSION="${TRUST_MANAGER_VERSION:-v0.13.0}"
 TRUST_NAMESPACE="${TRUST_NAMESPACE:-cert-manager}"
@@ -27,7 +27,7 @@ echo ">> installing cert-manager ${CERT_MANAGER_VERSION}"
 helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
 helm repo update jetstack >/dev/null
 # --enable-certificate-owner-ref makes cert-manager delete a Certificate's
-# output Secret when the Certificate goes away. Agentry relies on this for
+# output Secret when the Certificate goes away. Kaalm relies on this for
 # per-workload cert Secrets: cascade GC removes the Certificate on Agent or
 # AgentTask deletion, and this flag is what removes the Secret one hop later.
 # Without it, deleted workloads orphan their TLS Secrets.

@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 const (
@@ -45,7 +45,7 @@ const (
 	// namespace; kept distinct from testOperatorNamespace so ModelProvider
 	// credential Secrets (in default) and Agent workloads (also in default)
 	// do not collide with the system-namespace guard.
-	testSystemNamespace = "agentry-system"
+	testSystemNamespace = "kaalm-system"
 )
 
 var (
@@ -107,7 +107,7 @@ func (f *fakeHealthChecker) count(name string) int {
 }
 
 func (f *fakeHealthChecker) Probe(
-	_ context.Context, provider *agentryv1alpha1.ModelProvider, _ string,
+	_ context.Context, provider *kaalmv1alpha1.ModelProvider, _ string,
 ) ProviderProbeResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -135,7 +135,7 @@ func TestMain(m *testing.M) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		panic(err)
 	}
-	if err := agentryv1alpha1.AddToScheme(scheme); err != nil {
+	if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {
 		panic(err)
 	}
 	if err := cmapi.AddToScheme(scheme); err != nil {

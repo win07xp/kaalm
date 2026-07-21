@@ -22,7 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // Field index keys. Cross-resource lookups (usage counts, reference tracking,
@@ -45,28 +45,28 @@ const (
 func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	idx := mgr.GetFieldIndexer()
 
-	if err := idx.IndexField(ctx, &agentryv1alpha1.Agent{}, IndexAgentClassRef, func(o client.Object) []string {
-		return []string{o.(*agentryv1alpha1.Agent).Spec.AgentClassRef.Name}
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.Agent{}, IndexAgentClassRef, func(o client.Object) []string {
+		return []string{o.(*kaalmv1alpha1.Agent).Spec.AgentClassRef.Name}
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &agentryv1alpha1.AgentTask{}, IndexAgentClassRef, func(o client.Object) []string {
-		return []string{o.(*agentryv1alpha1.AgentTask).Spec.AgentClassRef.Name}
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentTask{}, IndexAgentClassRef, func(o client.Object) []string {
+		return []string{o.(*kaalmv1alpha1.AgentTask).Spec.AgentClassRef.Name}
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &agentryv1alpha1.Agent{}, IndexProviderRef, func(o client.Object) []string {
-		return providerRefNames(o.(*agentryv1alpha1.Agent).Spec.Providers)
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.Agent{}, IndexProviderRef, func(o client.Object) []string {
+		return providerRefNames(o.(*kaalmv1alpha1.Agent).Spec.Providers)
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &agentryv1alpha1.AgentTask{}, IndexProviderRef, func(o client.Object) []string {
-		return providerRefNames(o.(*agentryv1alpha1.AgentTask).Spec.Providers)
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentTask{}, IndexProviderRef, func(o client.Object) []string {
+		return providerRefNames(o.(*kaalmv1alpha1.AgentTask).Spec.Providers)
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &agentryv1alpha1.AgentClass{}, IndexAllowedProviders, func(o client.Object) []string {
-		ac := o.(*agentryv1alpha1.AgentClass)
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentClass{}, IndexAllowedProviders, func(o client.Object) []string {
+		ac := o.(*kaalmv1alpha1.AgentClass)
 		names := make([]string, 0, len(ac.Spec.AllowedProviders))
 		for _, p := range ac.Spec.AllowedProviders {
 			names = append(names, p.Name)
@@ -78,7 +78,7 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	return nil
 }
 
-func providerRefNames(refs []agentryv1alpha1.AgentProviderReference) []string {
+func providerRefNames(refs []kaalmv1alpha1.AgentProviderReference) []string {
 	names := make([]string, 0, len(refs))
 	for _, r := range refs {
 		names = append(names, r.ProviderRef.Name)

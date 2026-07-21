@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ktypes "k8s.io/apimachinery/pkg/types"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 type fakeCompletions struct {
@@ -53,15 +53,15 @@ func (f *fakeCompletions) PatchMailbox(_ context.Context, ns, task string, data 
 
 // seedTask installs an agentReported task whose Pod UID matches the harness
 // source IP (127.0.0.1).
-func seedTask(h *harness, name string, mutate func(*agentryv1alpha1.AgentTask)) {
-	task := &agentryv1alpha1.AgentTask{
+func seedTask(h *harness, name string, mutate func(*kaalmv1alpha1.AgentTask)) {
+	task := &kaalmv1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentTaskSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "std"},
-			Artifacts:     []agentryv1alpha1.AgentTaskArtifact{{Name: "pr-url"}},
+		Spec: kaalmv1alpha1.AgentTaskSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "std"},
+			Artifacts:     []kaalmv1alpha1.AgentTaskArtifact{{Name: "pr-url"}},
 		},
-		Status: agentryv1alpha1.AgentTaskStatus{
-			Phase:         agentryv1alpha1.TaskRunning,
+		Status: kaalmv1alpha1.AgentTaskStatus{
+			Phase:         kaalmv1alpha1.TaskRunning,
 			CurrentPodUID: "uid-live",
 		},
 	}
@@ -87,7 +87,7 @@ func TestTaskComplete_HappyPath(t *testing.T) {
 	completions := newFakeCompletions()
 	h.server.Completions = completions
 	seedTask(h, "fix-42", nil)
-	cert := h.ca.issue(t, "fix-42.team-a.task.agentry.io")
+	cert := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
 
 	resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{
 		"status": "success", "message": "PR opened",
@@ -109,32 +109,32 @@ func TestTaskComplete_Gates(t *testing.T) {
 	h.server.Completions = completions
 
 	// exitCode task: TaskNotAgentReported.
-	seedTask(h, "exit-task", func(task *agentryv1alpha1.AgentTask) {
+	seedTask(h, "exit-task", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = "exitCode"
 	})
-	cert := h.ca.issue(t, "exit-task.team-a.task.agentry.io")
+	cert := h.ca.issue(t, "exit-task.team-a.task.kaalm.io")
 	resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
 	if resp.StatusCode != 403 || !bodyContains(t, resp, "TaskNotAgentReported") {
 		t.Errorf("exitCode task = %d", resp.StatusCode)
 	}
 
 	// Terminal phase: TaskAlreadyCompleted.
-	seedTask(h, "done-task", func(task *agentryv1alpha1.AgentTask) {
-		task.Status.Phase = agentryv1alpha1.TaskSucceeded
+	seedTask(h, "done-task", func(task *kaalmv1alpha1.AgentTask) {
+		task.Status.Phase = kaalmv1alpha1.TaskSucceeded
 		task.Spec.Artifacts = nil
 	})
-	cert = h.ca.issue(t, "done-task.team-a.task.agentry.io")
+	cert = h.ca.issue(t, "done-task.team-a.task.kaalm.io")
 	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
 	if resp.StatusCode != 403 || !bodyContains(t, resp, "TaskAlreadyCompleted") {
 		t.Errorf("terminal task = %d", resp.StatusCode)
 	}
 
 	// Stale UID: StalePodCompletion, retryable.
-	seedTask(h, "stale-task", func(task *agentryv1alpha1.AgentTask) {
+	seedTask(h, "stale-task", func(task *kaalmv1alpha1.AgentTask) {
 		task.Status.CurrentPodUID = "uid-other"
 		task.Spec.Artifacts = nil
 	})
-	cert = h.ca.issue(t, "stale-task.team-a.task.agentry.io")
+	cert = h.ca.issue(t, "stale-task.team-a.task.kaalm.io")
 	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
 	if resp.StatusCode != 403 || !bodyContains(t, resp, "StalePodCompletion") {
 		t.Errorf("stale pod = %d", resp.StatusCode)
@@ -142,7 +142,7 @@ func TestTaskComplete_Gates(t *testing.T) {
 
 	// Artifact validation: success missing a declared artifact is 400.
 	seedTask(h, "arts-task", nil)
-	cert = h.ca.issue(t, "arts-task.team-a.task.agentry.io")
+	cert = h.ca.issue(t, "arts-task.team-a.task.kaalm.io")
 	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
 	if resp.StatusCode != 400 || !bodyContains(t, resp, "missing declared artifact") {
 		t.Errorf("missing artifact = %d", resp.StatusCode)
@@ -156,7 +156,7 @@ func TestTaskComplete_Gates(t *testing.T) {
 
 	// Oversized artifact: 413.
 	seedTask(h, "big-task", nil)
-	cert = h.ca.issue(t, "big-task.team-a.task.agentry.io")
+	cert = h.ca.issue(t, "big-task.team-a.task.kaalm.io")
 	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{
 		"status": "success", "artifacts": map[string]string{"pr-url": strings.Repeat("x", 5<<10)},
 	}, nil)
@@ -167,7 +167,7 @@ func TestTaskComplete_Gates(t *testing.T) {
 }
 
 func TestValidateCompletionArtifacts(t *testing.T) {
-	declared := []agentryv1alpha1.AgentTaskArtifact{{Name: "a"}, {Name: "b"}}
+	declared := []kaalmv1alpha1.AgentTaskArtifact{{Name: "a"}, {Name: "b"}}
 	if msg := ValidateCompletionArtifacts(CompletionStatusSuccess, map[string]string{"a": "1", "b": "2"}, declared); msg != "" {
 		t.Errorf("complete success set must pass: %s", msg)
 	}
@@ -215,8 +215,8 @@ func TestTaskComplete_BadRequestsAndPatchFailure(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	completions := newFakeCompletions()
 	h.server.Completions = completions
-	seedTask(h, "fix-42", func(task *agentryv1alpha1.AgentTask) { task.Spec.Artifacts = nil })
-	cert := h.ca.issue(t, "fix-42.team-a.task.agentry.io")
+	seedTask(h, "fix-42", func(task *kaalmv1alpha1.AgentTask) { task.Spec.Artifacts = nil })
+	cert := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
 	client := h.client(&cert)
 
 	// Non-JSON body: 400.
@@ -240,14 +240,14 @@ func TestTaskComplete_BadRequestsAndPatchFailure(t *testing.T) {
 	// Total-size cap: many small artifacts that are individually fine but
 	// together exceed 32 KiB. Declare them so validation passes.
 	big := map[string]string{}
-	declared := []agentryv1alpha1.AgentTaskArtifact{}
+	declared := []kaalmv1alpha1.AgentTaskArtifact{}
 	for i := 0; i < 10; i++ {
 		name := string(rune('a'+i)) + "-art"
 		big[name] = strings.Repeat("y", 4<<10)
-		declared = append(declared, agentryv1alpha1.AgentTaskArtifact{Name: name})
+		declared = append(declared, kaalmv1alpha1.AgentTaskArtifact{Name: name})
 	}
-	seedTask(h, "big-total", func(task *agentryv1alpha1.AgentTask) { task.Spec.Artifacts = declared })
-	certBig := h.ca.issue(t, "big-total.team-a.task.agentry.io")
+	seedTask(h, "big-total", func(task *kaalmv1alpha1.AgentTask) { task.Spec.Artifacts = declared })
+	certBig := h.ca.issue(t, "big-total.team-a.task.kaalm.io")
 	resp = postJSON(t, h.client(&certBig), h.url("/v1/task/complete"),
 		map[string]any{"status": CompletionStatusSuccess, "artifacts": big}, nil)
 	if resp.StatusCode != 413 || !bodyContains(t, resp, "combined") {
@@ -267,7 +267,7 @@ func TestTaskComplete_NoTaskBacksCaller(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	h.server.Completions = newFakeCompletions()
 	// No task seeded for this SAN.
-	cert := h.ca.issue(t, "ghost.team-a.task.agentry.io")
+	cert := h.ca.issue(t, "ghost.team-a.task.kaalm.io")
 	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
 	resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": CompletionStatusSuccess}, nil)
 	if resp.StatusCode != 403 || !bodyContains(t, resp, "no AgentTask") {

@@ -1,12 +1,12 @@
 # Resource Overview
 
-This part of the book covers the custom resources Agentry provides: their spec and status schemas, and the rationale for the design choices behind them. There is one page per CRD ([AgentClass](agentclass.md), [ModelProvider](modelprovider.md), [Agent](agent.md), [AgentTask](agenttask.md), [AgentChannel](agentchannel.md)), followed by the [cross-resource validation rules](validation-and-defaulting.md#cross-resource-validation) and [defaulting behavior](validation-and-defaulting.md#defaulting) that tie them together. The specs on these pages are the canonical field reference for implementation.
+This part of the book covers the custom resources Kaalm provides: their spec and status schemas, and the rationale for the design choices behind them. There is one page per CRD ([AgentClass](agentclass.md), [ModelProvider](modelprovider.md), [Agent](agent.md), [AgentTask](agenttask.md), [AgentChannel](agentchannel.md)), followed by the [cross-resource validation rules](validation-and-defaulting.md#cross-resource-validation) and [defaulting behavior](validation-and-defaulting.md#defaulting) that tie them together. The specs on these pages are the canonical field reference for implementation.
 
 For the HTTP endpoints that agent containers call (task completion, heartbeat, message delivery, async webhook), see [HTTP API](../gateways/api/overview.md).
 
 All resources live in one API group and version:
 
-- API group: `agentry.io`
+- API group: `kaalm.io`
 - API version: `v1alpha1` (v1 API stability is not a goal for the initial release)
 
 ## Resource Summary

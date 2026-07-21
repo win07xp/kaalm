@@ -1,4 +1,4 @@
-{{- include "agentry.replicaFloor" .Values.controller.replicas -}}
+{{- include "kaalm.replicaFloor" .Values.controller.replicas -}}
 {{/*
 The controller Deployment, Service, and PodDisruptionBudget. Two replicas with
 leader election: the leader reconciles, the standby keeps the activator
@@ -9,10 +9,10 @@ every replica). See docs/src/operations/deployment.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentry-controller
+  name: kaalm-controller
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
 spec:
   replicas: {{ .Values.controller.replicas }}
@@ -22,15 +22,15 @@ spec:
       maxUnavailable: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: agentry
+      app.kubernetes.io/name: kaalm
       app.kubernetes.io/component: controller
   template:
     metadata:
       labels:
-        {{- include "agentry.labels" . | nindent 8 }}
+        {{- include "kaalm.labels" . | nindent 8 }}
         app.kubernetes.io/component: controller
     spec:
-      serviceAccountName: agentry-controller
+      serviceAccountName: kaalm-controller
       securityContext:
         runAsNonRoot: true
       # Spread the two replicas across nodes so a single node loss cannot take
@@ -46,7 +46,7 @@ spec:
               podAffinityTerm:
                 labelSelector:
                   matchLabels:
-                    app.kubernetes.io/name: agentry
+                    app.kubernetes.io/name: kaalm
                     app.kubernetes.io/component: controller
                 topologyKey: kubernetes.io/hostname
       containers:
@@ -58,9 +58,9 @@ spec:
             - --health-probe-bind-address=:8081
             - --metrics-bind-address=:8080
             - --metrics-secure=false
-            - --controller-tls-cert=/var/run/agentry/tls.crt
-            - --controller-tls-key=/var/run/agentry/tls.key
-            - --controller-tls-ca=/var/run/agentry/ca.crt
+            - --controller-tls-cert=/var/run/kaalm/tls.crt
+            - --controller-tls-key=/var/run/kaalm/tls.key
+            - --controller-tls-ca=/var/run/kaalm/ca.crt
             - --activator-addr=:9443
           env:
             - name: POD_NAMESPACE
@@ -90,36 +90,36 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: agentry-tls
-              mountPath: /var/run/agentry
+            - name: kaalm-tls
+              mountPath: /var/run/kaalm
               readOnly: true
       volumes:
         # The controller's own leaf cert plus the trust-manager-projected CA,
         # combined so a rotation of either is picked up by the file watch.
-        - name: agentry-tls
+        - name: kaalm-tls
           projected:
             sources:
               - secret:
-                  name: agentry-controller-tls
+                  name: kaalm-controller-tls
                   items:
                     - { key: tls.crt, path: tls.crt }
                     - { key: tls.key, path: tls.key }
               - configMap:
-                  name: agentry-ca
+                  name: kaalm-ca
                   items:
                     - { key: ca.crt, path: ca.crt }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: agentry-controller
+  name: kaalm-controller
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
 spec:
   selector:
-    app.kubernetes.io/name: agentry
+    app.kubernetes.io/name: kaalm
     app.kubernetes.io/component: controller
   ports:
     - name: activator
@@ -132,13 +132,13 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: agentry-controller
+  name: kaalm-controller
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: agentry
+      app.kubernetes.io/name: kaalm
       app.kubernetes.io/component: controller

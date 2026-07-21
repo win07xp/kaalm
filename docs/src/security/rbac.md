@@ -1,26 +1,26 @@
 # RBAC and Authentication
 
-Agentry's RBAC model follows one rule: no component holds a standing permission it only needs occasionally, and no component holds a cluster-wide permission that a namespaced one would satisfy. This page walks through the five identities that matter (operator, gateway, platform engineer, agent developer, agent Pod) and then through how the gateway authenticates the callers that reach it.
+Kaalm's RBAC model follows one rule: no component holds a standing permission it only needs occasionally, and no component holds a cluster-wide permission that a namespaced one would satisfy. This page walks through the five identities that matter (operator, gateway, platform engineer, agent developer, agent Pod) and then through how the gateway authenticates the callers that reach it.
 
 Two Kubernetes facts shape almost every decision below, so they are worth stating up front:
 
-- **A ClusterRole bound with a ClusterRoleBinding applies in every namespace.** There is no way to say "this grant, but only in `agentry-system`". Anything that must be namespace-limited has to ship as a separate namespaced `Role` plus `RoleBinding`. Both the operator and the gateway therefore have a ClusterRole/Role pair, not a single object.
+- **A ClusterRole bound with a ClusterRoleBinding applies in every namespace.** There is no way to say "this grant, but only in `kaalm-system`". Anything that must be namespace-limited has to ship as a separate namespaced `Role` plus `RoleBinding`. Both the operator and the gateway therefore have a ClusterRole/Role pair, not a single object.
 - **RBAC `resourceNames` constrains `get`, `update`, `patch`, `delete`, and `watch`, but not `list` and not `create`.** Any grant scoped to a named object must omit those two verbs, or the scoping silently evaporates.
 
 ## Operator ServiceAccount
 
-The operator runs under `agentry-system/agentry-controller`, with a `ClusterRole` (bound via `ClusterRoleBinding`) plus a companion namespaced `Role` in `agentry-system`. The namespace-scoped grants below are delivered as the Role, because a ClusterRole bound cluster-wide cannot be namespace-limited. Together they grant:
+The operator runs under `kaalm-system/kaalm-controller`, with a `ClusterRole` (bound via `ClusterRoleBinding`) plus a companion namespaced `Role` in `kaalm-system`. The namespace-scoped grants below are delivered as the Role, because a ClusterRole bound cluster-wide cannot be namespace-limited. Together they grant:
 
-![A component diagram of the operator ServiceAccount's reach, split into three grant families. Bold red edges lead to a frame labelled "reach: every namespace in the cluster", holding the Agentry CRDs with their separate */status update and patch and */finalizers update grants, the core workload objects, cert-manager Certificates, roles and rolebindings with the escalate and bind verbs, cluster metadata and Events, plus a greyed conditional box for the CNI policy CRD group that the chart templates only when FQDN egress synthesis is switched on. Thin blue edges lead to an agentry-system frame holding Leases and Secrets. A dotted edge leads to a user-namespace frame holding the per-AgentChannel resourceNames-scoped channel Secret grant.](../diagrams/operator-rbac-reach.svg)
+![A component diagram of the operator ServiceAccount's reach, split into three grant families. Bold red edges lead to a frame labelled "reach: every namespace in the cluster", holding the Kaalm CRDs with their separate */status update and patch and */finalizers update grants, the core workload objects, cert-manager Certificates, roles and rolebindings with the escalate and bind verbs, cluster metadata and Events, plus a greyed conditional box for the CNI policy CRD group that the chart templates only when FQDN egress synthesis is switched on. Thin blue edges lead to an kaalm-system frame holding Leases and Secrets. A dotted edge leads to a user-namespace frame holding the per-AgentChannel resourceNames-scoped channel Secret grant.](../diagrams/operator-rbac-reach.svg)
 
-**Agentry CRDs.** Full access (`get, list, watch, create, update, patch, delete`) to all Agentry CRDs, plus:
+**Kaalm CRDs.** Full access (`get, list, watch, create, update, patch, delete`) to all Kaalm CRDs, plus:
 
 - `update, patch` on their **status subresources** (`agents/status`, `agenttasks/status`, `agentchannels/status`, `modelproviders/status`, `agentclasses/status`). With the status subresource enabled, write access on the main resource does not permit status writes, so these are separate grants.
 - `update` on their **finalizers subresources** (`agents/finalizers`, `agenttasks/finalizers`, and so on). The reconcilers set controller ownerRefs with `blockOwnerDeletion: true`, and clusters running the `OwnerReferencesPermissionEnforcement` admission plugin authorize that against the owner's `finalizers` subresource.
 
 **Core workload objects.** `get, list, watch, create, update, patch, delete` on `Pods`, `PersistentVolumeClaims`, `Services`, `ConfigMaps`, `NetworkPolicies`, `ServiceAccounts` cluster-wide.
 
-`NetworkPolicy` and `ServiceAccount` are owned per-Agent and per-AgentTask: the reconcilers synthesize one of each during provisioning and owner-reference them to the parent resource for cascade GC, so the operator must be able to create and delete them in user namespaces. `list` and `watch` are required because controller-runtime drives owned-resource reconciliation through informers. They are also required cluster-wide on `Pods` because the AgentReconciler enumerates gateway Pods in `agentry-system` for the activity fan-out (see [AgentReconciler](../controller/reconcilers.md#agentreconciler) step 8 and [Multi-replica fan-out](../gateways/user/activation-and-activity.md#activity-tracking-api)).
+`NetworkPolicy` and `ServiceAccount` are owned per-Agent and per-AgentTask: the reconcilers synthesize one of each during provisioning and owner-reference them to the parent resource for cascade GC, so the operator must be able to create and delete them in user namespaces. `list` and `watch` are required because controller-runtime drives owned-resource reconciliation through informers. They are also required cluster-wide on `Pods` because the AgentReconciler enumerates gateway Pods in `kaalm-system` for the activity fan-out (see [AgentReconciler](../controller/reconcilers.md#agentreconciler) step 8 and [Multi-replica fan-out](../gateways/user/activation-and-activity.md#activity-tracking-api)).
 
 On clusters where FQDN egress synthesis is enabled (`allowedHosts` on a supported CNI), the ClusterRole additionally carries the CNI's policy CRD group: `ciliumnetworkpolicies.cilium.io` on Cilium, the Calico Enterprise equivalent likewise. The chart templates these rules only when that feature is switched on, so a cluster without it never grants them.
 
@@ -28,9 +28,9 @@ On clusters where FQDN egress synthesis is enabled (`allowedHosts` on a supporte
 
 **Events.** `create, patch` on `Events` (for event emission).
 
-**Leases.** `get, list, watch, create, update, patch, delete` on `Leases` in `agentry-system`. Controller-runtime's leader-election lock requires the full set; it is granted via the namespaced Role, and that is what actually restricts it to the operator's own namespace.
+**Leases.** `get, list, watch, create, update, patch, delete` on `Leases` in `kaalm-system`. Controller-runtime's leader-election lock requires the full set; it is granted via the namespaced Role, and that is what actually restricts it to the operator's own namespace.
 
-**Secrets.** `get, list, watch` on `Secrets` in `agentry-system` only, granted via the namespaced Role, not cluster-wide. The operator validates that ModelProvider credential Secrets exist.
+**Secrets.** `get, list, watch` on `Secrets` in `kaalm-system` only, granted via the namespaced Role, not cluster-wide. The operator validates that ModelProvider credential Secrets exist.
 
 In addition, the AgentChannelReconciler creates **dynamic, per-AgentChannel Roles in user namespaces** granting the operator ServiceAccount `get, watch` scoped via `resourceNames` to the Secret(s) referenced by that AgentChannel's active webhook auth config: the inbound Secret (`spec.webhook.auth.secretRef` for bearer, `spec.webhook.auth.hmac.secretRef` for HMAC) and, when `callbackUrl` is set, the outbound `spec.webhook.callbackAuth` Secret. Three details make this scoping real:
 
@@ -40,7 +40,7 @@ In addition, the AgentChannelReconciler creates **dynamic, per-AgentChannel Role
 
 This scoped read path is what the reconciler uses to verify that the configured `data` key is present in the Secret (see [AgentChannelReconciler step 3](../controller/reconcilers.md#agentchannelreconciler)). The operator has no broader Secret read access in user namespaces.
 
-**Certificates.** `get, list, watch, create, update, patch, delete` on `cert-manager.io/v1/Certificate` in user namespaces (the per-Agent and per-AgentTask certificates live alongside the workload, not in `agentry-system`). `list` and `watch` are required so the reconciler can observe `Certificate.status.conditions[type=Ready]` before creating the dependent Pod.
+**Certificates.** `get, list, watch, create, update, patch, delete` on `cert-manager.io/v1/Certificate` in user namespaces (the per-Agent and per-AgentTask certificates live alongside the workload, not in `kaalm-system`). `list` and `watch` are required so the reconciler can observe `Certificate.status.conditions[type=Ready]` before creating the dependent Pod.
 
 **Roles and RoleBindings.** `get, list, watch, create, update, delete` on `roles` and `rolebindings` (`rbac.authorization.k8s.io`) cluster-wide. The AgentChannelReconciler and AgentTaskReconciler create the dynamic per-channel and per-task Roles/RoleBindings described above and under [Gateway ServiceAccount permissions](#gateway-serviceaccount-permissions), in whichever user namespace the owning resource lives.
 
@@ -51,20 +51,20 @@ Kubernetes **escalation prevention** forbids creating a Role that grants permiss
 
 This is a deliberate trade. The alternative that satisfies the escalation check without `escalate` is granting the operator standing Secret read across all user namespaces, which is strictly worse: it converts a create-time capability into an always-on read surface. Platform teams auditing RBAC should treat the operator ServiceAccount as privileged accordingly; the [threat model](threat-model.md) row on operator compromise covers what `escalate`/`bind` do and do not change.
 
-**Unlike a sidecar model, the operator does not need cluster-wide Secret read/write access.** Credentials are held by the gateway ServiceAccount in `agentry-system` and never copied to user namespaces. This significantly reduces the operator's blast radius.
+**Unlike a sidecar model, the operator does not need cluster-wide Secret read/write access.** Credentials are held by the gateway ServiceAccount in `kaalm-system` and never copied to user namespaces. This significantly reduces the operator's blast radius.
 
 ## Gateway ServiceAccount Permissions
 
-The Agentry Gateway runs under a separate ServiceAccount, `agentry-system/agentry-gateway`, whose grants (like the operator's) split into a `ClusterRole` for cluster-wide access and a companion namespaced `Role` in `agentry-system` for namespace-scoped access.
+The Kaalm Gateway runs under a separate ServiceAccount, `kaalm-system/kaalm-gateway`, whose grants (like the operator's) split into a `ClusterRole` for cluster-wide access and a companion namespaced `Role` in `kaalm-system` for namespace-scoped access.
 
-![A component diagram of the gateway ServiceAccount's reach, split into three grant families drawn as three distinct edge classes. Bold red edges lead to a frame labelled "reach: every namespace in the cluster", holding tokenreviews create, the Agentry CRDs with get list and watch plus patch on AgentChannel only, Pods, and a cluster-wide Services get. Thin green edges lead to an agentry-system frame holding Secrets with get and watch, and ConfigMaps with get, list, watch, create and patch, where delete is deliberately absent. Dotted amber edges lead to a user-namespace frame holding the resourceNames-scoped channel Secret grant, whose list verb is omitted, and the {taskName}-completion ConfigMap grant of update and patch, which never includes get or create.](../diagrams/gateway-rbac-reach.svg)
+![A component diagram of the gateway ServiceAccount's reach, split into three grant families drawn as three distinct edge classes. Bold red edges lead to a frame labelled "reach: every namespace in the cluster", holding tokenreviews create, the Kaalm CRDs with get list and watch plus patch on AgentChannel only, Pods, and a cluster-wide Services get. Thin green edges lead to an kaalm-system frame holding Secrets with get and watch, and ConfigMaps with get, list, watch, create and patch, where delete is deliberately absent. Dotted amber edges lead to a user-namespace frame holding the resourceNames-scoped channel Secret grant, whose list verb is omitted, and the {taskName}-completion ConfigMap grant of update and patch, which never includes get or create.](../diagrams/gateway-rbac-reach.svg)
 
-**Reading the diagram.** The two facts above are drawn, not just stated. Fact 1 is the red frame: those edges land in *every* namespace because a `ClusterRoleBinding` cannot be told to stop at `agentry-system`, which is why the gateway needs a ClusterRole/Role pair at all. Fact 2 is the two dotted edges: each one omits a verb on purpose, and the omissions are what make the name-scoping real rather than decorative.
+**Reading the diagram.** The two facts above are drawn, not just stated. Fact 1 is the red frame: those edges land in *every* namespace because a `ClusterRoleBinding` cannot be told to stop at `kaalm-system`, which is why the gateway needs a ClusterRole/Role pair at all. Fact 2 is the two dotted edges: each one omits a verb on purpose, and the omissions are what make the name-scoping real rather than decorative.
 
-### Namespaced grants in `agentry-system`
+### Namespaced grants in `kaalm-system`
 
 - `get, watch` on `Secrets` (to read LLM provider credentials).
-- `get, list, watch, create, patch` on `ConfigMaps`. Read paths: internal configuration and the `_canonical` budget totals written by the operator. Write paths: each replica server-side-applies its per-replica spend partials to the `agentry-budget-{providerName}` ConfigMaps (`patch`, plus `create` for the first write of a provider's ConfigMap, see [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management)), and the async webhook pipeline `create`s the per-request `agentry-async-{requestId}` placeholder at 202-acceptance and later `patch`es the payload in (see [Request Flow](../gateways/user/overview.md#request-flow) step 5a). `delete` is deliberately absent: cleanup of both families is controller-side (the ModelProviderReconciler prunes stale budget keys, the AgentChannelReconciler prunes and finalizer-sweeps async ConfigMaps).
+- `get, list, watch, create, patch` on `ConfigMaps`. Read paths: internal configuration and the `_canonical` budget totals written by the operator. Write paths: each replica server-side-applies its per-replica spend partials to the `kaalm-budget-{providerName}` ConfigMaps (`patch`, plus `create` for the first write of a provider's ConfigMap, see [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management)), and the async webhook pipeline `create`s the per-request `kaalm-async-{requestId}` placeholder at 202-acceptance and later `patch`es the payload in (see [Request Flow](../gateways/user/overview.md#request-flow) step 5a). `delete` is deliberately absent: cleanup of both families is controller-side (the ModelProviderReconciler prunes stale budget keys, the AgentChannelReconciler prunes and finalizer-sweeps async ConfigMaps).
 
 ### Cluster-wide grants
 
@@ -74,9 +74,9 @@ The Agentry Gateway runs under a separate ServiceAccount, `agentry-system/agentr
 
 **`get, list, watch` on `AgentTask`** for task completion handling. The gateway resolves the calling Pod's ownerRef to identify the associated AgentTask, short-circuits the `completion.condition: exitCode` case with `403 access_denied` before any patch attempt, validates that the artifact names in the completion payload match `spec.artifacts` exactly, **and** reads `status.currentPodUID` and `status.phase` to enforce the `/v1/task/complete` identity gate: `403 StalePodCompletion` when the calling Pod's UID does not match `status.currentPodUID`, `403 TaskAlreadyCompleted` when `status.phase` is terminal. See [POST /v1/task/complete](../gateways/api/task-complete.md) and [Per-Agent and Per-Task Child Resources](../runtime/child-resources.md) for the gateway/reconciler protocol that stamps these fields. The same cluster-wide `Pod`/`AgentTask` cache also backs the source-IP to Pod cross-check on every LLM request.
 
-The gateway does **not** create the per-task completion ConfigMap or set its ownerRef. The AgentTaskReconciler creates it at task provisioning time, and the gateway holds `update, patch` only via the per-task name-scoped Role; `get` and `create` are intentionally excluded. See [The Agentry Gateway](../gateways/overview.md).
+The gateway does **not** create the per-task completion ConfigMap or set its ownerRef. The AgentTaskReconciler creates it at task provisioning time, and the gateway holds `update, patch` only via the per-task name-scoped Role; `get` and `create` are intentionally excluded. See [The Kaalm Gateway](../gateways/overview.md).
 
-**`get, list, watch` on `AgentChannel`** (to look up which Agent a channel message targets and to manage platform connections), plus **`patch` on `AgentChannel`** (to write the `agentry.io/channel-disconnected` annotation during the finalizer handoff, see [Finalizers](../controller/finalizers.md)).
+**`get, list, watch` on `AgentChannel`** (to look up which Agent a channel message targets and to manage platform connections), plus **`patch` on `AgentChannel`** (to write the `kaalm.io/channel-disconnected` annotation during the finalizer handoff, see [Finalizers](../controller/finalizers.md)).
 
 **`get, list, watch` on `ModelProvider`** for model validation, `allowedNamespaces` checks, budget configuration, and fallback chain resolution.
 
@@ -97,7 +97,7 @@ This is implemented via **dynamic per-namespace Roles**: when the AgentChannelRe
 
 ### Dynamic per-namespace grants: task completion ConfigMaps
 
-When the AgentTaskReconciler provisions a task, it pre-creates an empty `{taskName}-completion` ConfigMap (owned by the AgentTask) and creates a `Role` in the task's namespace granting the gateway ServiceAccount `update, patch` (not `get`, not `create`) on that exact ConfigMap name, along with a `RoleBinding` to `agentry-system/agentry-gateway`. Both Role and RoleBinding are owned by the AgentTask (via ownerRef) and cascade-deleted on task cleanup.
+When the AgentTaskReconciler provisions a task, it pre-creates an empty `{taskName}-completion` ConfigMap (owned by the AgentTask) and creates a `Role` in the task's namespace granting the gateway ServiceAccount `update, patch` (not `get`, not `create`) on that exact ConfigMap name, along with a `RoleBinding` to `kaalm-system/kaalm-gateway`. Both Role and RoleBinding are owned by the AgentTask (via ownerRef) and cascade-deleted on task cleanup.
 
 Two verb choices are load-bearing:
 
@@ -108,31 +108,31 @@ This follows the same scoped-access pattern used for channel credentials above. 
 
 ### Summary of the gateway's reach
 
-The gateway's LLM credential access is scoped to `agentry-system`. Channel credential access extends to user namespaces only via the dynamic per-namespace Roles, reading only the specific Secrets referenced by the AgentChannel's active webhook auth config. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `agentry.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted.
+The gateway's LLM credential access is scoped to `kaalm-system`. Channel credential access extends to user namespaces only via the dynamic per-namespace Roles, reading only the specific Secrets referenced by the AgentChannel's active webhook auth config. The `patch` permission on AgentChannel is narrowly used: the gateway writes only the `kaalm.io/channel-disconnected` annotation as part of the finalizer handshake when a channel is deleted.
 
-Async webhook response ConfigMaps (`agentry-async-{requestId}`) are stored in `agentry-system`, where the gateway already has full ConfigMap access, not in agent namespaces. That is why no additional per-channel Role is needed for async response writes. The AgentChannelReconciler prunes these ConfigMaps in `agentry-system` using label selectors (`agentry.io/channel-namespace`, `agentry.io/channel-name`) rather than ownerRefs: a cross-namespace ownerReference is invalid (the GC resolves the owner in the dependent's namespace, treats it as missing, and deletes the dependent), so linkage must be by labels, with cleanup reconciler-enforced.
+Async webhook response ConfigMaps (`kaalm-async-{requestId}`) are stored in `kaalm-system`, where the gateway already has full ConfigMap access, not in agent namespaces. That is why no additional per-channel Role is needed for async response writes. The AgentChannelReconciler prunes these ConfigMaps in `kaalm-system` using label selectors (`kaalm.io/channel-namespace`, `kaalm.io/channel-name`) rather than ownerRefs: a cross-namespace ownerReference is invalid (the GC resolves the owner in the dependent's namespace, treats it as missing, and deletes the dependent), so linkage must be by labels, with cleanup reconciler-enforced.
 
 Activity tracking does not require any etcd writes. The gateway maintains activity timestamps in-memory and serves them to the controller via the [activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api).
 
 ## Platform Engineer Role
 
-A `ClusterRole` named `agentry-platform-admin`, assigned via `ClusterRoleBinding` to users/groups who should manage platform-level configuration, with:
+A `ClusterRole` named `kaalm-platform-admin`, assigned via `ClusterRoleBinding` to users/groups who should manage platform-level configuration, with:
 
 - Full access to `AgentClass` and `ModelProvider`.
 - `get, list, watch` on `Agent`, `AgentTask` cluster-wide (for observability).
 
-Secret management is deliberately **not** part of this ClusterRole. A grant delivered via ClusterRoleBinding applies in every namespace, so putting Secret CRUD here would silently hand platform engineers cluster-wide Secret access. Instead the chart ships a companion namespaced Role, `agentry-secrets-admin` (`create, get, update, delete` on Secrets), instantiated with a RoleBinding in `agentry-system` (to manage LLM credentials) and in each designated agent namespace (to provision channel credentials referenced by AgentChannel webhook auth config).
+Secret management is deliberately **not** part of this ClusterRole. A grant delivered via ClusterRoleBinding applies in every namespace, so putting Secret CRUD here would silently hand platform engineers cluster-wide Secret access. Instead the chart ships a companion namespaced Role, `kaalm-secrets-admin` (`create, get, update, delete` on Secrets), instantiated with a RoleBinding in `kaalm-system` (to manage LLM credentials) and in each designated agent namespace (to provision channel credentials referenced by AgentChannel webhook auth config).
 
 ## Agent Developer Role
 
-A `Role` (namespaced) named `agentry-developer` with:
+A `Role` (namespaced) named `kaalm-developer` with:
 
 - Full access to `Agent`, `AgentTask`, and `AgentChannel` in their namespace.
 - `get` on Pods, PVCs, Services, ConfigMaps in their namespace.
 - `get` on Events in their namespace.
 - `create` on `pods/exec` for debugging (optional, platform team decides).
 
-A namespaced Role can never grant access to cluster-scoped resources, so catalog visibility ships separately: a small ClusterRole `agentry-catalog-reader` (`get, list` on `AgentClass` and `ModelProvider`, read-only, because developers need to know what is available to reference), bound via `ClusterRoleBinding` to developer groups.
+A namespaced Role can never grant access to cluster-scoped resources, so catalog visibility ships separately: a small ClusterRole `kaalm-catalog-reader` (`get, list` on `AgentClass` and `ModelProvider`, read-only, because developers need to know what is available to reference), bound via `ClusterRoleBinding` to developer groups.
 
 No access to Secrets, no ability to create/modify AgentClass or ModelProvider, no access to other namespaces.
 
@@ -144,25 +144,25 @@ If an agent needs cluster API access (for example, a Kubernetes-administering ag
 
 ## Agent to Gateway Authentication
 
-The gateway supports **two authentication modes** for inbound requests, mapped to the two Helm tiers. The full request-time mechanics (SAN parsing, the Agentry-managed label set, TokenReview call shape, and cache behaviour) are documented once in [Namespace Identification](../gateways/llm/workload-identity.md); what follows is the security reasoning behind them.
+The gateway supports **two authentication modes** for inbound requests, mapped to the two Helm tiers. The full request-time mechanics (SAN parsing, the Kaalm-managed label set, TokenReview call shape, and cache behaviour) are documented once in [Namespace Identification](../gateways/llm/workload-identity.md); what follows is the security reasoning behind them.
 
-### Mode 1: mTLS client certificate (Agentry-managed Pods)
+### Mode 1: mTLS client certificate (Kaalm-managed Pods)
 
-This is the only authentication path available to Pods created by the AgentReconciler (Agent / AgentTask workloads). Agents present the cert-manager-issued certificate at `$AGENTRY_TLS_CERT` as a client cert on the LLM Gateway's TLS listener. The gateway verifies it against `agentry-ca` and extracts (namespace, agent name) from the SAN (`{name}.{namespace}.svc.cluster.local`). Identity is cryptographically attested, and the CA private key is not reachable from any agent Pod. See [Mode 1](../gateways/llm/workload-identity.md#mode-1-mtls-client-certificate).
+This is the only authentication path available to Pods created by the AgentReconciler (Agent / AgentTask workloads). Agents present the cert-manager-issued certificate at `$KAALM_TLS_CERT` as a client cert on the LLM Gateway's TLS listener. The gateway verifies it against `kaalm-ca` and extracts (namespace, agent name) from the SAN (`{name}.{namespace}.svc.cluster.local`). Identity is cryptographically attested, and the CA private key is not reachable from any agent Pod. See [Mode 1](../gateways/llm/workload-identity.md#mode-1-mtls-client-certificate).
 
-**Agent/AgentTask Pods must use mTLS: their ServiceAccount tokens are not accepted by the gateway.** This is a deliberate asymmetry. Accepting SA tokens from Agentry-managed Pods would create two attack paths (cert path plus token path), and a compromised agent could use the token path as a second credential after its cert-based access is contained. Rejecting SA tokens keeps that tier's credential surface to a single artifact: a bounded-lifetime (90d default `notAfter`), namespace-pinned client cert.
+**Agent/AgentTask Pods must use mTLS: their ServiceAccount tokens are not accepted by the gateway.** This is a deliberate asymmetry. Accepting SA tokens from Kaalm-managed Pods would create two attack paths (cert path plus token path), and a compromised agent could use the token path as a second credential after its cert-based access is contained. Rejecting SA tokens keeps that tier's credential surface to a single artifact: a bounded-lifetime (90d default `notAfter`), namespace-pinned client cert.
 
 Be precise about what that buys you: this is containment, not revocation. Re-issuing a leaf does nothing to the old one (there is no CRL or OCSP, and Go's `crypto/tls` performs no revocation checking), so a leaked cert and key stay valid until their `notAfter` regardless of any rotation. A known-compromised leaf is invalidated only by the [CA re-key runbook](tls.md#ca-renewal-and-re-key) or by waiting out `notAfter`. Clusters that need a tighter compromise bound should shorten the per-Agent `Certificate` `duration`.
 
 ### Mode 2: projected ServiceAccount bearer token via TokenReview (gateway-only tier)
 
-This mode exists for existing workloads in user namespaces that the platform team has granted LLM-provider access to without adopting the Agent CRD. The caller mounts a projected ServiceAccount token with audience `agentry-gateway` and sends it as `Authorization: Bearer <token>`; the gateway validates it against the API server via `TokenReview` and derives the namespace from the authenticated username. Validation results are cached for a bounded TTL derived from the token's own expiry. See [Mode 2](../gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token) for the exact call, parsing, and cache rules.
+This mode exists for existing workloads in user namespaces that the platform team has granted LLM-provider access to without adopting the Agent CRD. The caller mounts a projected ServiceAccount token with audience `kaalm-gateway` and sends it as `Authorization: Bearer <token>`; the gateway validates it against the API server via `TokenReview` and derives the namespace from the authenticated username. Validation results are cached for a bounded TTL derived from the token's own expiry. See [Mode 2](../gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token) for the exact call, parsing, and cache rules.
 
 Three properties of this mode are security-critical:
 
-**The mTLS tier is exclusive, and a precheck enforces it.** Before validating any token, the gateway resolves the request's source IP to a Pod via its informer cache and rejects the request with `401 Unauthorized` if the Pod has an `ownerRef` to an `Agent` or `AgentTask` resource or carries the Agentry-managed label set. This is what prevents an Agentry-managed Pod from falling back to bearer-token auth and reopening the second attack path Mode 1 closes. The precheck is **not cached**: it re-runs on every request.
+**The mTLS tier is exclusive, and a precheck enforces it.** Before validating any token, the gateway resolves the request's source IP to a Pod via its informer cache and rejects the request with `401 Unauthorized` if the Pod has an `ownerRef` to an `Agent` or `AgentTask` resource or carries the Kaalm-managed label set. This is what prevents an Kaalm-managed Pod from falling back to bearer-token auth and reopening the second attack path Mode 1 closes. The precheck is **not cached**: it re-runs on every request.
 
-**Audience binding is critical.** The gateway requests the `agentry-gateway` audience in its `TokenReview`, so a generic `kubernetes.default.svc`-audience token (such as a stolen kubelet token) cannot authenticate. Callers must configure their projected-volume `audience: agentry-gateway`.
+**Audience binding is critical.** The gateway requests the `kaalm-gateway` audience in its `TokenReview`, so a generic `kubernetes.default.svc`-audience token (such as a stolen kubelet token) cannot authenticate. Callers must configure their projected-volume `audience: kaalm-gateway`.
 
 **Cache TTL is bounded by the token, not by the API.** `TokenReviewStatus` returns no expiry field, so the gateway derives the TTL from the token's own `exp` claim (parsed without signature verification, which is safe because the API server has already authenticated the token and `exp` only bounds cache lifetime), with a 60s safety margin and a 5 minute cap. Opaque non-JWT tokens get the fixed 5 minute cap.
 
@@ -174,20 +174,20 @@ For [`POST /v1/task/complete`](../gateways/api/task-complete.md) specifically, t
 
 ### Client cert presentation
 
-Starter templates (see [Starter Templates](../runtime/starter-templates.md)) configure mTLS client-cert presentation and the cert-file watch-and-reload pattern. Custom Agent/AgentTask images must present `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY` on every agent-to-gateway call: LLM requests, task completion, and (Agents only) heartbeats. Activity timestamps and heartbeats are tracked in-memory in the gateway, so no etcd writes are involved in agent-to-gateway communication.
+Starter templates (see [Starter Templates](../runtime/starter-templates.md)) configure mTLS client-cert presentation and the cert-file watch-and-reload pattern. Custom Agent/AgentTask images must present `$KAALM_TLS_CERT` / `$KAALM_TLS_KEY` on every agent-to-gateway call: LLM requests, task completion, and (Agents only) heartbeats. Activity timestamps and heartbeats are tracked in-memory in the gateway, so no etcd writes are involved in agent-to-gateway communication.
 
 ## Internal Endpoint Authentication
 
-Three endpoints are for Agentry's own components, not for agents or users: the controller's `POST /v1/activate/{namespace}/{agentName}`, and the gateway's `GET /v1/activity` and `GET /v1/channels/health`. All three authenticate callers **via mTLS with SAN-based authorization**. There is no separate shared-secret layer on top of TLS.
+Three endpoints are for Kaalm's own components, not for agents or users: the controller's `POST /v1/activate/{namespace}/{agentName}`, and the gateway's `GET /v1/activity` and `GET /v1/channels/health`. All three authenticate callers **via mTLS with SAN-based authorization**. There is no separate shared-secret layer on top of TLS.
 
-- **Activator** (gateway to controller): the controller's TLS listener on port 9443 is shared with kubelet's `/healthz` and `/readyz` probes, so it is configured with `ClientAuth: tls.VerifyClientCertIfGiven`. Cert-less probes can complete the handshake, while per-path HTTP middleware enforces mTLS-with-SAN on `/v1/activate`. The gateway presents `agentry-gateway-tls` as its client cert; the controller verifies it against `agentry-ca` and authorizes the request only if the cert's SAN matches the gateway Service DNS (`agentry-gateway.agentry-system.svc.cluster.local` or `.svc`). Any other SAN is rejected as `403 Forbidden`. A request missing the cert entirely is rejected as `401 Unauthorized` at the handler.
-- **Activity API and Channel Health** (controller to gateway): the gateway's TLS listener on port 8443 requires a client certificate on `/v1/activity` and `/v1/channels/health`. The controller presents `agentry-controller-tls`; the gateway verifies against `agentry-ca` and authorizes only if the SAN matches the controller Service DNS (`agentry-controller.agentry-system.svc.cluster.local` or `.svc`).
+- **Activator** (gateway to controller): the controller's TLS listener on port 9443 is shared with kubelet's `/healthz` and `/readyz` probes, so it is configured with `ClientAuth: tls.VerifyClientCertIfGiven`. Cert-less probes can complete the handshake, while per-path HTTP middleware enforces mTLS-with-SAN on `/v1/activate`. The gateway presents `kaalm-gateway-tls` as its client cert; the controller verifies it against `kaalm-ca` and authorizes the request only if the cert's SAN matches the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `.svc`). Any other SAN is rejected as `403 Forbidden`. A request missing the cert entirely is rejected as `401 Unauthorized` at the handler.
+- **Activity API and Channel Health** (controller to gateway): the gateway's TLS listener on port 8443 requires a client certificate on `/v1/activity` and `/v1/channels/health`. The controller presents `kaalm-controller-tls`; the gateway verifies against `kaalm-ca` and authorizes only if the SAN matches the controller Service DNS (`kaalm-controller.kaalm-system.svc.cluster.local` or `.svc`).
 
-Both peer certificates are issued by cert-manager from `agentry-ca-issuer`, live only in `agentry-system`, and rotate continuously via cert-manager. There is no Secret-based shared key to rotate separately. The gateway cert declares `usages: [server auth, client auth]` (the gateway also dials the controller); the controller cert declares the same pair (the controller also dials the gateway activity API). See [the trust chain](tls.md#trust-chain) for how both certs are issued.
+Both peer certificates are issued by cert-manager from `kaalm-ca-issuer`, live only in `kaalm-system`, and rotate continuously via cert-manager. There is no Secret-based shared key to rotate separately. The gateway cert declares `usages: [server auth, client auth]` (the gateway also dials the controller); the controller cert declares the same pair (the controller also dials the gateway activity API). See [the trust chain](tls.md#trust-chain) for how both certs are issued.
 
-**Authorization is by SAN, not by mere possession of a cert signed by `agentry-ca`.** Per-Agent certs are signed by the same CA but have different SANs (`{name}.{namespace}.svc.cluster.local`), so a compromised agent cannot present its own cert to reach either internal endpoint: the authorization layer rejects the SAN before the handler runs.
+**Authorization is by SAN, not by mere possession of a cert signed by `kaalm-ca`.** Per-Agent certs are signed by the same CA but have different SANs (`{name}.{namespace}.svc.cluster.local`), so a compromised agent cannot present its own cert to reach either internal endpoint: the authorization layer rejects the SAN before the handler runs.
 
-![A component diagram of the internal endpoints. The agentry-ca-issuer ClusterIssuer sits above as the single trust anchor and issues all three certificates below it. Inside an agentry-system frame, the gateway calls POST /v1/activate on the controller's :9443 listener presenting agentry-gateway-tls, and the controller calls GET /v1/activity and GET /v1/channels/health on the gateway's :8443 listener presenting agentry-controller-tls; each is authorized only if the presented SAN matches the peer's Service DNS. In a user namespace, a compromised Agent holding a perfectly valid agentry-ca-signed {name}-tls completes the TLS handshake to :9443 but is rejected 403 Forbidden at the authorization layer, because its SAN is {name}.{namespace}.svc.cluster.local.](../diagrams/internal-endpoint-san.svg)
+![A component diagram of the internal endpoints. The kaalm-ca-issuer ClusterIssuer sits above as the single trust anchor and issues all three certificates below it. Inside an kaalm-system frame, the gateway calls POST /v1/activate on the controller's :9443 listener presenting kaalm-gateway-tls, and the controller calls GET /v1/activity and GET /v1/channels/health on the gateway's :8443 listener presenting kaalm-controller-tls; each is authorized only if the presented SAN matches the peer's Service DNS. In a user namespace, a compromised Agent holding a perfectly valid kaalm-ca-signed {name}-tls completes the TLS handshake to :9443 but is rejected 403 Forbidden at the authorization layer, because its SAN is {name}.{namespace}.svc.cluster.local.](../diagrams/internal-endpoint-san.svg)
 
 **Reading the diagram.** The grey edges from the issuer are the point of the figure: all three certificates chain to the same anchor, and the compromised agent's cert is not forged or expired. It verifies. Sharing the trust anchor is therefore necessary but not sufficient, and the SAN check is the entire control. The figure also shows why neither listener can simply require a client certificate: `:9443` carries kubelet's cert-less probes and `:8443` carries cert-less bearer-token callers, so both run `VerifyClientCertIfGiven` and enforce in per-path middleware instead.
 

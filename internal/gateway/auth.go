@@ -109,11 +109,11 @@ func (a *Authenticator) LLMPaths(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Pod-ownership precheck, uncached and BEFORE any token validation:
-		// Agentry-managed Pods must use mTLS and cannot fall back to their
+		// Kaalm-managed Pods must use mTLS and cannot fall back to their
 		// ServiceAccount token as a second credential.
 		if !a.DisableSourceIPCheck {
-			if pod, found := a.Store.PodByIP(r.Context(), sourceIP(r)); found && isAgentryManagedPod(pod) {
-				unauthorized(w, "Agentry-managed Pods must authenticate with mTLS")
+			if pod, found := a.Store.PodByIP(r.Context(), sourceIP(r)); found && isKaalmManagedPod(pod) {
+				unauthorized(w, "Kaalm-managed Pods must authenticate with mTLS")
 				return
 			}
 		}

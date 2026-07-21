@@ -1,4 +1,4 @@
-// Command gateway is the Agentry Gateway: the LLM listener on :8443 with
+// Command gateway is the Kaalm Gateway: the LLM listener on :8443 with
 // per-path client authentication, the provider proxy, and a dedicated health
 // port. The User listener (:8080) and the controller-facing internal handlers
 // land in later phases. See docs/src/gateways/.
@@ -32,8 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
-	"github.com/win07xp/kubeclaw/internal/gateway"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/gateway"
 )
 
 func main() {
@@ -62,9 +62,9 @@ func main() {
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "LLM listener address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
-	flag.StringVar(&certFile, "tls-cert", "/var/run/agentry/tls.crt", "serving certificate file")
-	flag.StringVar(&keyFile, "tls-key", "/var/run/agentry/tls.key", "serving key file")
-	flag.StringVar(&caFile, "tls-ca", "/var/run/agentry/ca.crt", "Agentry CA bundle for client verification")
+	flag.StringVar(&certFile, "tls-cert", "/var/run/kaalm/tls.crt", "serving certificate file")
+	flag.StringVar(&keyFile, "tls-key", "/var/run/kaalm/tls.key", "serving key file")
+	flag.StringVar(&caFile, "tls-ca", "/var/run/kaalm/ca.crt", "Kaalm CA bundle for client verification")
 	flag.StringVar(&upstreamCAFile, "upstream-ca", "", "optional extra CA bundle for upstream provider TLS")
 	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
 	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second, "upstream provider call timeout")
@@ -89,17 +89,17 @@ func main() {
 
 	operatorNamespace := os.Getenv("POD_NAMESPACE")
 	if operatorNamespace == "" {
-		operatorNamespace = "agentry-system"
+		operatorNamespace = "kaalm-system"
 	}
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(agentryv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kaalmv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(cmapi.AddToScheme(scheme))
 
 	restCfg := ctrl.GetConfigOrDie()
 	// Secrets are read uncached (direct GET), never through an informer. The
-	// gateway holds only get/watch on Secrets in agentry-system plus dynamic
+	// gateway holds only get/watch on Secrets in kaalm-system plus dynamic
 	// resourceNames-scoped grants on individual channel Secrets (no cluster-wide
 	// list), so a cached Secret informer would issue a forbidden cluster-scoped
 	// LIST and the read would hang waiting for a sync that never lands. See
@@ -185,7 +185,7 @@ func main() {
 	server.Async = async
 	server.Completions = &gateway.KubeCompletionWriter{Client: clientset}
 	server.Metrics = gateway.NewMetrics(metrics.Registry)
-	server.Recorder = cl.GetEventRecorderFor("agentry-gateway")
+	server.Recorder = cl.GetEventRecorderFor("kaalm-gateway")
 
 	// Prometheus metrics on a dedicated unauthenticated in-cluster port.
 	go func() {
@@ -226,12 +226,12 @@ func main() {
 	publisher := &gateway.BudgetPublisher{
 		Client: clientset, Store: store, Ledger: server.Budget,
 		OperatorNamespace: operatorNamespace, PodName: podName,
-		Providers: func(ctx context.Context) []*agentryv1alpha1.ModelProvider {
-			var list agentryv1alpha1.ModelProviderList
+		Providers: func(ctx context.Context) []*kaalmv1alpha1.ModelProvider {
+			var list kaalmv1alpha1.ModelProviderList
 			if err := cl.GetClient().List(ctx, &list); err != nil {
 				return nil
 			}
-			out := make([]*agentryv1alpha1.ModelProvider, 0, len(list.Items))
+			out := make([]*kaalmv1alpha1.ModelProvider, 0, len(list.Items))
 			for i := range list.Items {
 				out = append(out, &list.Items[i])
 			}
@@ -245,18 +245,18 @@ func main() {
 	// observed Terminating, confirm disconnection with the annotation the
 	// reconciler waits on. The webhook write gate itself lives in the intake
 	// handler.
-	if informer, err := cl.GetCache().GetInformer(ctx, &agentryv1alpha1.AgentChannel{}); err == nil {
+	if informer, err := cl.GetCache().GetInformer(ctx, &kaalmv1alpha1.AgentChannel{}); err == nil {
 		_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(_, newObj any) {
-				ch, ok := newObj.(*agentryv1alpha1.AgentChannel)
-				if !ok || ch.Status.Phase != agentryv1alpha1.ChannelTerminating {
+				ch, ok := newObj.(*kaalmv1alpha1.AgentChannel)
+				if !ok || ch.Status.Phase != kaalmv1alpha1.ChannelTerminating {
 					return
 				}
-				if ch.Annotations[agentryv1alpha1.AnnotationChannelDisconnected] == agentryv1alpha1.AnnotationTrue {
+				if ch.Annotations[kaalmv1alpha1.AnnotationChannelDisconnected] == kaalmv1alpha1.AnnotationTrue {
 					return
 				}
 				patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`,
-					agentryv1alpha1.AnnotationChannelDisconnected, agentryv1alpha1.AnnotationTrue))
+					kaalmv1alpha1.AnnotationChannelDisconnected, kaalmv1alpha1.AnnotationTrue))
 				if err := cl.GetClient().Patch(ctx, ch.DeepCopy(),
 					client.RawPatch(types.MergePatchType, patch)); err != nil {
 					logger.Warn("disconnect annotation patch failed", "channel", ch.Name, "error", err)
@@ -265,14 +265,14 @@ func main() {
 		})
 	}
 
-	logger.Info("agentry gateway starting",
+	logger.Info("kaalm gateway starting",
 		"listen", listenAddr, "health", healthAddr, "operator_namespace", operatorNamespace,
 		"source_ip_check_disabled", disableSourceIPCheck)
 	if err := server.Run(ctx); err != nil {
 		logger.Error("gateway listener failed", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("agentry gateway shut down")
+	logger.Info("kaalm gateway shut down")
 }
 
 // parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".

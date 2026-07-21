@@ -280,7 +280,7 @@ func TestPostJSON(t *testing.T) {
 // process or a kubectl/helm/network call, just a deterministic, hermetic
 // exercise of Run's own error handling.
 func TestRunMissingBinary(t *testing.T) {
-	const missing = "kubeclaw-test-utils-definitely-not-a-real-binary-xyz"
+	const missing = "kaalm-test-utils-definitely-not-a-real-binary-xyz"
 	if _, err := exec.LookPath(missing); err == nil {
 		t.Skipf("unexpected: %q resolves on this system, skipping", missing)
 	}

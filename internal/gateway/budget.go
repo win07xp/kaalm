@@ -30,11 +30,11 @@ import (
 	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // BudgetConfigMapName returns the per-provider budget ConfigMap name.
-func BudgetConfigMapName(providerName string) string { return "agentry-budget-" + providerName }
+func BudgetConfigMapName(providerName string) string { return "kaalm-budget-" + providerName }
 
 // CanonicalKey is the reconciler-owned roll-up key in the budget ConfigMap.
 const CanonicalKey = "_canonical"
@@ -114,7 +114,7 @@ func nextPeriodStart(scheme string, t time.Time) time.Time {
 
 // costOf prices a call from the provider's model catalog. Unpriced models
 // cost zero (spend visibility is a soft guardrail).
-func costOf(provider *agentryv1alpha1.ModelProvider, modelID string, usage Usage) float64 {
+func costOf(provider *kaalmv1alpha1.ModelProvider, modelID string, usage Usage) float64 {
 	for _, m := range provider.Spec.Models {
 		if m.ID != modelID {
 			continue
@@ -169,7 +169,7 @@ func (b *BudgetLedger) ledgerFor(providerName, scheme string) *providerLedger {
 }
 
 // Add records spend for a namespace after a call completes.
-func (b *BudgetLedger) Add(provider *agentryv1alpha1.ModelProvider, namespace string, costUSD float64) {
+func (b *BudgetLedger) Add(provider *kaalmv1alpha1.ModelProvider, namespace string, costUSD float64) {
 	scheme := provider.Spec.Budget.Period
 	if PeriodKey(scheme, b.now()) == "" || costUSD == 0 {
 		return
@@ -181,7 +181,7 @@ func (b *BudgetLedger) Add(provider *agentryv1alpha1.ModelProvider, namespace st
 
 // FoldPeers replaces the peer view for a provider from freshly read
 // current-period partials (own key excluded by the caller).
-func (b *BudgetLedger) FoldPeers(provider *agentryv1alpha1.ModelProvider, peers map[string]float64) {
+func (b *BudgetLedger) FoldPeers(provider *kaalmv1alpha1.ModelProvider, peers map[string]float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
@@ -190,7 +190,7 @@ func (b *BudgetLedger) FoldPeers(provider *agentryv1alpha1.ModelProvider, peers 
 
 // InitCanonical seeds the peer view from the reconciler's _canonical roll-up
 // at startup (read exactly once per provider per replica lifetime).
-func (b *BudgetLedger) InitCanonical(provider *agentryv1alpha1.ModelProvider, canonical map[string]float64) {
+func (b *BudgetLedger) InitCanonical(provider *kaalmv1alpha1.ModelProvider, canonical map[string]float64) {
 	b.FoldPeers(provider, canonical)
 }
 
@@ -238,7 +238,7 @@ type budgetDecision struct {
 // last-known spend state (no pre-call estimation). The highest-threshold
 // policy at or below the current utilization wins. Utilization is the worse
 // of the per-namespace and cluster-wide ratios.
-func (b *BudgetLedger) Enforce(provider *agentryv1alpha1.ModelProvider, namespace string) budgetDecision {
+func (b *BudgetLedger) Enforce(provider *kaalmv1alpha1.ModelProvider, namespace string) budgetDecision {
 	budget := provider.Spec.Budget
 	scheme := budget.Period
 	if PeriodKey(scheme, b.now()) == "" || len(budget.Policies) == 0 {
@@ -262,7 +262,7 @@ func (b *BudgetLedger) Enforce(provider *agentryv1alpha1.ModelProvider, namespac
 		}
 	}
 
-	var winner *agentryv1alpha1.ModelProviderBudgetPolicy
+	var winner *kaalmv1alpha1.ModelProviderBudgetPolicy
 	for i := range budget.Policies {
 		p := &budget.Policies[i]
 		if percent >= float64(p.AtPercent) && (winner == nil || p.AtPercent > winner.AtPercent) {
@@ -273,10 +273,10 @@ func (b *BudgetLedger) Enforce(provider *agentryv1alpha1.ModelProvider, namespac
 		return budgetDecision{Percent: int(percent)}
 	}
 	d := budgetDecision{Action: winner.Action, Percent: int(percent)}
-	if winner.Action == agentryv1alpha1.BudgetActionDegrade && winner.DegradeTo != nil {
+	if winner.Action == kaalmv1alpha1.BudgetActionDegrade && winner.DegradeTo != nil {
 		d.DegradeTo = *winner.DegradeTo
 	}
-	if winner.Action == agentryv1alpha1.BudgetActionBlock {
+	if winner.Action == kaalmv1alpha1.BudgetActionBlock {
 		d.RetryAfter = int(time.Until(nextPeriodStart(scheme, b.now())).Seconds()) + 1
 	}
 	return d
@@ -295,7 +295,7 @@ type BudgetPublisher struct {
 	PodName           string
 	Interval          time.Duration
 	// Providers enumerates the ModelProviders to exchange for.
-	Providers func(ctx context.Context) []*agentryv1alpha1.ModelProvider
+	Providers func(ctx context.Context) []*kaalmv1alpha1.ModelProvider
 }
 
 // Run loops until ctx is done.
@@ -326,7 +326,7 @@ func (p *BudgetPublisher) tick(ctx context.Context) {
 	}
 }
 
-func (p *BudgetPublisher) publish(ctx context.Context, provider *agentryv1alpha1.ModelProvider) {
+func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
 	period, spend, ok := p.Ledger.OwnPartial(provider.Name)
 	if !ok {
 		return
@@ -344,7 +344,7 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *agentryv1alpha1
 	}
 }
 
-func (p *BudgetPublisher) fold(ctx context.Context, provider *agentryv1alpha1.ModelProvider) {
+func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
 	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, BudgetConfigMapName(provider.Name), metav1.GetOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {

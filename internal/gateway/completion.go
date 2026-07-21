@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"strings"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // Completion mailbox wire format: the data keys the gateway writes into the
@@ -51,7 +51,7 @@ func CompletionMailboxName(taskName string) string { return taskName + "-complet
 // declared name must be present and none undeclared; on failure only the
 // no-undeclared rule holds (a crashing task may report a subset). Returns ""
 // when valid, else a message naming the offender.
-func ValidateCompletionArtifacts(status string, artifacts map[string]string, declared []agentryv1alpha1.AgentTaskArtifact) string {
+func ValidateCompletionArtifacts(status string, artifacts map[string]string, declared []kaalmv1alpha1.AgentTaskArtifact) string {
 	names := map[string]bool{}
 	for _, a := range declared {
 		names[a.Name] = true
@@ -103,7 +103,7 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	// (d) terminal phases reject further writes.
 	switch task.Status.Phase {
-	case agentryv1alpha1.TaskSucceeded, agentryv1alpha1.TaskFailed, agentryv1alpha1.TaskTimedOut:
+	case kaalmv1alpha1.TaskSucceeded, kaalmv1alpha1.TaskFailed, kaalmv1alpha1.TaskTimedOut:
 		writeError(w, http.StatusForbidden, errorBody{
 			Type: errAccessDenied, Message: "TaskAlreadyCompleted: the task has reached a terminal phase"}, 0)
 		return

@@ -10,11 +10,11 @@ skinparam rectangle {
 }
 
 rectangle "namespace: **team-support**" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
-  rectangle "**AgentChannel**\nsupport-slack\nfinalizer: agentry.io/channel-finalizer" as chan #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentChannel**\nsupport-slack\nfinalizer: kaalm.io/channel-finalizer" as chan #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
 }
 
-rectangle "namespace: **agentry-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
-  rectangle "**ConfigMap** agentry-async-{requestId}\nlabels:\n  agentry.io/channel-namespace: team-support\n  agentry.io/channel-name: support-slack\nannotation: agentry.io/expires-at (1h)" as cm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+rectangle "namespace: **kaalm-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**ConfigMap** kaalm-async-{requestId}\nlabels:\n  kaalm.io/channel-namespace: team-support\n  kaalm.io/channel-name: support-slack\nannotation: kaalm.io/expires-at (1h)" as cm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 
 chan -[#B71C1C,dashed]-> cm : **linked by labels, not ownerRef**\nswept explicitly by the\nchannel finalizer

@@ -63,26 +63,26 @@ Individual reconcilers emit further reasons of their own beyond this core set, f
 
 The controller exposes Prometheus metrics on `:8080/metrics` (standard controller-runtime port).
 
-Standard controller-runtime metrics (reconcile counts, duration, queue depth) are emitted automatically. The following Agentry-specific metrics are added.
+Standard controller-runtime metrics (reconcile counts, duration, queue depth) are emitted automatically. The following Kaalm-specific metrics are added.
 
 ### Gauges
 
-- `agentry_agents{phase,namespace}`: gauge of Agent count by phase and namespace
-- `agentry_tasks{phase,namespace}`: gauge of AgentTask count by phase and namespace
-- `agentry_channels{namespace,phase,ready,platform_connected}`: gauge of AgentChannel count
-- `agentry_provider_budget_canonical_usd{provider,namespace,period}`: gauge of the reconciler-summed canonical spend total
+- `kaalm_agents{phase,namespace}`: gauge of Agent count by phase and namespace
+- `kaalm_tasks{phase,namespace}`: gauge of AgentTask count by phase and namespace
+- `kaalm_channels{namespace,phase,ready,platform_connected}`: gauge of AgentChannel count
+- `kaalm_provider_budget_canonical_usd{provider,namespace,period}`: gauge of the reconciler-summed canonical spend total
 
 The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserves it for counters, and promlint flags non-counter `_total` names.
 
-`agentry_channels` is rolled up by `status.phase` (`Active` | `Degraded` | `Failed` | `Terminating`, see [AgentChannelReconciler step 5](reconcilers.md#agentchannelreconciler)), `status.conditions[type=Ready]`, and `status.conditions[type=PlatformConnected]`. The two condition labels keep their `true` | `false` | `unknown` values. This surfaces both the bound-Agent state (via `phase`) and the tri-state `PlatformConnected` condition computed by [AgentChannelReconciler step 4](reconcilers.md#agentchannelreconciler).
+`kaalm_channels` is rolled up by `status.phase` (`Active` | `Degraded` | `Failed` | `Terminating`, see [AgentChannelReconciler step 5](reconcilers.md#agentchannelreconciler)), `status.conditions[type=Ready]`, and `status.conditions[type=PlatformConnected]`. The two condition labels keep their `true` | `false` | `unknown` values. This surfaces both the bound-Agent state (via `phase`) and the tri-state `PlatformConnected` condition computed by [AgentChannelReconciler step 4](reconcilers.md#agentchannelreconciler).
 
-`agentry_provider_budget_canonical_usd` is written by [ModelProviderReconciler step 3](reconcilers.md#modelproviderreconciler) after pruning stale-replica partials. It is distinct from the gateway's per-replica `agentry_llm_spend_usd_total` (the partials before reconciliation). Dashboards plot this gauge to show authoritative spend without summing across replicas.
+`kaalm_provider_budget_canonical_usd` is written by [ModelProviderReconciler step 3](reconcilers.md#modelproviderreconciler) after pruning stale-replica partials. It is distinct from the gateway's per-replica `kaalm_llm_spend_usd_total` (the partials before reconciliation). Dashboards plot this gauge to show authoritative spend without summing across replicas.
 
 ### Counters
 
-- `agentry_hibernations_total{namespace}`: counter of hibernation events
-- `agentry_wakes_total{namespace,trigger}`: counter of wake events (trigger = `channel` | `annotation`)
-- `agentry_budget_threshold_events_total{provider,namespace,action}`: counter of budget policy triggers (action = `degrade` | `block` | `warn`)
+- `kaalm_hibernations_total{namespace}`: counter of hibernation events
+- `kaalm_wakes_total{namespace,trigger}`: counter of wake events (trigger = `channel` | `annotation`)
+- `kaalm_budget_threshold_events_total{provider,namespace,action}`: counter of budget policy triggers (action = `degrade` | `block` | `warn`)
 
 For gateway metrics (LLM and channel), see [LLM Gateway Operations](../gateways/llm/operations.md#observability) and [User Gateway Operations](../gateways/user/operations.md#observability).
 

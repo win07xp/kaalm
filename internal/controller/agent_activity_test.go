@@ -49,7 +49,7 @@ func TestGatewayActivityClient_NonOKResponse(t *testing.T) {
 
 	pki := newActivatorPKI(t)
 	serving := pki.issue(t, gatewayServiceName+"."+ns+".svc.cluster.local")
-	clientCert := pki.issue(t, "agentry-controller."+ns+".svc.cluster.local")
+	clientCert := pki.issue(t, "kaalm-controller."+ns+".svc.cluster.local")
 	certFile, keyFile, caFile := pki.writeFiles(t, clientCert)
 
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -118,7 +118,7 @@ func TestGatewayActivityClient_DefaultPortUnreachable(t *testing.T) {
 		t.Fatalf("create namespace: %v", err)
 	}
 	pki := newActivatorPKI(t)
-	clientCert := pki.issue(t, "agentry-controller."+ns+".svc.cluster.local")
+	clientCert := pki.issue(t, "kaalm-controller."+ns+".svc.cluster.local")
 	certFile, keyFile, caFile := pki.writeFiles(t, clientCert)
 
 	// A gateway Pod with an IP but nothing listening on the default port.
@@ -181,7 +181,7 @@ func TestGatewayActivityClient_FansOutAndCaches(t *testing.T) {
 	// Server cert SAN must match the ServerName the client pins.
 	serving := pki.issue(t, gatewayServiceName+"."+ns+".svc.cluster.local")
 	// Client identity files (loaded by httpClient()).
-	clientCert := pki.issue(t, "agentry-controller."+ns+".svc.cluster.local")
+	clientCert := pki.issue(t, "kaalm-controller."+ns+".svc.cluster.local")
 	certFile, keyFile, caFile := pki.writeFiles(t, clientCert)
 
 	now := time.Now().UTC()
@@ -308,7 +308,7 @@ func TestMergedActivity_Sources(t *testing.T) {
 // CA read and parse failures.
 func TestGatewayHTTPClient(t *testing.T) {
 	pki := newActivatorPKI(t)
-	cert := pki.issue(t, "agentry-controller.default.svc.cluster.local")
+	cert := pki.issue(t, "kaalm-controller.default.svc.cluster.local")
 	certFile, keyFile, caFile := pki.writeFiles(t, cert)
 
 	g := &GatewayActivityClient{OperatorNamespace: "default", CertFile: certFile, KeyFile: keyFile, CAFile: caFile}

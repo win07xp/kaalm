@@ -2,7 +2,7 @@
 # returns Skipped (no network) and Ready goes True on a dummy credential.
 # healthCheck.enabled:false now works too (the bool no longer carries omitempty),
 # but google-vertex is kept here because it needs no live endpoint at all.
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: ModelProvider
 metadata:
   name: e2e-vertex

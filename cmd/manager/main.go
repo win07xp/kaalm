@@ -41,8 +41,8 @@ import (
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
-	"github.com/win07xp/kubeclaw/internal/controller"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -54,7 +54,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(agentryv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kaalmv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(cmapi.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -89,10 +89,10 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&controllerTLSCert, "controller-tls-cert", "",
-		"The controller's TLS certificate (agentry-controller-tls). "+
+		"The controller's TLS certificate (kaalm-controller-tls). "+
 			"Enables the activator listener and the gateway activity client when set.")
 	flag.StringVar(&controllerTLSKey, "controller-tls-key", "", "The controller's TLS key.")
-	flag.StringVar(&controllerTLSCA, "controller-tls-ca", "", "The Agentry CA bundle for mTLS with the gateway.")
+	flag.StringVar(&controllerTLSCA, "controller-tls-ca", "", "The Kaalm CA bundle for mTLS with the gateway.")
 	flag.StringVar(&activatorAddr, "activator-addr", ":9443", "The activator/probe listener address.")
 	opts := zap.Options{
 		Development: true,
@@ -223,7 +223,7 @@ func main() {
 
 	operatorNamespace := os.Getenv("POD_NAMESPACE")
 	if operatorNamespace == "" {
-		operatorNamespace = "agentry-system"
+		operatorNamespace = "kaalm-system"
 	}
 
 	if err := (&controller.AgentClassReconciler{

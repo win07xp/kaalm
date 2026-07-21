@@ -28,7 +28,7 @@ func TestChannelsHealthEndpoint(t *testing.T) {
 	h.server.ChannelHealth.RecordFailure("/channels/team-a/failing", healthReasonAuthFailed, "bad token")
 	h.server.ChannelHealth.RecordSuccess("/channels/team-a/ok")
 
-	controllerCert := h.ca.issue(t, "agentry-controller.agentry-system.svc.cluster.local")
+	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
 	resp, err := h.client(&controllerCert).Get(h.url("/v1/channels/health?namespace=team-a"))
 	if err != nil {
 		t.Fatal(err)

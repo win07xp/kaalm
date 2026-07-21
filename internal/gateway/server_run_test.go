@@ -76,7 +76,7 @@ func writeFile(t *testing.T, path string, data []byte) {
 
 func TestServer_TLSConfig(t *testing.T) {
 	ca := newTestCA(t)
-	certFile, keyFile, caFile := certFiles(t, ca, "agentry-gateway.agentry-system.svc.cluster.local")
+	certFile, keyFile, caFile := certFiles(t, ca, "kaalm-gateway.kaalm-system.svc.cluster.local")
 	s := NewServer(Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}, newFakeStore(), nil, nil)
 
 	cfg, err := s.TLSConfig()

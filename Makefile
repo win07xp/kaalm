@@ -161,9 +161,9 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
-##@ Agentry
+##@ Kaalm
 
-CHART_DIR ?= charts/agentry
+CHART_DIR ?= charts/kaalm
 
 .PHONY: chart-sync
 chart-sync: manifests ## Sync generated CRDs and controller RBAC into the Helm chart.
@@ -189,12 +189,12 @@ k3d-up: ## Create a local k3d cluster with cert-manager and trust-manager for e2
 
 .PHONY: k3d-down
 k3d-down: ## Delete the local k3d cluster.
-	k3d cluster delete agentry-dev
+	k3d cluster delete kaalm-dev
 
-CLUSTER ?= agentry-dev
-CHART_APP_VERSION := $(shell grep '^appVersion:' charts/agentry/Chart.yaml | awk '{print $$2}' | tr -d '"')
-CONTROLLER_IMG ?= ghcr.io/win07xp/agentry-controller:$(CHART_APP_VERSION)
-GATEWAY_IMG ?= ghcr.io/win07xp/agentry-gateway:$(CHART_APP_VERSION)
+CLUSTER ?= kaalm-dev
+CHART_APP_VERSION := $(shell grep '^appVersion:' charts/kaalm/Chart.yaml | awk '{print $$2}' | tr -d '"')
+CONTROLLER_IMG ?= ghcr.io/win07xp/kaalm-controller:$(CHART_APP_VERSION)
+GATEWAY_IMG ?= ghcr.io/win07xp/kaalm-gateway:$(CHART_APP_VERSION)
 AGENT_IMG ?= registry.test/agents/starter-go:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
@@ -210,7 +210,7 @@ e2e-images: ## Build the controller, gateway, and agent images and import them i
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
-	helm upgrade --install agentry charts/agentry -n agentry-system --create-namespace \
+	helm upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
 		--set certManager.clusterResourceNamespace=cert-manager --wait --timeout 5m
 
 .PHONY: e2e

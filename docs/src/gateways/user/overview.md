@@ -10,7 +10,7 @@ For the LLM Gateway (provider routing, budget, fallback) and the shared gateway 
 
 A webhook call travels through eight steps: size check, authentication, normalization, channel lookup, activator check, delivery, and response. Sync mode returns the agent's reply inline; async mode returns `202` early and delivers the reply out of band.
 
-![Sequence diagram of a webhook call through the User Gateway. The caller POSTs to /channels/{ns}/{path}. The gateway runs the payload size check at the listener level on the raw frame, returning 413 for bodies over maxMessageBodyBytes; a note records that this runs before path resolution and before the path-not-registered 401, so the 413-versus-401 distinction never leaks which paths exist. Then per-AgentChannel bearer or HMAC auth (401 on failure), normalization into the Agentry envelope (400 invalid_request when fromBody is configured and the body is not JSON), and the AgentChannel lookup, which routes only to channels with Ready=True. In async mode the gateway creates the agentry-async-{requestId} placeholder ConfigMap via the apiserver, returning 503 if the Create fails and otherwise 202 Accepted with requestId and channelPath; a highlighted note marks that the caller is now gone while steps 5 to 7 still execute. Step 5 calls the controller's activator over mTLS if the Agent is Hibernated, which patches agentry.io/wake=true, and the gateway polls readiness bounded by wakeTimeout. Step 6 delivers POST /v1/message over bidirectional mTLS with three retries at 1s, 5s and 25s. The response leaves by one of three exits: an inline 200 in sync mode bounded by syncDeliveryDeadline, a signed POST to the callbackUrl receiver, or a ConfigMap Patch served at the polling endpoint.](../../diagrams/user-webhook-flow.svg)
+![Sequence diagram of a webhook call through the User Gateway. The caller POSTs to /channels/{ns}/{path}. The gateway runs the payload size check at the listener level on the raw frame, returning 413 for bodies over maxMessageBodyBytes; a note records that this runs before path resolution and before the path-not-registered 401, so the 413-versus-401 distinction never leaks which paths exist. Then per-AgentChannel bearer or HMAC auth (401 on failure), normalization into the Kaalm envelope (400 invalid_request when fromBody is configured and the body is not JSON), and the AgentChannel lookup, which routes only to channels with Ready=True. In async mode the gateway creates the kaalm-async-{requestId} placeholder ConfigMap via the apiserver, returning 503 if the Create fails and otherwise 202 Accepted with requestId and channelPath; a highlighted note marks that the caller is now gone while steps 5 to 7 still execute. Step 5 calls the controller's activator over mTLS if the Agent is Hibernated, which patches kaalm.io/wake=true, and the gateway polls readiness bounded by wakeTimeout. Step 6 delivers POST /v1/message over bidirectional mTLS with three retries at 1s, 5s and 25s. The response leaves by one of three exits: an inline 200 in sync mode bounded by syncDeliveryDeadline, a signed POST to the callbackUrl receiver, or a ConfigMap Patch served at the polling endpoint.](../../diagrams/user-webhook-flow.svg)
 
 Reading the diagram: the shape worth noticing is the async branch. The `202` is returned from inside the alt fragment, and everything below it (activation, delivery, retry, response) executes afterwards against a caller that has already been answered and disconnected. Sync mode is the same pipeline with the caller still attached, which is why only sync carries a wall-clock deadline.
 
@@ -30,7 +30,7 @@ The gateway verifies the request using the configured auth method, either bearer
 
 ### 3. Normalization
 
-The adapter translates the webhook payload into the Agentry message envelope:
+The adapter translates the webhook payload into the Kaalm message envelope:
 
 ```json
 {
@@ -47,7 +47,7 @@ The adapter translates the webhook payload into the Agentry message envelope:
 Field resolution:
 
 - **`userId`** is resolved using `AgentChannel.spec.webhook.userId` config (`fromHeader` or `fromBody`). If neither is configured, or the value is absent, the configured `fallback` is used (empty string if omitted).
-- **`content`** is resolved using `AgentChannel.spec.webhook.content` config (same shape as `userId`). When neither `fromHeader` nor `fromBody` is set, the gateway uses the raw inbound body, JSON-encoded as a string, as `content`. This preserves the generic-webhook story for senders whose body shape Agentry has no a-priori knowledge of.
+- **`content`** is resolved using `AgentChannel.spec.webhook.content` config (same shape as `userId`). When neither `fromHeader` nor `fromBody` is set, the gateway uses the raw inbound body, JSON-encoded as a string, as `content`. This preserves the generic-webhook story for senders whose body shape Kaalm has no a-priori knowledge of.
 - **`attachments`** and **`metadata`** are populated by adapter-specific code: empty `[]` and `{}` for the v1 generic webhook adapter; the v1.1 Discord and WhatsApp adapters fill them per platform.
 
 If `fromBody` is configured for either field and the body cannot be parsed as JSON, the gateway rejects the request with `400 Bad Request` (`error.type: invalid_request`) before delivering to the agent. See [AgentChannel](../../resources/agentchannel.md) for extraction configuration.
@@ -68,7 +68,7 @@ If the AgentChannel has `session.enabled: true`, the gateway generates a determi
 sessionId = UUIDv5(namespace: <fixed published namespace UUID>, name: channelId + ":" + userId)
 ```
 
-The namespace is a fixed UUID published as part of the Agentry API specification, identical across all installations and versions. See [POST /v1/message](../api/agent-endpoints.md#post-v1message) for the constant and its stability guarantee.
+The namespace is a fixed UUID published as part of the Kaalm API specification, identical across all installations and versions. See [POST /v1/message](../api/agent-endpoints.md#post-v1message) for the constant and its stability guarantee.
 
 Because the derivation is a pure function of the envelope, the ID is stable across gateway replicas and restarts, so no gateway-side session state is required. Session expiry and rotation are the agent's responsibility using its PVC state.
 
@@ -80,19 +80,19 @@ If the Agent is `Hibernated`, the gateway signals the controller to wake it and 
 
 If `AgentChannel.spec.webhook.responseMode` is `async`, the gateway returns HTTP 202 Accepted immediately after the AgentChannel lookup (step 4) with a body containing `requestId` (a UUID) and `channelPath` (the originating AgentChannel's webhook path). Both the mode decision and the `channelPath` in the body come from the resolved AgentChannel, so the lookup is the earliest point the `202` can be emitted. Steps 5 to 7 proceed asynchronously; the webhook caller does not block.
 
-Before returning `202`, the gateway creates an empty placeholder `agentry-async-{requestId}` ConfigMap in `agentry-system` (standard channel-namespace/channel-name labels and a 1-hour expiry annotation, no payload field) so the polling record is immediately queryable. If the placeholder `Create` fails, the gateway returns `503 Service Unavailable` to the inbound webhook caller instead of `202`. The invariant is that a returned `202` always implies a queryable polling record exists.
+Before returning `202`, the gateway creates an empty placeholder `kaalm-async-{requestId}` ConfigMap in `kaalm-system` (standard channel-namespace/channel-name labels and a 1-hour expiry annotation, no payload field) so the polling record is immediately queryable. If the placeholder `Create` fails, the gateway returns `503 Service Unavailable` to the inbound webhook caller instead of `202`. The invariant is that a returned `202` always implies a queryable polling record exists.
 
 The `requestId` is opaque; callers must not parse or construct it. The `channelPath` must be preserved by the caller and passed back as the `channelPath` query parameter on any poll request. See [Async Webhook Response](../api/async-responses.md) for the full schema.
 
 #### Serving a poll
 
-On poll (`GET /v1/channels/responses/{requestId}?channelPath=...`), any gateway replica reads the response from the `agentry-async-{requestId}` ConfigMap in `agentry-system`. The `channelPath` query parameter is used to look up AgentChannel auth config for authenticating the poll request.
+On poll (`GET /v1/channels/responses/{requestId}?channelPath=...`), any gateway replica reads the response from the `kaalm-async-{requestId}` ConfigMap in `kaalm-system`. The `channelPath` query parameter is used to look up AgentChannel auth config for authenticating the poll request.
 
-After authentication, the gateway asserts that the ConfigMap's `agentry.io/channel-namespace` / `agentry.io/channel-name` labels match the authenticated channel **before serving any response**, including the empty-placeholder `202`. That way a `requestId` stored by one channel cannot be probed via another channel's credentials at any point in its lifecycle. Mismatches return `404 Not Found`, indistinguishable on the wire from "unknown `requestId`", to avoid confirming that a cross-channel response exists. See [Async Webhook Response](../api/async-responses.md) for the response schemas and the channel-match assertion.
+After authentication, the gateway asserts that the ConfigMap's `kaalm.io/channel-namespace` / `kaalm.io/channel-name` labels match the authenticated channel **before serving any response**, including the empty-placeholder `202`. That way a `requestId` stored by one channel cannot be probed via another channel's credentials at any point in its lifecycle. Mismatches return `404 Not Found`, indistinguishable on the wire from "unknown `requestId`", to avoid confirming that a cross-channel response exists. See [Async Webhook Response](../api/async-responses.md) for the response schemas and the channel-match assertion.
 
 ### 6. Message delivery
 
-The gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS. The gateway verifies the agent's TLS certificate against the Agentry CA (`agentry-ca`, managed by cert-manager, see [TLS on the LLM Gateway Listener](../llm/listener-tls.md)).
+The gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS. The gateway verifies the agent's TLS certificate against the Kaalm CA (`kaalm-ca`, managed by cert-manager, see [TLS on the LLM Gateway Listener](../llm/listener-tls.md)).
 
 ### 6a. Delivery retry
 
@@ -123,13 +123,13 @@ The agent returns a response envelope; the gateway POSTs it to the configured `c
 
 #### Async response persistence
 
-The receiving replica creates an empty placeholder `agentry-async-{requestId}` ConfigMap in `agentry-system` at 202-acceptance time (see step 5a above) and later `Patch`es it with the response payload (or error envelope) when the agent reply is ready and the response will not be delivered via callback, either because no `callbackUrl` is configured, or because callback retries (3× with 1s/5s/25s backoff) were exhausted.
+The receiving replica creates an empty placeholder `kaalm-async-{requestId}` ConfigMap in `kaalm-system` at 202-acceptance time (see step 5a above) and later `Patch`es it with the response payload (or error envelope) when the agent reply is ready and the response will not be delivered via callback, either because no `callbackUrl` is configured, or because callback retries (3× with 1s/5s/25s backoff) were exhausted.
 
-**Lifetime.** The expiry annotation is set on placeholder creation (1 hour from 202-acceptance) and is **not** reset by the payload `Patch`, so total per-`requestId` ConfigMap lifetime is bounded at 1 hour regardless of how long the agent takes to reply. Each ConfigMap is labeled with `agentry.io/channel-namespace` and `agentry.io/channel-name` to identify the originating AgentChannel, and annotated with that 1-hour expiry. The gateway already has full ConfigMap access in `agentry-system`, so no additional RBAC is required.
+**Lifetime.** The expiry annotation is set on placeholder creation (1 hour from 202-acceptance) and is **not** reset by the payload `Patch`, so total per-`requestId` ConfigMap lifetime is bounded at 1 hour regardless of how long the agent takes to reply. Each ConfigMap is labeled with `kaalm.io/channel-namespace` and `kaalm.io/channel-name` to identify the originating AgentChannel, and annotated with that 1-hour expiry. The gateway already has full ConfigMap access in `kaalm-system`, so no additional RBAC is required.
 
 **Size limit.** The gateway rejects agent responses exceeding `gateway.maxResponseBodyBytes` (default 900 KiB, leaving headroom under Kubernetes' ~1 MiB ConfigMap object cap, and bounding per-request gateway memory in sync mode where the response is buffered before forwarding) with a `response_too_large` error returned to the caller (sync) or delivered to `callbackUrl` / the polling endpoint (async). The payload is stored as a text value under the ConfigMap's `data` field (JSON envelope), never `binaryData`, whose base64 encoding would inflate a 900 KiB payload past the ~1 MiB object cap.
 
-**Cleanup.** Ownership cannot be expressed with an ownerRef, so linkage is by the channel labels and the AgentChannelReconciler prunes expired ConfigMaps for live channels on its reconcile passes; see [Async Webhook Response](../api/async-responses.md) for the ownerRef and pruning rationale. When an AgentChannel is deleted, its finalizer sweeps all of that channel's `agentry-async-*` ConfigMaps in one shot before removing the finalizer, see [Finalizers](../../controller/finalizers.md). Without this sweep they would be orphaned indefinitely, since the reconciler's expiry prune runs only for live channels.
+**Cleanup.** Ownership cannot be expressed with an ownerRef, so linkage is by the channel labels and the AgentChannelReconciler prunes expired ConfigMaps for live channels on its reconcile passes; see [Async Webhook Response](../api/async-responses.md) for the ownerRef and pruning rationale. When an AgentChannel is deleted, its finalizer sweeps all of that channel's `kaalm-async-*` ConfigMaps in one shot before removing the finalizer, see [Finalizers](../../controller/finalizers.md). Without this sweep they would be orphaned indefinitely, since the reconciler's expiry prune runs only for live channels.
 
 **Scaling.** Any gateway replica can serve poll requests by reading from this ConfigMap, so no replica-affinity or in-memory routing is required. The store targets low-to-moderate async rates: live records accumulate at roughly the channel's async request rate × the 1-hour TTL, and [`maxPendingAsyncResponses`](../../resources/agentchannel.md) (default 100) is the per-channel guardrail that bounds this etcd pressure. High-QPS channels should use sync mode fronted by an external queue rather than raising the cap.
 
@@ -147,19 +147,19 @@ If the host now resolves to a blocked range (loopback, link-local, RFC1918, uniq
 
 After the IP-allowlist re-check passes and before dialing, `SendReply` constructs the signed callback per [Callback authentication](../api/async-responses.md) using the channel's `spec.webhook.callbackAuth` (required by [rule 25](../../resources/validation-and-defaulting.md#cross-resource-validation) whenever `callbackUrl` is set).
 
-Signing happens on every attempt, initial and each retry, using a fresh timestamp, so a delayed retry doesn't ship a stale `X-Agentry-Timestamp`. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` via the same per-channel scoped Role used for inbound `auth` (see [Gateway ServiceAccount permissions](../../security/rbac.md#gateway-serviceaccount-permissions)).
+Signing happens on every attempt, initial and each retry, using a fresh timestamp, so a delayed retry doesn't ship a stale `X-Kaalm-Timestamp`. The signing material is loaded from the Secret referenced by `callbackAuth.secretRef` via the same per-channel scoped Role used for inbound `auth` (see [Gateway ServiceAccount permissions](../../security/rbac.md#gateway-serviceaccount-permissions)).
 
 ---
 
 ## TLS and Ingress
 
-The User Gateway listener on `:8080` serves TLS using the same `agentry-gateway-tls` Certificate as the LLM listener: both listeners share a single cert whose SAN set covers the gateway's in-cluster Service DNS names. No plaintext path exists on the gateway; all webhook, activator, activity, and async-polling traffic is TLS end-to-end.
+The User Gateway listener on `:8080` serves TLS using the same `kaalm-gateway-tls` Certificate as the LLM listener: both listeners share a single cert whose SAN set covers the gateway's in-cluster Service DNS names. No plaintext path exists on the gateway; all webhook, activator, activity, and async-polling traffic is TLS end-to-end.
 
 **Listener separation**: port 8080 serves only externally-reachable channel traffic, namely webhook intake under `/channels/*` and the async polling fallback under `/v1/channels/responses/*`. All internal mTLS-authenticated endpoints (`/v1/activity`, `/v1/channels/health`) live on the LLM Gateway listener on `:8443`. This split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert. See [TLS on the LLM Gateway Listener](../llm/listener-tls.md) for the 8443 endpoint set.
 
 **Recommended Ingress configuration**: external webhook traffic arrives at a cluster Ingress that terminates TLS with the cluster's public certificate and then connects to the gateway backend. Two Ingress modes are supported; operators pick one:
 
-- **Backend re-encrypt (HTTPS-to-HTTPS)**: the Ingress controller speaks HTTPS to the gateway on port 8080, presenting the Agentry CA as the backend CA bundle (or disabling verification if the controller trusts cluster-internal names). This is the recommended default because it works with off-the-shelf Ingress controllers (NGINX, Traefik, HAProxy, most cloud LB Ingress classes).
+- **Backend re-encrypt (HTTPS-to-HTTPS)**: the Ingress controller speaks HTTPS to the gateway on port 8080, presenting the Kaalm CA as the backend CA bundle (or disabling verification if the controller trusts cluster-internal names). This is the recommended default because it works with off-the-shelf Ingress controllers (NGINX, Traefik, HAProxy, most cloud LB Ingress classes).
 - **TLS pass-through**: the Ingress forwards raw TLS bytes to the gateway without terminating, so the external client speaks TLS directly with the gateway. This preserves end-to-end TLS with the gateway's cert but requires the Ingress controller to support pass-through SNI routing and requires clients to trust the gateway's cert chain. Operators using pass-through must set the Helm value `gateway.externalHostnames` to add the public hostname to the gateway cert's SAN list: the default SAN set covers only in-cluster Service DNS, which would fail verification for an external client dialing the public hostname. See [Helm Chart Contents](../../operations/deployment.md#helm-chart-contents).
 
-Internal callers inside the cluster verify the gateway's cert against `agentry-ca` (projected by `trust-manager` into every namespace) when dialing the gateway directly. Cluster-local webhook producers and async-polling callers dial the User listener on `:8080`; the controller's activity fan-out dials the LLM listener on `:8443` (see [§ Activity Tracking API](activation-and-activity.md#activity-tracking-api)).
+Internal callers inside the cluster verify the gateway's cert against `kaalm-ca` (projected by `trust-manager` into every namespace) when dialing the gateway directly. Cluster-local webhook producers and async-polling callers dial the User listener on `:8080`; the controller's activity fan-out dials the LLM listener on `:8443` (see [§ Activity Tracking API](activation-and-activity.md#activity-tracking-api)).

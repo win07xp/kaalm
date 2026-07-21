@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func metav1ObjectMeta(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name} }
@@ -56,13 +56,13 @@ func (h *harness) addBackupProvider(t *testing.T, name string, upstreamFn http.H
 	// Reset the memoized upstream client so it rebuilds with the new pool.
 	h.server.upstreamOnce = onceReset()
 
-	h.store.providers[name] = &agentryv1alpha1.ModelProvider{
+	h.store.providers[name] = &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1ObjectMeta(name),
-		Spec: agentryv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1alpha1.ModelProviderSpec{
 			Type:              "openai",
 			Endpoint:          backendSrv.URL,
 			AllowedNamespaces: []string{"team-*"},
-			Models:            []agentryv1alpha1.ModelProviderModel{{ID: "m1"}},
+			Models:            []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
 		},
 	}
 	h.store.creds[name] = "sk-" + name
@@ -83,11 +83,11 @@ func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
 	})
 	_ = backup
 	// Wire the fallback and allow the backup in the workload + class.
-	h.store.providers["prov"].Spec.Fallback = []agentryv1alpha1.LocalObjectReference{{Name: "backup"}}
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1alpha1.LocalObjectReference{{Name: "backup"}}
 	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
-		agentryv1alpha1.AgentProviderReference{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "backup"}})
+		kaalmv1alpha1.AgentProviderReference{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "backup"}})
 	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
-		agentryv1alpha1.LocalObjectReference{Name: "backup"})
+		kaalmv1alpha1.LocalObjectReference{Name: "backup"})
 
 	cert := agentCert(t, h.ca)
 	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"),
@@ -108,20 +108,20 @@ func TestIntegration_FallbackExhaustionMaps503(t *testing.T) {
 	h.seedRoute()
 	// Point both providers at a dead endpoint.
 	h.store.providers["prov"].Spec.Endpoint = "https://127.0.0.1:1"
-	h.store.providers["prov"].Spec.Fallback = []agentryv1alpha1.LocalObjectReference{{Name: "backup"}}
-	h.store.providers["backup"] = &agentryv1alpha1.ModelProvider{
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1alpha1.LocalObjectReference{{Name: "backup"}}
+	h.store.providers["backup"] = &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1ObjectMeta("backup"),
-		Spec: agentryv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1alpha1.ModelProviderSpec{
 			Type: "openai", Endpoint: "https://127.0.0.1:1",
 			AllowedNamespaces: []string{"team-*"},
-			Models:            []agentryv1alpha1.ModelProviderModel{{ID: "m1"}},
+			Models:            []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
 		},
 	}
 	h.store.creds["backup"] = "sk-backup"
 	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
-		agentryv1alpha1.AgentProviderReference{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "backup"}})
+		kaalmv1alpha1.AgentProviderReference{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "backup"}})
 	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
-		agentryv1alpha1.LocalObjectReference{Name: "backup"})
+		kaalmv1alpha1.LocalObjectReference{Name: "backup"})
 
 	cert := agentCert(t, h.ca)
 	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
@@ -140,7 +140,7 @@ func TestIntegration_RateLimit429(t *testing.T) {
 	})
 	h.seedRoute()
 	h.server.RateLimiter = NewRateLimiter(func() int { return 1 })
-	h.store.providers["prov"].Spec.RateLimits = agentryv1alpha1.ModelProviderRateLimits{RequestsPerMinute: 2}
+	h.store.providers["prov"].Spec.RateLimits = kaalmv1alpha1.ModelProviderRateLimits{RequestsPerMinute: 2}
 	cert := agentCert(t, h.ca)
 	call := func() int {
 		resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)

@@ -142,7 +142,7 @@ func TestClassDerivedDefaultsNotBaked(t *testing.T) {
 	// omits a whole block gets no nested defaults at all, which is why the
 	// reconciler must treat an absent block as the documented default in Phase 3.)
 	ag := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "agentry.io/v1alpha1",
+		"apiVersion": "kaalm.io/v1alpha1",
 		"kind":       "Agent",
 		"metadata":   map[string]any{"name": "defaults-probe", "namespace": "default"},
 		"spec": map[string]any{

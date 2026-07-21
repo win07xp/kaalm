@@ -1,5 +1,5 @@
 @startuml crd-reference-graph
-' How the five Agentry CRDs reference each other, partitioned by scope.
+' How the five Kaalm CRDs reference each other, partitioned by scope.
 ' Source of truth: docs/src/concepts/core-concepts.md
 !include _style.puml
 
@@ -15,9 +15,9 @@ rectangle "**Cluster scope** (platform team owns)" as clusterband #line:9E9E9E;l
   rectangle "**ModelProvider**\nspec.credentialsRef\nspec.fallback" as mp #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 }
 
-' The credentials Secret is namespaced and is not an Agentry CRD, so it sits
+' The credentials Secret is namespaced and is not an Kaalm CRD, so it sits
 ' outside both scope partitions.
-rectangle "**Secret**\nin agentry-system" as sec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+rectangle "**Secret**\nin kaalm-system" as sec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 
 ' ---------- namespace-scoped: developer-owned workloads ----------
 rectangle "**Namespace scope** (developer owns)" as nsband #line:4A148C;line.dashed;text:2a0a4a {
@@ -42,7 +42,7 @@ mp <-[#B71C1C,bold]- ag : **providerRef**\n//the agent asks//
 mp <-[#B71C1C,bold]- at : providerRef
 
 legend bottom
-  Grey = cluster-scoped policy | Purple = namespaced workload | Orange = not an Agentry CRD
+  Grey = cluster-scoped policy | Purple = namespaced workload | Orange = not an Kaalm CRD
   Arrows point from a field to what it names
   **Both red edges must pass:** the class must allow the provider //and// the workload must ask for it.
   A third gate is not drawable here, because it is not a reference: the ModelProvider must also

@@ -28,20 +28,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
-func mkChannel(t *testing.T, name, agentName, path string, mutate func(*agentryv1alpha1.AgentChannel)) {
+func mkChannel(t *testing.T, name, agentName, path string, mutate func(*kaalmv1alpha1.AgentChannel)) {
 	t.Helper()
-	ch := &agentryv1alpha1.AgentChannel{
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			AgentRef: agentryv1alpha1.LocalObjectReference{Name: agentName},
-			Webhook: agentryv1alpha1.AgentChannelWebhook{
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			AgentRef: kaalmv1alpha1.LocalObjectReference{Name: agentName},
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{
 				Path: path,
-				Auth: agentryv1alpha1.ChannelAuth{
+				Auth: kaalmv1alpha1.ChannelAuth{
 					Type:      "bearer",
-					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: name + "-secret", Key: "token"},
+					SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: name + "-secret", Key: "token"},
 				},
 			},
 		},
@@ -68,11 +68,11 @@ func mkChannelSecret(t *testing.T, name string) {
 func expectChannelReady(t *testing.T, name string, want metav1.ConditionStatus, reason string) {
 	t.Helper()
 	eventually(t, func() error {
-		var ch agentryv1alpha1.AgentChannel
+		var ch kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
 			return err
 		}
-		c := condition(ch.Status.Conditions, agentryv1alpha1.ConditionReady)
+		c := condition(ch.Status.Conditions, kaalmv1alpha1.ConditionReady)
 		if c == nil {
 			return errString("no Ready condition yet")
 		}
@@ -92,12 +92,12 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 	mkChannelSecret(t, "ch-ok-secret")
 	mkChannel(t, "ch-ok", "ch-agent-ok", "/channels/default/ch-ok", nil)
 
-	expectChannelReady(t, "ch-ok", metav1.ConditionTrue, agentryv1alpha1.ReasonAgentReachable)
+	expectChannelReady(t, "ch-ok", metav1.ConditionTrue, kaalmv1alpha1.ReasonAgentReachable)
 
 	// The scoped Role exists with exactly the auth Secret, get+watch only.
 	var role rbacv1.Role
 	if err := testClient.Get(ctxT(),
-		types.NamespacedName{Namespace: "default", Name: "agentry-channel-ch-ok-creds"}, &role); err != nil {
+		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-ok-creds"}, &role); err != nil {
 		t.Fatalf("credential Role missing: %v", err)
 	}
 	rule := role.Rules[0]
@@ -111,16 +111,16 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 	}
 	var rb rbacv1.RoleBinding
 	if err := testClient.Get(ctxT(),
-		types.NamespacedName{Namespace: "default", Name: "agentry-channel-ch-ok-creds-gateway"}, &rb); err != nil {
+		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-ok-creds-gateway"}, &rb); err != nil {
 		t.Errorf("gateway RoleBinding missing: %v", err)
 	}
 	// Phase reduces from the Agent (Pending and transients are Active).
 	eventually(t, func() error {
-		var ch agentryv1alpha1.AgentChannel
+		var ch kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-ok"}, &ch); err != nil {
 			return err
 		}
-		if ch.Status.Phase != agentryv1alpha1.ChannelActive {
+		if ch.Status.Phase != kaalmv1alpha1.ChannelActive {
 			return errString("phase=" + string(ch.Status.Phase))
 		}
 		return nil
@@ -130,13 +130,13 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 func TestChannel_AgentNotFound(t *testing.T) {
 	mkChannelSecret(t, "ch-noagent-secret")
 	mkChannel(t, "ch-noagent", "no-such-agent", "/channels/default/ch-noagent", nil)
-	expectChannelReady(t, "ch-noagent", metav1.ConditionFalse, agentryv1alpha1.ReasonAgentNotFound)
+	expectChannelReady(t, "ch-noagent", metav1.ConditionFalse, kaalmv1alpha1.ReasonAgentNotFound)
 	eventually(t, func() error {
-		var ch agentryv1alpha1.AgentChannel
+		var ch kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-noagent"}, &ch); err != nil {
 			return err
 		}
-		if ch.Status.Phase != agentryv1alpha1.ChannelFailed {
+		if ch.Status.Phase != kaalmv1alpha1.ChannelFailed {
 			return errString("phase=" + string(ch.Status.Phase) + " want Failed")
 		}
 		return nil
@@ -145,12 +145,12 @@ func TestChannel_AgentNotFound(t *testing.T) {
 
 func TestChannel_ServiceDisabled(t *testing.T) {
 	mkWorkloadClass(t, "chc-svc", nil)
-	mkWorkloadAgent(t, "ch-agent-svc", "chc-svc", func(ag *agentryv1alpha1.Agent) {
-		ag.Spec.Service = &agentryv1alpha1.AgentService{Enabled: false}
+	mkWorkloadAgent(t, "ch-agent-svc", "chc-svc", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Service = &kaalmv1alpha1.AgentService{Enabled: false}
 	})
 	mkChannelSecret(t, "ch-svc-secret")
 	mkChannel(t, "ch-svc", "ch-agent-svc", "/channels/default/ch-svc", nil)
-	expectChannelReady(t, "ch-svc", metav1.ConditionFalse, agentryv1alpha1.ReasonAgentServiceDisabled)
+	expectChannelReady(t, "ch-svc", metav1.ConditionFalse, kaalmv1alpha1.ReasonAgentServiceDisabled)
 }
 
 func TestChannel_InvalidPathPrefix(t *testing.T) {
@@ -159,7 +159,7 @@ func TestChannel_InvalidPathPrefix(t *testing.T) {
 	mkChannelSecret(t, "ch-path-secret")
 	// Wrong namespace segment: rule 15.
 	mkChannel(t, "ch-path", "ch-agent-path", "/channels/other-ns/ch-path", nil)
-	expectChannelReady(t, "ch-path", metav1.ConditionFalse, agentryv1alpha1.ReasonInvalidPath)
+	expectChannelReady(t, "ch-path", metav1.ConditionFalse, kaalmv1alpha1.ReasonInvalidPath)
 }
 
 func TestChannel_PathConflictNewerLoses(t *testing.T) {
@@ -172,7 +172,7 @@ func TestChannel_PathConflictNewerLoses(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond) // distinct creationTimestamps (1s resolution)
 	mkChannel(t, "ch-conf-b", "ch-agent-conf", "/channels/default/shared-path", nil)
 
-	expectChannelReady(t, "ch-conf-b", metav1.ConditionFalse, agentryv1alpha1.ReasonPathConflict)
+	expectChannelReady(t, "ch-conf-b", metav1.ConditionFalse, kaalmv1alpha1.ReasonPathConflict)
 	expectChannelReady(t, "ch-conf-a", metav1.ConditionTrue, "")
 }
 
@@ -180,7 +180,7 @@ func TestChannel_CredentialsMissing(t *testing.T) {
 	mkWorkloadClass(t, "chc-cred", nil)
 	mkWorkloadAgent(t, "ch-agent-cred", "chc-cred", nil)
 	mkChannel(t, "ch-cred", "ch-agent-cred", "/channels/default/ch-cred", nil) // secret never created
-	expectChannelReady(t, "ch-cred", metav1.ConditionFalse, agentryv1alpha1.ReasonCredentialsMissing)
+	expectChannelReady(t, "ch-cred", metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsMissing)
 }
 
 func TestChannel_InvalidCallbackURL(t *testing.T) {
@@ -188,31 +188,31 @@ func TestChannel_InvalidCallbackURL(t *testing.T) {
 	mkWorkloadAgent(t, "ch-agent-cb", "chc-cb", nil)
 	mkChannelSecret(t, "ch-cb-secret")
 	badURL := "http://example.com/hook" // not https
-	mkChannel(t, "ch-cb", "ch-agent-cb", "/channels/default/ch-cb", func(ch *agentryv1alpha1.AgentChannel) {
+	mkChannel(t, "ch-cb", "ch-agent-cb", "/channels/default/ch-cb", func(ch *kaalmv1alpha1.AgentChannel) {
 		ch.Spec.Webhook.CallbackURL = &badURL
-		ch.Spec.Webhook.CallbackAuth = &agentryv1alpha1.ChannelAuth{
+		ch.Spec.Webhook.CallbackAuth = &kaalmv1alpha1.ChannelAuth{
 			Type:      "bearer",
-			SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "ch-cb-secret", Key: "token"},
+			SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "ch-cb-secret", Key: "token"},
 		}
 	})
-	expectChannelReady(t, "ch-cb", metav1.ConditionFalse, agentryv1alpha1.ReasonInvalidCallbackURL)
+	expectChannelReady(t, "ch-cb", metav1.ConditionFalse, kaalmv1alpha1.ReasonInvalidCallbackURL)
 }
 
 func TestChannel_DegradedWhenAgentDegraded(t *testing.T) {
 	mkWorkloadClass(t, "chc-deg", nil)
-	mkWorkloadAgent(t, "ch-agent-deg", "chc-deg", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "ch-agent-deg", "chc-deg", func(ag *kaalmv1alpha1.Agent) {
 		// Image outside the allowlist degrades the agent.
 		ag.Spec.Image = "evil.example/x:v1"
 	})
-	expectAgentPhase(t, "ch-agent-deg", agentryv1alpha1.AgentDegraded)
+	expectAgentPhase(t, "ch-agent-deg", kaalmv1alpha1.AgentDegraded)
 	mkChannelSecret(t, "ch-deg-secret")
 	mkChannel(t, "ch-deg", "ch-agent-deg", "/channels/default/ch-deg", nil)
 	eventually(t, func() error {
-		var ch agentryv1alpha1.AgentChannel
+		var ch kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-deg"}, &ch); err != nil {
 			return err
 		}
-		if ch.Status.Phase != agentryv1alpha1.ChannelDegraded {
+		if ch.Status.Phase != kaalmv1alpha1.ChannelDegraded {
 			return errString("phase=" + string(ch.Status.Phase) + " want Degraded")
 		}
 		return nil
@@ -233,11 +233,11 @@ func TestChannel_PruneExpiredAsyncConfigMaps(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: testSystemNamespace,
 				Labels: map[string]string{
-					agentryv1alpha1.LabelChannelNamespace: "default",
-					agentryv1alpha1.LabelChannelName:      "ch-prune",
+					kaalmv1alpha1.LabelChannelNamespace: "default",
+					kaalmv1alpha1.LabelChannelName:      "ch-prune",
 				},
 				Annotations: map[string]string{
-					agentryv1alpha1.AnnotationExpiresAt: expiry.UTC().Format(time.RFC3339),
+					kaalmv1alpha1.AnnotationExpiresAt: expiry.UTC().Format(time.RFC3339),
 				},
 			},
 			Data: map[string]string{},
@@ -246,8 +246,8 @@ func TestChannel_PruneExpiredAsyncConfigMaps(t *testing.T) {
 			t.Fatalf("create async cm: %v", err)
 		}
 	}
-	mkAsyncCM("agentry-async-expired-1", true)
-	mkAsyncCM("agentry-async-live-1", false)
+	mkAsyncCM("kaalm-async-expired-1", true)
+	mkAsyncCM("kaalm-async-live-1", false)
 
 	mkChannel(t, "ch-prune", "ch-agent-prune", "/channels/default/ch-prune", nil)
 	expectChannelReady(t, "ch-prune", metav1.ConditionTrue, "")
@@ -255,7 +255,7 @@ func TestChannel_PruneExpiredAsyncConfigMaps(t *testing.T) {
 	eventually(t, func() error {
 		var cm corev1.ConfigMap
 		err := testClient.Get(ctxT(),
-			types.NamespacedName{Namespace: testSystemNamespace, Name: "agentry-async-expired-1"}, &cm)
+			types.NamespacedName{Namespace: testSystemNamespace, Name: "kaalm-async-expired-1"}, &cm)
 		if !apierrors.IsNotFound(err) {
 			return errString("expired record not pruned")
 		}
@@ -263,7 +263,7 @@ func TestChannel_PruneExpiredAsyncConfigMaps(t *testing.T) {
 	})
 	var live corev1.ConfigMap
 	if err := testClient.Get(ctxT(),
-		types.NamespacedName{Namespace: testSystemNamespace, Name: "agentry-async-live-1"}, &live); err != nil {
+		types.NamespacedName{Namespace: testSystemNamespace, Name: "kaalm-async-live-1"}, &live); err != nil {
 		t.Errorf("live record must survive the prune: %v", err)
 	}
 }
@@ -278,13 +278,13 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 	// A live async record that only the finalizer sweep may remove.
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "agentry-async-del-1", Namespace: testSystemNamespace,
+			Name: "kaalm-async-del-1", Namespace: testSystemNamespace,
 			Labels: map[string]string{
-				agentryv1alpha1.LabelChannelNamespace: "default",
-				agentryv1alpha1.LabelChannelName:      "ch-del",
+				kaalmv1alpha1.LabelChannelNamespace: "default",
+				kaalmv1alpha1.LabelChannelName:      "ch-del",
 			},
 			Annotations: map[string]string{
-				agentryv1alpha1.AnnotationExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+				kaalmv1alpha1.AnnotationExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 			},
 		},
 	}
@@ -292,7 +292,7 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 		t.Fatalf("create async cm: %v", err)
 	}
 
-	var ch agentryv1alpha1.AgentChannel
+	var ch kaalmv1alpha1.AgentChannel
 	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &ch); err != nil {
 		t.Fatal(err)
 	}
@@ -302,11 +302,11 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 
 	// Step 1: the reconciler announces Terminating and holds.
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentChannel
+		var got kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got); err != nil {
 			return err
 		}
-		if got.Status.Phase != agentryv1alpha1.ChannelTerminating {
+		if got.Status.Phase != kaalmv1alpha1.ChannelTerminating {
 			return errString("phase=" + string(got.Status.Phase) + " want Terminating")
 		}
 		return nil
@@ -314,20 +314,20 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 
 	// Steps 2-3: play the gateway and confirm disconnection.
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentChannel
+		var got kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got); err != nil {
 			return err
 		}
 		if got.Annotations == nil {
 			got.Annotations = map[string]string{}
 		}
-		got.Annotations[agentryv1alpha1.AnnotationChannelDisconnected] = agentryv1alpha1.AnnotationTrue
+		got.Annotations[kaalmv1alpha1.AnnotationChannelDisconnected] = kaalmv1alpha1.AnnotationTrue
 		return testClient.Update(ctxT(), &got)
 	})
 
 	// Steps 5-6: sweep and release.
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentChannel
+		var got kaalmv1alpha1.AgentChannel
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got)
 		if !apierrors.IsNotFound(err) {
 			return errString("channel not yet finalized")
@@ -336,7 +336,7 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 	})
 	var sweptCM corev1.ConfigMap
 	err := testClient.Get(ctxT(),
-		types.NamespacedName{Namespace: testSystemNamespace, Name: "agentry-async-del-1"}, &sweptCM)
+		types.NamespacedName{Namespace: testSystemNamespace, Name: "kaalm-async-del-1"}, &sweptCM)
 	if !apierrors.IsNotFound(err) {
 		t.Error("finalizer sweep must remove the channel's async records")
 	}
@@ -351,7 +351,7 @@ func TestChannel_CredentialRoleGrowsWithSecretRefs(t *testing.T) {
 	mkChannel(t, "ch-role", "ch-agent-role", "/channels/default/ch-role", nil)
 	expectChannelReady(t, "ch-role", metav1.ConditionTrue, "")
 
-	roleName := "agentry-channel-ch-role-creds"
+	roleName := "kaalm-channel-ch-role-creds"
 	eventually(t, func() error {
 		var role rbacv1.Role
 		if err := testClient.Get(ctxT(),
@@ -367,13 +367,13 @@ func TestChannel_CredentialRoleGrowsWithSecretRefs(t *testing.T) {
 	// Add an HMAC secret ref: the Role's resourceNames must grow to include it.
 	mkChannelSecret(t, "ch-role-hmac")
 	eventually(t, func() error {
-		var ch agentryv1alpha1.AgentChannel
+		var ch kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-role"}, &ch); err != nil {
 			return err
 		}
-		ch.Spec.Webhook.Auth.HMAC = &agentryv1alpha1.ChannelHMAC{
+		ch.Spec.Webhook.Auth.HMAC = &kaalmv1alpha1.ChannelHMAC{
 			Header:    "X-Sig",
-			SecretRef: agentryv1alpha1.SecretKeyReference{Name: "ch-role-hmac", Key: "token"},
+			SecretRef: kaalmv1alpha1.SecretKeyReference{Name: "ch-role-hmac", Key: "token"},
 		}
 		return testClient.Update(ctxT(), &ch)
 	})
@@ -399,7 +399,7 @@ func TestChannel_DeleteBeforeFinalizerIsNoop(t *testing.T) {
 	// short-circuit reconcileDelete without touching status.
 	r := &AgentChannelReconciler{Client: testClient, OperatorNamespace: testSystemNamespace}
 	now := metav1.Now()
-	ch := &agentryv1alpha1.AgentChannel{
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ephemeral", Namespace: "default", DeletionTimestamp: &now},
 	}
 	res, err := r.reconcileDelete(context.Background(), ch)
@@ -411,15 +411,15 @@ func TestChannel_DeleteBeforeFinalizerIsNoop(t *testing.T) {
 // ---- AgentChannel: system-namespace guard ----
 
 func TestChannel_SystemNamespaceForbidden(t *testing.T) {
-	ch := &agentryv1alpha1.AgentChannel{
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch-sys", Namespace: testSystemNamespace},
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			AgentRef: agentryv1alpha1.LocalObjectReference{Name: "whatever"},
-			Webhook: agentryv1alpha1.AgentChannelWebhook{
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			AgentRef: kaalmv1alpha1.LocalObjectReference{Name: "whatever"},
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{
 				Path: "/channels/" + testSystemNamespace + "/ch-sys",
-				Auth: agentryv1alpha1.ChannelAuth{
+				Auth: kaalmv1alpha1.ChannelAuth{
 					Type:      "bearer",
-					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "s", Key: "token"},
+					SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "s", Key: "token"},
 				},
 			},
 		},
@@ -428,13 +428,13 @@ func TestChannel_SystemNamespaceForbidden(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentChannel
+		var got kaalmv1alpha1.AgentChannel
 		if err := testClient.Get(ctxT(),
 			types.NamespacedName{Namespace: testSystemNamespace, Name: "ch-sys"}, &got); err != nil {
 			return err
 		}
-		c := condition(got.Status.Conditions, agentryv1alpha1.ConditionReady)
-		if c == nil || c.Reason != agentryv1alpha1.ReasonSystemNamespaceForbidden {
+		c := condition(got.Status.Conditions, kaalmv1alpha1.ConditionReady)
+		if c == nil || c.Reason != kaalmv1alpha1.ReasonSystemNamespaceForbidden {
 			return errString("SystemNamespaceForbidden not set")
 		}
 		return nil
@@ -447,14 +447,14 @@ func TestChannel_HMACSecretMissing(t *testing.T) {
 	mkWorkloadClass(t, "chc-hmac", nil)
 	mkWorkloadAgent(t, "ch-agent-hmac", "chc-hmac", nil)
 	mkChannelSecret(t, "ch-hmac-inbound")
-	mkChannel(t, "ch-hmac", "ch-agent-hmac", "/channels/default/ch-hmac", func(ch *agentryv1alpha1.AgentChannel) {
-		ch.Spec.Webhook.Auth.SecretRef = &agentryv1alpha1.SecretKeyReference{Name: "ch-hmac-inbound", Key: "token"}
-		ch.Spec.Webhook.Auth.HMAC = &agentryv1alpha1.ChannelHMAC{
+	mkChannel(t, "ch-hmac", "ch-agent-hmac", "/channels/default/ch-hmac", func(ch *kaalmv1alpha1.AgentChannel) {
+		ch.Spec.Webhook.Auth.SecretRef = &kaalmv1alpha1.SecretKeyReference{Name: "ch-hmac-inbound", Key: "token"}
+		ch.Spec.Webhook.Auth.HMAC = &kaalmv1alpha1.ChannelHMAC{
 			Header:    "X-Sig",
-			SecretRef: agentryv1alpha1.SecretKeyReference{Name: "ch-hmac-missing", Key: "token"},
+			SecretRef: kaalmv1alpha1.SecretKeyReference{Name: "ch-hmac-missing", Key: "token"},
 		}
 	})
-	expectChannelReady(t, "ch-hmac", metav1.ConditionFalse, agentryv1alpha1.ReasonCredentialsMissing)
+	expectChannelReady(t, "ch-hmac", metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsMissing)
 }
 
 // TestChannel_PruneSkipsNonAsyncConfigMap covers the prune loop's skip of a
@@ -464,17 +464,17 @@ func TestChannel_PruneSkipsNonAsyncConfigMap(t *testing.T) {
 	mkWorkloadAgent(t, "ch-agent-skip", "chc-skip", nil)
 	mkChannelSecret(t, "ch-skip-secret")
 
-	// A ConfigMap carrying this channel's labels but NOT the agentry-async- name
+	// A ConfigMap carrying this channel's labels but NOT the kaalm-async- name
 	// prefix: the prune must leave it untouched.
 	other := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "unrelated-config", Namespace: testSystemNamespace,
 			Labels: map[string]string{
-				agentryv1alpha1.LabelChannelNamespace: "default",
-				agentryv1alpha1.LabelChannelName:      "ch-skip",
+				kaalmv1alpha1.LabelChannelNamespace: "default",
+				kaalmv1alpha1.LabelChannelName:      "ch-skip",
 			},
 			Annotations: map[string]string{
-				agentryv1alpha1.AnnotationExpiresAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+				kaalmv1alpha1.AnnotationExpiresAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
 			},
 		},
 	}
@@ -515,7 +515,7 @@ func TestValidateCallbackURL(t *testing.T) {
 		if bad != c.wantBad {
 			t.Errorf("%s: validateCallbackURL(%q) bad=%v, want %v (reason=%q)", c.name, c.url, bad, c.wantBad, reason)
 		}
-		if bad && reason != agentryv1alpha1.ReasonInvalidCallbackURL {
+		if bad && reason != kaalmv1alpha1.ReasonInvalidCallbackURL {
 			t.Errorf("%s: reason=%q, want InvalidCallbackURL", c.name, reason)
 		}
 	}
@@ -539,17 +539,17 @@ func (f fakeChannelHealth) NamespaceChannelHealth(
 // chTestPath is the webhook path shared across the channel-health unit tests.
 const chTestPath = "/channels/default/x"
 
-func newChannelAt() *agentryv1alpha1.AgentChannel {
-	return &agentryv1alpha1.AgentChannel{
+func newChannelAt() *kaalmv1alpha1.AgentChannel {
+	return &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "default"},
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			Webhook: agentryv1alpha1.AgentChannelWebhook{Path: chTestPath},
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: chTestPath},
 		},
 	}
 }
 
-func platformCond(ch *agentryv1alpha1.AgentChannel) *metav1.Condition {
-	return condition(ch.Status.Conditions, agentryv1alpha1.ConditionPlatformConnected)
+func platformCond(ch *kaalmv1alpha1.AgentChannel) *metav1.Condition {
+	return condition(ch.Status.Conditions, kaalmv1alpha1.ConditionPlatformConnected)
 }
 
 func TestReduceChannelHealth_NoDataPreservesCondition(t *testing.T) {
@@ -585,7 +585,7 @@ func TestReduceChannelHealth_Success(t *testing.T) {
 	ch := newChannelAt()
 	r.reduceChannelHealth(context.Background(), ch)
 	c := platformCond(ch)
-	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != agentryv1alpha1.ReasonWebhookReady {
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != kaalmv1alpha1.ReasonWebhookReady {
 		t.Fatalf("rule 1 success expected True/WebhookReady, got %+v", c)
 	}
 }
@@ -626,7 +626,7 @@ func TestReduceChannelHealth_NoRecentTraffic(t *testing.T) {
 	ch := newChannelAt()
 	r.reduceChannelHealth(context.Background(), ch)
 	c := platformCond(ch)
-	if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != agentryv1alpha1.ReasonNoRecentTraffic {
+	if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != kaalmv1alpha1.ReasonNoRecentTraffic {
 		t.Fatalf("rule 3 expected Unknown/NoRecentTraffic, got %+v", c)
 	}
 }
@@ -670,16 +670,16 @@ func TestNewerHealth(t *testing.T) {
 
 func TestAuthSecretNames_DedupAndHMAC(t *testing.T) {
 	cb := "https://example.com/hook"
-	ch := &agentryv1alpha1.AgentChannel{
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			Webhook: agentryv1alpha1.AgentChannelWebhook{
-				Auth: agentryv1alpha1.ChannelAuth{
-					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "inbound", Key: "t"},
-					HMAC:      &agentryv1alpha1.ChannelHMAC{SecretRef: agentryv1alpha1.SecretKeyReference{Name: "hmac-sec", Key: "s"}},
+	ch := &kaalmv1alpha1.AgentChannel{
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{
+				Auth: kaalmv1alpha1.ChannelAuth{
+					SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "inbound", Key: "t"},
+					HMAC:      &kaalmv1alpha1.ChannelHMAC{SecretRef: kaalmv1alpha1.SecretKeyReference{Name: "hmac-sec", Key: "s"}},
 				},
 				CallbackURL: &cb,
-				CallbackAuth: &agentryv1alpha1.ChannelAuth{
-					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "inbound", Key: "t"}, // duplicate name
+				CallbackAuth: &kaalmv1alpha1.ChannelAuth{
+					SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "inbound", Key: "t"}, // duplicate name
 				},
 			},
 		},

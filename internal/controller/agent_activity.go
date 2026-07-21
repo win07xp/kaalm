@@ -65,7 +65,7 @@ type GatewayActivityClient struct {
 	Reader            client.Reader
 	OperatorNamespace string
 	// CertFile/KeyFile/CAFile are the controller's client identity
-	// (agentry-controller-tls) and trust bundle.
+	// (kaalm-controller-tls) and trust bundle.
 	CertFile, KeyFile, CAFile string
 	// Port is the gateway LLM listener port (default 8443).
 	Port int

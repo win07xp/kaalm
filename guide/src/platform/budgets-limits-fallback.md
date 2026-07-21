@@ -12,7 +12,7 @@ billing-grade metering.
 
 ## Budget policies: warn, degrade, block
 
-The budget block from `config/samples/agentry_v1alpha1_modelprovider.yaml`:
+The budget block from `config/samples/kaalm_v1alpha1_modelprovider.yaml`:
 
 ```yaml
 budget:

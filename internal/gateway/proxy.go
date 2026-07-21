@@ -30,7 +30,7 @@ import (
 	"strings"
 	"sync"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // SpendRecorder accumulates token usage per (namespace, provider, model). The
@@ -131,20 +131,20 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// not drain a fallback provider's budget).
 	if decision := s.Budget.Enforce(provider, c.Namespace); decision.Action != "" {
 		switch decision.Action {
-		case agentryv1alpha1.BudgetActionBlock:
-			s.Metrics.BudgetThreshold(providerName, c.Namespace, agentryv1alpha1.BudgetActionBlock)
+		case kaalmv1alpha1.BudgetActionBlock:
+			s.Metrics.BudgetThreshold(providerName, c.Namespace, kaalmv1alpha1.BudgetActionBlock)
 			writeError(w, http.StatusTooManyRequests, errorBody{
 				Type: "budget_exhausted", Provider: providerName, Retryable: true,
 				Message: fmt.Sprintf("budget for namespace %s on provider %s is exhausted (%d%% used)",
 					c.Namespace, providerName, decision.Percent)}, decision.RetryAfter)
 			return
-		case agentryv1alpha1.BudgetActionDegrade:
-			s.Metrics.BudgetThreshold(providerName, c.Namespace, agentryv1alpha1.BudgetActionDegrade)
+		case kaalmv1alpha1.BudgetActionDegrade:
+			s.Metrics.BudgetThreshold(providerName, c.Namespace, kaalmv1alpha1.BudgetActionDegrade)
 			if decision.DegradeTo != "" && decision.DegradeTo != modelID {
 				modelID = decision.DegradeTo
 			}
-		case agentryv1alpha1.BudgetActionWarn:
-			s.Metrics.BudgetThreshold(providerName, c.Namespace, agentryv1alpha1.BudgetActionWarn)
+		case kaalmv1alpha1.BudgetActionWarn:
+			s.Metrics.BudgetThreshold(providerName, c.Namespace, kaalmv1alpha1.BudgetActionWarn)
 			slog.Warn("budget threshold crossed", "namespace", c.Namespace,
 				"provider", providerName, "percent", decision.Percent)
 		}
@@ -184,7 +184,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		primary: provider, namespace: c.Namespace, modelID: modelID,
 		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
 	}
-	res, ok := s.tryWithFallbacks(r.Context(), provider, st, func(ctx context.Context, cand *agentryv1alpha1.ModelProvider) forwardResult {
+	res, ok := s.tryWithFallbacks(r.Context(), provider, st, func(ctx context.Context, cand *kaalmv1alpha1.ModelProvider) forwardResult {
 		fr := s.forwardOnce(ctx, r, cand, outBody, adapter, typeAdapter, modelID)
 		if fr.class != classNone {
 			observed[fr.class] = true
@@ -233,7 +233,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
 func (s *Server) forwardOnce(
-	ctx context.Context, r *http.Request, provider *agentryv1alpha1.ModelProvider,
+	ctx context.Context, r *http.Request, provider *kaalmv1alpha1.ModelProvider,
 	outBody []byte, adapter, typeAdapter providerAdapter, modelID string,
 ) forwardResult {
 	credential, err := s.Store.Credential(ctx, provider)
@@ -276,7 +276,7 @@ func (s *Server) forwardOnce(
 }
 
 // recordUsage folds token usage into spend, budget, and metrics.
-func (s *Server) recordUsage(provider *agentryv1alpha1.ModelProvider, namespace, modelID string, usage Usage) {
+func (s *Server) recordUsage(provider *kaalmv1alpha1.ModelProvider, namespace, modelID string, usage Usage) {
 	s.Spend.Record(namespace, provider.Name, modelID, usage)
 	s.Budget.Add(provider, namespace, costOf(provider, modelID, usage))
 	s.Metrics.Tokens(provider.Name, modelID, namespace, usage)
@@ -326,7 +326,7 @@ func isSSE(resp *http.Response) bool {
 // stream completes; a stream ending without usage counts as zero spend.
 func (s *Server) relayStream(
 	w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
-	namespace string, provider *agentryv1alpha1.ModelProvider, modelID string,
+	namespace string, provider *kaalmv1alpha1.ModelProvider, modelID string,
 ) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)

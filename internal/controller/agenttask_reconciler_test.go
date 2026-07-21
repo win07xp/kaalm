@@ -27,15 +27,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
-func mkTask(t *testing.T, name, className string, mutate func(*agentryv1alpha1.AgentTask)) {
+func mkTask(t *testing.T, name, className string, mutate func(*kaalmv1alpha1.AgentTask)) {
 	t.Helper()
-	task := &agentryv1alpha1.AgentTask{
+	task := &kaalmv1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec: agentryv1alpha1.AgentTaskSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: className},
+		Spec: kaalmv1alpha1.AgentTaskSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: className},
 			Image:         "registry.test/agents/demo:v1",
 		},
 	}
@@ -47,9 +47,9 @@ func mkTask(t *testing.T, name, className string, mutate func(*agentryv1alpha1.A
 	}
 }
 
-func getTask(t *testing.T, name string) *agentryv1alpha1.AgentTask {
+func getTask(t *testing.T, name string) *kaalmv1alpha1.AgentTask {
 	t.Helper()
-	var task agentryv1alpha1.AgentTask
+	var task kaalmv1alpha1.AgentTask
 	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
 		t.Fatalf("get task %s: %v", name, err)
 	}
@@ -60,7 +60,7 @@ func taskPod(t *testing.T, name string) *corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
 	if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
-		client.MatchingLabels(map[string]string{"agentry.io/task": name})); err != nil {
+		client.MatchingLabels(map[string]string{"kaalm.io/task": name})); err != nil {
 		t.Fatalf("list task pods: %v", err)
 	}
 	for i := range pods.Items {
@@ -71,10 +71,10 @@ func taskPod(t *testing.T, name string) *corev1.Pod {
 	return nil
 }
 
-func expectTaskPhase(t *testing.T, name string, phase agentryv1alpha1.AgentTaskPhase) {
+func expectTaskPhase(t *testing.T, name string, phase kaalmv1alpha1.AgentTaskPhase) {
 	t.Helper()
 	eventually(t, func() error {
-		var task agentryv1alpha1.AgentTask
+		var task kaalmv1alpha1.AgentTask
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
 			return err
 		}
@@ -100,7 +100,7 @@ func writeMailbox(t *testing.T, taskName string, data map[string]string) {
 }
 
 // provisionRunningTask drives a task to Running and returns its Pod.
-func provisionRunningTask(t *testing.T, name, className string, mutate func(*agentryv1alpha1.AgentTask)) *corev1.Pod {
+func provisionRunningTask(t *testing.T, name, className string, mutate func(*kaalmv1alpha1.AgentTask)) *corev1.Pod {
 	t.Helper()
 	mkTask(t, name, className, mutate)
 	eventually(t, func() error { return markCertReadyErr(name) })
@@ -112,7 +112,7 @@ func provisionRunningTask(t *testing.T, name, className string, mutate func(*age
 	})
 	pod := taskPod(t, name)
 	markPodReady(t, pod)
-	expectTaskPhase(t, name, agentryv1alpha1.TaskRunning)
+	expectTaskPhase(t, name, kaalmv1alpha1.TaskRunning)
 	return taskPod(t, name)
 }
 
@@ -120,8 +120,8 @@ func provisionRunningTask(t *testing.T, name, className string, mutate func(*age
 
 func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	mkWorkloadClass(t, "tc-run", nil)
-	mkTask(t, "t-run", "tc-run", func(task *agentryv1alpha1.AgentTask) {
-		task.Spec.Artifacts = []agentryv1alpha1.AgentTaskArtifact{{Name: "out"}}
+	mkTask(t, "t-run", "tc-run", func(task *kaalmv1alpha1.AgentTask) {
+		task.Spec.Artifacts = []kaalmv1alpha1.AgentTaskArtifact{{Name: "out"}}
 	})
 
 	// Certificate gates the Pod.
@@ -141,12 +141,12 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	}
 	var role rbacv1.Role
 	if err := testClient.Get(ctxT(),
-		types.NamespacedName{Namespace: "default", Name: "agentry-task-t-run-completion"}, &role); err != nil {
+		types.NamespacedName{Namespace: "default", Name: "kaalm-task-t-run-completion"}, &role); err != nil {
 		t.Fatalf("completion Role missing: %v", err)
 	}
 	var rb rbacv1.RoleBinding
 	if err := testClient.Get(ctxT(),
-		types.NamespacedName{Namespace: "default", Name: "agentry-task-t-run-completion"}, &rb); err != nil {
+		types.NamespacedName{Namespace: "default", Name: "kaalm-task-t-run-completion"}, &rb); err != nil {
 		t.Fatalf("completion RoleBinding missing: %v", err)
 	}
 	pod := taskPod(t, "t-run")
@@ -167,7 +167,7 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	})
 
 	markPodReady(t, pod)
-	expectTaskPhase(t, "t-run", agentryv1alpha1.TaskRunning)
+	expectTaskPhase(t, "t-run", kaalmv1alpha1.TaskRunning)
 	if task := getTask(t, "t-run"); task.Status.StartTime == nil {
 		t.Error("startTime not stamped on Running")
 	}
@@ -175,10 +175,10 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 
 func TestTask_SystemNamespaceForbidden(t *testing.T) {
 	mkWorkloadClass(t, "tc-sys", nil)
-	task := &agentryv1alpha1.AgentTask{
+	task := &kaalmv1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{Name: "t-sys", Namespace: testSystemNamespace},
-		Spec: agentryv1alpha1.AgentTaskSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "tc-sys"},
+		Spec: kaalmv1alpha1.AgentTaskSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "tc-sys"},
 			Image:         "registry.test/agents/demo:v1",
 		},
 	}
@@ -186,13 +186,13 @@ func TestTask_SystemNamespaceForbidden(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentTask
+		var got kaalmv1alpha1.AgentTask
 		if err := testClient.Get(ctxT(),
 			types.NamespacedName{Namespace: testSystemNamespace, Name: "t-sys"}, &got); err != nil {
 			return err
 		}
-		c := condition(got.Status.Conditions, agentryv1alpha1.ConditionReady)
-		if c == nil || c.Reason != agentryv1alpha1.ReasonSystemNamespaceForbidden {
+		c := condition(got.Status.Conditions, kaalmv1alpha1.ConditionReady)
+		if c == nil || c.Reason != kaalmv1alpha1.ReasonSystemNamespaceForbidden {
 			return errString("SystemNamespaceForbidden not set")
 		}
 		return nil
@@ -201,16 +201,16 @@ func TestTask_SystemNamespaceForbidden(t *testing.T) {
 
 func TestTask_PersistenceNotAllowedIsTerminalFailed(t *testing.T) {
 	mkWorkloadClass(t, "tc-per", nil) // persistence disabled
-	mkTask(t, "t-per", "tc-per", func(task *agentryv1alpha1.AgentTask) {
+	mkTask(t, "t-per", "tc-per", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Persistence.Enabled = true
 	})
-	expectTaskPhase(t, "t-per", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-per", kaalmv1alpha1.TaskFailed)
 	task := getTask(t, "t-per")
 	if task.Status.CompletionTime == nil {
 		t.Error("terminal Failed must stamp completionTime")
 	}
-	c := condition(task.Status.Conditions, agentryv1alpha1.ConditionCompleted)
-	if c == nil || c.Reason != agentryv1alpha1.ReasonPersistenceNotAllowed {
+	c := condition(task.Status.Conditions, kaalmv1alpha1.ConditionCompleted)
+	if c == nil || c.Reason != kaalmv1alpha1.ReasonPersistenceNotAllowed {
 		t.Errorf("Completed condition wrong: %+v", c)
 	}
 	if taskPod(t, "t-per") != nil {
@@ -222,15 +222,15 @@ func TestTask_PersistenceNotAllowedIsTerminalFailed(t *testing.T) {
 
 func TestTask_AgentReportedSuccessCollectsArtifacts(t *testing.T) {
 	mkWorkloadClass(t, "tc-ok", nil)
-	provisionRunningTask(t, "t-ok", "tc-ok", func(task *agentryv1alpha1.AgentTask) {
-		task.Spec.Artifacts = []agentryv1alpha1.AgentTaskArtifact{{Name: "pr-url"}}
+	provisionRunningTask(t, "t-ok", "tc-ok", func(task *kaalmv1alpha1.AgentTask) {
+		task.Spec.Artifacts = []kaalmv1alpha1.AgentTaskArtifact{{Name: "pr-url"}}
 	})
 	writeMailbox(t, "t-ok", map[string]string{
 		"status":          "success",
 		"message":         "PR opened",
 		"artifact.pr-url": "https://example.com/pr/1",
 	})
-	expectTaskPhase(t, "t-ok", agentryv1alpha1.TaskSucceeded)
+	expectTaskPhase(t, "t-ok", kaalmv1alpha1.TaskSucceeded)
 	task := getTask(t, "t-ok")
 	if task.Status.ArtifactValues["pr-url"] != "https://example.com/pr/1" {
 		t.Errorf("artifacts not collected: %v", task.Status.ArtifactValues)
@@ -238,7 +238,7 @@ func TestTask_AgentReportedSuccessCollectsArtifacts(t *testing.T) {
 	if task.Status.AgentReportedStatus != "success" || task.Status.AgentReportedMessage != "PR opened" {
 		t.Errorf("reported fields wrong: %+v", task.Status)
 	}
-	c := condition(task.Status.Conditions, agentryv1alpha1.ConditionCompleted)
+	c := condition(task.Status.Conditions, kaalmv1alpha1.ConditionCompleted)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Errorf("Completed should be True: %+v", c)
 	}
@@ -246,20 +246,20 @@ func TestTask_AgentReportedSuccessCollectsArtifacts(t *testing.T) {
 
 func TestTask_UndeclaredArtifactFails(t *testing.T) {
 	mkWorkloadClass(t, "tc-art", nil)
-	provisionRunningTask(t, "t-art", "tc-art", func(task *agentryv1alpha1.AgentTask) {
-		task.Spec.Artifacts = []agentryv1alpha1.AgentTaskArtifact{{Name: "out"}}
+	provisionRunningTask(t, "t-art", "tc-art", func(task *kaalmv1alpha1.AgentTask) {
+		task.Spec.Artifacts = []kaalmv1alpha1.AgentTaskArtifact{{Name: "out"}}
 	})
 	writeMailbox(t, "t-art", map[string]string{
 		"status":         "success",
 		"artifact.out":   "x",
 		"artifact.rogue": "y",
 	})
-	expectTaskPhase(t, "t-art", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-art", kaalmv1alpha1.TaskFailed)
 }
 
 func TestTask_AgentReportedFailureRetriesThenFails(t *testing.T) {
 	mkWorkloadClass(t, "tc-retry", nil)
-	oldPod := provisionRunningTask(t, "t-retry", "tc-retry", func(task *agentryv1alpha1.AgentTask) {
+	oldPod := provisionRunningTask(t, "t-retry", "tc-retry", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.BackoffLimit = 1
 	})
 	writeMailbox(t, "t-retry", map[string]string{"status": "failure", "message": "boom"})
@@ -310,9 +310,9 @@ func TestTask_AgentReportedFailureRetriesThenFails(t *testing.T) {
 
 	// Second failure exhausts backoffLimit: terminal Failed.
 	markPodReady(t, taskPod(t, "t-retry"))
-	expectTaskPhase(t, "t-retry", agentryv1alpha1.TaskRunning)
+	expectTaskPhase(t, "t-retry", kaalmv1alpha1.TaskRunning)
 	writeMailbox(t, "t-retry", map[string]string{"status": "failure", "message": "boom again"})
-	expectTaskPhase(t, "t-retry", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-retry", kaalmv1alpha1.TaskFailed)
 	task := getTask(t, "t-retry")
 	if task.Status.CompletionTime == nil {
 		t.Error("terminal Failed must stamp completionTime")
@@ -327,21 +327,21 @@ func TestTask_PodLossCompletionWins(t *testing.T) {
 	// Completion lands, then the Pod is lost before the reconciler settles.
 	writeMailbox(t, "t-race", map[string]string{"status": "success"})
 	forceDeletePod(t, pod)
-	expectTaskPhase(t, "t-race", agentryv1alpha1.TaskSucceeded)
+	expectTaskPhase(t, "t-race", kaalmv1alpha1.TaskSucceeded)
 }
 
 func TestTask_PodLossEmptyMailboxFails(t *testing.T) {
 	mkWorkloadClass(t, "tc-loss", nil)
 	pod := provisionRunningTask(t, "t-loss", "tc-loss", nil)
 	forceDeletePod(t, pod)
-	expectTaskPhase(t, "t-loss", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-loss", kaalmv1alpha1.TaskFailed)
 }
 
 // ---- exitCode mode ----
 
 func TestTask_ExitCodeSuccessAndNoMailbox(t *testing.T) {
 	mkWorkloadClass(t, "tc-exit", nil)
-	pod := provisionRunningTask(t, "t-exit", "tc-exit", func(task *agentryv1alpha1.AgentTask) {
+	pod := provisionRunningTask(t, "t-exit", "tc-exit", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 	})
 
@@ -352,7 +352,7 @@ func TestTask_ExitCodeSuccessAndNoMailbox(t *testing.T) {
 		t.Errorf("exitCode task must not get a completion mailbox: %v", err)
 	}
 	var role rbacv1.Role
-	err = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "agentry-task-t-exit-completion"}, &role)
+	err = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "kaalm-task-t-exit-completion"}, &role)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("exitCode task must not get a completion Role: %v", err)
 	}
@@ -369,12 +369,12 @@ func TestTask_ExitCodeSuccessAndNoMailbox(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectTaskPhase(t, "t-exit", agentryv1alpha1.TaskSucceeded)
+	expectTaskPhase(t, "t-exit", kaalmv1alpha1.TaskSucceeded)
 }
 
 func TestTask_ExitCodeNonZeroFails(t *testing.T) {
 	mkWorkloadClass(t, "tc-exit2", nil)
-	pod := provisionRunningTask(t, "t-exit2", "tc-exit2", func(task *agentryv1alpha1.AgentTask) {
+	pod := provisionRunningTask(t, "t-exit2", "tc-exit2", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 	})
 	pod.Status.Phase = corev1.PodFailed
@@ -385,8 +385,8 @@ func TestTask_ExitCodeNonZeroFails(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectTaskPhase(t, "t-exit2", agentryv1alpha1.TaskFailed)
-	c := condition(getTask(t, "t-exit2").Status.Conditions, agentryv1alpha1.ConditionCompleted)
+	expectTaskPhase(t, "t-exit2", kaalmv1alpha1.TaskFailed)
+	c := condition(getTask(t, "t-exit2").Status.Conditions, kaalmv1alpha1.ConditionCompleted)
 	if c == nil || c.Status != metav1.ConditionFalse {
 		t.Errorf("Completed should be False: %+v", c)
 	}
@@ -396,10 +396,10 @@ func TestTask_ExitCodeNonZeroFails(t *testing.T) {
 
 func TestTask_TimeoutToTimedOut(t *testing.T) {
 	mkWorkloadClass(t, "tc-to", nil)
-	provisionRunningTask(t, "t-to", "tc-to", func(task *agentryv1alpha1.AgentTask) {
+	provisionRunningTask(t, "t-to", "tc-to", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Timeout = metav1.Duration{Duration: time.Second}
 	})
-	expectTaskPhase(t, "t-to", agentryv1alpha1.TaskTimedOut)
+	expectTaskPhase(t, "t-to", kaalmv1alpha1.TaskTimedOut)
 	// TimedOut is exempt from retries.
 	if r := getTask(t, "t-to").Status.Retries; r != 0 {
 		t.Errorf("timeout must not consume retries, got %d", r)
@@ -408,11 +408,11 @@ func TestTask_TimeoutToTimedOut(t *testing.T) {
 
 func TestTask_TimeoutOnTimeoutSucceed(t *testing.T) {
 	mkWorkloadClass(t, "tc-tos", nil)
-	provisionRunningTask(t, "t-tos", "tc-tos", func(task *agentryv1alpha1.AgentTask) {
+	provisionRunningTask(t, "t-tos", "tc-tos", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Timeout = metav1.Duration{Duration: time.Second}
 		task.Spec.Completion.OnTimeout = "Succeed"
 	})
-	expectTaskPhase(t, "t-tos", agentryv1alpha1.TaskSucceeded)
+	expectTaskPhase(t, "t-tos", kaalmv1alpha1.TaskSucceeded)
 }
 
 // ---- TTL ----
@@ -422,7 +422,7 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 	// A few seconds of TTL leaves a reliable margin to observe the Succeeded
 	// phase before the task is reaped, without slowing the suite noticeably.
 	ttl := int32(3)
-	pod := provisionRunningTask(t, "t-ttl", "tc-ttl", func(task *agentryv1alpha1.AgentTask) {
+	pod := provisionRunningTask(t, "t-ttl", "tc-ttl", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 		task.Spec.TTLSecondsAfterFinished = &ttl
 	})
@@ -430,11 +430,11 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectTaskPhase(t, "t-ttl", agentryv1alpha1.TaskSucceeded)
+	expectTaskPhase(t, "t-ttl", kaalmv1alpha1.TaskSucceeded)
 
 	// TTL fires and the finalizer needs the Pod's termination finished.
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentTask
+		var got kaalmv1alpha1.AgentTask
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-ttl"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -444,7 +444,7 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 		}
 		var pods corev1.PodList
 		if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
-			client.MatchingLabels(map[string]string{"agentry.io/task": "t-ttl"})); err != nil {
+			client.MatchingLabels(map[string]string{"kaalm.io/task": "t-ttl"})); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -460,55 +460,55 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 
 func TestTask_ImageNotAllowedIsTerminalFailed(t *testing.T) {
 	mkWorkloadClass(t, "tc-img", nil) // allows registry.test/agents/*
-	mkTask(t, "t-img", "tc-img", func(task *agentryv1alpha1.AgentTask) {
+	mkTask(t, "t-img", "tc-img", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Image = "evil.example/x:v1"
 	})
-	expectTaskPhase(t, "t-img", agentryv1alpha1.TaskFailed)
-	c := condition(getTask(t, "t-img").Status.Conditions, agentryv1alpha1.ConditionCompleted)
-	if c == nil || c.Reason != agentryv1alpha1.ReasonClassConstraintViolation {
+	expectTaskPhase(t, "t-img", kaalmv1alpha1.TaskFailed)
+	c := condition(getTask(t, "t-img").Status.Conditions, kaalmv1alpha1.ConditionCompleted)
+	if c == nil || c.Reason != kaalmv1alpha1.ReasonClassConstraintViolation {
 		t.Errorf("Completed condition wrong: %+v", c)
 	}
 }
 
 func TestTask_ProviderNotAllowedIsTerminalFailed(t *testing.T) {
 	mkWorkloadClass(t, "tc-prov", nil) // empty allowedProviders => none allowed
-	mkTask(t, "t-prov", "tc-prov", func(task *agentryv1alpha1.AgentTask) {
-		task.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "nope"}},
+	mkTask(t, "t-prov", "tc-prov", func(task *kaalmv1alpha1.AgentTask) {
+		task.Spec.Providers = []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "nope"}},
 		}
 	})
-	expectTaskPhase(t, "t-prov", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-prov", kaalmv1alpha1.TaskFailed)
 }
 
 func TestTask_ProviderNamespaceDeniedIsTerminalFailed(t *testing.T) {
 	mkSecret(t, "t-provns-key")
-	mkProvider(t, "t-provns", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "t-provns-key", Key: "token"}
+	mkProvider(t, "t-provns", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "t-provns-key", Key: "token"}
 		mp.Spec.AllowedNamespaces = []string{"team-*"}
 	})
-	mkWorkloadClass(t, "tc-provns", func(ac *agentryv1alpha1.AgentClass) {
-		ac.Spec.AllowedProviders = []agentryv1alpha1.LocalObjectReference{{Name: "t-provns"}}
+	mkWorkloadClass(t, "tc-provns", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.AllowedProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "t-provns"}}
 	})
-	mkTask(t, "t-provns-task", "tc-provns", func(task *agentryv1alpha1.AgentTask) {
-		task.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "t-provns"}},
+	mkTask(t, "t-provns-task", "tc-provns", func(task *kaalmv1alpha1.AgentTask) {
+		task.Spec.Providers = []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "t-provns"}},
 		}
 	})
 	// The task's namespace (default) does not match team-*.
-	expectTaskPhase(t, "t-provns-task", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-provns-task", kaalmv1alpha1.TaskFailed)
 }
 
 func TestTask_ImagePullSecretMissingGates(t *testing.T) {
-	mkWorkloadClass(t, "tc-pull", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "tc-pull", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "tc-pull-creds"}}
 	})
 	mkTask(t, "t-pull", "tc-pull", nil)
 	readyReason := func() (string, error) {
-		var task agentryv1alpha1.AgentTask
+		var task kaalmv1alpha1.AgentTask
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-pull"}, &task); err != nil {
 			return "", err
 		}
-		c := condition(task.Status.Conditions, agentryv1alpha1.ConditionReady)
+		c := condition(task.Status.Conditions, kaalmv1alpha1.ConditionReady)
 		if c == nil {
 			return "", errString("no Ready condition yet")
 		}
@@ -519,7 +519,7 @@ func TestTask_ImagePullSecretMissingGates(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if r != agentryv1alpha1.ReasonImagePullSecretMissing {
+		if r != kaalmv1alpha1.ReasonImagePullSecretMissing {
 			return errString("ImagePullSecretMissing not set, got " + r)
 		}
 		return nil
@@ -535,7 +535,7 @@ func TestTask_ImagePullSecretMissingGates(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if r == agentryv1alpha1.ReasonImagePullSecretMissing {
+		if r == kaalmv1alpha1.ReasonImagePullSecretMissing {
 			return errString("still gated on pull secret")
 		}
 		return nil
@@ -546,7 +546,7 @@ func TestTask_ImagePullSecretMissingGates(t *testing.T) {
 
 func TestTask_ExitCodeSucceedsBeforeReady(t *testing.T) {
 	mkWorkloadClass(t, "tc-early", nil)
-	mkTask(t, "t-early", "tc-early", func(task *agentryv1alpha1.AgentTask) {
+	mkTask(t, "t-early", "tc-early", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 	})
 	eventually(t, func() error { return markCertReadyErr("t-early") })
@@ -566,7 +566,7 @@ func TestTask_ExitCodeSucceedsBeforeReady(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectTaskPhase(t, "t-early", agentryv1alpha1.TaskSucceeded)
+	expectTaskPhase(t, "t-early", kaalmv1alpha1.TaskSucceeded)
 }
 
 // ---- AgentTask driveProvisioning: a fatal image error fails immediately ----
@@ -591,17 +591,17 @@ func TestTask_InvalidImageNameFailsImmediately(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectTaskPhase(t, "t-badimg", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-badimg", kaalmv1alpha1.TaskFailed)
 }
 
 // ---- AgentTask ensureTaskChildren: persistence provisions a task PVC ----
 
 func TestTask_PersistenceProvisionsPVC(t *testing.T) {
-	mkWorkloadClass(t, "tc-pvc", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "tc-pvc", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 		ac.Spec.Persistence.DefaultSizeGi = 1
 	})
-	mkTask(t, "t-pvc", "tc-pvc", func(task *agentryv1alpha1.AgentTask) {
+	mkTask(t, "t-pvc", "tc-pvc", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Persistence.Enabled = true
 	})
 	eventually(t, func() error { return markCertReadyErr("t-pvc") })
@@ -639,7 +639,7 @@ func TestTask_DeleteTerminatesPod(t *testing.T) {
 	})
 	// The task then finalizes away.
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentTask
+		var got kaalmv1alpha1.AgentTask
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-del"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -653,12 +653,12 @@ func TestTask_DeleteTerminatesPod(t *testing.T) {
 func TestTask_MissingClassIsNotReady(t *testing.T) {
 	mkTask(t, "t-noclass", "ghost-class", nil)
 	eventually(t, func() error {
-		var task agentryv1alpha1.AgentTask
+		var task kaalmv1alpha1.AgentTask
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noclass"}, &task); err != nil {
 			return err
 		}
-		c := condition(task.Status.Conditions, agentryv1alpha1.ConditionReady)
-		if c == nil || c.Reason != agentryv1alpha1.ReasonInvalidReference {
+		c := condition(task.Status.Conditions, kaalmv1alpha1.ConditionReady)
+		if c == nil || c.Reason != kaalmv1alpha1.ReasonInvalidReference {
 			return errString("InvalidReference not set")
 		}
 		return nil
@@ -667,16 +667,16 @@ func TestTask_MissingClassIsNotReady(t *testing.T) {
 
 func TestTask_EmptyImageIsNotReady(t *testing.T) {
 	mkWorkloadClass(t, "tc-noimg", nil) // no defaultImage
-	mkTask(t, "t-noimg", "tc-noimg", func(task *agentryv1alpha1.AgentTask) {
+	mkTask(t, "t-noimg", "tc-noimg", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Image = ""
 	})
 	eventually(t, func() error {
-		var task agentryv1alpha1.AgentTask
+		var task kaalmv1alpha1.AgentTask
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noimg"}, &task); err != nil {
 			return err
 		}
-		c := condition(task.Status.Conditions, agentryv1alpha1.ConditionReady)
-		if c == nil || c.Reason != agentryv1alpha1.ReasonInvalidReference {
+		c := condition(task.Status.Conditions, kaalmv1alpha1.ConditionReady)
+		if c == nil || c.Reason != kaalmv1alpha1.ReasonInvalidReference {
 			return errString("InvalidReference not set")
 		}
 		return nil
@@ -686,15 +686,15 @@ func TestTask_EmptyImageIsNotReady(t *testing.T) {
 // ---- AgentTask: a provider in the allowlist whose CR is absent fails ----
 
 func TestTask_ProviderCRMissingIsTerminalFailed(t *testing.T) {
-	mkWorkloadClass(t, "tc-provghost", func(ac *agentryv1alpha1.AgentClass) {
-		ac.Spec.AllowedProviders = []agentryv1alpha1.LocalObjectReference{{Name: "task-ghost-prov"}}
+	mkWorkloadClass(t, "tc-provghost", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.AllowedProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "task-ghost-prov"}}
 	})
-	mkTask(t, "t-provghost", "tc-provghost", func(task *agentryv1alpha1.AgentTask) {
-		task.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "task-ghost-prov"}},
+	mkTask(t, "t-provghost", "tc-provghost", func(task *kaalmv1alpha1.AgentTask) {
+		task.Spec.Providers = []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "task-ghost-prov"}},
 		}
 	})
-	expectTaskPhase(t, "t-provghost", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-provghost", kaalmv1alpha1.TaskFailed)
 }
 
 // ---- AgentTask: the provisioning deadline fails a Pod that never starts ----
@@ -705,7 +705,7 @@ func TestTask_ProvisioningDeadlineFails(t *testing.T) {
 	defer func() { provisioningDeadline = old }()
 
 	mkWorkloadClass(t, "tc-deadline", nil)
-	mkTask(t, "t-deadline", "tc-deadline", func(task *agentryv1alpha1.AgentTask) {
+	mkTask(t, "t-deadline", "tc-deadline", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 	})
 	eventually(t, func() error { return markCertReadyErr("t-deadline") })
@@ -725,14 +725,14 @@ func TestTask_ProvisioningDeadlineFails(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectTaskPhase(t, "t-deadline", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-deadline", kaalmv1alpha1.TaskFailed)
 }
 
 // TestTask_ExitCodeFailsBeforeReady covers driveProvisioning's terminal-before-
 // Ready branch for an exitCode task whose Pod fails outright.
 func TestTask_ExitCodeFailsBeforeReady(t *testing.T) {
 	mkWorkloadClass(t, "tc-failearly", nil)
-	mkTask(t, "t-failearly", "tc-failearly", func(task *agentryv1alpha1.AgentTask) {
+	mkTask(t, "t-failearly", "tc-failearly", func(task *kaalmv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 	})
 	eventually(t, func() error { return markCertReadyErr("t-failearly") })
@@ -747,7 +747,7 @@ func TestTask_ExitCodeFailsBeforeReady(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectTaskPhase(t, "t-failearly", agentryv1alpha1.TaskFailed)
+	expectTaskPhase(t, "t-failearly", kaalmv1alpha1.TaskFailed)
 }
 
 // TestTask_CrashInterruptedRetryResumes covers the Reconcile entry that resumes
@@ -759,18 +759,18 @@ func TestTask_CrashInterruptedRetryResumes(t *testing.T) {
 	// Simulate the crash-interrupted state: Failed, but not yet settled.
 	eventually(t, func() error {
 		task := getTask(t, "t-resume")
-		task.Status.Phase = agentryv1alpha1.TaskFailed
+		task.Status.Phase = kaalmv1alpha1.TaskFailed
 		task.Status.CompletionTime = nil
 		return testClient.Status().Update(ctxT(), task)
 	})
 	// The reconciler resumes it; the still-ready Pod carries it back to Running.
-	expectTaskPhase(t, "t-resume", agentryv1alpha1.TaskRunning)
+	expectTaskPhase(t, "t-resume", kaalmv1alpha1.TaskRunning)
 }
 
 // TestReadMailbox_NotFoundIsEmpty covers readMailbox's NotFound path directly.
 func TestReadMailbox_NotFoundIsEmpty(t *testing.T) {
 	r := &AgentTaskReconciler{Client: testClient}
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "no-mailbox", Namespace: "default"}}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "no-mailbox", Namespace: "default"}}
 	payload, err := r.readMailbox(ctxT(), task)
 	if err != nil {
 		t.Fatalf("missing mailbox must not error: %v", err)

@@ -15,9 +15,9 @@ Readiness is a gate, not a formality. A gateway replica that is listening but ha
 The probe is `GET /readyz` on the internal health port (`:8081` by default, Helm value `gateway.healthPort`). That port serves TLS with no client auth and exposes only `/healthz` and `/readyz`. It returns `200` only when **all** of the following are true:
 
 1. The **LLM listener** on `:8443` is bound and accepting TLS connections. The probe performs a local dial to confirm.
-2. The **User listener** on `:8080` is bound and accepting TLS connections (both listeners use the `agentry-gateway-tls` certificate). The probe performs a local TLS dial to confirm.
+2. The **User listener** on `:8080` is bound and accepting TLS connections (both listeners use the `kaalm-gateway-tls` certificate). The probe performs a local TLS dial to confirm.
 3. **All informer caches** the request path depends on have completed their initial sync (`cache.WaitForCacheSync` returned true for each).
-4. The **gateway serving certificate** (`agentry-gateway-tls`) has been loaded from disk. On startup, the gateway reads the mounted Secret; if the Secret does not yet exist (cert-manager has not issued it), readiness fails. This matters on initial chart install, where the Pod may start before cert-manager completes issuance.
+4. The **gateway serving certificate** (`kaalm-gateway-tls`) has been loaded from disk. On startup, the gateway reads the mounted Secret; if the Secret does not yet exist (cert-manager has not issued it), readiness fails. This matters on initial chart install, where the Pod may start before cert-manager completes issuance.
 
 ### The informers the request path depends on
 
@@ -46,14 +46,14 @@ Because both listeners and every dependent informer must be green for the probe 
 
 The gateway exposes Prometheus metrics on `:9090/metrics`:
 
-- `agentry_llm_requests_total{provider,model,namespace,status}`
-- `agentry_llm_request_duration_seconds{provider,model}`
-- `agentry_llm_tokens_total{provider,model,namespace,direction}` (direction = input|output)
-- `agentry_llm_spend_usd_total{provider,namespace}`
-- `agentry_llm_fallback_total{from_provider,to_provider,reason}`
-- `agentry_llm_budget_utilization{provider,namespace,period}` (gauge, 0-1)
+- `kaalm_llm_requests_total{provider,model,namespace,status}`
+- `kaalm_llm_request_duration_seconds{provider,model}`
+- `kaalm_llm_tokens_total{provider,model,namespace,direction}` (direction = input|output)
+- `kaalm_llm_spend_usd_total{provider,namespace}`
+- `kaalm_llm_fallback_total{from_provider,to_provider,reason}`
+- `kaalm_llm_budget_utilization{provider,namespace,period}` (gauge, 0-1)
 
-Note the naming: the counters carry the `_total` suffix and `agentry_llm_budget_utilization` does not, because it is a gauge rather than a monotonic counter.
+Note the naming: the counters carry the `_total` suffix and `kaalm_llm_budget_utilization` does not, because it is a gauge rather than a monotonic counter.
 
 For User Gateway metrics, see [User Gateway Operations](../user/operations.md#observability).
 

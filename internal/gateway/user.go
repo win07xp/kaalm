@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // ActivatorClient asks the controller to wake a hibernated Agent. Injected so
@@ -42,7 +42,7 @@ type ActivatorClient interface {
 // /v1/activate/{ns}/{name} on the controller's :9443 over mTLS.
 type ControllerActivator struct {
 	// BaseURL is the controller activator base, e.g.
-	// https://agentry-controller.agentry-system.svc.cluster.local:9443.
+	// https://kaalm-controller.kaalm-system.svc.cluster.local:9443.
 	BaseURL string
 	Client  *http.Client
 }
@@ -106,7 +106,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	// Write gate: a Terminating channel accepts no new work, which is what
 	// makes the delete-time finalizer sweep race-free.
-	if channel.Status.Phase == agentryv1alpha1.ChannelTerminating {
+	if channel.Status.Phase == kaalmv1alpha1.ChannelTerminating {
 		unauthorized(w, "auth failed or path not registered")
 		return
 	}
@@ -144,7 +144,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // attached, bounded by syncDeliveryDeadline.
 func (s *Server) handleSyncDelivery(
 	w http.ResponseWriter, ctx context.Context,
-	channel *agentryv1alpha1.AgentChannel, agent *agentryv1alpha1.Agent, env MessageEnvelope,
+	channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent, env MessageEnvelope,
 ) {
 	deadline := time.Now().Add(s.Config.SyncDeliveryDeadline)
 	ctx, cancel := context.WithDeadline(ctx, deadline)
@@ -183,10 +183,10 @@ func (s *Server) handleSyncDelivery(
 // wakeAndDeliver wakes a hibernated agent when needed, then runs the bounded
 // delivery pipeline. Returns the raw agent response body on success.
 func (s *Server) wakeAndDeliver(
-	ctx context.Context, channel *agentryv1alpha1.AgentChannel,
-	agent *agentryv1alpha1.Agent, env MessageEnvelope,
+	ctx context.Context, channel *kaalmv1alpha1.AgentChannel,
+	agent *kaalmv1alpha1.Agent, env MessageEnvelope,
 ) (respBody []byte, errType string, err error) {
-	if agent.Status.Phase == agentryv1alpha1.AgentHibernated {
+	if agent.Status.Phase == kaalmv1alpha1.AgentHibernated {
 		if s.Activator == nil {
 			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonAgentNotReady,
 				"agent hibernated and no activator configured")
@@ -214,7 +214,7 @@ func (s *Server) wakeAndDeliver(
 	return respBody, "", nil
 }
 
-func (s *Server) wakeTimeout(agent *agentryv1alpha1.Agent) time.Duration {
+func (s *Server) wakeTimeout(agent *kaalmv1alpha1.Agent) time.Duration {
 	if d := agent.Spec.Lifecycle.WakeTimeout.Duration; d > 0 {
 		return d
 	}
@@ -224,7 +224,7 @@ func (s *Server) wakeTimeout(agent *agentryv1alpha1.Agent) time.Duration {
 // waitAgentReachable polls the agent Service with TCP connects until it
 // accepts, bounded by wakeTimeout. Connect failure is the whole hibernation
 // detection mechanism; connect success is the readiness signal.
-func (s *Server) waitAgentReachable(ctx context.Context, agent *agentryv1alpha1.Agent) error {
+func (s *Server) waitAgentReachable(ctx context.Context, agent *kaalmv1alpha1.Agent) error {
 	deadline := time.Now().Add(s.wakeTimeout(agent))
 	addr := net.JoinHostPort(s.agentServiceHost(agent), fmt.Sprintf("%d", s.agentServicePort(agent)))
 	for time.Now().Before(deadline) {
@@ -245,14 +245,14 @@ func (s *Server) waitAgentReachable(ctx context.Context, agent *agentryv1alpha1.
 	return fmt.Errorf("wake timeout")
 }
 
-func (s *Server) agentServiceHost(agent *agentryv1alpha1.Agent) string {
+func (s *Server) agentServiceHost(agent *kaalmv1alpha1.Agent) string {
 	if s.Config.AgentServiceHostOverride != "" {
 		return s.Config.AgentServiceHostOverride
 	}
 	return fmt.Sprintf("%s.%s.svc.cluster.local", agent.Name, agent.Namespace)
 }
 
-func (s *Server) agentServicePort(agent *agentryv1alpha1.Agent) int32 {
+func (s *Server) agentServicePort(agent *kaalmv1alpha1.Agent) int32 {
 	if s.Config.AgentServicePortOverride != 0 {
 		return s.Config.AgentServicePortOverride
 	}
@@ -268,7 +268,7 @@ func (s *Server) agentServicePort(agent *agentryv1alpha1.Agent) int32 {
 // attempts; agents deduplicate. A 200 with a malformed envelope (missing or
 // non-string content) counts as a failed attempt.
 func (s *Server) deliverToAgent(
-	ctx context.Context, agent *agentryv1alpha1.Agent, env MessageEnvelope,
+	ctx context.Context, agent *kaalmv1alpha1.Agent, env MessageEnvelope,
 ) ([]byte, error) {
 	payload, err := json.Marshal(env)
 	if err != nil {
@@ -299,7 +299,7 @@ func (s *Server) deliverToAgent(
 	return nil, fmt.Errorf("failed to deliver message to agent after %d attempts: %w", len(backoff), lastErr)
 }
 
-func (s *Server) deliverOnce(ctx context.Context, url string, agent *agentryv1alpha1.Agent, payload []byte) ([]byte, error) {
+func (s *Server) deliverOnce(ctx context.Context, url string, agent *kaalmv1alpha1.Agent, payload []byte) ([]byte, error) {
 	attemptCtx, cancel := context.WithTimeout(ctx, s.Config.AgentReadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, url, bytes.NewReader(payload))
@@ -336,8 +336,8 @@ func (s *Server) deliverOnce(ctx context.Context, url string, agent *agentryv1al
 
 // agentHTTPClient builds (once) the mTLS client for gateway-to-agent
 // delivery: the gateway presents its own cert, verifies the agent's against
-// the Agentry CA, and pins ServerName to the agent's Service DNS.
-func (s *Server) agentHTTPClient(agent *agentryv1alpha1.Agent) (*http.Client, error) {
+// the Kaalm CA, and pins ServerName to the agent's Service DNS.
+func (s *Server) agentHTTPClient(agent *kaalmv1alpha1.Agent) (*http.Client, error) {
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		ServerName: fmt.Sprintf("%s.%s.svc.cluster.local", agent.Name, agent.Namespace),
@@ -389,7 +389,7 @@ func NewControllerActivator(operatorNamespace, certFile, keyFile, caFile string)
 	if err != nil {
 		return nil, err
 	}
-	host := fmt.Sprintf("agentry-controller.%s.svc.cluster.local", operatorNamespace)
+	host := fmt.Sprintf("kaalm-controller.%s.svc.cluster.local", operatorNamespace)
 	return &ControllerActivator{
 		BaseURL: fmt.Sprintf("https://%s:9443", host),
 		Client: &http.Client{

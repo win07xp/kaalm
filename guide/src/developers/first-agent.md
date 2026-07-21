@@ -15,10 +15,10 @@ registry your class's `allowedImages` permits.
 
 ## 2. Declare the Agent
 
-From `config/samples/agentry_v1alpha1_agent.yaml`:
+From `config/samples/kaalm_v1alpha1_agent.yaml`:
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: Agent
 metadata:
   name: support-assistant
@@ -43,7 +43,7 @@ let it call the `anthropic-shared` provider, give it a 10 Gi volume that
 survives restarts, and hibernate it when gateway traffic goes quiet.
 
 ```bash
-kubectl apply -f config/samples/agentry_v1alpha1_agent.yaml
+kubectl apply -f config/samples/kaalm_v1alpha1_agent.yaml
 ```
 
 ## 3. Watch it come up
@@ -57,7 +57,7 @@ Certificate, and NetworkPolicy being created; the Pod starts only after its
 certificate is issued) to `Running`. `Ready: True` means the whole set is up.
 
 Behind the scenes your agent received everything it needs as environment and
-mounts: the gateway endpoint (`AGENTRY_GATEWAY_ENDPOINT`), its client
+mounts: the gateway endpoint (`KAALM_GATEWAY_ENDPOINT`), its client
 certificate, and the cluster CA bundle. The starter templates consume all of
 this automatically.
 

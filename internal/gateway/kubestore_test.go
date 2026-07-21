@@ -27,17 +27,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
-// gatewayScheme builds a scheme carrying the core and agentry types.
+// gatewayScheme builds a scheme carrying the core and kaalm types.
 func gatewayScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentryv1alpha1.AddToScheme(s); err != nil {
+	if err := kaalmv1alpha1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -60,12 +60,12 @@ func kubeClientWith(t *testing.T, objs ...client.Object) client.Client {
 }
 
 func TestKubeStore_AgentTaskClassProvider(t *testing.T) {
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix", Namespace: "team-a"}}
-	class := &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "std"}}
-	prov := &agentryv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "prov"}}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix", Namespace: "team-a"}}
+	class := &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "std"}}
+	prov := &kaalmv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "prov"}}
 
-	k := &KubeStore{Reader: kubeClientWith(t, agent, task, class, prov), OperatorNamespace: "agentry-system"}
+	k := &KubeStore{Reader: kubeClientWith(t, agent, task, class, prov), OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
 
 	if a, ok := k.AgentByName(ctx, "team-a", "sup"); !ok || a.Name != "sup" {
@@ -95,17 +95,17 @@ func TestKubeStore_AgentTaskClassProvider(t *testing.T) {
 }
 
 func TestKubeStore_Credential(t *testing.T) {
-	prov := &agentryv1alpha1.ModelProvider{
+	prov := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
-		Spec: agentryv1alpha1.ModelProviderSpec{
-			CredentialsRef: agentryv1alpha1.SecretKeyReference{Name: "prov-secret", Key: "api-key"},
+		Spec: kaalmv1alpha1.ModelProviderSpec{
+			CredentialsRef: kaalmv1alpha1.SecretKeyReference{Name: "prov-secret", Key: "api-key"},
 		},
 	}
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "prov-secret", Namespace: "agentry-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: "prov-secret", Namespace: "kaalm-system"},
 		Data:       map[string][]byte{"api-key": []byte("sk-live")},
 	}
-	k := &KubeStore{Reader: kubeClientWith(t, prov, secret), OperatorNamespace: "agentry-system"}
+	k := &KubeStore{Reader: kubeClientWith(t, prov, secret), OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
 
 	got, err := k.Credential(ctx, prov)
@@ -129,10 +129,10 @@ func TestKubeStore_Credential(t *testing.T) {
 
 	// Empty value is treated as missing.
 	emptySec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "empty", Namespace: "agentry-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: "empty", Namespace: "kaalm-system"},
 		Data:       map[string][]byte{"api-key": {}},
 	}
-	k2 := &KubeStore{Reader: kubeClientWith(t, emptySec), OperatorNamespace: "agentry-system"}
+	k2 := &KubeStore{Reader: kubeClientWith(t, emptySec), OperatorNamespace: "kaalm-system"}
 	provEmpty := prov.DeepCopy()
 	provEmpty.Spec.CredentialsRef.Name = "empty"
 	if _, err := k2.Credential(ctx, provEmpty); err == nil {
@@ -145,7 +145,7 @@ func TestKubeStore_SecretValue(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "chan-secret", Namespace: "team-a"},
 		Data:       map[string][]byte{"token": []byte("hunter2")},
 	}
-	k := &KubeStore{Reader: kubeClientWith(t, secret), OperatorNamespace: "agentry-system"}
+	k := &KubeStore{Reader: kubeClientWith(t, secret), OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
 
 	if v, err := k.SecretValue(ctx, "team-a", "chan-secret", "token"); err != nil || v != "hunter2" {
@@ -160,16 +160,16 @@ func TestKubeStore_SecretValue(t *testing.T) {
 }
 
 // readyChannel builds an AgentChannel at path, optionally Ready.
-func readyChannel(ns, name, path string, ready bool) *agentryv1alpha1.AgentChannel {
-	ch := &agentryv1alpha1.AgentChannel{
+func readyChannel(ns, name, path string, ready bool) *kaalmv1alpha1.AgentChannel {
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			Webhook: agentryv1alpha1.AgentChannelWebhook{Path: path},
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: path},
 		},
 	}
 	if ready {
 		ch.Status.Conditions = []metav1.Condition{
-			{Type: agentryv1alpha1.ConditionReady, Status: "True", Reason: "Ready",
+			{Type: kaalmv1alpha1.ConditionReady, Status: "True", Reason: "Ready",
 				LastTransitionTime: metav1.Now()},
 		}
 	}
@@ -184,7 +184,7 @@ func TestKubeStore_ChannelByPath(t *testing.T) {
 	// Path does not begin with the channel's own namespace prefix (rule 15).
 	spoofed := readyChannel("team-c", "cc", "/channels/team-a/spoof", true)
 
-	k := &KubeStore{Reader: kubeClientWith(t, ready, notReady, spoofed), OperatorNamespace: "agentry-system"}
+	k := &KubeStore{Reader: kubeClientWith(t, ready, notReady, spoofed), OperatorNamespace: "kaalm-system"}
 
 	if ch, ok := k.ChannelByPath(ctx, "/channels/team-a/hook"); !ok || ch.Name != "ch" {
 		t.Errorf("Ready channel not found: %v %v", ch, ok)
@@ -223,7 +223,7 @@ func TestKubeStore_PodByIP(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "old", Namespace: "team-a"},
 		Status:     corev1.PodStatus{PodIP: "10.0.0.9", Phase: corev1.PodSucceeded},
 	}
-	k := &KubeStore{Reader: kubeClientWith(t, running, dead), OperatorNamespace: "agentry-system"}
+	k := &KubeStore{Reader: kubeClientWith(t, running, dead), OperatorNamespace: "kaalm-system"}
 
 	if p, ok := k.PodByIP(ctx, "10.0.0.5"); !ok || p.Name != "sup-abc" {
 		t.Errorf("PodByIP hit failed: %v %v", p, ok)

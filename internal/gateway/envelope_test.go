@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"testing"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func TestUTF8ErrorOffset(t *testing.T) {
@@ -76,22 +76,22 @@ func TestExtract(t *testing.T) {
 
 	// FromHeader.
 	hdrName := "X-User"
-	if got := extract(agentryv1alpha1.ChannelExtractor{FromHeader: &hdrName}, r, nil); got != "hdr-user" {
+	if got := extract(kaalmv1alpha1.ChannelExtractor{FromHeader: &hdrName}, r, nil); got != "hdr-user" {
 		t.Errorf("header extract = %q", got)
 	}
 	// FromHeader missing -> fallback.
 	missing := "X-Absent"
-	if got := extract(agentryv1alpha1.ChannelExtractor{FromHeader: &missing, Fallback: &fallback}, r, nil); got != "anon" {
+	if got := extract(kaalmv1alpha1.ChannelExtractor{FromHeader: &missing, Fallback: &fallback}, r, nil); got != "anon" {
 		t.Errorf("fallback = %q", got)
 	}
 	// FromBody.
 	path := "user.id"
 	body := map[string]any{"user": map[string]any{"id": "b-user"}}
-	if got := extract(agentryv1alpha1.ChannelExtractor{FromBody: &path}, r, body); got != "b-user" {
+	if got := extract(kaalmv1alpha1.ChannelExtractor{FromBody: &path}, r, body); got != "b-user" {
 		t.Errorf("body extract = %q", got)
 	}
 	// No extractor and no fallback -> empty.
-	if got := extract(agentryv1alpha1.ChannelExtractor{}, r, nil); got != "" {
+	if got := extract(kaalmv1alpha1.ChannelExtractor{}, r, nil); got != "" {
 		t.Errorf("empty extractor = %q", got)
 	}
 }

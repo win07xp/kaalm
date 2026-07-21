@@ -10,7 +10,7 @@ participant "Gateway r1" as G1 $gwBg
 participant "Gateway r2" as G2 $gwBg
 
 K -> API : delete agentchannel
-API -> API : set deletionTimestamp;\nagentry.io/channel-finalizer blocks
+API -> API : set deletionTimestamp;\nkaalm.io/channel-finalizer blocks
 API -> R : watch event
 
 R -> API : 1. status.phase = Terminating
@@ -18,7 +18,7 @@ API -> G1 : watch event
 API -> G2 : watch event
 G1 -> G1 : 2. drop connection,\nstop creating async records
 G2 -> G2 : 2. drop connection,\nstop creating async records
-G1 -> API : 3. annotate\nagentry.io/channel-disconnected: "true"
+G1 -> API : 3. annotate\nkaalm.io/channel-disconnected: "true"
 
 alt annotation observed
   API -> R : 4. disconnect confirmed
@@ -26,8 +26,8 @@ else gateway unavailable
   R -> R : 4. bounded 30s timeout
 end
 
-R -> API : 5. delete agentry-async-* ConfigMaps\nin agentry-system by label selector\nchannel-namespace + channel-name
-R -> API : 6. remove agentry.io/channel-finalizer
+R -> API : 5. delete kaalm-async-* ConfigMaps\nin kaalm-system by label selector\nchannel-namespace + channel-name
+R -> API : 6. remove kaalm.io/channel-finalizer
 API -> API : object deleted
 
 note over R, G2
@@ -43,7 +43,7 @@ note over R, G2
   to orphan. Without the gate, an
   in-flight write from r2 could land
   after the sweep: these ConfigMaps
-  sit in agentry-system, carry no
+  sit in kaalm-system, carry no
   ownerRef to the channel, and are
   invisible to cascade GC, so the
   sweep is their only cleanup.

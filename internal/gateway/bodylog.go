@@ -1,4 +1,4 @@
-//go:build !agentry_debug_logs
+//go:build !kaalm_debug_logs
 
 /*
 Copyright 2026.
@@ -25,7 +25,7 @@ package gateway
 //
 // There is no runtime flag, environment variable, or admin endpoint that flips
 // body logging on. The only way to log bodies is to compile with the
-// `agentry_debug_logs` build tag (see bodylog_debug.go), which produces a
+// `kaalm_debug_logs` build tag (see bodylog_debug.go), which produces a
 // separate image with a startup banner. This keeps the production wire format
 // provably PII-clean.
 const DebugBodyLogging = false

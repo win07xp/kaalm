@@ -22,34 +22,34 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
-func TestIsAgentryManagedPod(t *testing.T) {
+func TestIsKaalmManagedPod(t *testing.T) {
 	// OwnerRef to an Agent.
 	agentPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: agentryv1alpha1.GroupVersion.String(), Kind: "Agent"}},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: kaalmv1alpha1.GroupVersion.String(), Kind: "Agent"}},
 	}}
-	if !isAgentryManagedPod(agentPod) {
+	if !isKaalmManagedPod(agentPod) {
 		t.Error("Agent-owned pod must be managed")
 	}
 	// OwnerRef to an AgentTask.
 	taskPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: agentryv1alpha1.GroupVersion.String(), Kind: "AgentTask"}},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: kaalmv1alpha1.GroupVersion.String(), Kind: "AgentTask"}},
 	}}
-	if !isAgentryManagedPod(taskPod) {
+	if !isKaalmManagedPod(taskPod) {
 		t.Error("AgentTask-owned pod must be managed")
 	}
 	// Label-based.
-	labeledPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"agentry.io/workload": "agent"}}}
-	if !isAgentryManagedPod(labeledPod) {
+	labeledPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"kaalm.io/workload": "agent"}}}
+	if !isKaalmManagedPod(labeledPod) {
 		t.Error("labeled pod must be managed")
 	}
 	// Plain pod: not managed. An unrelated ownerRef must not match.
 	plain := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet"}},
 	}}
-	if isAgentryManagedPod(plain) {
+	if isKaalmManagedPod(plain) {
 		t.Error("plain pod must not be managed")
 	}
 }

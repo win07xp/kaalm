@@ -1,5 +1,5 @@
 # rule 16: webhook.path must not use the reserved /v1/ prefix
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentChannel
 metadata: {name: bad-path, namespace: default}
 spec:

@@ -1,6 +1,6 @@
 # Status Cheatsheet
 
-Everything Agentry tells you through `kubectl get` and `describe`, resource
+Everything Kaalm tells you through `kubectl get` and `describe`, resource
 by resource. Conditions listed are the ones the controller actually sets in
 v0.1.0.
 
@@ -89,7 +89,7 @@ not).
 # Watch an agent come up or wake
 kubectl get agents -w
 
-# Everything Agentry owns in a namespace
+# Everything Kaalm owns in a namespace
 kubectl get agents,agenttasks,agentchannels -n <ns>
 
 # The cluster-scoped pair

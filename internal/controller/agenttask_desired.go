@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/win07xp/kubeclaw/internal/gateway"
+	"github.com/win07xp/kaalm/internal/gateway"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
@@ -31,13 +31,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 const (
 	// gatewayServiceAccount is the gateway's ServiceAccount name; the per-task
 	// completion Role is bound to it.
-	gatewayServiceAccount = "agentry-gateway"
+	gatewayServiceAccount = "kaalm-gateway"
 
 	// Completion mailbox data layout, canonical in the gateway package (the
 	// gateway writes these keys on POST /v1/task/complete; the reconciler
@@ -77,7 +77,7 @@ type effectiveTaskSpec struct {
 	Providers        []string
 }
 
-func deriveEffectiveTaskSpec(task *agentryv1alpha1.AgentTask, class *agentryv1alpha1.AgentClass) effectiveTaskSpec {
+func deriveEffectiveTaskSpec(task *kaalmv1alpha1.AgentTask, class *kaalmv1alpha1.AgentClass) effectiveTaskSpec {
 	eff := effectiveTaskSpec{
 		Image:            task.Spec.Image,
 		Env:              task.Spec.Env,
@@ -120,33 +120,33 @@ func taskPVCName(taskName string) string            { return taskName + "-worksp
 func taskServiceAccountName(taskName string) string { return "task-" + taskName }
 func taskCompletionCMName(taskName string) string   { return taskName + "-completion" }
 func taskCompletionRoleName(taskName string) string {
-	return "agentry-task-" + taskName + "-completion"
+	return "kaalm-task-" + taskName + "-completion"
 }
 
-func taskPodLabels(task *agentryv1alpha1.AgentTask) map[string]string {
+func taskPodLabels(task *kaalmv1alpha1.AgentTask) map[string]string {
 	return map[string]string{
-		"agentry.io/task":     task.Name,
-		"agentry.io/workload": "task",
+		"kaalm.io/task":     task.Name,
+		"kaalm.io/workload": "task",
 	}
 }
 
 // isAgentReported reports whether the task uses agentReported completion (the
 // CRD default when the block or field is absent).
-func isAgentReported(task *agentryv1alpha1.AgentTask) bool {
+func isAgentReported(task *kaalmv1alpha1.AgentTask) bool {
 	return task.Spec.Completion.Condition != completionExitCode
 }
 
 // desiredTaskCertificate is the per-task client certificate: a single SAN in
 // the non-Service task shape and client auth only, since tasks have no inbound
 // listener. See docs/src/security/tls.md.
-func desiredTaskCertificate(task *agentryv1alpha1.AgentTask) *cmapi.Certificate {
+func desiredTaskCertificate(task *kaalmv1alpha1.AgentTask) *cmapi.Certificate {
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: taskCertificateName(task.Name), Namespace: task.Namespace},
 		Spec: cmapi.CertificateSpec{
 			SecretName: taskCertificateName(task.Name),
 			IssuerRef:  cmmeta.ObjectReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
 			DNSNames: []string{
-				fmt.Sprintf("%s.%s.%s", task.Name, task.Namespace, agentryv1alpha1.TaskSANSuffix),
+				fmt.Sprintf("%s.%s.%s", task.Name, task.Namespace, kaalmv1alpha1.TaskSANSuffix),
 			},
 			Duration:    &metav1.Duration{Duration: certDuration},
 			RenewBefore: &metav1.Duration{Duration: certRenewBefore},
@@ -155,13 +155,13 @@ func desiredTaskCertificate(task *agentryv1alpha1.AgentTask) *cmapi.Certificate 
 	}
 }
 
-func desiredTaskServiceAccount(task *agentryv1alpha1.AgentTask) *corev1.ServiceAccount {
+func desiredTaskServiceAccount(task *kaalmv1alpha1.AgentTask) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: taskServiceAccountName(task.Name), Namespace: task.Namespace},
 	}
 }
 
-func desiredTaskPVC(task *agentryv1alpha1.AgentTask, class *agentryv1alpha1.AgentClass, eff effectiveTaskSpec) *corev1.PersistentVolumeClaim {
+func desiredTaskPVC(task *kaalmv1alpha1.AgentTask, class *kaalmv1alpha1.AgentClass, eff effectiveTaskSpec) *corev1.PersistentVolumeClaim {
 	size := eff.PVCSizeGi
 	if size <= 0 {
 		size = 1
@@ -183,7 +183,7 @@ func desiredTaskPVC(task *agentryv1alpha1.AgentTask, class *agentryv1alpha1.Agen
 // desiredCompletionConfigMap is the empty completion mailbox, pre-created so
 // the gateway's name-scoped update/patch Role is enforceable (RBAC
 // resourceNames cannot constrain create).
-func desiredCompletionConfigMap(task *agentryv1alpha1.AgentTask) *corev1.ConfigMap {
+func desiredCompletionConfigMap(task *kaalmv1alpha1.AgentTask) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: taskCompletionCMName(task.Name), Namespace: task.Namespace},
 		Data:       map[string]string{},
@@ -193,7 +193,7 @@ func desiredCompletionConfigMap(task *agentryv1alpha1.AgentTask) *corev1.ConfigM
 // desiredCompletionRole grants the gateway update and patch, and nothing else,
 // on exactly the completion ConfigMap. No create: resourceNames cannot scope
 // it, so granting it would broaden access to every ConfigMap in the namespace.
-func desiredCompletionRole(task *agentryv1alpha1.AgentTask) *rbacv1.Role {
+func desiredCompletionRole(task *kaalmv1alpha1.AgentTask) *rbacv1.Role {
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: taskCompletionRoleName(task.Name), Namespace: task.Namespace},
 		Rules: []rbacv1.PolicyRule{{
@@ -205,7 +205,7 @@ func desiredCompletionRole(task *agentryv1alpha1.AgentTask) *rbacv1.Role {
 	}
 }
 
-func desiredCompletionRoleBinding(task *agentryv1alpha1.AgentTask, operatorNamespace string) *rbacv1.RoleBinding {
+func desiredCompletionRoleBinding(task *kaalmv1alpha1.AgentTask, operatorNamespace string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: taskCompletionRoleName(task.Name), Namespace: task.Namespace},
 		RoleRef: rbacv1.RoleRef{
@@ -221,11 +221,11 @@ func desiredCompletionRoleBinding(task *agentryv1alpha1.AgentTask, operatorNames
 	}
 }
 
-// desiredTaskPod derives the task Pod: restartPolicy Never (Agentry owns
+// desiredTaskPod derives the task Pod: restartPolicy Never (Kaalm owns
 // retries via backoffLimit, and exitCode completion depends on terminal Pod
 // phases), no kubelet probes, and the same injected env and TLS volume as an
 // Agent Pod.
-func desiredTaskPod(task *agentryv1alpha1.AgentTask, eff effectiveTaskSpec, operatorNamespace string) *corev1.Pod {
+func desiredTaskPod(task *kaalmv1alpha1.AgentTask, eff effectiveTaskSpec, operatorNamespace string) *corev1.Pod {
 	labels := map[string]string{}
 	for k, v := range eff.PodLabels {
 		labels[k] = v
@@ -239,16 +239,16 @@ func desiredTaskPod(task *agentryv1alpha1.AgentTask, eff effectiveTaskSpec, oper
 	}
 
 	env := []corev1.EnvVar{
-		{Name: "AGENTRY_HEALTH_PORT", Value: fmt.Sprintf("%d", eff.HealthPort)},
-		{Name: "AGENTRY_GATEWAY_ENDPOINT", Value: gatewayEndpoint(operatorNamespace)},
-		{Name: "AGENTRY_CA_CERT", Value: tlsMountPath + "/ca.crt"},
-		{Name: "AGENTRY_TLS_CERT", Value: tlsMountPath + "/tls.crt"},
-		{Name: "AGENTRY_TLS_KEY", Value: tlsMountPath + "/tls.key"},
+		{Name: "KAALM_HEALTH_PORT", Value: fmt.Sprintf("%d", eff.HealthPort)},
+		{Name: "KAALM_GATEWAY_ENDPOINT", Value: gatewayEndpoint(operatorNamespace)},
+		{Name: "KAALM_CA_CERT", Value: tlsMountPath + "/ca.crt"},
+		{Name: "KAALM_TLS_CERT", Value: tlsMountPath + "/tls.crt"},
+		{Name: "KAALM_TLS_KEY", Value: tlsMountPath + "/tls.key"},
 	}
 	env = append(env, eff.Env...)
 
 	volumes := []corev1.Volume{{
-		Name: "agentry-tls",
+		Name: "kaalm-tls",
 		VolumeSource: corev1.VolumeSource{
 			Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{
@@ -267,7 +267,7 @@ func desiredTaskPod(task *agentryv1alpha1.AgentTask, eff effectiveTaskSpec, oper
 			},
 		},
 	}}
-	mounts := []corev1.VolumeMount{{Name: "agentry-tls", MountPath: tlsMountPath, ReadOnly: true}}
+	mounts := []corev1.VolumeMount{{Name: "kaalm-tls", MountPath: tlsMountPath, ReadOnly: true}}
 
 	if eff.PersistenceOn {
 		mountPath := eff.MountPath
@@ -315,7 +315,7 @@ func desiredTaskPod(task *agentryv1alpha1.AgentTask, eff effectiveTaskSpec, oper
 // tasks have no listener and are not delivery targets. ingress stays an
 // explicit empty list to document deny-all intent.
 func desiredTaskNetworkPolicy(
-	task *agentryv1alpha1.AgentTask, class *agentryv1alpha1.AgentClass, operatorNamespace string,
+	task *kaalmv1alpha1.AgentTask, class *kaalmv1alpha1.AgentClass, operatorNamespace string,
 ) *networkingv1.NetworkPolicy {
 	protoTCP := corev1.ProtocolTCP
 	protoUDP := corev1.ProtocolUDP
@@ -385,7 +385,7 @@ func parseCompletion(data map[string]string) completionPayload {
 // validateArtifactNames applies the per-status rule from the wire contract:
 // strict (all declared present, none undeclared) on success; no-undeclared
 // only on failure. Returns "" when valid, else a message naming the offender.
-func validateArtifactNames(p completionPayload, declared []agentryv1alpha1.AgentTaskArtifact) string {
+func validateArtifactNames(p completionPayload, declared []kaalmv1alpha1.AgentTaskArtifact) string {
 	names := map[string]bool{}
 	for _, a := range declared {
 		names[a.Name] = true

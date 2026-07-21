@@ -8,7 +8,7 @@ When a developer updates an Agent's spec while it is in `Running` or `Idle` phas
 
 The comparison is never made against the live Pod object itself. The apiserver defaults and injects fields on admission (`serviceAccountName`, `nodeName`, tolerations, `imagePullPolicy`), so a naive deep-equal of derived spec vs. live spec always reports drift and would recreate the Pod in a loop.
 
-The hash covers the replacement-triggering fields: image, resources, command, args, env, provider wiring. Not all of these are immutable in Kubernetes. A Pod's `image` is mutable in place, and `resources` is in-place-resizable on newer clusters. Agentry deliberately replaces the Pod on any such change for a clean process restart.
+The hash covers the replacement-triggering fields: image, resources, command, args, env, provider wiring. Not all of these are immutable in Kubernetes. A Pod's `image` is mutable in place, and `resources` is in-place-resizable on newer clusters. Kaalm deliberately replaces the Pod on any such change for a clean process restart.
 
 On a hash mismatch, the controller recreates the Pod:
 
@@ -52,7 +52,7 @@ If the new AgentClass invariants can be applied by re-deriving the desired Pod s
 
 The reconciler re-derives the [child-resource set](../runtime/child-resources.md) for every Agent referencing the class: clamping `resources.limits` down to the new `maxLimits`, applying the tighter `securityContext`, regenerating the per-Agent `NetworkPolicy` from the new egress rules. It then transitions the Agent to `Provisioning`, deletes the existing Pod (graceful SIGTERM honoring `terminationGracePeriodSeconds`), and creates a new Pod with the adjusted spec. The PVC, Service, and Certificate are preserved. This mirrors the [spec-drift behavior above](#spec-change-handling); agents must tolerate restart.
 
-Drift is detected exactly as for Agent spec edits: by comparing the Pod-spec hash annotation against the hash of the re-derived spec, never by a DeepEqual against the live Pod. Recreation triggers when the new spec differs in the replacement-triggering fields (image, resources, command, args, env, provider wiring); Agentry deliberately replaces the Pod even for fields that are technically mutable in place.
+Drift is detected exactly as for Agent spec edits: by comparing the Pod-spec hash annotation against the hash of the re-derived spec, never by a DeepEqual against the live Pod. Recreation triggers when the new spec differs in the replacement-triggering fields (image, resources, command, args, env, provider wiring); Kaalm deliberately replaces the Pod even for fields that are technically mutable in place.
 
 This design makes AgentClass a live policy lever for Agents without disrupting one-shot task work (see [AgentTask handling](#agenttask-handling-no-degraded-phase) below).
 

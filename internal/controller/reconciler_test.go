@@ -35,21 +35,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 const timeout = 10 * time.Second
 
 func ctxT() context.Context { return context.Background() }
 
-func mkProvider(t *testing.T, name string, mutate func(*agentryv1alpha1.ModelProvider)) {
+func mkProvider(t *testing.T, name string, mutate func(*kaalmv1alpha1.ModelProvider)) {
 	t.Helper()
-	mp := &agentryv1alpha1.ModelProvider{
+	mp := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: agentryv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1alpha1.ModelProviderSpec{
 			Type:           "openai",
 			Endpoint:       "https://api.example.com",
-			CredentialsRef: agentryv1alpha1.SecretKeyReference{Name: name + "-key", Key: "token"},
+			CredentialsRef: kaalmv1alpha1.SecretKeyReference{Name: name + "-key", Key: "token"},
 		},
 	}
 	if mutate != nil {
@@ -62,9 +62,9 @@ func mkProvider(t *testing.T, name string, mutate func(*agentryv1alpha1.ModelPro
 
 func mkClass(t *testing.T, name string, allowed ...string) {
 	t.Helper()
-	ac := &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	ac := &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	for _, p := range allowed {
-		ac.Spec.AllowedProviders = append(ac.Spec.AllowedProviders, agentryv1alpha1.LocalObjectReference{Name: p})
+		ac.Spec.AllowedProviders = append(ac.Spec.AllowedProviders, kaalmv1alpha1.LocalObjectReference{Name: p})
 	}
 	if err := testClient.Create(ctxT(), ac); err != nil {
 		t.Fatalf("create class %s: %v", name, err)
@@ -73,13 +73,13 @@ func mkClass(t *testing.T, name string, allowed ...string) {
 
 func mkAgent(t *testing.T, name, className string, providers ...string) {
 	t.Helper()
-	ag := &agentryv1alpha1.Agent{
+	ag := &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       agentryv1alpha1.AgentSpec{AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: className}},
+		Spec:       kaalmv1alpha1.AgentSpec{AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: className}},
 	}
 	for _, p := range providers {
 		ag.Spec.Providers = append(ag.Spec.Providers,
-			agentryv1alpha1.AgentProviderReference{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: p}})
+			kaalmv1alpha1.AgentProviderReference{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: p}})
 	}
 	if err := testClient.Create(ctxT(), ag); err != nil {
 		t.Fatalf("create agent %s: %v", name, err)
@@ -100,7 +100,7 @@ func mkSecret(t *testing.T, name string) {
 func expectReady(t *testing.T, get func() []metav1.Condition, want metav1.ConditionStatus, reason string) {
 	t.Helper()
 	eventually(t, func() error {
-		c := condition(get(), agentryv1alpha1.ConditionReady)
+		c := condition(get(), kaalmv1alpha1.ConditionReady)
 		if c == nil {
 			return errString("no Ready condition yet")
 		}
@@ -124,32 +124,32 @@ func TestAgentClass_ValidBecomesReady(t *testing.T) {
 	mkProvider(t, "ac-valid-prov", nil)
 	mkClass(t, "ac-valid", "ac-valid-prov")
 	expectReady(t, func() []metav1.Condition {
-		var ac agentryv1alpha1.AgentClass
+		var ac kaalmv1alpha1.AgentClass
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-valid"}, &ac)
 		return ac.Status.Conditions
-	}, metav1.ConditionTrue, agentryv1alpha1.ReasonAllReferencesResolved)
+	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonAllReferencesResolved)
 }
 
 func TestAgentClass_MissingProviderIsNotReady(t *testing.T) {
 	mkClass(t, "ac-missing", "does-not-exist")
 	expectReady(t, func() []metav1.Condition {
-		var ac agentryv1alpha1.AgentClass
+		var ac kaalmv1alpha1.AgentClass
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-missing"}, &ac)
 		return ac.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonInvalidReference)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonInvalidReference)
 }
 
 func TestAgentClass_InvalidCIDRIsNotReady(t *testing.T) {
-	ac := &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-badcidr"}}
+	ac := &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-badcidr"}}
 	ac.Spec.Network.Egress.AllowedCIDRs = []string{"not-a-cidr"}
 	if err := testClient.Create(ctxT(), ac); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	expectReady(t, func() []metav1.Condition {
-		var got agentryv1alpha1.AgentClass
+		var got kaalmv1alpha1.AgentClass
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-badcidr"}, &got)
 		return got.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonInvalidReference)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonInvalidReference)
 }
 
 func TestAgentClass_CountsUsers(t *testing.T) {
@@ -157,7 +157,7 @@ func TestAgentClass_CountsUsers(t *testing.T) {
 	mkAgent(t, "count-a", "ac-count")
 	mkAgent(t, "count-b", "ac-count")
 	eventually(t, func() error {
-		var ac agentryv1alpha1.AgentClass
+		var ac kaalmv1alpha1.AgentClass
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-count"}, &ac); err != nil {
 			return err
 		}
@@ -174,18 +174,18 @@ func TestAgentClass_FinalizerHoldsWhileReferenced(t *testing.T) {
 
 	// Wait for the finalizer to be added.
 	eventually(t, func() error {
-		var ac agentryv1alpha1.AgentClass
+		var ac kaalmv1alpha1.AgentClass
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac); err != nil {
 			return err
 		}
-		if !controllerutil.ContainsFinalizer(&ac, agentryv1alpha1.ClassFinalizer) {
+		if !controllerutil.ContainsFinalizer(&ac, kaalmv1alpha1.ClassFinalizer) {
 			return errString("no finalizer yet")
 		}
 		return nil
 	})
 
 	// Delete the class: it should be held (deletionTimestamp set, object remains).
-	var ac agentryv1alpha1.AgentClass
+	var ac kaalmv1alpha1.AgentClass
 	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac)
 	if err := testClient.Delete(ctxT(), &ac); err != nil {
 		t.Fatalf("delete class: %v", err)
@@ -197,13 +197,13 @@ func TestAgentClass_FinalizerHoldsWhileReferenced(t *testing.T) {
 	}
 
 	// Remove the referrer; the class should now finalize away.
-	var agent agentryv1alpha1.Agent
+	var agent kaalmv1alpha1.Agent
 	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "hold-agent", Namespace: "default"}, &agent)
 	if err := testClient.Delete(ctxT(), &agent); err != nil {
 		t.Fatalf("delete agent: %v", err)
 	}
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentClass
+		var got kaalmv1alpha1.AgentClass
 		err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -215,29 +215,29 @@ func TestAgentClass_FinalizerHoldsWhileReferenced(t *testing.T) {
 // ---- ModelProvider ----
 
 func TestModelProvider_CredentialsMissingIsNotReady(t *testing.T) {
-	mkProvider(t, "mp-nocred", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "absent-secret", Key: "token"}
+	mkProvider(t, "mp-nocred", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "absent-secret", Key: "token"}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nocred"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonCredentialsMissing)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsMissing)
 }
 
 func TestModelProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 	mkSecret(t, "mp-ok-key")
-	mkProvider(t, "mp-ok", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: true}
+	mkProvider(t, "mp-ok", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.HealthCheck = &kaalmv1alpha1.ModelProviderHealthCheck{Enabled: true}
 	})
 	get := func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-ok"}, &mp)
 		return mp.Status.Conditions
 	}
-	expectReady(t, get, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 	eventually(t, func() error {
-		c := condition(get(), agentryv1alpha1.ConditionHealthy)
+		c := condition(get(), kaalmv1alpha1.ConditionHealthy)
 		if c == nil || c.Status != metav1.ConditionTrue {
 			return errString("not yet Healthy")
 		}
@@ -248,14 +248,14 @@ func TestModelProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 func TestModelProvider_AuthFailedIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-auth-key")
 	fakeHealth.set("mp-auth", ProviderProbeResult{AuthFailed: true})
-	mkProvider(t, "mp-auth", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: true}
+	mkProvider(t, "mp-auth", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.HealthCheck = &kaalmv1alpha1.ModelProviderHealthCheck{Enabled: true}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-auth"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonCredentialsInvalid)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsInvalid)
 }
 
 func TestModelProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
@@ -263,14 +263,14 @@ func TestModelProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
 	// A probe result that WOULD block Ready if the probe ran, so a passing
 	// test proves the probe was genuinely skipped rather than merely healthy.
 	fakeHealth.set("mp-nohc", ProviderProbeResult{AuthFailed: true})
-	mkProvider(t, "mp-nohc", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: false}
+	mkProvider(t, "mp-nohc", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.HealthCheck = &kaalmv1alpha1.ModelProviderHealthCheck{Enabled: false}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nohc"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 	if n := fakeHealth.count("mp-nohc"); n != 0 {
 		t.Fatalf("healthCheck.enabled=false: expected probe to be skipped, called %d times", n)
 	}
@@ -281,11 +281,11 @@ func TestModelProvider_NilHealthCheckRunsProbe(t *testing.T) {
 	// Leave HealthCheck nil: reconcile-time defaulting must still run the probe.
 	mkProvider(t, "mp-nilhc", nil)
 	get := func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nilhc"}, &mp)
 		return mp.Status.Conditions
 	}
-	expectReady(t, get, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 	eventually(t, func() error {
 		if fakeHealth.count("mp-nilhc") == 0 {
 			return errString("nil healthCheck: expected probe to run, but it was never called")
@@ -297,33 +297,33 @@ func TestModelProvider_NilHealthCheckRunsProbe(t *testing.T) {
 func TestModelProvider_FallbackCycleIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-cyc-a-key")
 	mkSecret(t, "mp-cyc-b-key")
-	mkProvider(t, "mp-cyc-b", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.Fallback = []agentryv1alpha1.LocalObjectReference{{Name: "mp-cyc-a"}}
+	mkProvider(t, "mp-cyc-b", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.Fallback = []kaalmv1alpha1.LocalObjectReference{{Name: "mp-cyc-a"}}
 	})
-	mkProvider(t, "mp-cyc-a", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.Fallback = []agentryv1alpha1.LocalObjectReference{{Name: "mp-cyc-b"}}
+	mkProvider(t, "mp-cyc-a", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.Fallback = []kaalmv1alpha1.LocalObjectReference{{Name: "mp-cyc-b"}}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-cyc-a"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonFallbackIneligible)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonFallbackIneligible)
 }
 
 func TestModelProvider_InvalidDegradeTargetIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-deg-key")
-	mkProvider(t, "mp-deg", func(mp *agentryv1alpha1.ModelProvider) {
+	mkProvider(t, "mp-deg", func(mp *kaalmv1alpha1.ModelProvider) {
 		to := "no-such-model"
-		mp.Spec.Models = []agentryv1alpha1.ModelProviderModel{{ID: "real-model"}}
-		mp.Spec.Budget.Policies = []agentryv1alpha1.ModelProviderBudgetPolicy{
+		mp.Spec.Models = []kaalmv1alpha1.ModelProviderModel{{ID: "real-model"}}
+		mp.Spec.Budget.Policies = []kaalmv1alpha1.ModelProviderBudgetPolicy{
 			{AtPercent: 100, Action: "degrade", DegradeTo: &to},
 		}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-deg"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonInvalidDegradeTarget)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonInvalidDegradeTarget)
 }
 
 var _ = client.IgnoreNotFound
@@ -355,9 +355,9 @@ func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 
 	// A provider referenced only by an AgentTask.
 	mkWorkloadClass(t, "iref-tcls", nil)
-	mkTask(t, "iref-task", "iref-tcls", func(task *agentryv1alpha1.AgentTask) {
-		task.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "iref-task-prov"}},
+	mkTask(t, "iref-task", "iref-tcls", func(task *kaalmv1alpha1.AgentTask) {
+		task.Spec.Providers = []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "iref-task-prov"}},
 		}
 	})
 	eventually(t, func() error {
@@ -388,34 +388,34 @@ func TestModelProvider_CredentialKeyMissing(t *testing.T) {
 	if err := testClient.Create(ctxT(), sec); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("create secret: %v", err)
 	}
-	mkProvider(t, "mp-wrongkey", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-wrongkey-secret", Key: "token"}
+	mkProvider(t, "mp-wrongkey", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-wrongkey-secret", Key: "token"}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-wrongkey"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonCredentialsMissing)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsMissing)
 }
 
 // ---- ModelProvider delete handshake (reconcileDelete + isReferenced) ----
 
 func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 	mkSecret(t, "mpref-key")
-	mkProvider(t, "mpref", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mpref-key", Key: "token"}
+	mkProvider(t, "mpref", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mpref-key", Key: "token"}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 
 	// An AgentClass listing the provider makes isReferenced true (classes branch).
 	mkClass(t, "acref", "mpref")
 
 	// Delete the provider: the finalizer holds it in Terminating while referenced.
-	var mp agentryv1alpha1.ModelProvider
+	var mp kaalmv1alpha1.ModelProvider
 	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp); err != nil {
 		t.Fatal(err)
 	}
@@ -428,13 +428,13 @@ func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 	}
 
 	// Remove the referrer; the provider finalizes away.
-	var ac agentryv1alpha1.AgentClass
+	var ac kaalmv1alpha1.AgentClass
 	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "acref"}, &ac)
 	if err := testClient.Delete(ctxT(), &ac); err != nil {
 		t.Fatalf("delete class: %v", err)
 	}
 	eventually(t, func() error {
-		var got agentryv1alpha1.ModelProvider
+		var got kaalmv1alpha1.ModelProvider
 		err := testClient.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -448,18 +448,18 @@ func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 func TestModelProvider_ProbeSkipped(t *testing.T) {
 	mkSecret(t, "mp-skip-key")
 	fakeHealth.set("mp-skip", ProviderProbeResult{Skipped: true})
-	mkProvider(t, "mp-skip", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-skip-key", Key: "token"}
-		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: true}
+	mkProvider(t, "mp-skip", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-skip-key", Key: "token"}
+		mp.Spec.HealthCheck = &kaalmv1alpha1.ModelProviderHealthCheck{Enabled: true}
 	})
 	get := func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-skip"}, &mp)
 		return mp.Status.Conditions
 	}
-	expectReady(t, get, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 	eventually(t, func() error {
-		c := condition(get(), agentryv1alpha1.ConditionHealthy)
+		c := condition(get(), kaalmv1alpha1.ConditionHealthy)
 		if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != "ProbeSkipped" {
 			return errString("Healthy should be Unknown/ProbeSkipped")
 		}
@@ -470,21 +470,21 @@ func TestModelProvider_ProbeSkipped(t *testing.T) {
 func TestModelProvider_ProbeErrStaysReady(t *testing.T) {
 	mkSecret(t, "mp-unhealthy-key")
 	fakeHealth.set("mp-unhealthy", ProviderProbeResult{Err: errString("upstream 500")})
-	mkProvider(t, "mp-unhealthy", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-unhealthy-key", Key: "token"}
+	mkProvider(t, "mp-unhealthy", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-unhealthy-key", Key: "token"}
 		// IntervalSeconds>0 exercises the interval() configured branch.
-		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: true, IntervalSeconds: 5}
+		mp.Spec.HealthCheck = &kaalmv1alpha1.ModelProviderHealthCheck{Enabled: true, IntervalSeconds: 5}
 	})
 	get := func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-unhealthy"}, &mp)
 		return mp.Status.Conditions
 	}
 	// A transient probe error does not flip Ready.
-	expectReady(t, get, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 	eventually(t, func() error {
-		c := condition(get(), agentryv1alpha1.ConditionHealthy)
-		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != agentryv1alpha1.ReasonProviderUnhealthy {
+		c := condition(get(), kaalmv1alpha1.ConditionHealthy)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1alpha1.ReasonProviderUnhealthy {
 			return errString("Healthy should be False/ProviderUnhealthy")
 		}
 		return nil
@@ -495,40 +495,40 @@ func TestModelProvider_ProbeErrStaysReady(t *testing.T) {
 
 func TestModelProvider_FallbackMissingIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-fbmiss-key")
-	mkProvider(t, "mp-fbmiss", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-fbmiss-key", Key: "token"}
-		mp.Spec.Fallback = []agentryv1alpha1.LocalObjectReference{{Name: "no-such-provider"}}
+	mkProvider(t, "mp-fbmiss", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-fbmiss-key", Key: "token"}
+		mp.Spec.Fallback = []kaalmv1alpha1.LocalObjectReference{{Name: "no-such-provider"}}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-fbmiss"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonFallbackIneligible)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonFallbackIneligible)
 }
 
 func TestModelProvider_FallbackTypeMismatchIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-fbtype-a-key")
 	mkSecret(t, "mp-fbtype-b-key")
-	mkProvider(t, "mp-fbtype-b", func(mp *agentryv1alpha1.ModelProvider) {
+	mkProvider(t, "mp-fbtype-b", func(mp *kaalmv1alpha1.ModelProvider) {
 		mp.Spec.Type = "anthropic"
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-fbtype-b-key", Key: "token"}
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-fbtype-b-key", Key: "token"}
 	})
-	mkProvider(t, "mp-fbtype-a", func(mp *agentryv1alpha1.ModelProvider) {
+	mkProvider(t, "mp-fbtype-a", func(mp *kaalmv1alpha1.ModelProvider) {
 		mp.Spec.Type = "openai"
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-fbtype-a-key", Key: "token"}
-		mp.Spec.Fallback = []agentryv1alpha1.LocalObjectReference{{Name: "mp-fbtype-b"}}
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-fbtype-a-key", Key: "token"}
+		mp.Spec.Fallback = []kaalmv1alpha1.LocalObjectReference{{Name: "mp-fbtype-b"}}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-fbtype-a"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonFallbackIneligible)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonFallbackIneligible)
 }
 
 // ---- AgentClass FQDN + host validation ----
 
 func TestAgentClass_AllowedHostsUnsupportedByCNI(t *testing.T) {
-	ac := &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-hosts"}}
+	ac := &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-hosts"}}
 	ac.Spec.Network.Egress.AllowedHosts = []string{"api.example.com"}
 	if err := testClient.Create(ctxT(), ac); err != nil {
 		t.Fatalf("create: %v", err)
@@ -537,18 +537,18 @@ func TestAgentClass_AllowedHostsUnsupportedByCNI(t *testing.T) {
 	// unsupported; the class stays Ready (allowedHosts is advisory) but the
 	// FQDNPolicySupported condition is False.
 	expectReady(t, func() []metav1.Condition {
-		var got agentryv1alpha1.AgentClass
+		var got kaalmv1alpha1.AgentClass
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hosts"}, &got)
 		return got.Status.Conditions
-	}, metav1.ConditionTrue, agentryv1alpha1.ReasonAllReferencesResolved)
+	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonAllReferencesResolved)
 	eventually(t, func() error {
-		var got agentryv1alpha1.AgentClass
+		var got kaalmv1alpha1.AgentClass
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hosts"}, &got); err != nil {
 			return err
 		}
-		c := condition(got.Status.Conditions, agentryv1alpha1.ConditionFQDNPolicySupported)
+		c := condition(got.Status.Conditions, kaalmv1alpha1.ConditionFQDNPolicySupported)
 		if c == nil || c.Status != metav1.ConditionFalse ||
-			c.Reason != agentryv1alpha1.ReasonFQDNPolicyUnsupported {
+			c.Reason != kaalmv1alpha1.ReasonFQDNPolicyUnsupported {
 			return errString("FQDNPolicySupported should be False/FQDNPolicyUnsupported")
 		}
 		return nil
@@ -556,16 +556,16 @@ func TestAgentClass_AllowedHostsUnsupportedByCNI(t *testing.T) {
 }
 
 func TestAgentClass_InvalidHostIsNotReady(t *testing.T) {
-	ac := &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-badhost"}}
+	ac := &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-badhost"}}
 	ac.Spec.Network.Egress.AllowedHosts = []string{"not a valid host"}
 	if err := testClient.Create(ctxT(), ac); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	expectReady(t, func() []metav1.Condition {
-		var got agentryv1alpha1.AgentClass
+		var got kaalmv1alpha1.AgentClass
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-badhost"}, &got)
 		return got.Status.Conditions
-	}, metav1.ConditionFalse, agentryv1alpha1.ReasonInvalidReference)
+	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonInvalidReference)
 }
 
 // ---- reconcileDelete short-circuits when the finalizer is already gone ----
@@ -579,19 +579,19 @@ func TestReconcileDelete_NoFinalizerIsNoop(t *testing.T) {
 	}
 
 	mpRes, err := (&ModelProviderReconciler{Client: testClient}).reconcileDelete(ctx,
-		&agentryv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
+		&kaalmv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
 	clean("ModelProvider", mpRes.Requeue, mpRes.RequeueAfter, err)
 
 	acRes, err := (&AgentClassReconciler{Client: testClient}).reconcileDelete(ctx,
-		&agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
+		&kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
 	clean("AgentClass", acRes.Requeue, acRes.RequeueAfter, err)
 
 	taskRes, err := (&AgentTaskReconciler{Client: testClient}).reconcileDelete(ctx,
-		&agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
+		&kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
 	clean("AgentTask", taskRes.Requeue, taskRes.RequeueAfter, err)
 
 	agRes, err := (&AgentReconciler{Client: testClient}).reconcileDelete(ctx,
-		&agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
+		&kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
 	clean("Agent", agRes.Requeue, agRes.RequeueAfter, err)
 }
 
@@ -601,7 +601,7 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentryv1alpha1.AddToScheme(scheme); err != nil {
+	if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	if err := cmapi.AddToScheme(scheme); err != nil {
@@ -649,19 +649,19 @@ func TestGetErrorBranches(t *testing.T) {
 
 	// credential surfaces a non-NotFound Secret Get error as CredentialsMissing.
 	r := &ModelProviderReconciler{Client: c, OperatorNamespace: "default"}
-	mp := &agentryv1alpha1.ModelProvider{
+	mp := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "p"},
-		Spec:       agentryv1alpha1.ModelProviderSpec{CredentialsRef: agentryv1alpha1.SecretKeyReference{Name: "s", Key: "token"}},
+		Spec:       kaalmv1alpha1.ModelProviderSpec{CredentialsRef: kaalmv1alpha1.SecretKeyReference{Name: "s", Key: "token"}},
 	}
 	_, reason, msg := r.credential(ctx, mp)
-	if reason != agentryv1alpha1.ReasonCredentialsMissing || msg == "" {
+	if reason != kaalmv1alpha1.ReasonCredentialsMissing || msg == "" {
 		t.Errorf("credential Get error: reason=%q msg=%q", reason, msg)
 	}
 
 	// reconcileBudget surfaces a non-NotFound ConfigMap Get error.
-	budgeted := &agentryv1alpha1.ModelProvider{
+	budgeted := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "b"},
-		Spec:       agentryv1alpha1.ModelProviderSpec{Budget: agentryv1alpha1.ModelProviderBudget{Period: "monthly"}},
+		Spec:       kaalmv1alpha1.ModelProviderSpec{Budget: kaalmv1alpha1.ModelProviderBudget{Period: "monthly"}},
 	}
 	if err := r.reconcileBudget(ctx, budgeted, map[string]bool{}); err == nil {
 		t.Error("reconcileBudget must surface a ConfigMap Get error")
@@ -673,25 +673,25 @@ func TestMapFuncs_ListErrorReturnsNil(t *testing.T) {
 	c := newErrListClient(t)
 
 	ar := &AgentReconciler{Client: c}
-	if reqs := ar.agentsForClass(ctx, &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}); reqs != nil {
+	if reqs := ar.agentsForClass(ctx, &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}); reqs != nil {
 		t.Errorf("agentsForClass on a list error must return nil: %v", reqs)
 	}
-	if reqs := ar.agentsForProvider(ctx, &agentryv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}); reqs != nil {
+	if reqs := ar.agentsForProvider(ctx, &kaalmv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}); reqs != nil {
 		t.Errorf("agentsForProvider on a list error must return nil: %v", reqs)
 	}
 
 	acr := &AgentClassReconciler{Client: c}
-	if reqs := acr.classesForProvider(ctx, &agentryv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}); reqs != nil {
+	if reqs := acr.classesForProvider(ctx, &kaalmv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}); reqs != nil {
 		t.Errorf("classesForProvider on a list error must return nil: %v", reqs)
 	}
 
 	tr := &AgentTaskReconciler{Client: c}
-	if reqs := tr.tasksForClass(ctx, &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}); reqs != nil {
+	if reqs := tr.tasksForClass(ctx, &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}); reqs != nil {
 		t.Errorf("tasksForClass on a list error must return nil: %v", reqs)
 	}
 
 	chr := &AgentChannelReconciler{Client: c}
-	if reqs := chr.channelsForAgent(ctx, &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"}}); reqs != nil {
+	if reqs := chr.channelsForAgent(ctx, &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"}}); reqs != nil {
 		t.Errorf("channelsForAgent on a list error must return nil: %v", reqs)
 	}
 }
@@ -706,15 +706,15 @@ func TestReferenceCountsPropagateListErrors(t *testing.T) {
 	}
 
 	// isReferenced (via reconcileDelete on a finalized provider) surfaces it too.
-	mp := &agentryv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	controllerutil.AddFinalizer(mp, agentryv1alpha1.ProviderFinalizer)
+	mp := &kaalmv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	controllerutil.AddFinalizer(mp, kaalmv1alpha1.ProviderFinalizer)
 	if _, err := (&ModelProviderReconciler{Client: c}).reconcileDelete(ctx, mp); err == nil {
 		t.Error("provider reconcileDelete must surface the isReferenced list error")
 	}
 
 	// countUsers (via reconcileDelete on a finalized class) surfaces it.
-	ac := &agentryv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}
-	controllerutil.AddFinalizer(ac, agentryv1alpha1.ClassFinalizer)
+	ac := &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}
+	controllerutil.AddFinalizer(ac, kaalmv1alpha1.ClassFinalizer)
 	if _, err := (&AgentClassReconciler{Client: c}).reconcileDelete(ctx, ac); err == nil {
 		t.Error("class reconcileDelete must surface the countUsers list error")
 	}
@@ -724,25 +724,25 @@ func TestClassForWorkload(t *testing.T) {
 	ctx := context.Background()
 
 	// An Agent maps to its class.
-	ag := &agentryv1alpha1.Agent{
+	ag := &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
-		Spec:       agentryv1alpha1.AgentSpec{AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "cls"}},
+		Spec:       kaalmv1alpha1.AgentSpec{AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "cls"}},
 	}
 	if reqs := classForWorkload(ctx, ag); len(reqs) != 1 || reqs[0].Name != "cls" {
 		t.Errorf("agent should map to its class: %v", reqs)
 	}
 
 	// An AgentTask maps to its class.
-	task := &agentryv1alpha1.AgentTask{
+	task := &kaalmv1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"},
-		Spec:       agentryv1alpha1.AgentTaskSpec{AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "tcls"}},
+		Spec:       kaalmv1alpha1.AgentTaskSpec{AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "tcls"}},
 	}
 	if reqs := classForWorkload(ctx, task); len(reqs) != 1 || reqs[0].Name != "tcls" {
 		t.Errorf("task should map to its class: %v", reqs)
 	}
 
 	// An empty class ref yields no requests.
-	empty := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "e"}}
+	empty := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "e"}}
 	if reqs := classForWorkload(ctx, empty); reqs != nil {
 		t.Errorf("empty classRef must map to nil: %v", reqs)
 	}
@@ -756,10 +756,10 @@ func TestClassForWorkload(t *testing.T) {
 func TestProvidersForWorkload(t *testing.T) {
 	ctx := context.Background()
 
-	ag := &agentryv1alpha1.Agent{Spec: agentryv1alpha1.AgentSpec{
-		Providers: []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "p1"}},
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "p2"}},
+	ag := &kaalmv1alpha1.Agent{Spec: kaalmv1alpha1.AgentSpec{
+		Providers: []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "p1"}},
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "p2"}},
 		},
 	}}
 	if reqs := providersForWorkload(ctx, ag); len(reqs) != 2 ||
@@ -767,9 +767,9 @@ func TestProvidersForWorkload(t *testing.T) {
 		t.Errorf("agent providers not mapped: %v", reqs)
 	}
 
-	task := &agentryv1alpha1.AgentTask{Spec: agentryv1alpha1.AgentTaskSpec{
-		Providers: []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "tp"}},
+	task := &kaalmv1alpha1.AgentTask{Spec: kaalmv1alpha1.AgentTaskSpec{
+		Providers: []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "tp"}},
 		},
 	}}
 	if reqs := providersForWorkload(ctx, task); len(reqs) != 1 || reqs[0].Name != "tp" {
@@ -784,14 +784,14 @@ func TestProvidersForWorkload(t *testing.T) {
 
 func TestProvidersForClass(t *testing.T) {
 	ctx := context.Background()
-	ac := &agentryv1alpha1.AgentClass{Spec: agentryv1alpha1.AgentClassSpec{
-		AllowedProviders: []agentryv1alpha1.LocalObjectReference{{Name: "a"}, {Name: "b"}},
+	ac := &kaalmv1alpha1.AgentClass{Spec: kaalmv1alpha1.AgentClassSpec{
+		AllowedProviders: []kaalmv1alpha1.LocalObjectReference{{Name: "a"}, {Name: "b"}},
 	}}
 	if reqs := providersForClass(ctx, ac); len(reqs) != 2 || reqs[0].Name != "a" || reqs[1].Name != "b" {
 		t.Errorf("class allowedProviders not mapped: %v", reqs)
 	}
 	// A wrong type yields nil.
-	if reqs := providersForClass(ctx, &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "x"}}); reqs != nil {
+	if reqs := providersForClass(ctx, &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "x"}}); reqs != nil {
 		t.Errorf("non-AgentClass object must map to nil: %v", reqs)
 	}
 }
@@ -823,8 +823,8 @@ func TestEqualStrings(t *testing.T) {
 // ---- cost helpers ----
 
 func TestCheapestModel(t *testing.T) {
-	mp := &agentryv1alpha1.ModelProvider{Spec: agentryv1alpha1.ModelProviderSpec{
-		Models: []agentryv1alpha1.ModelProviderModel{
+	mp := &kaalmv1alpha1.ModelProvider{Spec: kaalmv1alpha1.ModelProviderSpec{
+		Models: []kaalmv1alpha1.ModelProviderModel{
 			{ID: "bad", CostPer1MInputTokens: "nope", CostPer1MOutputTokens: "x"},
 			{ID: "cheap", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "1"},
 			{ID: "pricey", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "10"},
@@ -835,8 +835,8 @@ func TestCheapestModel(t *testing.T) {
 		t.Errorf("cheapestModel = %q, %v; want cheap,true", got, ok)
 	}
 	// No parseable costs -> ok false.
-	none := &agentryv1alpha1.ModelProvider{Spec: agentryv1alpha1.ModelProviderSpec{
-		Models: []agentryv1alpha1.ModelProviderModel{{ID: "m", CostPer1MInputTokens: "x", CostPer1MOutputTokens: "y"}},
+	none := &kaalmv1alpha1.ModelProvider{Spec: kaalmv1alpha1.ModelProviderSpec{
+		Models: []kaalmv1alpha1.ModelProviderModel{{ID: "m", CostPer1MInputTokens: "x", CostPer1MOutputTokens: "y"}},
 	}}
 	if _, ok := cheapestModel(none); ok {
 		t.Error("unparseable costs must yield ok=false")
@@ -847,15 +847,15 @@ func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
 	rec := record.NewFakeRecorder(4)
 	r := &ModelProviderReconciler{Recorder: rec}
 	to := "pricey"
-	mp := &agentryv1alpha1.ModelProvider{
+	mp := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "mp"},
-		Spec: agentryv1alpha1.ModelProviderSpec{
-			Models: []agentryv1alpha1.ModelProviderModel{
+		Spec: kaalmv1alpha1.ModelProviderSpec{
+			Models: []kaalmv1alpha1.ModelProviderModel{
 				{ID: "cheap", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "1"},
 				{ID: "pricey", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "10"},
 			},
-			Budget: agentryv1alpha1.ModelProviderBudget{
-				Policies: []agentryv1alpha1.ModelProviderBudgetPolicy{
+			Budget: kaalmv1alpha1.ModelProviderBudget{
+				Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{
 					{AtPercent: 100, Action: "degrade", DegradeTo: &to},
 				},
 			},

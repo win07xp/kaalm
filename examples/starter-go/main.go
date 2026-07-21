@@ -1,6 +1,6 @@
 // Copyright 2026. Licensed under the Apache License, Version 2.0.
 //
-// Command starter-go is a minimal, working implementation of the Agentry
+// Command starter-go is a minimal, working implementation of the Kaalm
 // Runtime Contract, meant to be copied and modified. It handles every
 // repetitive and error-prone part of the contract so you only replace
 // handleMessage in handler.go. See docs/src/runtime/starter-templates.md.
@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	gatewaySANLocal = "agentry-gateway.agentry-system.svc.cluster.local"
-	gatewaySANShort = "agentry-gateway.agentry-system.svc"
+	gatewaySANLocal = "kaalm-gateway.kaalm-system.svc.cluster.local"
+	gatewaySANShort = "kaalm-gateway.kaalm-system.svc"
 	dedupBufferSize = 1024
 	heartbeatPeriod = 30 * time.Second
 )
@@ -62,10 +62,10 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[agent] ")
 
-	healthPort := envOr("AGENTRY_HEALTH_PORT", "8080")
-	certFile := envOr("AGENTRY_TLS_CERT", "/var/run/agentry/tls.crt")
-	keyFile := envOr("AGENTRY_TLS_KEY", "/var/run/agentry/tls.key")
-	caFile := envOr("AGENTRY_CA_CERT", "/var/run/agentry/ca.crt")
+	healthPort := envOr("KAALM_HEALTH_PORT", "8080")
+	certFile := envOr("KAALM_TLS_CERT", "/var/run/kaalm/tls.crt")
+	keyFile := envOr("KAALM_TLS_KEY", "/var/run/kaalm/tls.key")
+	caFile := envOr("KAALM_CA_CERT", "/var/run/kaalm/ca.crt")
 
 	reloader, err := newCertReloader(certFile, keyFile, caFile)
 	if err != nil {
@@ -77,7 +77,7 @@ func main() {
 
 	a := &agent{
 		reloader:   reloader,
-		gatewayURL: strings.TrimSuffix(os.Getenv("AGENTRY_GATEWAY_ENDPOINT"), "/"),
+		gatewayURL: strings.TrimSuffix(os.Getenv("KAALM_GATEWAY_ENDPOINT"), "/"),
 		healthPort: healthPort,
 		dedup:      newDedupBuffer(dedupBufferSize),
 	}
@@ -113,7 +113,7 @@ func main() {
 		}
 	}()
 
-	if status := taskAutocompleteStatus(a.isTask, os.Getenv("AGENTRY_TASK_AUTOCOMPLETE")); status != "" {
+	if status := taskAutocompleteStatus(a.isTask, os.Getenv("KAALM_TASK_AUTOCOMPLETE")); status != "" {
 		go func() {
 			// Completing at pod startup can race the gateway's source-IP check:
 			// its Pod informer may not have indexed this pod's IP yet, so the
@@ -182,7 +182,7 @@ func (a *agent) handleV1Message(w http.ResponseWriter, r *http.Request) {
 // emits in Agent mode only; off never emits. There is no force-on for tasks:
 // the endpoint rejects task callers by design.
 func (a *agent) shouldHeartbeat() bool {
-	switch os.Getenv("AGENTRY_TEMPLATE_HEARTBEAT") {
+	switch os.Getenv("KAALM_TEMPLATE_HEARTBEAT") {
 	case "off":
 		return false
 	default: // auto
@@ -223,7 +223,7 @@ func gatewaySANMatches(cert *x509.Certificate) bool {
 }
 
 // workloadIsTask detects AgentTask mode from the mounted client cert's SAN
-// shape ({name}.{ns}.task.agentry.io), so the heartbeat loop needs no config.
+// shape ({name}.{ns}.task.kaalm.io), so the heartbeat loop needs no config.
 func workloadIsTask(cert *tls.Certificate) bool {
 	if cert == nil || len(cert.Certificate) == 0 {
 		return false
@@ -233,7 +233,7 @@ func workloadIsTask(cert *tls.Certificate) bool {
 		return false
 	}
 	for _, san := range leaf.DNSNames {
-		if strings.HasSuffix(san, ".task.agentry.io") {
+		if strings.HasSuffix(san, ".task.kaalm.io") {
 			return true
 		}
 	}
@@ -302,7 +302,7 @@ func (d *dedupBuffer) put(id string, reply ResponseEnvelope) {
 
 // taskAutocompleteStatus returns the status an AgentTask should self-report on
 // startup, or "" to disable. Honored only in task mode; the value comes from
-// AGENTRY_TASK_AUTOCOMPLETE ("success" or "failure"). This is a smoke/e2e hook:
+// KAALM_TASK_AUTOCOMPLETE ("success" or "failure"). This is a smoke/e2e hook:
 // a real task reports completion from its own work, not on startup.
 func taskAutocompleteStatus(isTask bool, env string) string {
 	if !isTask {

@@ -6,7 +6,7 @@ and the bundled starter class is Ready.
 ## 1. The five CRDs
 
 ```bash
-kubectl get crds | grep agentry.io
+kubectl get crds | grep kaalm.io
 ```
 
 Expect all five: `agentclasses`, `agents`, `agenttasks`, `agentchannels`,
@@ -15,22 +15,22 @@ Expect all five: `agentclasses`, `agents`, `agenttasks`, `agentchannels`,
 ## 2. The two components
 
 ```bash
-kubectl get pods -n agentry-system
+kubectl get pods -n kaalm-system
 ```
 
 Expect two controller replicas and two gateway replicas, all `Running`. The
 gateway also exposes a Service:
 
 ```bash
-kubectl get svc -n agentry-system agentry-gateway
+kubectl get svc -n kaalm-system kaalm-gateway
 ```
 
 with three ports: `8080` (user gateway, inbound webhooks), `8443` (LLM gateway,
 agents call out through this), and `9090` (metrics).
 
-If pods are stuck in `ContainerCreating` on the `agentry-tls` volume, the
+If pods are stuck in `ContainerCreating` on the `kaalm-tls` volume, the
 cert-manager Certificates have not been issued yet; check
-`kubectl get certificates -n agentry-system` and the cert-manager logs.
+`kubectl get certificates -n kaalm-system` and the cert-manager logs.
 
 ## 3. The starter AgentClass
 

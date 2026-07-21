@@ -36,7 +36,7 @@ type AgentSpec struct {
 	// Args overrides the container args.
 	// +optional
 	Args []string `json:"args,omitempty"`
-	// Env are extra environment variables merged with the injected AGENTRY_* set.
+	// Env are extra environment variables merged with the injected KAALM_* set.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 	// Providers lists the ModelProviders this agent may call. Omit for agents

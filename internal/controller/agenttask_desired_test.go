@@ -23,13 +23,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func TestDesiredTaskPod_Shape(t *testing.T) {
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
 	eff := effectiveTaskSpec{Image: "img:v1", HealthPort: 8080, PersistenceOn: true}
-	pod := desiredTaskPod(task, eff, "agentry-system")
+	pod := desiredTaskPod(task, eff, "kaalm-system")
 
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Error("task pods must have restartPolicy Never")
@@ -45,7 +45,7 @@ func TestDesiredTaskPod_Shape(t *testing.T) {
 	for _, e := range c.Env {
 		envMap[e.Name] = e.Value
 	}
-	if envMap["AGENTRY_GATEWAY_ENDPOINT"] == "" || envMap["AGENTRY_TLS_CERT"] == "" {
+	if envMap["KAALM_GATEWAY_ENDPOINT"] == "" || envMap["KAALM_TLS_CERT"] == "" {
 		t.Errorf("contract env missing: %v", envMap)
 	}
 	found := false
@@ -60,9 +60,9 @@ func TestDesiredTaskPod_Shape(t *testing.T) {
 }
 
 func TestDesiredTaskCertificate_Shape(t *testing.T) {
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
 	cert := desiredTaskCertificate(task)
-	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != "fix-42.team-a.task.agentry.io" {
+	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != "fix-42.team-a.task.kaalm.io" {
 		t.Errorf("task SAN wrong: %v", cert.Spec.DNSNames)
 	}
 	if len(cert.Spec.Usages) != 1 || string(cert.Spec.Usages[0]) != "client auth" {
@@ -71,7 +71,7 @@ func TestDesiredTaskCertificate_Shape(t *testing.T) {
 }
 
 func TestDesiredCompletionRole_Scoping(t *testing.T) {
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
 	role := desiredCompletionRole(task)
 	rule := role.Rules[0]
 	if len(rule.ResourceNames) != 1 || rule.ResourceNames[0] != "fix-42-completion" {
@@ -82,16 +82,16 @@ func TestDesiredCompletionRole_Scoping(t *testing.T) {
 			t.Errorf("role must grant update/patch only, found %q", v)
 		}
 	}
-	rb := desiredCompletionRoleBinding(task, "agentry-system")
-	if rb.Subjects[0].Name != "agentry-gateway" || rb.Subjects[0].Namespace != "agentry-system" {
+	rb := desiredCompletionRoleBinding(task, "kaalm-system")
+	if rb.Subjects[0].Name != "kaalm-gateway" || rb.Subjects[0].Namespace != "kaalm-system" {
 		t.Errorf("binding subject wrong: %+v", rb.Subjects[0])
 	}
 }
 
 func TestDesiredTaskNetworkPolicy_NoIngress(t *testing.T) {
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
-	class := &agentryv1alpha1.AgentClass{}
-	np := desiredTaskNetworkPolicy(task, class, "agentry-system")
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
+	class := &kaalmv1alpha1.AgentClass{}
+	np := desiredTaskNetworkPolicy(task, class, "kaalm-system")
 	if np.Spec.Ingress == nil || len(np.Spec.Ingress) != 0 {
 		t.Errorf("task policy must declare an explicit empty ingress list, got %v", np.Spec.Ingress)
 	}
@@ -118,7 +118,7 @@ func TestParseCompletionAndValidate(t *testing.T) {
 		t.Errorf("parse wrong: %+v", p)
 	}
 
-	declared := []agentryv1alpha1.AgentTaskArtifact{{Name: "pr-url"}, {Name: "summary"}}
+	declared := []kaalmv1alpha1.AgentTaskArtifact{{Name: "pr-url"}, {Name: "summary"}}
 	// success requires every declared artifact.
 	if msg := validateArtifactNames(p, declared); msg == "" {
 		t.Error("missing declared artifact must fail on success")
@@ -139,29 +139,29 @@ func TestParseCompletionAndValidate(t *testing.T) {
 func TestDeriveEffectiveTaskSpec_ClassDefaults(t *testing.T) {
 	sc := testStorageClass
 	rc := "gvisor"
-	class := &agentryv1alpha1.AgentClass{
+	class := &kaalmv1alpha1.AgentClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "std"},
-		Spec: agentryv1alpha1.AgentClassSpec{
-			Image: agentryv1alpha1.AgentClassImage{DefaultImage: "reg/default:v1", PullPolicy: corev1.PullAlways},
-			Resources: agentryv1alpha1.AgentClassResources{
+		Spec: kaalmv1alpha1.AgentClassSpec{
+			Image: kaalmv1alpha1.AgentClassImage{DefaultImage: "reg/default:v1", PullPolicy: corev1.PullAlways},
+			Resources: kaalmv1alpha1.AgentClassResources{
 				Defaults: corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
 				},
 			},
-			Persistence: agentryv1alpha1.AgentClassPersistence{
+			Persistence: kaalmv1alpha1.AgentClassPersistence{
 				DefaultSizeGi: 5, MaxSizeGi: 10, StorageClassName: &sc,
 			},
-			Runtime: agentryv1alpha1.AgentClassRuntime{RuntimeClassName: &rc},
+			Runtime: kaalmv1alpha1.AgentClassRuntime{RuntimeClassName: &rc},
 		},
 	}
 	// Task with no image and no resources inherits class defaults; size clamps.
 	size := int32(50)
-	task := &agentryv1alpha1.AgentTask{
+	task := &kaalmv1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"},
-		Spec: agentryv1alpha1.AgentTaskSpec{
-			Persistence: agentryv1alpha1.AgentTaskPersistence{Enabled: true, SizeGi: &size},
-			Providers: []agentryv1alpha1.AgentProviderReference{
-				{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "p1"}},
+		Spec: kaalmv1alpha1.AgentTaskSpec{
+			Persistence: kaalmv1alpha1.AgentTaskPersistence{Enabled: true, SizeGi: &size},
+			Providers: []kaalmv1alpha1.AgentProviderReference{
+				{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "p1"}},
 			},
 		},
 	}
@@ -198,20 +198,20 @@ func TestDeriveEffectiveTaskSpec_ClassDefaults(t *testing.T) {
 }
 
 func TestDesiredTaskPod_MergesClassPodMetadata(t *testing.T) {
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-9", Namespace: "team-a"}}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-9", Namespace: "team-a"}}
 	eff := effectiveTaskSpec{
 		Image:          "img:v1",
 		HealthPort:     8080,
 		PodLabels:      map[string]string{"team": "payments", "tier": "batch"},
 		PodAnnotations: map[string]string{"prometheus.io/scrape": "true"},
 	}
-	pod := desiredTaskPod(task, eff, "agentry-system")
+	pod := desiredTaskPod(task, eff, "kaalm-system")
 
 	// Class-level pod labels merge with the task's identity labels.
 	if pod.Labels["team"] != "payments" || pod.Labels["tier"] != "batch" {
 		t.Errorf("class pod labels not merged: %v", pod.Labels)
 	}
-	if pod.Labels["agentry.io/task"] != "fix-9" {
+	if pod.Labels["kaalm.io/task"] != "fix-9" {
 		t.Errorf("task identity label missing: %v", pod.Labels)
 	}
 	if pod.Annotations["prometheus.io/scrape"] != "true" {
@@ -220,13 +220,13 @@ func TestDesiredTaskPod_MergesClassPodMetadata(t *testing.T) {
 }
 
 func TestDesiredTaskNetworkPolicy_AllowedCIDRs(t *testing.T) {
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-9", Namespace: "team-a"}}
-	class := &agentryv1alpha1.AgentClass{Spec: agentryv1alpha1.AgentClassSpec{
-		Network: agentryv1alpha1.AgentClassNetwork{
-			Egress: agentryv1alpha1.AgentClassEgress{AllowedCIDRs: []string{"203.0.113.0/24"}},
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-9", Namespace: "team-a"}}
+	class := &kaalmv1alpha1.AgentClass{Spec: kaalmv1alpha1.AgentClassSpec{
+		Network: kaalmv1alpha1.AgentClassNetwork{
+			Egress: kaalmv1alpha1.AgentClassEgress{AllowedCIDRs: []string{"203.0.113.0/24"}},
 		},
 	}}
-	np := desiredTaskNetworkPolicy(task, class, "agentry-system")
+	np := desiredTaskNetworkPolicy(task, class, "kaalm-system")
 	// gateway + DNS + one CIDR rule.
 	if len(np.Spec.Egress) != 3 {
 		t.Fatalf("want 3 egress rules, got %d", len(np.Spec.Egress))
@@ -238,11 +238,11 @@ func TestDesiredTaskNetworkPolicy_AllowedCIDRs(t *testing.T) {
 }
 
 func TestDesiredTaskPVC(t *testing.T) {
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-1", Namespace: "team-a"}}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-1", Namespace: "team-a"}}
 	sc := testStorageClass
-	class := &agentryv1alpha1.AgentClass{
-		Spec: agentryv1alpha1.AgentClassSpec{
-			Persistence: agentryv1alpha1.AgentClassPersistence{StorageClassName: &sc},
+	class := &kaalmv1alpha1.AgentClass{
+		Spec: kaalmv1alpha1.AgentClassSpec{
+			Persistence: kaalmv1alpha1.AgentClassPersistence{StorageClassName: &sc},
 		},
 	}
 	// Zero size defaults to 1Gi.

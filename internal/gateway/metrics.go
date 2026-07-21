@@ -20,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // Metrics is the gateway's Prometheus catalog (docs/src/operations/observability.md).
@@ -46,37 +46,37 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	f := promauto.With(reg)
 	return &Metrics{
 		llmRequests: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_llm_requests_total", Help: "LLM proxy requests by outcome.",
+			Name: "kaalm_llm_requests_total", Help: "LLM proxy requests by outcome.",
 		}, []string{"provider", "model", "namespace", "status"}),
 		llmDuration: f.NewHistogramVec(prometheus.HistogramOpts{
-			Name: "agentry_llm_request_duration_seconds", Help: "LLM proxy request duration.",
+			Name: "kaalm_llm_request_duration_seconds", Help: "LLM proxy request duration.",
 		}, []string{"provider", "model"}),
 		llmTokens: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_llm_tokens_total", Help: "Token usage by direction.",
+			Name: "kaalm_llm_tokens_total", Help: "Token usage by direction.",
 		}, []string{"provider", "model", "namespace", "direction"}),
 		llmSpend: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_llm_spend_usd_total", Help: "Accumulated LLM spend in USD.",
+			Name: "kaalm_llm_spend_usd_total", Help: "Accumulated LLM spend in USD.",
 		}, []string{"provider", "namespace"}),
 		llmFallback: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_llm_fallback_total", Help: "Fallback attempts by reason.",
+			Name: "kaalm_llm_fallback_total", Help: "Fallback attempts by reason.",
 		}, []string{"from_provider", "to_provider", "reason"}),
 		budgetThreshld: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_budget_threshold_events_total", Help: "Budget threshold actions fired.",
+			Name: "kaalm_budget_threshold_events_total", Help: "Budget threshold actions fired.",
 		}, []string{"provider", "namespace", "action"}),
 		channelMsgs: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_channel_messages_total", Help: "Channel messages by outcome.",
+			Name: "kaalm_channel_messages_total", Help: "Channel messages by outcome.",
 		}, []string{"channel_type", "namespace", "status"}),
 		channelWake: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_channel_wake_total", Help: "Wake-on-demand triggers.",
+			Name: "kaalm_channel_wake_total", Help: "Wake-on-demand triggers.",
 		}, []string{"namespace"}),
 		channelCB: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_channel_callback_total", Help: "Async callback attempts by outcome.",
+			Name: "kaalm_channel_callback_total", Help: "Async callback attempts by outcome.",
 		}, []string{"namespace", "status"}),
 		tooLarge: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_channel_response_too_large_total", Help: "Oversized agent responses.",
+			Name: "kaalm_channel_response_too_large_total", Help: "Oversized agent responses.",
 		}, []string{"namespace", "mode"}),
 		patchFailed: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "agentry_channel_async_patch_failed_total", Help: "Async response patch exhaustions (v1 silent-loss).",
+			Name: "kaalm_channel_async_patch_failed_total", Help: "Async response patch exhaustions (v1 silent-loss).",
 		}, []string{"namespace"}),
 	}
 }
@@ -170,4 +170,4 @@ func (m *Metrics) AsyncPatchFailed(namespace string) {
 	m.patchFailed.WithLabelValues(namespace).Inc()
 }
 
-var _ = agentryv1alpha1.GroupVersion
+var _ = kaalmv1alpha1.GroupVersion

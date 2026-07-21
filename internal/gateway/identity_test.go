@@ -43,7 +43,7 @@ func TestParseWorkloadSAN(t *testing.T) {
 		},
 		{
 			name: "task cert",
-			sans: []string{"fix-42.team-b.task.agentry.io"},
+			sans: []string{"fix-42.team-b.task.kaalm.io"},
 			want: Identity{Namespace: "team-b", Name: "fix-42", Kind: KindAgentTask},
 		},
 		{
@@ -53,17 +53,17 @@ func TestParseWorkloadSAN(t *testing.T) {
 		},
 		{
 			name:    "task shape with extra label rejected",
-			sans:    []string{"a.b.c.task.agentry.io"},
+			sans:    []string{"a.b.c.task.kaalm.io"},
 			wantErr: true,
 		},
 		{
 			name:    "no recognized SAN",
-			sans:    []string{"agentry-gateway.agentry-system.svc", "localhost"},
+			sans:    []string{"kaalm-gateway.kaalm-system.svc", "localhost"},
 			wantErr: true,
 		},
 		{
 			name:    "two recognized SANs rejected",
-			sans:    []string{"a.ns1.svc.cluster.local", "b.ns2.task.agentry.io"},
+			sans:    []string{"a.ns1.svc.cluster.local", "b.ns2.task.kaalm.io"},
 			wantErr: true,
 		},
 		{
@@ -92,13 +92,13 @@ func TestParseWorkloadSAN(t *testing.T) {
 }
 
 func TestIsControllerCert(t *testing.T) {
-	long := certWithSANs("agentry-controller.agentry-system.svc.cluster.local")
-	short := certWithSANs("agentry-controller.agentry-system.svc")
+	long := certWithSANs("kaalm-controller.kaalm-system.svc.cluster.local")
+	short := certWithSANs("kaalm-controller.kaalm-system.svc")
 	agent := certWithSANs("sup.team-a.svc.cluster.local")
-	if !IsControllerCert(long, "agentry-system") || !IsControllerCert(short, "agentry-system") {
+	if !IsControllerCert(long, "kaalm-system") || !IsControllerCert(short, "kaalm-system") {
 		t.Error("controller SANs must be accepted")
 	}
-	if IsControllerCert(agent, "agentry-system") {
+	if IsControllerCert(agent, "kaalm-system") {
 		t.Error("agent cert must not pass the controller check")
 	}
 	if IsControllerCert(long, "other-ns") {

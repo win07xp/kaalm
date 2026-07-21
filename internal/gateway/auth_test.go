@@ -66,7 +66,7 @@ func TestSourceIP(t *testing.T) {
 func TestLLMPaths_BearerErrorBranches(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	h.seedRoute()
-	// A plain Deployment pod in team-b (not Agentry-managed) so the precheck
+	// A plain Deployment pod in team-b (not Kaalm-managed) so the precheck
 	// passes and the TokenReview path runs.
 	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-b"}}
 

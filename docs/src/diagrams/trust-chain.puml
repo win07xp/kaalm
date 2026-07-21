@@ -1,5 +1,5 @@
 @startuml trust-chain
-' The Agentry trust chain: one CA, the namespace its Secret must live in, and the four leaf families it signs.
+' The Kaalm trust chain: one CA, the namespace its Secret must live in, and the four leaf families it signs.
 ' Source of truth: docs/src/security/tls.md
 !include _style.puml
 
@@ -11,28 +11,28 @@ skinparam rectangle {
 
 ' ---------- cluster-scoped ----------
 rectangle "cluster-scoped (no namespace)" as band #line:9E9E9E;line.dashed;text:555555 {
-  rectangle "**ClusterIssuer**\nagentry-selfsigned" as selfsigned #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
-  rectangle "**ClusterIssuer**\nagentry-ca-issuer\nca.secretName: agentry-ca\n(the ref has no namespace field)" as caissuer #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**ClusterIssuer**\nkaalm-selfsigned" as selfsigned #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**ClusterIssuer**\nkaalm-ca-issuer\nca.secretName: kaalm-ca\n(the ref has no namespace field)" as caissuer #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 }
 
 ' ---------- cert-manager namespace ----------
 rectangle "namespace: **cert-manager**\n(certManager.clusterResourceNamespace)" as nscm #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "**Certificate** agentry-ca\nisCA: true\n43800h (5y) / renewBefore 8760h (1y)\nprivateKey.rotationPolicy: Never" as cacert #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
-  rectangle "**Secret** agentry-ca\ntls.crt + tls.key" as casecret #back:FFD580;line:7a3f00;line.bold;text:3a1f00
-  rectangle "**Bundle** agentry-ca\n(trust-manager)" as bundle #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**Certificate** kaalm-ca\nisCA: true\n43800h (5y) / renewBefore 8760h (1y)\nprivateKey.rotationPolicy: Never" as cacert #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**Secret** kaalm-ca\ntls.crt + tls.key" as casecret #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**Bundle** kaalm-ca\n(trust-manager)" as bundle #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 }
 
-' ---------- agentry-system ----------
-rectangle "namespace: **agentry-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
-  rectangle "**Certificate** agentry-gateway-tls //chart//\nSAN: agentry-gateway.agentry-system\n.svc.cluster.local, .svc, localhost\n(+ gateway.externalHostnames)\nusages: server auth, client auth" as gwtls #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
-  rectangle "**Certificate** agentry-controller-tls //chart//\nSAN: agentry-controller.agentry-system\n.svc.cluster.local, .svc\nusages: server auth, client auth" as ctrltls #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+' ---------- kaalm-system ----------
+rectangle "namespace: **kaalm-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**Certificate** kaalm-gateway-tls //chart//\nSAN: kaalm-gateway.kaalm-system\n.svc.cluster.local, .svc, localhost\n(+ gateway.externalHostnames)\nusages: server auth, client auth" as gwtls #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+  rectangle "**Certificate** kaalm-controller-tls //chart//\nSAN: kaalm-controller.kaalm-system\n.svc.cluster.local, .svc\nusages: server auth, client auth" as ctrltls #back:87CEEB;line:0D47A1;line.bold;text:0a2540
 }
 
 ' ---------- a user namespace ----------
 rectangle "a user namespace (e.g. team-support)" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
   rectangle "**Certificate** {name}-tls //AgentReconciler//\nSAN: {name}.{namespace}.svc.cluster.local,\n.svc, {name}.{namespace}\nusages: server auth, client auth" as agenttls #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
-  rectangle "**Certificate** {taskName}-tls //AgentTaskReconciler//\nSAN: {taskName}.{namespace}.task.agentry.io\nusages: client auth only" as tasktls #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
-  rectangle "**ConfigMap** agentry-ca\nmounted /var/run/agentry/ca.crt" as cacm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**Certificate** {taskName}-tls //AgentTaskReconciler//\nSAN: {taskName}.{namespace}.task.kaalm.io\nusages: client auth only" as tasktls #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**ConfigMap** kaalm-ca\nmounted /var/run/kaalm/ca.crt" as cacm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 
 ' ---------- the chain ----------
@@ -40,7 +40,7 @@ selfsigned -[#9E9E9E,bold]-> cacert : issuerRef
 cacert -[#7a3f00,bold]-> casecret : cert-manager writes
 casecret -[#B71C1C,bold]-> caissuer : resolved **only** in the\n--cluster-resource-namespace
 
-' All four set issuerRef: { name: agentry-ca-issuer, kind: ClusterIssuer } (see legend).
+' All four set issuerRef: { name: kaalm-ca-issuer, kind: ClusterIssuer } (see legend).
 caissuer -[#1B5E20,bold]-> gwtls : signs
 caissuer -[#0D47A1,bold]-> ctrltls
 caissuer -[#4A148C,bold]-> agenttls
@@ -51,13 +51,13 @@ casecret -[#7a3f00]-> bundle : source, read only from\n--trust-namespace
 bundle -[#7a3f00,bold]-> cacm : projects into every\nnon-system namespace
 
 legend bottom
-  All four leaf families set issuerRef: { name: agentry-ca-issuer, kind: ClusterIssuer }. Neither the
+  All four leaf families set issuerRef: { name: kaalm-ca-issuer, kind: ClusterIssuer }. Neither the
   gateway nor the controller ever reads the CA Secret: trust arrives only as the projected ConfigMap.
   ====
   **Namespace placement is the point.** One Secret, one namespace, two readers: the CA ClusterIssuer
   resolves ca.secretName only in cert-manager's --cluster-resource-namespace, and trust-manager reads
   Bundle sources only from its --trust-namespace. Both default to cert-manager, so one copy serves both.
-  Put the Secret anywhere else (agentry-system is the tempting mistake) and agentry-ca-issuer goes
+  Put the Secret anywhere else (kaalm-system is the tempting mistake) and kaalm-ca-issuer goes
   Ready=False, reason=SecretNotFound, and leaf issuance fails **cluster-wide**.
   ====
   **Why a ClusterIssuer and not an Issuer:** a Certificate's issuerRef does not resolve a namespaced

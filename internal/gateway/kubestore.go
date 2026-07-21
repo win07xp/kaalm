@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // PodIPIndex is the cache index mapping status.podIP to Pods. Registered by
@@ -41,8 +41,8 @@ type KubeStore struct {
 }
 
 // AgentByName looks up an Agent in the cache.
-func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*agentryv1alpha1.Agent, bool) {
-	var a agentryv1alpha1.Agent
+func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*kaalmv1alpha1.Agent, bool) {
+	var a kaalmv1alpha1.Agent
 	if err := k.Reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &a); err != nil {
 		return nil, false
 	}
@@ -50,8 +50,8 @@ func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*agentryv
 }
 
 // TaskByName looks up an AgentTask in the cache.
-func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*agentryv1alpha1.AgentTask, bool) {
-	var t agentryv1alpha1.AgentTask
+func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*kaalmv1alpha1.AgentTask, bool) {
+	var t kaalmv1alpha1.AgentTask
 	if err := k.Reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &t); err != nil {
 		return nil, false
 	}
@@ -59,8 +59,8 @@ func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*agentryv1
 }
 
 // ClassByName looks up an AgentClass in the cache.
-func (k *KubeStore) ClassByName(ctx context.Context, name string) (*agentryv1alpha1.AgentClass, bool) {
-	var c agentryv1alpha1.AgentClass
+func (k *KubeStore) ClassByName(ctx context.Context, name string) (*kaalmv1alpha1.AgentClass, bool) {
+	var c kaalmv1alpha1.AgentClass
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &c); err != nil {
 		return nil, false
 	}
@@ -68,8 +68,8 @@ func (k *KubeStore) ClassByName(ctx context.Context, name string) (*agentryv1alp
 }
 
 // ProviderByName looks up a ModelProvider in the cache.
-func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*agentryv1alpha1.ModelProvider, bool) {
-	var p agentryv1alpha1.ModelProvider
+func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ModelProvider, bool) {
+	var p kaalmv1alpha1.ModelProvider
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &p); err != nil {
 		return nil, false
 	}
@@ -79,7 +79,7 @@ func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*agentryv1
 // Credential reads the provider's credential Secret key from the operator
 // namespace via the cache (which doubles as the rotation watch: an updated
 // Secret is re-read on the next request).
-func (k *KubeStore) Credential(ctx context.Context, provider *agentryv1alpha1.ModelProvider) (string, error) {
+func (k *KubeStore) Credential(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) (string, error) {
 	var sec corev1.Secret
 	key := types.NamespacedName{Namespace: k.OperatorNamespace, Name: provider.Spec.CredentialsRef.Name}
 	if err := k.Reader.Get(ctx, key, &sec); err != nil {
@@ -96,8 +96,8 @@ func (k *KubeStore) Credential(ctx context.Context, provider *agentryv1alpha1.Mo
 // The prefix defense (the path must begin with the channel's own
 // /channels/{namespace}/ prefix) is enforced here, independent of the
 // reconciler's InvalidPath status.
-func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*agentryv1alpha1.AgentChannel, bool) {
-	var channels agentryv1alpha1.AgentChannelList
+func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1alpha1.AgentChannel, bool) {
+	var channels kaalmv1alpha1.AgentChannelList
 	if err := k.Reader.List(ctx, &channels); err != nil {
 		return nil, false
 	}
@@ -110,7 +110,7 @@ func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*agentryv1a
 			continue
 		}
 		for _, c := range ch.Status.Conditions {
-			if c.Type == agentryv1alpha1.ConditionReady && c.Status == "True" {
+			if c.Type == kaalmv1alpha1.ConditionReady && c.Status == "True" {
 				return ch, true
 			}
 		}
@@ -119,7 +119,7 @@ func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*agentryv1a
 }
 
 // channelPathAllowed is the gateway-side half of validation rule 15.
-func channelPathAllowed(ch *agentryv1alpha1.AgentChannel) bool {
+func channelPathAllowed(ch *kaalmv1alpha1.AgentChannel) bool {
 	return strings.HasPrefix(ch.Spec.Webhook.Path, "/channels/"+ch.Namespace+"/")
 }
 

@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: agentchannels.agentry.io
+  name: agentchannels.kaalm.io
 spec:
-  group: agentry.io
+  group: kaalm.io
   names:
     kind: AgentChannel
     listKind: AgentChannelList

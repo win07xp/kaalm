@@ -1,11 +1,11 @@
-# Agentry Helm values. Defaults match the design (docs/src/operations/deployment.md).
+# Kaalm Helm values. Defaults match the design (docs/src/operations/deployment.md).
 # The controller and gateway both have a hard floor of 2 replicas, enforced by a
 # template guard; going below aborts rendering.
 
 controller:
   replicas: 2
   image:
-    repository: ghcr.io/win07xp/agentry-controller
+    repository: ghcr.io/win07xp/kaalm-controller
     tag: ""            # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
   # Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy.
@@ -19,12 +19,12 @@ controller:
 gateway:
   replicas: 2
   image:
-    repository: ghcr.io/win07xp/agentry-gateway
+    repository: ghcr.io/win07xp/kaalm-gateway
     tag: ""
     pullPolicy: IfNotPresent
-  # Maximum fallback-chain depth for LLM provider routing (AGENTRY_MAX_FALLBACK_DEPTH).
+  # Maximum fallback-chain depth for LLM provider routing (KAALM_MAX_FALLBACK_DEPTH).
   maxFallbackDepth: 3
-  # Additional DNS names appended to the agentry-gateway-tls certificate SANs.
+  # Additional DNS names appended to the kaalm-gateway-tls certificate SANs.
   # Required when the User listener is exposed via TLS pass-through Ingress.
   externalHostnames: []
   # DNS-name suffixes or CIDR blocks that replace the default deny-internal rule
@@ -55,8 +55,8 @@ gateway:
   healthPort: 8081
 
 certManager:
-  # cert-manager's cluster resource namespace. The agentry-ca Certificate and its
-  # Secret MUST live here (not agentry-system), or issuance fails cluster-wide
+  # cert-manager's cluster resource namespace. The kaalm-ca Certificate and its
+  # Secret MUST live here (not kaalm-system), or issuance fails cluster-wide
   # with SecretNotFound. Must match cert-manager's --cluster-resource-namespace
   # and trust-manager's --trust-namespace.
   clusterResourceNamespace: cert-manager

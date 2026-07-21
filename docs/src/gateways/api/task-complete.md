@@ -20,7 +20,7 @@ The ConfigMap is the **data** channel. Admission to write it is gated by a separ
 
 Every call is checked against `AgentTask.status.currentPodUID` before any write happens:
 
-1. The gateway resolves the calling Pod's UID via the source-IP → Pod cross-check ([The Agentry Gateway](../overview.md)).
+1. The gateway resolves the calling Pod's UID via the source-IP → Pod cross-check ([The Kaalm Gateway](../overview.md)).
 2. On an informer-cache miss (typically a new-Pod startup window where the gateway's Pod informer has not yet observed the calling Pod), the gateway falls back to a live `List Pods` against the API server in the cert-SAN-derived namespace, filtered by source IP, before considering the cross-check failed. This fallback collapses the new-Pod informer-lag window into the retryable `403 StalePodCompletion` path described below, rather than leaking it as a terminal `401`.
 3. The resulting UID is compared against `AgentTask.status.currentPodUID`, resolved from the gateway's existing AgentTask watch (the same cache used for the `exitCode` short-circuit and the artifact-name validation below). Any call whose UID does not match is rejected with `403 access_denied`, `reason=StalePodCompletion`.
 4. The gateway also rejects calls when `AgentTask.status.phase` is already terminal (`Succeeded` / `Failed` / `TimedOut`) with `403 access_denied`, `reason=TaskAlreadyCompleted`. Without this gate, the data the agent is trying to report would be silently dropped after the reconciler has finalized state.

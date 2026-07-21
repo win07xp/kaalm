@@ -2,14 +2,14 @@
 
 ## Project Overview
 
-**Agentry**, a Kubernetes-native operator making AI agents a first-class workload
+**Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
 type. v0.1.0 released 2026-07-21, feature-complete against the v1 design. Next
 milestone (v0.2.0): full S1-S15 e2e coverage and release machinery; see
 `docs/src/ROADMAP.md`.
 
-- API group: `agentry.io` | Version: `v1alpha1`
+- API group: `kaalm.io` | Version: `v1alpha1`
 - Stack: Go, controller-runtime (kubebuilder), Helm
-- Components: operator controller + gateway, both in `agentry-system` namespace
+- Components: operator controller + gateway, both in `kaalm-system` namespace
 - 5 CRDs: AgentClass, ModelProvider, Agent, AgentTask, AgentChannel
 
 ## Documentation

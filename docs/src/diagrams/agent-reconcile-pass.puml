@@ -6,7 +6,7 @@
 start
 :Agent reconcile;
 
-if (1. namespace == agentry-system?) then (yes)
+if (1. namespace == kaalm-system?) then (yes)
   :Ready=False
   reason=SystemNamespaceForbidden
   no child resources created;<<$mutedBg>>
@@ -68,7 +68,7 @@ if (8. phase is Running or Idle?) then (yes)
 else (no)
 endif
 
-if (9. agentry.io/wake=true?) then (yes)
+if (9. kaalm.io/wake=true?) then (yes)
   :Hibernated: go Resuming, then\nclear. Otherwise clear now;
 else (no)
 endif

@@ -8,18 +8,18 @@ The gateway exposes Prometheus metrics on `:9090/metrics`.
 
 **Message delivery.**
 
-- `agentry_channel_messages_total{channel_type,namespace,status}`
-- `agentry_channel_message_duration_seconds{channel_type}`
+- `kaalm_channel_messages_total{channel_type,namespace,status}`
+- `kaalm_channel_message_duration_seconds{channel_type}`
 
-**Wake-on-demand.** These two metrics are meant to be read together. `agentry_channel_wake_total` tells you how often the activator fired; `agentry_channel_wake_duration_seconds` tells you how long each wake took and how it ended. Together they make wake-on-demand latency observable end to end, which is what lets you put an SLO on the hard control-plane dependency called out in [The Agentry Gateway](../overview.md).
+**Wake-on-demand.** These two metrics are meant to be read together. `kaalm_channel_wake_total` tells you how often the activator fired; `kaalm_channel_wake_duration_seconds` tells you how long each wake took and how it ended. Together they make wake-on-demand latency observable end to end, which is what lets you put an SLO on the hard control-plane dependency called out in [The Kaalm Gateway](../overview.md).
 
-- `agentry_channel_wake_total{namespace}` (count of hibernation wakes triggered)
-- `agentry_channel_wake_duration_seconds{namespace,result}`, a histogram of time from `POST /v1/activate` to either Agent ready or wake timeout, with `result ∈ {ready, controller_unavailable, wake_timeout}`
+- `kaalm_channel_wake_total{namespace}` (count of hibernation wakes triggered)
+- `kaalm_channel_wake_duration_seconds{namespace,result}`, a histogram of time from `POST /v1/activate` to either Agent ready or wake timeout, with `result ∈ {ready, controller_unavailable, wake_timeout}`
 
 **Async callback delivery.** A counter and a histogram covering the push half of async mode:
 
-- `agentry_channel_callback_total{namespace,status}`
-- `agentry_channel_callback_duration_seconds{namespace}`
+- `kaalm_channel_callback_total{namespace,status}`
+- `kaalm_channel_callback_duration_seconds{namespace}`
 
 The `status` label is `delivered`, `exhausted`, `rejected`, or `invalid`:
 
@@ -34,11 +34,11 @@ The `status` label is `delivered`, `exhausted`, `rejected`, or `invalid`:
 
 **Response size rejections.**
 
-- `agentry_channel_response_too_large_total{namespace,mode}`, a counter of agent responses rejected for exceeding the configured size limit. `mode ∈ {sync, async}` separates the size-limit signal by response mode.
+- `kaalm_channel_response_too_large_total{namespace,mode}`, a counter of agent responses rejected for exceeding the configured size limit. `mode ∈ {sync, async}` separates the size-limit signal by response mode.
 
 **Async patch failures.**
 
-- `agentry_channel_async_patch_failed_total{namespace}`, a counter of async response-`Patch` pipelines that exhausted all 4 attempts and dropped the payload.
+- `kaalm_channel_async_patch_failed_total{namespace}`, a counter of async response-`Patch` pipelines that exhausted all 4 attempts and dropped the payload.
 
 This is the operator-side signal that the v1 silent-loss limitation fired. From the caller's side the loss is invisible: pollers observe `202` until the TTL flips the record to `404` with no stored envelope ever appearing. The metric is the only place the drop surfaces, so any sustained nonzero rate warrants an alert. See [Response-Patch failure semantics](../api/async-responses.md) and [Recommended alerts](../../operations/observability.md#recommended-alerts).
 
@@ -56,7 +56,7 @@ For LLM Gateway metrics, see [LLM Gateway Operations](../llm/operations.md#obser
 | Sync-mode wall-clock budget exceeded | Sync callers get `504` `sync_deadline_exceeded`, `retryable: true`. Async mode unaffected. |
 | Async response ConfigMap not found | Poll returns `404`: the response is unknown or has expired past the 1-hour TTL. |
 
-**All gateway replicas down.** Inbound webhooks fail at the user-provisioned Ingress, which has no ready backend, so callers see the Ingress's own 502/503 rather than anything Agentry produced. LLM calls from agents fail. Channel-driven wakes cannot be triggered at all, because wakes originate at the gateway. The controller defers idle and hibernation transitions and sets `GatewayReachable=False` on affected Agents: with no activity data it cannot safely conclude an Agent is idle. See [Activity Detection](../../controller/hibernation-and-wake.md#activity-detection).
+**All gateway replicas down.** Inbound webhooks fail at the user-provisioned Ingress, which has no ready backend, so callers see the Ingress's own 502/503 rather than anything Kaalm produced. LLM calls from agents fail. Channel-driven wakes cannot be triggered at all, because wakes originate at the gateway. The controller defers idle and hibernation transitions and sets `GatewayReachable=False` on affected Agents: with no activity data it cannot safely conclude an Agent is idle. See [Activity Detection](../../controller/hibernation-and-wake.md#activity-detection).
 
 **Gateway replica not ready.** The replica is removed from Service endpoints until readiness passes, so traffic lands only on replicas that can actually serve it. See [Gateway Readiness](../llm/operations.md#gateway-readiness).
 

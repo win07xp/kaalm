@@ -6,5 +6,5 @@
   this book uses more than these four.
 - Vocabulary on first contact: pod, manifest and YAML, CRD (why
   `kubectl get agents` works at all).
-- Reading the five Agentry resource types with `kubectl get`, before any
+- Reading the five Kaalm resource types with `kubectl get`, before any
   exist: empty lists are a fine first result.

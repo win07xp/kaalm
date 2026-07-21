@@ -29,17 +29,17 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // mkWorkloadClass creates an AgentClass that admits the test image, with
 // optional extra mutation.
-func mkWorkloadClass(t *testing.T, name string, mutate func(*agentryv1alpha1.AgentClass)) {
+func mkWorkloadClass(t *testing.T, name string, mutate func(*kaalmv1alpha1.AgentClass)) {
 	t.Helper()
-	ac := &agentryv1alpha1.AgentClass{
+	ac := &kaalmv1alpha1.AgentClass{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: agentryv1alpha1.AgentClassSpec{
-			Image: agentryv1alpha1.AgentClassImage{AllowedImages: []string{"registry.test/agents/*"}},
+		Spec: kaalmv1alpha1.AgentClassSpec{
+			Image: kaalmv1alpha1.AgentClassImage{AllowedImages: []string{"registry.test/agents/*"}},
 		},
 	}
 	if mutate != nil {
@@ -50,12 +50,12 @@ func mkWorkloadClass(t *testing.T, name string, mutate func(*agentryv1alpha1.Age
 	}
 }
 
-func mkWorkloadAgent(t *testing.T, name, className string, mutate func(*agentryv1alpha1.Agent)) {
+func mkWorkloadAgent(t *testing.T, name, className string, mutate func(*kaalmv1alpha1.Agent)) {
 	t.Helper()
-	ag := &agentryv1alpha1.Agent{
+	ag := &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec: agentryv1alpha1.AgentSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: className},
+		Spec: kaalmv1alpha1.AgentSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: className},
 			Image:         "registry.test/agents/demo:v1",
 		},
 	}
@@ -67,9 +67,9 @@ func mkWorkloadAgent(t *testing.T, name, className string, mutate func(*agentryv
 	}
 }
 
-func getWorkloadAgent(t *testing.T, name string) *agentryv1alpha1.Agent {
+func getWorkloadAgent(t *testing.T, name string) *kaalmv1alpha1.Agent {
 	t.Helper()
-	var ag agentryv1alpha1.Agent
+	var ag kaalmv1alpha1.Agent
 	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 		t.Fatalf("get agent %s: %v", name, err)
 	}
@@ -101,7 +101,7 @@ func agentPod(t *testing.T, name string) *corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
 	if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
-		client.MatchingLabels(map[string]string{"agentry.io/agent": name})); err != nil {
+		client.MatchingLabels(map[string]string{"kaalm.io/agent": name})); err != nil {
 		t.Fatalf("list pods: %v", err)
 	}
 	for i := range pods.Items {
@@ -133,10 +133,10 @@ func forceDeletePod(t *testing.T, pod *corev1.Pod) {
 	}
 }
 
-func expectAgentPhase(t *testing.T, name string, phase agentryv1alpha1.AgentPhase) {
+func expectAgentPhase(t *testing.T, name string, phase kaalmv1alpha1.AgentPhase) {
 	t.Helper()
 	eventually(t, func() error {
-		var ag agentryv1alpha1.Agent
+		var ag kaalmv1alpha1.Agent
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 			return err
 		}
@@ -150,11 +150,11 @@ func expectAgentPhase(t *testing.T, name string, phase agentryv1alpha1.AgentPhas
 func expectAgentReadyReason(t *testing.T, name, reason string) {
 	t.Helper()
 	eventually(t, func() error {
-		var ag agentryv1alpha1.Agent
+		var ag kaalmv1alpha1.Agent
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 			return err
 		}
-		c := condition(ag.Status.Conditions, agentryv1alpha1.ConditionReady)
+		c := condition(ag.Status.Conditions, kaalmv1alpha1.ConditionReady)
 		if c == nil {
 			return errString("no Ready condition yet")
 		}
@@ -168,11 +168,11 @@ func expectAgentReadyReason(t *testing.T, name, reason string) {
 // ---- Happy path ----
 
 func TestAgent_ProvisionToRunning(t *testing.T) {
-	mkWorkloadClass(t, "wc-run", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-run", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 		ac.Spec.Persistence.DefaultSizeGi = 1
 	})
-	mkWorkloadAgent(t, "run-agent", "wc-run", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "run-agent", "wc-run", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 	})
 
@@ -216,18 +216,18 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 			t.Errorf("%s missing: %v", probe.kind, err)
 		}
 	}
-	expectAgentPhase(t, "run-agent", agentryv1alpha1.AgentProvisioning)
+	expectAgentPhase(t, "run-agent", kaalmv1alpha1.AgentProvisioning)
 
 	// Kubelet brings the Pod up; the Agent goes Running.
 	markPodReady(t, agentPod(t, "run-agent"))
-	expectAgentPhase(t, "run-agent", agentryv1alpha1.AgentRunning)
+	expectAgentPhase(t, "run-agent", kaalmv1alpha1.AgentRunning)
 	ag := getWorkloadAgent(t, "run-agent")
 	if ag.Status.Endpoint == "" || ag.Status.PodName == "" || ag.Status.PVCName != "run-agent-memory" {
 		t.Errorf("status incomplete: endpoint=%q podName=%q pvcName=%q",
 			ag.Status.Endpoint, ag.Status.PodName, ag.Status.PVCName)
 	}
-	c := condition(ag.Status.Conditions, agentryv1alpha1.ConditionReady)
-	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != agentryv1alpha1.ReasonPodRunning {
+	c := condition(ag.Status.Conditions, kaalmv1alpha1.ConditionReady)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != kaalmv1alpha1.ReasonPodRunning {
 		t.Errorf("Ready condition wrong: %+v", c)
 	}
 }
@@ -236,10 +236,10 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 
 func TestAgent_SystemNamespaceForbidden(t *testing.T) {
 	mkWorkloadClass(t, "wc-sys", nil)
-	ag := &agentryv1alpha1.Agent{
+	ag := &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sys-agent", Namespace: testSystemNamespace},
-		Spec: agentryv1alpha1.AgentSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "wc-sys"},
+		Spec: kaalmv1alpha1.AgentSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "wc-sys"},
 			Image:         "registry.test/agents/demo:v1",
 		},
 	}
@@ -247,13 +247,13 @@ func TestAgent_SystemNamespaceForbidden(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	eventually(t, func() error {
-		var got agentryv1alpha1.Agent
+		var got kaalmv1alpha1.Agent
 		if err := testClient.Get(ctxT(),
 			types.NamespacedName{Namespace: testSystemNamespace, Name: "sys-agent"}, &got); err != nil {
 			return err
 		}
-		c := condition(got.Status.Conditions, agentryv1alpha1.ConditionReady)
-		if c == nil || c.Reason != agentryv1alpha1.ReasonSystemNamespaceForbidden {
+		c := condition(got.Status.Conditions, kaalmv1alpha1.ConditionReady)
+		if c == nil || c.Reason != kaalmv1alpha1.ReasonSystemNamespaceForbidden {
 			return errString("SystemNamespaceForbidden not set")
 		}
 		return nil
@@ -268,15 +268,15 @@ func TestAgent_SystemNamespaceForbidden(t *testing.T) {
 
 func TestAgent_MissingClass(t *testing.T) {
 	mkWorkloadAgent(t, "noclass-agent", "does-not-exist", nil)
-	expectAgentReadyReason(t, "noclass-agent", agentryv1alpha1.ReasonInvalidReference)
+	expectAgentReadyReason(t, "noclass-agent", kaalmv1alpha1.ReasonInvalidReference)
 }
 
 func TestAgent_ImagePullSecretMissing(t *testing.T) {
-	mkWorkloadClass(t, "wc-pull", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-pull", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "wc-pull-registry-creds"}}
 	})
 	mkWorkloadAgent(t, "pull-agent", "wc-pull", nil)
-	expectAgentReadyReason(t, "pull-agent", agentryv1alpha1.ReasonImagePullSecretMissing)
+	expectAgentReadyReason(t, "pull-agent", kaalmv1alpha1.ReasonImagePullSecretMissing)
 
 	// Creating the Secret recovers the gate.
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "wc-pull-registry-creds", Namespace: "default"}}
@@ -287,63 +287,63 @@ func TestAgent_ImagePullSecretMissing(t *testing.T) {
 }
 
 func TestAgent_ExistingClaimNotFound(t *testing.T) {
-	mkWorkloadClass(t, "wc-claim", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-claim", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 	})
 	claim := "no-such-claim"
-	mkWorkloadAgent(t, "claim-agent", "wc-claim", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "claim-agent", "wc-claim", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 		ag.Spec.Persistence.ExistingClaim = &claim
 	})
-	expectAgentReadyReason(t, "claim-agent", agentryv1alpha1.ReasonExistingClaimNotFound)
+	expectAgentReadyReason(t, "claim-agent", kaalmv1alpha1.ReasonExistingClaimNotFound)
 }
 
 // ---- Degraded paths ----
 
 func TestAgent_ImageNotAllowedDegrades(t *testing.T) {
 	mkWorkloadClass(t, "wc-img", nil)
-	mkWorkloadAgent(t, "img-agent", "wc-img", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "img-agent", "wc-img", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Image = "evil.example/agents/demo:v1"
 	})
-	expectAgentPhase(t, "img-agent", agentryv1alpha1.AgentDegraded)
+	expectAgentPhase(t, "img-agent", kaalmv1alpha1.AgentDegraded)
 	ag := getWorkloadAgent(t, "img-agent")
-	if ag.Status.PreDegradedPhase != agentryv1alpha1.AgentPending {
+	if ag.Status.PreDegradedPhase != kaalmv1alpha1.AgentPending {
 		t.Errorf("preDegradedPhase = %q, want Pending", ag.Status.PreDegradedPhase)
 	}
-	expectAgentReadyReason(t, "img-agent", agentryv1alpha1.ReasonClassConstraintViolation)
+	expectAgentReadyReason(t, "img-agent", kaalmv1alpha1.ReasonClassConstraintViolation)
 }
 
 func TestAgent_ProviderNamespaceDeniedDegrades(t *testing.T) {
 	mkSecret(t, "prov-ns-key")
-	mkProvider(t, "prov-ns", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "prov-ns-key", Key: "token"}
+	mkProvider(t, "prov-ns", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "prov-ns-key", Key: "token"}
 		mp.Spec.AllowedNamespaces = []string{"team-*"}
 	})
-	mkWorkloadClass(t, "wc-prov", func(ac *agentryv1alpha1.AgentClass) {
-		ac.Spec.AllowedProviders = []agentryv1alpha1.LocalObjectReference{{Name: "prov-ns"}}
+	mkWorkloadClass(t, "wc-prov", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.AllowedProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "prov-ns"}}
 	})
-	mkWorkloadAgent(t, "prov-agent", "wc-prov", func(ag *agentryv1alpha1.Agent) {
-		ag.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "prov-ns"}},
+	mkWorkloadAgent(t, "prov-agent", "wc-prov", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Providers = []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "prov-ns"}},
 		}
 	})
 	// The agent's namespace (default) does not match team-*.
-	expectAgentPhase(t, "prov-agent", agentryv1alpha1.AgentDegraded)
-	expectAgentReadyReason(t, "prov-agent", agentryv1alpha1.ReasonClassConstraintViolation)
+	expectAgentPhase(t, "prov-agent", kaalmv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "prov-agent", kaalmv1alpha1.ReasonClassConstraintViolation)
 }
 
 func TestAgent_PersistenceNotAllowedDegradesAndRecovers(t *testing.T) {
 	mkWorkloadClass(t, "wc-per", nil) // persistence disabled on the class
-	mkWorkloadAgent(t, "per-agent", "wc-per", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "per-agent", "wc-per", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 	})
-	expectAgentPhase(t, "per-agent", agentryv1alpha1.AgentDegraded)
-	expectAgentReadyReason(t, "per-agent", agentryv1alpha1.ReasonPersistenceNotAllowed)
+	expectAgentPhase(t, "per-agent", kaalmv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "per-agent", kaalmv1alpha1.ReasonPersistenceNotAllowed)
 
 	// Platform team enables persistence on the class: the Agent recovers to
 	// its pre-degradation phase and provisioning proceeds.
 	eventually(t, func() error {
-		var ac agentryv1alpha1.AgentClass
+		var ac kaalmv1alpha1.AgentClass
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-per"}, &ac); err != nil {
 			return err
 		}
@@ -353,7 +353,7 @@ func TestAgent_PersistenceNotAllowedDegradesAndRecovers(t *testing.T) {
 	})
 	eventually(t, func() error {
 		ag := getWorkloadAgent(t, "per-agent")
-		if ag.Status.Phase == agentryv1alpha1.AgentDegraded {
+		if ag.Status.Phase == kaalmv1alpha1.AgentDegraded {
 			return errString("still Degraded")
 		}
 		if ag.Status.PreDegradedPhase != "" {
@@ -364,26 +364,26 @@ func TestAgent_PersistenceNotAllowedDegradesAndRecovers(t *testing.T) {
 }
 
 func TestAgent_HibernationRequiresPersistenceDegrades(t *testing.T) {
-	mkWorkloadClass(t, "wc-hib", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-hib", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Lifecycle.HibernationAllowed = true
 	})
-	mkWorkloadAgent(t, "hib-agent", "wc-hib", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "hib-agent", "wc-hib", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Lifecycle.HibernationEnabled = true // no persistence
 	})
-	expectAgentPhase(t, "hib-agent", agentryv1alpha1.AgentDegraded)
-	expectAgentReadyReason(t, "hib-agent", agentryv1alpha1.ReasonHibernationRequiresPersist)
+	expectAgentPhase(t, "hib-agent", kaalmv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "hib-agent", kaalmv1alpha1.ReasonHibernationRequiresPersist)
 }
 
 func TestAgent_HibernationNotAllowedDegrades(t *testing.T) {
-	mkWorkloadClass(t, "wc-hib2", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-hib2", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 	})
-	mkWorkloadAgent(t, "hib2-agent", "wc-hib2", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "hib2-agent", "wc-hib2", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 		ag.Spec.Lifecycle.HibernationEnabled = true // class does not allow it
 	})
-	expectAgentPhase(t, "hib2-agent", agentryv1alpha1.AgentDegraded)
-	expectAgentReadyReason(t, "hib2-agent", agentryv1alpha1.ReasonHibernationNotAllowed)
+	expectAgentPhase(t, "hib2-agent", kaalmv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "hib2-agent", kaalmv1alpha1.ReasonHibernationNotAllowed)
 }
 
 // ---- Drift and disruption ----
@@ -401,14 +401,14 @@ func provisionRunningAgent(t *testing.T, name, className string) *corev1.Pod {
 	})
 	pod := agentPod(t, name)
 	markPodReady(t, pod)
-	expectAgentPhase(t, name, agentryv1alpha1.AgentRunning)
+	expectAgentPhase(t, name, kaalmv1alpha1.AgentRunning)
 	return agentPod(t, name)
 }
 
 func TestAgent_SpecDriftReplacesPod(t *testing.T) {
 	mkWorkloadClass(t, "wc-drift", nil)
 	oldPod := provisionRunningAgent(t, "drift-agent", "wc-drift")
-	oldHash := oldPod.Annotations["agentry.io/pod-spec-hash"]
+	oldHash := oldPod.Annotations["kaalm.io/pod-spec-hash"]
 
 	// A replacement-triggering edit: new env var.
 	eventually(t, func() error {
@@ -434,7 +434,7 @@ func TestAgent_SpecDriftReplacesPod(t *testing.T) {
 		forceDeletePod(t, &got)
 		return nil
 	})
-	expectAgentPhase(t, "drift-agent", agentryv1alpha1.AgentProvisioning)
+	expectAgentPhase(t, "drift-agent", kaalmv1alpha1.AgentProvisioning)
 
 	// A new Pod appears with a different hash.
 	eventually(t, func() error {
@@ -445,7 +445,7 @@ func TestAgent_SpecDriftReplacesPod(t *testing.T) {
 		if pod.Name == oldPod.Name {
 			return errString("old pod still current")
 		}
-		if pod.Annotations["agentry.io/pod-spec-hash"] == oldHash {
+		if pod.Annotations["kaalm.io/pod-spec-hash"] == oldHash {
 			return errString("replacement pod has the old hash")
 		}
 		return nil
@@ -474,12 +474,12 @@ func TestAgent_InvoluntaryDisruptionReprovisions(t *testing.T) {
 // ---- Finalizer ----
 
 func TestAgent_FinalizerRetainStripsPVCOwnerRef(t *testing.T) {
-	mkWorkloadClass(t, "wc-retain", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-retain", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 		ac.Spec.Persistence.DefaultSizeGi = 1
 		ac.Spec.Persistence.PVCRetention = "Retain"
 	})
-	mkWorkloadAgent(t, "retain-agent", "wc-retain", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "retain-agent", "wc-retain", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 	})
 	markCertReady(t, "retain-agent")
@@ -498,7 +498,7 @@ func TestAgent_FinalizerRetainStripsPVCOwnerRef(t *testing.T) {
 	eventually(t, func() error {
 		var pods corev1.PodList
 		if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
-			client.MatchingLabels(map[string]string{"agentry.io/agent": "retain-agent"})); err != nil {
+			client.MatchingLabels(map[string]string{"kaalm.io/agent": "retain-agent"})); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -509,7 +509,7 @@ func TestAgent_FinalizerRetainStripsPVCOwnerRef(t *testing.T) {
 
 	// The Agent finalizes away and the PVC survives with no Agent ownerRef.
 	eventually(t, func() error {
-		var got agentryv1alpha1.Agent
+		var got kaalmv1alpha1.Agent
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "retain-agent"}, &got)
 		if !apierrors.IsNotFound(err) {
 			return errString("agent not yet finalized")
@@ -529,12 +529,12 @@ func TestAgent_FinalizerRetainStripsPVCOwnerRef(t *testing.T) {
 }
 
 func TestAgent_FinalizerDeleteKeepsPVCOwnerRef(t *testing.T) {
-	mkWorkloadClass(t, "wc-delete", func(ac *agentryv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-delete", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 		ac.Spec.Persistence.DefaultSizeGi = 1
 		// PVCRetention defaults to Delete.
 	})
-	mkWorkloadAgent(t, "delete-agent", "wc-delete", func(ag *agentryv1alpha1.Agent) {
+	mkWorkloadAgent(t, "delete-agent", "wc-delete", func(ag *kaalmv1alpha1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 	})
 	markCertReady(t, "delete-agent")
@@ -552,7 +552,7 @@ func TestAgent_FinalizerDeleteKeepsPVCOwnerRef(t *testing.T) {
 	eventually(t, func() error {
 		var pods corev1.PodList
 		if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
-			client.MatchingLabels(map[string]string{"agentry.io/agent": "delete-agent"})); err != nil {
+			client.MatchingLabels(map[string]string{"kaalm.io/agent": "delete-agent"})); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -561,7 +561,7 @@ func TestAgent_FinalizerDeleteKeepsPVCOwnerRef(t *testing.T) {
 		return nil
 	})
 	eventually(t, func() error {
-		var got agentryv1alpha1.Agent
+		var got kaalmv1alpha1.Agent
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "delete-agent"}, &got)
 		if !apierrors.IsNotFound(err) {
 			return errString("agent not yet finalized")
@@ -602,7 +602,7 @@ func TestAgent_CrashLoopMarksFailed(t *testing.T) {
 	if err := testClient.Status().Update(ctxT(), pod); err != nil {
 		t.Fatalf("update pod status: %v", err)
 	}
-	expectAgentPhase(t, "crash-agent", agentryv1alpha1.AgentFailed)
+	expectAgentPhase(t, "crash-agent", kaalmv1alpha1.AgentFailed)
 	expectAgentReadyReason(t, "crash-agent", "CrashLoopBackOff")
 }
 
@@ -643,29 +643,29 @@ func TestAgent_TerminalPodReprovisions(t *testing.T) {
 // ---- Agent degradedReasons: provider named in the class but the CR is absent ----
 
 func TestAgent_ProviderMissingDegrades(t *testing.T) {
-	mkWorkloadClass(t, "wc-provmiss", func(ac *agentryv1alpha1.AgentClass) {
-		ac.Spec.AllowedProviders = []agentryv1alpha1.LocalObjectReference{{Name: "ghost-prov"}}
+	mkWorkloadClass(t, "wc-provmiss", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.AllowedProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "ghost-prov"}}
 	})
-	mkWorkloadAgent(t, "provmiss-agent", "wc-provmiss", func(ag *agentryv1alpha1.Agent) {
-		ag.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "ghost-prov"}},
+	mkWorkloadAgent(t, "provmiss-agent", "wc-provmiss", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Providers = []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "ghost-prov"}},
 		}
 	})
-	expectAgentPhase(t, "provmiss-agent", agentryv1alpha1.AgentDegraded)
-	expectAgentReadyReason(t, "provmiss-agent", agentryv1alpha1.ReasonClassConstraintViolation)
+	expectAgentPhase(t, "provmiss-agent", kaalmv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "provmiss-agent", kaalmv1alpha1.ReasonClassConstraintViolation)
 }
 
 // ---- Agent: a provider outside the class allowlist degrades ----
 
 func TestAgent_ProviderNotAllowedDegrades(t *testing.T) {
 	mkWorkloadClass(t, "wc-provdenied", nil) // empty allowedProviders => none allowed
-	mkWorkloadAgent(t, "provdenied-agent", "wc-provdenied", func(ag *agentryv1alpha1.Agent) {
-		ag.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
-			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "some-prov"}},
+	mkWorkloadAgent(t, "provdenied-agent", "wc-provdenied", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Providers = []kaalmv1alpha1.AgentProviderReference{
+			{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "some-prov"}},
 		}
 	})
-	expectAgentPhase(t, "provdenied-agent", agentryv1alpha1.AgentDegraded)
-	expectAgentReadyReason(t, "provdenied-agent", agentryv1alpha1.ReasonClassConstraintViolation)
+	expectAgentPhase(t, "provdenied-agent", kaalmv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "provdenied-agent", kaalmv1alpha1.ReasonClassConstraintViolation)
 }
 
 // ---- Agent convergePod: a terminating Pod holds the agent in Provisioning ----
@@ -677,7 +677,7 @@ func TestAgent_TerminatingPodHoldsProvisioning(t *testing.T) {
 	// A finalizer keeps the Pod present with a deletionTimestamp set (envtest
 	// removes unscheduled Pods instantly otherwise), so convergePod observes a
 	// replacement in progress and holds the agent in Provisioning.
-	const fin = "test.agentry.io/hold"
+	const fin = "test.kaalm.io/hold"
 	eventually(t, func() error {
 		var got corev1.Pod
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got); err != nil {
@@ -690,7 +690,7 @@ func TestAgent_TerminatingPodHoldsProvisioning(t *testing.T) {
 		t.Fatalf("graceful delete: %v", err)
 	}
 	touchAgent(t, "terming-agent")
-	expectAgentPhase(t, "terming-agent", agentryv1alpha1.AgentProvisioning)
+	expectAgentPhase(t, "terming-agent", kaalmv1alpha1.AgentProvisioning)
 	expectAgentReadyReason(t, "terming-agent", "PodProvisioning")
 
 	// Release the finalizer so the Pod can be reaped.
@@ -755,9 +755,9 @@ func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 	ctx := context.Background()
 	c := newErrCreateClient(t)
 
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"}}
-	class := &agentryv1alpha1.AgentClass{}
-	ar := &AgentReconciler{Client: c, OperatorNamespace: "agentry-system"}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"}}
+	class := &kaalmv1alpha1.AgentClass{}
+	ar := &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system"}
 	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080, ServiceEnabled: true, PersistenceOn: true, PVCSizeGi: 1}
 
 	if err := ar.ensureServiceAccount(ctx, agent); err == nil {
@@ -782,8 +782,8 @@ func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 		t.Error("convergePod must surface a create error")
 	}
 
-	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"}}
-	tr := &AgentTaskReconciler{Client: c, OperatorNamespace: "agentry-system"}
+	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"}}
+	tr := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system"}
 	if err := tr.ensureTaskChildren(ctx, task, class, effectiveTaskSpec{PersistenceOn: true, PVCSizeGi: 1}); err == nil {
 		t.Error("ensureTaskChildren must surface a create error")
 	}

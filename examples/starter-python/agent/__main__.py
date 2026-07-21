@@ -1,5 +1,5 @@
 # Copyright 2026. Licensed under the Apache License, Version 2.0.
-"""Minimal Agentry runtime-contract agent using aiohttp.
+"""Minimal Kaalm runtime-contract agent using aiohttp.
 
 Copy this directory and replace handle_message in handler.py. Everything else
 is contract boilerplate: HTTPS serving, mTLS, cert reload, dedup, heartbeats,
@@ -31,11 +31,11 @@ HEARTBEAT_PERIOD = 30  # seconds
 
 class Agent:
     def __init__(self) -> None:
-        self.health_port = int(os.environ.get("AGENTRY_HEALTH_PORT", "8080"))
-        self.cert_file = os.environ.get("AGENTRY_TLS_CERT", "/var/run/agentry/tls.crt")
-        self.key_file = os.environ.get("AGENTRY_TLS_KEY", "/var/run/agentry/tls.key")
-        self.ca_file = os.environ.get("AGENTRY_CA_CERT", "/var/run/agentry/ca.crt")
-        self.gateway_url = os.environ.get("AGENTRY_GATEWAY_ENDPOINT", "").rstrip("/")
+        self.health_port = int(os.environ.get("KAALM_HEALTH_PORT", "8080"))
+        self.cert_file = os.environ.get("KAALM_TLS_CERT", "/var/run/kaalm/tls.crt")
+        self.key_file = os.environ.get("KAALM_TLS_KEY", "/var/run/kaalm/tls.key")
+        self.ca_file = os.environ.get("KAALM_CA_CERT", "/var/run/kaalm/ca.crt")
+        self.gateway_url = os.environ.get("KAALM_GATEWAY_ENDPOINT", "").rstrip("/")
 
         self.reloader = CertReloader(self.cert_file, self.key_file, self.ca_file, log.info)
         self.reloader.start_watch()
@@ -91,7 +91,7 @@ class Agent:
 
     def should_heartbeat(self) -> bool:
         # auto (default): Agent mode only. off: never. No force-on for tasks.
-        if os.environ.get("AGENTRY_TEMPLATE_HEARTBEAT") == "off":
+        if os.environ.get("KAALM_TEMPLATE_HEARTBEAT") == "off":
             return False
         return not self.is_task
 

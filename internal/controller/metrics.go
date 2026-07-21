@@ -21,26 +21,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
-// The controller's Agentry-specific Prometheus catalog. Standard reconcile
+// The controller's Kaalm-specific Prometheus catalog. Standard reconcile
 // metrics come from controller-runtime automatically. No metric carries
 // per-Agent identity as a label (docs/src/operations/observability.md). These
 // register against the shared controller-runtime registry, served on the
 // manager's metrics port.
 var (
 	hibernationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "agentry_hibernations_total", Help: "Agent hibernations by namespace.",
+		Name: "kaalm_hibernations_total", Help: "Agent hibernations by namespace.",
 	}, []string{"namespace"})
 
 	wakesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "agentry_wakes_total", Help: "Agent wakes by namespace and trigger.",
+		Name: "kaalm_wakes_total", Help: "Agent wakes by namespace and trigger.",
 	}, []string{"namespace", "trigger"})
 
 	budgetThresholdEvents = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "agentry_budget_threshold_events_total", Help: "Reconcile-observed budget threshold actions.",
+		Name: "kaalm_budget_threshold_events_total", Help: "Reconcile-observed budget threshold actions.",
 	}, []string{"provider", "namespace", "action"})
 
 	providerBudgetCanonical = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "agentry_provider_budget_canonical_usd", Help: "Canonical per-namespace spend roll-up.",
+		Name: "kaalm_provider_budget_canonical_usd", Help: "Canonical per-namespace spend roll-up.",
 	}, []string{"provider", "namespace", "period"})
 )
 

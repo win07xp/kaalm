@@ -1,5 +1,5 @@
 # rule 25: callbackAuth required when callbackUrl set
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentChannel
 metadata: {name: no-cbauth, namespace: default}
 spec:

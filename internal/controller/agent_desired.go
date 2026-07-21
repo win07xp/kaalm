@@ -33,25 +33,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // Well-known names and defaults shared by the desired-state builders. The
 // gateway Service name and ports come from the design (docs/src/gateways/); the
 // mount path and env var names are the runtime contract (docs/src/runtime/).
 const (
-	gatewayServiceName = "agentry-gateway"
+	gatewayServiceName = "kaalm-gateway"
 	gatewayPort        = 8443
 	defaultHealthPort  = int32(8080)
-	tlsMountPath       = "/var/run/agentry"
-	caBundleConfigMap  = "agentry-ca" // trust-manager Bundle target
-	clusterIssuerName  = "agentry-ca-issuer"
+	tlsMountPath       = "/var/run/kaalm"
+	caBundleConfigMap  = "kaalm-ca" // trust-manager Bundle target
+	clusterIssuerName  = "kaalm-ca-issuer"
 
 	// annotationPodSpecHash carries the derived-Pod-spec hash for drift
 	// detection (the Deployment pod-template-hash idiom). Never compare
 	// against the live Pod object: apiserver defaulting would report
 	// perpetual drift.
-	annotationPodSpecHash = "agentry.io/pod-spec-hash"
+	annotationPodSpecHash = "kaalm.io/pod-spec-hash"
 
 	certDuration    = 2160 * time.Hour // 90d chart default
 	certRenewBefore = 720 * time.Hour  // 30d
@@ -93,7 +93,7 @@ type effectiveAgentSpec struct {
 
 // deriveEffectiveSpec merges class defaults into the Agent's spec and clamps
 // resources to the class maximum.
-func deriveEffectiveSpec(agent *agentryv1alpha1.Agent, class *agentryv1alpha1.AgentClass) effectiveAgentSpec {
+func deriveEffectiveSpec(agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass) effectiveAgentSpec {
 	eff := effectiveAgentSpec{
 		Image:            agent.Spec.Image,
 		Command:          agent.Spec.Command,
@@ -258,9 +258,9 @@ func gatewayEndpoint(operatorNamespace string) string {
 }
 
 // desiredCertificate builds the per-Agent cert-manager Certificate: Service DNS
-// SANs, server+client auth, issued from the agentry-ca-issuer ClusterIssuer.
+// SANs, server+client auth, issued from the kaalm-ca-issuer ClusterIssuer.
 // See docs/src/security/tls.md.
-func desiredCertificate(agent *agentryv1alpha1.Agent) *cmapi.Certificate {
+func desiredCertificate(agent *kaalmv1alpha1.Agent) *cmapi.Certificate {
 	name, ns := agent.Name, agent.Namespace
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: agentCertificateName(name), Namespace: ns},
@@ -281,7 +281,7 @@ func desiredCertificate(agent *agentryv1alpha1.Agent) *cmapi.Certificate {
 
 // desiredServiceAccount is the per-Agent identity with no RoleBindings: the
 // agent has no Kubernetes API access unless explicitly granted.
-func desiredServiceAccount(agent *agentryv1alpha1.Agent) *corev1.ServiceAccount {
+func desiredServiceAccount(agent *kaalmv1alpha1.Agent) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: agentServiceAccountName(agent.Name), Namespace: agent.Namespace},
 	}
@@ -289,7 +289,7 @@ func desiredServiceAccount(agent *agentryv1alpha1.Agent) *corev1.ServiceAccount 
 
 // desiredService is the ClusterIP Service fronting the agent's HTTPS listener.
 // targetPort is the literal health port, decoupled from the Service-facing port.
-func desiredService(agent *agentryv1alpha1.Agent, eff effectiveAgentSpec) *corev1.Service {
+func desiredService(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: agent.Name, Namespace: agent.Namespace},
 		Spec: corev1.ServiceSpec{
@@ -307,7 +307,7 @@ func desiredService(agent *agentryv1alpha1.Agent, eff effectiveAgentSpec) *corev
 
 // desiredPVC provisions the agent's durable volume. Callers must not invoke it
 // when persistence is disabled or an existingClaim is referenced.
-func desiredPVC(agent *agentryv1alpha1.Agent, class *agentryv1alpha1.AgentClass, eff effectiveAgentSpec) *corev1.PersistentVolumeClaim {
+func desiredPVC(agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec) *corev1.PersistentVolumeClaim {
 	size := eff.PVCSizeGi
 	if size <= 0 {
 		size = 1
@@ -326,17 +326,17 @@ func desiredPVC(agent *agentryv1alpha1.Agent, class *agentryv1alpha1.AgentClass,
 	}
 }
 
-func agentPodLabels(agent *agentryv1alpha1.Agent) map[string]string {
+func agentPodLabels(agent *kaalmv1alpha1.Agent) map[string]string {
 	return map[string]string{
-		"agentry.io/agent":    agent.Name,
-		"agentry.io/workload": "agent",
+		"kaalm.io/agent":    agent.Name,
+		"kaalm.io/workload": "agent",
 	}
 }
 
 // desiredPod derives the agent Pod: injected env and probes per the runtime
-// contract, the single projected TLS volume at /var/run/agentry, and the
+// contract, the single projected TLS volume at /var/run/kaalm, and the
 // drift-detection hash annotation.
-func desiredPod(agent *agentryv1alpha1.Agent, eff effectiveAgentSpec, operatorNamespace string) *corev1.Pod {
+func desiredPod(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec, operatorNamespace string) *corev1.Pod {
 	labels := map[string]string{}
 	for k, v := range eff.PodLabels {
 		labels[k] = v
@@ -351,16 +351,16 @@ func desiredPod(agent *agentryv1alpha1.Agent, eff effectiveAgentSpec, operatorNa
 	annotations[annotationPodSpecHash] = podSpecHash(eff)
 
 	env := []corev1.EnvVar{
-		{Name: "AGENTRY_HEALTH_PORT", Value: fmt.Sprintf("%d", eff.HealthPort)},
-		{Name: "AGENTRY_GATEWAY_ENDPOINT", Value: gatewayEndpoint(operatorNamespace)},
-		{Name: "AGENTRY_CA_CERT", Value: tlsMountPath + "/ca.crt"},
-		{Name: "AGENTRY_TLS_CERT", Value: tlsMountPath + "/tls.crt"},
-		{Name: "AGENTRY_TLS_KEY", Value: tlsMountPath + "/tls.key"},
+		{Name: "KAALM_HEALTH_PORT", Value: fmt.Sprintf("%d", eff.HealthPort)},
+		{Name: "KAALM_GATEWAY_ENDPOINT", Value: gatewayEndpoint(operatorNamespace)},
+		{Name: "KAALM_CA_CERT", Value: tlsMountPath + "/ca.crt"},
+		{Name: "KAALM_TLS_CERT", Value: tlsMountPath + "/tls.crt"},
+		{Name: "KAALM_TLS_KEY", Value: tlsMountPath + "/tls.key"},
 	}
 	env = append(env, eff.Env...)
 
 	volumes := []corev1.Volume{{
-		Name: "agentry-tls",
+		Name: "kaalm-tls",
 		VolumeSource: corev1.VolumeSource{
 			Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{
@@ -379,7 +379,7 @@ func desiredPod(agent *agentryv1alpha1.Agent, eff effectiveAgentSpec, operatorNa
 			},
 		},
 	}}
-	mounts := []corev1.VolumeMount{{Name: "agentry-tls", MountPath: tlsMountPath, ReadOnly: true}}
+	mounts := []corev1.VolumeMount{{Name: "kaalm-tls", MountPath: tlsMountPath, ReadOnly: true}}
 
 	if eff.PersistenceOn {
 		claim := eff.ExistingClaim
@@ -453,7 +453,7 @@ func desiredPod(agent *agentryv1alpha1.Agent, eff effectiveAgentSpec, operatorNa
 // policy kind and land in the hardening phase; when unsupported they are
 // ignored and the AgentClassReconciler emits the Warning.
 func desiredNetworkPolicy(
-	agent *agentryv1alpha1.Agent, class *agentryv1alpha1.AgentClass, eff effectiveAgentSpec, operatorNamespace string,
+	agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec, operatorNamespace string,
 ) *networkingv1.NetworkPolicy {
 	protoTCP := corev1.ProtocolTCP
 	protoUDP := corev1.ProtocolUDP

@@ -1,4 +1,4 @@
-module agentry.io/starter-go
+module kaalm.io/starter-go
 
 go 1.23.0
 

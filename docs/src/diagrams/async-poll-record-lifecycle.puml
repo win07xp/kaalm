@@ -1,5 +1,5 @@
 @startuml async-poll-record-lifecycle
-' Lifecycle of the agentry-async-{requestId} ConfigMap, as seen by a poller.
+' Lifecycle of the kaalm-async-{requestId} ConfigMap, as seen by a poller.
 ' Source of truth: docs/src/gateways/api/async-responses.md
 !include _style.puml
 skinparam wrapWidth 400
@@ -28,7 +28,7 @@ Expired -up-> Absent : reconciler prune\n(expires-at annotation, live channels o
 note bottom of Absent
   **Channel deletion is the other way back to Absent,**
   and it is not expiry-gated: the AgentChannel finalizer
-  sweeps every agentry-async-* record for that channel by
+  sweeps every kaalm-async-* record for that channel by
   label selector, whatever state it is in. A Placeholder or
   Patched record still inside its 1h TTL goes too.
 end note
@@ -54,7 +54,7 @@ legend bottom
   simply ages out. Both documented v1 limitations reach Expired along this **same** edge:
   **Replica Failure** (the replica holding the in-memory delivery pipeline dies after the
   202) and **Response-Patch Failure** (all 4 Patch attempts fail, raising
-  agentry_channel_async_patch_failed_total). Either way **no envelope is ever stored**:
+  kaalm_channel_async_patch_failed_total). Either way **no envelope is ever stored**:
   pollers see 202 until the TTL flips them to 404, which is why callers should treat an
   unanswered poll past 5 to 10 minutes as failed and resubmit for a fresh requestId.
 endlegend

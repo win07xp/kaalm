@@ -3,7 +3,7 @@
 ' Source of truth: docs/src/gateways/llm/overview.md
 !include _style.puml
 
-rectangle "**Agentry Gateway** (agentry-system)" as gwproc {
+rectangle "**Kaalm Gateway** (kaalm-system)" as gwproc {
 
   rectangle "**LLM Gateway Listener**" as llml {
     rectangle "Request validator" as v #back:90EE90;line:1B5E20;text:0b3d0b

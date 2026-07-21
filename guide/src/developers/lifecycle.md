@@ -55,7 +55,7 @@ instead of silence.
 You can also wake an agent by hand, the same way the gateway does:
 
 ```bash
-kubectl annotate agent support-assistant agentry.io/wake=true
+kubectl annotate agent support-assistant kaalm.io/wake=true
 ```
 
 ## Promoting a task to a persistent agent
@@ -75,7 +75,7 @@ task's `ttlSecondsAfterFinished` cleans up its PVC:
 runs the finalizer, and only then releases the resource. The PVC's fate is
 the class's `pvcRetention` policy: `Retain` (the sample class's choice) keeps
 it for a successor agent or post-mortem; `Delete` removes it with the agent.
-This policy is Agentry's own and is independent of the PV reclaim policy
+This policy is Kaalm's own and is independent of the PV reclaim policy
 underneath.
 
 ---

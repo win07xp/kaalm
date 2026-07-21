@@ -1,4 +1,4 @@
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentTask
 metadata:
   name: e2e-task
@@ -8,7 +8,7 @@ spec:
     name: e2e-standard
   image: registry.test/agents/starter-go:e2e
   env:
-    - name: AGENTRY_TASK_AUTOCOMPLETE
+    - name: KAALM_TASK_AUTOCOMPLETE
       value: success
   completion:
     condition: agentReported

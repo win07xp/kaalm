@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func TestPodSpecHash_StableAndSensitive(t *testing.T) {
@@ -121,23 +121,23 @@ func TestNamespaceAllowed(t *testing.T) {
 }
 
 func TestDeriveEffectiveSpec_ClassDefaults(t *testing.T) {
-	class := &agentryv1alpha1.AgentClass{
+	class := &kaalmv1alpha1.AgentClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "standard"},
-		Spec: agentryv1alpha1.AgentClassSpec{
-			Image: agentryv1alpha1.AgentClassImage{DefaultImage: "registry/default:v1"},
-			Resources: agentryv1alpha1.AgentClassResources{
+		Spec: kaalmv1alpha1.AgentClassSpec{
+			Image: kaalmv1alpha1.AgentClassImage{DefaultImage: "registry/default:v1"},
+			Resources: kaalmv1alpha1.AgentClassResources{
 				Defaults: corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m")},
 				},
 			},
-			Persistence: agentryv1alpha1.AgentClassPersistence{DefaultSizeGi: 5, MaxSizeGi: 10},
+			Persistence: kaalmv1alpha1.AgentClassPersistence{DefaultSizeGi: 5, MaxSizeGi: 10},
 		},
 	}
-	agent := &agentryv1alpha1.Agent{
+	agent := &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
-		Spec: agentryv1alpha1.AgentSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "standard"},
-			Persistence:   agentryv1alpha1.AgentPersistence{Enabled: true},
+		Spec: kaalmv1alpha1.AgentSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "standard"},
+			Persistence:   kaalmv1alpha1.AgentPersistence{Enabled: true},
 		},
 	}
 	eff := deriveEffectiveSpec(agent, class)
@@ -168,25 +168,25 @@ func TestDeriveEffectiveSpec_ClassDefaults(t *testing.T) {
 }
 
 func TestDesiredPod_ContractInjection(t *testing.T) {
-	agent := &agentryv1alpha1.Agent{
+	agent := &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentSpec{
+		Spec: kaalmv1alpha1.AgentSpec{
 			Env: []corev1.EnvVar{{Name: "LOG_LEVEL", Value: "info"}},
 		},
 	}
 	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, Env: agent.Spec.Env, PersistenceOn: true}
-	pod := desiredPod(agent, eff, "agentry-system")
+	pod := desiredPod(agent, eff, "kaalm-system")
 
 	envMap := map[string]string{}
 	for _, e := range pod.Spec.Containers[0].Env {
 		envMap[e.Name] = e.Value
 	}
-	if envMap["AGENTRY_GATEWAY_ENDPOINT"] != "https://agentry-gateway.agentry-system.svc.cluster.local:8443" {
-		t.Errorf("gateway endpoint wrong: %q", envMap["AGENTRY_GATEWAY_ENDPOINT"])
+	if envMap["KAALM_GATEWAY_ENDPOINT"] != "https://kaalm-gateway.kaalm-system.svc.cluster.local:8443" {
+		t.Errorf("gateway endpoint wrong: %q", envMap["KAALM_GATEWAY_ENDPOINT"])
 	}
-	if envMap["AGENTRY_CA_CERT"] != "/var/run/agentry/ca.crt" ||
-		envMap["AGENTRY_TLS_CERT"] != "/var/run/agentry/tls.crt" ||
-		envMap["AGENTRY_TLS_KEY"] != "/var/run/agentry/tls.key" {
+	if envMap["KAALM_CA_CERT"] != "/var/run/kaalm/ca.crt" ||
+		envMap["KAALM_TLS_CERT"] != "/var/run/kaalm/tls.crt" ||
+		envMap["KAALM_TLS_KEY"] != "/var/run/kaalm/tls.key" {
 		t.Errorf("TLS paths wrong: %v", envMap)
 	}
 	if envMap["LOG_LEVEL"] != "info" {
@@ -221,7 +221,7 @@ func TestDesiredPod_ContractInjection(t *testing.T) {
 }
 
 func TestDesiredCertificate_Shape(t *testing.T) {
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	cert := desiredCertificate(agent)
 	if cert.Name != "sup-tls" || cert.Spec.SecretName != "sup-tls" {
 		t.Errorf("cert naming wrong: %s / %s", cert.Name, cert.Spec.SecretName)
@@ -235,7 +235,7 @@ func TestDesiredCertificate_Shape(t *testing.T) {
 			t.Errorf("SAN %d = %q, want %q", i, cert.Spec.DNSNames[i], s)
 		}
 	}
-	if cert.Spec.IssuerRef.Name != "agentry-ca-issuer" || cert.Spec.IssuerRef.Kind != "ClusterIssuer" {
+	if cert.Spec.IssuerRef.Name != "kaalm-ca-issuer" || cert.Spec.IssuerRef.Kind != "ClusterIssuer" {
 		t.Errorf("issuerRef wrong: %+v", cert.Spec.IssuerRef)
 	}
 	if len(cert.Spec.Usages) != 2 {
@@ -244,16 +244,16 @@ func TestDesiredCertificate_Shape(t *testing.T) {
 }
 
 func TestDesiredNetworkPolicy_Rules(t *testing.T) {
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
-	class := &agentryv1alpha1.AgentClass{
-		Spec: agentryv1alpha1.AgentClassSpec{
-			Network: agentryv1alpha1.AgentClassNetwork{
-				Egress:                    agentryv1alpha1.AgentClassEgress{AllowedCIDRs: []string{"10.0.0.0/8"}},
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	class := &kaalmv1alpha1.AgentClass{
+		Spec: kaalmv1alpha1.AgentClassSpec{
+			Network: kaalmv1alpha1.AgentClassNetwork{
+				Egress:                    kaalmv1alpha1.AgentClassEgress{AllowedCIDRs: []string{"10.0.0.0/8"}},
 				AllowSameNamespaceIngress: true,
 			},
 		},
 	}
-	np := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 8080}, "agentry-system")
+	np := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 8080}, "kaalm-system")
 	// gateway egress + DNS + one CIDR
 	if len(np.Spec.Egress) != 3 {
 		t.Fatalf("want 3 egress rules, got %d", len(np.Spec.Egress))
@@ -271,15 +271,15 @@ func TestDesiredNetworkPolicy_Rules(t *testing.T) {
 }
 
 func TestDesiredPod_MergesClassPodMetadata(t *testing.T) {
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	eff := effectiveAgentSpec{
 		Image:          "img:v1",
 		HealthPort:     8080,
 		PodLabels:      map[string]string{"team": "search"},
 		PodAnnotations: map[string]string{"vault.io/inject": "false"},
 	}
-	pod := desiredPod(agent, eff, "agentry-system")
-	if pod.Labels["team"] != "search" || pod.Labels["agentry.io/agent"] != "sup" {
+	pod := desiredPod(agent, eff, "kaalm-system")
+	if pod.Labels["team"] != "search" || pod.Labels["kaalm.io/agent"] != "sup" {
 		t.Errorf("class labels not merged with identity labels: %v", pod.Labels)
 	}
 	if pod.Annotations["vault.io/inject"] != "false" {
@@ -291,8 +291,8 @@ func TestDesiredPod_MergesClassPodMetadata(t *testing.T) {
 }
 
 func TestDesiredPVC_ZeroSizeDefaults(t *testing.T) {
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
-	class := &agentryv1alpha1.AgentClass{}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	class := &kaalmv1alpha1.AgentClass{}
 	pvc := desiredPVC(agent, class, effectiveAgentSpec{PVCSizeGi: 0})
 	if pvc.Name != "sup-memory" {
 		t.Errorf("pvc name wrong: %s", pvc.Name)

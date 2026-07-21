@@ -30,7 +30,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func TestControllerActivator_Wake(t *testing.T) {
@@ -68,11 +68,11 @@ func TestControllerActivator_Wake(t *testing.T) {
 func TestNewControllerActivator(t *testing.T) {
 	ca := newTestCA(t)
 	certFile, keyFile, caFile := certFiles(t, ca, "gw")
-	act, err := NewControllerActivator("agentry-system", certFile, keyFile, caFile)
+	act, err := NewControllerActivator("kaalm-system", certFile, keyFile, caFile)
 	if err != nil {
 		t.Fatalf("NewControllerActivator: %v", err)
 	}
-	if !strings.Contains(act.BaseURL, "agentry-controller.agentry-system.svc.cluster.local:9443") {
+	if !strings.Contains(act.BaseURL, "kaalm-controller.kaalm-system.svc.cluster.local:9443") {
 		t.Errorf("base URL = %q", act.BaseURL)
 	}
 	if act.Client == nil {
@@ -80,10 +80,10 @@ func TestNewControllerActivator(t *testing.T) {
 	}
 
 	// A missing cert file fails construction.
-	if _, err := NewControllerActivator("agentry-system", "/nope/tls.crt", keyFile, caFile); err == nil {
+	if _, err := NewControllerActivator("kaalm-system", "/nope/tls.crt", keyFile, caFile); err == nil {
 		t.Error("missing cert must error")
 	}
-	if _, err := NewControllerActivator("agentry-system", certFile, keyFile, "/nope/ca.crt"); err == nil {
+	if _, err := NewControllerActivator("kaalm-system", certFile, keyFile, "/nope/ca.crt"); err == nil {
 		t.Error("missing CA must error")
 	}
 }
@@ -126,7 +126,7 @@ func TestWakeAndDeliver_Hibernated(t *testing.T) {
 		_, _ = w.Write([]byte(`{"content":"awake"}`))
 	})
 	h.seedChannel("sync")
-	h.store.agents["team-a/sup"].Status.Phase = agentryv1alpha1.AgentHibernated
+	h.store.agents["team-a/sup"].Status.Phase = kaalmv1alpha1.AgentHibernated
 
 	// No activator configured: controller-down error surfaces as 504.
 	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
@@ -161,14 +161,14 @@ func TestWakeAndDeliver_Hibernated(t *testing.T) {
 func TestWakeTimeout(t *testing.T) {
 	s := &Server{}
 	// Default when unset.
-	def := &agentryv1alpha1.Agent{}
+	def := &kaalmv1alpha1.Agent{}
 	if got := s.wakeTimeout(def); got != 120*time.Second {
 		t.Errorf("default wakeTimeout = %v", got)
 	}
 	// Spec override.
-	withTimeout := &agentryv1alpha1.Agent{
-		Spec: agentryv1alpha1.AgentSpec{
-			Lifecycle: agentryv1alpha1.AgentLifecycle{
+	withTimeout := &kaalmv1alpha1.Agent{
+		Spec: kaalmv1alpha1.AgentSpec{
+			Lifecycle: kaalmv1alpha1.AgentLifecycle{
 				WakeTimeout: metav1.Duration{Duration: 42 * time.Second},
 			},
 		},
@@ -181,7 +181,7 @@ func TestWakeTimeout(t *testing.T) {
 func TestAgentServiceHostPort(t *testing.T) {
 	// No overrides: derived Service DNS and default port.
 	s := &Server{}
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	if host := s.agentServiceHost(agent); host != "sup.team-a.svc.cluster.local" {
 		t.Errorf("host = %q", host)
 	}
@@ -189,7 +189,7 @@ func TestAgentServiceHostPort(t *testing.T) {
 		t.Errorf("default port = %d", port)
 	}
 	// Spec service port wins over the default.
-	agent.Spec.Service = &agentryv1alpha1.AgentService{Port: 9000}
+	agent.Spec.Service = &kaalmv1alpha1.AgentService{Port: 9000}
 	if port := s.agentServicePort(agent); port != 9000 {
 		t.Errorf("spec port = %d", port)
 	}

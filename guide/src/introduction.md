@@ -1,6 +1,6 @@
 # Introduction
 
-Agentry runs AI agents as a first-class workload type on Kubernetes: you describe
+Kaalm (Kubernetes AI/Agent Loop Manager) runs AI agents as a first-class workload type on Kubernetes: you describe
 an agent in YAML, and the operator gives it a Pod, an identity, a channel to talk
 through, and guardrails on what it may spend.
 
@@ -29,15 +29,15 @@ Three are namespaced and owned by application teams:
 - **AgentChannel** connects an Agent to the outside world through an inbound
   webhook.
 
-Every LLM call an agent makes goes through the Agentry gateway, which injects
+Every LLM call an agent makes goes through the Kaalm gateway, which injects
 the provider credential server-side, so API keys never appear in an agent's
 namespace, container, or environment.
 
 ## Which chapters are for you
 
-- **Platform engineer** (you install Agentry and offer classes and providers to
+- **Platform engineer** (you install Kaalm and offer classes and providers to
   teams): read Getting Started, then the For Platform Teams part.
-- **Agent developer** (someone already runs Agentry for you; you deploy agents):
+- **Agent developer** (someone already runs Kaalm for you; you deploy agents):
   skim the mental model above, then start at [Your First Agent](developers/first-agent.md).
 
 ## What you need before starting

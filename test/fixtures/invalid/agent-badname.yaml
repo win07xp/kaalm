@@ -1,5 +1,5 @@
 # rule 21: metadata.name must be a DNS-1123 label (no dots)
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: Agent
 metadata:
   name: admin.svc

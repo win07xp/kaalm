@@ -1,4 +1,4 @@
-{{- include "agentry.replicaFloor" .Values.gateway.replicas -}}
+{{- include "kaalm.replicaFloor" .Values.gateway.replicas -}}
 {{/*
 The gateway Deployment, Service, and PodDisruptionBudget. The two logical
 gateways (LLM proxy on :8443, User webhook on :8080) share one Deployment; the
@@ -10,10 +10,10 @@ docs/src/operations/deployment.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
   replicas: {{ .Values.gateway.replicas }}
@@ -23,15 +23,15 @@ spec:
       maxUnavailable: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: agentry
+      app.kubernetes.io/name: kaalm
       app.kubernetes.io/component: gateway
   template:
     metadata:
       labels:
-        {{- include "agentry.labels" . | nindent 8 }}
+        {{- include "kaalm.labels" . | nindent 8 }}
         app.kubernetes.io/component: gateway
     spec:
-      serviceAccountName: agentry-gateway
+      serviceAccountName: kaalm-gateway
       securityContext:
         runAsNonRoot: true
       containers:
@@ -43,13 +43,13 @@ spec:
             - --user-addr=:8080
             - --health-addr=:{{ .Values.gateway.healthPort }}
             - --metrics-addr=:9090
-            - --tls-cert=/var/run/agentry/tls.crt
-            - --tls-key=/var/run/agentry/tls.key
-            - --tls-ca=/var/run/agentry/ca.crt
+            - --tls-cert=/var/run/kaalm/tls.crt
+            - --tls-key=/var/run/kaalm/tls.key
+            - --tls-ca=/var/run/kaalm/ca.crt
             - --max-fallback-depth={{ .Values.gateway.maxFallbackDepth }}
-            - --max-llm-body-bytes={{ include "agentry.bytes" .Values.gateway.maxLLMRequestBodyBytes }}
-            - --max-message-body-bytes={{ include "agentry.bytes" .Values.gateway.maxMessageBodyBytes }}
-            - --max-response-body-bytes={{ include "agentry.bytes" .Values.gateway.maxResponseBodyBytes }}
+            - --max-llm-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxLLMRequestBodyBytes }}
+            - --max-message-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxMessageBodyBytes }}
+            - --max-response-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxResponseBodyBytes }}
             - --sync-delivery-deadline={{ .Values.gateway.syncDeliveryDeadline }}
             - --agent-read-timeout={{ .Values.gateway.agentReadTimeout }}
             - --agent-connect-timeout={{ .Values.gateway.agentDeliveryConnectTimeout }}
@@ -92,34 +92,34 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: agentry-tls
-              mountPath: /var/run/agentry
+            - name: kaalm-tls
+              mountPath: /var/run/kaalm
               readOnly: true
       volumes:
-        - name: agentry-tls
+        - name: kaalm-tls
           projected:
             sources:
               - secret:
-                  name: agentry-gateway-tls
+                  name: kaalm-gateway-tls
                   items:
                     - { key: tls.crt, path: tls.crt }
                     - { key: tls.key, path: tls.key }
               - configMap:
-                  name: agentry-ca
+                  name: kaalm-ca
                   items:
                     - { key: ca.crt, path: ca.crt }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
   selector:
-    app.kubernetes.io/name: agentry
+    app.kubernetes.io/name: kaalm
     app.kubernetes.io/component: gateway
   ports:
     - name: user
@@ -135,13 +135,13 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: agentry
+      app.kubernetes.io/name: kaalm
       app.kubernetes.io/component: gateway

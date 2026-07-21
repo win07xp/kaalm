@@ -33,7 +33,7 @@ import (
 const (
 	// tokenAudience is the audience the gateway requires on projected SA
 	// tokens; generic kubernetes.default.svc tokens are rejected.
-	tokenAudience = "agentry-gateway"
+	tokenAudience = "kaalm-gateway"
 
 	tokenCacheMaxTTL       = 5 * time.Minute
 	tokenCacheSafetyMargin = 60 * time.Second
@@ -52,7 +52,7 @@ type KubeTokenReviewer struct {
 	Client kubernetes.Interface
 }
 
-// Review posts a TokenReview with the agentry-gateway audience.
+// Review posts a TokenReview with the kaalm-gateway audience.
 func (k *KubeTokenReviewer) Review(ctx context.Context, token string) (string, bool, error) {
 	tr := &authnv1.TokenReview{
 		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{tokenAudience}},

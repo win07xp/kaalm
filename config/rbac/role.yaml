@@ -45,7 +45,19 @@ rules:
   - list
   - watch
 - apiGroups:
-  - agentry.io
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kaalm.io
   resources:
   - agentchannels
   - agentclasses
@@ -58,7 +70,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - agentry.io
+  - kaalm.io
   resources:
   - agentchannels/finalizers
   - agentclasses/finalizers
@@ -68,7 +80,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - agentry.io
+  - kaalm.io
   resources:
   - agentchannels/status
   - agentclasses/status
@@ -80,22 +92,10 @@ rules:
   - patch
   - update
 - apiGroups:
-  - agentry.io
+  - kaalm.io
   resources:
   - agenttasks
   verbs:
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - cert-manager.io
-  resources:
-  - certificates
-  verbs:
-  - create
   - delete
   - get
   - list

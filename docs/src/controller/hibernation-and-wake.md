@@ -79,7 +79,7 @@ While waiting, the gateway holds the message. The v1 generic webhook adapter has
 
 ### From activator call to Resuming
 
-The controller side of that call is deliberately thin. The activator handler is served on **every** controller replica, and all it does is patch `agentry.io/wake=true` on the target Agent via the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` runs the manual-wake path (step 9) to transition the Agent to `Resuming` and recreate the Pod.
+The controller side of that call is deliberately thin. The activator handler is served on **every** controller replica, and all it does is patch `kaalm.io/wake=true` on the target Agent via the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` runs the manual-wake path (step 9) to transition the Agent to `Resuming` and recreate the Pod.
 
 This is why the handler does not need to run on the leader. The Service round-robins the POST across replicas, but any replica that receives it can drive the wake, because the signal is an annotation on the resource rather than an in-memory call on the leader. See [Operator Structure](overview.md).
 
@@ -100,7 +100,7 @@ A gateway-side `wakeTimeout` exhaustion does not interrupt this: the caller gets
 Manual wake is also supported via annotation:
 
 ```
-kubectl annotate agent foo agentry.io/wake=true
+kubectl annotate agent foo kaalm.io/wake=true
 ```
 
 Operational uses include pre-warming an agent before expected traffic or forcing a wake when no AgentChannel is configured. The AgentReconciler handles this annotation with phase-dependent removal so a failed reconcile cannot silently drop the wake:

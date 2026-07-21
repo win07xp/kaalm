@@ -28,27 +28,27 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // nsTeamA is a sample tenant namespace reused across these records tests.
 const nsTeamA = "team-a"
 
 func TestAsyncCMName(t *testing.T) {
-	if got := asyncCMName("abc-123"); got != "agentry-async-abc-123" {
+	if got := asyncCMName("abc-123"); got != "kaalm-async-abc-123" {
 		t.Errorf("asyncCMName = %q", got)
 	}
 }
 
 func TestKubeAsyncRecords_Lifecycle(t *testing.T) {
 	client := k8sfake.NewSimpleClientset()
-	recs := &KubeAsyncRecords{Client: client, OperatorNamespace: "agentry-system"}
+	recs := &KubeAsyncRecords{Client: client, OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
 
-	ch := &agentryv1alpha1.AgentChannel{
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: nsTeamA},
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			Webhook: agentryv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"},
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"},
 		},
 	}
 
@@ -63,15 +63,15 @@ func TestKubeAsyncRecords_Lifecycle(t *testing.T) {
 	}
 
 	// Verify labels and expiry annotation landed.
-	cm, err := client.CoreV1().ConfigMaps("agentry-system").Get(ctx, asyncCMName("req-1"), metav1.GetOptions{})
+	cm, err := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, asyncCMName("req-1"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get cm: %v", err)
 	}
-	if cm.Labels[agentryv1alpha1.LabelChannelNamespace] != nsTeamA ||
-		cm.Labels[agentryv1alpha1.LabelChannelName] != "ch" {
+	if cm.Labels[kaalmv1alpha1.LabelChannelNamespace] != nsTeamA ||
+		cm.Labels[kaalmv1alpha1.LabelChannelName] != "ch" {
 		t.Errorf("labels wrong: %v", cm.Labels)
 	}
-	if cm.Annotations[agentryv1alpha1.AnnotationExpiresAt] == "" {
+	if cm.Annotations[kaalmv1alpha1.AnnotationExpiresAt] == "" {
 		t.Error("expiry annotation missing")
 	}
 
@@ -99,17 +99,17 @@ func TestKubeAsyncRecords_Lifecycle(t *testing.T) {
 
 func TestKubeAsyncRecords_CountPending(t *testing.T) {
 	ctx := context.Background()
-	ch := &agentryv1alpha1.AgentChannel{
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: nsTeamA},
-		Spec:       agentryv1alpha1.AgentChannelSpec{Webhook: agentryv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
+		Spec:       kaalmv1alpha1.AgentChannelSpec{Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
 	}
-	otherCh := &agentryv1alpha1.AgentChannel{
+	otherCh := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: nsTeamA},
-		Spec:       agentryv1alpha1.AgentChannelSpec{Webhook: agentryv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/other"}},
+		Spec:       kaalmv1alpha1.AgentChannelSpec{Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/other"}},
 	}
 
 	client := k8sfake.NewSimpleClientset()
-	recs := &KubeAsyncRecords{Client: client, OperatorNamespace: "agentry-system"}
+	recs := &KubeAsyncRecords{Client: client, OperatorNamespace: "kaalm-system"}
 	exp := time.Now().Add(asyncTTL)
 	if err := recs.Create(ctx, "a1", ch, exp); err != nil {
 		t.Fatal(err)
@@ -172,19 +172,19 @@ func TestKubeAsyncRecords_ErrorPaths(t *testing.T) {
 	ctx := context.Background()
 
 	// CountPending list error.
-	recs := &KubeAsyncRecords{Client: cmErrClientset("list"), OperatorNamespace: "agentry-system"}
+	recs := &KubeAsyncRecords{Client: cmErrClientset("list"), OperatorNamespace: "kaalm-system"}
 	if _, err := recs.CountPending(ctx, "team-a", "ch"); err == nil {
 		t.Error("CountPending must surface list errors")
 	}
 
 	// Patch error.
-	recsP := &KubeAsyncRecords{Client: cmErrClientset("patch"), OperatorNamespace: "agentry-system"}
+	recsP := &KubeAsyncRecords{Client: cmErrClientset("patch"), OperatorNamespace: "kaalm-system"}
 	if err := recsP.Patch(ctx, "req-1", []byte(`{}`)); err == nil {
 		t.Error("Patch must surface errors")
 	}
 
 	// Get with a non-NotFound error.
-	recsG := &KubeAsyncRecords{Client: cmErrClientset("get"), OperatorNamespace: "agentry-system"}
+	recsG := &KubeAsyncRecords{Client: cmErrClientset("get"), OperatorNamespace: "kaalm-system"}
 	if _, _, err := recsG.Get(ctx, "req-1"); err == nil {
 		t.Error("Get must surface non-NotFound errors")
 	}
