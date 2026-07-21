@@ -455,3 +455,342 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 		return errString("task not yet TTL-deleted")
 	})
 }
+
+// ---- AgentTask pre-Pod violations (taskViolation) ----
+
+func TestTask_ImageNotAllowedIsTerminalFailed(t *testing.T) {
+	mkWorkloadClass(t, "tc-img", nil) // allows registry.test/agents/*
+	mkTask(t, "t-img", "tc-img", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Image = "evil.example/x:v1"
+	})
+	expectTaskPhase(t, "t-img", agentryv1alpha1.TaskFailed)
+	c := condition(getTask(t, "t-img").Status.Conditions, agentryv1alpha1.ConditionCompleted)
+	if c == nil || c.Reason != agentryv1alpha1.ReasonClassConstraintViolation {
+		t.Errorf("Completed condition wrong: %+v", c)
+	}
+}
+
+func TestTask_ProviderNotAllowedIsTerminalFailed(t *testing.T) {
+	mkWorkloadClass(t, "tc-prov", nil) // empty allowedProviders => none allowed
+	mkTask(t, "t-prov", "tc-prov", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
+			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "nope"}},
+		}
+	})
+	expectTaskPhase(t, "t-prov", agentryv1alpha1.TaskFailed)
+}
+
+func TestTask_ProviderNamespaceDeniedIsTerminalFailed(t *testing.T) {
+	mkSecret(t, "t-provns-key")
+	mkProvider(t, "t-provns", func(mp *agentryv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "t-provns-key", Key: "token"}
+		mp.Spec.AllowedNamespaces = []string{"team-*"}
+	})
+	mkWorkloadClass(t, "tc-provns", func(ac *agentryv1alpha1.AgentClass) {
+		ac.Spec.AllowedProviders = []agentryv1alpha1.LocalObjectReference{{Name: "t-provns"}}
+	})
+	mkTask(t, "t-provns-task", "tc-provns", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
+			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "t-provns"}},
+		}
+	})
+	// The task's namespace (default) does not match team-*.
+	expectTaskPhase(t, "t-provns-task", agentryv1alpha1.TaskFailed)
+}
+
+func TestTask_ImagePullSecretMissingGates(t *testing.T) {
+	mkWorkloadClass(t, "tc-pull", func(ac *agentryv1alpha1.AgentClass) {
+		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "tc-pull-creds"}}
+	})
+	mkTask(t, "t-pull", "tc-pull", nil)
+	readyReason := func() (string, error) {
+		var task agentryv1alpha1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-pull"}, &task); err != nil {
+			return "", err
+		}
+		c := condition(task.Status.Conditions, agentryv1alpha1.ConditionReady)
+		if c == nil {
+			return "", errString("no Ready condition yet")
+		}
+		return c.Reason, nil
+	}
+	eventually(t, func() error {
+		r, err := readyReason()
+		if err != nil {
+			return err
+		}
+		if r != agentryv1alpha1.ReasonImagePullSecretMissing {
+			return errString("ImagePullSecretMissing not set, got " + r)
+		}
+		return nil
+	})
+	// Creating the Secret recovers the gate and provisioning proceeds.
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tc-pull-creds", Namespace: "default"}}
+	if err := testClient.Create(ctxT(), sec); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	eventually(t, func() error { return markCertReadyErr("t-pull") })
+	eventually(t, func() error {
+		r, err := readyReason()
+		if err != nil {
+			return err
+		}
+		if r == agentryv1alpha1.ReasonImagePullSecretMissing {
+			return errString("still gated on pull secret")
+		}
+		return nil
+	})
+}
+
+// ---- AgentTask exitCode: Pod succeeds before ever becoming Ready ----
+
+func TestTask_ExitCodeSucceedsBeforeReady(t *testing.T) {
+	mkWorkloadClass(t, "tc-early", nil)
+	mkTask(t, "t-early", "tc-early", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Completion.Condition = completionExitCode
+	})
+	eventually(t, func() error { return markCertReadyErr("t-early") })
+	eventually(t, func() error {
+		if taskPod(t, "t-early") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	// The container runs to completion before the (never-set) Ready condition.
+	pod := taskPod(t, "t-early")
+	pod.Status.Phase = corev1.PodSucceeded
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "agent",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}},
+	}}
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-early", agentryv1alpha1.TaskSucceeded)
+}
+
+// ---- AgentTask driveProvisioning: a fatal image error fails immediately ----
+
+func TestTask_InvalidImageNameFailsImmediately(t *testing.T) {
+	mkWorkloadClass(t, "tc-badimg", nil)
+	mkTask(t, "t-badimg", "tc-badimg", nil)
+	eventually(t, func() error { return markCertReadyErr("t-badimg") })
+	eventually(t, func() error {
+		if taskPod(t, "t-badimg") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	pod := taskPod(t, "t-badimg")
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "agent",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason: "InvalidImageName", Message: "couldn't parse image reference",
+		}},
+	}}
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-badimg", agentryv1alpha1.TaskFailed)
+}
+
+// ---- AgentTask ensureTaskChildren: persistence provisions a task PVC ----
+
+func TestTask_PersistenceProvisionsPVC(t *testing.T) {
+	mkWorkloadClass(t, "tc-pvc", func(ac *agentryv1alpha1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+	})
+	mkTask(t, "t-pvc", "tc-pvc", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Persistence.Enabled = true
+	})
+	eventually(t, func() error { return markCertReadyErr("t-pvc") })
+	eventually(t, func() error {
+		var pvc corev1.PersistentVolumeClaim
+		return testClient.Get(ctxT(),
+			types.NamespacedName{Namespace: "default", Name: "t-pvc-workspace"}, &pvc)
+	})
+}
+
+// ---- AgentTask reconcileDelete: a running task's Pod is terminated ----
+
+func TestTask_DeleteTerminatesPod(t *testing.T) {
+	mkWorkloadClass(t, "tc-del", nil)
+	pod := provisionRunningTask(t, "t-del", "tc-del", nil)
+
+	task := getTask(t, "t-del")
+	if err := testClient.Delete(ctxT(), task); err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+	// The finalizer deletes the Pod; finish its termination (kubelet-less).
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			forceDeletePod(t, &got)
+		}
+		return errString("pod still present")
+	})
+	// The task then finalizes away.
+	eventually(t, func() error {
+		var got agentryv1alpha1.AgentTask
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-del"}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return errString("task not yet finalized")
+	})
+}
+
+// ---- AgentTask: missing class and empty image are terminal/gated ----
+
+func TestTask_MissingClassIsNotReady(t *testing.T) {
+	mkTask(t, "t-noclass", "ghost-class", nil)
+	eventually(t, func() error {
+		var task agentryv1alpha1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noclass"}, &task); err != nil {
+			return err
+		}
+		c := condition(task.Status.Conditions, agentryv1alpha1.ConditionReady)
+		if c == nil || c.Reason != agentryv1alpha1.ReasonInvalidReference {
+			return errString("InvalidReference not set")
+		}
+		return nil
+	})
+}
+
+func TestTask_EmptyImageIsNotReady(t *testing.T) {
+	mkWorkloadClass(t, "tc-noimg", nil) // no defaultImage
+	mkTask(t, "t-noimg", "tc-noimg", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Image = ""
+	})
+	eventually(t, func() error {
+		var task agentryv1alpha1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noimg"}, &task); err != nil {
+			return err
+		}
+		c := condition(task.Status.Conditions, agentryv1alpha1.ConditionReady)
+		if c == nil || c.Reason != agentryv1alpha1.ReasonInvalidReference {
+			return errString("InvalidReference not set")
+		}
+		return nil
+	})
+}
+
+// ---- AgentTask: a provider in the allowlist whose CR is absent fails ----
+
+func TestTask_ProviderCRMissingIsTerminalFailed(t *testing.T) {
+	mkWorkloadClass(t, "tc-provghost", func(ac *agentryv1alpha1.AgentClass) {
+		ac.Spec.AllowedProviders = []agentryv1alpha1.LocalObjectReference{{Name: "task-ghost-prov"}}
+	})
+	mkTask(t, "t-provghost", "tc-provghost", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
+			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "task-ghost-prov"}},
+		}
+	})
+	expectTaskPhase(t, "t-provghost", agentryv1alpha1.TaskFailed)
+}
+
+// ---- AgentTask: the provisioning deadline fails a Pod that never starts ----
+
+func TestTask_ProvisioningDeadlineFails(t *testing.T) {
+	old := provisioningDeadline
+	provisioningDeadline = 1 * time.Second
+	defer func() { provisioningDeadline = old }()
+
+	mkWorkloadClass(t, "tc-deadline", nil)
+	mkTask(t, "t-deadline", "tc-deadline", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Completion.Condition = completionExitCode
+	})
+	eventually(t, func() error { return markCertReadyErr("t-deadline") })
+	eventually(t, func() error {
+		if taskPod(t, "t-deadline") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	// A non-fatal waiting reason exercises the container-status scan without
+	// short-circuiting; the Pod never becomes Ready, so the deadline fails it.
+	pod := taskPod(t, "t-deadline")
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "agent",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+	}}
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-deadline", agentryv1alpha1.TaskFailed)
+}
+
+// TestTask_ExitCodeFailsBeforeReady covers driveProvisioning's terminal-before-
+// Ready branch for an exitCode task whose Pod fails outright.
+func TestTask_ExitCodeFailsBeforeReady(t *testing.T) {
+	mkWorkloadClass(t, "tc-failearly", nil)
+	mkTask(t, "t-failearly", "tc-failearly", func(task *agentryv1alpha1.AgentTask) {
+		task.Spec.Completion.Condition = completionExitCode
+	})
+	eventually(t, func() error { return markCertReadyErr("t-failearly") })
+	eventually(t, func() error {
+		if taskPod(t, "t-failearly") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	pod := taskPod(t, "t-failearly")
+	pod.Status.Phase = corev1.PodFailed
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-failearly", agentryv1alpha1.TaskFailed)
+}
+
+// TestTask_CrashInterruptedRetryResumes covers the Reconcile entry that resumes
+// a Failed task with no completionTime (a retry interrupted mid-sequence).
+func TestTask_CrashInterruptedRetryResumes(t *testing.T) {
+	mkWorkloadClass(t, "tc-resume", nil)
+	provisionRunningTask(t, "t-resume", "tc-resume", nil)
+
+	// Simulate the crash-interrupted state: Failed, but not yet settled.
+	eventually(t, func() error {
+		task := getTask(t, "t-resume")
+		task.Status.Phase = agentryv1alpha1.TaskFailed
+		task.Status.CompletionTime = nil
+		return testClient.Status().Update(ctxT(), task)
+	})
+	// The reconciler resumes it; the still-ready Pod carries it back to Running.
+	expectTaskPhase(t, "t-resume", agentryv1alpha1.TaskRunning)
+}
+
+// TestReadMailbox_NotFoundIsEmpty covers readMailbox's NotFound path directly.
+func TestReadMailbox_NotFoundIsEmpty(t *testing.T) {
+	r := &AgentTaskReconciler{Client: testClient}
+	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "no-mailbox", Namespace: "default"}}
+	payload, err := r.readMailbox(ctxT(), task)
+	if err != nil {
+		t.Fatalf("missing mailbox must not error: %v", err)
+	}
+	if payload.Status != "" {
+		t.Errorf("absent mailbox must parse to an empty payload: %+v", payload)
+	}
+}
+
+func TestPodExitMessage(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name:  "agent",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 3}},
+	}}}}
+	if got := podExitMessage(pod); got != "container agent exited 3" {
+		t.Errorf("podExitMessage = %q", got)
+	}
+	// No terminated container -> fallback.
+	empty := &corev1.Pod{}
+	if got := podExitMessage(empty); got != "task Pod failed without a container exit code" {
+		t.Errorf("podExitMessage fallback = %q", got)
+	}
+}

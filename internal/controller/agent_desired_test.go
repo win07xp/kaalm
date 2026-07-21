@@ -269,3 +269,36 @@ func TestDesiredNetworkPolicy_Rules(t *testing.T) {
 		t.Error("policy must declare both Ingress and Egress")
 	}
 }
+
+func TestDesiredPod_MergesClassPodMetadata(t *testing.T) {
+	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	eff := effectiveAgentSpec{
+		Image:          "img:v1",
+		HealthPort:     8080,
+		PodLabels:      map[string]string{"team": "search"},
+		PodAnnotations: map[string]string{"vault.io/inject": "false"},
+	}
+	pod := desiredPod(agent, eff, "agentry-system")
+	if pod.Labels["team"] != "search" || pod.Labels["agentry.io/agent"] != "sup" {
+		t.Errorf("class labels not merged with identity labels: %v", pod.Labels)
+	}
+	if pod.Annotations["vault.io/inject"] != "false" {
+		t.Errorf("class annotations not merged: %v", pod.Annotations)
+	}
+	if pod.Annotations[annotationPodSpecHash] == "" {
+		t.Error("pod-spec hash annotation must still be present")
+	}
+}
+
+func TestDesiredPVC_ZeroSizeDefaults(t *testing.T) {
+	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	class := &agentryv1alpha1.AgentClass{}
+	pvc := desiredPVC(agent, class, effectiveAgentSpec{PVCSizeGi: 0})
+	if pvc.Name != "sup-memory" {
+		t.Errorf("pvc name wrong: %s", pvc.Name)
+	}
+	q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if q.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("zero size must default to 1Gi, got %s", q.String())
+	}
+}

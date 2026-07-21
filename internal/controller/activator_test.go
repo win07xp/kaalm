@@ -28,6 +28,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,4 +212,109 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 		}
 		return errString("neither the wake annotation nor a WakeIgnored event observed")
 	})
+}
+
+// TestHandleActivate_Guards drives handleActivate directly, exercising the
+// method, client-cert, SAN, and path-shape guards without a live listener.
+func TestHandleActivate_Guards(t *testing.T) {
+	s := &ActivatorServer{OperatorNamespace: "agentry-system"}
+
+	gatewayTLS := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
+		{DNSNames: []string{"agentry-gateway.agentry-system.svc.cluster.local"}},
+	}}
+	agentTLS := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
+		{DNSNames: []string{"sup.team-a.svc.cluster.local"}},
+	}}
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		tls    *tls.ConnectionState
+		want   int
+	}{
+		{"GET not allowed", http.MethodGet, "/v1/activate/default/a", gatewayTLS, http.StatusMethodNotAllowed},
+		{"no client cert", http.MethodPost, "/v1/activate/default/a", nil, http.StatusUnauthorized},
+		{"wrong identity", http.MethodPost, "/v1/activate/default/a", agentTLS, http.StatusForbidden},
+		{"bad path shape", http.MethodPost, "/v1/activate/only-one-segment", gatewayTLS, http.StatusBadRequest},
+		{"empty segment", http.MethodPost, "/v1/activate/default/", gatewayTLS, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(c.method, c.path, strings.NewReader(""))
+		req.TLS = c.tls
+		w := httptest.NewRecorder()
+		s.handleActivate(w, req)
+		if w.Code != c.want {
+			t.Errorf("%s: status = %d, want %d", c.name, w.Code, c.want)
+		}
+	}
+}
+
+// TestHandleActivate_AgentNotFound exercises the Get/NotFound -> 404 path with
+// the shared envtest client.
+func TestHandleActivate_AgentNotFound(t *testing.T) {
+	s := &ActivatorServer{Client: testClient, OperatorNamespace: testSystemNamespace}
+	req := httptest.NewRequest(http.MethodPost, "/v1/activate/default/no-such-agent-xyz", strings.NewReader(""))
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
+		{DNSNames: []string{"agentry-gateway." + testSystemNamespace + ".svc.cluster.local"}},
+	}}
+	w := httptest.NewRecorder()
+	s.handleActivate(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("missing agent: status = %d, want 404", w.Code)
+	}
+}
+
+func TestIsGatewayCert_ShortSAN(t *testing.T) {
+	s := &ActivatorServer{OperatorNamespace: "agentry-system"}
+	// The short svc SAN form is also accepted.
+	if !s.isGatewayCert(&x509.Certificate{DNSNames: []string{"agentry-gateway.agentry-system.svc"}}) {
+		t.Error("short svc SAN must be recognized as the gateway identity")
+	}
+	if s.isGatewayCert(&x509.Certificate{DNSNames: []string{"unrelated.example.com"}}) {
+		t.Error("an unrelated SAN must not be recognized as the gateway")
+	}
+}
+
+// TestActivatorStart_Errors drives the ActivatorServer.Start setup failures:
+// missing CA, non-PEM CA, a bad key pair, and a bind failure.
+func TestActivatorStart_Errors(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	if err := (&ActivatorServer{CAFile: filepath.Join(dir, "absent.crt")}).Start(ctx); err == nil {
+		t.Error("missing CA file must fail Start")
+	}
+
+	badPEM := filepath.Join(dir, "bad.pem")
+	if err := os.WriteFile(badPEM, []byte("not a pem block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&ActivatorServer{CAFile: badPEM}).Start(ctx); err == nil {
+		t.Error("non-PEM CA must fail Start")
+	}
+
+	pki := newActivatorPKI(t)
+	serving := pki.issue(t, "agentry-controller.agentry-system.svc.cluster.local")
+	certFile, keyFile, caFile := pki.writeFiles(t, serving)
+
+	badKeyPair := &ActivatorServer{
+		CAFile: caFile, CertFile: filepath.Join(dir, "absent.crt"), KeyFile: filepath.Join(dir, "absent.key"),
+	}
+	if err := badKeyPair.Start(ctx); err == nil {
+		t.Error("missing key pair must fail Start")
+	}
+
+	// Valid material but an unbindable address: ListenAndServeTLS returns an
+	// error the select surfaces.
+	badAddr := &ActivatorServer{CAFile: caFile, CertFile: certFile, KeyFile: keyFile, Addr: "not-a-valid-address"}
+	if err := badAddr.Start(ctx); err == nil {
+		t.Error("an unbindable address must fail Start")
+	}
+}
+
+func TestNeedLeaderElection(t *testing.T) {
+	if (&ActivatorServer{}).NeedLeaderElection() {
+		t.Error("the activator must run on every replica (NeedLeaderElection=false)")
+	}
 }

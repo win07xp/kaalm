@@ -17,7 +17,9 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
@@ -582,5 +584,210 @@ func TestAgent_FinalizerDeleteKeepsPVCOwnerRef(t *testing.T) {
 	}
 	if !found {
 		t.Error("PVC lost its Agent ownerRef under Delete retention")
+	}
+}
+
+// ---- Agent convergePod: crash loop -> Failed ----
+
+func TestAgent_CrashLoopMarksFailed(t *testing.T) {
+	mkWorkloadClass(t, "wc-crash", nil)
+	pod := provisionRunningAgent(t, "crash-agent", "wc-crash")
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:         "agent",
+		RestartCount: crashLoopThreshold,
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason: "CrashLoopBackOff", Message: "back-off restarting",
+		}},
+	}}
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectAgentPhase(t, "crash-agent", agentryv1alpha1.AgentFailed)
+	expectAgentReadyReason(t, "crash-agent", "CrashLoopBackOff")
+}
+
+// ---- Agent convergePod: terminal Pod is re-provisioned ----
+
+func TestAgent_TerminalPodReprovisions(t *testing.T) {
+	mkWorkloadClass(t, "wc-term", nil)
+	pod := provisionRunningAgent(t, "term-agent", "wc-term")
+	pod.Status.Phase = corev1.PodFailed
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	// The reconciler deletes the terminal Pod; finish its termination.
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			forceDeletePod(t, &got)
+		}
+		return errString("terminal pod still present")
+	})
+	// A fresh Pod is provisioned.
+	eventually(t, func() error {
+		newPod := agentPod(t, "term-agent")
+		if newPod == nil || newPod.Name == pod.Name {
+			return errString("no replacement pod yet")
+		}
+		return nil
+	})
+}
+
+// ---- Agent degradedReasons: provider named in the class but the CR is absent ----
+
+func TestAgent_ProviderMissingDegrades(t *testing.T) {
+	mkWorkloadClass(t, "wc-provmiss", func(ac *agentryv1alpha1.AgentClass) {
+		ac.Spec.AllowedProviders = []agentryv1alpha1.LocalObjectReference{{Name: "ghost-prov"}}
+	})
+	mkWorkloadAgent(t, "provmiss-agent", "wc-provmiss", func(ag *agentryv1alpha1.Agent) {
+		ag.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
+			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "ghost-prov"}},
+		}
+	})
+	expectAgentPhase(t, "provmiss-agent", agentryv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "provmiss-agent", agentryv1alpha1.ReasonClassConstraintViolation)
+}
+
+// ---- Agent: a provider outside the class allowlist degrades ----
+
+func TestAgent_ProviderNotAllowedDegrades(t *testing.T) {
+	mkWorkloadClass(t, "wc-provdenied", nil) // empty allowedProviders => none allowed
+	mkWorkloadAgent(t, "provdenied-agent", "wc-provdenied", func(ag *agentryv1alpha1.Agent) {
+		ag.Spec.Providers = []agentryv1alpha1.AgentProviderReference{
+			{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "some-prov"}},
+		}
+	})
+	expectAgentPhase(t, "provdenied-agent", agentryv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "provdenied-agent", agentryv1alpha1.ReasonClassConstraintViolation)
+}
+
+// ---- Agent convergePod: a terminating Pod holds the agent in Provisioning ----
+
+func TestAgent_TerminatingPodHoldsProvisioning(t *testing.T) {
+	mkWorkloadClass(t, "wc-terming", nil)
+	pod := provisionRunningAgent(t, "terming-agent", "wc-terming")
+
+	// A finalizer keeps the Pod present with a deletionTimestamp set (envtest
+	// removes unscheduled Pods instantly otherwise), so convergePod observes a
+	// replacement in progress and holds the agent in Provisioning.
+	const fin = "test.agentry.io/hold"
+	eventually(t, func() error {
+		var got corev1.Pod
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got); err != nil {
+			return err
+		}
+		got.Finalizers = append(got.Finalizers, fin)
+		return testClient.Update(ctxT(), &got)
+	})
+	if err := testClient.Delete(ctxT(), pod); err != nil {
+		t.Fatalf("graceful delete: %v", err)
+	}
+	touchAgent(t, "terming-agent")
+	expectAgentPhase(t, "terming-agent", agentryv1alpha1.AgentProvisioning)
+	expectAgentReadyReason(t, "terming-agent", "PodProvisioning")
+
+	// Release the finalizer so the Pod can be reaped.
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		got.Finalizers = nil
+		return testClient.Update(ctxT(), &got)
+	})
+}
+
+// ---- Agent ensureService: a drifted Service is reconciled back ----
+
+func TestAgent_ServicePortDriftReconciled(t *testing.T) {
+	mkWorkloadClass(t, "wc-svcdrift", nil)
+	provisionRunningAgent(t, "svcdrift-agent", "wc-svcdrift")
+
+	var svc corev1.Service
+	key := types.NamespacedName{Namespace: "default", Name: "svcdrift-agent"}
+	eventually(t, func() error { return testClient.Get(ctxT(), key, &svc) })
+	wantPort := svc.Spec.Ports[0].Port
+
+	// Drift the Service port out of band.
+	svc.Spec.Ports[0].Port = 9999
+	if err := testClient.Update(ctxT(), &svc); err != nil {
+		t.Fatalf("drift service: %v", err)
+	}
+	touchAgent(t, "svcdrift-agent")
+
+	eventually(t, func() error {
+		var got corev1.Service
+		if err := testClient.Get(ctxT(), key, &got); err != nil {
+			return err
+		}
+		if got.Spec.Ports[0].Port != wantPort {
+			return errString("service port not reconciled back")
+		}
+		return nil
+	})
+}
+
+func TestAgentReconciler_NowUsesClock(t *testing.T) {
+	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	r := &AgentReconciler{Clock: func() time.Time { return fixed }}
+	if got := r.now(); !got.Equal(fixed) {
+		t.Errorf("now() = %v, want injected clock %v", got, fixed)
+	}
+	// A nil clock falls back to wall time (just prove it returns something recent).
+	def := &AgentReconciler{}
+	if def.now().IsZero() {
+		t.Error("default now() must return wall time")
+	}
+}
+
+func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
+	ctx := context.Background()
+	c := newErrCreateClient(t)
+
+	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"}}
+	class := &agentryv1alpha1.AgentClass{}
+	ar := &AgentReconciler{Client: c, OperatorNamespace: "agentry-system"}
+	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080, ServiceEnabled: true, PersistenceOn: true, PVCSizeGi: 1}
+
+	if err := ar.ensureServiceAccount(ctx, agent); err == nil {
+		t.Error("ensureServiceAccount must surface a create error")
+	}
+	if err := ar.ensureService(ctx, agent, eff); err == nil {
+		t.Error("ensureService must surface a create error")
+	}
+	if err := ar.ensurePVC(ctx, agent, class, eff); err == nil {
+		t.Error("ensurePVC must surface a create error")
+	}
+	if err := ar.ensureNetworkPolicy(ctx, agent, class, eff); err == nil {
+		t.Error("ensureNetworkPolicy must surface a create error")
+	}
+	// The Certificate does not exist yet, so ensureCertificate takes the create
+	// path and surfaces the failure.
+	if _, err := ar.ensureCertificate(ctx, agent); err == nil {
+		t.Error("ensureCertificate must surface a create error")
+	}
+	// convergePod finds no Pod and fails to create one.
+	if err := ar.convergePod(ctx, agent, eff); err == nil {
+		t.Error("convergePod must surface a create error")
+	}
+
+	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"}}
+	tr := &AgentTaskReconciler{Client: c, OperatorNamespace: "agentry-system"}
+	if err := tr.ensureTaskChildren(ctx, task, class, effectiveTaskSpec{PersistenceOn: true, PVCSizeGi: 1}); err == nil {
+		t.Error("ensureTaskChildren must surface a create error")
+	}
+	if _, err := tr.ensureTaskCertificate(ctx, task); err == nil {
+		t.Error("ensureTaskCertificate must surface a create error")
 	}
 }

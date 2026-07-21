@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -337,5 +339,354 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 		types.NamespacedName{Namespace: testSystemNamespace, Name: "agentry-async-del-1"}, &sweptCM)
 	if !apierrors.IsNotFound(err) {
 		t.Error("finalizer sweep must remove the channel's async records")
+	}
+}
+
+// ---- AgentChannel ensureCredentialRole: secret refs change -> Role updated ----
+
+func TestChannel_CredentialRoleGrowsWithSecretRefs(t *testing.T) {
+	mkWorkloadClass(t, "chc-role", nil)
+	mkWorkloadAgent(t, "ch-agent-role", "chc-role", nil)
+	mkChannelSecret(t, "ch-role-secret")
+	mkChannel(t, "ch-role", "ch-agent-role", "/channels/default/ch-role", nil)
+	expectChannelReady(t, "ch-role", metav1.ConditionTrue, "")
+
+	roleName := "agentry-channel-ch-role-creds"
+	eventually(t, func() error {
+		var role rbacv1.Role
+		if err := testClient.Get(ctxT(),
+			types.NamespacedName{Namespace: "default", Name: roleName}, &role); err != nil {
+			return err
+		}
+		if len(role.Rules) != 1 || len(role.Rules[0].ResourceNames) != 1 {
+			return errString("initial role not scoped to one secret")
+		}
+		return nil
+	})
+
+	// Add an HMAC secret ref: the Role's resourceNames must grow to include it.
+	mkChannelSecret(t, "ch-role-hmac")
+	eventually(t, func() error {
+		var ch agentryv1alpha1.AgentChannel
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-role"}, &ch); err != nil {
+			return err
+		}
+		ch.Spec.Webhook.Auth.HMAC = &agentryv1alpha1.ChannelHMAC{
+			Header:    "X-Sig",
+			SecretRef: agentryv1alpha1.SecretKeyReference{Name: "ch-role-hmac", Key: "token"},
+		}
+		return testClient.Update(ctxT(), &ch)
+	})
+	eventually(t, func() error {
+		var role rbacv1.Role
+		if err := testClient.Get(ctxT(),
+			types.NamespacedName{Namespace: "default", Name: roleName}, &role); err != nil {
+			return err
+		}
+		names := append([]string(nil), role.Rules[0].ResourceNames...)
+		sort.Strings(names)
+		if len(names) != 2 || names[0] != "ch-role-hmac" || names[1] != "ch-role-secret" {
+			return errString("role resourceNames did not grow to both secrets")
+		}
+		return nil
+	})
+}
+
+// ---- AgentChannel reconcileDelete: no finalizer is a no-op ----
+
+func TestChannel_DeleteBeforeFinalizerIsNoop(t *testing.T) {
+	// A channel with the deletion timestamp already set but no finalizer must
+	// short-circuit reconcileDelete without touching status.
+	r := &AgentChannelReconciler{Client: testClient, OperatorNamespace: testSystemNamespace}
+	now := metav1.Now()
+	ch := &agentryv1alpha1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "ephemeral", Namespace: "default", DeletionTimestamp: &now},
+	}
+	res, err := r.reconcileDelete(context.Background(), ch)
+	if err != nil || res.RequeueAfter != 0 || res.Requeue {
+		t.Errorf("no-finalizer delete should be a clean no-op: res=%+v err=%v", res, err)
+	}
+}
+
+// ---- AgentChannel: system-namespace guard ----
+
+func TestChannel_SystemNamespaceForbidden(t *testing.T) {
+	ch := &agentryv1alpha1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch-sys", Namespace: testSystemNamespace},
+		Spec: agentryv1alpha1.AgentChannelSpec{
+			AgentRef: agentryv1alpha1.LocalObjectReference{Name: "whatever"},
+			Webhook: agentryv1alpha1.AgentChannelWebhook{
+				Path: "/channels/" + testSystemNamespace + "/ch-sys",
+				Auth: agentryv1alpha1.ChannelAuth{
+					Type:      "bearer",
+					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "s", Key: "token"},
+				},
+			},
+		},
+	}
+	if err := testClient.Create(ctxT(), ch); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	eventually(t, func() error {
+		var got agentryv1alpha1.AgentChannel
+		if err := testClient.Get(ctxT(),
+			types.NamespacedName{Namespace: testSystemNamespace, Name: "ch-sys"}, &got); err != nil {
+			return err
+		}
+		c := condition(got.Status.Conditions, agentryv1alpha1.ConditionReady)
+		if c == nil || c.Reason != agentryv1alpha1.ReasonSystemNamespaceForbidden {
+			return errString("SystemNamespaceForbidden not set")
+		}
+		return nil
+	})
+}
+
+// ---- AgentChannel: HMAC secret missing fails validation ----
+
+func TestChannel_HMACSecretMissing(t *testing.T) {
+	mkWorkloadClass(t, "chc-hmac", nil)
+	mkWorkloadAgent(t, "ch-agent-hmac", "chc-hmac", nil)
+	mkChannelSecret(t, "ch-hmac-inbound")
+	mkChannel(t, "ch-hmac", "ch-agent-hmac", "/channels/default/ch-hmac", func(ch *agentryv1alpha1.AgentChannel) {
+		ch.Spec.Webhook.Auth.SecretRef = &agentryv1alpha1.SecretKeyReference{Name: "ch-hmac-inbound", Key: "token"}
+		ch.Spec.Webhook.Auth.HMAC = &agentryv1alpha1.ChannelHMAC{
+			Header:    "X-Sig",
+			SecretRef: agentryv1alpha1.SecretKeyReference{Name: "ch-hmac-missing", Key: "token"},
+		}
+	})
+	expectChannelReady(t, "ch-hmac", metav1.ConditionFalse, agentryv1alpha1.ReasonCredentialsMissing)
+}
+
+// TestChannel_PruneSkipsNonAsyncConfigMap covers the prune loop's skip of a
+// labeled ConfigMap that is not an async-response record.
+func TestChannel_PruneSkipsNonAsyncConfigMap(t *testing.T) {
+	mkWorkloadClass(t, "chc-skip", nil)
+	mkWorkloadAgent(t, "ch-agent-skip", "chc-skip", nil)
+	mkChannelSecret(t, "ch-skip-secret")
+
+	// A ConfigMap carrying this channel's labels but NOT the agentry-async- name
+	// prefix: the prune must leave it untouched.
+	other := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "unrelated-config", Namespace: testSystemNamespace,
+			Labels: map[string]string{
+				agentryv1alpha1.LabelChannelNamespace: "default",
+				agentryv1alpha1.LabelChannelName:      "ch-skip",
+			},
+			Annotations: map[string]string{
+				agentryv1alpha1.AnnotationExpiresAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+			},
+		},
+	}
+	if err := testClient.Create(ctxT(), other); err != nil {
+		t.Fatalf("create configmap: %v", err)
+	}
+
+	mkChannel(t, "ch-skip", "ch-agent-skip", "/channels/default/ch-skip", nil)
+	expectChannelReady(t, "ch-skip", metav1.ConditionTrue, "")
+
+	// Give the reconciler time to run a prune pass, then confirm survival.
+	time.Sleep(500 * time.Millisecond)
+	var got corev1.ConfigMap
+	if err := testClient.Get(ctxT(),
+		types.NamespacedName{Namespace: testSystemNamespace, Name: "unrelated-config"}, &got); err != nil {
+		t.Errorf("a non-async ConfigMap must not be pruned: %v", err)
+	}
+}
+
+// ---- validateCallbackURL (rule 22, reconcile-time half) ----
+
+func TestValidateCallbackURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		wantBad bool
+	}{
+		{"not https", "http://example.com/hook", true},
+		{"parse error", "://no-scheme", true},
+		{"empty host", "https://", true},
+		{"loopback literal", "https://127.0.0.1/hook", true},
+		{"public literal ok", "https://8.8.8.8/hook", false},
+		{"unresolvable deferred", "https://nonexistent.invalid/hook", false},
+	}
+	for _, c := range cases {
+		reason, _ := validateCallbackURL(c.url)
+		bad := reason != ""
+		if bad != c.wantBad {
+			t.Errorf("%s: validateCallbackURL(%q) bad=%v, want %v (reason=%q)", c.name, c.url, bad, c.wantBad, reason)
+		}
+		if bad && reason != agentryv1alpha1.ReasonInvalidCallbackURL {
+			t.Errorf("%s: reason=%q, want InvalidCallbackURL", c.name, reason)
+		}
+	}
+}
+
+// ---- channel health reduction ----
+
+// fakeChannelHealth serves canned per-replica channel health.
+type fakeChannelHealth struct {
+	reachable []ReplicaChannelHealth
+	total     int
+	err       error
+}
+
+func (f fakeChannelHealth) NamespaceChannelHealth(
+	context.Context, string,
+) ([]ReplicaChannelHealth, int, error) {
+	return f.reachable, f.total, f.err
+}
+
+// chTestPath is the webhook path shared across the channel-health unit tests.
+const chTestPath = "/channels/default/x"
+
+func newChannelAt() *agentryv1alpha1.AgentChannel {
+	return &agentryv1alpha1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "default"},
+		Spec: agentryv1alpha1.AgentChannelSpec{
+			Webhook: agentryv1alpha1.AgentChannelWebhook{Path: chTestPath},
+		},
+	}
+}
+
+func platformCond(ch *agentryv1alpha1.AgentChannel) *metav1.Condition {
+	return condition(ch.Status.Conditions, agentryv1alpha1.ConditionPlatformConnected)
+}
+
+func TestReduceChannelHealth_NoDataPreservesCondition(t *testing.T) {
+	// total==0 is rule 4: no condition written.
+	r := &AgentChannelReconciler{Health: fakeChannelHealth{total: 0}}
+	ch := newChannelAt()
+	r.reduceChannelHealth(context.Background(), ch)
+	if platformCond(ch) != nil {
+		t.Fatalf("rule 4: no PlatformConnected condition expected, got %+v", platformCond(ch))
+	}
+
+	// err also preserves.
+	r = &AgentChannelReconciler{Health: fakeChannelHealth{
+		reachable: []ReplicaChannelHealth{{}}, total: 1, err: errString("boom"),
+	}}
+	ch = newChannelAt()
+	r.reduceChannelHealth(context.Background(), ch)
+	if platformCond(ch) != nil {
+		t.Fatal("error result must preserve the existing condition")
+	}
+}
+
+func TestReduceChannelHealth_Success(t *testing.T) {
+	path := chTestPath
+	// Two success replicas with different timestamps: the newer wins (newerHealth).
+	r := &AgentChannelReconciler{Health: fakeChannelHealth{
+		total: 2,
+		reachable: []ReplicaChannelHealth{
+			{Channels: map[string]ChannelHealthState{path: {State: healthStateSuccess, Timestamp: strptr("2026-01-01T00:00:00Z")}}},
+			{Channels: map[string]ChannelHealthState{path: {State: healthStateSuccess, Timestamp: strptr("2026-02-01T00:00:00Z")}}},
+		},
+	}}
+	ch := newChannelAt()
+	r.reduceChannelHealth(context.Background(), ch)
+	c := platformCond(ch)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != agentryv1alpha1.ReasonWebhookReady {
+		t.Fatalf("rule 1 success expected True/WebhookReady, got %+v", c)
+	}
+}
+
+func TestReduceChannelHealth_Failure(t *testing.T) {
+	path := chTestPath
+	r := &AgentChannelReconciler{Health: fakeChannelHealth{
+		total: 1,
+		reachable: []ReplicaChannelHealth{{
+			Channels: map[string]ChannelHealthState{path: {
+				State:     healthStateFailure,
+				Reason:    strptr("Timeout"),
+				LastError: strptr("dial tcp: i/o timeout"),
+				Timestamp: strptr("2026-01-01T00:00:00Z"),
+			}},
+		}},
+	}}
+	ch := newChannelAt()
+	r.reduceChannelHealth(context.Background(), ch)
+	c := platformCond(ch)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "Timeout" ||
+		c.Message != "dial tcp: i/o timeout" {
+		t.Fatalf("rule 2 failure expected False/Timeout, got %+v", c)
+	}
+}
+
+func TestReduceChannelHealth_NoRecentTraffic(t *testing.T) {
+	path := chTestPath
+	// A replica up longer than its window, with only an empty state: rule 3.
+	r := &AgentChannelReconciler{Health: fakeChannelHealth{
+		total: 1,
+		reachable: []ReplicaChannelHealth{{
+			StartedAt:     time.Now().Add(-time.Hour),
+			WindowSeconds: 60,
+			Channels:      map[string]ChannelHealthState{path: {State: healthStateEmpty}},
+		}},
+	}}
+	ch := newChannelAt()
+	r.reduceChannelHealth(context.Background(), ch)
+	c := platformCond(ch)
+	if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != agentryv1alpha1.ReasonNoRecentTraffic {
+		t.Fatalf("rule 3 expected Unknown/NoRecentTraffic, got %+v", c)
+	}
+}
+
+func TestReduceChannelHealth_DefaultReturnsNoCondition(t *testing.T) {
+	path := chTestPath
+	// Window not yet full and all empty: rule 4 default -> no condition.
+	r := &AgentChannelReconciler{Health: fakeChannelHealth{
+		total: 1,
+		reachable: []ReplicaChannelHealth{{
+			StartedAt:     time.Now(),
+			WindowSeconds: 3600,
+			Channels:      map[string]ChannelHealthState{path: {State: healthStateEmpty}},
+		}},
+	}}
+	ch := newChannelAt()
+	r.reduceChannelHealth(context.Background(), ch)
+	if platformCond(ch) != nil {
+		t.Fatal("rule 4 default must leave the condition unset")
+	}
+}
+
+func TestNewerHealth(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b ChannelHealthState
+		want bool
+	}{
+		{"both nil", ChannelHealthState{}, ChannelHealthState{}, true},
+		{"a nil b set", ChannelHealthState{}, ChannelHealthState{Timestamp: strptr("x")}, false},
+		{"a set b nil", ChannelHealthState{Timestamp: strptr("x")}, ChannelHealthState{}, true},
+		{"a newer", ChannelHealthState{Timestamp: strptr("2026-02")}, ChannelHealthState{Timestamp: strptr("2026-01")}, true},
+		{"a older", ChannelHealthState{Timestamp: strptr("2026-01")}, ChannelHealthState{Timestamp: strptr("2026-02")}, false},
+	}
+	for _, c := range cases {
+		if got := newerHealth(c.a, c.b); got != c.want {
+			t.Errorf("%s: newerHealth = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAuthSecretNames_DedupAndHMAC(t *testing.T) {
+	cb := "https://example.com/hook"
+	ch := &agentryv1alpha1.AgentChannel{
+		Spec: agentryv1alpha1.AgentChannelSpec{
+			Webhook: agentryv1alpha1.AgentChannelWebhook{
+				Auth: agentryv1alpha1.ChannelAuth{
+					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "inbound", Key: "t"},
+					HMAC:      &agentryv1alpha1.ChannelHMAC{SecretRef: agentryv1alpha1.SecretKeyReference{Name: "hmac-sec", Key: "s"}},
+				},
+				CallbackURL: &cb,
+				CallbackAuth: &agentryv1alpha1.ChannelAuth{
+					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "inbound", Key: "t"}, // duplicate name
+				},
+			},
+		},
+	}
+	names := authSecretNames(ch)
+	// Sorted, deduped: hmac-sec, inbound.
+	if len(names) != 2 || names[0] != "hmac-sec" || names[1] != "inbound" {
+		t.Errorf("authSecretNames = %v, want [hmac-sec inbound]", names)
 	}
 }

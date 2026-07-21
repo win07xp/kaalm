@@ -63,3 +63,50 @@ func TestHTTPProbe_HealthyWithinTimeout(t *testing.T) {
 		t.Fatalf("fast server with default timeout: expected Healthy, got %+v", res)
 	}
 }
+
+// ---- HTTPProviderHealthChecker.Probe classification ----
+
+func TestHTTPProbe_Classification(t *testing.T) {
+	// anthropic path sets the x-api-key header; a 200 is Healthy.
+	anthropic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") == "" || r.Header.Get("anthropic-version") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer anthropic.Close()
+
+	unauthorized := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer unauthorized.Close()
+
+	serverErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer serverErr.Close()
+
+	checker := &HTTPProviderHealthChecker{}
+	probe := func(typ, endpoint string) ProviderProbeResult {
+		return checker.Probe(context.Background(), &agentryv1alpha1.ModelProvider{
+			Spec: agentryv1alpha1.ModelProviderSpec{Type: typ, Endpoint: endpoint},
+		}, "sk-test")
+	}
+
+	if res := probe("anthropic", anthropic.URL); !res.Healthy {
+		t.Errorf("anthropic 200 should be Healthy: %+v", res)
+	}
+	if res := probe("openai", unauthorized.URL); !res.AuthFailed {
+		t.Errorf("401 should be AuthFailed: %+v", res)
+	}
+	if res := probe("openai-compatible", serverErr.URL); res.Err == nil {
+		t.Errorf("500 should be a transient Err: %+v", res)
+	}
+	if res := probe("google-vertex", anthropic.URL); !res.Skipped {
+		t.Errorf("google-vertex should be Skipped: %+v", res)
+	}
+	if res := probe("mystery-provider", anthropic.URL); res.Err == nil {
+		t.Errorf("unknown type should error: %+v", res)
+	}
+}

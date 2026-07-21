@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
@@ -132,5 +133,137 @@ func TestParseCompletionAndValidate(t *testing.T) {
 	pu := parseCompletion(map[string]string{"status": "failure", "artifact.rogue": "x"})
 	if msg := validateArtifactNames(pu, declared); msg == "" {
 		t.Error("undeclared artifact must fail")
+	}
+}
+
+func TestDeriveEffectiveTaskSpec_ClassDefaults(t *testing.T) {
+	sc := testStorageClass
+	rc := "gvisor"
+	class := &agentryv1alpha1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "std"},
+		Spec: agentryv1alpha1.AgentClassSpec{
+			Image: agentryv1alpha1.AgentClassImage{DefaultImage: "reg/default:v1", PullPolicy: corev1.PullAlways},
+			Resources: agentryv1alpha1.AgentClassResources{
+				Defaults: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+				},
+			},
+			Persistence: agentryv1alpha1.AgentClassPersistence{
+				DefaultSizeGi: 5, MaxSizeGi: 10, StorageClassName: &sc,
+			},
+			Runtime: agentryv1alpha1.AgentClassRuntime{RuntimeClassName: &rc},
+		},
+	}
+	// Task with no image and no resources inherits class defaults; size clamps.
+	size := int32(50)
+	task := &agentryv1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"},
+		Spec: agentryv1alpha1.AgentTaskSpec{
+			Persistence: agentryv1alpha1.AgentTaskPersistence{Enabled: true, SizeGi: &size},
+			Providers: []agentryv1alpha1.AgentProviderReference{
+				{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "p1"}},
+			},
+		},
+	}
+	eff := deriveEffectiveTaskSpec(task, class)
+	if eff.Image != "reg/default:v1" {
+		t.Errorf("class default image not applied: %q", eff.Image)
+	}
+	if cpu := eff.Resources.Requests[corev1.ResourceCPU]; cpu.Cmp(resource.MustParse("100m")) != 0 {
+		t.Error("class default resources not applied")
+	}
+	if eff.PVCSizeGi != 10 {
+		t.Errorf("size not clamped to class max: %d", eff.PVCSizeGi)
+	}
+	if eff.RuntimeClassName == nil || *eff.RuntimeClassName != "gvisor" {
+		t.Error("runtimeClassName not propagated")
+	}
+	if eff.PullPolicy != corev1.PullAlways {
+		t.Errorf("pull policy not propagated: %v", eff.PullPolicy)
+	}
+	if len(eff.Providers) != 1 || eff.Providers[0] != "p1" {
+		t.Errorf("providers not derived: %v", eff.Providers)
+	}
+
+	// Task overrides win; a default size applies when unset.
+	task.Spec.Image = "reg/custom:v2"
+	task.Spec.Persistence.SizeGi = nil
+	eff = deriveEffectiveTaskSpec(task, class)
+	if eff.Image != "reg/custom:v2" {
+		t.Errorf("task image override lost: %q", eff.Image)
+	}
+	if eff.PVCSizeGi != 5 {
+		t.Errorf("class default size not applied: %d", eff.PVCSizeGi)
+	}
+}
+
+func TestDesiredTaskPod_MergesClassPodMetadata(t *testing.T) {
+	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-9", Namespace: "team-a"}}
+	eff := effectiveTaskSpec{
+		Image:          "img:v1",
+		HealthPort:     8080,
+		PodLabels:      map[string]string{"team": "payments", "tier": "batch"},
+		PodAnnotations: map[string]string{"prometheus.io/scrape": "true"},
+	}
+	pod := desiredTaskPod(task, eff, "agentry-system")
+
+	// Class-level pod labels merge with the task's identity labels.
+	if pod.Labels["team"] != "payments" || pod.Labels["tier"] != "batch" {
+		t.Errorf("class pod labels not merged: %v", pod.Labels)
+	}
+	if pod.Labels["agentry.io/task"] != "fix-9" {
+		t.Errorf("task identity label missing: %v", pod.Labels)
+	}
+	if pod.Annotations["prometheus.io/scrape"] != "true" {
+		t.Errorf("class pod annotations not merged: %v", pod.Annotations)
+	}
+}
+
+func TestDesiredTaskNetworkPolicy_AllowedCIDRs(t *testing.T) {
+	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-9", Namespace: "team-a"}}
+	class := &agentryv1alpha1.AgentClass{Spec: agentryv1alpha1.AgentClassSpec{
+		Network: agentryv1alpha1.AgentClassNetwork{
+			Egress: agentryv1alpha1.AgentClassEgress{AllowedCIDRs: []string{"203.0.113.0/24"}},
+		},
+	}}
+	np := desiredTaskNetworkPolicy(task, class, "agentry-system")
+	// gateway + DNS + one CIDR rule.
+	if len(np.Spec.Egress) != 3 {
+		t.Fatalf("want 3 egress rules, got %d", len(np.Spec.Egress))
+	}
+	last := np.Spec.Egress[2]
+	if last.To[0].IPBlock == nil || last.To[0].IPBlock.CIDR != "203.0.113.0/24" {
+		t.Errorf("allowedCIDR egress rule missing: %+v", last)
+	}
+}
+
+func TestDesiredTaskPVC(t *testing.T) {
+	task := &agentryv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-1", Namespace: "team-a"}}
+	sc := testStorageClass
+	class := &agentryv1alpha1.AgentClass{
+		Spec: agentryv1alpha1.AgentClassSpec{
+			Persistence: agentryv1alpha1.AgentClassPersistence{StorageClassName: &sc},
+		},
+	}
+	// Zero size defaults to 1Gi.
+	pvc := desiredTaskPVC(task, class, effectiveTaskSpec{PVCSizeGi: 0})
+	if pvc.Name != "fix-1-workspace" || pvc.Namespace != "team-a" {
+		t.Errorf("naming wrong: %s/%s", pvc.Namespace, pvc.Name)
+	}
+	if len(pvc.Spec.AccessModes) != 1 || pvc.Spec.AccessModes[0] != corev1.ReadWriteOnce {
+		t.Errorf("access mode wrong: %v", pvc.Spec.AccessModes)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != testStorageClass {
+		t.Errorf("storage class not propagated: %v", pvc.Spec.StorageClassName)
+	}
+	q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if q.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("default size not 1Gi: %s", q.String())
+	}
+	// A set size is honored.
+	pvc = desiredTaskPVC(task, class, effectiveTaskSpec{PVCSizeGi: 5})
+	q = pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if q.Cmp(resource.MustParse("5Gi")) != 0 {
+		t.Errorf("size not honored: %s", q.String())
 	}
 }
