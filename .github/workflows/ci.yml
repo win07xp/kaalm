@@ -28,8 +28,8 @@ jobs:
       - name: Build binaries
         run: make build
 
-      - name: Unit and envtest suites
-        run: make test
+      - name: Unit and envtest suites (with 85% coverage gate)
+        run: make cover-check
 
   lint:
     runs-on: ubuntu-latest

@@ -61,6 +61,22 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+# Minimum acceptable project-wide statement coverage (the union across all
+# non-e2e packages, so cross-package tests get credit). Overridable: make
+# cover-check COVERAGE_THRESHOLD=90
+COVERAGE_THRESHOLD ?= 85
+
+.PHONY: cover-check
+cover-check: manifests generate fmt vet setup-envtest ## Run tests with union coverage and fail below COVERAGE_THRESHOLD%.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go test $$(go list ./... | grep -v /e2e) \
+		-coverpkg=$$(go list ./... | grep -v /e2e | paste -sd,) -coverprofile cover.out
+	@total=$$(go tool cover -func=cover.out | awk '/^total:/{print $$3}' | tr -d '%'); \
+	awk -v t="$$total" -v thr="$(COVERAGE_THRESHOLD)" 'BEGIN{ \
+		printf "total project coverage: %s%% (gate: %s%%)\n", t, thr; \
+		if (t+0 < thr+0) { printf "::error::total coverage %s%% is below the %s%% gate\n", t, thr; exit 1 } \
+		printf "coverage gate passed\n" }'
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run
