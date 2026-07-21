@@ -419,7 +419,9 @@ func TestTask_TimeoutOnTimeoutSucceed(t *testing.T) {
 
 func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 	mkWorkloadClass(t, "tc-ttl", nil)
-	ttl := int32(1)
+	// A few seconds of TTL leaves a reliable margin to observe the Succeeded
+	// phase before the task is reaped, without slowing the suite noticeably.
+	ttl := int32(3)
 	pod := provisionRunningTask(t, "t-ttl", "tc-ttl", func(task *agentryv1alpha1.AgentTask) {
 		task.Spec.Completion.Condition = completionExitCode
 		task.Spec.TTLSecondsAfterFinished = &ttl
