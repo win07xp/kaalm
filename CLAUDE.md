@@ -14,12 +14,12 @@ milestone (v0.2.0): full S1-S15 e2e coverage and release machinery; see
 
 ## Documentation
 
-Two mdBooks: `docs/` (the design book, which is the spec; start at
-`docs/src/SUMMARY.md`) and `guide/` (task-oriented user guide, mostly stubs).
-Build both with `make books`. Doc conventions: no em-dashes or en-dashes; the
-numbered validation rules, runtime-contract items, and scenario IDs are cited
-by number, so numbering is immutable. Before editing book prose or diagrams,
-read `docs/AUTHORING.md` (canonical single-sourced pages, PlantUML workflow).
+Two mdBooks: `docs/` (the design book, which is the spec) and `guide/`
+(task-oriented user guide, mostly stubs). Build both with `make books`. Each
+book has its own CLAUDE.md with its authoring rules. Conventions that bind all
+prose in this repo: no em-dashes or en-dashes; the numbered validation rules,
+runtime-contract items, and scenario IDs are cited by number, so numbering is
+immutable.
 
 ## Build Commands
 
