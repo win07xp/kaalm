@@ -177,6 +177,11 @@ chart-sync: manifests ## Sync generated CRDs and controller RBAC into the Helm c
 chart-lint: chart-sync ## Lint the Helm chart (after syncing CRDs).
 	helm lint $(CHART_DIR)
 
+.PHONY: books
+books: ## Build both mdBooks: the design book (docs/) and the user guide (guide/).
+	mdbook build docs
+	mdbook build guide
+
 .PHONY: k3d-up
 k3d-up: ## Create a local k3d cluster with cert-manager and trust-manager for e2e.
 	hack/k3d-up.sh

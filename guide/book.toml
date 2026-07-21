@@ -1,0 +1,11 @@
+[book]
+title = "Agentry User Guide"
+description = "Task-oriented guide to installing Agentry and running AI agents on Kubernetes."
+authors = ["Asad"]
+language = "en"
+src = "src"
+
+# This book uses the stock mdBook theme, unlike the design book (docs/),
+# which carries a custom column layout for wide diagrams. Cross-links to
+# the design book assume both books are hosted under a common root one
+# day (guide/ and docs/); until then they resolve only in that layout.
