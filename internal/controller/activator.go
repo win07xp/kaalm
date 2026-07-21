@@ -136,7 +136,7 @@ func (s *ActivatorServer) handleActivate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, agentryv1alpha1.AnnotationWake, agentryv1alpha1.AnnotationTrue))
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, agentryv1alpha1.AnnotationWake, agentryv1alpha1.AnnotationTrue)
 	if err := s.Client.Patch(r.Context(), &agent, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

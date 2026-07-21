@@ -347,6 +347,13 @@ func (s *Server) relayStream(
 			flusher.Flush()
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		// The response headers and status are already flushed, so we cannot
+		// signal the truncation downstream; log it and record whatever usage
+		// was accumulated before the read failed.
+		slog.Warn("SSE relay read error", "namespace", namespace,
+			"provider", provider.Name, "model", modelID, "err", err)
+	}
 	if usage != (Usage{}) {
 		s.Spend.Record(namespace, provider.Name, modelID, usage)
 		s.Budget.Add(provider, namespace, costOf(provider, modelID, usage))
