@@ -34,6 +34,4 @@ go run ./cmd/manager/main.go            # run locally
 
 ## Conventions
 
-- Test files are subject-based, mirroring source files (`budget.go` gets
-  `budget_test.go`). Never create batch or grab-bag test files.
 - Use the LSP tool before GREP when doing code search.
