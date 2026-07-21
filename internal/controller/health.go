@@ -48,21 +48,40 @@ type ProviderHealthChecker interface {
 	Probe(ctx context.Context, provider *agentryv1alpha1.ModelProvider, credential string) ProviderProbeResult
 }
 
+// defaultHealthTimeout bounds a single liveness probe when the provider does not
+// set healthCheck.timeoutSeconds.
+const defaultHealthTimeout = 10 * time.Second
+
 // HTTPProviderHealthChecker is the real checker. It issues a token-authenticated
 // GET to the provider's model-list endpoint and classifies the response.
 type HTTPProviderHealthChecker struct {
-	// Client is the HTTP client. If nil, a client with a 10s timeout is used.
+	// Client is the HTTP client. If nil, a client bounded by the provider's
+	// healthCheck.timeoutSeconds (default 10s) is used per probe.
 	Client *http.Client
+}
+
+// healthCheckTimeout returns the per-probe timeout: healthCheck.timeoutSeconds
+// when set, otherwise defaultHealthTimeout.
+func healthCheckTimeout(provider *agentryv1alpha1.ModelProvider) time.Duration {
+	if hc := provider.Spec.HealthCheck; hc != nil && hc.TimeoutSeconds > 0 {
+		return time.Duration(hc.TimeoutSeconds) * time.Second
+	}
+	return defaultHealthTimeout
 }
 
 // Probe implements ProviderHealthChecker.
 func (h *HTTPProviderHealthChecker) Probe(
 	ctx context.Context, provider *agentryv1alpha1.ModelProvider, credential string,
 ) ProviderProbeResult {
+	timeout := healthCheckTimeout(provider)
 	cl := h.Client
 	if cl == nil {
-		cl = &http.Client{Timeout: 10 * time.Second}
+		cl = &http.Client{Timeout: timeout}
 	}
+	// Bound the request by the configured timeout via the context too, so an
+	// injected Client (tests) and the default client both honor the field.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	url := strings.TrimSuffix(provider.Spec.Endpoint, "/") + "/v1/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
