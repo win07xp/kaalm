@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -147,6 +148,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if handled, res, err := r.reconcileDegraded(ctx, &agent, &class, eff); handled {
 		return res, err
 	}
+
+	// Step 10 (S10): surface budget exhaustion as a Degraded condition without
+	// a phase transition. Runs for every non-hard-degraded agent; the mutation
+	// is persisted by whichever Status().Update the reconcile path below hits.
+	r.reconcileBudgetCondition(ctx, &agent)
 
 	// Hibernation phases: Hibernating drives the Pod down; Hibernated holds
 	// with no Pod (PVC, Service, Certificate, SA, and NetworkPolicy persist).
@@ -486,6 +492,44 @@ func (r *AgentReconciler) enterOrStayDegraded(
 	}
 	r.setReady(agent, false, first.Reason, first.Message)
 	return r.Status().Update(ctx, agent)
+}
+
+// reconcileBudgetCondition mirrors provider budget state onto the Agent (S10).
+// If any referenced ModelProvider reports the Agent's namespace as budget
+// Blocked in status.budgetUsage, the Degraded condition is set (reason
+// BudgetExhausted); otherwise it is removed. This never touches status.phase:
+// budget exhaustion is a recoverable runtime state, not a lifecycle transition,
+// so the agent keeps running and the signal clears on its own when the provider
+// reports the namespace unblocked (period reset, budget increase, or spend
+// drop), driven by the ModelProvider watch. Provider Get errors are tolerated
+// (a missing or unreadable provider is the degrade path's concern, not this
+// one): the condition reflects what could be read.
+func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *kaalmv1alpha1.Agent) {
+	var blocking []string
+	for _, p := range agent.Spec.Providers {
+		var mp kaalmv1alpha1.ModelProvider
+		if err := r.Get(ctx, types.NamespacedName{Name: p.ProviderRef.Name}, &mp); err != nil {
+			continue
+		}
+		for _, u := range mp.Status.BudgetUsage {
+			if u.Namespace == agent.Namespace && u.State == kaalmv1alpha1.BudgetStateBlocked {
+				blocking = append(blocking, mp.Name)
+				break
+			}
+		}
+	}
+	if len(blocking) == 0 {
+		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1alpha1.ConditionDegraded)
+		return
+	}
+	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+		Type:               kaalmv1alpha1.ConditionDegraded,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: agent.Generation,
+		Reason:             kaalmv1alpha1.ReasonBudgetExhausted,
+		Message: fmt.Sprintf("namespace %q budget exhausted on provider %s",
+			agent.Namespace, strings.Join(blocking, ", ")),
+	})
 }
 
 func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1alpha1.Agent) (bool, error) {

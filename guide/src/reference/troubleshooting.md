@@ -21,13 +21,14 @@ kubectl describe agent <name>        # conditions carry the reason
 Degraded means running but missing something it needs. `kubectl describe
 agent` gives the reason:
 
-- **Provider access revoked or provider deleted**: reason
-  `ClassConstraintViolation` (see S5 in the scenarios); LLM calls return 403
-  until access is restored.
-
-Budget exhaustion does NOT show up here in v0.1.0: the agent keeps its
-phase and conditions, and the signal is the `429 budget_exhausted` its LLM
-calls receive (plus `state: Blocked` in the provider's status).
+- **Provider access revoked or provider deleted**: the agent's *phase* goes
+  to `Degraded`, reason `ClassConstraintViolation` (see S5 in the scenarios);
+  LLM calls return 403 until access is restored.
+- **Budget exhausted**: the agent keeps its phase but carries a `Degraded`
+  *condition*, reason `BudgetExhausted` (see S10). LLM calls return
+  `429 budget_exhausted` and the provider status shows `state: Blocked` for
+  the namespace. The condition clears on its own when the budget frees up
+  (period reset, ceiling increase, or spend drop).
 
 ## Webhook returns 401 or 403
 

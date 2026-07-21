@@ -47,11 +47,13 @@ independently; add `clusterUSD` for a ceiling on the sum across namespaces.
 Either ceiling alone is fine; a blocked request's error message names which
 one fired.
 
-What a blocked team observes today: their agents keep running (exhaustion is
+What a blocked team observes: their agents keep running (exhaustion is
 recoverable, not a lifecycle event) and every LLM call answers `429` until
 the period resets. The namespace's `state: Blocked` in provider status is
-your side of the same picture. Surfacing exhaustion as a condition on the
-affected Agents is designed (scenario S10) but not wired up in v0.1.0.
+your side of the same picture. Each affected Agent also carries a `Degraded`
+condition (reason `BudgetExhausted`) visible in `kubectl describe agent`,
+with its phase preserved; the condition clears on its own when the budget
+frees up.
 
 ## Reading spend
 
