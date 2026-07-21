@@ -23,9 +23,11 @@ Phases, in lifecycle order:
 | `Failed` | Crash-looping or unprovisionable |
 | `Terminating` | Deletion in progress, finalizer running |
 
-Conditions: `Ready` (the roll-up) and `GatewayReachable` (the controller's
-view of the gateway). A wake can also be refused with event reason
-`WakeIgnored` (for example, hibernation not in effect).
+Conditions: `Ready` (the roll-up), `GatewayReachable` (the controller's view
+of the gateway), and `Degraded` (reason `BudgetExhausted`, present only while
+a referenced provider reports the namespace budget-blocked; phase is
+preserved). A wake can also be refused with event reason `WakeIgnored` (for
+example, hibernation not in effect).
 
 ## AgentTask
 
