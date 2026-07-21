@@ -1,6 +1,6 @@
 [book]
-title = "Agentry User Guide"
-description = "Task-oriented guide to installing Agentry and running AI agents on Kubernetes."
+title = "Kaalm User Guide"
+description = "Task-oriented guide to installing Kaalm and running AI agents on Kubernetes."
 authors = ["Asad"]
 language = "en"
 src = "src"

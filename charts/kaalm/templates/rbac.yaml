@@ -8,42 +8,42 @@ is a plain binary, not a controller-gen target. See docs/src/security/rbac.md.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: agentry-controller
+  name: kaalm-controller
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 ---
 # Controller ClusterRole (synced from the controller-gen manager-role).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: agentry-controller
+  name: kaalm-controller
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 rules:
 {{ .Files.Get "files/controller-rules.yaml" }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: agentry-controller
+  name: kaalm-controller
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: agentry-controller
+  name: kaalm-controller
 subjects:
   - kind: ServiceAccount
-    name: agentry-controller
+    name: kaalm-controller
     namespace: {{ .Release.Namespace }}
 ---
 # Leader-election and event RBAC for the manager, scoped to the release
@@ -51,10 +51,10 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: agentry-controller-leader-election
+  name: kaalm-controller-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -69,17 +69,17 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: agentry-controller-leader-election
+  name: kaalm-controller-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: agentry-controller-leader-election
+  name: kaalm-controller-leader-election
 subjects:
   - kind: ServiceAccount
-    name: agentry-controller
+    name: kaalm-controller
     namespace: {{ .Release.Namespace }}
 ---
 # Gateway ClusterRole. Reach is cluster-wide by necessity: a ClusterRoleBinding
@@ -88,21 +88,21 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 rules:
   # Mode 2 (gateway-only tier) bearer-token validation.
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
   # Provider routing, task completion, and the source-IP-to-Pod cross-check.
-  - apiGroups: ["agentry.io"]
+  - apiGroups: ["kaalm.io"]
     resources: ["agents", "agenttasks", "agentclasses", "modelproviders"]
     verbs: ["get", "list", "watch"]
   # AgentChannel routing plus the channel-disconnected annotation in the
   # delete handshake.
-  - apiGroups: ["agentry.io"]
+  - apiGroups: ["kaalm.io"]
     resources: ["agentchannels"]
     verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
@@ -117,29 +117,29 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: agentry-gateway
+  name: kaalm-gateway
 subjects:
   - kind: ServiceAccount
-    name: agentry-gateway
+    name: kaalm-gateway
     namespace: {{ .Release.Namespace }}
 ---
-# Gateway namespaced Role in agentry-system: LLM credential reads and the
+# Gateway namespaced Role in kaalm-system: LLM credential reads and the
 # budget/async ConfigMap surface. `delete` is absent (cleanup is
 # controller-side). Per-channel and per-task Secret/ConfigMap grants are
 # created dynamically by the reconcilers, not shipped here.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -151,15 +151,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: agentry-gateway
+  name: kaalm-gateway
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: agentry-gateway
+  name: kaalm-gateway
 subjects:
   - kind: ServiceAccount
-    name: agentry-gateway
+    name: kaalm-gateway
     namespace: {{ .Release.Namespace }}

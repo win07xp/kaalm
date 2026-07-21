@@ -34,7 +34,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // fakeAsync is an in-memory AsyncRecords.
@@ -45,7 +45,7 @@ type fakeAsync struct {
 
 func newFakeAsync() *fakeAsync { return &fakeAsync{records: map[string]*AsyncRecord{}} }
 
-func (f *fakeAsync) Create(_ context.Context, id string, ch *agentryv1alpha1.AgentChannel, _ time.Time) error {
+func (f *fakeAsync) Create(_ context.Context, id string, ch *kaalmv1alpha1.AgentChannel, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.records[id] = &AsyncRecord{CreatedAt: time.Now(), ChannelNamespace: ch.Namespace, ChannelName: ch.Name}
@@ -111,7 +111,7 @@ func newUserHarness(t *testing.T, agentFn http.HandlerFunc) *userHarness {
 	port, _ := strconv.Atoi(portStr)
 
 	cfg := Config{
-		OperatorNamespace:        "agentry-system",
+		OperatorNamespace:        "kaalm-system",
 		DeliveryBackoff:          []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
 		CallbackBackoff:          []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
 		AgentServiceHostOverride: host,
@@ -129,28 +129,28 @@ func newUserHarness(t *testing.T, agentFn http.HandlerFunc) *userHarness {
 }
 
 // seedChannel installs a Ready bearer-auth channel and its agent.
-func (h *userHarness) seedChannel(mode string) *agentryv1alpha1.AgentChannel {
-	ch := &agentryv1alpha1.AgentChannel{
+func (h *userHarness) seedChannel(mode string) *kaalmv1alpha1.AgentChannel {
+	ch := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "support", Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			AgentRef: agentryv1alpha1.LocalObjectReference{Name: "sup"},
-			Webhook: agentryv1alpha1.AgentChannelWebhook{
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			AgentRef: kaalmv1alpha1.LocalObjectReference{Name: "sup"},
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{
 				Path: "/channels/team-a/support",
-				Auth: agentryv1alpha1.ChannelAuth{
+				Auth: kaalmv1alpha1.ChannelAuth{
 					Type:      authTypeBearer,
-					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "hook-secret", Key: "token"},
+					SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "hook-secret", Key: "token"},
 				},
 				ResponseMode: mode,
 			},
-			Session: agentryv1alpha1.AgentChannelSession{Enabled: true},
+			Session: kaalmv1alpha1.AgentChannelSession{Enabled: true},
 		},
-		Status: agentryv1alpha1.AgentChannelStatus{Phase: agentryv1alpha1.ChannelActive},
+		Status: kaalmv1alpha1.AgentChannelStatus{Phase: kaalmv1alpha1.ChannelActive},
 	}
 	h.store.channels[ch.Spec.Webhook.Path] = ch
 	h.store.secrets["team-a/hook-secret/token"] = "hook-token"
-	h.store.agents["team-a/sup"] = &agentryv1alpha1.Agent{
+	h.store.agents["team-a/sup"] = &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
-		Status:     agentryv1alpha1.AgentStatus{Phase: agentryv1alpha1.AgentRunning},
+		Status:     kaalmv1alpha1.AgentStatus{Phase: kaalmv1alpha1.AgentRunning},
 	}
 	return ch
 }
@@ -233,12 +233,12 @@ func TestWebhook_HMACAuth(t *testing.T) {
 	})
 	ch := h.seedChannel("sync")
 	prefix := "sha256="
-	ch.Spec.Webhook.Auth = agentryv1alpha1.ChannelAuth{
+	ch.Spec.Webhook.Auth = kaalmv1alpha1.ChannelAuth{
 		Type: authTypeHMAC,
-		HMAC: &agentryv1alpha1.ChannelHMAC{
+		HMAC: &kaalmv1alpha1.ChannelHMAC{
 			Header:          "X-Hub-Signature-256",
 			Algorithm:       "sha256",
-			SecretRef:       agentryv1alpha1.SecretKeyReference{Name: "hook-secret", Key: "token"},
+			SecretRef:       kaalmv1alpha1.SecretKeyReference{Name: "hook-secret", Key: "token"},
 			SignaturePrefix: &prefix,
 		},
 	}
@@ -281,8 +281,8 @@ func TestWebhook_ExtractorsAndBadJSON(t *testing.T) {
 	userPath := "user.id"
 	contentPath := "message.text"
 	fallback := "anonymous"
-	ch.Spec.Webhook.UserID = agentryv1alpha1.ChannelExtractor{FromBody: &userPath, Fallback: &fallback}
-	ch.Spec.Webhook.Content = agentryv1alpha1.ChannelExtractor{FromBody: &contentPath}
+	ch.Spec.Webhook.UserID = kaalmv1alpha1.ChannelExtractor{FromBody: &userPath, Fallback: &fallback}
+	ch.Spec.Webhook.Content = kaalmv1alpha1.ChannelExtractor{FromBody: &contentPath}
 
 	resp := h.post(t, "/channels/team-a/support", "hook-token",
 		[]byte(`{"user":{"id":"u-42"},"message":{"text":"help me"}}`))
@@ -411,15 +411,15 @@ func TestWebhook_AsyncAcceptAndPoll(t *testing.T) {
 	}
 
 	// Wrong-channel probing: a second channel's credentials see 404.
-	other := &agentryv1alpha1.AgentChannel{
+	other := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "team-b"},
-		Spec: agentryv1alpha1.AgentChannelSpec{
-			AgentRef: agentryv1alpha1.LocalObjectReference{Name: "x"},
-			Webhook: agentryv1alpha1.AgentChannelWebhook{
+		Spec: kaalmv1alpha1.AgentChannelSpec{
+			AgentRef: kaalmv1alpha1.LocalObjectReference{Name: "x"},
+			Webhook: kaalmv1alpha1.AgentChannelWebhook{
 				Path: "/channels/team-b/other",
-				Auth: agentryv1alpha1.ChannelAuth{
+				Auth: kaalmv1alpha1.ChannelAuth{
 					Type:      authTypeBearer,
-					SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "other-secret", Key: "token"},
+					SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "other-secret", Key: "token"},
 				},
 			},
 		},
@@ -460,9 +460,9 @@ func TestWebhook_AsyncCallbackDelivery(t *testing.T) {
 	ch := h.seedChannel("async")
 	cbURL := callback.URL // https://127.0.0.1:port; loopback is blocked, so allow via test hook
 	ch.Spec.Webhook.CallbackURL = &cbURL
-	ch.Spec.Webhook.CallbackAuth = &agentryv1alpha1.ChannelAuth{
+	ch.Spec.Webhook.CallbackAuth = &kaalmv1alpha1.ChannelAuth{
 		Type:      authTypeBearer,
-		SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "hook-secret", Key: "token"},
+		SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "hook-secret", Key: "token"},
 	}
 	// The callback target is the loopback test server: it would be blocked
 	// by the deny ranges. Verify the block first, then use polling instead.
@@ -520,7 +520,7 @@ func TestWakeAndDeliver_WakeTimeout(t *testing.T) {
 	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	h.seedChannel("sync")
 	agent := h.store.agents["team-a/sup"]
-	agent.Status.Phase = agentryv1alpha1.AgentHibernated
+	agent.Status.Phase = kaalmv1alpha1.AgentHibernated
 	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 80 * time.Millisecond}
 
 	// Wake succeeds but the agent never becomes reachable: point delivery at a
@@ -542,7 +542,7 @@ func TestAgentHTTPClient_WithCertFiles(t *testing.T) {
 	ca := newTestCA(t)
 	certFile, keyFile, caFile := certFiles(t, ca, "gw")
 	s := &Server{Config: Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}}
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 
 	client, err := s.agentHTTPClient(agent)
 	if err != nil || client == nil {
@@ -556,7 +556,7 @@ func TestAgentHTTPClient_WithCertFiles(t *testing.T) {
 
 func TestAgentHTTPClient_BadCertFiles(t *testing.T) {
 	s := &Server{Config: Config{CertFile: "/nonexistent/tls.crt", KeyFile: "/nonexistent/tls.key", CAFile: "/nonexistent/ca.crt"}}
-	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	if _, err := s.agentHTTPClient(agent); err == nil {
 		t.Error("missing cert files must error")
 	}
@@ -570,7 +570,7 @@ func TestWebhook_TerminatingAndAgentMissing(t *testing.T) {
 	ch := h.seedChannel("sync")
 
 	// A Terminating channel accepts no new work: 401 (no existence leak).
-	ch.Status.Phase = agentryv1alpha1.ChannelTerminating
+	ch.Status.Phase = kaalmv1alpha1.ChannelTerminating
 	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
 	if resp.StatusCode != 401 {
 		t.Errorf("terminating channel = %d, want 401", resp.StatusCode)
@@ -578,7 +578,7 @@ func TestWebhook_TerminatingAndAgentMissing(t *testing.T) {
 	_ = resp.Body.Close()
 
 	// Restore the channel but drop its Agent: referenced Agent not found -> 502.
-	ch.Status.Phase = agentryv1alpha1.ChannelActive
+	ch.Status.Phase = kaalmv1alpha1.ChannelActive
 	delete(h.store.agents, "team-a/sup")
 	resp = h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
 	if resp.StatusCode != http.StatusBadGateway {

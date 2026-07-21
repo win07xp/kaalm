@@ -42,7 +42,7 @@ else cache miss or window expired
     Pod IPs are not in the gateway cert's SAN, so the
     transport pins tls.Config.ServerName to the gateway
     Service DNS. SAN verification still passes, and the
-    chain is still checked against agentry-ca.
+    chain is still checked against kaalm-ca.
   end note
 
   rec -> rec : merge: **most recent timestamp**\n**per agent, per source**

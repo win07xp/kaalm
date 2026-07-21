@@ -7,7 +7,7 @@ Where an [Agent](agent.md) is a long-running service, an AgentTask has a beginni
 ## Spec
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentTask
 metadata:
   name: fix-issue-342
@@ -126,7 +126,7 @@ Three status fields deserve emphasis:
 
 `metadata.name` must be a DNS-1123 label, the same constraint and rationale as the [Agent CRD](agent.md), including the 63-character bound (the task name becomes a single DNS label in the SAN). It is enforced via the same **root-scoped** CRD CEL pattern: `x-kubernetes-validations: [{rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') && size(self.metadata.name) <= 63", message: "AgentTask name must be a DNS-1123 label (no dots, max 63 characters)"}]` at the root of the AgentTask schema.
 
-The constraint is load-bearing for workload identity: the gateway extracts the namespace from the `{name}.{namespace}.task.agentry.io` SAN shape by splitting on `.` and reading label index 1. A dotted task name would shift the namespace label and defeat identification. See [Namespace Identification § Mode 1](../gateways/llm/workload-identity.md).
+The constraint is load-bearing for workload identity: the gateway extracts the namespace from the `{name}.{namespace}.task.kaalm.io` SAN shape by splitting on `.` and reading label index 1. A dotted task name would shift the namespace label and defeat identification. See [Namespace Identification § Mode 1](../gateways/llm/workload-identity.md).
 
 ### Completion modes
 
@@ -168,6 +168,6 @@ Combined with a terminal-phase rejection (`reason=TaskAlreadyCompleted` when `st
 
 ### Runtime-contract guarantees (same as Agent)
 
-The AgentTaskReconciler injects the full `$AGENTRY_*` environment-variable set on the task Pod (`$AGENTRY_HEALTH_PORT`, `$AGENTRY_GATEWAY_ENDPOINT`, `$AGENTRY_CA_CERT`, `$AGENTRY_TLS_CERT`, `$AGENTRY_TLS_KEY`) and creates a per-task cert-manager `Certificate` (`{taskName}-tls`) with `usages: [client auth]`. The output Secret mounts at `/var/run/agentry/`, so the task image presents a valid mTLS client cert on every call to `$AGENTRY_GATEWAY_ENDPOINT`: LLM requests and `POST /v1/task/complete`. Tasks send no heartbeats; `/v1/agent/heartbeat` is Agent-only and rejects per-task certs with 403.
+The AgentTaskReconciler injects the full `$KAALM_*` environment-variable set on the task Pod (`$KAALM_HEALTH_PORT`, `$KAALM_GATEWAY_ENDPOINT`, `$KAALM_CA_CERT`, `$KAALM_TLS_CERT`, `$KAALM_TLS_KEY`) and creates a per-task cert-manager `Certificate` (`{taskName}-tls`) with `usages: [client auth]`. The output Secret mounts at `/var/run/kaalm/`, so the task image presents a valid mTLS client cert on every call to `$KAALM_GATEWAY_ENDPOINT`: LLM requests and `POST /v1/task/complete`. Tasks send no heartbeats; `/v1/agent/heartbeat` is Agent-only and rejects per-task certs with 403.
 
-The Certificate's SAN is `{taskName}.{namespace}.task.agentry.io`, a non-Service shape, since tasks have no Service. See [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) and [Namespace Identification](../gateways/llm/workload-identity.md) for the full flow.
+The Certificate's SAN is `{taskName}.{namespace}.task.kaalm.io`, a non-Service shape, since tasks have no Service. See [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) and [Namespace Identification](../gateways/llm/workload-identity.md) for the full flow.

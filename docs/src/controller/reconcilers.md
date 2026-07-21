@@ -40,12 +40,12 @@ Reconciliation steps:
 1. Validate the referenced Secret exists and contains the expected key. If not, set `Ready=False, reason=CredentialsMissing`.
 2. If health checks are enabled, dispatch a **lightweight provider-specific liveness probe** against the provider endpoint, not a real inference request. See [Liveness probe](#liveness-probe) below.
 3. Reconcile budget state. See [Budget reconciliation](#budget-reconciliation) below.
-4. Set the gateway-reachability condition: read the live count of Ready gateway Pods in `agentry-system` from the controller's existing gateway-Pod informer (the same informer used by [AgentReconciler step 8](#agentreconciler) for activity fan-out and by [AgentChannelReconciler step 4](#agentchannelreconciler) for channel-health fan-out, so no new RBAC). If ≥1 gateway Pod is Ready, set `GatewayReachable=True`; otherwise `False` with a message stating `"no Ready gateway Pods in agentry-system"`. This is a cluster-wide signal mirrored onto each ModelProvider's status for user-facing visibility via `kubectl describe modelprovider`: LLM traffic for every provider depends on the same gateway Deployment, so the duplication is intentional. No active HTTP probe is issued by this reconciler; informer events drive re-evaluation when gateway Pod readiness changes, so the condition reflects current state without a polling cadence.
+4. Set the gateway-reachability condition: read the live count of Ready gateway Pods in `kaalm-system` from the controller's existing gateway-Pod informer (the same informer used by [AgentReconciler step 8](#agentreconciler) for activity fan-out and by [AgentChannelReconciler step 4](#agentchannelreconciler) for channel-health fan-out, so no new RBAC). If ≥1 gateway Pod is Ready, set `GatewayReachable=True`; otherwise `False` with a message stating `"no Ready gateway Pods in kaalm-system"`. This is a cluster-wide signal mirrored onto each ModelProvider's status for user-facing visibility via `kubectl describe modelprovider`: LLM traffic for every provider depends on the same gateway Deployment, so the duplication is intentional. No active HTTP probe is issued by this reconciler; informer events drive re-evaluation when gateway Pod readiness changes, so the condition reflects current state without a polling cadence.
 5. Validate the fallback chain. See [Fallback chain validation](#fallback-chain-validation) below.
 6. Validate budget policies: confirm that every `budget.policies[x].degradeTo` value matches a model `id` in `spec.models`. If not, set `Ready=False, reason=InvalidDegradeTarget`. This catches misconfigured degrade targets before they silently fail at runtime when a budget threshold is crossed.
 7. Run the **cost sanity check on `degradeTo`**. See [Cost sanity on degradeTo](#cost-sanity-on-degradeto) below.
 
-The ModelProviderReconciler is **not** responsible for credential distribution to agent pods. Credentials are held in `agentry-system` Secrets and read directly by the gateway.
+The ModelProviderReconciler is **not** responsible for credential distribution to agent pods. Credentials are held in `kaalm-system` Secrets and read directly by the gateway.
 
 ### Liveness probe
 
@@ -64,7 +64,7 @@ Track the result in `status.conditions[type=Healthy]` with exponential backoff o
 
 ### Budget reconciliation
 
-Read per-replica partial spend counters from the gateway's budget ConfigMap in `agentry-system`; see [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management) for the ConfigMap format.
+Read per-replica partial spend counters from the gateway's budget ConfigMap in `kaalm-system`; see [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management) for the ConfigMap format.
 
 Before summing, cross-reference ConfigMap keys against the current set of gateway Pod names (from the controller's gateway-Pod informer, the same informer step 4 reads for the `GatewayReachable` condition) and delete stale entries left by scaled-down or replaced replicas. Sum the remaining per-replica partials, write the canonical total to the `_canonical` key, and update `status.budgetUsage` per namespace.
 
@@ -99,7 +99,7 @@ This is what makes the AgentClass-drift path and the [Recoverable error bucket](
 
 On every requeue triggered by an AgentClass or ModelProvider change, the reconciler re-derives the desired Pod spec under the new class invariants and either recreates the Pod or degrades the Agent. The propagation mechanics are specified in [AgentClass change handling](change-propagation.md#agentclass-change-handling); what the reconciler does locally is:
 
-**(a) Recreate the Pod** via the standard Provisioning transition if the new spec differs in replacement-triggering fields: image, resources, command, args, env, provider wiring. Image (and, on newer clusters, resources) is technically mutable in place, but Agentry deliberately replaces the Pod for a clean restart (recreate-and-clamp).
+**(a) Recreate the Pod** via the standard Provisioning transition if the new spec differs in replacement-triggering fields: image, resources, command, args, env, provider wiring. Image (and, on newer clusters, resources) is technically mutable in place, but Kaalm deliberately replaces the Pod for a clean restart (recreate-and-clamp).
 
 Drift is detected by comparing a hash of the derived Pod spec, stamped as a Pod annotation at creation, against the hash of the re-derived spec: the Deployment `pod-template-hash` idiom. It is **never** detected by a DeepEqual against the live Pod object, whose apiserver-defaulted and admission-injected fields (`serviceAccountName`, `nodeName`, `tolerations`, `imagePullPolicy`, …) would report perpetual drift and recreate-loop the Pod.
 
@@ -115,7 +115,7 @@ The image, provider, persistence, and hibernation checks reuse cross-resource va
 
 This is the most complex reconciler. It implements the persistent [Agent State Machine](agent-lifecycle.md). Each reconciliation pass:
 
-1. If the Agent's namespace is `agentry-system`, set `Ready=False, reason=SystemNamespaceForbidden` and stop: no child resources are created. This guards SAN integrity: an Agent in `agentry-system` could otherwise be issued a certificate whose SAN collides with the gateway or controller Service identity (see [rule 28](../resources/validation-and-defaulting.md#cross-resource-validation)); the same guard runs first in the AgentTaskReconciler and AgentChannelReconciler. Otherwise, resolve `agentClassRef` and fetch the AgentClass. If missing, set `Ready=False` with a clear reason.
+1. If the Agent's namespace is `kaalm-system`, set `Ready=False, reason=SystemNamespaceForbidden` and stop: no child resources are created. This guards SAN integrity: an Agent in `kaalm-system` could otherwise be issued a certificate whose SAN collides with the gateway or controller Service identity (see [rule 28](../resources/validation-and-defaulting.md#cross-resource-validation)); the same guard runs first in the AgentTaskReconciler and AgentChannelReconciler. Otherwise, resolve `agentClassRef` and fetch the AgentClass. If missing, set `Ready=False` with a clear reason.
 2. If `spec.providers` is present, resolve all `providerRef`s. If any referenced ModelProvider is missing, no longer in `AgentClass.allowedProviders`, or its `allowedNamespaces` does not include the Agent's namespace, transition the Agent to `phase=Degraded, reason=ClassConstraintViolation` with `preDegradedPhase` set (matching the AgentClass-drift path above). Recovers when the developer aligns the Agent or ModelProvider spec.
 3. Determine the desired phase based on the state machine.
 4. **Create/ensure the cert-manager `Certificate` resource for the Agent before Pod creation.** See [Agent Certificate](#agent-certificate) below.
@@ -123,12 +123,12 @@ This is the most complex reconciler. It implements the persistent [Agent State M
 6. Converge the remaining child resources to match the desired phase: `Pod`, `PVC`, `Service`, `ServiceAccount`, `NetworkPolicy`. All are owner-referenced to the Agent for cascade GC. See [Child-resource convergence](#child-resource-convergence) below.
 7. When creating a Pod, inject controller-managed environment variables and probes. See [Injected environment and probes](#injected-environment-and-probes) below.
 8. For agents in `Running` or `Idle` phase: query the activity API in a **per-namespace batch**. See [Activity fan-out](#activity-fan-out) below.
-9. On every reconcile pass, check for the `agentry.io/wake=true` annotation. See [Wake annotation handling](#wake-annotation-handling) below.
+9. On every reconcile pass, check for the `kaalm.io/wake=true` annotation. See [Wake annotation handling](#wake-annotation-handling) below.
 10. Update status and emit events for phase transitions. On any change to `status.phase`, set `status.phaseTransitionTime = now()` in the same status patch so the field always reflects the moment the new phase was committed. This timestamp is consumed by the gateway-restart-detection logic in step 8 and by the activity API fan-out in [Activity Tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api). Do not update `phaseTransitionTime` on condition-only or label/annotation-only updates.
 
 Owner references are set on all child resources pointing back to the Agent, so cascade deletion works naturally.
 
-![Activity diagram of one AgentReconciler pass. Step 1 exits to Ready=False, reason=SystemNamespaceForbidden for an Agent in agentry-system, and to a second Ready=False if the agentClassRef does not resolve. Step 2 exits to phase=Degraded, reason=ClassConstraintViolation when a providerRef is unresolvable, excluded from allowedProviders, or blocked by the provider's allowedNamespaces. Step 4 loops back on itself, requeueing with backoff without creating the Pod until the cert-manager Certificate reports Ready=True. Step 5 exits to Ready=False, reason=ImagePullSecretMissing when a pull Secret is absent from the Agent's namespace, and to phase=Degraded with one of PersistenceNotAllowed, HibernationNotAllowed, or HibernationRequiresPersistence when the persistence and hibernation cross-checks fail. Only after all five gates pass do steps 6 and 7 converge the child resources and create the Pod, followed by the conditional activity fan-out in step 8, the wake-annotation check in step 9, and the status write in step 10.](../diagrams/agent-reconcile-pass.svg)
+![Activity diagram of one AgentReconciler pass. Step 1 exits to Ready=False, reason=SystemNamespaceForbidden for an Agent in kaalm-system, and to a second Ready=False if the agentClassRef does not resolve. Step 2 exits to phase=Degraded, reason=ClassConstraintViolation when a providerRef is unresolvable, excluded from allowedProviders, or blocked by the provider's allowedNamespaces. Step 4 loops back on itself, requeueing with backoff without creating the Pod until the cert-manager Certificate reports Ready=True. Step 5 exits to Ready=False, reason=ImagePullSecretMissing when a pull Secret is absent from the Agent's namespace, and to phase=Degraded with one of PersistenceNotAllowed, HibernationNotAllowed, or HibernationRequiresPersistence when the persistence and hibernation cross-checks fail. Only after all five gates pass do steps 6 and 7 converge the child resources and create the Pod, followed by the conditional activity fan-out in step 8, the wake-annotation check in step 9, and the status write in step 10.](../diagrams/agent-reconcile-pass.svg)
 
 Reading the diagram: the numbered list above is flat, but the pass is not. Five exits can end it before a Pod ever exists, spread over three of the ten steps (1 twice, 2, and 5 twice), and step 4 is a loop rather than a step: Pod creation is gated on certificate readiness, so the reconciler requeues rather than proceeding. The two exit shapes are distinct. `Ready=False` (grey) leaves `status.phase` alone and reports a condition; `phase=Degraded` (blue) is a phase transition that records `preDegradedPhase` so the prior phase can be restored on recovery.
 
@@ -136,7 +136,7 @@ Reading the diagram: the numbered list above is flat, but the pass is not. Five 
 
 The Certificate is named `{agentName}-tls` in the Agent's namespace, owned by the Agent via `ownerReferences` so it is garbage-collected on Agent deletion. Key fields:
 
-- `spec.issuerRef`: `{ name: "agentry-ca-issuer", kind: "ClusterIssuer" }`. A `ClusterIssuer` is used because cert-manager does not resolve a namespaced `Issuer` across namespace boundaries; the chart installs `agentry-ca-issuer` as a `ClusterIssuer` sourcing from the `agentry-ca` Secret in cert-manager's **cluster resource namespace** (chart value `certManager.clusterResourceNamespace`, default `cert-manager`). A CA `ClusterIssuer` resolves `spec.ca.secretName` only in the namespace cert-manager's `--cluster-resource-namespace` flag points at, never in `agentry-system`.
+- `spec.issuerRef`: `{ name: "kaalm-ca-issuer", kind: "ClusterIssuer" }`. A `ClusterIssuer` is used because cert-manager does not resolve a namespaced `Issuer` across namespace boundaries; the chart installs `kaalm-ca-issuer` as a `ClusterIssuer` sourcing from the `kaalm-ca` Secret in cert-manager's **cluster resource namespace** (chart value `certManager.clusterResourceNamespace`, default `cert-manager`). A CA `ClusterIssuer` resolves `spec.ca.secretName` only in the namespace cert-manager's `--cluster-resource-namespace` flag points at, never in `kaalm-system`.
 - `spec.secretName`: `{agentName}-tls` (the output Secret cert-manager creates in the Agent's namespace).
 - `spec.dnsNames`: `{agentName}.{namespace}.svc.cluster.local`, `{agentName}.{namespace}.svc`, `{agentName}.{namespace}`.
 - `spec.duration`: `2160h` (90d), `spec.renewBefore`: `720h` (30d), chart defaults.
@@ -148,7 +148,7 @@ Subsequent rotation is transparent: cert-manager rotates per `renewBefore`, kube
 
 ### Pre-Pod-creation checks
 
-Before creating the Pod, for each entry in the effective `AgentClass.spec.image.imagePullSecrets` (plus any Agent-level additions, once supported), verify that a Secret with that name exists in the **Agent's namespace**. AgentClass is cluster-scoped but the Secret is resolved per-workload in the Agent's namespace: the reconciler does **not** copy Secrets from `agentry-system` into user namespaces. If any referenced Secret is missing, set `Ready=False, reason=ImagePullSecretMissing` with a message naming the namespace and missing Secret (e.g., `"imagePullSecret 'registry-credentials' missing in namespace 'team-support'"`) and skip Pod creation.
+Before creating the Pod, for each entry in the effective `AgentClass.spec.image.imagePullSecrets` (plus any Agent-level additions, once supported), verify that a Secret with that name exists in the **Agent's namespace**. AgentClass is cluster-scoped but the Secret is resolved per-workload in the Agent's namespace: the reconciler does **not** copy Secrets from `kaalm-system` into user namespaces. If any referenced Secret is missing, set `Ready=False, reason=ImagePullSecretMissing` with a message naming the namespace and missing Secret (e.g., `"imagePullSecret 'registry-credentials' missing in namespace 'team-support'"`) and skip Pod creation.
 
 This check runs *before* the Pod is created so that a missing pull secret surfaces as a clear condition rather than as an `ImagePullBackOff` loop on a live Pod, and so the Pod is not left in a crash state consuming quota. See [Cross-Resource Validation rule 23](../resources/validation-and-defaulting.md#cross-resource-validation).
 
@@ -171,7 +171,7 @@ Pod convergence explicitly covers involuntary disruption. Both of the following 
 
 Either one drives the [involuntary-disruption transition](agent-lifecycle.md) back through `Provisioning`. Detection is event-driven via the owned-Pod watch, not polling.
 
-**Service**: ClusterIP, named `{agentName}` in the Agent's namespace, with `port: spec.service.port` (default 8080) and `targetPort` set to the same numeric port the controller injects as `$AGENTRY_HEALTH_PORT` on the Pod (default 8080). `targetPort` is a literal number on the Service: there is no env-var substitution at Service apply time; the controller computes the port once and uses the same value in both the Service spec and the Pod env var. The two are decoupled from `spec.service.port` deliberately so a developer can override the Service-facing port without changing the in-Pod listen port; the agent only ever binds the port given by `$AGENTRY_HEALTH_PORT`. See the [Agent CRD design notes](../resources/agent.md).
+**Service**: ClusterIP, named `{agentName}` in the Agent's namespace, with `port: spec.service.port` (default 8080) and `targetPort` set to the same numeric port the controller injects as `$KAALM_HEALTH_PORT` on the Pod (default 8080). `targetPort` is a literal number on the Service: there is no env-var substitution at Service apply time; the controller computes the port once and uses the same value in both the Service spec and the Pod env var. The two are decoupled from `spec.service.port` deliberately so a developer can override the Service-facing port without changing the in-Pod listen port; the agent only ever binds the port given by `$KAALM_HEALTH_PORT`. See the [Agent CRD design notes](../resources/agent.md).
 
 **ServiceAccount**: named `agent-{agentName}` in the Agent's namespace, with no RoleBindings by default (the agent has no Kubernetes API access unless the platform team or developer explicitly grants it, see [Agent Pod ServiceAccount](../security/rbac.md#agent-pod-serviceaccount)). Created before the Pod so the Pod can reference it via `spec.serviceAccountName`.
 
@@ -179,19 +179,19 @@ Either one drives the [involuntary-disruption transition](agent-lifecycle.md) ba
 
 - (a) the default egress allow to the gateway Service on port 8443,
 - (b) the DNS egress rule from the Helm value `controller.networkPolicy.dnsSelector`,
-- (c) the default ingress allow from the gateway for `$AGENTRY_HEALTH_PORT`,
+- (c) the default ingress allow from the gateway for `$KAALM_HEALTH_PORT`,
 - (d) `AgentClass.spec.network.egress.allowedCIDRs` translated into `NetworkPolicy.egress.to.ipBlock.cidr` rules,
 - (e) `AgentClass.spec.network.egress.allowedHosts` translated into `CiliumNetworkPolicy.toFQDNs` (or the Calico-Enterprise equivalent) **only** when the AgentClassReconciler's startup CNI probe reported FQDN-policy support; otherwise `allowedHosts` is silently ignored and the matching `Warning` event is emitted on the AgentClass, not the Agent,
 - (f) inter-agent ingress only when `AgentClass.spec.network.allowSameNamespaceIngress: true`.
 
 ### Injected environment and probes
 
-- `$AGENTRY_HEALTH_PORT` (always): the port the agent serves its HTTPS health/message endpoint on (default 8080).
-- `$AGENTRY_GATEWAY_ENDPOINT` (always): HTTPS URL pointing to the gateway Service in `agentry-system` on port 8443. This is the base URL for all agent→gateway calls: LLM requests, heartbeats ([`POST /v1/agent/heartbeat`](../gateways/api/agent-endpoints.md#post-v1agentheartbeat)), and task completion ([`POST /v1/task/complete`](../gateways/api/task-complete.md)). Always injected regardless of whether `spec.providers` is set, so provider-less agents (e.g., AgentTasks that report completion but make no LLM calls) can still reach the gateway.
-- `$AGENTRY_CA_CERT` (always): path to the Agentry CA trust bundle projected into the Pod.
-- `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (always): paths to the agent's TLS serving/client certificate and key (cert-manager-managed; see step 4).
+- `$KAALM_HEALTH_PORT` (always): the port the agent serves its HTTPS health/message endpoint on (default 8080).
+- `$KAALM_GATEWAY_ENDPOINT` (always): HTTPS URL pointing to the gateway Service in `kaalm-system` on port 8443. This is the base URL for all agent→gateway calls: LLM requests, heartbeats ([`POST /v1/agent/heartbeat`](../gateways/api/agent-endpoints.md#post-v1agentheartbeat)), and task completion ([`POST /v1/task/complete`](../gateways/api/task-complete.md)). Always injected regardless of whether `spec.providers` is set, so provider-less agents (e.g., AgentTasks that report completion but make no LLM calls) can still reach the gateway.
+- `$KAALM_CA_CERT` (always): path to the Kaalm CA trust bundle projected into the Pod.
+- `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY` (always): paths to the agent's TLS serving/client certificate and key (cert-manager-managed; see step 4).
 
-The controller also injects the liveness and readiness probes with `httpGet.scheme: HTTPS`, targeting `GET /livez` (liveness) and `GET /readyz` (readiness) on `$AGENTRY_HEALTH_PORT`: the paths pinned by [The Runtime Contract](../runtime/contract.md) item 1. The agent serves TLS on that port, and Kubernetes httpGet probes do not verify TLS certificates, so no additional CA configuration is required on the probe itself.
+The controller also injects the liveness and readiness probes with `httpGet.scheme: HTTPS`, targeting `GET /livez` (liveness) and `GET /readyz` (readiness) on `$KAALM_HEALTH_PORT`: the paths pinned by [The Runtime Contract](../runtime/contract.md) item 1. The agent serves TLS on that port, and Kubernetes httpGet probes do not verify TLS certificates, so no additional CA configuration is required on the probe itself.
 
 Agent Pods are created with `restartPolicy: Always`: the kubelet restarts a crashed container in place, and the persistent-crash-loop detection behind the `any → Failed` transition reads `containerStatuses[].restartCount` / `CrashLoopBackOff`, not Pod phase (see [Agent state machine](agent-lifecycle.md)).
 
@@ -207,7 +207,7 @@ The fan-out skips unreachable replicas. The result is used to evaluate idle and 
 
 ### Wake annotation handling
 
-Removal of `agentry.io/wake=true` is phase-dependent so a failed reconcile cannot silently drop the wake:
+Removal of `kaalm.io/wake=true` is phase-dependent so a failed reconcile cannot silently drop the wake:
 
 - **Non-`Hibernated` agent with the annotation**: remove the annotation immediately. Emit a `Warning` event (`reason=WakeIgnored`, message `"wake annotation observed on non-Hibernated agent; ignored"`) **unless the Agent is in `Resuming`**, in which case the annotation is removed silently. The `Resuming` carve-out exists because a wake observed during `Resuming` is a benign idempotent re-attempt by the gateway (or a manual re-annotation racing an in-progress wake), not the misfire case the Warning is meant to surface for `Running`/`Idle`/`Degraded`. No phase change in either branch. Removing the annotation in both branches prevents stale annotations from triggering spurious wakes on a future hibernation cycle.
 - **`Hibernated` agent with the annotation**: transition to `Resuming` and recreate the Pod (see [Wake trigger](hibernation-and-wake.md#wake-trigger)). Remove the annotation **only after the transition to `Resuming` has been committed** (successful status update). If the status update or the subsequent Pod recreation fails and the reconcile is requeued, leave the annotation in place so the next reconcile observes it again. This ensures a wake signal from the activator (or from a manual `kubectl annotate`) cannot be lost to a transient apiserver error between the moment the reconciler sees the annotation and the moment it commits the phase change.
@@ -224,7 +224,7 @@ Reconciliation steps:
 2. **Create/ensure the cert-manager `Certificate` resource for the AgentTask before Pod creation.** See [AgentTask Certificate](#agenttask-certificate) below.
 3. **For tasks with `spec.completion.condition: agentReported` only**, pre-create the completion mailbox and its scoped RBAC. See [Completion mailbox and per-task Role](#completion-mailbox-and-per-task-role) below.
 4. Converge the remaining child resources in the task's namespace: `Pod`, `PVC`, `ServiceAccount`, `NetworkPolicy`. All are owner-referenced to the AgentTask for cascade GC. See [Task child-resource convergence](#task-child-resource-convergence) below.
-5. Inject controller-managed environment variables on Pod creation: the same set as [AgentReconciler step 7](#agentreconciler): `$AGENTRY_HEALTH_PORT`, `$AGENTRY_GATEWAY_ENDPOINT`, `$AGENTRY_CA_CERT`, `$AGENTRY_TLS_CERT`, `$AGENTRY_TLS_KEY`. `$AGENTRY_GATEWAY_ENDPOINT` is always injected so the task image can call [`POST /v1/task/complete`](../gateways/api/task-complete.md) even if the task makes no LLM calls. (Heartbeats are **Agent-only**: `/v1/agent/heartbeat` rejects AgentTask callers with `403` at the handler; task liveness is governed by the task timeout, not idle detection. See [The Runtime Contract](../runtime/contract.md) item 5.) Readiness and liveness probes are **not** injected by the controller for AgentTasks: tasks have no Service and typically do not serve a message endpoint, and task Pods carry no probes at all (a container image cannot declare Pod-spec probes, and AgentTask exposes no probe fields). Task liveness is governed by `spec.completion.timeout` and the provisioning deadline, not by kubelet probes.
+5. Inject controller-managed environment variables on Pod creation: the same set as [AgentReconciler step 7](#agentreconciler): `$KAALM_HEALTH_PORT`, `$KAALM_GATEWAY_ENDPOINT`, `$KAALM_CA_CERT`, `$KAALM_TLS_CERT`, `$KAALM_TLS_KEY`. `$KAALM_GATEWAY_ENDPOINT` is always injected so the task image can call [`POST /v1/task/complete`](../gateways/api/task-complete.md) even if the task makes no LLM calls. (Heartbeats are **Agent-only**: `/v1/agent/heartbeat` rejects AgentTask callers with `403` at the handler; task liveness is governed by the task timeout, not idle detection. See [The Runtime Contract](../runtime/contract.md) item 5.) Readiness and liveness probes are **not** injected by the controller for AgentTasks: tasks have no Service and typically do not serve a message endpoint, and task Pods carry no probes at all (a container image cannot declare Pod-spec probes, and AgentTask exposes no probe fields). Task liveness is governed by `spec.completion.timeout` and the provisioning deadline, not by kubelet probes.
 6. Drive the [AgentTask State Machine](task-lifecycle.md). See [Pod-loss precedence and retry stamping](#pod-loss-precedence-and-retry-stamping) below.
 7. On `Completing`: artifact values are read from the pre-existing `{taskName}-completion` ConfigMap that was created in step 3. When the agent calls `POST /v1/task/complete`, the gateway validates the payload's artifact names against `spec.artifacts` (returning `400 invalid_request` synchronously to the agent on mismatch, see [POST /v1/task/complete](../gateways/api/task-complete.md)) and only then updates this ConfigMap (via `update`/`patch` against the resource-name-scoped Role) with the completion payload. The reconciler watches for changes to this ConfigMap, defensively re-validates the artifact names against `spec.artifacts` (a no-op under normal operation, since the gateway has already enforced the same check), reads artifact values, and populates `status.artifactValues`. No exec into the container is required, and the completion data survives Pod crashes or eviction.
 8. Honor `ttlSecondsAfterFinished` by scheduling deletion.
@@ -233,9 +233,9 @@ Reconciliation steps:
 
 Named `{taskName}-tls` in the task's namespace, owner-referenced to the AgentTask so it is garbage-collected on deletion. Key fields:
 
-- `spec.issuerRef`: `{ name: "agentry-ca-issuer", kind: "ClusterIssuer" }`, the same `ClusterIssuer` used by Agents.
+- `spec.issuerRef`: `{ name: "kaalm-ca-issuer", kind: "ClusterIssuer" }`, the same `ClusterIssuer` used by Agents.
 - `spec.secretName`: `{taskName}-tls`.
-- `spec.dnsNames`: `{taskName}.{namespace}.task.agentry.io` (single SAN). A non-Service shape is used deliberately: AgentTasks have no Service, so the Service-DNS shape used by Agents would be misleading. The shape is recognized by the gateway's SAN parser as an AgentTask identity, see [Namespace Identification](../gateways/llm/workload-identity.md).
+- `spec.dnsNames`: `{taskName}.{namespace}.task.kaalm.io` (single SAN). A non-Service shape is used deliberately: AgentTasks have no Service, so the Service-DNS shape used by Agents would be misleading. The shape is recognized by the gateway's SAN parser as an AgentTask identity, see [Namespace Identification](../gateways/llm/workload-identity.md).
 - `spec.usages`: `client auth` only (no `server auth`, since tasks have no inbound TLS listener).
 - `spec.duration`: `2160h` (90d), `spec.renewBefore`: `720h` (30d), matching Agent defaults.
 
@@ -243,7 +243,7 @@ Named `{taskName}-tls` in the task's namespace, owner-referenced to the AgentTas
 
 ### Completion mailbox and per-task Role
 
-Pre-create the empty `{taskName}-completion` ConfigMap in the task's namespace with `data: {}`, owned by the AgentTask via `ownerRef` for cascade deletion. Then ensure a per-task `Role` and `RoleBinding` exist granting the gateway ServiceAccount (`agentry-system/agentry-gateway`) `update, patch` on the ConfigMap with that exact name (`resourceNames: ["{taskName}-completion"]`). The Role and RoleBinding are also owned by the AgentTask.
+Pre-create the empty `{taskName}-completion` ConfigMap in the task's namespace with `data: {}`, owned by the AgentTask via `ownerRef` for cascade deletion. Then ensure a per-task `Role` and `RoleBinding` exist granting the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) `update, patch` on the ConfigMap with that exact name (`resourceNames: ["{taskName}-completion"]`). The Role and RoleBinding are also owned by the AgentTask.
 
 The verb set is deliberately `update, patch` and not `create`: Kubernetes RBAC's `resourceNames` does not constrain `create` requests, so granting `create` on a named ConfigMap would silently broaden the gateway's access to all ConfigMaps in the namespace. By pre-creating the resource here and granting the gateway only name-scoped mutate verbs, the scoping guarantee is enforceable. This mirrors the per-channel Role pattern in [AgentChannelReconciler](#agentchannelreconciler). See [Gateway ServiceAccount](../security/rbac.md#gateway-serviceaccount-permissions) for the security rationale.
 
@@ -251,7 +251,7 @@ Tasks with `completion.condition: exitCode` skip this step entirely: they have n
 
 ### Task child-resource convergence
 
-Task Pods are created with `restartPolicy: Never`. Agentry owns retries via `backoffLimit` (a kubelet in-place restart would bypass `status.retries` accounting and blur the one-run-per-`currentPodUID` gate), and `exitCode`-mode completion depends on it: Pod phase only reaches `Succeeded`/`Failed` under `Never`; with `Always`/`OnFailure` the kubelet restarts the container in place and the phase stays `Running` forever.
+Task Pods are created with `restartPolicy: Never`. Kaalm owns retries via `backoffLimit` (a kubelet in-place restart would bypass `status.retries` accounting and blur the one-run-per-`currentPodUID` gate), and `exitCode`-mode completion depends on it: Pod phase only reaches `Succeeded`/`Failed` under `Never`; with `Always`/`OnFailure` the kubelet restarts the container in place and the phase stays `Running` forever.
 
 For `agentReported`-mode tasks, the `{taskName}-completion` ConfigMap and its scoped Role/RoleBinding were already created in step 3 alongside the Certificate; they are not (re-)created lazily by the gateway. `exitCode`-mode tasks have no equivalent.
 
@@ -291,7 +291,7 @@ The AgentChannelReconciler does not own Pod resources. The gateway watches `Agen
 
 ### Per-channel credential Role
 
-The Role is named `agentry-channel-{channelName}-creds` and lives in the AgentChannel's namespace. It must exist before the reconciler reads any Secret, because the reconciler does not have blanket Secret-read RBAC in user namespaces: the Role is what gives it (and the gateway) access to the specific Secret(s).
+The Role is named `kaalm-channel-{channelName}-creds` and lives in the AgentChannel's namespace. It must exist before the reconciler reads any Secret, because the reconciler does not have blanket Secret-read RBAC in user namespaces: the Role is what gives it (and the gateway) access to the specific Secret(s).
 
 The Role grants `get, watch`, `resourceNames`-scoped to every Secret referenced by the channel's webhook auth config. `list` is deliberately omitted: RBAC `resourceNames` cannot constrain a plain `list` request, so the verb would be dead weight. Name-scoped `watch` requests must set `fieldSelector metadata.name=<secret>` to satisfy the `resourceNames` check.
 
@@ -302,7 +302,7 @@ The scoped Secrets are:
 
 When both references point to the same Secret, `resourceNames` lists it once; when they differ, the list contains both.
 
-The Role is bound by two RoleBindings: one to the gateway ServiceAccount (`agentry-system/agentry-gateway`) and one to the operator ServiceAccount (`agentry-system/agentry-controller`). If the inbound auth type, the outbound auth type, or any Secret reference has changed since the last reconcile (detectable by comparing the current Role's `resourceNames` against the desired set), the reconciler updates the Role to the new `resourceNames` so neither the gateway nor the operator retains read access to a Secret either no longer needs. The Role name is deterministic so successive reconciles are idempotent.
+The Role is bound by two RoleBindings: one to the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) and one to the operator ServiceAccount (`kaalm-system/kaalm-controller`). If the inbound auth type, the outbound auth type, or any Secret reference has changed since the last reconcile (detectable by comparing the current Role's `resourceNames` against the desired set), the reconciler updates the Role to the new `resourceNames` so neither the gateway nor the operator retains read access to a Secret either no longer needs. The Role name is deterministic so successive reconciles are idempotent.
 
 After the Role exists, the reconciler reads each referenced Secret via this scoped path and validates:
 
@@ -315,7 +315,7 @@ Both Role and RoleBindings are owned by the AgentChannel via `ownerRef` and casc
 
 ### Channel health poll
 
-Poll `GET /v1/channels/health?namespace={ns}` (see [Channel Health Endpoint](../gateways/api/internal-endpoints.md#get-v1channelshealth)), authenticating via mTLS with the controller's `agentry-controller-tls` client cert. The fan-out shape mirrors the activity-API path: query every gateway Pod IP in parallel and skip unreachable replicas. It uses the same per-namespace reconciler-local cache with the fixed 15-second window described in [AgentReconciler step 8](#agentreconciler), so a burst of AgentChannel reconciles in one namespace produces a single fan-out per window; load is bounded to O(namespaces × replicas) per window, identical to the activity API.
+Poll `GET /v1/channels/health?namespace={ns}` (see [Channel Health Endpoint](../gateways/api/internal-endpoints.md#get-v1channelshealth)), authenticating via mTLS with the controller's `kaalm-controller-tls` client cert. The fan-out shape mirrors the activity-API path: query every gateway Pod IP in parallel and skip unreachable replicas. It uses the same per-namespace reconciler-local cache with the fixed 15-second window described in [AgentReconciler step 8](#agentreconciler), so a burst of AgentChannel reconciles in one namespace produces a single fan-out per window; load is bounded to O(namespaces × replicas) per window, identical to the activity API.
 
 Each per-replica response carries a top-level `replicaStartedAt` and `windowSeconds` (sourced from `gateway.channelHealthWindow`) plus a `channels` map whose values are `{ phase, state, reason, lastError, timestamp }` per channel path. `state ∈ { success, failure, empty }` is the replica's view of its in-window observation list (see [Channel Health Tracking](../gateways/user/platform-adapters.md#channel-health-tracking) for the per-replica state model).
 
@@ -339,7 +339,7 @@ Reduce per-channel and update `status.conditions[type=PlatformConnected]` using 
 
 ### Async ConfigMap pruning
 
-List `agentry-async-*` ConfigMaps in `agentry-system` matching the label selector `agentry.io/channel-namespace={ns},agentry.io/channel-name={name}` for this AgentChannel, and delete any whose `agentry.io/expires-at` annotation is in the past.
+List `kaalm-async-*` ConfigMaps in `kaalm-system` matching the label selector `kaalm.io/channel-namespace={ns},kaalm.io/channel-name={name}` for this AgentChannel, and delete any whose `kaalm.io/expires-at` annotation is in the past.
 
 The 1-hour TTL on async responses is enforced by this step rather than by Kubernetes GC because ownership cannot be expressed with a cross-namespace ownerRef; the linkage is by labels instead. See [Async webhook response](../gateways/api/async-responses.md) for the full rationale.
 

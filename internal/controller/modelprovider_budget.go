@@ -30,8 +30,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
-	"github.com/win07xp/kubeclaw/internal/gateway"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/gateway"
 )
 
 // gatewayPodLabels selects gateway Pods in the operator namespace, for the
@@ -61,8 +61,8 @@ func (r *ModelProviderReconciler) gatewayPods(ctx context.Context) (names map[st
 
 // setGatewayReachable mirrors the cluster-wide gateway readiness onto this
 // provider's status for kubectl-describe visibility (reconciler step 4).
-func (r *ModelProviderReconciler) setGatewayReachable(mp *agentryv1alpha1.ModelProvider, ready int) {
-	cond := metav1.Condition{Type: agentryv1alpha1.ConditionGatewayReachable}
+func (r *ModelProviderReconciler) setGatewayReachable(mp *kaalmv1alpha1.ModelProvider, ready int) {
+	cond := metav1.Condition{Type: kaalmv1alpha1.ConditionGatewayReachable}
 	if ready >= 1 {
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = "GatewayReady"
@@ -76,12 +76,12 @@ func (r *ModelProviderReconciler) setGatewayReachable(mp *agentryv1alpha1.ModelP
 }
 
 // reconcileBudget is the reducer over the per-replica partials in the
-// agentry-budget-{provider} ConfigMap: prune keys with no live gateway Pod,
+// kaalm-budget-{provider} ConfigMap: prune keys with no live gateway Pod,
 // archive and drop stale-period entries, sum current-period partials, write
 // _canonical, and populate status.budgetUsage. See
 // docs/src/gateways/llm/budgets-and-rate-limits.md.
 func (r *ModelProviderReconciler) reconcileBudget(
-	ctx context.Context, mp *agentryv1alpha1.ModelProvider, liveGateways map[string]bool,
+	ctx context.Context, mp *kaalmv1alpha1.ModelProvider, liveGateways map[string]bool,
 ) error {
 	scheme := mp.Spec.Budget.Period
 	currentPeriod := gateway.PeriodKey(scheme, time.Now())
@@ -174,8 +174,8 @@ func (r *ModelProviderReconciler) reconcileBudget(
 // budgetUsageEntries renders per-namespace spend into status entries with the
 // enforcement state derived from the provider's policies.
 func budgetUsageEntries(
-	mp *agentryv1alpha1.ModelProvider, spend map[string]float64, period string,
-) []agentryv1alpha1.ModelProviderBudgetUsage {
+	mp *kaalmv1alpha1.ModelProvider, spend map[string]float64, period string,
+) []kaalmv1alpha1.ModelProviderBudgetUsage {
 	ceiling, _ := strconv.ParseFloat(mp.Spec.Budget.PerNamespaceUSD, 64)
 	namespaces := make([]string, 0, len(spend))
 	for ns := range spend {
@@ -183,13 +183,13 @@ func budgetUsageEntries(
 	}
 	sort.Strings(namespaces)
 
-	out := make([]agentryv1alpha1.ModelProviderBudgetUsage, 0, len(namespaces))
+	out := make([]kaalmv1alpha1.ModelProviderBudgetUsage, 0, len(namespaces))
 	for _, ns := range namespaces {
-		entry := agentryv1alpha1.ModelProviderBudgetUsage{
+		entry := kaalmv1alpha1.ModelProviderBudgetUsage{
 			Namespace: ns,
 			Period:    period,
 			SpentUSD:  strconv.FormatFloat(spend[ns], 'f', 2, 64),
-			State:     agentryv1alpha1.BudgetStateNormal,
+			State:     kaalmv1alpha1.BudgetStateNormal,
 		}
 		if ceiling > 0 {
 			percent := spend[ns] / ceiling * 100
@@ -199,11 +199,11 @@ func budgetUsageEntries(
 					continue
 				}
 				switch p.Action {
-				case agentryv1alpha1.BudgetActionBlock:
-					entry.State = agentryv1alpha1.BudgetStateBlocked
-				case agentryv1alpha1.BudgetActionDegrade:
-					if entry.State != agentryv1alpha1.BudgetStateBlocked {
-						entry.State = agentryv1alpha1.BudgetStateThrottled
+				case kaalmv1alpha1.BudgetActionBlock:
+					entry.State = kaalmv1alpha1.BudgetStateBlocked
+				case kaalmv1alpha1.BudgetActionDegrade:
+					if entry.State != kaalmv1alpha1.BudgetStateBlocked {
+						entry.State = kaalmv1alpha1.BudgetStateThrottled
 					}
 				}
 			}

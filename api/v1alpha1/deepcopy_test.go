@@ -79,7 +79,7 @@ func fullObjectMeta(name string) metav1.ObjectMeta {
 		Namespace:   "default",
 		Labels:      map[string]string{"k": "v"},
 		Annotations: map[string]string{"a": "b"},
-		Finalizers:  []string{"agentry.io/finalizer"},
+		Finalizers:  []string{"kaalm.io/finalizer"},
 	}
 }
 
@@ -98,7 +98,7 @@ func fullConditions() []metav1.Condition {
 
 func newFullAgent() *Agent {
 	return &Agent{
-		TypeMeta:   metav1.TypeMeta{Kind: "Agent", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta:   metav1.TypeMeta{Kind: "Agent", APIVersion: "kaalm.io/v1alpha1"},
 		ObjectMeta: fullObjectMeta("agent-1"),
 		Spec: AgentSpec{
 			AgentClassRef: LocalObjectReference{Name: "class-a"},
@@ -181,7 +181,7 @@ func TestAgentDeepCopy(t *testing.T) {
 
 func TestAgentListDeepCopy(t *testing.T) {
 	list := &AgentList{
-		TypeMeta: metav1.TypeMeta{Kind: "AgentList", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta: metav1.TypeMeta{Kind: "AgentList", APIVersion: "kaalm.io/v1alpha1"},
 		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
 		Items:    []Agent{*newFullAgent(), *newFullAgent()},
 	}
@@ -202,7 +202,7 @@ func TestAgentListDeepCopy(t *testing.T) {
 
 func newFullAgentChannel() *AgentChannel {
 	return &AgentChannel{
-		TypeMeta:   metav1.TypeMeta{Kind: "AgentChannel", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta:   metav1.TypeMeta{Kind: "AgentChannel", APIVersion: "kaalm.io/v1alpha1"},
 		ObjectMeta: fullObjectMeta("channel-1"),
 		Spec: AgentChannelSpec{
 			AgentRef: LocalObjectReference{Name: "agent-1"},
@@ -271,7 +271,7 @@ func TestAgentChannelDeepCopy(t *testing.T) {
 
 func TestAgentChannelListDeepCopy(t *testing.T) {
 	list := &AgentChannelList{
-		TypeMeta: metav1.TypeMeta{Kind: "AgentChannelList", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta: metav1.TypeMeta{Kind: "AgentChannelList", APIVersion: "kaalm.io/v1alpha1"},
 		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
 		Items:    []AgentChannel{*newFullAgentChannel(), *newFullAgentChannel()},
 	}
@@ -288,7 +288,7 @@ func TestAgentChannelListDeepCopy(t *testing.T) {
 
 func newFullAgentClass() *AgentClass {
 	return &AgentClass{
-		TypeMeta:   metav1.TypeMeta{Kind: "AgentClass", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta:   metav1.TypeMeta{Kind: "AgentClass", APIVersion: "kaalm.io/v1alpha1"},
 		ObjectMeta: fullObjectMeta("class-1"),
 		Spec: AgentClassSpec{
 			Runtime: AgentClassRuntime{
@@ -382,7 +382,7 @@ func TestAgentClassDeepCopy(t *testing.T) {
 
 func TestAgentClassListDeepCopy(t *testing.T) {
 	list := &AgentClassList{
-		TypeMeta: metav1.TypeMeta{Kind: "AgentClassList", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta: metav1.TypeMeta{Kind: "AgentClassList", APIVersion: "kaalm.io/v1alpha1"},
 		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
 		Items:    []AgentClass{*newFullAgentClass(), *newFullAgentClass()},
 	}
@@ -399,7 +399,7 @@ func TestAgentClassListDeepCopy(t *testing.T) {
 
 func newFullAgentTask() *AgentTask {
 	return &AgentTask{
-		TypeMeta:   metav1.TypeMeta{Kind: "AgentTask", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta:   metav1.TypeMeta{Kind: "AgentTask", APIVersion: "kaalm.io/v1alpha1"},
 		ObjectMeta: fullObjectMeta("task-1"),
 		Spec: AgentTaskSpec{
 			AgentClassRef: LocalObjectReference{Name: "class-a"},
@@ -473,7 +473,7 @@ func TestAgentTaskDeepCopy(t *testing.T) {
 
 func TestAgentTaskListDeepCopy(t *testing.T) {
 	list := &AgentTaskList{
-		TypeMeta: metav1.TypeMeta{Kind: "AgentTaskList", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta: metav1.TypeMeta{Kind: "AgentTaskList", APIVersion: "kaalm.io/v1alpha1"},
 		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
 		Items:    []AgentTask{*newFullAgentTask(), *newFullAgentTask()},
 	}
@@ -490,7 +490,7 @@ func TestAgentTaskListDeepCopy(t *testing.T) {
 
 func newFullModelProvider() *ModelProvider {
 	return &ModelProvider{
-		TypeMeta:   metav1.TypeMeta{Kind: "ModelProvider", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta:   metav1.TypeMeta{Kind: "ModelProvider", APIVersion: "kaalm.io/v1alpha1"},
 		ObjectMeta: fullObjectMeta("provider-1"),
 		Spec: ModelProviderSpec{
 			Type:           "anthropic",
@@ -557,7 +557,7 @@ func TestModelProviderDeepCopy(t *testing.T) {
 
 func TestModelProviderListDeepCopy(t *testing.T) {
 	list := &ModelProviderList{
-		TypeMeta: metav1.TypeMeta{Kind: "ModelProviderList", APIVersion: "agentry.io/v1alpha1"},
+		TypeMeta: metav1.TypeMeta{Kind: "ModelProviderList", APIVersion: "kaalm.io/v1alpha1"},
 		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
 		Items:    []ModelProvider{*newFullModelProvider(), *newFullModelProvider()},
 	}
@@ -907,8 +907,8 @@ func TestDeepCopyNilReceivers(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGroupVersion(t *testing.T) {
-	if GroupVersion.Group != "agentry.io" {
-		t.Fatalf("GroupVersion.Group = %q, want agentry.io", GroupVersion.Group)
+	if GroupVersion.Group != "kaalm.io" {
+		t.Fatalf("GroupVersion.Group = %q, want kaalm.io", GroupVersion.Group)
 	}
 	if GroupVersion.Version != "v1alpha1" {
 		t.Fatalf("GroupVersion.Version = %q, want v1alpha1", GroupVersion.Version)
@@ -949,7 +949,7 @@ func TestSANConstants(t *testing.T) {
 	if AgentSANSuffix != "svc.cluster.local" {
 		t.Fatalf("AgentSANSuffix = %q", AgentSANSuffix)
 	}
-	if TaskSANSuffix != "task.agentry.io" {
+	if TaskSANSuffix != "task.kaalm.io" {
 		t.Fatalf("TaskSANSuffix = %q", TaskSANSuffix)
 	}
 	if AgentSANLabels != 5 {

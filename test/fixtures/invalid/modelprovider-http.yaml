@@ -1,5 +1,5 @@
 # endpoint must be HTTPS
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: ModelProvider
 metadata: {name: insecure}
 spec:

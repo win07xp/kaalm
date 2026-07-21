@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // RateLimiter enforces per-(namespace, model) request ceilings. The configured
@@ -56,7 +56,7 @@ func NewRateLimiter(replicas func() int) *RateLimiter {
 
 // Allow reports whether a request may proceed, consuming one token when it
 // can. A provider with no requestsPerMinute limit always allows.
-func (r *RateLimiter) Allow(provider *agentryv1alpha1.ModelProvider, namespace, model string) bool {
+func (r *RateLimiter) Allow(provider *kaalmv1alpha1.ModelProvider, namespace, model string) bool {
 	limit := provider.Spec.RateLimits.RequestsPerMinute
 	if limit <= 0 {
 		return true

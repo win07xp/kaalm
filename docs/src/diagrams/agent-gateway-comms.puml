@@ -10,7 +10,7 @@ skinparam wrapWidth 340
 participant "**kubelet**\n(node component)" as kubelet $mutedBg
 
 box "a user namespace" #FCFCFC
-  participant "**Agent** container\nserves $AGENTRY_HEALTH_PORT\n(default 8080)" as agent $agentBg
+  participant "**Agent** container\nserves $KAALM_HEALTH_PORT\n(default 8080)" as agent $agentBg
   participant "**AgentTask**\ncontainer" as task $agentBg
 end box
 
@@ -19,10 +19,10 @@ participant "**Controller**" as ctrl $ctrlBg
 
 note over agent
   One cert, both directions:
-  **$AGENTRY_TLS_CERT** is the **server**
+  **$KAALM_TLS_CERT** is the **server**
   cert below and the **client** cert on
   every call to the gateway. Peers are
-  verified against $AGENTRY_CA_CERT.
+  verified against $KAALM_CA_CERT.
 end note
 
 == Inbound: two auth regimes on the one port ==
@@ -42,7 +42,7 @@ end
 note over kubelet, task
   **Why enforcement is per path, not per handshake.**
   The cert-less probes and the cert-required /v1/message
-  share $AGENTRY_HEALTH_PORT, so the socket must
+  share $KAALM_HEALTH_PORT, so the socket must
   **request** a client cert without **requiring** one:
   ClientAuth = **VerifyClientCertIfGiven**.
   RequireAndVerifyClientCert would fail every probe at the
@@ -52,9 +52,9 @@ note over kubelet, task
   :8443 listeners use this same pattern.
 end note
 
-== Outbound to $AGENTRY_GATEWAY_ENDPOINT: mTLS only ==
+== Outbound to $KAALM_GATEWAY_ENDPOINT: mTLS only ==
 
-agent -[#4A148C]> gw : LLM request\nmTLS, client cert $AGENTRY_TLS_CERT\nSAN {name}.{ns}.svc.cluster.local
+agent -[#4A148C]> gw : LLM request\nmTLS, client cert $KAALM_TLS_CERT\nSAN {name}.{ns}.svc.cluster.local
 agent -[#4A148C]> gw : POST /v1/agent/heartbeat\nmTLS, **Agents only**
 task -[#4A148C]> gw : POST /v1/task/complete\nmTLS, **AgentTasks only**
 
@@ -68,7 +68,7 @@ note over gw
   **403 access_denied**.
 end note
 
-== Controller to gateway: dialed by Pod IP, not $AGENTRY_GATEWAY_ENDPOINT ==
+== Controller to gateway: dialed by Pod IP, not $KAALM_GATEWAY_ENDPOINT ==
 
 ctrl -[#0D47A1]> gw : GET /v1/activity?namespace=\nmTLS, **controller SAN required**
 gw -[#0D47A1]-> ctrl : in-memory activity timestamps\n(no etcd writes per request)

@@ -34,8 +34,8 @@ Coverage is one of three kinds:
 Two scenarios are deliberately not fully automated in v1:
 
 - **S9** ships the enabling primitive (`existingClaim`); the `VolumeSnapshot`
-  step is standard Kubernetes, not Agentry machinery, so it is not part of the
-  Agentry test surface.
+  step is standard Kubernetes, not Kaalm machinery, so it is not part of the
+  Kaalm test surface.
 - **S2**'s gVisor sandbox depends on a `RuntimeClass` the local k3d loop does
   not install; the reconciler wiring (passing `runtimeClassName` into the Pod
   spec) is unit-tested, but the sandbox-escape assertion is an operator-side

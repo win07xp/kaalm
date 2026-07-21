@@ -1,17 +1,17 @@
 # The Runtime Contract
 
-Agentry is BYO-image: any container can run as an Agent or AgentTask, provided it implements a small contract. This page specifies that contract. It is the minimum a container image must satisfy to participate in the lifecycle: HTTPS health endpoints on the injected health port, graceful SIGTERM handling, authenticated TLS calls to the injected gateway endpoint, an optional `POST /v1/message` handler when an AgentChannel is in use, and `messageId` deduplication on that handler.
+Kaalm is BYO-image: any container can run as an Agent or AgentTask, provided it implements a small contract. This page specifies that contract. It is the minimum a container image must satisfy to participate in the lifecycle: HTTPS health endpoints on the injected health port, graceful SIGTERM handling, authenticated TLS calls to the injected gateway endpoint, an optional `POST /v1/message` handler when an AgentChannel is in use, and `messageId` deduplication on that handler.
 
 The contract has seven numbered items. Other pages cite them by number, so the numbering is stable. For the surrounding system, see [System Architecture](../concepts/system-architecture.md). Working implementations of every item ship as Go and Python [starter templates](starter-templates.md), summarized at the end of this page.
 
 ## 1. HTTPS health endpoints
 
-The container serves two health endpoints on a known port (`$AGENTRY_HEALTH_PORT`, default 8080):
+The container serves two health endpoints on a known port (`$KAALM_HEALTH_PORT`, default 8080):
 
 - `GET /readyz` (readiness), returning 200 when healthy.
 - `GET /livez` (liveness), returning 200 when healthy.
 
-These are the paths the controller-injected probes target (see [AgentReconciler step 7](../controller/reconcilers.md#agentreconciler)). The agent serves TLS on this port using the cert-manager-issued per-Agent certificate (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`). Liveness and readiness probes must therefore be configured with `httpGet.scheme: HTTPS`. Kubernetes does not verify TLS certificates for httpGet probes, so the certificate works without any additional CA configuration on the probe.
+These are the paths the controller-injected probes target (see [AgentReconciler step 7](../controller/reconcilers.md#agentreconciler)). The agent serves TLS on this port using the cert-manager-issued per-Agent certificate (`$KAALM_TLS_CERT` / `$KAALM_TLS_KEY`). Liveness and readiness probes must therefore be configured with `httpGet.scheme: HTTPS`. Kubernetes does not verify TLS certificates for httpGet probes, so the certificate works without any additional CA configuration on the probe.
 
 ## 2. Graceful SIGTERM handling
 
@@ -19,7 +19,7 @@ On receiving SIGTERM, the agent should finish in-flight work and exit within the
 
 ## 3. Gateway communication
 
-The controller injects `$AGENTRY_GATEWAY_ENDPOINT`: an HTTPS URL pointing to the gateway's LLM listener (port 8443). This is the base URL for all agent to gateway calls:
+The controller injects `$KAALM_GATEWAY_ENDPOINT`: an HTTPS URL pointing to the gateway's LLM listener (port 8443). This is the base URL for all agent to gateway calls:
 
 - LLM requests.
 - Heartbeats: [`POST /v1/agent/heartbeat`](../gateways/api/agent-endpoints.md#post-v1agentheartbeat), Agents only, see item 5.
@@ -29,26 +29,26 @@ The variable is always injected, whether or not `spec.providers` is set. Provide
 
 ### TLS requirements
 
-Two TLS requirements apply to all calls to `$AGENTRY_GATEWAY_ENDPOINT`.
+Two TLS requirements apply to all calls to `$KAALM_GATEWAY_ENDPOINT`.
 
-**Server verification.** The agent must trust the Agentry CA certificate at `$AGENTRY_CA_CERT` (`/var/run/agentry/ca.crt`) to verify the gateway's TLS certificate. The CA is managed by cert-manager (see [Certificate Lifecycle](../operations/deployment.md#certificate-lifecycle)).
+**Server verification.** The agent must trust the Kaalm CA certificate at `$KAALM_CA_CERT` (`/var/run/kaalm/ca.crt`) to verify the gateway's TLS certificate. The CA is managed by cert-manager (see [Certificate Lifecycle](../operations/deployment.md#certificate-lifecycle)).
 
 **Client authentication.** One of two modes, depending on how the workload was provisioned. [Workload identity](../gateways/llm/workload-identity.md) is the canonical reference for both modes, including the SAN shapes and how the gateway extracts the namespace.
 
-- **mTLS** (Agentry-managed Pods). The AgentReconciler (for Agents) and the AgentTaskReconciler (for AgentTasks) create a cert-manager `Certificate` for the Pod; the cert and key are mounted at `$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`. The agent must present this client certificate on every request to the gateway. The gateway extracts the agent's namespace from the certificate SAN: `{name}.{namespace}.svc.cluster.local` for Agents, `{name}.{namespace}.task.agentry.io` for AgentTasks. The task SAN shape avoids implying a Service the task does not have. This is the only mode accepted for Pods managed by Agentry.
+- **mTLS** (Kaalm-managed Pods). The AgentReconciler (for Agents) and the AgentTaskReconciler (for AgentTasks) create a cert-manager `Certificate` for the Pod; the cert and key are mounted at `$KAALM_TLS_CERT` / `$KAALM_TLS_KEY`. The agent must present this client certificate on every request to the gateway. The gateway extracts the agent's namespace from the certificate SAN: `{name}.{namespace}.svc.cluster.local` for Agents, `{name}.{namespace}.task.kaalm.io` for AgentTasks. The task SAN shape avoids implying a Service the task does not have. This is the only mode accepted for Pods managed by Kaalm.
 - **ServiceAccount bearer token** (gateway-only tier). Workloads not managed by an Agent resource present a projected ServiceAccount token in the `Authorization: Bearer <jwt>` header. The gateway validates it with the Kubernetes `TokenReview` API and extracts the namespace from the validated `status.user.username`. No client cert is required.
 
-The starter templates implement the mTLS mode. The bearer-token mode is for existing gateway-only-tier images, configured per [Tiered On-Ramp](../operations/deployment.md#tiered-on-ramp): an audience-bound projected token plus a manual `agentry-ca` ConfigMap mount. The controller injects nothing into gateway-only Pods. Custom images must configure their HTTP client for the appropriate mode.
+The starter templates implement the mTLS mode. The bearer-token mode is for existing gateway-only-tier images, configured per [Tiered On-Ramp](../operations/deployment.md#tiered-on-ramp): an audience-bound projected token plus a manual `kaalm-ca` ConfigMap mount. The controller injects nothing into gateway-only Pods. Custom images must configure their HTTP client for the appropriate mode.
 
 ### TLS material layout
 
-The TLS material is delivered as a single projected volume at `/var/run/agentry/`. It combines the cert-manager Secret (`tls.crt`, `tls.key`) and the trust-manager CA ConfigMap (`ca.crt`). The single mount directory has one kubelet-managed `..data` symlink covering all three files. That single directory is what makes the one-directory rotation watch in the starter templates sufficient (see [Starter Templates](starter-templates.md) item 4).
+The TLS material is delivered as a single projected volume at `/var/run/kaalm/`. It combines the cert-manager Secret (`tls.crt`, `tls.key`) and the trust-manager CA ConfigMap (`ca.crt`). The single mount directory has one kubelet-managed `..data` symlink covering all three files. That single directory is what makes the one-directory rotation watch in the starter templates sufficient (see [Starter Templates](starter-templates.md) item 4).
 
 ## 4. Message endpoint
 
 This item is optional: agents without an AgentChannel do not need to implement it.
 
-If the agent uses an AgentChannel, it exposes `POST /v1/message` on `$AGENTRY_HEALTH_PORT` over TLS. The endpoint accepts the standard Agentry message envelope and returns a response envelope. The agent serves TLS using the cert-manager-issued certificate at `$AGENTRY_TLS_CERT` (`/var/run/agentry/tls.crt`) and key at `$AGENTRY_TLS_KEY` (`/var/run/agentry/tls.key`).
+If the agent uses an AgentChannel, it exposes `POST /v1/message` on `$KAALM_HEALTH_PORT` over TLS. The endpoint accepts the standard Kaalm message envelope and returns a response envelope. The agent serves TLS using the cert-manager-issued certificate at `$KAALM_TLS_CERT` (`/var/run/kaalm/tls.crt`) and key at `$KAALM_TLS_KEY` (`/var/run/kaalm/tls.key`).
 
 ### Certificate reload on rotation
 
@@ -63,12 +63,12 @@ Standard approaches: in Go, a `tls.Config.GetCertificate` callback plus `GetConf
 
 ### Client-certificate verification on /v1/message
 
-Servers handling `POST /v1/message` MUST verify the gateway's client certificate. Enforcement is per path, not at the handshake. The listener shares `$AGENTRY_HEALTH_PORT` with `/readyz` and `/livez`, and the kubelet presents no client certificate on probes, so the TLS layer must request but not require one. In Go: `tls.Config.ClientAuth = tls.VerifyClientCertIfGiven` with `ClientCAs` populated from `$AGENTRY_CA_CERT`; equivalent in other runtimes.
+Servers handling `POST /v1/message` MUST verify the gateway's client certificate. Enforcement is per path, not at the handshake. The listener shares `$KAALM_HEALTH_PORT` with `/readyz` and `/livez`, and the kubelet presents no client certificate on probes, so the TLS layer must request but not require one. In Go: `tls.Config.ClientAuth = tls.VerifyClientCertIfGiven` with `ClientCAs` populated from `$KAALM_CA_CERT`; equivalent in other runtimes.
 
 Enforcement happens at the handler:
 
 - `POST /v1/message` rejects requests with no peer certificate with `401 Unauthorized`.
-- `POST /v1/message` rejects cert-bearing requests whose SAN does not match the gateway Service DNS (`agentry-gateway.agentry-system.svc.cluster.local` or `agentry-gateway.agentry-system.svc`) with `403 Forbidden`.
+- `POST /v1/message` rejects cert-bearing requests whose SAN does not match the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `kaalm-gateway.kaalm-system.svc`) with `403 Forbidden`.
 - `/readyz` and `/livez` pass unauthenticated.
 
 This is the same per-path pattern the controller's `:9443` and the gateway's `:8443` listeners use. [NetworkPolicy](../security/model.md#network-policy) enforcement remains a prerequisite; mTLS is the second layer above it. See [In-cluster TLS](../security/tls.md#in-cluster-tls).
@@ -77,7 +77,7 @@ This is the same per-path pattern the controller's `:9443` and the gateway's `:8
 
 This item is optional. For idle detection, the agent may emit activity heartbeats by calling `POST /v1/agent/heartbeat` on the gateway. The gateway tracks these timestamps in-memory, with no etcd writes. Alternatively, the gateway infers activity from observed LLM and channel traffic.
 
-Heartbeats are meaningful only for Agents: idle detection and hibernation do not apply to one-shot tasks. The endpoint enforces this. AgentTask callers are rejected with `403` at the handler (see the `:8443` auth profile in [The Agentry Gateway](../gateways/overview.md)). Task images must not run a heartbeat loop.
+Heartbeats are meaningful only for Agents: idle detection and hibernation do not apply to one-shot tasks. The endpoint enforces this. AgentTask callers are rejected with `403` at the handler (see the `:8443` auth profile in [The Kaalm Gateway](../gateways/overview.md)). Task images must not run a heartbeat loop.
 
 ## 6. Completion signal (AgentTask only)
 
@@ -110,16 +110,16 @@ The starter templates implement this as an in-memory LRU over the last 1024 `mes
 
 ## Communication summary
 
-![Sequence diagram of every call in and out of an agent container, each labelled with what authenticates it. Inbound, two auth regimes share $AGENTRY_HEALTH_PORT: the kubelet GETs /readyz and /livez over HTTPS with no client cert, while the gateway POSTs /v1/message over mTLS and the agent answers 401 Unauthorized when no peer certificate was presented, 403 Forbidden when the SAN is not the gateway Service DNS, and 200 with a response envelope when it matches. A note records that because the cert-less probes and the cert-required /v1/message share the one port, the socket must request a client cert without requiring one (ClientAuth = VerifyClientCertIfGiven); RequireAndVerifyClientCert would fail every probe at the handshake before the router ran and leave the agent permanently unready, which is why the 401 and 403 are decided at the handler instead. Outbound to $AGENTRY_GATEWAY_ENDPOINT everything is mTLS with no bearer-token fallback: the Agent sends LLM requests and POST /v1/agent/heartbeat (Agents only), the AgentTask sends POST /v1/task/complete (AgentTasks only), and the wrong workload kind on either report path gets 403 access_denied. The controller calls GET /v1/activity on the same port with a controller-SAN client cert and receives in-memory activity timestamps. A further note records that one certificate, $AGENTRY_TLS_CERT, serves as both the server cert for probes and messages and the client cert for every gateway call.](../diagrams/agent-gateway-comms.svg)
+![Sequence diagram of every call in and out of an agent container, each labelled with what authenticates it. Inbound, two auth regimes share $KAALM_HEALTH_PORT: the kubelet GETs /readyz and /livez over HTTPS with no client cert, while the gateway POSTs /v1/message over mTLS and the agent answers 401 Unauthorized when no peer certificate was presented, 403 Forbidden when the SAN is not the gateway Service DNS, and 200 with a response envelope when it matches. A note records that because the cert-less probes and the cert-required /v1/message share the one port, the socket must request a client cert without requiring one (ClientAuth = VerifyClientCertIfGiven); RequireAndVerifyClientCert would fail every probe at the handshake before the router ran and leave the agent permanently unready, which is why the 401 and 403 are decided at the handler instead. Outbound to $KAALM_GATEWAY_ENDPOINT everything is mTLS with no bearer-token fallback: the Agent sends LLM requests and POST /v1/agent/heartbeat (Agents only), the AgentTask sends POST /v1/task/complete (AgentTasks only), and the wrong workload kind on either report path gets 403 access_denied. The controller calls GET /v1/activity on the same port with a controller-SAN client cert and receives in-memory activity timestamps. A further note records that one certificate, $KAALM_TLS_CERT, serves as both the server cert for probes and messages and the client cert for every gateway call.](../diagrams/agent-gateway-comms.svg)
 
 **Reading the diagram.** The two halves are the two directions. Above the divider the agent is a *server* and the interesting fact is that its port has no single handshake policy; below it the agent is a *client* and every call is mTLS. The same certificate plays both roles.
 
-All agent to gateway and gateway to agent communication is over TLS. Agent to gateway traffic (LLM requests, heartbeats, task completion) is authenticated via mTLS for Agentry-managed Pods, or via a `TokenReview`-validated ServiceAccount bearer token for gateway-only-tier workloads, with a source-IP to Pod cross-check in both modes (see [Namespace Identification](../gateways/llm/workload-identity.md)). Gateway to agent traffic (channel message delivery) is also mTLS: the gateway verifies the agent's cert-manager-issued certificate against the Agentry CA (`agentry-ca`), and the agent enforces the SAN-match check on the gateway's client cert as required by item 4.
+All agent to gateway and gateway to agent communication is over TLS. Agent to gateway traffic (LLM requests, heartbeats, task completion) is authenticated via mTLS for Kaalm-managed Pods, or via a `TokenReview`-validated ServiceAccount bearer token for gateway-only-tier workloads, with a source-IP to Pod cross-check in both modes (see [Namespace Identification](../gateways/llm/workload-identity.md)). Gateway to agent traffic (channel message delivery) is also mTLS: the gateway verifies the agent's cert-manager-issued certificate against the Kaalm CA (`kaalm-ca`), and the agent enforces the SAN-match check on the gateway's client cert as required by item 4.
 
 Activity timestamps are maintained in-memory in the gateway. The controller queries them via the [activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api) rather than reading Pod annotations, avoiding per-request etcd writes at scale.
 
 ## Starter templates
 
-Agentry ships starter templates (one Go, one Python) under `examples/starter-go/` and `examples/starter-python/` as part of v1. Each template implements the full runtime contract end-to-end: HTTPS serving on `$AGENTRY_HEALTH_PORT`, mTLS client certificate presentation on gateway calls, cert-file watch and reload, a `/v1/message` handler skeleton, `messageId`-based deduplication, and a task-completion helper with the bounded `StalePodCompletion` retry from item 6.
+Kaalm ships starter templates (one Go, one Python) under `examples/starter-go/` and `examples/starter-python/` as part of v1. Each template implements the full runtime contract end-to-end: HTTPS serving on `$KAALM_HEALTH_PORT`, mTLS client certificate presentation on gateway calls, cert-file watch and reload, a `/v1/message` handler skeleton, `messageId`-based deduplication, and a task-completion helper with the bounded `StalePodCompletion` retry from item 6.
 
-The templates target Agentry-managed (mTLS-tier) workloads; gateway-only-tier workloads are pre-existing images configured per [Tiered On-Ramp](../operations/deployment.md#tiered-on-ramp). Adopters copy the template and replace the agent logic; the boilerplate stays. See [Starter Templates](starter-templates.md). Full-featured reference base images (published container images that embed and wrap the contract) are planned for a future release.
+The templates target Kaalm-managed (mTLS-tier) workloads; gateway-only-tier workloads are pre-existing images configured per [Tiered On-Ramp](../operations/deployment.md#tiered-on-ramp). Adopters copy the template and replace the agent logic; the boilerplate stays. See [Starter Templates](starter-templates.md). Full-featured reference base images (published container images that embed and wrap the contract) are planned for a future release.

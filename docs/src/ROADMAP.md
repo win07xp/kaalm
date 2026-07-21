@@ -6,7 +6,7 @@ against it, and what comes next.
 ## Where the project stands
 
 **v0.1.0 shipped on 2026-07-21**
-([release](https://github.com/win07xp/kubeclaw/releases/tag/v0.1.0)). The operator
+([release](https://github.com/win07xp/kaalm/releases/tag/v0.1.0)). The operator
 is feature-complete against the v1 design: all five CRDs, the reconciling
 controller (lifecycle, hibernation and wake, budgets, health probes, finalizers),
 the two-listener gateway (LLM proxy with credential isolation, budgets, rate
@@ -78,5 +78,5 @@ they are likely to matter:
 
 Items move here from the release notes when a version ships, and out of here into
 the design book when they get designed. History lives in git and in the
-[releases](https://github.com/win07xp/kubeclaw/releases); this page only ever
+[releases](https://github.com/win07xp/kaalm/releases); this page only ever
 describes the present and the future.

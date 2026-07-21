@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: modelproviders.agentry.io
+  name: modelproviders.kaalm.io
 spec:
-  group: agentry.io
+  group: kaalm.io
   names:
     kind: ModelProvider
     listKind: ModelProviderList
@@ -143,7 +143,7 @@ spec:
                   this provider's type.
                 items:
                   description: |-
-                    LocalObjectReference names another Agentry resource by name, in the same scope
+                    LocalObjectReference names another Kaalm resource by name, in the same scope
                     as the referrer (same namespace for namespaced kinds, cluster-wide for
                     cluster-scoped kinds). Used for agentClassRef, providerRef, allowedProviders
                     entries, fallback entries, and agentRef.

@@ -22,13 +22,13 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
-func rlProvider(rpm int32) *agentryv1alpha1.ModelProvider {
-	return &agentryv1alpha1.ModelProvider{
+func rlProvider(rpm int32) *kaalmv1alpha1.ModelProvider {
+	return &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
-		Spec:       agentryv1alpha1.ModelProviderSpec{RateLimits: agentryv1alpha1.ModelProviderRateLimits{RequestsPerMinute: rpm}},
+		Spec:       kaalmv1alpha1.ModelProviderSpec{RateLimits: kaalmv1alpha1.ModelProviderRateLimits{RequestsPerMinute: rpm}},
 	}
 }
 

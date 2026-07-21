@@ -7,7 +7,7 @@ Agent is a namespace-scoped, developer-facing resource representing a persistent
 The annotated example below shows every spec field. Only `agentClassRef` is required.
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: Agent
 metadata:
   name: support-assistant
@@ -125,7 +125,7 @@ Updated by the AgentReconciler on every `status.phase` change, in the same statu
 
 ### `providers` is optional
 
-Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through `$AGENTRY_GATEWAY_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](../gateways/llm/provider-routing.md) for the full routing chain.
+Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through `$KAALM_GATEWAY_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](../gateways/llm/provider-routing.md) for the full routing chain.
 
 ### `activitySource`
 
@@ -145,20 +145,20 @@ Mounts a pre-existing PVC instead of provisioning one. This is the enabler for p
 - The claim must exist in the Agent's namespace at reconcile time, else `Ready=False, reason=ExistingClaimNotFound` and the Pod is not created.
 - `AgentClass.spec.persistence.enabled: true` is still required (rule 24 gates `persistence.enabled` regardless of provisioning source).
 - `maxSizeGi` is not enforced against pre-existing claims; platform teams bound those with namespace ResourceQuota.
-- The reconciler does **not** add an ownerRef to a pre-existing PVC, so `pvcRetention` never applies to it: the Agent finalizer only manages PVCs Agentry provisioned, and an `existingClaim` PVC survives Agent deletion under either `pvcRetention` setting.
+- The reconciler does **not** add an ownerRef to a pre-existing PVC, so `pvcRetention` never applies to it: the Agent finalizer only manages PVCs Kaalm provisioned, and an `existingClaim` PVC survives Agent deletion under either `pvcRetention` setting.
 - AgentTask does not support `existingClaim` in v1; task scratch storage is always task-owned.
 
 ### `service` is always ClusterIP
 
-`spec.service.port` is the Service-facing port (default 8080) and is the only field a developer can override. The synthesized Service's `targetPort` is **always** the value of `$AGENTRY_HEALTH_PORT` injected into the Pod (default 8080), which is the port the agent process actually binds. The two are decoupled deliberately: the agent only knows about `$AGENTRY_HEALTH_PORT`, and overriding `spec.service.port` to expose a different cluster-facing port (e.g., 80) does not require any agent-side change. Setting them to different values is supported and works correctly.
+`spec.service.port` is the Service-facing port (default 8080) and is the only field a developer can override. The synthesized Service's `targetPort` is **always** the value of `$KAALM_HEALTH_PORT` injected into the Pod (default 8080), which is the port the agent process actually binds. The two are decoupled deliberately: the agent only knows about `$KAALM_HEALTH_PORT`, and overriding `spec.service.port` to expose a different cluster-facing port (e.g., 80) does not require any agent-side change. Setting them to different values is supported and works correctly.
 
-The Agentry User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](../gateways/user/overview.md#request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
+The Kaalm User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](../gateways/user/overview.md#request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
 
 ### TLS environment variables
 
-The controller injects `$AGENTRY_CA_CERT` (path to the Agentry CA trust bundle), `$AGENTRY_TLS_CERT` and `$AGENTRY_TLS_KEY` (paths to the cert-manager-issued per-Agent cert and key) into every agent Pod. These cert/key files serve a dual purpose:
+The controller injects `$KAALM_CA_CERT` (path to the Kaalm CA trust bundle), `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY` (paths to the cert-manager-issued per-Agent cert and key) into every agent Pod. These cert/key files serve a dual purpose:
 
-- **Server TLS** (gateway to agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against `agentry-ca` on message delivery.
-- **Client TLS / mTLS** (agent to gateway): the agent presents this same cert as a client certificate when calling `$AGENTRY_GATEWAY_ENDPOINT` (LLM requests and heartbeats), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
+- **Server TLS** (gateway to agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against `kaalm-ca` on message delivery.
+- **Client TLS / mTLS** (agent to gateway): the agent presents this same cert as a client certificate when calling `$KAALM_GATEWAY_ENDPOINT` (LLM requests and heartbeats), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
 
 Starter templates handle both uses automatically; see [Starter Templates](../runtime/starter-templates.md). Custom images must configure their HTTP client to present the client cert for all calls to the gateway and must watch the cert/key files for rotation updates.

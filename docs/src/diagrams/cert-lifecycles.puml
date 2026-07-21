@@ -9,7 +9,7 @@ skinparam wrapWidth 420
 skinparam maxMessageSize 340
 
 participant "**AgentReconciler**\n**AgentTaskReconciler**" as R #87CEEB
-participant "cert-manager\n(agentry-ca-issuer)" as CM #F5F5F5
+participant "cert-manager\n(kaalm-ca-issuer)" as CM #F5F5F5
 participant "**Agent** Pod" as AP #E6E6FA
 participant "**AgentTask** Pod" as TP #E6E6FA
 participant "**Gateway**" as GW #90EE90
@@ -27,11 +27,11 @@ end note
 note over R, CM #FFF8DC
   Both reconcilers create a Certificate named {workload}-tls in the
   workload's **own** namespace, owner-referenced to the workload, with
-  issuerRef: { name: agentry-ca-issuer, kind: ClusterIssuer }.
+  issuerRef: { name: kaalm-ca-issuer, kind: ClusterIssuer }.
   Only the SAN shape and the usages differ:
 end note
 R -> CM : **{name}-tls** (per Agent)\nSAN: {name}.{namespace}.svc.cluster.local,\n.svc, {name}.{namespace}\nusages: **server auth + client auth**\n(one cert, both directions)
-R -> CM : **{taskName}-tls** (per AgentTask)\nSAN: **{taskName}.{namespace}.task.agentry.io**\na single entry, non-Service shape,\nbecause tasks have no Service\nusages: **client auth only**
+R -> CM : **{taskName}-tls** (per AgentTask)\nSAN: **{taskName}.{namespace}.task.kaalm.io**\na single entry, non-Service shape,\nbecause tasks have no Service\nusages: **client auth only**
 
 == 2. Stored ==
 
@@ -52,8 +52,8 @@ R -> TP : create the AgentTask Pod
 
 == 3. Mounted ==
 
-CM -> AP : /var/run/agentry/tls.crt + tls.key
-CM -> TP : /var/run/agentry/tls.crt + tls.key
+CM -> AP : /var/run/kaalm/tls.crt + tls.key
+CM -> TP : /var/run/kaalm/tls.crt + tls.key
 note over AP #E6E6FA
   **Has a listener.** Serves HTTPS
   with this cert, and presents the
@@ -62,7 +62,7 @@ note over AP #E6E6FA
 end note
 note over TP #E6E6FA
   **No listener.** Presents the cert on
-  every call to $AGENTRY_GATEWAY_ENDPOINT
+  every call to $KAALM_GATEWAY_ENDPOINT
   and never serves TLS with it.
 end note
 
@@ -75,7 +75,7 @@ TP -[#B71C1C]->x GW : POST /v1/agent/heartbeat: **403**.\nTasks do not send hear
 note over TP, GW #90EE90
   On every inbound mTLS call the gateway
   verifies the presented leaf against
-  agentry-ca and reads the namespace off
+  kaalm-ca and reads the namespace off
   the SAN. Both cert shapes carry it.
 end note
 
@@ -96,9 +96,9 @@ CM -> CM : cert-manager removes the\noutput Secret in both cases
 legend bottom
   **Agent:** Service DNS SANs | server auth + client auth | has a listener | inbound /v1/message edge | heartbeats
   ====
-  **AgentTask:** one task.agentry.io SAN | client auth only | no listener, no Service | no inbound edge | heartbeat 403
+  **AgentTask:** one task.kaalm.io SAN | client auth only | no listener, no Service | no inbound edge | heartbeat 403
   ====
-  Step 5 rotates the leaf only. Both workloads must also watch $AGENTRY_CA_CERT and rebuild both trust
+  Step 5 rotates the leaf only. Both workloads must also watch $KAALM_CA_CERT and rebuild both trust
   pools when the CA bundle itself changes: see CA Renewal and Re-Key.
 endlegend
 @enduml

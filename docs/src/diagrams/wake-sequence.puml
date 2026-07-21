@@ -22,7 +22,7 @@ end note
 
 alt #FFF8DC controller reachable
   gw -> ctrl : POST /v1/activate/{ns}/{name} (mTLS)
-  ctrl -> api : patch agentry.io/wake=true
+  ctrl -> api : patch kaalm.io/wake=true
   ctrl --> gw : **202 Accepted**
 
   note over gw, ctrl #FFE4B5

@@ -1,6 +1,6 @@
 # Platform Adapters and Channel Health
 
-A **platform adapter** is the code that turns one external messaging platform into Agentry's internal message envelope, and turns an agent's reply back into something that platform understands. The User Gateway holds one adapter per channel type, and every AgentChannel names the type it uses.
+A **platform adapter** is the code that turns one external messaging platform into Kaalm's internal message envelope, and turns an agent's reply back into something that platform understands. The User Gateway holds one adapter per channel type, and every AgentChannel names the type it uses.
 
 This page covers the adapter interface v1 ships, and the health signal the gateway derives from adapter traffic so the controller can report whether a channel is actually working.
 

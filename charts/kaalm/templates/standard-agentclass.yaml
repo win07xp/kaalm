@@ -7,12 +7,12 @@ example manifest, not a live default, for the same reason. See
 docs/src/operations/deployment.md.
 */}}
 {{- if .Values.standardAgentClass.enabled }}
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentClass
 metadata:
   name: standard
   labels:
-    {{- include "agentry.labels" . | nindent 4 }}
+    {{- include "kaalm.labels" . | nindent 4 }}
   annotations:
     # helm keep: the class outlives an uninstall so running Agents are not
     # orphaned; platform teams delete it explicitly.

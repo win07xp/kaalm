@@ -6,44 +6,44 @@ domain: io
 layout:
 - go.kubebuilder.io/v4
 projectName: kbinit
-repo: github.com/win07xp/kubeclaw
+repo: github.com/win07xp/kaalm
 resources:
 - api:
     crdVersion: v1
   domain: io
-  group: agentry
+  group: kaalm
   kind: AgentClass
-  path: github.com/win07xp/kubeclaw/api/v1alpha1
+  path: github.com/win07xp/kaalm/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
   domain: io
-  group: agentry
+  group: kaalm
   kind: ModelProvider
-  path: github.com/win07xp/kubeclaw/api/v1alpha1
+  path: github.com/win07xp/kaalm/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   domain: io
-  group: agentry
+  group: kaalm
   kind: Agent
-  path: github.com/win07xp/kubeclaw/api/v1alpha1
+  path: github.com/win07xp/kaalm/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   domain: io
-  group: agentry
+  group: kaalm
   kind: AgentTask
-  path: github.com/win07xp/kubeclaw/api/v1alpha1
+  path: github.com/win07xp/kaalm/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   domain: io
-  group: agentry
+  group: kaalm
   kind: AgentChannel
-  path: github.com/win07xp/kubeclaw/api/v1alpha1
+  path: github.com/win07xp/kaalm/api/v1alpha1
   version: v1alpha1
 version: "3"

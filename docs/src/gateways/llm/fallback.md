@@ -107,7 +107,7 @@ tryWithFallbacks(primary, provider, request, attemptCount, visited) -> (result, 
 
 ## Depth cap semantics
 
-`maxFallbackDepth` (default `3`, set via Helm `gateway.maxFallbackDepth` → `AGENTRY_MAX_FALLBACK_DEPTH`) bounds the **total number of providers attempted per request, including the primary**, not the nesting depth of the tree. With the default, the gateway tries at most the primary plus two others before giving up, regardless of how the fallback tree is shaped.
+`maxFallbackDepth` (default `3`, set via Helm `gateway.maxFallbackDepth` → `KAALM_MAX_FALLBACK_DEPTH`) bounds the **total number of providers attempted per request, including the primary**, not the nesting depth of the tree. With the default, the gateway tries at most the primary plus two others before giving up, regardless of how the fallback tree is shaped.
 
 This is the latency guarantee: each attempt is bounded from connect through first response byte by `gateway.providerFirstByteTimeout` (default `120s`), so no single request waits more than `maxFallbackDepth × providerFirstByteTimeout` before a terminal error. Once a stream has started, the same value applies as an idle-bytes timeout between SSE chunks. An upstream that stalls without closing is terminated with the documented mid-stream error event rather than holding gateway and agent connections open indefinitely.
 

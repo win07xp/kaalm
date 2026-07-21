@@ -12,11 +12,11 @@ rectangle "**Untrusted**" as untrusted #line:8B4513;line.dashed {
 rectangle "**Cluster-internal (trusted)**" as trusted #line:0D47A1;line.dashed {
 
   rectangle "Agent /\nAgentTask Pods" as pods #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
-  rectangle "Agentry\nController" as ctrl #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  rectangle "Kaalm\nController" as ctrl #back:87CEEB;line:0D47A1;line.bold;text:0a2540
   rectangle "kubelet" as kubelet #back:F5F5F5;line:9E9E9E;text:2a0a4a
   rectangle "Prometheus" as prom #back:F5F5F5;line:9E9E9E;text:2a0a4a
 
-  rectangle "**Agentry Gateway Deployment** (agentry-system)" as gw {
+  rectangle "**Kaalm Gateway Deployment** (kaalm-system)" as gw {
     rectangle "**:8443** LLM listener\nVerifyClientCertIfGiven\n....\nLLM proxy paths\nPOST /v1/task/complete\nPOST /v1/agent/heartbeat\nGET /v1/activity\nGET /v1/channels/health" as p8443 #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
     rectangle "**:8080** User listener\nper-AgentChannel auth\n....\n/channels/*\n/v1/channels/responses/*" as p8080 #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
     rectangle "**:8081** health\nTLS, no client auth\n....\n/healthz  /readyz" as p8081 #back:F5F5F5;line:9E9E9E;text:2a0a4a

@@ -1,4 +1,4 @@
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentTask
 metadata:
   name: nightly-report

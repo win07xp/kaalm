@@ -1,12 +1,12 @@
-Agentry {{ .Chart.AppVersion }} installed into namespace {{ .Release.Namespace }}.
+Kaalm {{ .Chart.AppVersion }} installed into namespace {{ .Release.Namespace }}.
 
 The chart installs:
   - the 5 CustomResourceDefinitions
   - the controller and gateway Deployments (2 replicas each, PDB minAvailable 1)
   - ServiceAccounts, ClusterRoles/Bindings, and the gateway's namespaced Role
-  - the cert-manager trust chain (agentry-selfsigned + agentry-ca-issuer
-    ClusterIssuers, the agentry-ca root Certificate, the gateway and controller
-    leaf Certificates) and the trust-manager agentry-ca Bundle
+  - the cert-manager trust chain (kaalm-selfsigned + kaalm-ca-issuer
+    ClusterIssuers, the kaalm-ca root Certificate, the gateway and controller
+    leaf Certificates) and the trust-manager kaalm-ca Bundle
   - a default "standard" AgentClass
 
 Prerequisites (the chart does NOT install these):
@@ -16,14 +16,14 @@ Prerequisites (the chart does NOT install these):
   3. a NetworkPolicy-enforcing CNI (kindnet/flannel do not qualify)
 
 Check the rollout:
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/agentry-controller
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/agentry-gateway
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/kaalm-controller
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/kaalm-gateway
 
 The Deployments mount cert-manager-issued Secrets and the trust-manager CA
 ConfigMap; on first install the Pods stay ContainerCreating until those issue.
-If they never become Ready, verify the agentry-ca-issuer ClusterIssuer is
+If they never become Ready, verify the kaalm-ca-issuer ClusterIssuer is
 Ready and that certManager.clusterResourceNamespace matches your cert-manager
 and trust-manager configuration.
 
 CRD upgrades are never applied by `helm upgrade`. Before upgrading, run:
-  kubectl apply --server-side -f charts/agentry/crds/
+  kubectl apply --server-side -f charts/kaalm/crds/

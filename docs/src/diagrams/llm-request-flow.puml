@@ -6,10 +6,10 @@
 participant "Agent\ncontainer" as agent
 participant "LLM Gateway\n:8443" as gw #90EE90
 participant "Informer cache\nPod / Agent /\nModelProvider" as inf #F5F5F5
-participant "Secret\n(agentry-system)" as sec #FFD580
+participant "Secret\n(kaalm-system)" as sec #FFD580
 participant "Upstream\nprovider" as prov #FFE4B5
 
-agent -> gw : **1.** HTTPS to $AGENTRY_GATEWAY_ENDPOINT\nnative provider path + qualified\n{providerRef}/{modelId}
+agent -> gw : **1.** HTTPS to $KAALM_GATEWAY_ENDPOINT\nnative provider path + qualified\n{providerRef}/{modelId}
 opt body > maxLLMRequestBodyBytes (4 MiB)
   gw --> agent : **413** request_too_large\n(at the listener, **before** namespace identification)
 end

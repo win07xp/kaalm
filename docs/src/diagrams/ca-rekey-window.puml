@@ -7,8 +7,8 @@ skinparam wrapWidth 340
 
 actor "Platform\nengineer" as PE #FFE4B5
 participant "cert-manager" as CM #F5F5F5
-participant "trust-manager\n**Bundle** agentry-ca" as TM #F5F5F5
-participant "projected **ConfigMap**\nagentry-ca\n/var/run/agentry/ca.crt" as CFG #FFD580
+participant "trust-manager\n**Bundle** kaalm-ca" as TM #F5F5F5
+participant "projected **ConfigMap**\nkaalm-ca\n/var/run/kaalm/ca.crt" as CFG #FFD580
 participant "**Agent** process" as AG #E6E6FA
 participant "**Gateway**" as GW #90EE90
 
@@ -20,7 +20,7 @@ note over AG
 end note
 
 note over PE, GW #FFF8DC
-  Routine **renewal** is not this. agentry-ca pins
+  Routine **renewal** is not this. kaalm-ca pins
   privateKey.rotationPolicy: Never, so renewal re-uses the CA
   key pair, every existing leaf keeps verifying, and no window
   is needed. Only a **re-key** (compromise recovery) runs the
@@ -41,7 +41,7 @@ group dual-trust window: both the old and the new CA are trusted (finite)
 
   == Runbook step 2: force leaf re-issuance ==
   PE -> CM : cmctl renew on the leaf Certificates
-  CM -> GW : agentry-gateway-tls re-issued\nunder the **new** CA key
+  CM -> GW : kaalm-gateway-tls re-issued\nunder the **new** CA key
   CM -> AG : {name}-tls re-issued\nunder the **new** CA key
   note over AG, GW #FFF8DC
     This is where a missed reload turns fatal, not step 1.
@@ -71,7 +71,7 @@ else the agent missed the CA-bundle change
 end
 
 legend bottom
-  Starter templates watch $AGENTRY_CA_CERT and rebuild both pools on change, which makes this
+  Starter templates watch $KAALM_CA_CERT and rebuild both pools on change, which makes this
   transparent. Custom images carry the same obligation: the inbound server rebuilds ClientCAs via a
   tls.Config.GetConfigForClient callback returning a config with the fresh pool, and the outbound
   HTTP client rebuilds RootCAs. A CA-bundle change MUST rebuild both.

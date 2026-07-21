@@ -11,7 +11,7 @@ Because it is cluster-scoped, a ModelProvider is a platform-team resource: appli
 The annotated example below shows every spec field.
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: ModelProvider
 metadata:
   name: anthropic-shared
@@ -28,7 +28,7 @@ spec:
   endpoint: "https://api.anthropic.com"
 
   # Credentials: a reference to a Secret in the operator's namespace.
-  # The gateway reads this directly from agentry-system; credentials
+  # The gateway reads this directly from kaalm-system; credentials
   # never leave that namespace.
   credentialsRef:
     name: anthropic-api-key
@@ -151,7 +151,7 @@ Two conditions summarize provider health: `Ready` reports whether the spec is va
 
 ### Credential scoping
 
-Credentials are referenced from the operator's namespace and read directly by the gateway in `agentry-system`. They never leave that namespace or reach agent containers. This keeps provider API keys out of every application namespace: an agent that wants to call an LLM must go through the gateway, which attaches the credentials server-side.
+Credentials are referenced from the operator's namespace and read directly by the gateway in `kaalm-system`. They never leave that namespace or reach agent containers. This keeps provider API keys out of every application namespace: an agent that wants to call an LLM must go through the gateway, which attaches the credentials server-side.
 
 ### Budget accounting
 

@@ -31,13 +31,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // ActivatorServer serves the controller's :9443 endpoints: kubelet probes
 // (cert-less) and POST /v1/activate/{namespace}/{agentName} (gateway SAN
 // required). It runs on EVERY controller replica, not only the leader: the
-// handler is deliberately thin, patching agentry.io/wake=true on the target
+// handler is deliberately thin, patching kaalm.io/wake=true on the target
 // Agent so the leader's existing watch drives the actual wake. See
 // docs/src/gateways/user/activation-and-activity.md (The Activator).
 type ActivatorServer struct {
@@ -127,7 +127,7 @@ func (s *ActivatorServer) handleActivate(w http.ResponseWriter, r *http.Request)
 	}
 	namespace, name := parts[0], parts[1]
 
-	var agent agentryv1alpha1.Agent
+	var agent kaalmv1alpha1.Agent
 	if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: namespace, Name: name}, &agent); err != nil {
 		if apierrors.IsNotFound(err) {
 			http.Error(w, "agent not found", http.StatusNotFound)
@@ -136,7 +136,7 @@ func (s *ActivatorServer) handleActivate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, agentryv1alpha1.AnnotationWake, agentryv1alpha1.AnnotationTrue)
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, kaalmv1alpha1.AnnotationWake, kaalmv1alpha1.AnnotationTrue)
 	if err := s.Client.Patch(r.Context(), &agent, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

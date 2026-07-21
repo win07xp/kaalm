@@ -1,4 +1,4 @@
-' Shared style for every Agentry diagram.
+' Shared style for every Kaalm diagram.
 ' Include from each diagram with:  !include _style.puml
 '
 ' Visual language (keep it consistent, readers learn it once):

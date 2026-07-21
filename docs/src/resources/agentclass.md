@@ -2,14 +2,14 @@
 
 AgentClass is a cluster-scoped policy resource. It describes the runtime configuration, isolation, resource defaults, and allowed providers for a category of agents. It is analogous to StorageClass: developers reference an AgentClass by name in their Agent or AgentTask spec, and the platform team controls what each class permits.
 
-This split is the core of Agentry's governance model. Developers pick a class; the class decides what images may run, how much compute they get, where their traffic may go, and which LLM providers they may call. When a live AgentClass is edited, the change propagates to running workloads through a controlled mechanism described in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling). The reconciler that materializes an AgentClass into cluster objects is documented in [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).
+This split is the core of Kaalm's governance model. Developers pick a class; the class decides what images may run, how much compute they get, where their traffic may go, and which LLM providers they may call. When a live AgentClass is edited, the change propagates to running workloads through a controlled mechanism described in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling). The reconciler that materializes an AgentClass into cluster objects is documented in [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).
 
 ## Spec
 
 The full spec, annotated:
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentClass
 metadata:
   name: standard
@@ -72,7 +72,7 @@ spec:
   # Network policy hints (the controller translates these into NetworkPolicy resources)
   network:
     egress:
-      # Allowed external destinations beyond the Agentry gateway, expressed as
+      # Allowed external destinations beyond the Kaalm gateway, expressed as
       # CIDR blocks. Agent containers call providers through the gateway; this
       # governs other egress (MCP, tools). Enforced on any CNI that implements
       # standard Kubernetes NetworkPolicy.
@@ -90,8 +90,8 @@ spec:
     allowHostNetwork: false
     # Allow ingress from other agent Pods in the same namespace.
     # When true, the controller adds a NetworkPolicy ingress rule that allows
-    # traffic from any Pod in the same namespace bearing the agentry agent label.
-    # Default false (deny all ingress except from the Agentry gateway).
+    # traffic from any Pod in the same namespace bearing the kaalm agent label.
+    # Default false (deny all ingress except from the Kaalm gateway).
     allowSameNamespaceIngress: false
 
   # Pod security
@@ -189,7 +189,7 @@ Defaults are applied at reconcile time if the Agent does not specify a value. `m
 
 ### `imagePullSecrets` namespace resolution
 
-AgentClass is cluster-scoped, but `imagePullSecrets[*].name` references a Secret, and Secrets live in namespaces. The reconciler resolves each entry in the **Agent's (or AgentTask's) namespace** at Pod-creation time, not in `agentry-system`. Secrets are never copied across namespaces.
+AgentClass is cluster-scoped, but `imagePullSecrets[*].name` references a Secret, and Secrets live in namespaces. The reconciler resolves each entry in the **Agent's (or AgentTask's) namespace** at Pod-creation time, not in `kaalm-system`. Secrets are never copied across namespaces.
 
 If any referenced Secret is missing from the target namespace, the Agent enters `Ready=False, reason=ImagePullSecretMissing` with a message naming the namespace and secret, and the Pod is not created. See rule 23 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation) and the reconcile step in [AgentReconciler](../controller/reconcilers.md#agentreconciler) / [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler).
 

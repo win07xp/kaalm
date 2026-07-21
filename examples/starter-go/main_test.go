@@ -24,14 +24,14 @@ func TestDedupBuffer_CachesAndEvicts(t *testing.T) {
 }
 
 func TestShouldHeartbeat(t *testing.T) {
-	t.Setenv("AGENTRY_TEMPLATE_HEARTBEAT", "auto")
+	t.Setenv("KAALM_TEMPLATE_HEARTBEAT", "auto")
 	if !(&agent{isTask: false}).shouldHeartbeat() {
 		t.Error("agent mode auto must heartbeat")
 	}
 	if (&agent{isTask: true}).shouldHeartbeat() {
 		t.Error("task mode auto must not heartbeat")
 	}
-	t.Setenv("AGENTRY_TEMPLATE_HEARTBEAT", "off")
+	t.Setenv("KAALM_TEMPLATE_HEARTBEAT", "off")
 	if (&agent{isTask: false}).shouldHeartbeat() {
 		t.Error("off must never heartbeat")
 	}

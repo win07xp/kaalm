@@ -134,23 +134,23 @@ const (
 
 // Finalizers, one per CRD. See docs/src/controller/finalizers.md.
 const (
-	AgentFinalizer    = "agentry.io/agent-finalizer"
-	TaskFinalizer     = "agentry.io/task-finalizer"
-	ProviderFinalizer = "agentry.io/provider-finalizer"
-	ClassFinalizer    = "agentry.io/class-finalizer"
-	ChannelFinalizer  = "agentry.io/channel-finalizer"
+	AgentFinalizer    = "kaalm.io/agent-finalizer"
+	TaskFinalizer     = "kaalm.io/task-finalizer"
+	ProviderFinalizer = "kaalm.io/provider-finalizer"
+	ClassFinalizer    = "kaalm.io/class-finalizer"
+	ChannelFinalizer  = "kaalm.io/channel-finalizer"
 )
 
 // Well-known annotations and labels. See docs/src/controller/ and
 // gateways/api/async-responses.md.
 const (
-	AnnotationWake                = "agentry.io/wake"                 // AnnotationTrue triggers a wake on a Hibernated Agent
-	AnnotationTrue                = "true"                            // the value every boolean Agentry annotation carries
-	AnnotationChannelDisconnected = "agentry.io/channel-disconnected" // "true", written by the gateway in the channel-delete handshake
-	AnnotationExpiresAt           = "agentry.io/expires-at"           // RFC3339 TTL on async-response ConfigMaps (1h)
+	AnnotationWake                = "kaalm.io/wake"                 // AnnotationTrue triggers a wake on a Hibernated Agent
+	AnnotationTrue                = "true"                          // the value every boolean Kaalm annotation carries
+	AnnotationChannelDisconnected = "kaalm.io/channel-disconnected" // "true", written by the gateway in the channel-delete handshake
+	AnnotationExpiresAt           = "kaalm.io/expires-at"           // RFC3339 TTL on async-response ConfigMaps (1h)
 
-	LabelChannelNamespace = "agentry.io/channel-namespace" // on agentry-async-* ConfigMaps, for the label-selector sweep
-	LabelChannelName      = "agentry.io/channel-name"
+	LabelChannelNamespace = "kaalm.io/channel-namespace" // on kaalm-async-* ConfigMaps, for the label-selector sweep
+	LabelChannelName      = "kaalm.io/channel-name"
 )
 
 // SessionNamespaceUUID is the fixed UUIDv5 namespace used to derive an
@@ -165,7 +165,7 @@ const SessionNamespaceUUID = "f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d"
 // dotted-name spoofing. See docs/src/gateways/llm/workload-identity.md.
 const (
 	AgentSANSuffix = "svc.cluster.local" // {name}.{namespace}.svc.cluster.local, 5 labels
-	TaskSANSuffix  = "task.agentry.io"   // {taskName}.{namespace}.task.agentry.io, 5 labels
+	TaskSANSuffix  = "task.kaalm.io"     // {taskName}.{namespace}.task.kaalm.io, 5 labels
 	AgentSANLabels = 5
 	TaskSANLabels  = 5
 )

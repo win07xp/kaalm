@@ -6,7 +6,7 @@ the checklist for both, plus what your tenants observe when a gate closes.
 
 ## The three gates
 
-For an Agentry-managed workload (an Agent or AgentTask calling the gateway
+For an Kaalm-managed workload (an Agent or AgentTask calling the gateway
 with its client certificate), every LLM request passes:
 
 1. **The workload's own list**: the provider must appear in the workload's
@@ -21,7 +21,7 @@ naming the failed gate. The namespace gate is checked **before** model
 existence, deliberately: a namespace without access never learns which models
 a provider hosts.
 
-Existing (non-Agentry) workloads calling the gateway with a ServiceAccount
+Existing (non-Kaalm) workloads calling the gateway with a ServiceAccount
 token face only gate 3 plus the model catalog; they have no workload spec or
 class.
 

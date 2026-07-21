@@ -26,7 +26,7 @@ This table is the canonical list. Rows whose behavior needs more than a sentence
 | Idle -> Running | Activity observed (see [Activity Detection](hibernation-and-wake.md#activity-detection)) |
 | Idle -> Hibernating | Idle for `hibernationDelay` (defaults from AgentClass) AND `hibernationEnabled` |
 | Hibernating -> Hibernated | Pod scaled to 0, PVC retained, Service remains |
-| Hibernated -> Resuming | Gateway [Activator](../gateways/user/activation-and-activity.md#the-activator) calls `POST /v1/activate/{namespace}/{agentName}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `agentry.io/wake: "true"` annotation (manual override) |
+| Hibernated -> Resuming | Gateway [Activator](../gateways/user/activation-and-activity.md#the-activator) calls `POST /v1/activate/{namespace}/{agentName}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `kaalm.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
 | Running/Idle -> Provisioning | Spec drift (Agent or AgentClass) re-derives a Pod spec that differs in replacement-triggering fields. Drift is detected in both `Running` and `Idle`, since an idle Agent still has a Pod to replace. See [Spec change handling](change-propagation.md#spec-change-handling). |
 | Running/Idle -> Provisioning | **Involuntary Pod disruption**: the Pod was deleted out-of-band, or is present but terminal without kubelet recovery. See [Involuntary Pod disruption](#involuntary-pod-disruption). |

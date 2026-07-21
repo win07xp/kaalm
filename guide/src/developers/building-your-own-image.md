@@ -11,27 +11,27 @@ Environment:
 
 | Variable | Meaning |
 |---|---|
-| `AGENTRY_HEALTH_PORT` | The port to serve on (default 8080) |
-| `AGENTRY_GATEWAY_ENDPOINT` | Base HTTPS URL of the gateway's LLM listener; all outbound calls go here |
-| `AGENTRY_TLS_CERT` / `AGENTRY_TLS_KEY` | Your per-agent certificate and key, mounted at `/var/run/agentry/` |
-| `AGENTRY_CA_CERT` | The cluster CA bundle, same mount |
+| `KAALM_HEALTH_PORT` | The port to serve on (default 8080) |
+| `KAALM_GATEWAY_ENDPOINT` | Base HTTPS URL of the gateway's LLM listener; all outbound calls go here |
+| `KAALM_TLS_CERT` / `KAALM_TLS_KEY` | Your per-agent certificate and key, mounted at `/var/run/kaalm/` |
+| `KAALM_CA_CERT` | The cluster CA bundle, same mount |
 
 The certificate is your identity: the gateway authenticates you by its SAN,
 and it doubles as your serving certificate. Your `spec.env` entries are
-appended after these, so do not shadow the `AGENTRY_` names.
+appended after these, so do not shadow the `KAALM_` names.
 
 ## The contract as a checklist
 
 Numbered as in the design book (runtime contract items 1 to 7):
 
 1. **Health endpoints (required).** Serve `GET /readyz` and `GET /livez`
-   over TLS on `$AGENTRY_HEALTH_PORT`, returning 200 when healthy. The
+   over TLS on `$KAALM_HEALTH_PORT`, returning 200 when healthy. The
    controller's injected probes target exactly these paths.
 2. **Graceful SIGTERM (required).** Finish in-flight work and exit within
    the grace period.
 3. **Gateway communication (required in practice).** Talk to
-   `$AGENTRY_GATEWAY_ENDPOINT` for LLM calls, presenting your client
-   certificate and verifying the gateway against `$AGENTRY_CA_CERT`.
+   `$KAALM_GATEWAY_ENDPOINT` for LLM calls, presenting your client
+   certificate and verifying the gateway against `$KAALM_CA_CERT`.
 4. **Message endpoint (channel-backed Agents only).** Serve
    `POST /v1/message` on the health port: message envelope in, response
    envelope out. Verify the caller's client certificate; only the gateway
@@ -54,7 +54,7 @@ Numbered as in the design book (runtime contract items 1 to 7):
 The same image can serve as a persistent Agent and as an AgentTask. The
 starter templates detect task mode from their own certificate's SAN and
 switch behavior: no heartbeat loop, report completion instead. The
-`AGENTRY_TEMPLATE_HEARTBEAT` variable (`auto`, the default, or `off`) exists
+`KAALM_TEMPLATE_HEARTBEAT` variable (`auto`, the default, or `off`) exists
 only as an override for the heartbeat loop; there is no force-on.
 
 ## Growing out of a template versus starting clean

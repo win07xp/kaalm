@@ -9,7 +9,7 @@ skinparam rectangle {
   roundCorner 4
 }
 
-rectangle "mount directory **/var/run/agentry/**\n**watch this one**: IN_CREATE + IN_MOVED_TO on ..data" as dir #line:4A148C;line.bold;text:2a0a4a {
+rectangle "mount directory **/var/run/kaalm/**\n**watch this one**: IN_CREATE + IN_MOVED_TO on ..data" as dir #line:4A148C;line.bold;text:2a0a4a {
 
   rectangle "**tls.crt**  **tls.key**  **ca.crt**\nsymlinks, one hop\n(never written in place)" as leaves #back:F5F5F5;line:9E9E9E;line.bold;text:555555
 

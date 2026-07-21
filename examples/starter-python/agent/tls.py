@@ -1,5 +1,5 @@
 # Copyright 2026. Licensed under the Apache License, Version 2.0.
-"""TLS material loading and rotation reload for the Agentry runtime contract.
+"""TLS material loading and rotation reload for the Kaalm runtime contract.
 
 The kubelet rotates a projected volume by atomically renaming the ``..data``
 symlink under the mount directory. The leaf files are never rewritten in place,
@@ -18,8 +18,8 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 GATEWAY_SANS = {
-    "agentry-gateway.agentry-system.svc.cluster.local",
-    "agentry-gateway.agentry-system.svc",
+    "kaalm-gateway.kaalm-system.svc.cluster.local",
+    "kaalm-gateway.kaalm-system.svc",
 }
 
 
@@ -114,7 +114,7 @@ def peer_san_matches_gateway(transport_extra_ssl_object) -> bool:
 def workload_is_task(cert_file: str) -> bool:
     """Detect AgentTask mode from the client cert SAN shape.
 
-    AgentTask certs carry ``{name}.{namespace}.task.agentry.io``; Agent certs
+    AgentTask certs carry ``{name}.{namespace}.task.kaalm.io``; Agent certs
     carry the Service DNS shape. Parsed without extra dependencies via ssl.
     """
     try:
@@ -122,6 +122,6 @@ def workload_is_task(cert_file: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     for typ, value in cert.get("subjectAltName", ()):
-        if typ == "DNS" and value.endswith(".task.agentry.io"):
+        if typ == "DNS" and value.endswith(".task.kaalm.io"):
             return True
     return False

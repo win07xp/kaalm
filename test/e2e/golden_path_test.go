@@ -9,7 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/win07xp/kubeclaw/test/utils"
+	"github.com/win07xp/kaalm/test/utils"
 )
 
 // readyTrue reports whether a resource's Ready condition is True.
@@ -62,7 +62,7 @@ var _ = Describe("Golden path", Ordered, func() {
 	})
 
 	It("delivers a sync webhook and returns the agent's reply", func() {
-		port, stop, err := utils.PortForward("agentry-system", "agentry-gateway", "8080")
+		port, stop, err := utils.PortForward("kaalm-system", "kaalm-gateway", "8080")
 		Expect(err).NotTo(HaveOccurred())
 		defer stop()
 

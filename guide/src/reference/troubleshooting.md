@@ -88,7 +88,7 @@ Read the error type; the two cases behave differently:
 `kubectl describe modelprovider <name>`:
 
 - `CredentialsMissing` / `CredentialsInvalid`: the Secret named by
-  `credentialsRef` is absent in `agentry-system` or lacks the key.
+  `credentialsRef` is absent in `kaalm-system` or lacks the key.
 - `InvalidDegradeTarget`: a budget policy's `degradeTo` is not in
   `spec.models`.
 - `FallbackIneligible`: a fallback provider is missing or has a different

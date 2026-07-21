@@ -4,21 +4,24 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: agenttasks.agentry.io
+  name: agents.kaalm.io
 spec:
-  group: agentry.io
+  group: kaalm.io
   names:
-    kind: AgentTask
-    listKind: AgentTaskList
-    plural: agenttasks
+    kind: Agent
+    listKind: AgentList
+    plural: agents
     shortNames:
-    - at
-    singular: agenttask
+    - ag
+    singular: agent
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.phase
       name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
       type: string
     - jsonPath: .spec.agentClassRef.name
       name: Class
@@ -29,7 +32,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: AgentTask is the Schema for the agenttasks API.
+        description: Agent is the Schema for the agents API.
         properties:
           apiVersion:
             description: |-
@@ -50,9 +53,8 @@ spec:
             type: object
           spec:
             description: |-
-              AgentTaskSpec is a developer-owned run-to-completion workload. Artifacts may be
-              declared only for agentReported completion (rule 17). See
-              docs/src/resources/agenttask.md.
+              AgentSpec is a developer-owned persistent agent workload governed by an
+              AgentClass. Only agentClassRef is required. See docs/src/resources/agent.md.
             properties:
               agentClassRef:
                 description: AgentClassRef selects the governing AgentClass.
@@ -64,52 +66,19 @@ spec:
                 required:
                 - name
                 type: object
-              artifacts:
-                description: Artifacts declares the named outputs an agentReported
-                  task may return.
+              args:
+                description: Args overrides the container args.
                 items:
-                  description: AgentTaskArtifact declares a named output.
-                  properties:
-                    name:
-                      minLength: 1
-                      type: string
-                  required:
-                  - name
-                  type: object
+                  type: string
                 type: array
-              completion:
-                description: Completion defines how the task reports done and its
-                  timeout behavior.
-                properties:
-                  backoffLimit:
-                    description: BackoffLimit is the number of Pod recreation retries
-                      before Failed.
-                    format: int32
-                    type: integer
-                  condition:
-                    default: agentReported
-                    description: |-
-                      Condition selects how completion is detected. agentReported uses
-                      POST /v1/task/complete; exitCode uses container exit.
-                    enum:
-                    - agentReported
-                    - exitCode
-                    type: string
-                  onTimeout:
-                    default: Fail
-                    description: OnTimeout decides the terminal phase when the timeout
-                      fires.
-                    enum:
-                    - Fail
-                    - Succeed
-                    type: string
-                  timeout:
-                    description: Timeout bounds the task's running time.
-                    type: string
-                type: object
+              command:
+                description: Command overrides the container entrypoint.
+                items:
+                  type: string
+                type: array
               env:
                 description: Env are extra environment variables merged with the injected
-                  AGENTRY_* set.
+                  KAALM_* set.
                 items:
                   description: EnvVar represents an environment variable present in
                     a Container.
@@ -230,19 +199,75 @@ spec:
                 description: Image overrides the class default image (subject to the
                   class allowlist).
                 type: string
+              lifecycle:
+                description: Lifecycle configures idle, hibernation, and wake behavior.
+                properties:
+                  activitySource:
+                    default: gatewayTraffic
+                    description: ActivitySource selects which signals count as activity
+                      for idle detection.
+                    enum:
+                    - gatewayTraffic
+                    - agentHeartbeat
+                    - both
+                    type: string
+                  hibernationDelay:
+                    type: string
+                  hibernationEnabled:
+                    description: |-
+                      HibernationEnabled deletes the Pod (keeping the PVC) after the hibernation
+                      delay, and recreates it on the next inbound message. Requires persistence.
+                    type: boolean
+                  idleTimeout:
+                    type: string
+                  wakeTimeout:
+                    type: string
+                type: object
+              mcpServers:
+                description: MCPServers are referenced only for NetworkPolicy egress
+                  scoping.
+                items:
+                  description: AgentMCPServer is an MCP endpoint the agent may reach
+                    (egress scoping only).
+                  properties:
+                    name:
+                      type: string
+                    url:
+                      type: string
+                  required:
+                  - name
+                  - url
+                  type: object
+                type: array
               persistence:
-                description: Persistence requests a PVC for the duration of the task.
+                description: Persistence requests a PVC for durable agent state.
                 properties:
                   enabled:
+                    description: Enabled requests a persistent volume.
                     type: boolean
+                  existingClaim:
+                    description: |-
+                      ExistingClaim references a pre-provisioned PVC by name. The controller does
+                      not own or provision it.
+                    type: string
                   mountPath:
+                    description: MountPath is where the volume is mounted in the agent
+                      container.
                     type: string
                   sizeGi:
+                    description: |-
+                      SizeGi is the requested volume size, clamped to the class maximum. Omit
+                      when using existingClaim.
                     format: int32
                     type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: sizeGi and existingClaim are mutually exclusive
+                  rule: '!(has(self.sizeGi) && has(self.existingClaim))'
               providers:
-                description: Providers lists the ModelProviders this task may call.
+                description: |-
+                  Providers lists the ModelProviders this agent may call. Omit for agents
+                  that make no LLM calls.
                 items:
                   description: AgentProviderReference names a ModelProvider the agent
                     may use.
@@ -262,7 +287,7 @@ spec:
                   type: object
                 type: array
               resources:
-                description: Resources requested by the task container, clamped to
+                description: Resources requested by the agent container, clamped to
                   the class maximum.
                 properties:
                   claims:
@@ -321,41 +346,35 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
-              ttlSecondsAfterFinished:
-                description: TTLSecondsAfterFinished bounds how long a terminal task
-                  is retained.
-                format: int32
-                type: integer
+              service:
+                description: |-
+                  Service exposes the agent's HTTPS endpoint for intra-cluster delivery.
+                  A nil block defaults to an enabled Service on port 8080 at reconcile
+                  time (the CRD default on enabled only fires when the block is present).
+                properties:
+                  enabled:
+                    default: true
+                    description: |-
+                      Enabled creates a ClusterIP Service. An agent with the Service disabled is
+                      outbound-only and cannot be targeted by an AgentChannel.
+                      The json tag deliberately has no omitempty: a serialized explicit
+                      false must survive the wire, or the CRD default would overwrite it.
+                    type: boolean
+                  port:
+                    description: Port is the Service port exposing the agent's health/message
+                      listener.
+                    format: int32
+                    type: integer
+                type: object
             required:
             - agentClassRef
             type: object
-            x-kubernetes-validations:
-            - message: 'artifacts require completion.condition: agentReported; an
-                exitCode task cannot collect artifacts'
-              rule: '!(has(self.artifacts) && has(self.completion) && has(self.completion.condition)
-                && self.completion.condition == ''exitCode'')'
           status:
-            description: AgentTaskStatus is the observed state of an AgentTask.
+            description: AgentStatus is the observed state of an Agent.
             properties:
-              agentReportedMessage:
-                type: string
-              agentReportedStatus:
-                description: AgentReportedStatus is the status the agent reported
-                  at completion.
-                enum:
-                - success
-                - failure
-                type: string
-              artifactValues:
-                additionalProperties:
-                  type: string
-                description: ArtifactValues holds the collected agentReported outputs.
-                type: object
-              completionTime:
-                format: date-time
-                type: string
               conditions:
-                description: Conditions report Completed.
+                description: Conditions report Ready, ProvidersReady, and the recoverable
+                  Degraded state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -414,9 +433,15 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              currentPodUID:
-                description: CurrentPodUID gates completion writes to the live task
-                  Pod (identity gate).
+              endpoint:
+                description: Endpoint is the in-cluster HTTPS URL for the agent, when
+                  the Service exists.
+                type: string
+              hibernatedAt:
+                format: date-time
+                type: string
+              lastActivityTime:
+                format: date-time
                 type: string
               observedGeneration:
                 format: int64
@@ -424,14 +449,17 @@ spec:
               phase:
                 description: Phase is the current lifecycle phase.
                 type: string
+              phaseTransitionTime:
+                format: date-time
+                type: string
               podName:
                 type: string
-              retries:
-                description: Retries counts Pod recreations under backoffLimit.
-                format: int32
-                type: integer
-              startTime:
-                format: date-time
+              preDegradedPhase:
+                description: |-
+                  PreDegradedPhase records the phase to restore when a Degraded condition
+                  clears.
+                type: string
+              pvcName:
                 type: string
             type: object
         type: object

@@ -1,7 +1,7 @@
 # Providing LLM Access
 
 A ModelProvider gives teams LLM access without ever handing them the API key.
-The credential lives in a Secret in `agentry-system`; the gateway reads it
+The credential lives in a Secret in `kaalm-system`; the gateway reads it
 there and injects it server-side on every proxied call. Teams see model names
 and budgets, never keys.
 
@@ -15,7 +15,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: anthropic-api-key
-  namespace: agentry-system
+  namespace: kaalm-system
 type: Opaque
 stringData:
   token: <your-api-key>
@@ -23,10 +23,10 @@ stringData:
 
 ## 2. Create the ModelProvider
 
-From `config/samples/agentry_v1alpha1_modelprovider.yaml`:
+From `config/samples/kaalm_v1alpha1_modelprovider.yaml`:
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: ModelProvider
 metadata:
   name: anthropic-shared
@@ -84,4 +84,4 @@ useful for offline fixtures or provider types with no probe.
 
 *How this works: design book pages Resources, ModelProvider (every field and
 the status shape), Security, Credentials (why keys live only in
-agentry-system), and Gateways, LLM (how the proxy injects the credential).*
+kaalm-system), and Gateways, LLM (how the proxy injects the credential).*

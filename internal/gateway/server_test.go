@@ -40,7 +40,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // ---- test PKI ----
@@ -59,7 +59,7 @@ func newTestCA(t *testing.T) *testCA {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "agentry-test-ca"},
+		Subject:               pkix.Name{CommonName: "kaalm-test-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
@@ -111,46 +111,46 @@ func (ca *testCA) issue(t *testing.T, sans ...string) tls.Certificate {
 // ---- fakes ----
 
 type fakeStore struct {
-	agents    map[string]*agentryv1alpha1.Agent
-	tasks     map[string]*agentryv1alpha1.AgentTask
-	classes   map[string]*agentryv1alpha1.AgentClass
-	providers map[string]*agentryv1alpha1.ModelProvider
+	agents    map[string]*kaalmv1alpha1.Agent
+	tasks     map[string]*kaalmv1alpha1.AgentTask
+	classes   map[string]*kaalmv1alpha1.AgentClass
+	providers map[string]*kaalmv1alpha1.ModelProvider
 	creds     map[string]string
 	podsByIP  map[string]*corev1.Pod
-	channels  map[string]*agentryv1alpha1.AgentChannel // key: webhook path
-	secrets   map[string]string                        // key: ns/name/key
+	channels  map[string]*kaalmv1alpha1.AgentChannel // key: webhook path
+	secrets   map[string]string                      // key: ns/name/key
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		agents:    map[string]*agentryv1alpha1.Agent{},
-		tasks:     map[string]*agentryv1alpha1.AgentTask{},
-		classes:   map[string]*agentryv1alpha1.AgentClass{},
-		providers: map[string]*agentryv1alpha1.ModelProvider{},
+		agents:    map[string]*kaalmv1alpha1.Agent{},
+		tasks:     map[string]*kaalmv1alpha1.AgentTask{},
+		classes:   map[string]*kaalmv1alpha1.AgentClass{},
+		providers: map[string]*kaalmv1alpha1.ModelProvider{},
 		creds:     map[string]string{},
 		podsByIP:  map[string]*corev1.Pod{},
-		channels:  map[string]*agentryv1alpha1.AgentChannel{},
+		channels:  map[string]*kaalmv1alpha1.AgentChannel{},
 		secrets:   map[string]string{},
 	}
 }
 
-func (f *fakeStore) AgentByName(_ context.Context, ns, name string) (*agentryv1alpha1.Agent, bool) {
+func (f *fakeStore) AgentByName(_ context.Context, ns, name string) (*kaalmv1alpha1.Agent, bool) {
 	a, ok := f.agents[ns+"/"+name]
 	return a, ok
 }
-func (f *fakeStore) TaskByName(_ context.Context, ns, name string) (*agentryv1alpha1.AgentTask, bool) {
+func (f *fakeStore) TaskByName(_ context.Context, ns, name string) (*kaalmv1alpha1.AgentTask, bool) {
 	tk, ok := f.tasks[ns+"/"+name]
 	return tk, ok
 }
-func (f *fakeStore) ClassByName(_ context.Context, name string) (*agentryv1alpha1.AgentClass, bool) {
+func (f *fakeStore) ClassByName(_ context.Context, name string) (*kaalmv1alpha1.AgentClass, bool) {
 	c, ok := f.classes[name]
 	return c, ok
 }
-func (f *fakeStore) ProviderByName(_ context.Context, name string) (*agentryv1alpha1.ModelProvider, bool) {
+func (f *fakeStore) ProviderByName(_ context.Context, name string) (*kaalmv1alpha1.ModelProvider, bool) {
 	p, ok := f.providers[name]
 	return p, ok
 }
-func (f *fakeStore) Credential(_ context.Context, p *agentryv1alpha1.ModelProvider) (string, error) {
+func (f *fakeStore) Credential(_ context.Context, p *kaalmv1alpha1.ModelProvider) (string, error) {
 	cred, ok := f.creds[p.Name]
 	if !ok {
 		return "", fmt.Errorf("no credential for %s", p.Name)
@@ -161,7 +161,7 @@ func (f *fakeStore) PodByIP(_ context.Context, ip string) (*corev1.Pod, bool) {
 	p, ok := f.podsByIP[ip]
 	return p, ok
 }
-func (f *fakeStore) ChannelByPath(_ context.Context, path string) (*agentryv1alpha1.AgentChannel, bool) {
+func (f *fakeStore) ChannelByPath(_ context.Context, path string) (*kaalmv1alpha1.AgentChannel, bool) {
 	ch, ok := f.channels[path]
 	return ch, ok
 }
@@ -211,14 +211,14 @@ func newHarness(t *testing.T, upstreamFn http.HandlerFunc) *harness {
 
 	h.reviewer = &fakeReviewer{}
 	cfg := Config{
-		OperatorNamespace: "agentry-system",
+		OperatorNamespace: "kaalm-system",
 		MaxBodyBytes:      1 << 20,
 		UpstreamTimeout:   10 * time.Second,
 		UpstreamCAs:       upstreamPool,
 	}
 	h.server = NewServer(cfg, h.store, NewTokenAuthenticator(h.reviewer), h.spend)
 
-	serverCert := h.ca.issue(t, "agentry-gateway.agentry-system.svc.cluster.local", "localhost")
+	serverCert := h.ca.issue(t, "kaalm-gateway.kaalm-system.svc.cluster.local", "localhost")
 	tlsCfg := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		ClientAuth:   tls.VerifyClientCertIfGiven,
@@ -250,28 +250,28 @@ func (h *harness) client(clientCert *tls.Certificate) *http.Client {
 // seedRoute installs an agent in team-a wired to provider "prov" offering
 // model "m1", with the source IP mapped to a matching Pod.
 func (h *harness) seedRoute() {
-	h.store.agents["team-a/sup"] = &agentryv1alpha1.Agent{
+	h.store.agents["team-a/sup"] = &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "std"},
-			Providers: []agentryv1alpha1.AgentProviderReference{
-				{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "prov"}},
+		Spec: kaalmv1alpha1.AgentSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "std"},
+			Providers: []kaalmv1alpha1.AgentProviderReference{
+				{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "prov"}},
 			},
 		},
 	}
-	h.store.classes["std"] = &agentryv1alpha1.AgentClass{
+	h.store.classes["std"] = &kaalmv1alpha1.AgentClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "std"},
-		Spec: agentryv1alpha1.AgentClassSpec{
-			AllowedProviders: []agentryv1alpha1.LocalObjectReference{{Name: "prov"}},
+		Spec: kaalmv1alpha1.AgentClassSpec{
+			AllowedProviders: []kaalmv1alpha1.LocalObjectReference{{Name: "prov"}},
 		},
 	}
-	h.store.providers["prov"] = &agentryv1alpha1.ModelProvider{
+	h.store.providers["prov"] = &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
-		Spec: agentryv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1alpha1.ModelProviderSpec{
 			Type:              "openai",
 			Endpoint:          h.upstream.URL,
 			AllowedNamespaces: []string{"team-*"},
-			Models:            []agentryv1alpha1.ModelProviderModel{{ID: "m1"}},
+			Models:            []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
 		},
 	}
 	h.store.creds["prov"] = "sk-test-cred"
@@ -411,11 +411,11 @@ func TestProxy_BearerTierHappyPathAndPrecheck(t *testing.T) {
 		t.Errorf("provider credential expected, got %q", got)
 	}
 
-	// Precheck: an Agentry-managed Pod cannot use its SA token.
+	// Precheck: an Kaalm-managed Pod cannot use its SA token.
 	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "sup-abc", Namespace: "team-a",
-			Labels: map[string]string{"agentry.io/workload": "agent"},
+			Labels: map[string]string{"kaalm.io/workload": "agent"},
 		},
 	}
 	before := h.reviewer.calls
@@ -471,9 +471,9 @@ func TestProxy_TenancyDenialsInOrder(t *testing.T) {
 func TestAuthMatrix(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	h.seedRoute()
-	taskCert := h.ca.issue(t, "fix-42.team-a.task.agentry.io")
-	controllerCert := h.ca.issue(t, "agentry-controller.agentry-system.svc.cluster.local")
-	gatewayShapedCert := h.ca.issue(t, "something.agentry-system.svc") // valid CA, no recognized SAN
+	taskCert := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
+	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
+	gatewayShapedCert := h.ca.issue(t, "something.kaalm-system.svc") // valid CA, no recognized SAN
 	agentC := agentCert(t, h.ca)
 	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
 

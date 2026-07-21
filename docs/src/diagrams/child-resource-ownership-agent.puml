@@ -12,7 +12,7 @@ skinparam rectangle {
 
 rectangle "namespace: **team-support** (the Agent's own namespace)" as ns #line:4A148C;line.dashed;text:2a0a4a {
 
-  rectangle "**Agent**\nsupport-assistant\nfinalizer:\nagentry.io/agent-finalizer" as agent #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**Agent**\nsupport-assistant\nfinalizer:\nkaalm.io/agent-finalizer" as agent #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
 
   rectangle "**Pod**\n**the only state-coupled child:**\ncreated on Running,\ndeleted on Hibernated" as pod #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
   rectangle "**Service** (ClusterIP)\nonly if spec.service.enabled\n(default true)" as svc #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a

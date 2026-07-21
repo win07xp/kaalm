@@ -1,4 +1,4 @@
-module github.com/win07xp/kubeclaw
+module github.com/win07xp/kaalm
 
 go 1.23.8
 

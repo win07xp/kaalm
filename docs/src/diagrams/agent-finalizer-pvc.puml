@@ -6,7 +6,7 @@
 start
 :delete Agent requested;<<$extBg>>
 :apiserver sets deletionTimestamp.
-agentry.io/agent-finalizer blocks the
+kaalm.io/agent-finalizer blocks the
 delete; the object stays readable;
 
 if (does a Pod exist?) then (yes)
@@ -17,7 +17,7 @@ else (no)
   Failed before the first Pod started;<<$mutedBg>>
 endif
 
-if (was the PVC provisioned\nby Agentry?) then (no)
+if (was the PVC provisioned\nby Kaalm?) then (no)
   :spec.persistence.existingClaim was
   never given an ownerRef, so it is
   untouched under either setting;<<$mutedBg>>

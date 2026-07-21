@@ -1,4 +1,4 @@
-# What Is Agentry
+# What Is Kaalm
 
 *Stub: written after v0.2.0.*
 
@@ -6,6 +6,6 @@
   it that you can send messages and jobs.
 - Why running one is more than running a chatbot script: identity, memory,
   spending limits, a front door.
-- What Agentry does about that, in agent terms, with no Kubernetes
+- What Kaalm does about that, in agent terms, with no Kubernetes
   vocabulary yet.
 - What you will have by the end of the book.

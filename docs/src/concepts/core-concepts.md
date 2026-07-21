@@ -4,7 +4,7 @@ This page introduces every term the rest of the book leans on. Later chapters de
 
 ## The Five Custom Resources
 
-Agentry workloads come in two shapes. An **Agent** is a long-lived workload that the controller can hibernate and wake on demand. An Agent may have an inbound webhook channel attached via an AgentChannel. An **AgentTask** is an ephemeral one-shot job: no inbound endpoint, no hibernation, torn down on completion. Both run as Pods under the policy template defined by an AgentClass.
+Kaalm workloads come in two shapes. An **Agent** is a long-lived workload that the controller can hibernate and wake on demand. An Agent may have an inbound webhook channel attached via an AgentChannel. An **AgentTask** is an ephemeral one-shot job: no inbound endpoint, no hibernation, torn down on completion. Both run as Pods under the policy template defined by an AgentClass.
 
 | Kind | Scope | Tier | Purpose |
 |---|---|---|---|
@@ -24,13 +24,13 @@ In plain language:
 
 The five resources form one reference graph, split along the scope boundary in the table above: the cluster-scoped policy resources the platform team owns, and the namespaced workload resources developers point at them.
 
-![Reference graph of the five Agentry CRDs. Cluster scope holds AgentClass and ModelProvider; namespace scope holds Agent, AgentTask, and AgentChannel. Agent and AgentTask each name an AgentClass through spec.agentClassRef and a ModelProvider through spec.providers[].providerRef, while AgentClass independently names ModelProviders through spec.allowedProviders, so two separate edges converge on the same ModelProvider. AgentChannel names an Agent through spec.agentRef, never an AgentTask. ModelProvider points at itself through spec.fallback and at a Secret in agentry-system through spec.credentialsRef.](../diagrams/crd-reference-graph.svg)
+![Reference graph of the five Kaalm CRDs. Cluster scope holds AgentClass and ModelProvider; namespace scope holds Agent, AgentTask, and AgentChannel. Agent and AgentTask each name an AgentClass through spec.agentClassRef and a ModelProvider through spec.providers[].providerRef, while AgentClass independently names ModelProviders through spec.allowedProviders, so two separate edges converge on the same ModelProvider. AgentChannel names an Agent through spec.agentRef, never an AgentTask. ModelProvider points at itself through spec.fallback and at a Secret in kaalm-system through spec.credentialsRef.](../diagrams/crd-reference-graph.svg)
 
 Reading the diagram: the two red edges into ModelProvider are the shape that matters. They are **separate gates, not one list**. An Agent may only call a provider when its AgentClass lists that provider in `allowedProviders` (the platform team's decision) **and** the Agent itself names it in `providers[].providerRef` (the developer's decision) **and** the ModelProvider admits the Agent's namespace in `allowedNamespaces`. The grey self-edge is the other one: `spec.fallback` points at ModelProviders, so a provider chain is a tree that the gateway walks depth-first, and validation must reject cycles in it. Both facts are properties of the graph, so the per-resource specs cannot show them.
 
 ## The Two Gateways
 
-Both gateways are call surfaces of a single replicated Deployment in `agentry-system`, with a separate internal health port for kubelet probes.
+Both gateways are call surfaces of a single replicated Deployment in `kaalm-system`, with a separate internal health port for kubelet probes.
 
 The **LLM Gateway** listens on `:8443` (TLS, plus internal mTLS endpoints) and mediates all agent-to-provider traffic in the outbound direction: agent to LLM provider. It provides spend visibility, soft budget guardrails, rate limiting, fallback routing, and credential isolation. Using it is optional per agent.
 
@@ -40,9 +40,9 @@ Which endpoints live on which listener, and what authentication each path requir
 
 ## Adoption Tiers
 
-Agentry can be adopted at two depths, and behaviors throughout this book branch on the tier a workload belongs to.
+Kaalm can be adopted at two depths, and behaviors throughout this book branch on the tier a workload belongs to.
 
-In the **gateway-only tier**, existing workloads keep their own deployment story and simply point their LLM traffic at the gateway, authenticating with projected ServiceAccount tokens, to gain spend tracking. They have no Agent, AgentTask, or AgentChannel resources of their own (the chart still ships a default `standard` AgentClass, but no workload references it). Provider access is gated by `ModelProvider.allowedNamespaces` alone, since there is no Agent, AgentTask, or AgentClass to consult. Egress is the platform team's responsibility: Agentry does not synthesize a NetworkPolicy for these Pods, so budget enforcement, rate limits, and provider-access gating only hold if the platform team applies their own policies in those namespaces denying egress to provider IPs except via the gateway.
+In the **gateway-only tier**, existing workloads keep their own deployment story and simply point their LLM traffic at the gateway, authenticating with projected ServiceAccount tokens, to gain spend tracking. They have no Agent, AgentTask, or AgentChannel resources of their own (the chart still ships a default `standard` AgentClass, but no workload references it). Provider access is gated by `ModelProvider.allowedNamespaces` alone, since there is no Agent, AgentTask, or AgentClass to consult. Egress is the platform team's responsibility: Kaalm does not synthesize a NetworkPolicy for these Pods, so budget enforcement, rate limits, and provider-access gating only hold if the platform team applies their own policies in those namespaces denying egress to provider IPs except via the gateway.
 
 In the **full lifecycle tier**, Agents, AgentTasks, and AgentChannels are managed by the operator, with hibernation, wake-on-demand, and per-Pod mTLS via cert-manager-issued certificates. The chart-level framing (Helm values, prerequisites, install order) is in [tiers](../operations/deployment.md#tiered-on-ramp).
 
@@ -50,9 +50,9 @@ In the **full lifecycle tier**, Agents, AgentTasks, and AgentChannels are manage
 
 This section is a summary. The full mechanics, including every enforcement rule, live in [workload identity](../gateways/llm/workload-identity.md).
 
-The gateway authenticates calling workloads in one of two modes, mapped to the two tiers. **Mode 1 is an mTLS client certificate**, the primary, zero-config path for Agentry-managed Agent and AgentTask Pods. The gateway verifies the certificate against the Agentry CA and reads identity from its SAN, which comes in two shapes: `{name}.{namespace}.svc.cluster.local` for Agents (exactly 5 DNS labels) and `{name}.{namespace}.task.agentry.io` for AgentTasks (exactly 5 labels). The suffix is what distinguishes an Agent from an AgentTask on the wire; the exact label count is enforced separately, as defense in depth against dotted names.
+The gateway authenticates calling workloads in one of two modes, mapped to the two tiers. **Mode 1 is an mTLS client certificate**, the primary, zero-config path for Kaalm-managed Agent and AgentTask Pods. The gateway verifies the certificate against the Kaalm CA and reads identity from its SAN, which comes in two shapes: `{name}.{namespace}.svc.cluster.local` for Agents (exactly 5 DNS labels) and `{name}.{namespace}.task.kaalm.io` for AgentTasks (exactly 5 labels). The suffix is what distinguishes an Agent from an AgentTask on the wire; the exact label count is enforced separately, as defense in depth against dotted names.
 
-**Mode 2 is a ServiceAccount bearer token**, the path for gateway-only-tier workloads. The caller presents a projected ServiceAccount token, the gateway validates it via the Kubernetes `TokenReview` API, and the validated username yields the caller's namespace. Agentry-managed Pods cannot use this mode; for them, mTLS is the only accepted credential.
+**Mode 2 is a ServiceAccount bearer token**, the path for gateway-only-tier workloads. The caller presents a projected ServiceAccount token, the gateway validates it via the Kubernetes `TokenReview` API, and the validated username yields the caller's namespace. Kaalm-managed Pods cannot use this mode; for them, mTLS is the only accepted credential.
 
 In both modes a source-IP cross-check confirms, as defense in depth, that the Pod at the request's source IP is in the namespace authentication identified.
 

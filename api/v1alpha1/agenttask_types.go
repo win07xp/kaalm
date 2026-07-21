@@ -32,7 +32,7 @@ type AgentTaskSpec struct {
 	// Image overrides the class default image (subject to the class allowlist).
 	// +optional
 	Image string `json:"image,omitempty"`
-	// Env are extra environment variables merged with the injected AGENTRY_* set.
+	// Env are extra environment variables merged with the injected KAALM_* set.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 	// Providers lists the ModelProviders this task may call.

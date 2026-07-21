@@ -23,7 +23,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func TestIsFallbackable(t *testing.T) {
@@ -68,16 +68,16 @@ func newFallbackHarness() *fallbackHarness {
 	return h
 }
 
-func (h *fallbackHarness) provider(name, ptype string, fallbacks ...string) *agentryv1alpha1.ModelProvider {
-	p := &agentryv1alpha1.ModelProvider{
+func (h *fallbackHarness) provider(name, ptype string, fallbacks ...string) *kaalmv1alpha1.ModelProvider {
+	p := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: agentryv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1alpha1.ModelProviderSpec{
 			Type:   ptype,
-			Models: []agentryv1alpha1.ModelProviderModel{{ID: "m1"}},
+			Models: []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
 		},
 	}
 	for _, f := range fallbacks {
-		p.Spec.Fallback = append(p.Spec.Fallback, agentryv1alpha1.LocalObjectReference{Name: f})
+		p.Spec.Fallback = append(p.Spec.Fallback, kaalmv1alpha1.LocalObjectReference{Name: f})
 	}
 	h.store.providers[name] = p
 	return p
@@ -86,10 +86,10 @@ func (h *fallbackHarness) provider(name, ptype string, fallbacks ...string) *age
 // run walks from primary and returns the chosen provider name (or "" on
 // exhaustion) plus the total attemptCount budget consumed (which counts
 // budget-blocked candidates that never forward).
-func (h *fallbackHarness) run(primary *agentryv1alpha1.ModelProvider) (string, int, bool) {
+func (h *fallbackHarness) run(primary *kaalmv1alpha1.ModelProvider) (string, int, bool) {
 	st := &walkState{primary: primary, namespace: "team-a", modelID: "m1", maxDepth: 3, visited: map[string]bool{}}
 	res, ok := h.server.tryWithFallbacks(context.Background(), primary, st,
-		func(_ context.Context, cand *agentryv1alpha1.ModelProvider) forwardResult {
+		func(_ context.Context, cand *kaalmv1alpha1.ModelProvider) forwardResult {
 			status := h.results[cand.Name]
 			if status == 0 {
 				return forwardResult{fallilable: true, class: classConnect, provider: cand.Name}
@@ -134,7 +134,7 @@ func TestFallback_DepthCap(t *testing.T) {
 	h := newFallbackHarness()
 	// A deep chain; the cap of 3 stops after primary + 2.
 	p := h.provider("p0", "anthropic", "p1")
-	h.provider("p1", "anthropic", "p2").Spec.Fallback = []agentryv1alpha1.LocalObjectReference{{Name: "p2"}}
+	h.provider("p1", "anthropic", "p2").Spec.Fallback = []kaalmv1alpha1.LocalObjectReference{{Name: "p2"}}
 	h.provider("p2", "anthropic", "p3")
 	h.provider("p3", "anthropic")
 	for _, n := range []string{"p0", "p1", "p2", "p3"} {
@@ -193,9 +193,9 @@ func TestFallback_BudgetBlockedPrimaryHandledByCaller(t *testing.T) {
 	h := newFallbackHarness()
 	p := h.provider("primary", "anthropic", "blocked")
 	blocked := h.provider("blocked", "anthropic", "child")
-	blocked.Spec.Budget = agentryv1alpha1.ModelProviderBudget{
+	blocked.Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
 		Period: "monthly", PerNamespaceUSD: "10",
-		Policies: []agentryv1alpha1.ModelProviderBudgetPolicy{{AtPercent: 100, Action: "block"}},
+		Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{{AtPercent: 100, Action: "block"}},
 	}
 	h.server.Budget.Add(blocked, "team-a", 20) // 200% -> blocked
 	h.provider("child", "anthropic")

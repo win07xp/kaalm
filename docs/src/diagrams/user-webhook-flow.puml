@@ -31,7 +31,7 @@ group #F5F5F5 2a. Authenticate (per-AgentChannel bearer or HMAC)
   end
 end
 
-group #F5F5F5 3. Normalize to the Agentry envelope
+group #F5F5F5 3. Normalize to the Kaalm envelope
   alt fromBody configured and body is not JSON
     gw --> caller : **400** invalid_request
   end
@@ -42,7 +42,7 @@ group #F5F5F5 4. AgentChannel lookup
 end
 
 alt #FFF8DC responseMode: async
-  gw -> api : Create placeholder ConfigMap\nagentry-async-{requestId}
+  gw -> api : Create placeholder ConfigMap\nkaalm-async-{requestId}
   alt Create fails
     api --> gw : error
     gw --> caller : **503** (no 202 without a\nqueryable polling record)
@@ -59,7 +59,7 @@ end
 group #F5F5F5 5. Activator check
   opt Agent is Hibernated
     gw -> ctrl : POST /v1/activate/{ns}/{name} (mTLS)
-    ctrl -> api : patch agentry.io/wake=true
+    ctrl -> api : patch kaalm.io/wake=true
     gw -> agent : poll readiness, bounded by wakeTimeout (120s)
     note over gw, agent : Full wake sequence: see "The Activator".
   end

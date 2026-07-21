@@ -22,7 +22,7 @@ import (
 	"path"
 	"strings"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // splitQualifiedModel splits {providerRef}/{modelId} on the FIRST slash.
@@ -48,7 +48,7 @@ type routeDenial struct {
 // authorized for a provider never learns which models it hosts.
 func (s *Server) authorizeRoute(
 	ctx context.Context, c *caller, providerName, modelID string,
-) (*agentryv1alpha1.ModelProvider, *routeDenial) {
+) (*kaalmv1alpha1.ModelProvider, *routeDenial) {
 	// Workload gates (mTLS tier). Gateway-only callers have no Agent,
 	// AgentTask, or AgentClass: their chain is allowedNamespaces plus the
 	// model list alone.
@@ -102,7 +102,7 @@ func (s *Server) authorizeRoute(
 
 // workloadProviders resolves the caller's workload resource to its provider
 // references and class name.
-func (s *Server) workloadProviders(ctx context.Context, c *caller) ([]agentryv1alpha1.AgentProviderReference, string, bool) {
+func (s *Server) workloadProviders(ctx context.Context, c *caller) ([]kaalmv1alpha1.AgentProviderReference, string, bool) {
 	switch c.Workload.Kind {
 	case KindAgent:
 		agent, ok := s.Store.AgentByName(ctx, c.Namespace, c.Workload.Name)
@@ -120,7 +120,7 @@ func (s *Server) workloadProviders(ctx context.Context, c *caller) ([]agentryv1a
 	return nil, "", false
 }
 
-func containsProviderRef(refs []agentryv1alpha1.AgentProviderReference, name string) bool {
+func containsProviderRef(refs []kaalmv1alpha1.AgentProviderReference, name string) bool {
 	for _, r := range refs {
 		if r.ProviderRef.Name == name {
 			return true

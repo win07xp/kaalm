@@ -12,7 +12,7 @@ skinparam rectangle {
 
 rectangle "namespace: **team-support**" as ns #line:4A148C;line.dashed;text:2a0a4a {
 
-  rectangle "**AgentTask**\nnightly-report\nfinalizer: agentry.io/task-finalizer" as task #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentTask**\nnightly-report\nfinalizer: kaalm.io/task-finalizer" as task #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
 
   rectangle "**Pod**\nephemeral, no listener" as pod #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
   rectangle "**PVC**\nonly if the task spec\nrequests persistence" as pvc #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a

@@ -1,4 +1,4 @@
-# Build an Agentry binary. Pass --build-arg BINARY=manager (default) or
+# Build an Kaalm binary. Pass --build-arg BINARY=manager (default) or
 # --build-arg BINARY=gateway to select which command to build. Both ship from
 # the same source tree and base image.
 FROM docker.io/golang:1.24 AS builder

@@ -2,7 +2,7 @@
 
 [Welcome](welcome.md)
 
-- [What Is Agentry](what-is-agentry.md)
+- [What Is Kaalm](what-is-kaalm.md)
 - [Setting Up Your Laptop](setting-up.md)
 - [A Cluster in One Command](a-cluster-in-one-command.md)
 - [Looking Around](looking-around.md)

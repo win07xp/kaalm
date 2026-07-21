@@ -67,7 +67,7 @@ legend bottom
   it needs **metadata.namespace**, which CRD validation cannot reach at any scope,
   only metadata.name and metadata.generateName (15, 28);
   or it must surface on **pre-existing objects** as recoverable status rather than a
-  blocked write (29). Agentry runs no admission webhook server, so there is no third place.
+  blocked write (29). Kaalm runs no admission webhook server, so there is no third place.
   ====
   |= rule |= reason |= rule |= reason |
   | 15 | InvalidPath / PathConflict | 2, 3, 4, 5 | ClassConstraintViolation |

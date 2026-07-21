@@ -1,4 +1,4 @@
-// Command gateway is the Agentry Gateway: the LLM listener on :8443 with
+// Command gateway is the Kaalm Gateway: the LLM listener on :8443 with
 // per-path client authentication, the provider proxy, and a dedicated health
 // port. The User listener (:8080) and the controller-facing internal handlers
 // land in later phases. See docs/src/gateways/.

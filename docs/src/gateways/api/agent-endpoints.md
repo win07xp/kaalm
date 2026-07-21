@@ -24,7 +24,7 @@ The gateway accepts heartbeats unconditionally: every heartbeat updates the agen
 | Status | `error.type` | `retryable` | When |
 |---|---|---|---|
 | `401 Unauthorized` | `unauthorized` | `false` | The source-IP → Pod cross-check fails: the source IP does not resolve to any Pod in the cert-SAN-derived namespace via the gateway's informer cache. Same envelope shape as the [LLM Gateway 401 row](errors.md#llm-gateway-error-responses). |
-| `403 Forbidden` | `access_denied` | `false` | The calling Pod is not associated with an Agent. This includes the AgentTask-SAN-at-listener / Agent-only-at-handler case: an AgentTask Pod's cert passes the TLS listener but this handler accepts Agents only. See [The Agentry Gateway](../overview.md). |
+| `403 Forbidden` | `access_denied` | `false` | The calling Pod is not associated with an Agent. This includes the AgentTask-SAN-at-listener / Agent-only-at-handler case: an AgentTask Pod's cert passes the TLS listener but this handler accepts Agents only. See [The Kaalm Gateway](../overview.md). |
 
 There is **no** live API-server fallback on this endpoint, unlike [`/v1/task/complete`](task-complete.md). Heartbeats are periodic, so a single call dropped during informer lag is recovered on the next heartbeat tick, and the per-call API cost of a fallback is not justified here. Custom agents that emit a heartbeat within the first ~100ms of startup may observe a `401` for this reason; the standard advice is to either delay the first heartbeat past informer-lag or accept the missed tick.
 
@@ -32,15 +32,15 @@ There is **no** live API-server fallback on this endpoint, unlike [`/v1/task/com
 
 ## POST /v1/message
 
-This endpoint is **implemented by the agent container**, not by the gateway. The User Gateway calls it to deliver normalized channel messages (see [User Gateway Request Flow](../user/overview.md#request-flow)). Agents that use AgentChannel must expose this endpoint on `$AGENTRY_HEALTH_PORT` (default 8080).
+This endpoint is **implemented by the agent container**, not by the gateway. The User Gateway calls it to deliver normalized channel messages (see [User Gateway Request Flow](../user/overview.md#request-flow)). Agents that use AgentChannel must expose this endpoint on `$KAALM_HEALTH_PORT` (default 8080).
 
 ### Agent-side auth contract
 
 Because the agent is the server here, the agent is responsible for authenticating the gateway:
 
-- The `/v1/message` listener must terminate TLS using the agent's cert-manager-issued cert (`$AGENTRY_TLS_CERT` / `$AGENTRY_TLS_KEY`).
-- It must request client certificates with `tls.Config.ClientAuth = tls.VerifyClientCertIfGiven` (or equivalent), with `ClientCAs` loaded from `$AGENTRY_CA_CERT`.
-- It must enforce per-path at the handler: `/v1/message` returns `401 Unauthorized` when no client cert was presented, and `403 Forbidden` when the peer cert's SAN does not match the gateway Service DNS (`agentry-gateway.agentry-system.svc.cluster.local` or `agentry-gateway.agentry-system.svc`).
+- The `/v1/message` listener must terminate TLS using the agent's cert-manager-issued cert (`$KAALM_TLS_CERT` / `$KAALM_TLS_KEY`).
+- It must request client certificates with `tls.Config.ClientAuth = tls.VerifyClientCertIfGiven` (or equivalent), with `ClientCAs` loaded from `$KAALM_CA_CERT`.
+- It must enforce per-path at the handler: `/v1/message` returns `401 Unauthorized` when no client cert was presented, and `403 Forbidden` when the peer cert's SAN does not match the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `kaalm-gateway.kaalm-system.svc`).
 
 Enforcement cannot live at the TLS handshake (`RequireAndVerifyClientCert`): the kubelet's HTTP probes share the same port and present no client certificate, so a handshake-level requirement would fail every probe and leave the agent permanently unready. This is the same `VerifyClientCertIfGiven` + per-path pattern the controller `:9443` and gateway `:8443` listeners use. Layered with the synthesized NetworkPolicy gateway → agent ingress allow rule, this is what keeps the message path safe under a misconfigured per-Agent NetworkPolicy. See [The Runtime Contract item 4](../../runtime/contract.md) and [In-cluster TLS](../../security/tls.md#in-cluster-tls).
 
@@ -86,7 +86,7 @@ When `AgentChannel.spec.session.enabled: true`, the gateway computes a **determi
 sessionId = UUIDv5(namespace: f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d, name: channelId + ":" + userId)
 ```
 
-The namespace constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` is a purpose-generated UUID published as part of the Agentry API specification. It is identical across all installations and versions. **This constant must not change after v1 ships**: any change would invalidate existing session state in agent PVCs, because agents key their conversation state by `sessionId`.
+The namespace constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` is a purpose-generated UUID published as part of the Kaalm API specification. It is identical across all installations and versions. **This constant must not change after v1 ships**: any change would invalidate existing session state in agent PVCs, because agents key their conversation state by `sessionId`.
 
 Because the derivation is a pure function of `channelId` and `userId`, the resulting ID is stable across gateway replicas and gateway restarts, and no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope.
 

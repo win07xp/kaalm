@@ -22,7 +22,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func TestSplitQualifiedModel(t *testing.T) {
@@ -115,18 +115,18 @@ func TestNamespaceGlobAllowed(t *testing.T) {
 func TestWorkloadProviders(t *testing.T) {
 	s := &Server{Store: newFakeStore()}
 	fs := s.Store.(*fakeStore)
-	fs.agents["team-a/sup"] = &agentryv1alpha1.Agent{
+	fs.agents["team-a/sup"] = &kaalmv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "std"},
-			Providers:     []agentryv1alpha1.AgentProviderReference{{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "prov"}}},
+		Spec: kaalmv1alpha1.AgentSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "std"},
+			Providers:     []kaalmv1alpha1.AgentProviderReference{{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "prov"}}},
 		},
 	}
-	fs.tasks["team-a/fix"] = &agentryv1alpha1.AgentTask{
+	fs.tasks["team-a/fix"] = &kaalmv1alpha1.AgentTask{
 		ObjectMeta: metav1.ObjectMeta{Name: "fix", Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentTaskSpec{
-			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "tstd"},
-			Providers:     []agentryv1alpha1.AgentProviderReference{{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "tprov"}}},
+		Spec: kaalmv1alpha1.AgentTaskSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "tstd"},
+			Providers:     []kaalmv1alpha1.AgentProviderReference{{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "tprov"}}},
 		},
 	}
 	ctx := context.Background()

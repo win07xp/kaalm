@@ -8,9 +8,9 @@ start
 
 if (Client certificate presented?) then (**yes: Mode 1, mTLS**)
 
-  :Verified against **agentry-ca** at the handshake\n(a cert failing CA verification is rejected at the\nhandshake itself: no HTTP response, no error body);
+  :Verified against **kaalm-ca** at the handshake\n(a cert failing CA verification is rejected at the\nhandshake itself: no HTTP response, no error body);
 
-  :Scan the DNS SAN **list** for a recognized suffix:\n**.svc.cluster.local** or **.task.agentry.io**\n(short-form Service SANs match neither: ignored);
+  :Scan the DNS SAN **list** for a recognized suffix:\n**.svc.cluster.local** or **.task.kaalm.io**\n(short-form Service SANs match neither: ignored);
 
   if (Exactly **one** recognized SAN, with **exactly**\nthe expected label count of **5** for either shape) then (no)
     :**403 invalid_cert**;
@@ -42,11 +42,11 @@ else (**no: Mode 2, bearer**)
     token-cache hit cannot skip it.
   end note
 
-  if (Pod ownerRef -> **Agent** / **AgentTask**, or carries\nthe Agentry-managed label set?) then (yes)
+  if (Pod ownerRef -> **Agent** / **AgentTask**, or carries\nthe Kaalm-managed label set?) then (yes)
     :**401 unauthorized**\nregardless of the token presented;
     note right
       **This blocks the auth**
-      **downgrade.** Agentry-managed
+      **downgrade.** Kaalm-managed
       Pods MUST use mTLS, so a
       compromised Agent Pod cannot
       fall back to its SA token as
@@ -57,7 +57,7 @@ else (**no: Mode 2, bearer**)
   endif
 
   if (Token cache hit? (SHA-256 of the token)) then (no)
-    :POST **TokenReview**, audience **agentry-gateway**;
+    :POST **TokenReview**, audience **kaalm-gateway**;
 
     if (apiserver reachable?) then (no)
       :**503 internal_unavailable**\nretryable: true, **Retry-After: 1**\n(mTLS and cached-token callers unaffected);

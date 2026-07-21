@@ -56,7 +56,7 @@ else (no)
 endif
 
 :**Patch** the payload into
-agentry-async-{requestId};
+kaalm-async-{requestId};
 
 if (Patch lands within its own\n1s/5s/25s, 4-attempt budget?) then (yes)
   :polls return **200** until the
@@ -64,7 +64,7 @@ if (Patch lands within its own\n1s/5s/25s, 4-attempt budget?) then (yes)
   stop
 else (no)
   :payload dropped silently
-  agentry_channel_async_patch_failed_total
+  kaalm_channel_async_patch_failed_total
   pollers see **202** until
   the TTL flips to **404**; <<#FFCDD2>>
   stop

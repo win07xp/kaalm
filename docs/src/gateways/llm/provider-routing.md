@@ -6,7 +6,7 @@ Both variants of routing run only after [Namespace Identification](workload-iden
 
 The two variants below are the same gate chain with the class-level and workload-level gates removed; [Provider access gating](../../concepts/tenancy-and-tiers.md#provider-access-gating) draws both tiers as a single figure, with the denial code on every arm.
 
-## mTLS tier (Agentry-managed Pods)
+## mTLS tier (Kaalm-managed Pods)
 
 Agents and AgentTasks created by the controller have an Agent (or AgentTask) resource with `spec.providers`, and an AgentClass with `allowedProviders`. The gateway walks the full chain:
 
@@ -28,11 +28,11 @@ Existing workloads that authenticate with a projected ServiceAccount bearer toke
 4. **Model allowlist**: the requested model must appear in `ModelProvider.spec.models`. If not, the request is rejected with `400 invalid_request`.
 5. **Forward**: the gateway reads `spec.endpoint`, `spec.type`, and credentials and forwards the request.
 
-**AgentClass `allowedProviders` is deliberately not enforced in this tier.** AgentClass is the platform-team policy layer for the full-lifecycle tier; gateway-only workloads are not Agents and are not associated with any AgentClass. Platform teams who need class-scoped provider policy must onboard workloads through the full Agent lifecycle tier. The gateway-only tier trades that policy surface for a zero-CRD on-ramp, see [What Agentry Provides](../../concepts/vision-and-scope.md#what-agentry-provides) and [Tiered On-Ramp](../../operations/deployment.md#tiered-on-ramp).
+**AgentClass `allowedProviders` is deliberately not enforced in this tier.** AgentClass is the platform-team policy layer for the full-lifecycle tier; gateway-only workloads are not Agents and are not associated with any AgentClass. Platform teams who need class-scoped provider policy must onboard workloads through the full Agent lifecycle tier. The gateway-only tier trades that policy surface for a zero-CRD on-ramp, see [What Kaalm Provides](../../concepts/vision-and-scope.md#what-kaalm-provides) and [Tiered On-Ramp](../../operations/deployment.md#tiered-on-ramp).
 
 ## Credential Handling
 
-Provider credentials are stored as Secrets in `agentry-system` and referenced by ModelProvider. The gateway reads these Secrets directly at startup and watches them for rotation. Credentials never leave `agentry-system`: there is no per-agent or per-namespace credential copying. The full storage-to-rotation lifecycle, including who else can read the Secret, is in [Lifecycle of an LLM API key](../../security/credentials.md#lifecycle-of-an-llm-api-key).
+Provider credentials are stored as Secrets in `kaalm-system` and referenced by ModelProvider. The gateway reads these Secrets directly at startup and watches them for rotation. Credentials never leave `kaalm-system`: there is no per-agent or per-namespace credential copying. The full storage-to-rotation lifecycle, including who else can read the Secret, is in [Lifecycle of an LLM API key](../../security/credentials.md#lifecycle-of-an-llm-api-key).
 
 The credential's shape is adapter-specific. For Anthropic, OpenAI, and OpenAI-compatible providers, the referenced Secret holds a static API key that the adapter injects as the provider's auth header. Google Vertex does not accept static API keys: its Secret holds a GCP service-account JSON key, and the Vertex adapter mints OAuth2 access tokens from it (cached in memory and refreshed roughly 5 minutes before the ~1-hour expiry), attaching the current token as the `Authorization: Bearer` header on LLM requests and health probes alike.
 
@@ -68,7 +68,7 @@ The adapter interface is deliberately narrow. The gateway is protocol-aware but 
 
 The gateway always connects to upstream LLM providers over HTTPS. For enterprise environments that require custom CA bundles or HTTP proxies for outbound traffic, the gateway supports:
 
-- **Custom CA bundle**: a ConfigMap in `agentry-system` (`agentry-upstream-ca`) containing additional CA certificates. The gateway loads these on startup and watches for changes. All upstream HTTPS connections trust both the system CA bundle and the custom bundle.
+- **Custom CA bundle**: a ConfigMap in `kaalm-system` (`kaalm-upstream-ca`) containing additional CA certificates. The gateway loads these on startup and watches for changes. All upstream HTTPS connections trust both the system CA bundle and the custom bundle.
 - **HTTP proxy**: standard `HTTPS_PROXY` / `NO_PROXY` environment variables on the gateway Deployment. The gateway respects these for all upstream provider calls.
 
 These are gateway-level settings (not per-ModelProvider) because they typically reflect cluster-wide network infrastructure.

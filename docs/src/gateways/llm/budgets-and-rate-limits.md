@@ -14,11 +14,11 @@ Each gateway replica maintains an in-memory spend counter per (provider, namespa
 
 Replicas do not talk to each other directly. They exchange spend through a ConfigMap, and the reconciler acts as the reducer over what they write.
 
-![Sequence diagram of the budget counter exchange between two gateway replicas, the agentry-budget-{provider} ConfigMap, and the ModelProviderReconciler, divided into four cadences. At startup a replica reads _canonical once to initialize its counter, and a note records that this is the only time a replica ever reads that key. Per request, the replica increments its in-memory counter synchronously per provider, namespace and period. Every 10 seconds each replica server-side-applies its partial to its own key, named for its Pod, using its own Pod name as the field manager, so simultaneous writes never conflict; the period tag lets the reducer drop stale entries during rollover. On every ConfigMap watch event, each replica folds its peers' current-period partials into its enforcement view; a highlighted note marks this as load-bearing, since the enforced value is the replica's own live counter plus every peer's latest partial, at most one 10-second interval stale, and without the fold a long-lived replica would never observe peer spend and drift would grow unbounded within a period. On each reconcile the reconciler reads all keys, filters out entries whose period is not current, prunes keys with no live gateway Pod name, sums the remaining partials, writes _canonical, and updates status.budgetUsage. A closing note marks that _canonical is not on the enforcement path: it is the durable roll-up for status reporting and replica restarts, while per-request enforcement reads peers' partials straight off the watch.](../../diagrams/budget-exchange.svg)
+![Sequence diagram of the budget counter exchange between two gateway replicas, the kaalm-budget-{provider} ConfigMap, and the ModelProviderReconciler, divided into four cadences. At startup a replica reads _canonical once to initialize its counter, and a note records that this is the only time a replica ever reads that key. Per request, the replica increments its in-memory counter synchronously per provider, namespace and period. Every 10 seconds each replica server-side-applies its partial to its own key, named for its Pod, using its own Pod name as the field manager, so simultaneous writes never conflict; the period tag lets the reducer drop stale entries during rollover. On every ConfigMap watch event, each replica folds its peers' current-period partials into its enforcement view; a highlighted note marks this as load-bearing, since the enforced value is the replica's own live counter plus every peer's latest partial, at most one 10-second interval stale, and without the fold a long-lived replica would never observe peer spend and drift would grow unbounded within a period. On each reconcile the reconciler reads all keys, filters out entries whose period is not current, prunes keys with no live gateway Pod name, sums the remaining partials, writes _canonical, and updates status.budgetUsage. A closing note marks that _canonical is not on the enforcement path: it is the durable roll-up for status reporting and replica restarts, while per-request enforcement reads peers' partials straight off the watch.](../../diagrams/budget-exchange.svg)
 
 Reading the diagram: the four cadences are the structure, and the thing to notice is which arrows the enforcement decision actually depends on. It depends on the per-request increment and on the watch-driven fold of peers' partials. It does not depend on `_canonical`, which is written by the reconciler and read exactly once per replica lifetime, at startup.
 
-Each gateway replica periodically (every 10s) writes its partial spend counters to a ConfigMap in `agentry-system` named `agentry-budget-{providerName}`, keyed by the replica's Pod name. Replicas use **server-side apply** with per-replica field managers (field manager name = Pod name), so each replica owns only its own key. This eliminates optimistic concurrency conflicts between replicas writing simultaneously.
+Each gateway replica periodically (every 10s) writes its partial spend counters to a ConfigMap in `kaalm-system` named `kaalm-budget-{providerName}`, keyed by the replica's Pod name. Replicas use **server-side apply** with per-replica field managers (field manager name = Pod name), so each replica owns only its own key. This eliminates optimistic concurrency conflicts between replicas writing simultaneously.
 
 The ConfigMap data structure is:
 
@@ -28,21 +28,21 @@ data:
   # The "period" field is required so the reconciler can exclude stale entries from prior periods
   # during rollover. Replicas transition to the new period independently on their first request,
   # so mixed-period entries are expected in the rollover window.
-  agentry-gateway-0: '{"period": "2026-04", "team-support": "142.50", "team-ml": "87.30"}'
-  agentry-gateway-1: '{"period": "2026-04", "team-support": "138.20", "team-ml": "91.10"}'
+  kaalm-gateway-0: '{"period": "2026-04", "team-support": "142.50", "team-ml": "87.30"}'
+  kaalm-gateway-1: '{"period": "2026-04", "team-support": "138.20", "team-ml": "91.10"}'
   _canonical: '{"team-support": "280.70", "team-ml": "178.40"}'
 ```
 
 The two roles in this ConfigMap are worth naming precisely:
 
-- **Per-replica keys** (`agentry-gateway-0`, `agentry-gateway-1`) are written by the replicas, each owning exactly one key via its own field manager. They are partials: one replica's view of its own spend.
+- **Per-replica keys** (`kaalm-gateway-0`, `kaalm-gateway-1`) are written by the replicas, each owning exactly one key via its own field manager. They are partials: one replica's view of its own spend.
 - **`_canonical`** is written only by the reconciler. It is the durable roll-up.
 
 The ModelProviderReconciler reads this ConfigMap on each reconcile pass (event-driven plus the controller's 5-minute periodic requeue per [Reconcile Interval and Performance](../../controller/overview.md#reconcile-interval-and-performance)), **filters out any per-replica entries whose `period` does not match the current period**, sums the remaining partials, writes the `_canonical` key with the total, and updates `status.budgetUsage` on the ModelProvider. Gateway replicas read the `_canonical` key on startup to initialize their local counters. This avoids a Prometheus dependency and works with existing ConfigMap RBAC.
 
 ### Cross-replica enforcement view
 
-After startup, each replica **watches the budget ConfigMap** (via the `agentry-system` ConfigMap informer it already holds) and folds the other replicas' current-period partials into its enforcement view on every change. The spend value a replica enforces budget policies against is therefore its own live in-memory counter plus every peer's most recently written partial, at most one 10-second write interval stale.
+After startup, each replica **watches the budget ConfigMap** (via the `kaalm-system` ConfigMap informer it already holds) and folds the other replicas' current-period partials into its enforcement view on every change. The spend value a replica enforces budget policies against is therefore its own live in-memory counter plus every peer's most recently written partial, at most one 10-second write interval stale.
 
 This is load-bearing: if replicas only read `_canonical` at startup, a long-lived replica would never observe peer spend and enforcement drift would grow unbounded within a budget period. The reconciler's `_canonical` write remains the durable roll-up for status reporting and replica (re)starts; per-request enforcement never waits on it.
 
@@ -74,7 +74,7 @@ For typical deployments (2-3 replicas, 1 call/sec peak per replica, $0.01-0.10 p
 
 Streaming-heavy namespaces should size their soft-guardrail slack from that larger figure.
 
-**Agentry's budget feature is spend visibility and soft guardrails, not a hard financial cap.** This is an explicit design decision, not a limitation to be fixed. Teams requiring hard caps should use provider-level account limits in addition to Agentry's per-namespace guardrails.
+**Kaalm's budget feature is spend visibility and soft guardrails, not a hard financial cap.** This is an explicit design decision, not a limitation to be fixed. Teams requiring hard caps should use provider-level account limits in addition to Kaalm's per-namespace guardrails.
 
 ### Budget period rollover
 
@@ -108,7 +108,7 @@ During scale-up, existing replicas immediately divide by N+1 when the new Pod ap
 
 During rolling restarts (`maxUnavailable: 1`), different replicas can transiently hold different bucket sizes, causing the effective cluster-wide ceiling to deviate by up to one replica's share.
 
-If tighter enforcement is required, replace per-replica division with a shared ConfigMap-backed token bucket (the `agentry-budget-{providerName}` ConfigMap already provides the coordination primitive).
+If tighter enforcement is required, replace per-replica division with a shared ConfigMap-backed token bucket (the `kaalm-budget-{providerName}` ConfigMap already provides the coordination primitive).
 
 ## Related
 

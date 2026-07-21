@@ -1,14 +1,14 @@
 # Multi-Tenancy and Adoption Tiers
 
-Agentry is built for a shared cluster: many tenants, one platform team, one set of provider credentials. Two questions follow from that. First, **how deeply does a workload adopt Agentry?** Some workloads want nothing but a metered path to an LLM; others want the full managed lifecycle. Second, **what keeps one tenant from reaching another's traffic, budget, or agents?**
+Kaalm is built for a shared cluster: many tenants, one platform team, one set of provider credentials. Two questions follow from that. First, **how deeply does a workload adopt Kaalm?** Some workloads want nothing but a metered path to an LLM; others want the full managed lifecycle. Second, **what keeps one tenant from reaching another's traffic, budget, or agents?**
 
 This page answers both, in that order. The adoption tier a workload belongs to changes which isolation layers apply to it, so the tiers come first.
 
-A note on vocabulary: the personas page described a "two-tier model" meaning the split between Priya's cluster-scoped resources and Dev's namespaced ones. That is a different axis from the **adoption tiers** below, which describe how much of Agentry a given workload uses. Both splits are real; they are just not the same split.
+A note on vocabulary: the personas page described a "two-tier model" meaning the split between Priya's cluster-scoped resources and Dev's namespaced ones. That is a different axis from the **adoption tiers** below, which describe how much of Kaalm a given workload uses. Both splits are real; they are just not the same split.
 
 ## Adoption Tiers
 
-Agentry can be adopted at two depths. This is not a cosmetic distinction: several behaviors throughout the design branch on which tier a workload belongs to, and the sections below say so explicitly where they do.
+Kaalm can be adopted at two depths. This is not a cosmetic distinction: several behaviors throughout the design branch on which tier a workload belongs to, and the sections below say so explicitly where they do.
 
 ### Gateway-only tier
 
@@ -16,13 +16,13 @@ Existing workloads call the gateway via projected ServiceAccount tokens, getting
 
 Because there is no Agent, AgentTask, or AgentClass to consult, provider access is gated by `ModelProvider.allowedNamespaces` alone.
 
-**Egress is the platform team's responsibility.** Agentry does not synthesize a NetworkPolicy for these Pods. Budget enforcement, rate limits, and provider-access gating are all enforced *at the gateway*, so they only hold if traffic actually goes through the gateway. That means the platform team must apply their own NetworkPolicies in those namespaces, denying egress to provider IPs except via the gateway. Without those policies a Pod can simply call the provider directly and every gateway-side control is bypassed. See [Deployment Model](system-architecture.md#deployment-model).
+**Egress is the platform team's responsibility.** Kaalm does not synthesize a NetworkPolicy for these Pods. Budget enforcement, rate limits, and provider-access gating are all enforced *at the gateway*, so they only hold if traffic actually goes through the gateway. That means the platform team must apply their own NetworkPolicies in those namespaces, denying egress to provider IPs except via the gateway. Without those policies a Pod can simply call the provider directly and every gateway-side control is bypassed. See [Deployment Model](system-architecture.md#deployment-model).
 
 ### Full lifecycle tier
 
 Agents, AgentTasks, and AgentChannels managed by the operator, with hibernation, wake-on-demand, and per-Pod mTLS via cert-manager-issued certificates.
 
-Here the egress boundary is not left to the platform team: because these Pods are Agentry-managed, the controller synthesizes their NetworkPolicies itself (see [NetworkPolicy as the cross-tenant boundary](#networkpolicy-as-the-cross-tenant-boundary) below).
+Here the egress boundary is not left to the platform team: because these Pods are Kaalm-managed, the controller synthesizes their NetworkPolicies itself (see [NetworkPolicy as the cross-tenant boundary](#networkpolicy-as-the-cross-tenant-boundary) below).
 
 The chart-level framing (Helm values, prerequisites, install order) is in [Deployment Model](system-architecture.md#deployment-model).
 
@@ -45,7 +45,7 @@ Platform teams that need to treat developers as untrusted should restrict `netwo
 
 ### RBAC layering
 
-The operator ServiceAccount holds the cluster-scoped surface (CRD watches, child-resource management). The gateway ServiceAccount is scoped to `agentry-system`, plus dynamic per-channel and per-task `Role`s with `resourceNames`-bounded access in user namespaces. See [RBAC Model](../security/rbac.md).
+The operator ServiceAccount holds the cluster-scoped surface (CRD watches, child-resource management). The gateway ServiceAccount is scoped to `kaalm-system`, plus dynamic per-channel and per-task `Role`s with `resourceNames`-bounded access in user namespaces. See [RBAC Model](../security/rbac.md).
 
 ### Provider access gating
 
@@ -59,7 +59,7 @@ For full-lifecycle workloads, an Agent or AgentTask can use a provider only when
 
 All three layers must pass. Gateway-only-tier callers have no Agent, AgentTask, or AgentClass to consult, so they are gated by `ModelProvider.allowedNamespaces` alone.
 
-Separately, the requested model must exist in `ModelProvider.spec.models`. That check is a model-resolution prerequisite enforced at the gateway, not a tenancy boundary, and it applies to callers in both tiers: see [The Agentry Gateway](../gateways/overview.md).
+Separately, the requested model must exist in `ModelProvider.spec.models`. That check is a model-resolution prerequisite enforced at the gateway, not a tenancy boundary, and it applies to callers in both tiers: see [The Kaalm Gateway](../gateways/overview.md).
 
 ![The gate chain the LLM gateway applies to a request carrying a qualified model name: identify the caller's namespace from an mTLS certificate SAN (full lifecycle tier) or a TokenReview-verified bearer token (gateway-only tier), then Gate A checks the providerRef against the workload's spec.providers and the AgentClass allowedProviders, Gate B checks the calling namespace against ModelProvider allowedNamespaces, and Gate C resolves the modelId against ModelProvider models. Gate A sits in a lane of its own that gateway-only callers bypass entirely. Budget and rate-limit checks follow, and every denial arm is labelled with its status code and error type.](../diagrams/provider-access-gates.svg)
 
@@ -73,18 +73,18 @@ Gateway rate-limit token buckets are keyed on (namespace, model) against the clu
 
 Both controls apply to gateway-only-tier callers as well, because both are enforced at the gateway from the namespace identified on every request; the gateway derives that namespace from the caller's workload identity, whichever auth mode it used (see [Namespace identification](../gateways/llm/workload-identity.md)).
 
-See [The Agentry Gateway](../gateways/overview.md) for the per-request enforcement points, and [Multi-replica state](../gateways/overview.md#multi-replica-state) for the cross-replica reconciliation strategies (both counters live in gateway replicas, so they need reconciling).
+See [The Kaalm Gateway](../gateways/overview.md) for the per-request enforcement points, and [Multi-replica state](../gateways/overview.md#multi-replica-state) for the cross-replica reconciliation strategies (both counters live in gateway replicas, so they need reconciling).
 
 ### NetworkPolicy as the cross-tenant boundary
 
-Synthesized per-Pod NetworkPolicies bound Agentry-managed Pods' egress to the AgentClass-permitted set:
+Synthesized per-Pod NetworkPolicies bound Kaalm-managed Pods' egress to the AgentClass-permitted set:
 
 - **LLM provider traffic is gateway-mediated**, with no direct provider egress. This is what makes the spend and rate-limit controls above unbypassable for these Pods.
 - **Plus any AgentClass-allowed direct egress** (`allowedCIDRs`, `allowedHosts`, e.g. MCP servers).
 
 See [Per-Agent and Per-Task Child Resources](../runtime/child-resources.md).
 
-Gateway-only-tier Pods are not Agentry-managed and inherit no synthesized policy: see the caveat under [Adoption Tiers](#adoption-tiers).
+Gateway-only-tier Pods are not Kaalm-managed and inherit no synthesized policy: see the caveat under [Adoption Tiers](#adoption-tiers).
 
 ### Webhook path namespace-prefixing
 
@@ -96,7 +96,7 @@ The rule is enforced twice: at reconcile time (`Ready=False, reason=InvalidPath`
 
 ### Tenant-level resource limits
 
-Per-Pod resource caps live in `AgentClass.spec.maxLimits`. That bounds any single Pod, not a tenant's total footprint. Agentry does not synthesize ResourceQuota or LimitRange: platform teams should apply standard namespace-level ResourceQuota and LimitRange to bound aggregate tenant footprint.
+Per-Pod resource caps live in `AgentClass.spec.maxLimits`. That bounds any single Pod, not a tenant's total footprint. Kaalm does not synthesize ResourceQuota or LimitRange: platform teams should apply standard namespace-level ResourceQuota and LimitRange to bound aggregate tenant footprint.
 
 ## Where to go next
 

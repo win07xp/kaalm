@@ -1,7 +1,7 @@
 apiVersion: v2
-name: agentry
+name: kaalm
 description: >-
-  Agentry, a Kubernetes-native operator that makes AI agents a first-class
+  Kaalm, a Kubernetes-native operator that makes AI agents a first-class
   workload type. Installs the controller, the shared gateway, RBAC, and the
   cert-manager and trust-manager resources. Requires cert-manager,
   trust-manager, and a NetworkPolicy-enforcing CNI to be installed already.
@@ -14,6 +14,6 @@ keywords:
   - agents
   - operator
   - llm
-home: https://github.com/win07xp/kubeclaw
+home: https://github.com/win07xp/kaalm
 sources:
-  - https://github.com/win07xp/kubeclaw
+  - https://github.com/win07xp/kaalm

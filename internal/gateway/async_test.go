@@ -29,7 +29,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func decodeJSON(resp *http.Response, v any) error {
@@ -58,7 +58,7 @@ func mustIP(t *testing.T, s string) net.IP {
 // failingAsync always fails Patch, to exercise the retry-exhaustion path.
 type failingAsync struct{ patches int }
 
-func (f *failingAsync) Create(context.Context, string, *agentryv1alpha1.AgentChannel, time.Time) error {
+func (f *failingAsync) Create(context.Context, string, *kaalmv1alpha1.AgentChannel, time.Time) error {
 	return nil
 }
 func (f *failingAsync) Patch(context.Context, string, []byte) error {

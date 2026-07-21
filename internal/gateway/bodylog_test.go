@@ -20,11 +20,11 @@ import "testing"
 
 // TestDefaultBuildLogsNoBodies asserts the default build's PII posture: body
 // logging is compiled out. The debug build overrides this only under the
-// agentry_debug_logs tag.
+// kaalm_debug_logs tag.
 func TestDefaultBuildLogsNoBodies(t *testing.T) {
 	if DebugBodyLogging {
 		t.Fatal("the default test build must have body logging disabled; " +
-			"do not run tests with -tags agentry_debug_logs in CI")
+			"do not run tests with -tags kaalm_debug_logs in CI")
 	}
 	// bodyLog must be a safe no-op in the default build.
 	bodyLog("prompt", []byte("secret prompt content"))

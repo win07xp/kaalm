@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 // ProviderProbeResult classifies a provider liveness probe. Exactly one of
@@ -45,7 +45,7 @@ type ProviderProbeResult struct {
 // ProviderHealthChecker probes an upstream LLM provider for liveness. It is an
 // interface so reconcilers can be tested with a fake and never reach a real API.
 type ProviderHealthChecker interface {
-	Probe(ctx context.Context, provider *agentryv1alpha1.ModelProvider, credential string) ProviderProbeResult
+	Probe(ctx context.Context, provider *kaalmv1alpha1.ModelProvider, credential string) ProviderProbeResult
 }
 
 // defaultHealthTimeout bounds a single liveness probe when the provider does not
@@ -62,7 +62,7 @@ type HTTPProviderHealthChecker struct {
 
 // healthCheckTimeout returns the per-probe timeout: healthCheck.timeoutSeconds
 // when set, otherwise defaultHealthTimeout.
-func healthCheckTimeout(provider *agentryv1alpha1.ModelProvider) time.Duration {
+func healthCheckTimeout(provider *kaalmv1alpha1.ModelProvider) time.Duration {
 	if hc := provider.Spec.HealthCheck; hc != nil && hc.TimeoutSeconds > 0 {
 		return time.Duration(hc.TimeoutSeconds) * time.Second
 	}
@@ -71,7 +71,7 @@ func healthCheckTimeout(provider *agentryv1alpha1.ModelProvider) time.Duration {
 
 // Probe implements ProviderHealthChecker.
 func (h *HTTPProviderHealthChecker) Probe(
-	ctx context.Context, provider *agentryv1alpha1.ModelProvider, credential string,
+	ctx context.Context, provider *kaalmv1alpha1.ModelProvider, credential string,
 ) ProviderProbeResult {
 	timeout := healthCheckTimeout(provider)
 	cl := h.Client

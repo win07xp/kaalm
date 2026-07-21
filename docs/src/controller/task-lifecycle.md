@@ -90,7 +90,7 @@ The reconciler stamps `AgentTask.status.currentPodUID = Pod.UID` whenever the ag
 
 The reconciler watches Pod phase: exit 0 -> `Succeeded`, non-zero -> `Failed`.
 
-This mode depends on task Pods being created with `restartPolicy: Never`, which the AgentTaskReconciler pins unconditionally because Agentry owns retries via `backoffLimit`. With `Always` or `OnFailure`, the kubelet restarts the exited container in place and the Pod phase never reaches `Succeeded`/`Failed`, so completion would never be observed. In-place kubelet restarts would also bypass `status.retries` accounting and blur the one-run-per-`currentPodUID` assumption.
+This mode depends on task Pods being created with `restartPolicy: Never`, which the AgentTaskReconciler pins unconditionally because Kaalm owns retries via `backoffLimit`. With `Always` or `OnFailure`, the kubelet restarts the exited container in place and the Pod phase never reaches `Succeeded`/`Failed`, so completion would never be observed. In-place kubelet restarts would also bypass `status.retries` accounting and blur the one-run-per-`currentPodUID` assumption.
 
 Agent Pods, by contrast, are pinned `restartPolicy: Always`. Crash-loop detection there reads `containerStatuses` restart counts (CrashLoopBackOff), not Pod phase.
 

@@ -6,7 +6,7 @@ Both endpoints share a deliberate placement decision: they are served on the LLM
 
 ## GET /v1/activity
 
-Called by the [AgentReconciler](../../controller/reconcilers.md#agentreconciler) to read per-namespace last-activity timestamps for idle and hibernation transitions. Authenticated via **mTLS**: the caller must present the controller's `agentry-controller-tls` client cert, verified against `agentry-ca`, with a SAN that matches the controller Service DNS. There is no bearer-token or HMAC alternative. See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
+Called by the [AgentReconciler](../../controller/reconcilers.md#agentreconciler) to read per-namespace last-activity timestamps for idle and hibernation transitions. Authenticated via **mTLS**: the caller must present the controller's `kaalm-controller-tls` client cert, verified against `kaalm-ca`, with a SAN that matches the controller Service DNS. There is no bearer-token or HMAC alternative. See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
 
 **Request:**
 
@@ -47,7 +47,7 @@ Both signal sources are always returned. The controller applies the `Agent.spec.
 
 ## GET /v1/channels/health
 
-Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated via **mTLS**: the caller must present the controller's `agentry-controller-tls` client cert, verified against `agentry-ca`, with a SAN that matches the controller Service DNS. There is no bearer token or HMAC header. See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
+Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated via **mTLS**: the caller must present the controller's `kaalm-controller-tls` client cert, verified against `kaalm-ca`, with a SAN that matches the controller Service DNS. There is no bearer token or HMAC header. See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
 
 **Request:**
 

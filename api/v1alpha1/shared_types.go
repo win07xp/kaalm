@@ -16,7 +16,7 @@ limitations under the License.
 
 package v1alpha1
 
-// LocalObjectReference names another Agentry resource by name, in the same scope
+// LocalObjectReference names another Kaalm resource by name, in the same scope
 // as the referrer (same namespace for namespaced kinds, cluster-wide for
 // cluster-scoped kinds). Used for agentClassRef, providerRef, allowedProviders
 // entries, fallback entries, and agentRef.
@@ -28,7 +28,7 @@ type LocalObjectReference struct {
 }
 
 // SecretKeyReference points at a single key within a Secret. The Secret lives in
-// the namespace appropriate to the referrer: agentry-system for ModelProvider
+// the namespace appropriate to the referrer: kaalm-system for ModelProvider
 // credentials, the AgentChannel's own namespace for channel auth Secrets.
 type SecretKeyReference struct {
 	// Name of the Secret.

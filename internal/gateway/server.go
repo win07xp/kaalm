@@ -29,7 +29,7 @@ import (
 
 // Config carries the gateway's runtime settings.
 type Config struct {
-	// OperatorNamespace hosts the gateway (agentry-system); the controller
+	// OperatorNamespace hosts the gateway (kaalm-system); the controller
 	// SAN check and the gateway endpoint derivation use it.
 	OperatorNamespace string
 	// ListenAddr is the LLM listener (default :8443).
@@ -37,11 +37,11 @@ type Config struct {
 	// HealthAddr serves /healthz and /readyz over TLS with no client auth on
 	// a dedicated port, outside the listener auth profiles.
 	HealthAddr string
-	// CertFile/KeyFile are the serving cert (agentry-gateway-tls), reloaded
+	// CertFile/KeyFile are the serving cert (kaalm-gateway-tls), reloaded
 	// from disk on rotation.
 	CertFile string
 	KeyFile  string
-	// CAFile is the Agentry CA bundle used for the inbound ClientCAs pool.
+	// CAFile is the Kaalm CA bundle used for the inbound ClientCAs pool.
 	CAFile string
 	// MaxBodyBytes caps inbound LLM request bodies (default 4 MiB).
 	MaxBodyBytes int64
@@ -54,7 +54,7 @@ type Config struct {
 	// UpstreamTimeout bounds each upstream provider call.
 	UpstreamTimeout time.Duration
 	// UpstreamCAs, when set, replaces the system pool for upstream TLS
-	// verification (the agentry-upstream-ca mechanism; tests use it too).
+	// verification (the kaalm-upstream-ca mechanism; tests use it too).
 	UpstreamCAs *x509.CertPool
 	// DisableSourceIPCheck skips the source-IP cross-check (dev/test only).
 	DisableSourceIPCheck bool
@@ -88,7 +88,7 @@ type Config struct {
 	CallbackCAs *x509.CertPool
 }
 
-// Server is the Agentry Gateway's :8443 surface.
+// Server is the Kaalm Gateway's :8443 surface.
 type Server struct {
 	Config        Config
 	Store         Store

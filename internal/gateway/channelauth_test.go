@@ -30,7 +30,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 const sha1Size = 20
@@ -43,26 +43,26 @@ func TestChannelSecret_Branches(t *testing.T) {
 	ctx := context.Background()
 
 	// Bearer with secretRef resolves.
-	bearer := &agentryv1alpha1.ChannelAuth{Type: authTypeBearer, SecretRef: &agentryv1alpha1.SecretKeyReference{Name: "bearer-secret", Key: "token"}}
+	bearer := &kaalmv1alpha1.ChannelAuth{Type: authTypeBearer, SecretRef: &kaalmv1alpha1.SecretKeyReference{Name: "bearer-secret", Key: "token"}}
 	if v, err := s.channelSecret(ctx, "team-a", bearer); err != nil || v != "bt" {
 		t.Errorf("bearer secret = %q err=%v", v, err)
 	}
 	// Bearer without secretRef errors.
-	if _, err := s.channelSecret(ctx, "team-a", &agentryv1alpha1.ChannelAuth{Type: authTypeBearer}); err == nil {
+	if _, err := s.channelSecret(ctx, "team-a", &kaalmv1alpha1.ChannelAuth{Type: authTypeBearer}); err == nil {
 		t.Error("bearer without secretRef must error")
 	}
 	// HMAC with block resolves.
-	hm := &agentryv1alpha1.ChannelAuth{Type: authTypeHMAC, HMAC: &agentryv1alpha1.ChannelHMAC{
-		SecretRef: agentryv1alpha1.SecretKeyReference{Name: "hmac-secret", Key: "key"}}}
+	hm := &kaalmv1alpha1.ChannelAuth{Type: authTypeHMAC, HMAC: &kaalmv1alpha1.ChannelHMAC{
+		SecretRef: kaalmv1alpha1.SecretKeyReference{Name: "hmac-secret", Key: "key"}}}
 	if v, err := s.channelSecret(ctx, "team-a", hm); err != nil || v != "hk" {
 		t.Errorf("hmac secret = %q err=%v", v, err)
 	}
 	// HMAC without block errors.
-	if _, err := s.channelSecret(ctx, "team-a", &agentryv1alpha1.ChannelAuth{Type: authTypeHMAC}); err == nil {
+	if _, err := s.channelSecret(ctx, "team-a", &kaalmv1alpha1.ChannelAuth{Type: authTypeHMAC}); err == nil {
 		t.Error("hmac without block must error")
 	}
 	// Unknown type errors.
-	if _, err := s.channelSecret(ctx, "team-a", &agentryv1alpha1.ChannelAuth{Type: "mystery"}); err == nil {
+	if _, err := s.channelSecret(ctx, "team-a", &kaalmv1alpha1.ChannelAuth{Type: "mystery"}); err == nil {
 		t.Error("unknown auth type must error")
 	}
 }
@@ -84,12 +84,12 @@ func TestAuthenticatePoll_HMAC(t *testing.T) {
 	fs := s.Store.(*fakeStore)
 	fs.secrets["team-a/hmac-secret/key"] = "topsecret"
 
-	channel := &agentryv1alpha1.AgentChannel{
+	channel := &kaalmv1alpha1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "team-a"},
-		Spec: agentryv1alpha1.AgentChannelSpec{Webhook: agentryv1alpha1.AgentChannelWebhook{
-			Auth: agentryv1alpha1.ChannelAuth{Type: authTypeHMAC, HMAC: &agentryv1alpha1.ChannelHMAC{
+		Spec: kaalmv1alpha1.AgentChannelSpec{Webhook: kaalmv1alpha1.AgentChannelWebhook{
+			Auth: kaalmv1alpha1.ChannelAuth{Type: authTypeHMAC, HMAC: &kaalmv1alpha1.ChannelHMAC{
 				Header: "X-Sig", Algorithm: "sha256",
-				SecretRef: agentryv1alpha1.SecretKeyReference{Name: "hmac-secret", Key: "key"}}},
+				SecretRef: kaalmv1alpha1.SecretKeyReference{Name: "hmac-secret", Key: "key"}}},
 		}},
 	}
 	ctx := context.Background()
@@ -153,7 +153,7 @@ func TestAuthenticatePoll_HMAC(t *testing.T) {
 
 func TestSignCallback_Bearer(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com/cb", nil)
-	auth := &agentryv1alpha1.ChannelAuth{Type: authTypeBearer}
+	auth := &kaalmv1alpha1.ChannelAuth{Type: authTypeBearer}
 	signCallback(req, auth, "s3cr3t", "req-1", []byte("body"), time.Now())
 	if got := req.Header.Get("Authorization"); got != "Bearer s3cr3t" {
 		t.Errorf("bearer callback header = %q", got)
@@ -162,9 +162,9 @@ func TestSignCallback_Bearer(t *testing.T) {
 
 func TestSignCallback_HMAC(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com/cb", nil)
-	auth := &agentryv1alpha1.ChannelAuth{
+	auth := &kaalmv1alpha1.ChannelAuth{
 		Type: authTypeHMAC,
-		HMAC: &agentryv1alpha1.ChannelHMAC{Header: "X-Sig", Algorithm: "sha256"},
+		HMAC: &kaalmv1alpha1.ChannelHMAC{Header: "X-Sig", Algorithm: "sha256"},
 	}
 	now := time.Unix(1_700_000_000, 0)
 	body := []byte(`{"response":"ok"}`)
@@ -202,39 +202,39 @@ func TestVerifyHMACHeader(t *testing.T) {
 	expected := mac.Sum(nil)
 
 	// Empty header.
-	if verifyHMACHeader("", &agentryv1alpha1.ChannelHMAC{}, expected) {
+	if verifyHMACHeader("", &kaalmv1alpha1.ChannelHMAC{}, expected) {
 		t.Error("empty header must fail")
 	}
 	// Valid hex (default encoding).
-	if !verifyHMACHeader(hex.EncodeToString(expected), &agentryv1alpha1.ChannelHMAC{}, expected) {
+	if !verifyHMACHeader(hex.EncodeToString(expected), &kaalmv1alpha1.ChannelHMAC{}, expected) {
 		t.Error("valid hex must pass")
 	}
 	// Valid base64.
 	if !verifyHMACHeader(base64.StdEncoding.EncodeToString(expected),
-		&agentryv1alpha1.ChannelHMAC{Encoding: "base64"}, expected) {
+		&kaalmv1alpha1.ChannelHMAC{Encoding: "base64"}, expected) {
 		t.Error("valid base64 must pass")
 	}
 	// Prefix stripped then matched.
 	prefix := "sha256="
 	if !verifyHMACHeader("sha256="+hex.EncodeToString(expected),
-		&agentryv1alpha1.ChannelHMAC{SignaturePrefix: &prefix}, expected) {
+		&kaalmv1alpha1.ChannelHMAC{SignaturePrefix: &prefix}, expected) {
 		t.Error("prefixed hex must pass after strip")
 	}
 	// Prefix expected but absent.
 	if verifyHMACHeader(hex.EncodeToString(expected),
-		&agentryv1alpha1.ChannelHMAC{SignaturePrefix: &prefix}, expected) {
+		&kaalmv1alpha1.ChannelHMAC{SignaturePrefix: &prefix}, expected) {
 		t.Error("missing required prefix must fail")
 	}
 	// Undecodable hex.
-	if verifyHMACHeader("zz-not-hex", &agentryv1alpha1.ChannelHMAC{}, expected) {
+	if verifyHMACHeader("zz-not-hex", &kaalmv1alpha1.ChannelHMAC{}, expected) {
 		t.Error("bad hex must fail")
 	}
 	// Undecodable base64.
-	if verifyHMACHeader("!!!!", &agentryv1alpha1.ChannelHMAC{Encoding: "base64"}, expected) {
+	if verifyHMACHeader("!!!!", &kaalmv1alpha1.ChannelHMAC{Encoding: "base64"}, expected) {
 		t.Error("bad base64 must fail")
 	}
 	// Well-formed but wrong digest.
-	if verifyHMACHeader(hex.EncodeToString([]byte("wrongwrongwrongwrong")), &agentryv1alpha1.ChannelHMAC{}, expected) {
+	if verifyHMACHeader(hex.EncodeToString([]byte("wrongwrongwrongwrong")), &kaalmv1alpha1.ChannelHMAC{}, expected) {
 		t.Error("wrong digest must fail")
 	}
 }

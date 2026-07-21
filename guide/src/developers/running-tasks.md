@@ -9,7 +9,7 @@ hibernation; just a Pod with an identity and gateway access.
 The e2e suite's own fixture, from `test/e2e/testdata/agenttask.yaml`:
 
 ```yaml
-apiVersion: agentry.io/v1alpha1
+apiVersion: kaalm.io/v1alpha1
 kind: AgentTask
 metadata:
   name: e2e-task
@@ -19,7 +19,7 @@ spec:
     name: e2e-standard
   image: registry.test/agents/starter-go:e2e
   env:
-    - name: AGENTRY_TASK_AUTOCOMPLETE
+    - name: KAALM_TASK_AUTOCOMPLETE
       value: success
   completion:
     condition: agentReported
@@ -28,7 +28,7 @@ spec:
   ttlSecondsAfterFinished: 30
 ```
 
-(The `AGENTRY_TASK_AUTOCOMPLETE` variable is a starter-template test hook;
+(The `KAALM_TASK_AUTOCOMPLETE` variable is a starter-template test hook;
 your task image reports completion itself.)
 
 ## The two completion modes
@@ -36,7 +36,7 @@ your task image reports completion itself.)
 - **`agentReported`**: the task calls the gateway's `POST /v1/task/complete`
   when done, carrying a status and any declared artifacts. This is the mode
   for agents that produce a result (the sample task in
-  `config/samples/agentry_v1alpha1_agenttask.yaml` declares a `report-url`
+  `config/samples/kaalm_v1alpha1_agenttask.yaml` declares a `report-url`
   artifact). The starter templates implement the call for you.
 - **`exitCode`**: the container's exit status is the verdict; zero succeeds.
   Use this for agents that behave like batch jobs. Artifacts cannot be

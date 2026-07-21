@@ -26,8 +26,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
-	"github.com/win07xp/kubeclaw/internal/gateway"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/gateway"
 )
 
 // mkGatewayPod creates a Pod carrying the gateway component label in the
@@ -58,28 +58,28 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 	mkGatewayPod(t, "budget-gw-1", false)
 
 	mkSecret(t, "mp-budget-key")
-	mkProvider(t, "mp-budget", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-budget-key", Key: "token"}
-		mp.Spec.Budget = agentryv1alpha1.ModelProviderBudget{
+	mkProvider(t, "mp-budget", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-budget-key", Key: "token"}
+		mp.Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
 			Period: "monthly", PerNamespaceUSD: "100",
-			Policies: []agentryv1alpha1.ModelProviderBudgetPolicy{
+			Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{
 				{AtPercent: 80, Action: "block"},
 			},
 		}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 
 	// GatewayReachable=True: one gateway Pod is Ready.
 	eventually(t, func() error {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp); err != nil {
 			return err
 		}
-		c := condition(mp.Status.Conditions, agentryv1alpha1.ConditionGatewayReachable)
+		c := condition(mp.Status.Conditions, kaalmv1alpha1.ConditionGatewayReachable)
 		if c == nil || c.Status != metav1.ConditionTrue {
 			return errString("GatewayReachable not True yet")
 		}
@@ -131,7 +131,7 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 
 	// Status: team-a at 90% is Blocked (>=80 block policy), team-b Normal.
 	eventually(t, func() error {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp); err != nil {
 			return err
 		}
@@ -165,21 +165,21 @@ func TestModelProvider_BudgetRolloverAndThrottle(t *testing.T) {
 	mkGatewayPod(t, "roll-bad-gw", true)
 
 	mkSecret(t, "mp-roll-key")
-	mkProvider(t, "mp-roll", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-roll-key", Key: "token"}
-		mp.Spec.Models = []agentryv1alpha1.ModelProviderModel{{ID: "cheap"}}
-		mp.Spec.Budget = agentryv1alpha1.ModelProviderBudget{
+	mkProvider(t, "mp-roll", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-roll-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1alpha1.ModelProviderModel{{ID: "cheap"}}
+		mp.Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
 			Period: "monthly", PerNamespaceUSD: "100",
-			Policies: []agentryv1alpha1.ModelProviderBudgetPolicy{
+			Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{
 				{AtPercent: 50, Action: "degrade", DegradeTo: strptr("cheap")},
 			},
 		}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-roll"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 
 	period := gateway.PeriodKey("monthly", time.Now())
 	cm := &corev1.ConfigMap{
@@ -201,12 +201,12 @@ func TestModelProvider_BudgetRolloverAndThrottle(t *testing.T) {
 
 	// The degrade policy throttles team-y at 60% of its ceiling.
 	eventually(t, func() error {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-roll"}, &mp); err != nil {
 			return err
 		}
 		for _, u := range mp.Status.BudgetUsage {
-			if u.Period == period && u.Namespace == "team-y" && u.State == agentryv1alpha1.BudgetStateThrottled {
+			if u.Period == period && u.Namespace == "team-y" && u.State == kaalmv1alpha1.BudgetStateThrottled {
 				return nil
 			}
 		}
@@ -233,14 +233,14 @@ func TestModelProvider_BudgetRolloverAndThrottle(t *testing.T) {
 // cadence with the health probe off.
 func TestModelProvider_BudgetRequeueWithoutProbe(t *testing.T) {
 	mkSecret(t, "mp-budreq-key")
-	mkProvider(t, "mp-budreq", func(mp *agentryv1alpha1.ModelProvider) {
-		mp.Spec.CredentialsRef = agentryv1alpha1.SecretKeyReference{Name: "mp-budreq-key", Key: "token"}
-		mp.Spec.HealthCheck = &agentryv1alpha1.ModelProviderHealthCheck{Enabled: false}
-		mp.Spec.Budget = agentryv1alpha1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	mkProvider(t, "mp-budreq", func(mp *kaalmv1alpha1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1alpha1.SecretKeyReference{Name: "mp-budreq-key", Key: "token"}
+		mp.Spec.HealthCheck = &kaalmv1alpha1.ModelProviderHealthCheck{Enabled: false}
+		mp.Spec.Budget = kaalmv1alpha1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp agentryv1alpha1.ModelProvider
+		var mp kaalmv1alpha1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budreq"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionTrue, agentryv1alpha1.ReasonCredentialsValid)
+	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
 }

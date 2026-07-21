@@ -26,38 +26,38 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 func TestBudgetConfigMapName(t *testing.T) {
-	if got := BudgetConfigMapName("prov"); got != "agentry-budget-prov" {
+	if got := BudgetConfigMapName("prov"); got != "kaalm-budget-prov" {
 		t.Errorf("BudgetConfigMapName = %q", got)
 	}
 }
 
 func TestBudgetLedger_InitCanonical(t *testing.T) {
-	p := budgetProvider(agentryv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	b := NewBudgetLedger()
 	// Seed peer view from the reconciler's roll-up; own is still zero.
 	b.InitCanonical(p, map[string]float64{"team-a": 110})
-	if d := b.Enforce(p, "team-a"); d.Action != agentryv1alpha1.BudgetActionBlock {
+	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
 		t.Errorf("canonical seed of 110%% should block, got %+v", d)
 	}
 }
 
 // providersFn returns a static provider set for the publisher.
-func providersFn(ps ...*agentryv1alpha1.ModelProvider) func(context.Context) []*agentryv1alpha1.ModelProvider {
-	return func(context.Context) []*agentryv1alpha1.ModelProvider { return ps }
+func providersFn(ps ...*kaalmv1alpha1.ModelProvider) func(context.Context) []*kaalmv1alpha1.ModelProvider {
+	return func(context.Context) []*kaalmv1alpha1.ModelProvider { return ps }
 }
 
 func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 	ctx := context.Background()
-	p := budgetProvider(agentryv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 
 	// The reconciler owns the ConfigMap; the fake clientset does not support
 	// server-side-apply create, so seed the (empty) object the Apply patches.
 	client := k8sfake.NewSimpleClientset(&corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "agentry-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"},
 	})
 	ledger := NewBudgetLedger()
 	ledger.Add(p, "team-a", 42) // own spend to publish
@@ -65,14 +65,14 @@ func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 	pub := &BudgetPublisher{
 		Client:            client,
 		Ledger:            ledger,
-		OperatorNamespace: "agentry-system",
+		OperatorNamespace: "kaalm-system",
 		PodName:           "gw-0",
 		Providers:         providersFn(p),
 	}
 
 	// publish server-side-applies this replica's partial under its Pod key.
 	pub.publish(ctx, p)
-	cm, err := client.CoreV1().ConfigMaps("agentry-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{})
+	cm, err := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("published ConfigMap missing: %v", err)
 	}
@@ -93,30 +93,30 @@ func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 	})
 	cm.Data["gw-1"] = string(peerPartial)
 	cm.Data[CanonicalKey] = `{"period":"ignored","team-a":"999"}`
-	if _, err := client.CoreV1().ConfigMaps("agentry-system").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+	if _, err := client.CoreV1().ConfigMaps("kaalm-system").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	pub.fold(ctx, p)
 	// own 42 + peer 70 = 112% -> block (canonical key must be ignored).
-	if d := ledger.Enforce(p, "team-a"); d.Action != agentryv1alpha1.BudgetActionBlock {
+	if d := ledger.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
 		t.Errorf("fold should fold peer 70 in, got %+v", d)
 	}
 }
 
 func TestBudgetPublisher_FoldDropsStalePeriod(t *testing.T) {
 	ctx := context.Background()
-	p := budgetProvider(agentryv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	client := k8sfake.NewSimpleClientset()
 	ledger := NewBudgetLedger()
-	pub := &BudgetPublisher{Client: client, Ledger: ledger, OperatorNamespace: "agentry-system", PodName: "gw-0", Providers: providersFn(p)}
+	pub := &BudgetPublisher{Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
 
 	// A peer partial tagged with a stale period must be dropped by the fold.
 	stalePartial, _ := json.Marshal(budgetPartial{Period: "1999-01", Spend: map[string]string{"team-a": "500"}})
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "agentry-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"},
 		Data:       map[string]string{"gw-9": string(stalePartial)},
 	}
-	if _, err := client.CoreV1().ConfigMaps("agentry-system").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+	if _, err := client.CoreV1().ConfigMaps("kaalm-system").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	pub.fold(ctx, p)
@@ -129,7 +129,7 @@ func TestBudgetPublisher_FoldMissingConfigMap(t *testing.T) {
 	ctx := context.Background()
 	p := budgetProvider()
 	client := k8sfake.NewSimpleClientset()
-	pub := &BudgetPublisher{Client: client, Ledger: NewBudgetLedger(), OperatorNamespace: "agentry-system", PodName: "gw-0", Providers: providersFn(p)}
+	pub := &BudgetPublisher{Client: client, Ledger: NewBudgetLedger(), OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
 	// No ConfigMap exists: fold must be a quiet no-op (NotFound tolerated).
 	pub.fold(ctx, p)
 }
@@ -139,62 +139,62 @@ func TestBudgetPublisher_PublishNoOwnSpend(t *testing.T) {
 	p := budgetProvider()
 	client := k8sfake.NewSimpleClientset()
 	// Ledger has no spend; publish must not write anything.
-	pub := &BudgetPublisher{Client: client, Ledger: NewBudgetLedger(), OperatorNamespace: "agentry-system", PodName: "gw-0", Providers: providersFn(p)}
+	pub := &BudgetPublisher{Client: client, Ledger: NewBudgetLedger(), OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
 	pub.publish(ctx, p)
-	if _, err := client.CoreV1().ConfigMaps("agentry-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{}); err == nil {
+	if _, err := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{}); err == nil {
 		t.Error("publish with no own spend must not create a ConfigMap")
 	}
 }
 
 func TestBudgetPublisher_SeedFromCanonical(t *testing.T) {
 	ctx := context.Background()
-	p := budgetProvider(agentryv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 
 	canonical, _ := json.Marshal(map[string]string{"team-a": "130"})
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "agentry-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"},
 		Data:       map[string]string{CanonicalKey: string(canonical)},
 	}
 	client := k8sfake.NewSimpleClientset(cm)
 	ledger := NewBudgetLedger()
-	pub := &BudgetPublisher{Client: client, Ledger: ledger, OperatorNamespace: "agentry-system", PodName: "gw-0", Providers: providersFn(p)}
+	pub := &BudgetPublisher{Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
 
 	pub.SeedFromCanonical(ctx)
-	if d := ledger.Enforce(p, "team-a"); d.Action != agentryv1alpha1.BudgetActionBlock {
+	if d := ledger.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
 		t.Errorf("canonical seed of 130%% should block, got %+v", d)
 	}
 
 	// A provider with no ConfigMap at all is skipped without panic.
 	other := budgetProvider()
 	other.Name = "other"
-	pub2 := &BudgetPublisher{Client: k8sfake.NewSimpleClientset(), Ledger: NewBudgetLedger(), OperatorNamespace: "agentry-system", PodName: "gw-0", Providers: providersFn(other)}
+	pub2 := &BudgetPublisher{Client: k8sfake.NewSimpleClientset(), Ledger: NewBudgetLedger(), OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(other)}
 	pub2.SeedFromCanonical(ctx)
 }
 
 func TestBudgetPublisher_TickAndRun(t *testing.T) {
-	p := budgetProvider(agentryv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	// A provider with budget disabled (period none) must be skipped by tick.
 	disabled := budgetProvider()
 	disabled.Name = "disabled"
 	disabled.Spec.Budget.Period = "none"
 
 	client := k8sfake.NewSimpleClientset(&corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "agentry-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"},
 	})
 	ledger := NewBudgetLedger()
 	ledger.Add(p, "team-a", 10)
 	pub := &BudgetPublisher{
-		Client: client, Ledger: ledger, OperatorNamespace: "agentry-system",
+		Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system",
 		PodName: "gw-0", Interval: 5 * time.Millisecond,
 		Providers: providersFn(p, disabled),
 	}
 
 	// tick publishes+folds the active provider and skips the disabled one.
 	pub.tick(context.Background())
-	if _, err := client.CoreV1().ConfigMaps("agentry-system").Get(context.Background(), BudgetConfigMapName("prov"), metav1.GetOptions{}); err != nil {
+	if _, err := client.CoreV1().ConfigMaps("kaalm-system").Get(context.Background(), BudgetConfigMapName("prov"), metav1.GetOptions{}); err != nil {
 		t.Errorf("tick should have published prov: %v", err)
 	}
-	if _, err := client.CoreV1().ConfigMaps("agentry-system").Get(context.Background(), BudgetConfigMapName("disabled"), metav1.GetOptions{}); err == nil {
+	if _, err := client.CoreV1().ConfigMaps("kaalm-system").Get(context.Background(), BudgetConfigMapName("disabled"), metav1.GetOptions{}); err == nil {
 		t.Error("tick must skip a period=none provider")
 	}
 
@@ -215,7 +215,7 @@ func TestBudgetPublisher_RunDefaultInterval(t *testing.T) {
 	// ticker never fires and Run returns via ctx.Done.
 	pub := &BudgetPublisher{
 		Client: k8sfake.NewSimpleClientset(), Ledger: NewBudgetLedger(),
-		OperatorNamespace: "agentry-system", PodName: "gw-0",
+		OperatorNamespace: "kaalm-system", PodName: "gw-0",
 		Providers: providersFn(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())

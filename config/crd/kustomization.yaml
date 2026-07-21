@@ -2,11 +2,11 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/agentry.io_agentclasses.yaml
-- bases/agentry.io_modelproviders.yaml
-- bases/agentry.io_agents.yaml
-- bases/agentry.io_agenttasks.yaml
-- bases/agentry.io_agentchannels.yaml
+- bases/kaalm.io_agentclasses.yaml
+- bases/kaalm.io_modelproviders.yaml
+- bases/kaalm.io_agents.yaml
+- bases/kaalm.io_agenttasks.yaml
+- bases/kaalm.io_agentchannels.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

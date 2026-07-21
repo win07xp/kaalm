@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
 const (
@@ -40,13 +40,13 @@ const (
 
 	// timestampHeader carries the unix-seconds timestamp on HMAC poll
 	// requests and outbound callbacks.
-	timestampHeader = "X-Agentry-Timestamp"
+	timestampHeader = "X-Kaalm-Timestamp"
 	// maxTimestampSkew bounds HMAC timestamp drift.
 	maxTimestampSkew = 300 * time.Second
 )
 
 // channelSecret resolves an auth block's secret material via the Store.
-func (s *Server) channelSecret(ctx context.Context, namespace string, auth *agentryv1alpha1.ChannelAuth) (string, error) {
+func (s *Server) channelSecret(ctx context.Context, namespace string, auth *kaalmv1alpha1.ChannelAuth) (string, error) {
 	switch auth.Type {
 	case authTypeBearer:
 		if auth.SecretRef == nil {
@@ -74,7 +74,7 @@ func hmacHasher(algorithm string) func() hash.Hash {
 // timestamp) for third-party sender compatibility; see
 // docs/src/gateways/api/channel-webhook.md.
 func (s *Server) authenticateWebhook(
-	ctx context.Context, channel *agentryv1alpha1.AgentChannel, r *http.Request, body []byte,
+	ctx context.Context, channel *kaalmv1alpha1.AgentChannel, r *http.Request, body []byte,
 ) bool {
 	auth := channel.Spec.Webhook.Auth
 	secret, err := s.channelSecret(ctx, channel.Namespace, &auth)
@@ -95,7 +95,7 @@ func (s *Server) authenticateWebhook(
 
 // verifyHMACHeader strips the configured prefix, decodes per the configured
 // encoding, and constant-time-compares against the expected digest.
-func verifyHMACHeader(headerValue string, cfg *agentryv1alpha1.ChannelHMAC, expected []byte) bool {
+func verifyHMACHeader(headerValue string, cfg *kaalmv1alpha1.ChannelHMAC, expected []byte) bool {
 	if headerValue == "" {
 		return false
 	}
@@ -123,7 +123,7 @@ func verifyHMACHeader(headerValue string, cfg *agentryv1alpha1.ChannelHMAC, expe
 // Poll requests have no body: bearer presents the same token; HMAC signs
 // "{requestId}\n{timestamp}" with bare lowercase hex and a 300s skew bound.
 func (s *Server) authenticatePoll(
-	ctx context.Context, channel *agentryv1alpha1.AgentChannel, r *http.Request, requestID string,
+	ctx context.Context, channel *kaalmv1alpha1.AgentChannel, r *http.Request, requestID string,
 ) bool {
 	auth := channel.Spec.Webhook.Auth
 	secret, err := s.channelSecret(ctx, channel.Namespace, &auth)
@@ -158,7 +158,7 @@ func (s *Server) authenticatePoll(
 // callbackAuth, with a fresh timestamp per attempt. The HMAC canonical string
 // is "{requestId}\n{timestamp}\n{sha256(body)}".
 func signCallback(
-	req *http.Request, auth *agentryv1alpha1.ChannelAuth, secret, requestID string, body []byte, now time.Time,
+	req *http.Request, auth *kaalmv1alpha1.ChannelAuth, secret, requestID string, body []byte, now time.Time,
 ) {
 	switch auth.Type {
 	case authTypeBearer:
