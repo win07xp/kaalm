@@ -1,6 +1,7 @@
 .claude/settings.local.json
 docs/book/
 guide/book/
+learn/book/
 
 *.exe
 *.exe~

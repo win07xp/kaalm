@@ -68,6 +68,9 @@ they are likely to matter:
   the v1 soft-limit design where overshoot within a sync window is accepted.
 - **Cross-format provider fallback.** Translation between provider API formats
   (for example Anthropic to OpenAI) so fallback chains can cross `spec.type`.
+- **The beginners' tutorial.** A third book (`learn/`, already scaffolded
+  with its chapter plan) taking a reader from an empty laptop to a running
+  agent; deliberately unwritten until installs are one command.
 - **Larger horizons.** Agent-to-agent orchestration, a web UI, multi-cluster
   federation, and agent-aware scheduling (GPU awareness, priority, preemption).
 

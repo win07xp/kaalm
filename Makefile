@@ -178,9 +178,10 @@ chart-lint: chart-sync ## Lint the Helm chart (after syncing CRDs).
 	helm lint $(CHART_DIR)
 
 .PHONY: books
-books: ## Build both mdBooks: the design book (docs/) and the user guide (guide/).
+books: ## Build all mdBooks: the design book (docs/), the user guide (guide/), and the tutorial (learn/).
 	mdbook build docs
 	mdbook build guide
+	mdbook build learn
 
 .PHONY: k3d-up
 k3d-up: ## Create a local k3d cluster with cert-manager and trust-manager for e2e.

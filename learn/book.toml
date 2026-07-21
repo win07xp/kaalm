@@ -1,0 +1,9 @@
+[book]
+title = "Learn Agentry"
+description = "A from-zero tutorial: an empty laptop to a running AI agent you can talk to, in one sitting."
+authors = ["Asad"]
+language = "en"
+src = "src"
+
+# Stock mdBook theme, like the guide. One narrative path on k3d; writing
+# starts after v0.2.0 publishes an installable image and chart.

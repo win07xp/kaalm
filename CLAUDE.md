@@ -14,12 +14,13 @@ milestone (v0.2.0): full S1-S15 e2e coverage and release machinery; see
 
 ## Documentation
 
-Two mdBooks: `docs/` (the design book, which is the spec) and `guide/`
-(task-oriented user guide, mostly stubs). Build both with `make books`. Each
-book has its own CLAUDE.md with its authoring rules. Conventions that bind all
-prose in this repo: no em-dashes or en-dashes; the numbered validation rules,
-runtime-contract items, and scenario IDs are cited by number, so numbering is
-immutable.
+Three mdBooks: `docs/` (the design book, which is the spec), `guide/`
+(task-oriented user guide, complete), and `learn/` (beginner tutorial, stubs
+only until v0.2.0 ships an installable release). Build all with `make books`.
+Each book has its own CLAUDE.md with its authoring rules. Conventions that
+bind all prose in this repo: no em-dashes or en-dashes; the numbered
+validation rules, runtime-contract items, and scenario IDs are cited by
+number, so numbering is immutable.
 
 ## Build Commands
 
