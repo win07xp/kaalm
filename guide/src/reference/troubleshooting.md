@@ -24,8 +24,10 @@ agent` gives the reason:
 - **Provider access revoked or provider deleted**: reason
   `ClassConstraintViolation` (see S5 in the scenarios); LLM calls return 403
   until access is restored.
-- **Budget exhausted**: the Degraded condition appears while phase stays
-  Running; clears at the period reset or on a budget increase.
+
+Budget exhaustion does NOT show up here in v0.1.0: the agent keeps its
+phase and conditions, and the signal is the `429 budget_exhausted` its LLM
+calls receive (plus `state: Blocked` in the provider's status).
 
 ## Webhook returns 401 or 403
 
