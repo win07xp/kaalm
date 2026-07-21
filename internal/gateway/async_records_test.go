@@ -18,12 +18,15 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
 )
@@ -152,5 +155,43 @@ func TestKubeCompletionWriter_PatchMailbox(t *testing.T) {
 	}
 	if cm.Data[CompletionKeyStatus] != CompletionStatusSuccess || cm.Data["artifact.pr-url"] != "https://x/1" {
 		t.Errorf("mailbox not patched: %v", cm.Data)
+	}
+}
+
+// cmErrClientset returns a fake clientset that fails the given verb on
+// configmaps, to exercise the error branches.
+func cmErrClientset(verb string) *k8sfake.Clientset {
+	c := k8sfake.NewSimpleClientset()
+	c.PrependReactor(verb, "configmaps", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("injected failure")
+	})
+	return c
+}
+
+func TestKubeAsyncRecords_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+
+	// CountPending list error.
+	recs := &KubeAsyncRecords{Client: cmErrClientset("list"), OperatorNamespace: "agentry-system"}
+	if _, err := recs.CountPending(ctx, "team-a", "ch"); err == nil {
+		t.Error("CountPending must surface list errors")
+	}
+
+	// Patch error.
+	recsP := &KubeAsyncRecords{Client: cmErrClientset("patch"), OperatorNamespace: "agentry-system"}
+	if err := recsP.Patch(ctx, "req-1", []byte(`{}`)); err == nil {
+		t.Error("Patch must surface errors")
+	}
+
+	// Get with a non-NotFound error.
+	recsG := &KubeAsyncRecords{Client: cmErrClientset("get"), OperatorNamespace: "agentry-system"}
+	if _, _, err := recsG.Get(ctx, "req-1"); err == nil {
+		t.Error("Get must surface non-NotFound errors")
+	}
+
+	// PatchMailbox error.
+	w := &KubeCompletionWriter{Client: cmErrClientset("patch")}
+	if err := w.PatchMailbox(ctx, "team-a", "fix", map[string]string{"status": CompletionStatusSuccess}); err == nil {
+		t.Error("PatchMailbox must surface errors")
 	}
 }

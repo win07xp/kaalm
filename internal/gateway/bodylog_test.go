@@ -29,3 +29,11 @@ func TestDefaultBuildLogsNoBodies(t *testing.T) {
 	// bodyLog must be a safe no-op in the default build.
 	bodyLog("prompt", []byte("secret prompt content"))
 }
+
+func TestBodyLogIsNoOp(t *testing.T) {
+	// Default build: bodyLog must not panic and logs nothing.
+	bodyLog("prompt", []byte("secret content"))
+	if DebugBodyLogging {
+		t.Error("default build must have body logging disabled")
+	}
+}

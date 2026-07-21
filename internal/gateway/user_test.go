@@ -515,3 +515,105 @@ func TestChannelHealth_ReflectsTraffic(t *testing.T) {
 		t.Errorf("window seconds = %d", snap.WindowSeconds)
 	}
 }
+
+func TestWakeAndDeliver_WakeTimeout(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("sync")
+	agent := h.store.agents["team-a/sup"]
+	agent.Status.Phase = agentryv1alpha1.AgentHibernated
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 80 * time.Millisecond}
+
+	// Wake succeeds but the agent never becomes reachable: point delivery at a
+	// closed port so waitAgentReachable exhausts its (short) wakeTimeout.
+	h.server.Activator = &fakeActivator{}
+	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Errorf("wake timeout = %d, want 504", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errWakeTimeout {
+		t.Errorf("error type = %q, want %q", got, errWakeTimeout)
+	}
+}
+
+func TestAgentHTTPClient_WithCertFiles(t *testing.T) {
+	ca := newTestCA(t)
+	certFile, keyFile, caFile := certFiles(t, ca, "gw")
+	s := &Server{Config: Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}}
+	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+
+	client, err := s.agentHTTPClient(agent)
+	if err != nil || client == nil {
+		t.Fatalf("agentHTTPClient = %v err=%v", client, err)
+	}
+	// The loader is memoized: a second call reuses it without error.
+	if _, err := s.agentHTTPClient(agent); err != nil {
+		t.Errorf("second agentHTTPClient: %v", err)
+	}
+}
+
+func TestAgentHTTPClient_BadCertFiles(t *testing.T) {
+	s := &Server{Config: Config{CertFile: "/nonexistent/tls.crt", KeyFile: "/nonexistent/tls.key", CAFile: "/nonexistent/ca.crt"}}
+	agent := &agentryv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	if _, err := s.agentHTTPClient(agent); err == nil {
+		t.Error("missing cert files must error")
+	}
+}
+
+func TestWebhook_TerminatingAndAgentMissing(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"ok"}`))
+	})
+	ch := h.seedChannel("sync")
+
+	// A Terminating channel accepts no new work: 401 (no existence leak).
+	ch.Status.Phase = agentryv1alpha1.ChannelTerminating
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if resp.StatusCode != 401 {
+		t.Errorf("terminating channel = %d, want 401", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// Restore the channel but drop its Agent: referenced Agent not found -> 502.
+	ch.Status.Phase = agentryv1alpha1.ChannelActive
+	delete(h.store.agents, "team-a/sup")
+	resp = h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("missing agent = %d, want 502", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+}
+
+func TestWebhook_WrongMethod(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("sync")
+	req, _ := http.NewRequest(http.MethodGet, h.userSrv.URL+"/channels/team-a/support", nil)
+	resp, err := h.userSrv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Errorf("GET webhook = %d, want 401", resp.StatusCode)
+	}
+	// Unknown path on the user listener: 401.
+	req, _ = http.NewRequest(http.MethodGet, h.userSrv.URL+"/nonsense", nil)
+	resp, _ = h.userSrv.Client().Do(req)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Errorf("unknown user path = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestWebhook_RawBodyInvalidUTF8(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("sync") // no content extractor -> raw-body fallback
+	// A body with an invalid UTF-8 byte fails raw-body normalization with 400.
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte{0xff, 0xfe})
+	if resp.StatusCode != 400 || !bodyContains(t, resp, "UTF-8") {
+		t.Errorf("invalid UTF-8 raw body = %d", resp.StatusCode)
+	}
+}

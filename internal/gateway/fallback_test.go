@@ -219,3 +219,18 @@ func TestExhaustionErrorMapping(t *testing.T) {
 		t.Errorf("mixed = %d, want 502", st)
 	}
 }
+
+func TestFailClassName(t *testing.T) {
+	cases := map[failClass]string{
+		classConnect:   "connect_error",
+		classTimeout:   "timeout",
+		classBudget:    "budget_blocked",
+		classUpstream:  "upstream_error",
+		classNonFallle: "other",
+	}
+	for c, want := range cases {
+		if got := failClassName(c); got != want {
+			t.Errorf("failClassName(%d) = %q, want %q", c, got, want)
+		}
+	}
+}

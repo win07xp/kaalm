@@ -16,7 +16,14 @@ limitations under the License.
 
 package gateway
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
+)
 
 func TestSplitQualifiedModel(t *testing.T) {
 	cases := []struct {
@@ -102,5 +109,46 @@ func TestNamespaceGlobAllowed(t *testing.T) {
 	}
 	if namespaceGlobAllowed("prod", []string{"team-*", "dev"}) {
 		t.Error("non-matching namespace admitted")
+	}
+}
+
+func TestWorkloadProviders(t *testing.T) {
+	s := &Server{Store: newFakeStore()}
+	fs := s.Store.(*fakeStore)
+	fs.agents["team-a/sup"] = &agentryv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
+		Spec: agentryv1alpha1.AgentSpec{
+			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "std"},
+			Providers:     []agentryv1alpha1.AgentProviderReference{{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "prov"}}},
+		},
+	}
+	fs.tasks["team-a/fix"] = &agentryv1alpha1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{Name: "fix", Namespace: "team-a"},
+		Spec: agentryv1alpha1.AgentTaskSpec{
+			AgentClassRef: agentryv1alpha1.LocalObjectReference{Name: "tstd"},
+			Providers:     []agentryv1alpha1.AgentProviderReference{{ProviderRef: agentryv1alpha1.LocalObjectReference{Name: "tprov"}}},
+		},
+	}
+	ctx := context.Background()
+
+	refs, class, ok := s.workloadProviders(ctx, &caller{Namespace: "team-a", Workload: &Identity{Name: "sup", Kind: KindAgent}})
+	if !ok || class != "std" || len(refs) != 1 || refs[0].ProviderRef.Name != "prov" {
+		t.Errorf("agent providers wrong: %v %q %v", refs, class, ok)
+	}
+	refs, class, ok = s.workloadProviders(ctx, &caller{Namespace: "team-a", Workload: &Identity{Name: "fix", Kind: KindAgentTask}})
+	if !ok || class != "tstd" || refs[0].ProviderRef.Name != "tprov" {
+		t.Errorf("task providers wrong: %v %q %v", refs, class, ok)
+	}
+	// Unknown agent.
+	if _, _, ok := s.workloadProviders(ctx, &caller{Namespace: "team-a", Workload: &Identity{Name: "ghost", Kind: KindAgent}}); ok {
+		t.Error("unknown agent must miss")
+	}
+	// Unknown task.
+	if _, _, ok := s.workloadProviders(ctx, &caller{Namespace: "team-a", Workload: &Identity{Name: "ghost", Kind: KindAgentTask}}); ok {
+		t.Error("unknown task must miss")
+	}
+	// Unrecognized kind.
+	if _, _, ok := s.workloadProviders(ctx, &caller{Namespace: "team-a", Workload: &Identity{Name: "x", Kind: "Weird"}}); ok {
+		t.Error("unrecognized kind must miss")
 	}
 }

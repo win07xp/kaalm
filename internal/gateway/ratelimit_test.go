@@ -103,3 +103,14 @@ func TestRateLimiter_DividesByReplicas(t *testing.T) {
 		t.Errorf("with 4 replicas each gets 8/4=2, allowed %d", allowed)
 	}
 }
+
+func TestNewRateLimiter_DefaultReplicas(t *testing.T) {
+	rl := NewRateLimiter(nil)
+	if rl.Replicas() != 1 {
+		t.Errorf("nil replicas must default to 1, got %d", rl.Replicas())
+	}
+	rl2 := NewRateLimiter(func() int { return 3 })
+	if rl2.Replicas() != 3 {
+		t.Errorf("explicit replicas = %d", rl2.Replicas())
+	}
+}

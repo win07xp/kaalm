@@ -136,6 +136,25 @@ func TestPeriodKey(t *testing.T) {
 	}
 }
 
+func TestNextPeriodStart(t *testing.T) {
+	at := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) // a Sunday
+	if got := nextPeriodStart("monthly", at); got != time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) {
+		t.Errorf("monthly next = %v", got)
+	}
+	if got := nextPeriodStart("daily", at); got != time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) {
+		t.Errorf("daily next = %v", got)
+	}
+	// Sunday: the next Monday is one day away.
+	if got := nextPeriodStart("weekly", at); got != time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) {
+		t.Errorf("weekly next (Sun) = %v", got)
+	}
+	// A Monday rolls to the following Monday (7 days), not the same day.
+	mon := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
+	if got := nextPeriodStart("weekly", mon); got != time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC) {
+		t.Errorf("weekly next (Mon) = %v", got)
+	}
+}
+
 func TestCostOf(t *testing.T) {
 	p := budgetProvider()
 	// 1M input at $10 + 500k output at $30 = 10 + 15 = 25.
@@ -222,6 +241,24 @@ func TestParseBudgetPartialRoundTrip(t *testing.T) {
 	period, spend, err := ParseBudgetPartial(string(raw))
 	if err != nil || period != "2026-07" || spend["team-a"] != 12.34 {
 		t.Errorf("round trip failed: %q %v %v", period, spend, err)
+	}
+}
+
+func TestParseBudgetPartial_BadFloat(t *testing.T) {
+	// A non-numeric namespace value is skipped, not fatal.
+	period, spend, err := ParseBudgetPartial(`{"period":"2099-01","team-a":"1.5","team-b":"notanumber"}`)
+	if err != nil || period != "2099-01" {
+		t.Fatalf("parse err=%v period=%q", err, period)
+	}
+	if spend["team-a"] != 1.5 {
+		t.Errorf("team-a = %v", spend["team-a"])
+	}
+	if _, ok := spend["team-b"]; ok {
+		t.Error("unparseable value must be skipped")
+	}
+	// Invalid JSON errors.
+	if _, _, err := ParseBudgetPartial("not json"); err == nil {
+		t.Error("invalid JSON must error")
 	}
 }
 

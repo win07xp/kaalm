@@ -181,3 +181,96 @@ func TestValidateCompletionArtifacts(t *testing.T) {
 		t.Error("undeclared must fail in both branches")
 	}
 }
+
+func TestParseCompletionData(t *testing.T) {
+	data := map[string]string{
+		CompletionKeyStatus:                 CompletionStatusSuccess,
+		CompletionKeyMessage:                "done",
+		CompletionArtifactPrefix + "pr-url": "https://x/1",
+		CompletionArtifactPrefix + "log":    "tail",
+		"unrelated":                         "ignored",
+	}
+	status, message, artifacts := ParseCompletionData(data)
+	if status != CompletionStatusSuccess || message != "done" {
+		t.Errorf("status/message wrong: %q %q", status, message)
+	}
+	if artifacts["pr-url"] != "https://x/1" || artifacts["log"] != "tail" {
+		t.Errorf("artifacts wrong: %v", artifacts)
+	}
+	if _, ok := artifacts["unrelated"]; ok {
+		t.Error("non-artifact keys must be dropped")
+	}
+	if _, ok := artifacts["status"]; ok {
+		t.Error("status key must not appear as artifact")
+	}
+}
+
+func TestCompletionMailboxName(t *testing.T) {
+	if got := CompletionMailboxName("fix-42"); got != "fix-42-completion" {
+		t.Errorf("CompletionMailboxName = %q", got)
+	}
+}
+
+func TestTaskComplete_BadRequestsAndPatchFailure(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	completions := newFakeCompletions()
+	h.server.Completions = completions
+	seedTask(h, "fix-42", func(task *agentryv1alpha1.AgentTask) { task.Spec.Artifacts = nil })
+	cert := h.ca.issue(t, "fix-42.team-a.task.agentry.io")
+	client := h.client(&cert)
+
+	// Non-JSON body: 400.
+	req, _ := http.NewRequest(http.MethodPost, h.url("/v1/task/complete"), strings.NewReader("not-json"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 400 {
+		t.Errorf("non-JSON body = %d, want 400", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// Invalid status value: 400.
+	resp = postJSON(t, client, h.url("/v1/task/complete"), map[string]any{"status": "weird"}, nil)
+	if resp.StatusCode != 400 || !bodyContains(t, resp, "failure") {
+		t.Errorf("invalid status = %d", resp.StatusCode)
+	}
+
+	// Total-size cap: many small artifacts that are individually fine but
+	// together exceed 32 KiB. Declare them so validation passes.
+	big := map[string]string{}
+	declared := []agentryv1alpha1.AgentTaskArtifact{}
+	for i := 0; i < 10; i++ {
+		name := string(rune('a'+i)) + "-art"
+		big[name] = strings.Repeat("y", 4<<10)
+		declared = append(declared, agentryv1alpha1.AgentTaskArtifact{Name: name})
+	}
+	seedTask(h, "big-total", func(task *agentryv1alpha1.AgentTask) { task.Spec.Artifacts = declared })
+	certBig := h.ca.issue(t, "big-total.team-a.task.agentry.io")
+	resp = postJSON(t, h.client(&certBig), h.url("/v1/task/complete"),
+		map[string]any{"status": CompletionStatusSuccess, "artifacts": big}, nil)
+	if resp.StatusCode != 413 || !bodyContains(t, resp, "combined") {
+		t.Errorf("total-size cap = %d, want 413", resp.StatusCode)
+	}
+
+	// Mailbox patch failure: 503.
+	completions.fail = true
+	resp = postJSON(t, client, h.url("/v1/task/complete"), map[string]any{"status": CompletionStatusSuccess}, nil)
+	if resp.StatusCode != 503 {
+		t.Errorf("patch failure = %d, want 503", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+}
+
+func TestTaskComplete_NoTaskBacksCaller(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	h.server.Completions = newFakeCompletions()
+	// No task seeded for this SAN.
+	cert := h.ca.issue(t, "ghost.team-a.task.agentry.io")
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
+	resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": CompletionStatusSuccess}, nil)
+	if resp.StatusCode != 403 || !bodyContains(t, resp, "no AgentTask") {
+		t.Errorf("no backing task = %d", resp.StatusCode)
+	}
+}

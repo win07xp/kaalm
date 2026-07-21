@@ -589,3 +589,35 @@ func TestProxy_RogueCACertFailsHandshake(t *testing.T) {
 		t.Fatal("certificate from an untrusted CA must fail the TLS handshake")
 	}
 }
+
+func TestCertLoader_PartialWriteFallback(t *testing.T) {
+	ca := newTestCA(t)
+	certFile, keyFile, caFile := certFiles(t, ca, "gw")
+	l := &certLoader{certFile: certFile, keyFile: keyFile, caFile: caFile}
+
+	// Prime the caches.
+	cert, err := l.certificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := l.caPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A corrupt cert (partial write) keeps serving the cached certificate.
+	time.Sleep(10 * time.Millisecond)
+	writeFile(t, certFile, []byte("-----BEGIN CERTIFICATE-----\ngarbage\n-----END CERTIFICATE-----"))
+	got, err := l.certificate()
+	if err != nil || got != cert {
+		t.Errorf("corrupt cert must fall back to cached: got=%v err=%v", got, err)
+	}
+
+	// A corrupt CA bundle keeps serving the cached pool.
+	time.Sleep(10 * time.Millisecond)
+	writeFile(t, caFile, []byte("not a certificate at all"))
+	gotPool, err := l.caPool()
+	if err != nil || gotPool != pool {
+		t.Errorf("corrupt CA must fall back to cached pool: err=%v", err)
+	}
+}

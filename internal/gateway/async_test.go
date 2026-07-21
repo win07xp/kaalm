@@ -17,19 +17,17 @@ limitations under the License.
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	authnv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
-	clienttesting "k8s.io/client-go/testing"
 
 	agentryv1alpha1 "github.com/win07xp/kubeclaw/api/v1alpha1"
 )
@@ -46,6 +44,15 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+func mustIP(t *testing.T, s string) net.IP {
+	t.Helper()
+	ip := net.ParseIP(s)
+	if ip == nil {
+		t.Fatalf("bad test IP %q", s)
+	}
+	return ip
 }
 
 // failingAsync always fails Patch, to exercise the retry-exhaustion path.
@@ -86,82 +93,6 @@ func TestPatchWithRetry_ContextCancel(t *testing.T) {
 	}
 }
 
-func TestCertLoader_PartialWriteFallback(t *testing.T) {
-	ca := newTestCA(t)
-	certFile, keyFile, caFile := certFiles(t, ca, "gw")
-	l := &certLoader{certFile: certFile, keyFile: keyFile, caFile: caFile}
-
-	// Prime the caches.
-	cert, err := l.certificate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, err := l.caPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// A corrupt cert (partial write) keeps serving the cached certificate.
-	time.Sleep(10 * time.Millisecond)
-	writeFile(t, certFile, []byte("-----BEGIN CERTIFICATE-----\ngarbage\n-----END CERTIFICATE-----"))
-	got, err := l.certificate()
-	if err != nil || got != cert {
-		t.Errorf("corrupt cert must fall back to cached: got=%v err=%v", got, err)
-	}
-
-	// A corrupt CA bundle keeps serving the cached pool.
-	time.Sleep(10 * time.Millisecond)
-	writeFile(t, caFile, []byte("not a certificate at all"))
-	gotPool, err := l.caPool()
-	if err != nil || gotPool != pool {
-		t.Errorf("corrupt CA must fall back to cached pool: err=%v", err)
-	}
-}
-
-func TestReview_Error(t *testing.T) {
-	client := k8sfake.NewSimpleClientset()
-	client.PrependReactor("create", "tokenreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
-		return true, (*authnv1.TokenReview)(nil), errors.New("apiserver down")
-	})
-	r := &KubeTokenReviewer{Client: client}
-	if _, _, err := r.Review(context.Background(), "tok"); err == nil {
-		t.Error("Review must surface apiserver errors")
-	}
-}
-
-func TestNewRateLimiter_DefaultReplicas(t *testing.T) {
-	rl := NewRateLimiter(nil)
-	if rl.Replicas() != 1 {
-		t.Errorf("nil replicas must default to 1, got %d", rl.Replicas())
-	}
-	rl2 := NewRateLimiter(func() int { return 3 })
-	if rl2.Replicas() != 3 {
-		t.Errorf("explicit replicas = %d", rl2.Replicas())
-	}
-}
-
-func TestWakeAndDeliver_WakeTimeout(t *testing.T) {
-	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-	h.seedChannel("sync")
-	agent := h.store.agents["team-a/sup"]
-	agent.Status.Phase = agentryv1alpha1.AgentHibernated
-	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 80 * time.Millisecond}
-
-	// Wake succeeds but the agent never becomes reachable: point delivery at a
-	// closed port so waitAgentReachable exhausts its (short) wakeTimeout.
-	h.server.Activator = &fakeActivator{}
-	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
-	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
-
-	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
-	if resp.StatusCode != http.StatusGatewayTimeout {
-		t.Errorf("wake timeout = %d, want 504", resp.StatusCode)
-	}
-	if got := errType(t, resp); got != errWakeTimeout {
-		t.Errorf("error type = %q, want %q", got, errWakeTimeout)
-	}
-}
-
 func TestRunAsyncPipeline_DeliveryFailureStored(t *testing.T) {
 	// The agent always fails: the async pipeline stores an error payload.
 	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) })
@@ -186,4 +117,36 @@ func TestRunAsyncPipeline_DeliveryFailureStored(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("error payload never stored")
+}
+
+func TestBlockedCallbackIP(t *testing.T) {
+	blocked := []string{"127.0.0.1", "10.1.2.3", "192.168.0.1", "169.254.169.254", "::1", "fc00::1", "0.0.0.0", "fe80::1"}
+	for _, ip := range blocked {
+		if !blockedCallbackIP(mustIP(t, ip)) {
+			t.Errorf("%s must be blocked", ip)
+		}
+	}
+	allowed := []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"}
+	for _, ip := range allowed {
+		if blockedCallbackIP(mustIP(t, ip)) {
+			t.Errorf("%s must be allowed", ip)
+		}
+	}
+}
+
+func TestHandleAsyncAccept_PendingCap(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	ch := h.seedChannel("async")
+	ch.Spec.Webhook.MaxPendingAsyncResponses = 1
+	// Pre-fill the pending count to the cap.
+	_ = h.async.Create(context.Background(), "pre-1", ch, metav1.Now().Time)
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("at-cap async = %d, want 503", resp.StatusCode)
+	}
+	if !bytes.Contains([]byte(resp.Header.Get("Content-Type")), []byte("json")) {
+		t.Log("content-type:", resp.Header.Get("Content-Type"))
+	}
+	_ = resp.Body.Close()
 }
