@@ -3,6 +3,9 @@ docs/book/
 guide/book/
 learn/book/
 
+# Packaged Helm charts and the consolidated installer.
+dist/
+
 *.exe
 *.exe~
 *.dll
