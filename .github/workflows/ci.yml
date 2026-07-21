@@ -52,10 +52,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Lint Helm chart with synced CRDs
+      - name: Lint and package the Helm chart with synced CRDs
         run: |
           make chart-sync
           helm lint charts/kaalm
+          make chart-package # the release workflow packages the same way; fail here, not at a tag
 
   books:
     runs-on: ubuntu-latest

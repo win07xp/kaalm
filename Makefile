@@ -177,6 +177,11 @@ chart-sync: manifests ## Sync generated CRDs and controller RBAC into the Helm c
 chart-lint: chart-sync ## Lint the Helm chart (after syncing CRDs).
 	helm lint $(CHART_DIR)
 
+.PHONY: chart-package
+chart-package: chart-sync ## Package the chart into dist/ (VERSION defaults to Chart.yaml appVersion). Mirrors the release workflow.
+	@V=$${VERSION:-$(CHART_APP_VERSION)}; mkdir -p dist; \
+		helm package $(CHART_DIR) --version $$V --app-version $$V --destination dist
+
 .PHONY: books
 books: ## Build all mdBooks: the design book (docs/), the user guide (guide/), and the tutorial (learn/).
 	mdbook build docs
