@@ -1,117 +1,79 @@
 # Implementation Roadmap
 
-The rest of this book is the design. This page is the plan for building it: how the
-design becomes a working operator, in what order, and where the code stands today.
+The rest of this book is the design. This page is where the implementation stands
+against it, and what comes next.
 
-The design is complete and has been through six review sweeps. The Go
-implementation began on 2026-07-19. The strategy is to avoid a big-bang: reach a
-demonstrable "an Agent resource becomes a running Pod" milestone early, and defer
-the hard, externally dependent pieces (real provider wire formats, TokenReview,
-Vertex OAuth) behind interfaces so they land late and stay testable.
+## Where the project stands
 
-## Status at a glance
+**v0.1.0 shipped on 2026-07-21**
+([release](https://github.com/win07xp/kubeclaw/releases/tag/v0.1.0)). The operator
+is feature-complete against the v1 design: all five CRDs, the reconciling
+controller (lifecycle, hibernation and wake, budgets, health probes, finalizers),
+the two-listener gateway (LLM proxy with credential isolation, budgets, rate
+limits, and fallback trees; user gateway with sync and async webhooks), the Helm
+chart with cert-manager TLS wiring, the runtime contract with Go and Python
+starter templates, and this book.
 
-All nine phases are done: the operator is feature-complete against the v1 design. The [scenario-coverage map](appendix/scenario-coverage.md) ties each acceptance scenario to the tests that verify it.
+Quality bar at release: 87.6% project test coverage enforced by an 85% CI gate,
+envtest suites against a real apiserver, and a k3d end-to-end suite that is green
+both locally and in GitHub Actions. The
+[scenario-coverage map](appendix/scenario-coverage.md) ties each acceptance
+scenario to the tests that verify it.
 
-| Phase | Status | Delivers |
-|---|---|---|
-| 0. Foundations | Done | Repo scaffold, dev loop (k3d with cert-manager and trust-manager), Makefile, CI, green build/test/lint |
-| 1. API types | Done | The 5 CRD Go types, apply-time CEL validation, generated CRDs, installable and schema-validated |
-| 2. Foundation reconcilers | Done | AgentClass and ModelProvider: validation, conditions, finalizers (the budget path deferred behind a seam) |
-| 3. AgentReconciler core | Done | Walking skeleton: an Agent becomes a Pod, PVC, Service, Certificate, and NetworkPolicy, with cert gating, drift detection, and a finalizer |
-| 4. AgentTaskReconciler | Done | Run-to-completion, the completion mailbox and per-task Role, the currentPodUID identity gate, retry, and TTL |
-| 5. Gateway skeleton | Done | The single `VerifyClientCertIfGiven` socket with per-path auth (mTLS SAN and TokenReview), plus the LLM proxy happy path |
-| 6. Controller and gateway | Done | Activity fan-out, wake and the activator, the hibernation phases, and the budget ConfigMap exchange |
-| 7. User gateway and AgentChannel | Done | The webhook flow (sync and async), the async response lifecycle, and the AgentChannel reconciler with its delete handshake |
-| 8. Runtime SDK and templates | Done | The runtime contract as a Go library, and the Go and Python starter templates, which then become the end-to-end test agent |
-| 9. Hardening | Done | The Vertex adapter, fallback traversal, rate limiting, the Prometheus metric catalog and PII-safe logging, and the S1 to S15 scenario-coverage map |
+Two honest caveats, also stated in the release notes:
 
-Milestones worth naming: Phase 3 is "Agent to Pod on a cluster". Phase 5 is "an LLM
-call proxied with auth enforced". Phase 7 is "an external webhook reaches an agent
-and gets a reply". Phase 9 is "the [acceptance scenarios](appendix/scenarios.md)
-pass".
+- The API is `v1alpha1` and may change in breaking ways between minor releases.
+- No container image or Helm chart is published yet. Installing v0.1.0 means
+  building from source.
 
-## Principles that hold across every phase
+## Next: v0.2.0
 
-- **Seams at every external and cross-component dependency.** The controller's
-  provisioning path does not need the gateway. Only activity fan-out, wake, budget,
-  and channel health do. Each of these is a Go interface (an activity client, a
-  channel-health client, a provider adapter, a token reviewer, a clock), so each
-  side is built and tested against fakes before its peer exists.
-- **Test-driven.** Unit tests for pure logic (SAN parsing, the sessionId UUIDv5
-  derivation, fallback traversal, the budget fold, glob matching, pod-spec
-  hashing); envtest for reconcilers against a real apiserver; k3d for full
-  end-to-end.
-- **The docs are the specification.** Every phase cites its pages, and the
-  [acceptance scenarios](appendix/scenarios.md) (S1 to S15) are the north star that
-  defines "done".
-- **Defaulting is reconcile-time, not admission.** Only intrinsic field defaults
-  (for example `service.enabled`, `maxPendingAsyncResponses`, `session.enabled`) use
-  CRD defaults. Every AgentClass-derived default is merged at reconcile time so the
-  stored spec reflects exactly what the developer wrote, per
-  [Validation and Defaulting](resources/validation-and-defaulting.md).
+Two workstreams, both already scoped:
 
-## Repository layout
+**1. Prove every acceptance scenario on a real cluster.** The
+[scenarios](appendix/scenarios.md) (S1 to S15) define "done" for the design, and
+v0.1.0 ships with cluster-level e2e proof for S1, S3, S6, S8, S11, and S13. The
+rest are verified at the unit or envtest level only (S4 fallback, S7 hibernate
+and wake, S10 budget exhaustion, S15 async webhook) or not systematically at all
+(S2, S5, S9, S12, S14). v0.2.0 closes that gap: every scenario gets an e2e spec,
+and the scenario-coverage map goes all green in its e2e column.
 
-One Go module, `github.com/win07xp/kubeclaw`, scaffolded with kubebuilder and
-adapted. The CRD group is exactly `agentry.io`: kubebuilder was initialized with
-`--domain io` and the APIs created with `--group agentry`, which it joins into
-`agentry.io`.
+**2. Release machinery, so a tag is installable.** A tag-triggered workflow that
+builds and pushes a multi-arch controller and gateway image to a registry,
+packages and publishes the Helm chart, versions the image reference into the
+chart, and attaches both to the GitHub release. After this, `helm install` works
+without cloning the repo.
 
-```
-kubeclaw/
-  api/v1alpha1/    the 5 CRD types, constants, generated deepcopy
-  cmd/manager/     the controller binary
-  cmd/gateway/     the gateway binary (a health-only stub until Phase 5)
-  internal/        reconcilers (Phase 2+) and gateway internals (Phase 5+)
-  config/          kubebuilder kustomize; the controller-gen target
-  charts/agentry/  the Helm chart, which is the deploy artifact; crds/ is synced
-                   from config/crd
-  examples/        the Go and Python starter templates
-  hack/            k3d-up.sh and pinned tool versions
-  test/            the CEL fixtures and suite, and the e2e suite
-  docs/            this book
-```
+## Beyond v0.2.0
 
-The Helm chart is the shipped installer, per [Deployment](operations/deployment.md).
-Kustomize under `config/` is generation input only: a Make target syncs the
-generated CRDs into the chart. The chart does not install the three hard
-prerequisites (cert-manager, trust-manager, and a NetworkPolicy-enforcing CNI); the
-local dev script provisions them into k3d.
+These are the deferrals the design itself names (see
+[Scope for v1](concepts/vision-and-scope.md#scope-for-v1)), roughly in the order
+they are likely to matter:
 
-## What Phases 0 and 1 delivered
+- **API graduation.** Promote `v1alpha1` toward `v1beta1` once real usage has
+  shaken out the field shapes; from that point, breaking changes require
+  conversion.
+- **Platform channel adapters.** Discord and WhatsApp adapters for the user
+  gateway (the v1 channel type is the generic webhook only); see
+  [Future platform types](resources/agentchannel.md#future-platform-types-v11).
+- **Reference base images.** Published container images wrapping the runtime
+  contract, replacing copy-the-starter-template as the primary on-ramp; see
+  [Starter Templates](runtime/starter-templates.md).
+- **Agent Sandbox integration.** The `agentSandbox` runtime backend for
+  code-executing agents.
+- **Observability deepening.** Concrete Grafana dashboard JSON for the shipped
+  metric catalogs, and OpenTelemetry tracing across the gateway to agent to
+  provider hops; see [Observability](operations/observability.md).
+- **Hard budget enforcement.** Synchronous per-request aggregation, replacing
+  the v1 soft-limit design where overshoot within a sync window is accepted.
+- **Cross-format provider fallback.** Translation between provider API formats
+  (for example Anthropic to OpenAI) so fallback chains can cross `spec.type`.
+- **Larger horizons.** Agent-to-agent orchestration, a web UI, multi-cluster
+  federation, and agent-aware scheduling (GPU awareness, priority, preemption).
 
-Everything below is committed and verified: `make build`, `vet`, `lint`, and `test`
-pass, there is no manifest drift, and the CRDs install and enforce their CEL rules
-on a real apiserver.
+## How this page is maintained
 
-**Phase 0, foundations.** The kubebuilder scaffold adapted to two binaries; the
-Helm chart carrying the CRDs with the documented tunables and a replica-floor guard;
-`hack/k3d-up.sh` bringing up a k3d cluster with cert-manager and trust-manager in
-the cert-manager cluster-resource namespace; a Dockerfile parameterized by which
-binary to build; a Makefile that builds both binaries and adds chart-sync, k3d-up,
-and e2e targets; and GitHub Actions CI running build, envtest, lint, a
-manifest-drift check, and a chart lint.
-
-**Phase 1, API types.** All five CRDs in `api/v1alpha1`: AgentClass and
-ModelProvider are cluster-scoped, Agent, AgentTask, and AgentChannel are namespaced,
-each with a full spec and status, printer columns, and a status subresource.
-Apply-time validation is expressed as CEL and structural markers only: the DNS-1123
-name rule, the persistence sizeGi-versus-existingClaim mutex, the
-artifacts-versus-exitCode rule, the reserved `/v1/` path rule, the callbackAuth
-requirement, the conditional auth requirements, the userId and content mutex, the
-HTTPS endpoint rule, and the enums. Cross-resource rules stay reconcile-time and are
-not markers. The ModelProvider catalog is a list-map keyed by model id. A
-`constants.go` centralizes the phases, conditions, reason strings, finalizers,
-well-known annotations and labels, the sessionId namespace UUID, and the SAN
-suffixes. An envtest suite under `test/cel` proves that five valid specs apply and
-seven invalid specs are each rejected by their one intended rule, plus a guard that
-class-derived defaults are never baked into the stored spec.
-
-## Toolchain
-
-Go 1.26. Codegen and test tooling (controller-gen, setup-envtest, kustomize, the
-kubebuilder CLI) install into the Go bin directory; the Makefile also pins its own
-copies under `bin/`. golangci-lint is pinned to v1.63.4 in both the Makefile and CI,
-matching the v1-format `.golangci.yml`. envtest runs against a Kubernetes 1.32
-control plane. The local end-to-end loop uses k3d.
+Items move here from the release notes when a version ships, and out of here into
+the design book when they get designed. History lives in git and in the
+[releases](https://github.com/win07xp/kubeclaw/releases); this page only ever
+describes the present and the future.
