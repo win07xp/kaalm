@@ -1,6 +1,7 @@
 # Summary
 
 [Introduction](introduction.md)
+[Implementation Roadmap](ROADMAP.md)
 
 # Orientation
 
@@ -76,3 +77,4 @@
 ---
 
 - [Acceptance Scenarios](appendix/scenarios.md)
+- [Scenario Coverage](appendix/scenario-coverage.md)

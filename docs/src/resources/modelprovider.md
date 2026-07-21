@@ -145,7 +145,7 @@ status:
   clusterSpentUSD: "699.50"
 ```
 
-Two conditions summarize provider health: `Ready` reports whether the spec is valid and credentials check out, and `Healthy` reports the result of the periodic upstream probe. `budgetUsage` shows per-namespace spend for the current period, and `clusterSpentUSD` shows the sum across all namespaces.
+Two conditions summarize provider health: `Ready` reports whether the spec is valid and credentials check out, and `Healthy` reports the result of the periodic upstream probe. The probe runs by default; set `healthCheck.enabled: false` to disable it (for example for a provider type with no probe, or an offline test fixture). `healthCheck.intervalSeconds` sets the probe cadence (default 60) and `healthCheck.timeoutSeconds` bounds each probe request (default 10). `budgetUsage` shows per-namespace spend for the current period, and `clusterSpentUSD` shows the sum across all namespaces.
 
 ## Design Notes
 

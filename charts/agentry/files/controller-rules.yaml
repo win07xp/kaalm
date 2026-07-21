@@ -1,0 +1,123 @@
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - agentry.io
+  resources:
+  - agentchannels
+  - agentclasses
+  - agents
+  - modelproviders
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - agentry.io
+  resources:
+  - agentchannels/finalizers
+  - agentclasses/finalizers
+  - agents/finalizers
+  - agenttasks/finalizers
+  - modelproviders/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - agentry.io
+  resources:
+  - agentchannels/status
+  - agentclasses/status
+  - agents/status
+  - agenttasks/status
+  - modelproviders/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - agentry.io
+  resources:
+  - agenttasks
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

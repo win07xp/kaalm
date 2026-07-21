@@ -1,0 +1,10 @@
+# rule 27a: sizeGi and existingClaim are mutually exclusive
+apiVersion: agentry.io/v1alpha1
+kind: Agent
+metadata: {name: mutex-agent, namespace: default}
+spec:
+  agentClassRef: {name: standard}
+  persistence:
+    enabled: true
+    sizeGi: 10
+    existingClaim: my-claim

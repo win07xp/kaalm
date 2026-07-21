@@ -1,0 +1,14 @@
+apiVersion: agentry.io/v1alpha1
+kind: Agent
+metadata:
+  name: e2e-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationDelay: 0s
+    idleTimeout: 0s
+    wakeTimeout: 0s

@@ -1,0 +1,24 @@
+apiVersion: agentry.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: anthropic-shared
+spec:
+  type: anthropic
+  endpoint: https://api.anthropic.com
+  credentialsRef:
+    name: anthropic-api-key
+    key: token
+  models:
+    - id: claude-opus-4-6
+      costPer1MInputTokens: "15.00"
+      costPer1MOutputTokens: "75.00"
+  allowedNamespaces: ["team-*"]
+  budget:
+    period: monthly
+    perNamespaceUSD: "500"
+    policies:
+      - atPercent: 80
+        action: warn
+      - atPercent: 100
+        action: degrade
+        degradeTo: claude-opus-4-6

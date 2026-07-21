@@ -1,0 +1,19 @@
+apiVersion: agentry.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: standard
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["ghcr.io/win07xp/*"]
+  persistence:
+    enabled: true
+    defaultSizeGi: 5
+    maxSizeGi: 50
+    pvcRetention: Retain
+  allowedProviders:
+    - name: anthropic-shared
+  lifecycle:
+    defaultIdleTimeout: 30m
+    hibernationAllowed: true

@@ -1,0 +1,27 @@
+apiVersion: agentry.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: support-webhook
+  namespace: default
+spec:
+  agentRef:
+    name: support-assistant
+  webhook:
+    path: /channels/default/support-webhook
+    auth:
+      type: bearer
+      secretRef:
+        name: webhook-secret
+        key: token
+    userId:
+      fromHeader: X-User-Id
+    responseMode: async
+    callbackUrl: https://hooks.example.com/reply
+    callbackAuth:
+      type: hmac
+      hmac:
+        header: X-Signature
+        algorithm: sha256
+        secretRef:
+          name: callback-secret
+          key: signing

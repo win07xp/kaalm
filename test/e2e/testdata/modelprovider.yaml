@@ -1,0 +1,18 @@
+# Hermetic e2e: google-vertex has no liveness probe implemented, so Probe
+# returns Skipped (no network) and Ready goes True on a dummy credential.
+# healthCheck.enabled:false now works too (the bool no longer carries omitempty),
+# but google-vertex is kept here because it needs no live endpoint at all.
+apiVersion: agentry.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: e2e-vertex
+spec:
+  type: google-vertex
+  endpoint: https://us-central1-aiplatform.googleapis.com
+  credentialsRef:
+    name: e2e-vertex-key
+    key: token
+  models:
+    - id: gemini-1.5-pro
+      costPer1MInputTokens: "1.25"
+      costPer1MOutputTokens: "5.00"

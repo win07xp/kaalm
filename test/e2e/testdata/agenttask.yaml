@@ -1,0 +1,17 @@
+apiVersion: agentry.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: e2e-task
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  env:
+    - name: AGENTRY_TASK_AUTOCOMPLETE
+      value: success
+  completion:
+    condition: agentReported
+    timeout: 2m
+    onTimeout: Fail
+  ttlSecondsAfterFinished: 30

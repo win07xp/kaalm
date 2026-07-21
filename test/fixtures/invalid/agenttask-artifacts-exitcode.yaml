@@ -1,0 +1,8 @@
+# rule 17: exitCode tasks cannot declare artifacts
+apiVersion: agentry.io/v1alpha1
+kind: AgentTask
+metadata: {name: bad-task, namespace: default}
+spec:
+  agentClassRef: {name: standard}
+  completion: {condition: exitCode}
+  artifacts: [{name: out}]

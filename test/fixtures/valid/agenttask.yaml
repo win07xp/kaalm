@@ -1,0 +1,14 @@
+apiVersion: agentry.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: nightly-report
+  namespace: default
+spec:
+  agentClassRef:
+    name: standard
+  image: ghcr.io/win07xp/task:latest
+  completion:
+    condition: agentReported
+    timeout: 1h
+  artifacts:
+    - name: report-url

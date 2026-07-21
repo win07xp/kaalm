@@ -1,0 +1,123 @@
+{{/*
+The Agentry trust chain. cert-manager and trust-manager controllers are hard
+prerequisites the chart does NOT install; it ships only the Agentry-specific
+issuers, certificates, and bundle. See docs/src/security/tls.md.
+*/}}
+---
+# A self-signed ClusterIssuer that bootstraps the Agentry root CA.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: agentry-selfsigned
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+# The Agentry root CA. It and its output Secret MUST live in cert-manager's
+# cluster resource namespace, or the CA ClusterIssuer below fails cluster-wide
+# with SecretNotFound (the ca.secretName has no namespace field).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: agentry-ca
+  namespace: {{ .Values.certManager.clusterResourceNamespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: agentry-ca
+  secretName: agentry-ca
+  duration: 43800h    # 5y
+  renewBefore: 8760h  # 1y
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never  # key reuse on renewal keeps all leaves valid
+  issuerRef:
+    name: agentry-selfsigned
+    kind: ClusterIssuer
+---
+# The CA ClusterIssuer that signs every Agentry leaf, including the per-Agent
+# and per-AgentTask certs created in user namespaces.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: agentry-ca-issuer
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: agentry-ca
+---
+# The gateway serving/client certificate.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: agentry-gateway-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  secretName: agentry-gateway-tls
+  duration: 2160h     # 90d
+  renewBefore: 720h   # 30d
+  issuerRef:
+    name: agentry-ca-issuer
+    kind: ClusterIssuer
+  usages:
+    - server auth
+    - client auth
+  dnsNames:
+    - agentry-gateway.{{ .Release.Namespace }}.svc.cluster.local
+    - agentry-gateway.{{ .Release.Namespace }}.svc
+    - localhost
+    {{- range .Values.gateway.externalHostnames }}
+    - {{ . | quote }}
+    {{- end }}
+---
+# The controller serving/client certificate for the activator, activity API,
+# and channels-health endpoints on :9443.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: agentry-controller-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  secretName: agentry-controller-tls
+  duration: 2160h
+  renewBefore: 720h
+  issuerRef:
+    name: agentry-ca-issuer
+    kind: ClusterIssuer
+  usages:
+    - server auth
+    - client auth
+  dnsNames:
+    - agentry-controller.{{ .Release.Namespace }}.svc.cluster.local
+    - agentry-controller.{{ .Release.Namespace }}.svc
+---
+# trust-manager projects the CA into workload namespaces as the agentry-ca
+# ConfigMap (mounted at /var/run/agentry/ca.crt). trust-manager reads Bundle
+# sources only from its trust namespace, which must equal the cluster resource
+# namespace above.
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: agentry-ca
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  sources:
+    - secret:
+        name: agentry-ca
+        key: tls.crt
+  target:
+    configMap:
+      key: ca.crt
+    {{- if .Values.trustManager.bundleSelector }}
+    namespaceSelector:
+      {{- toYaml .Values.trustManager.bundleSelector | nindent 6 }}
+    {{- end }}

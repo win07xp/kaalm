@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify generated code and manifests are up to date
+        run: |
+          make manifests generate
+          git diff --exit-code || (echo "::error::run 'make manifests generate' and commit the result" && exit 1)
+
+      - name: Build binaries
+        run: make build
+
+      - name: Unit and envtest suites (with 85% coverage gate)
+        run: make cover-check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.63.4
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Lint Helm chart with synced CRDs
+        run: |
+          make chart-sync
+          helm lint charts/agentry
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install k3d
+        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.7.4 bash
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Run e2e suite
+        run: make e2e
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl describe pods -n agentry-system || true
+          kubectl describe pods -n e2e || true
+          kubectl logs -n agentry-system -l app.kubernetes.io/component=controller --tail=200 || true
+          kubectl logs -n agentry-system -l app.kubernetes.io/component=gateway --tail=200 || true

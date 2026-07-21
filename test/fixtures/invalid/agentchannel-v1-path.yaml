@@ -1,0 +1,9 @@
+# rule 16: webhook.path must not use the reserved /v1/ prefix
+apiVersion: agentry.io/v1alpha1
+kind: AgentChannel
+metadata: {name: bad-path, namespace: default}
+spec:
+  agentRef: {name: support-assistant}
+  webhook:
+    path: /v1/hijack
+    auth: {type: bearer, secretRef: {name: s, key: k}}

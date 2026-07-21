@@ -1,0 +1,397 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: agentchannels.agentry.io
+spec:
+  group: agentry.io
+  names:
+    kind: AgentChannel
+    listKind: AgentChannelList
+    plural: agentchannels
+    shortNames:
+    - ach
+    singular: agentchannel
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentRef.name
+      name: Agent
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="PlatformConnected")].status
+      name: Connected
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AgentChannel is the Schema for the agentchannels API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AgentChannelSpec binds an inbound webhook channel to an Agent. See
+              docs/src/resources/agentchannel.md.
+            properties:
+              agentRef:
+                description: |-
+                  AgentRef names the target Agent. It must be an Agent, never an AgentTask,
+                  in the same namespace.
+                properties:
+                  name:
+                    description: Name of the referenced object.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              session:
+                description: Session configures deterministic session identity.
+                properties:
+                  enabled:
+                    description: Enabled derives a deterministic sessionId per (channel,
+                      user).
+                    type: boolean
+                type: object
+              type:
+                default: webhook
+                description: Type selects the channel platform. Only webhook is supported
+                  in v1.
+                enum:
+                - webhook
+                type: string
+              webhook:
+                description: Webhook configures the webhook channel.
+                properties:
+                  auth:
+                    description: Auth authenticates inbound webhook calls.
+                    properties:
+                      hmac:
+                        description: HMAC configures signature verification. Required
+                          for hmac.
+                        properties:
+                          algorithm:
+                            default: sha256
+                            description: Algorithm used to compute the signature.
+                            enum:
+                            - sha256
+                            - sha1
+                            type: string
+                          encoding:
+                            default: hex
+                            description: Encoding of the signature in the header.
+                            enum:
+                            - hex
+                            - base64
+                            type: string
+                          header:
+                            description: Header carrying the signature.
+                            type: string
+                          secretRef:
+                            description: SecretRef holds the signing key.
+                            properties:
+                              key:
+                                description: Key within the Secret's data.
+                                minLength: 1
+                                type: string
+                              name:
+                                description: Name of the Secret.
+                                minLength: 1
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                          signaturePrefix:
+                            description: SignaturePrefix is stripped from the header
+                              value before comparison.
+                            type: string
+                        required:
+                        - header
+                        - secretRef
+                        type: object
+                      secretRef:
+                        description: SecretRef holds the bearer token. Required for
+                          bearer.
+                        properties:
+                          key:
+                            description: Key within the Secret's data.
+                            minLength: 1
+                            type: string
+                          name:
+                            description: Name of the Secret.
+                            minLength: 1
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      type:
+                        description: Type selects the auth scheme.
+                        enum:
+                        - bearer
+                        - hmac
+                        type: string
+                    required:
+                    - type
+                    type: object
+                    x-kubernetes-validations:
+                    - message: bearer auth requires secretRef; hmac auth requires
+                        the hmac block
+                      rule: (self.type == 'bearer' && has(self.secretRef)) || (self.type
+                        == 'hmac' && has(self.hmac))
+                  callbackAuth:
+                    description: CallbackAuth signs outbound callbacks. Required when
+                      callbackUrl is set.
+                    properties:
+                      hmac:
+                        description: HMAC configures signature verification. Required
+                          for hmac.
+                        properties:
+                          algorithm:
+                            default: sha256
+                            description: Algorithm used to compute the signature.
+                            enum:
+                            - sha256
+                            - sha1
+                            type: string
+                          encoding:
+                            default: hex
+                            description: Encoding of the signature in the header.
+                            enum:
+                            - hex
+                            - base64
+                            type: string
+                          header:
+                            description: Header carrying the signature.
+                            type: string
+                          secretRef:
+                            description: SecretRef holds the signing key.
+                            properties:
+                              key:
+                                description: Key within the Secret's data.
+                                minLength: 1
+                                type: string
+                              name:
+                                description: Name of the Secret.
+                                minLength: 1
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                          signaturePrefix:
+                            description: SignaturePrefix is stripped from the header
+                              value before comparison.
+                            type: string
+                        required:
+                        - header
+                        - secretRef
+                        type: object
+                      secretRef:
+                        description: SecretRef holds the bearer token. Required for
+                          bearer.
+                        properties:
+                          key:
+                            description: Key within the Secret's data.
+                            minLength: 1
+                            type: string
+                          name:
+                            description: Name of the Secret.
+                            minLength: 1
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      type:
+                        description: Type selects the auth scheme.
+                        enum:
+                        - bearer
+                        - hmac
+                        type: string
+                    required:
+                    - type
+                    type: object
+                    x-kubernetes-validations:
+                    - message: bearer auth requires secretRef; hmac auth requires
+                        the hmac block
+                      rule: (self.type == 'bearer' && has(self.secretRef)) || (self.type
+                        == 'hmac' && has(self.hmac))
+                  callbackUrl:
+                    description: |-
+                      CallbackURL, when set, receives async responses. Must be HTTPS and must not
+                      point into internal address space (rule 22, checked at reconcile time).
+                    type: string
+                  content:
+                    description: Content extracts the message content from the request.
+                    properties:
+                      fallback:
+                        description: Fallback value used when extraction yields nothing.
+                        type: string
+                      fromBody:
+                        description: |-
+                          FromBody is a dotted path into the JSON request body (for example
+                          "user.id").
+                        pattern: ^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$
+                        type: string
+                      fromHeader:
+                        description: FromHeader names a request header.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: fromHeader and fromBody are mutually exclusive
+                      rule: '!(has(self.fromHeader) && has(self.fromBody))'
+                  maxPendingAsyncResponses:
+                    default: 100
+                    description: MaxPendingAsyncResponses caps concurrent in-flight
+                      async responses.
+                    format: int32
+                    type: integer
+                  path:
+                    description: |-
+                      Path is the inbound webhook path. It must begin with /channels/{namespace}/
+                      (the namespace prefix is checked at reconcile time) and must not use the
+                      reserved /v1/ prefix (rule 16).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: webhook.path must not use the reserved /v1/ prefix
+                      rule: '!self.startsWith(''/v1/'')'
+                  responseMode:
+                    default: sync
+                    description: |-
+                      ResponseMode selects synchronous inline delivery or asynchronous
+                      (202 + callback/polling) delivery.
+                    enum:
+                    - sync
+                    - async
+                    type: string
+                  userId:
+                    description: UserID extracts the caller identity from the request.
+                    properties:
+                      fallback:
+                        description: Fallback value used when extraction yields nothing.
+                        type: string
+                      fromBody:
+                        description: |-
+                          FromBody is a dotted path into the JSON request body (for example
+                          "user.id").
+                        pattern: ^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$
+                        type: string
+                      fromHeader:
+                        description: FromHeader names a request header.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: fromHeader and fromBody are mutually exclusive
+                      rule: '!(has(self.fromHeader) && has(self.fromBody))'
+                required:
+                - auth
+                - path
+                type: object
+                x-kubernetes-validations:
+                - message: callbackAuth is required when callbackUrl is set
+                  rule: '!has(self.callbackUrl) || has(self.callbackAuth)'
+            required:
+            - agentRef
+            - webhook
+            type: object
+          status:
+            description: AgentChannelStatus is the observed state of an AgentChannel.
+            properties:
+              conditions:
+                description: Conditions report Ready and the tri-state PlatformConnected.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the current lifecycle phase. Unset until first
+                  reconcile.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

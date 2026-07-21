@@ -35,7 +35,7 @@ Three caveats bound the guarantee. This synthesis applies only to Agentry-manage
 All of the resources above live in the same namespace as the Agent CR, and the reconciler gives each one an ownerRef back to it. Full Agent deletion cascade-GCs them. Two of them sit outside that rule:
 
 - A PVC referenced via `persistence.existingClaim` is never given an ownerRef by the reconciler, so it survives Agent deletion. It is also untouched by [`pvcRetention`](../resources/agentclass.md), which governs Agentry-provisioned PVCs only.
-- The Secret cert-manager writes for the per-Agent `Certificate` is **owned by cert-manager, not by the reconciler** (see [AgentReconciler](../controller/reconcilers.md#agentreconciler)). It is still cleaned up on Agent deletion, but one hop later and by a different mechanism: cascade GC removes the owned `Certificate`, and cert-manager then removes the Secret it had issued.
+- The Secret cert-manager writes for the per-Agent `Certificate` is **owned by cert-manager, not by the reconciler** (see [AgentReconciler](../controller/reconcilers.md#agentreconciler)). It is still cleaned up on Agent deletion, but one hop later and by a different mechanism: cascade GC removes the owned `Certificate`, and cert-manager then removes the Secret it had issued. That second hop requires cert-manager to run with `--enable-certificate-owner-ref=true`, which is not its default; see [In-cluster TLS](../security/tls.md#in-cluster-tls).
 
 **There is no per-Agent configuration ConfigMap.** Non-sensitive config (gateway endpoint, ports) is delivered as env vars injected at Pod creation, and config changes are Pod-replacing spec drift by design. The same model applies to AgentTask.
 

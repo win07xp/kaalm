@@ -1,2 +1,28 @@
 .claude/settings.local.json
 docs/book/
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/*
+Dockerfile.cross
+*.test
+*.out
+go.work
+!vendor/**/zz_generated.*
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Starter-template build artifacts
+examples/starter-go/starter-go
+__pycache__/
+*.pyc
+
+# Stray root-built binaries
+/gateway
+/manager

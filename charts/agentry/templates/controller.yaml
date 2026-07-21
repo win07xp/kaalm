@@ -1,0 +1,144 @@
+{{- include "agentry.replicaFloor" .Values.controller.replicas -}}
+{{/*
+The controller Deployment, Service, and PodDisruptionBudget. Two replicas with
+leader election: the leader reconciles, the standby keeps the activator
+endpoint reachable across voluntary disruptions (the activator handler runs on
+every replica). See docs/src/operations/deployment.md.
+*/}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentry-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentry
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "agentry.labels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: agentry-controller
+      securityContext:
+        runAsNonRoot: true
+      # Spread the two replicas across nodes so a single node loss cannot take
+      # both, which would surface as controller_unavailable 504s on wake.
+      # Preferred (not required) so the chart still schedules on single-node
+      # dev clusters; on multi-node clusters the scheduler spreads them. The
+      # PDB (minAvailable 1) is what guards against simultaneous voluntary
+      # eviction regardless.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: agentry
+                    app.kubernetes.io/component: controller
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: manager
+          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=:8080
+            - --metrics-secure=false
+            - --controller-tls-cert=/var/run/agentry/tls.crt
+            - --controller-tls-key=/var/run/agentry/tls.key
+            - --controller-tls-ca=/var/run/agentry/ca.crt
+            - --activator-addr=:9443
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: activator
+              containerPort: 9443
+            - name: metrics
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: agentry-tls
+              mountPath: /var/run/agentry
+              readOnly: true
+      volumes:
+        # The controller's own leaf cert plus the trust-manager-projected CA,
+        # combined so a rotation of either is picked up by the file watch.
+        - name: agentry-tls
+          projected:
+            sources:
+              - secret:
+                  name: agentry-controller-tls
+                  items:
+                    - { key: tls.crt, path: tls.crt }
+                    - { key: tls.key, path: tls.key }
+              - configMap:
+                  name: agentry-ca
+                  items:
+                    - { key: ca.crt, path: ca.crt }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentry-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  selector:
+    app.kubernetes.io/name: agentry
+    app.kubernetes.io/component: controller
+  ports:
+    - name: activator
+      port: 9443
+      targetPort: 9443
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentry-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentry.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentry
+      app.kubernetes.io/component: controller

@@ -1,0 +1,17 @@
+apiVersion: agentry.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: e2e-standard
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s

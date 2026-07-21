@@ -1,0 +1,8 @@
+# endpoint must be HTTPS
+apiVersion: agentry.io/v1alpha1
+kind: ModelProvider
+metadata: {name: insecure}
+spec:
+  type: openai
+  endpoint: http://api.example.com
+  credentialsRef: {name: k, key: token}
