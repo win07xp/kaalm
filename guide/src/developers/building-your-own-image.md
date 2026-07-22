@@ -70,7 +70,7 @@ logic; everything else is contract plumbing you should rarely touch.
 
 ## Testing an image before pointing an Agent at it
 
-The honest answer for v0.1.0: the fastest full-fidelity loop is the e2e
+The honest answer for v0.2.0: the fastest full-fidelity loop is the e2e
 cluster, because the contract is mostly about TLS identity, and that needs
 the real certificate machinery:
 

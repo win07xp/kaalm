@@ -6,8 +6,8 @@ description: >-
   cert-manager and trust-manager resources. Requires cert-manager,
   trust-manager, and a NetworkPolicy-enforcing CNI to be installed already.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 kubeVersion: ">=1.28.0-0"
 keywords:
   - ai

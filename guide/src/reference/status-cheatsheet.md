@@ -2,7 +2,7 @@
 
 Everything Kaalm tells you through `kubectl get` and `describe`, resource
 by resource. Conditions listed are the ones the controller actually sets in
-v0.1.0.
+v0.2.0.
 
 ## Agent
 
