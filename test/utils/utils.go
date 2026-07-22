@@ -188,3 +188,25 @@ func PostJSON(url, bearer string, body []byte) (int, string, error) {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	return resp.StatusCode, string(b), nil
 }
+
+// GetWithBearer issues a GET with an optional bearer token, mirroring PostJSON.
+// Used by the async polling endpoint assertions.
+func GetWithBearer(url, bearer string) (int, string, error) {
+	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // localhost port-forward only
+	tr := &http.Transport{TLSClientConfig: tlsCfg}
+	cli := &http.Client{Timeout: 45 * time.Second, Transport: tr}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	return resp.StatusCode, string(b), nil
+}

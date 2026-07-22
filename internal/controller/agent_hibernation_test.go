@@ -62,6 +62,78 @@ func TestAgent_IdleTransitionAndReturn(t *testing.T) {
 	expectAgentPhase(t, "idle-agent", kaalmv1alpha1.AgentRunning)
 }
 
+// replicaNoTraffic builds a replica view that has been up for startedAgo but
+// has recorded no traffic for any agent (empty map). This drives the
+// no-recorded-activity fallback in evaluateActivity.
+func replicaNoTraffic(startedAgo time.Duration) ReplicaActivity {
+	return ReplicaActivity{
+		StartedAt: time.Now().Add(-startedAgo),
+		Agents:    map[string]AgentActivity{},
+	}
+}
+
+// TestAgent_HibernatesWithoutRecordedTraffic pins the fallback path for an
+// agent that has never made a gateway LLM call: with a qualified replica but no
+// recorded traffic, evaluateActivity uses PhaseTransitionTime as a synthetic
+// silence marker. Because setPhase advances that marker on every transition, a
+// naive reading flips Idle<->Running forever; this asserts the agent instead
+// settles into Hibernated.
+func TestAgent_HibernatesWithoutRecordedTraffic(t *testing.T) {
+	mkWorkloadClass(t, "wc-notraffic", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+		ac.Spec.Lifecycle.HibernationAllowed = true
+	})
+	provisionRunningAgentWithLifecycle(t, "notraffic", "wc-notraffic", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Persistence.Enabled = true
+		ag.Spec.Lifecycle.HibernationEnabled = true
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
+		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
+	})
+
+	// Backdate the Running transition so the (trafficless) silence is already
+	// well past idleTimeout+hibernationDelay, mirroring how the real-traffic
+	// test seeds a 2h-old activity timestamp; the transitions then fire on the
+	// immediate requeue chain instead of waiting out wall-clock timers.
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, "notraffic")
+		old := metav1.NewTime(time.Now().Add(-3 * time.Hour))
+		ag.Status.PhaseTransitionTime = &old
+		return testClient.Status().Update(ctxT(), ag)
+	})
+
+	// A replica up long enough to qualify, but with no traffic for this agent.
+	fakeActivity.set([]ReplicaActivity{replicaNoTraffic(3 * time.Hour)}, 1)
+	touchAgent(t, "notraffic")
+
+	// The reconciler deletes the Pod on the way to Hibernated; finish its
+	// termination (no kubelet in envtest) and assert it settles, not oscillates.
+	eventually(t, func() error {
+		var pods corev1.PodList
+		if err := testClient.List(ctxT(), &pods, listAgentPods("notraffic")...); err != nil {
+			return err
+		}
+		for i := range pods.Items {
+			if !pods.Items[i].DeletionTimestamp.IsZero() {
+				forceDeletePod(t, &pods.Items[i])
+			}
+		}
+		ag := getWorkloadAgent(t, "notraffic")
+		if ag.Status.Phase != kaalmv1alpha1.AgentHibernated {
+			return errString(fmt.Sprintf("phase=%s want Hibernated (no-traffic fallback)", ag.Status.Phase))
+		}
+		return nil
+	})
+
+	if agentPod(t, "notraffic") != nil {
+		t.Error("Hibernated must have no Pod")
+	}
+	ag := getWorkloadAgent(t, "notraffic")
+	if ag.Status.HibernatedAt == nil {
+		t.Error("hibernatedAt must be stamped on the no-traffic hibernation path")
+	}
+}
+
 func TestAgent_HibernateAndWake(t *testing.T) {
 	mkWorkloadClass(t, "wc-hibwake", func(ac *kaalmv1alpha1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true

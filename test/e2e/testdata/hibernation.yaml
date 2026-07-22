@@ -1,0 +1,119 @@
+# Fixtures for the hibernate/wake e2e (S7) and the wake_timeout arm (S14).
+#
+# A hibernation-enabled class needs persistence + hibernationAllowed and, unlike
+# the golden-path e2e-standard class, POSITIVE lifecycle timers: the controller
+# only runs idle/hibernation evaluation when the effective idleTimeout is > 0
+# (agent_controller.go). max*=0 means "uncapped" (agent_desired.go pick()), so
+# the small positive defaults below flow through unclamped.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s7-hibernating
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+  lifecycle:
+    hibernationAllowed: true
+    defaultIdleTimeout: 2s
+    defaultHibernationDelay: 2s
+    defaultWakeTimeout: 0s
+---
+# S7 agent: healthy, hibernation-enabled, generous wake budget (0s -> 120s
+# default) to absorb the freshly-woken-pod kube-router ipset lag (~20s).
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s7-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s7-hibernating
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationEnabled: true
+---
+# Async channel so the caller gets a 202 + requestId and retrieves the reply by
+# polling. No callbackUrl: the pipeline stores the result on the poll record,
+# sidestepping the SSRF guard on in-cluster callback IPs (that is issue #11).
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: s7-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s7-agent
+  type: webhook
+  webhook:
+    path: /channels/e2e/s7-channel
+    responseMode: async
+    auth:
+      type: bearer
+      secretRef:
+        name: s7-hook
+        key: token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s7-hook
+  namespace: e2e
+type: Opaque
+stringData:
+  token: s7-webhook-bearer-token
+---
+# S14 agent: identical to s7-agent but with an impossibly short wakeTimeout. A
+# freshly recreated pod cannot become reachable within 1s (schedule + start +
+# the ~20s ipset lag), so the first wake attempt always exceeds wakeTimeout and
+# the async pipeline stores a wake_timeout error payload.
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s14-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s7-hibernating
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationEnabled: true
+    wakeTimeout: 1s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: s14-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s14-agent
+  type: webhook
+  webhook:
+    path: /channels/e2e/s14-channel
+    responseMode: async
+    auth:
+      type: bearer
+      secretRef:
+        name: s14-hook
+        key: token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s14-hook
+  namespace: e2e
+type: Opaque
+stringData:
+  token: s14-webhook-bearer-token
