@@ -178,10 +178,10 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 func ParseCompletionData(data map[string]string) (status, message string, artifacts map[string]string) {
 	artifacts = map[string]string{}
 	for k, v := range data {
-		switch {
-		case k == CompletionKeyStatus:
+		switch k {
+		case CompletionKeyStatus:
 			status = v
-		case k == CompletionKeyMessage:
+		case CompletionKeyMessage:
 			message = v
 		default:
 			if name, ok := strings.CutPrefix(k, CompletionArtifactPrefix); ok {

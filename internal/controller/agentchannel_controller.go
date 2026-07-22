@@ -352,7 +352,7 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 // re-check so the two halves cannot drift.
 func validateCallbackURL(raw string, policy callbackpolicy.Policy) (string, string) {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
+	if err != nil || parsed.Scheme != schemeHTTPS || parsed.Hostname() == "" {
 		return kaalmv1alpha1.ReasonInvalidCallbackURL, "callbackUrl must be a valid https URL"
 	}
 	host := parsed.Hostname()

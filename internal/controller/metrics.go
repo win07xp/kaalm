@@ -21,6 +21,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
+// labelNamespace is the shared Prometheus label name.
+const labelNamespace = "namespace"
+
 // The controller's Kaalm-specific Prometheus catalog. Standard reconcile
 // metrics come from controller-runtime automatically. No metric carries
 // per-Agent identity as a label (docs/src/operations/observability.md). These
@@ -29,19 +32,19 @@ import (
 var (
 	hibernationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kaalm_hibernations_total", Help: "Agent hibernations by namespace.",
-	}, []string{"namespace"})
+	}, []string{labelNamespace})
 
 	wakesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kaalm_wakes_total", Help: "Agent wakes by namespace and trigger.",
-	}, []string{"namespace", "trigger"})
+	}, []string{labelNamespace, "trigger"})
 
 	budgetThresholdEvents = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kaalm_budget_threshold_events_total", Help: "Reconcile-observed budget threshold actions.",
-	}, []string{"provider", "namespace", "action"})
+	}, []string{"provider", labelNamespace, "action"})
 
 	providerBudgetCanonical = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kaalm_provider_budget_canonical_usd", Help: "Canonical per-namespace spend roll-up.",
-	}, []string{"provider", "namespace", "period"})
+	}, []string{"provider", labelNamespace, "period"})
 )
 
 func init() {

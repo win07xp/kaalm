@@ -1,6 +1,8 @@
-# Build an Kaalm binary. Pass --build-arg BINARY=manager (default) or
-# --build-arg BINARY=gateway to select which command to build. Both ship from
-# the same source tree and base image.
+# Build a shipped Kaalm binary. Pass --build-arg BINARY=manager (default) or
+# --build-arg BINARY=gateway. Both ship from the same source tree and base
+# image. The e2e mock provider is not built here: it is a test double with its
+# own Dockerfile under test/e2e/mockprovider, so this build context stays free
+# of test code.
 FROM docker.io/golang:1.24 AS builder
 ARG TARGETOS
 ARG TARGETARCH
