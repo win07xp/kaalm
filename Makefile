@@ -201,22 +201,25 @@ CHART_APP_VERSION := $(shell grep '^appVersion:' charts/kaalm/Chart.yaml | awk '
 CONTROLLER_IMG ?= ghcr.io/win07xp/kaalm-controller:$(CHART_APP_VERSION)
 GATEWAY_IMG ?= ghcr.io/win07xp/kaalm-gateway:$(CHART_APP_VERSION)
 AGENT_IMG ?= registry.test/agents/starter-go:e2e
+MOCKPROVIDER_IMG ?= registry.test/mock/llm-provider:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
 CURL_IMG ?= curlimages/curl:8.10.1
 
 .PHONY: e2e-images
-e2e-images: ## Build the controller, gateway, and agent images and import them into k3d.
+e2e-images: ## Build the controller, gateway, agent, and mock-provider images and import them into k3d.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
+	docker build -t $(MOCKPROVIDER_IMG) --build-arg BINARY=mockprovider .
 	docker build -t $(AGENT_IMG) examples/starter-go
 	docker pull $(CURL_IMG)
-	k3d image import $(CONTROLLER_IMG) $(GATEWAY_IMG) $(AGENT_IMG) $(CURL_IMG) -c $(CLUSTER)
+	k3d image import $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(CURL_IMG) -c $(CLUSTER)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 	helm upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
-		--set certManager.clusterResourceNamespace=cert-manager --wait --timeout 5m
+		--set certManager.clusterResourceNamespace=cert-manager \
+		--set gateway.trustClusterCAForUpstream=true --wait --timeout 5m
 
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: bring up the cluster, build+import images, install the chart, run the suite.
