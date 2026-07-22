@@ -219,7 +219,9 @@ e2e-images: ## Build the controller, gateway, agent, and mock-provider images an
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 	helm upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
 		--set certManager.clusterResourceNamespace=cert-manager \
-		--set gateway.trustClusterCAForUpstream=true --wait --timeout 5m
+		--set gateway.trustClusterCAForUpstream=true \
+		--set gateway.trustClusterCAForCallbacks=true \
+		--set gateway.allowPrivateCallbacks=true --wait --timeout 5m
 
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: bring up the cluster, build+import images, install the chart, run the suite.

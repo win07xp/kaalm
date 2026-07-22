@@ -30,6 +30,17 @@ gateway:
   # cert signed by kaalm-ca-issuer. Off by default; public providers need only
   # the system roots.
   trustClusterCAForUpstream: false
+  # Trust the cluster CA (kaalm-ca) for AgentChannel callbackUrl TLS, in addition
+  # to the public system roots. Enable this to deliver async responses to
+  # in-cluster or self-hosted callback receivers served with a kaalm-ca-issuer
+  # cert. Off by default; public receivers need only the system roots.
+  trustClusterCAForCallbacks: false
+  # Permit callbackUrl hosts that resolve to private (RFC1918/ULA) addresses,
+  # for in-cluster or self-hosted receivers. Loopback and link-local (cloud
+  # metadata) stay blocked regardless. Off by default: SSRF protection denies
+  # private callback targets unless you opt in. Applies to both the controller's
+  # reconcile-time callbackUrl validation and the gateway's pre-dial check.
+  allowPrivateCallbacks: false
   # Additional DNS names appended to the kaalm-gateway-tls certificate SANs.
   # Required when the User listener is exposed via TLS pass-through Ingress.
   externalHostnames: []

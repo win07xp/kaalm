@@ -43,6 +43,8 @@ func main() {
 		certFile, keyFile    string
 		caFile               string
 		upstreamCAFile       string
+		callbackCAFile       string
+		allowPrivateCB       bool
 		maxBodyBytes         int64
 		upstreamTimeout      time.Duration
 		disableSourceIPCheck bool
@@ -67,6 +69,10 @@ func main() {
 	flag.StringVar(&caFile, "tls-ca", "/var/run/kaalm/ca.crt", "Kaalm CA bundle for client verification")
 	flag.StringVar(&upstreamCAFile, "upstream-ca", "",
 		"optional CA bundle to trust for upstream provider TLS, added to the system roots")
+	flag.StringVar(&callbackCAFile, "callback-ca", "",
+		"optional CA bundle to trust for channel callbackUrl TLS, added to the system roots")
+	flag.BoolVar(&allowPrivateCB, "allow-private-callbacks", false,
+		"permit callbackUrl hosts that resolve to private (RFC1918/ULA) addresses, for in-cluster receivers; loopback and cloud metadata stay blocked")
 	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
 	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second, "upstream provider call timeout")
 	flag.BoolVar(&disableSourceIPCheck, "disable-source-ip-check", false,
@@ -133,25 +139,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The upstream CA bundle is additive to the system roots: it lets the
-	// gateway reach in-cluster or self-hosted providers signed by a private CA
-	// (e.g. kaalm-ca) without losing the ability to verify public providers.
-	var upstreamCAs *x509.CertPool
-	if upstreamCAFile != "" {
-		pem, err := os.ReadFile(upstreamCAFile)
-		if err != nil {
-			logger.Error("reading upstream CA bundle", "error", err)
-			os.Exit(1)
-		}
-		upstreamCAs, err = x509.SystemCertPool()
-		if err != nil || upstreamCAs == nil {
-			upstreamCAs = x509.NewCertPool()
-		}
-		if !upstreamCAs.AppendCertsFromPEM(pem) {
-			logger.Error("no certificates parsed from upstream CA bundle")
-			os.Exit(1)
-		}
-	}
+	// The upstream and callback CA bundles are additive to the system roots:
+	// they let the gateway reach in-cluster or self-hosted providers/receivers
+	// signed by a private CA (e.g. kaalm-ca) without losing the ability to
+	// verify public endpoints.
+	upstreamCAs := additiveCAs(upstreamCAFile, "upstream", logger)
+	callbackCAs := additiveCAs(callbackCAFile, "callback", logger)
 
 	store := &gateway.KubeStore{Reader: cl.GetClient(), OperatorNamespace: operatorNamespace}
 	tokens := gateway.NewTokenAuthenticator(&gateway.KubeTokenReviewer{Client: clientset})
@@ -166,6 +159,8 @@ func main() {
 		MaxBodyBytes:             maxBodyBytes,
 		UpstreamTimeout:          upstreamTimeout,
 		UpstreamCAs:              upstreamCAs,
+		CallbackCAs:              callbackCAs,
+		AllowPrivateCallbacks:    allowPrivateCB,
 		DisableSourceIPCheck:     disableSourceIPCheck,
 		UserListenAddr:           userAddr,
 		AgentServiceHostOverride: agentHostOverride,
@@ -284,6 +279,30 @@ func main() {
 
 // parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".
 // An empty or malformed value falls back to the Config default (nil).
+// additiveCAs builds a CertPool from the system roots plus the PEM bundle at
+// file, or returns nil when file is empty (leaving TLS on the system roots). It
+// exits on a read/parse failure: a misconfigured trust bundle must not be
+// silently ignored. kind names the pool in log messages.
+func additiveCAs(file, kind string, logger *slog.Logger) *x509.CertPool {
+	if file == "" {
+		return nil
+	}
+	pem, err := os.ReadFile(file)
+	if err != nil {
+		logger.Error("reading "+kind+" CA bundle", "error", err)
+		os.Exit(1)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		logger.Error("no certificates parsed from " + kind + " CA bundle")
+		os.Exit(1)
+	}
+	return pool
+}
+
 func parseBackoff(raw string, logger *slog.Logger) []time.Duration {
 	if raw == "" {
 		return nil

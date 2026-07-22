@@ -84,8 +84,13 @@ type Config struct {
 	AgentServicePortOverride int32
 	// InsecureSkipAgentVerify disables agent cert verification (dev only).
 	InsecureSkipAgentVerify bool
-	// CallbackCAs, when set, replaces the system pool for callback TLS (tests).
+	// CallbackCAs, when set, replaces the system pool for callback TLS (tests,
+	// and the --callback-ca bundle for in-cluster/self-hosted receivers).
 	CallbackCAs *x509.CertPool
+	// AllowPrivateCallbacks permits callbackUrl hosts that resolve to private
+	// (RFC1918/ULA) addresses, for in-cluster or self-hosted receivers. Loopback
+	// and link-local (cloud metadata) stay blocked. Default false.
+	AllowPrivateCallbacks bool
 }
 
 // Server is the Kaalm Gateway's :8443 surface.

@@ -272,6 +272,30 @@ func TestPostJSON(t *testing.T) {
 	})
 }
 
+func TestPostJSONHeaders(t *testing.T) {
+	var gotUser, gotAuth string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-User-Id")
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	status, _, err := PostJSONHeaders(srv.URL, "tok", map[string]string{"X-User-Id": "alice"}, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("PostJSONHeaders returned error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want %d", status, http.StatusOK)
+	}
+	if gotUser != "alice" {
+		t.Errorf("X-User-Id = %q, want %q", gotUser, "alice")
+	}
+	if gotAuth != "Bearer tok" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok")
+	}
+}
+
 func TestGetWithBearer(t *testing.T) {
 	t.Run("success with bearer token", func(t *testing.T) {
 		var gotAuth, gotMethod string

@@ -62,6 +62,9 @@ spec:
             - --controller-tls-key=/var/run/kaalm/tls.key
             - --controller-tls-ca=/var/run/kaalm/ca.crt
             - --activator-addr=:9443
+            {{- if .Values.gateway.allowPrivateCallbacks }}
+            - --allow-private-callbacks
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

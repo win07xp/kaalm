@@ -169,6 +169,12 @@ func PortForward(namespace, svc, remotePort string) (int, func(), error) {
 // PostJSON POSTs a JSON body over HTTPS, skipping cert verification (the target
 // is a localhost port-forward in the e2e suite only).
 func PostJSON(url, bearer string, body []byte) (int, string, error) {
+	return PostJSONHeaders(url, bearer, nil, body)
+}
+
+// PostJSONHeaders is PostJSON with extra request headers (for example the
+// userId header a channel extracts with fromHeader).
+func PostJSONHeaders(url, bearer string, headers map[string]string, body []byte) (int, string, error) {
 	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // localhost port-forward only
 	tr := &http.Transport{TLSClientConfig: tlsCfg}
 	cli := &http.Client{Timeout: 45 * time.Second, Transport: tr}
@@ -179,6 +185,9 @@ func PostJSON(url, bearer string, body []byte) (int, string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := cli.Do(req)
 	if err != nil {
