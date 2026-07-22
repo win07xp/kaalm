@@ -224,7 +224,12 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 		--set gateway.allowPrivateCallbacks=true --wait --timeout 5m
 
 .PHONY: e2e
-e2e: ## One-shot k3d e2e: bring up the cluster, build+import images, install the chart, run the suite.
+e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the chart, run the suite.
+	# Always start from a fresh cluster. A long-lived k3d cluster stops
+	# enforcing NetworkPolicies after enough churn, which fails the deny probe
+	# and, worse, makes every allow-path assertion pass vacuously. The reuse
+	# path in k3d-up.sh stays available for the inner loop (make e2e-deploy).
+	-k3d cluster delete $(CLUSTER)
 	hack/k3d-up.sh
 	$(MAKE) e2e-images
 	$(MAKE) e2e-deploy

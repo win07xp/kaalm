@@ -104,8 +104,17 @@ var _ = Describe("Golden path", Ordered, func() {
 		// passing vacuously on an image-pull or scheduling failure. The curl image
 		// is preloaded into k3d (make e2e-images) and pinned IfNotPresent, so this
 		// runs hermetically with no Docker Hub pull.
+		// A steady 200 here means the policy is not being enforced at all, which
+		// on a long-lived k3d cluster usually means the CNI stopped enforcing
+		// after enough NetworkPolicy churn rather than that the policy is wrong.
+		// That failure mode also makes every allow-path assertion in this suite
+		// pass vacuously, so name it explicitly instead of leaving a bare
+		// timeout. `make e2e` recreates the cluster to avoid it.
 		Eventually(func() (string, error) {
 			return utils.Kubectl(probe...)
-		}, "60s", "5s").Should(ContainSubstring("000"))
+		}, "60s", "5s").Should(ContainSubstring("000"),
+			"cross-namespace delivery was not blocked. If this is a long-lived k3d cluster, "+
+				"its CNI may have stopped enforcing NetworkPolicies: recreate it "+
+				"(k3d cluster delete kaalm-dev) and re-run. See issue #35.")
 	})
 })
