@@ -20,10 +20,7 @@ Coverage is one of four kinds:
   automate what these smokes checked once.
 
 The **e2e** column is the v0.2.0 acceptance surface: every scenario points at
-the spec that proves it on a cluster. It is green for every scenario except
-S11, whose spec is tracked in
-[#30](https://github.com/win07xp/kaalm/issues/30); the milestone closes when
-that lands.
+the spec that proves it on a cluster, and every scenario is green.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -37,7 +34,7 @@ that lands.
 | S8 Ephemeral coding agent | `Task lifecycle` (agentReported to Succeeded; mailbox; TTL GC) | Envtest `TestTask_*` |
 | S9 Promote a task to persistent | `Promotion via existingClaim` (adopt a pre-populated PVC; read state back) | Envtest `TestAgent_ExistingClaimNotFound`; CEL `sizeGi`/`existingClaim` mutex |
 | S10 Budget-exhausted graceful fail | `Fallback and budget` (S10: 429 `budget_exhausted`, Agent `Degraded`) | Unit `TestProxy_BudgetDegradeAndBlock` |
-| S11 Clean teardown on delete | pending, tracked in [#30](https://github.com/win07xp/kaalm/issues/30) | Envtest `TestAgent_FinalizerRetainStripsPVCOwnerRef`, `TestAgent_FinalizerDeleteKeepsPVCOwnerRef` |
+| S11 Clean teardown on delete | `Clean teardown on delete (S11)` (finalizer completes, Pod terminated, PVC removed under `Delete` and kept under `Retain`) | Envtest `TestAgent_FinalizerRetainStripsPVCOwnerRef`, `TestAgent_FinalizerDeleteKeepsPVCOwnerRef` |
 | S12 Personal assistant via webhook | `Session identity and async callback` (S12: stable/distinct sessionId) + `Golden path` (sync delivery) | Unit `TestWebhook_SyncRoundTrip` |
 | S13 Generic webhook exposure | `Golden path` (delivers a sync webhook and returns the reply) | Unit `TestWebhook_ExtractorsAndBadJSON` |
 | S14 Webhook for a hibernated agent | `Hibernate and wake` (S14: `wake_timeout` payload on the polling endpoint) | Unit `TestWebhook_Async*` |
