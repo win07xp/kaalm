@@ -143,9 +143,11 @@ func main() {
 	// The upstream and callback CA bundles are additive to the system roots:
 	// they let the gateway reach in-cluster or self-hosted providers/receivers
 	// signed by a private CA (e.g. kaalm-ca) without losing the ability to
-	// verify public endpoints.
-	upstreamCAs := additiveCAs(upstreamCAFile, "upstream", logger)
-	callbackCAs := additiveCAs(callbackCAFile, "callback", logger)
+	// verify public endpoints. The server re-reads them when their mtime
+	// changes, so a rotated bundle needs no restart; validate once here so a
+	// misconfigured path fails fast at startup rather than at first dial.
+	validateCABundle(upstreamCAFile, "upstream", logger)
+	validateCABundle(callbackCAFile, "callback", logger)
 
 	store := &gateway.KubeStore{Reader: cl.GetClient(), OperatorNamespace: operatorNamespace}
 	tokens := gateway.NewTokenAuthenticator(&gateway.KubeTokenReviewer{Client: clientset})
@@ -159,8 +161,8 @@ func main() {
 		CAFile:                   caFile,
 		MaxBodyBytes:             maxBodyBytes,
 		UpstreamTimeout:          upstreamTimeout,
-		UpstreamCAs:              upstreamCAs,
-		CallbackCAs:              callbackCAs,
+		UpstreamCAFile:           upstreamCAFile,
+		CallbackCAFile:           callbackCAFile,
 		AllowPrivateCallbacks:    allowPrivateCB,
 		DisableSourceIPCheck:     disableSourceIPCheck,
 		UserListenAddr:           userAddr,
@@ -280,28 +282,23 @@ func main() {
 
 // parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".
 // An empty or malformed value falls back to the Config default (nil).
-// additiveCAs builds a CertPool from the system roots plus the PEM bundle at
-// file, or returns nil when file is empty (leaving TLS on the system roots). It
-// exits on a read/parse failure: a misconfigured trust bundle must not be
-// silently ignored. kind names the pool in log messages.
-func additiveCAs(file, kind string, logger *slog.Logger) *x509.CertPool {
+// validateCABundle checks that the PEM bundle at file exists and parses, and
+// exits if not: a misconfigured trust bundle must not be silently ignored. The
+// pool itself is built (and rebuilt on rotation) by the server. kind names the
+// bundle in log messages; an empty file is a no-op.
+func validateCABundle(file, kind string, logger *slog.Logger) {
 	if file == "" {
-		return nil
+		return
 	}
 	pem, err := os.ReadFile(file)
 	if err != nil {
 		logger.Error("reading "+kind+" CA bundle", "error", err)
 		os.Exit(1)
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pem) {
+	if !x509.NewCertPool().AppendCertsFromPEM(pem) {
 		logger.Error("no certificates parsed from " + kind + " CA bundle")
 		os.Exit(1)
 	}
-	return pool
 }
 
 func parseBackoff(raw string, logger *slog.Logger) []time.Duration {

@@ -354,11 +354,17 @@ func (s *Server) dialCallbackOnce(
 		port = "443"
 	}
 	pinned := net.JoinHostPort(ip.String(), port)
+	// Re-read the trust bundle per attempt so a rotated CA applies without a
+	// gateway restart; the transport is already rebuilt for every dial.
+	callbackCAs, err := s.callbackCAPool()
+	if err != nil {
+		return 0, err
+	}
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, pinned)
 		},
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname(), RootCAs: s.Config.CallbackCAs},
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname(), RootCAs: callbackCAs},
 	}
 	client := &http.Client{Transport: transport, Timeout: s.Config.AgentReadTimeout}
 
