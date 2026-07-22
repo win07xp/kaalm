@@ -1,0 +1,101 @@
+# S4: a primary provider pointed at the mock's /fail prefix (503, fallbackable)
+# with a fallback pointed at /ok. Both share the mock Service and the e2e-mock-key
+# credential (created by mockprovider.yaml). The gateway should walk primary ->
+# fallback and return the fallback's 200.
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: s4-primary
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/fail
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  fallback:
+    - name: s4-fallback
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: s4-fallback
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/ok
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s4-caller
+  namespace: e2e
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s4-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s4-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # Request the primary; the gateway walks to the fallback on the 503.
+        # Retry the source-IP startup race (transient 401) until a 200.
+        - |
+          token=$(cat /var/run/token/token)
+          for i in $(seq 1 20); do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"s4-primary/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"; cat /tmp/resp; echo
+            if [ "$code" = "200" ]; then echo "HTTP 200"; cat /tmp/resp; exit 0; fi
+            sleep 3
+          done
+          echo "gave up after retries"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt

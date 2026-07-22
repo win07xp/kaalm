@@ -1,0 +1,125 @@
+# S10: a provider pointed at the mock's /bigusage prefix (~5M+5M tokens/call).
+# At the configured prices one call costs ~$15, so a $10 per-namespace budget
+# with a block-at-100% policy blocks the next call. A dedicated AgentClass and
+# Agent reference the provider so the budget Degraded condition (issue #2) is
+# reachable (a hard-degraded Agent would skip the budget check).
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: s10-budget
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/bigusage
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  budget:
+    period: daily
+    perNamespaceUSD: "10"
+    policies:
+      - atPercent: 100
+        action: block
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s10-class
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  allowedProviders:
+    - name: s10-budget
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s10-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s10-class
+  image: registry.test/agents/starter-go:e2e
+  providers:
+    - providerRef:
+        name: s10-budget
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s10-caller
+  namespace: e2e
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s10-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s10-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # Loop LLM calls to drive spend past the ceiling. Early calls may 401
+        # (source-IP startup race) or 200 (accruing spend); once the serving
+        # replica's last-known spend crosses the block threshold (allow a budget
+        # publish interval for the 2-replica fold), a call returns 429
+        # budget_exhausted with Retry-After.
+        - |
+          token=$(cat /var/run/token/token)
+          for i in $(seq 1 40); do
+            code=$(curl -sS -D /tmp/hdr -o /tmp/body -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"s10-budget/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"; grep -i '^retry-after' /tmp/hdr || true; cat /tmp/body; echo
+            if [ "$code" = "429" ]; then
+              echo "GOT HTTP 429"; grep -i '^retry-after' /tmp/hdr; cat /tmp/body; exit 0
+            fi
+            sleep 2
+          done
+          echo "never blocked"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
