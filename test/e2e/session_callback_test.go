@@ -49,6 +49,14 @@ var _ = Describe("Session identity and async callback", Ordered, func() {
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agent", "e2e", "s15-agent", "{.status.phase}")
 		}, "180s", "5s").Should(Equal("Running"))
+
+		By("both channels reconcile to Active (s15's internal callbackUrl passes Rule 22)")
+		Eventually(func() (string, error) {
+			return utils.ResourceField("agentchannel", "e2e", "s12-channel", "{.status.phase}")
+		}, "90s", "3s").Should(Equal("Active"))
+		Eventually(func() (string, error) {
+			return utils.ResourceField("agentchannel", "e2e", "s15-channel", "{.status.phase}")
+		}, "90s", "3s").Should(Equal("Active"))
 	})
 
 	It("derives a stable per-user, distinct-across-users sessionId (S12)", func() {
