@@ -72,7 +72,8 @@ func main() {
 	flag.StringVar(&callbackCAFile, "callback-ca", "",
 		"optional CA bundle to trust for channel callbackUrl TLS, added to the system roots")
 	flag.BoolVar(&allowPrivateCB, "allow-private-callbacks", false,
-		"permit callbackUrl hosts that resolve to private (RFC1918/ULA) addresses, for in-cluster receivers; loopback and cloud metadata stay blocked")
+		"permit callbackUrl hosts that resolve to private (RFC1918/ULA) addresses, for in-cluster receivers; "+
+			"loopback and cloud metadata stay blocked")
 	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
 	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second, "upstream provider call timeout")
 	flag.BoolVar(&disableSourceIPCheck, "disable-source-ip-check", false,
