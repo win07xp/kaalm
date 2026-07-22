@@ -1,0 +1,57 @@
+# S2: a sandboxed AgentClass. k3d has no gVisor, so we prove only the
+# Kaalm-owned parts: runtimeClassName passthrough into the Pod spec, and the
+# stricter image allowlist rejecting an out-of-allowlist workload. A real
+# RuntimeClass named "gvisor" (handler runc, which k3d can actually run) lets
+# the Pod be admitted so its spec.runtimeClassName is observable; the sandbox
+# runtime itself is environment-provided.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runc
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: e2e-sandboxed
+spec:
+  runtime:
+    backend: pod
+    runtimeClassName: gvisor
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+---
+# In-allowlist image: provisions a Pod carrying spec.runtimeClassName: gvisor.
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s2-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-sandboxed
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationDelay: 0s
+    idleTimeout: 0s
+    wakeTimeout: 0s
+---
+# Out-of-allowlist image: rejected at reconcile time, never provisioned.
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s2-bad-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-sandboxed
+  image: ghcr.io/evil/agent:latest

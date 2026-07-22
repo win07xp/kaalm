@@ -1,0 +1,49 @@
+# S5: a provider that initially allows the e2e namespace, and an Agent that
+# uses it. The spec revokes access by patching allowedNamespaces; no upstream
+# forward happens (403 access_denied is decided at routing), so no mock is
+# needed here.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s5-mock-key
+  namespace: kaalm-system
+type: Opaque
+stringData:
+  token: dummy-s5-credential
+---
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: s5-provider
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/ok
+  credentialsRef:
+    name: s5-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s5-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  providers:
+    - providerRef:
+        name: s5-provider
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationDelay: 0s
+    idleTimeout: 0s
+    wakeTimeout: 0s
