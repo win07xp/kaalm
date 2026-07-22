@@ -557,8 +557,19 @@ func TestProxy_StreamingRelay(t *testing.T) {
 	if _, ok := up.body["stream_options"]; !ok {
 		t.Error("stream_options not injected into the upstream streaming request")
 	}
-	// Usage folded out of the stream.
-	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 12 || u.OutputTokens != 3 {
+	// Usage folded out of the stream. relayStream flushes each SSE line to the
+	// client and records spend only after the scanner loop ends, so io.ReadAll
+	// above can return while the server is still between its final Flush and
+	// Spend.Record. Poll for the record instead of asserting instantly.
+	// MemorySpend guards Record/Total with a mutex, so this read is race-free.
+	var u Usage
+	for i := 0; i < 100; i++ {
+		if u = h.spend.Total("team-a", "prov", "m1"); u != (Usage{}) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if u.InputTokens != 12 || u.OutputTokens != 3 {
 		t.Errorf("stream usage not recorded: %+v", u)
 	}
 }
