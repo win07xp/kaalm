@@ -68,7 +68,7 @@ The adapter interface is deliberately narrow. The gateway is protocol-aware but 
 
 The gateway always connects to upstream LLM providers over HTTPS. For enterprise environments that require custom CA bundles or HTTP proxies for outbound traffic, the gateway supports:
 
-- **Custom CA bundle**: a ConfigMap in `kaalm-system` (`kaalm-upstream-ca`) containing additional CA certificates. The gateway loads these on startup and watches for changes. All upstream HTTPS connections trust both the system CA bundle and the custom bundle.
+- **Custom CA bundle**: a ConfigMap in `kaalm-system` (`kaalm-upstream-ca`) containing additional CA certificates. You create the ConfigMap; set the Helm value `gateway.upstreamCA.configMap` to its name and the chart mounts it and points the gateway at it. The gateway loads these on startup and watches for changes. All upstream HTTPS connections trust both the system CA bundle and the custom bundle.
 - **Cluster CA (in-cluster providers)**: the Helm value `gateway.trustClusterCAForUpstream: true` adds the cluster's own CA (`kaalm-ca`, already mounted at `/var/run/kaalm/ca.crt`) to the upstream trust pool. This is the turnkey path for a self-hosted `openai-compatible` provider running in the cluster with an endpoint served by a `kaalm-ca-issuer` certificate, without supplying a separate `kaalm-upstream-ca` bundle. It composes with the custom bundle above; both are added to the system roots.
 - **HTTP proxy**: standard `HTTPS_PROXY` / `NO_PROXY` environment variables on the gateway Deployment. The gateway respects these for all upstream provider calls.
 

@@ -69,9 +69,9 @@ func main() {
 	flag.StringVar(&keyFile, "tls-key", "/var/run/kaalm/tls.key", "serving key file")
 	flag.StringVar(&caFile, "tls-ca", "/var/run/kaalm/ca.crt", "Kaalm CA bundle for client verification")
 	flag.StringVar(&upstreamCAFile, "upstream-ca", "",
-		"optional CA bundle to trust for upstream provider TLS, added to the system roots")
+		"comma-separated CA bundle files to trust for upstream provider TLS, merged and added to the system roots")
 	flag.StringVar(&callbackCAFile, "callback-ca", "",
-		"optional CA bundle to trust for channel callbackUrl TLS, added to the system roots")
+		"comma-separated CA bundle files to trust for channel callbackUrl TLS, merged and added to the system roots")
 	flag.StringVar(&callbackAllowlist, "callback-url-allowlist", "",
 		"comma-separated DNS-name suffixes and CIDR blocks whose callbackUrl targets are permitted despite the "+
 			"deny-internal default; loopback and cloud metadata stay blocked regardless")
@@ -147,8 +147,12 @@ func main() {
 	// verify public endpoints. The server re-reads them when their mtime
 	// changes, so a rotated bundle needs no restart; validate once here so a
 	// misconfigured path fails fast at startup rather than at first dial.
-	validateCABundle(upstreamCAFile, "upstream", logger)
-	validateCABundle(callbackCAFile, "callback", logger)
+	for _, file := range splitPaths(upstreamCAFile) {
+		validateCABundle(file, "upstream", logger)
+	}
+	for _, file := range splitPaths(callbackCAFile) {
+		validateCABundle(file, "callback", logger)
+	}
 
 	store := &gateway.KubeStore{Reader: cl.GetClient(), OperatorNamespace: operatorNamespace}
 	tokens := gateway.NewTokenAuthenticator(&gateway.KubeTokenReviewer{Client: clientset})
@@ -162,8 +166,8 @@ func main() {
 		CAFile:                   caFile,
 		MaxBodyBytes:             maxBodyBytes,
 		UpstreamTimeout:          upstreamTimeout,
-		UpstreamCAFile:           upstreamCAFile,
-		CallbackCAFile:           callbackCAFile,
+		UpstreamCAFiles:          splitPaths(upstreamCAFile),
+		CallbackCAFiles:          splitPaths(callbackCAFile),
 		CallbackPolicy:           callbackpolicy.NewFromCSV(callbackAllowlist),
 		DisableSourceIPCheck:     disableSourceIPCheck,
 		UserListenAddr:           userAddr,
@@ -283,6 +287,18 @@ func main() {
 
 // parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".
 // An empty or malformed value falls back to the Config default (nil).
+// splitPaths parses a comma-separated file list, dropping blanks so an unset
+// flag yields no paths.
+func splitPaths(csv string) []string {
+	var out []string
+	for _, part := range strings.Split(csv, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 // validateCABundle checks that the PEM bundle at file exists and parses, and
 // exits if not: a misconfigured trust bundle must not be silently ignored. The
 // pool itself is built (and rebuilt on rotation) by the server. kind names the
