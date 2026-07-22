@@ -35,6 +35,7 @@ var _ = AfterSuite(func() {
 	// Order: workloads first, then cluster-scoped, then the namespace.
 	for _, f := range []string{
 		"test/e2e/testdata/agenttask.yaml",
+		"test/e2e/testdata/hibernation.yaml",
 		"test/e2e/testdata/agentchannel.yaml",
 		"test/e2e/testdata/agent.yaml",
 		"test/e2e/testdata/modelprovider.yaml",
