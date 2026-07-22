@@ -1,0 +1,61 @@
+# S5: a token-authenticated caller applied AFTER revocation. It retries the
+# transient source-IP startup 401 (informer race), then stops at the first
+# definitive (non-401) response, which the spec asserts is 403 access_denied.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s5-caller
+  namespace: e2e
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s5-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s5-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          token=$(cat /var/run/token/token)
+          for i in $(seq 1 20); do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"s5-provider/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"; cat /tmp/resp; echo
+            # 401 is the transient source-IP race; anything else is the real answer.
+            if [ "$code" != "401" ] && [ "$code" != "000" ]; then
+              echo "HTTP $code"; cat /tmp/resp; exit 0
+            fi
+            sleep 3
+          done
+          echo "no definitive response"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
