@@ -17,8 +17,14 @@ import "context"
 // To make LLM calls, POST to a.gatewayURL using the mTLS client the template
 // pre-configured (a.gatewayCli): the gateway proxies to your ModelProviders.
 func handleMessage(_ context.Context, env MessageEnvelope) (ResponseEnvelope, error) {
+	// Reflect the caller identity and derived session id the gateway supplied,
+	// so a session-aware client can correlate replies. sessionId is present only
+	// when the AgentChannel enables session identity.
 	return ResponseEnvelope{
-		Content:  "starter-go received: " + env.Content,
-		Metadata: map[string]any{},
+		Content: "starter-go received: " + env.Content,
+		Metadata: map[string]any{
+			"userId":    env.UserID,
+			"sessionId": env.SessionID,
+		},
 	}, nil
 }

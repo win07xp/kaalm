@@ -498,22 +498,27 @@ func TestChannel_PruneSkipsNonAsyncConfigMap(t *testing.T) {
 
 func TestValidateCallbackURL(t *testing.T) {
 	cases := []struct {
-		name    string
-		url     string
-		wantBad bool
+		name         string
+		url          string
+		allowPrivate bool
+		wantBad      bool
 	}{
-		{"not https", "http://example.com/hook", true},
-		{"parse error", "://no-scheme", true},
-		{"empty host", "https://", true},
-		{"loopback literal", "https://127.0.0.1/hook", true},
-		{"public literal ok", "https://8.8.8.8/hook", false},
-		{"unresolvable deferred", "https://nonexistent.invalid/hook", false},
+		{"not https", "http://example.com/hook", false, true},
+		{"parse error", "://no-scheme", false, true},
+		{"empty host", "https://", false, true},
+		{"loopback literal", "https://127.0.0.1/hook", false, true},
+		{"public literal ok", "https://8.8.8.8/hook", false, false},
+		{"unresolvable deferred", "https://nonexistent.invalid/hook", false, false},
+		{"private blocked by default", "https://10.1.2.3/hook", false, true},
+		{"private allowed when opted in", "https://10.1.2.3/hook", true, false},
+		{"loopback blocked even when opted in", "https://127.0.0.1/hook", true, true},
+		{"metadata blocked even when opted in", "https://169.254.169.254/hook", true, true},
 	}
 	for _, c := range cases {
-		reason, _ := validateCallbackURL(c.url)
+		reason, _ := validateCallbackURL(c.url, c.allowPrivate)
 		bad := reason != ""
 		if bad != c.wantBad {
-			t.Errorf("%s: validateCallbackURL(%q) bad=%v, want %v (reason=%q)", c.name, c.url, bad, c.wantBad, reason)
+			t.Errorf("%s: validateCallbackURL(%q, %v) bad=%v, want %v (reason=%q)", c.name, c.url, c.allowPrivate, bad, c.wantBad, reason)
 		}
 		if bad && reason != kaalmv1alpha1.ReasonInvalidCallbackURL {
 			t.Errorf("%s: reason=%q, want InvalidCallbackURL", c.name, reason)

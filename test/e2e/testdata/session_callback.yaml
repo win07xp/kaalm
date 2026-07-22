@@ -1,0 +1,114 @@
+# Fixtures for S12 (deterministic session identity) and S15 (async callback
+# delivery to an in-cluster receiver).
+#
+# S12: a sync channel that extracts userId from a header and enables session
+# identity. The gateway derives sessionId = UUIDv5(ns, channelPath + ":" +
+# userId) and puts it in the envelope; the starter-go agent reflects userId and
+# sessionId in its reply metadata so the test can observe stable-per-user,
+# distinct-across-users values.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s12-hook
+  namespace: e2e
+type: Opaque
+stringData:
+  token: s12-webhook-bearer-token
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s12-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: s12-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s12-agent
+  type: webhook
+  session:
+    enabled: true
+  webhook:
+    path: /channels/e2e/s12-channel
+    responseMode: sync
+    userId:
+      fromHeader: X-User-Id
+    auth:
+      type: bearer
+      secretRef:
+        name: s12-hook
+        key: token
+---
+# S15: an async channel whose callbackUrl points at the in-cluster mock's
+# receiver. Reaching it needs the gateway deployed with
+# trustClusterCAForCallbacks (the mock serves a kaalm-ca cert) and
+# allowPrivateCallbacks (the mock's ClusterIP is RFC1918); the e2e deploy sets
+# both. Callbacks are signed with HMAC; the mock records the signature headers.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s15-hook
+  namespace: e2e
+type: Opaque
+stringData:
+  token: s15-webhook-bearer-token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s15-cb-secret
+  namespace: e2e
+type: Opaque
+stringData:
+  key: s15-callback-hmac-key
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s15-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: s15-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s15-agent
+  type: webhook
+  webhook:
+    path: /channels/e2e/s15-channel
+    responseMode: async
+    callbackUrl: https://mock-provider.e2e.svc:8443/callback
+    callbackAuth:
+      type: hmac
+      hmac:
+        header: X-Kaalm-Signature
+        algorithm: sha256
+        secretRef:
+          name: s15-cb-secret
+          key: key
+    auth:
+      type: bearer
+      secretRef:
+        name: s15-hook
+        key: token

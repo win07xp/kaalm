@@ -252,13 +252,21 @@ func (s *Server) patchWithRetry(ctx context.Context, requestID string, payload [
 	slog.Error("async response patch failed; payload dropped", "requestId", requestID)
 }
 
-// blockedCallbackIP reports whether an IP falls in the deny ranges: loopback,
-// link-local, RFC1918, unique-local IPv6, cloud metadata.
-func blockedCallbackIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
+// blockedCallbackIP reports whether an IP falls in the callback deny ranges.
+// Loopback, link-local (which covers the 169.254.169.254 cloud-metadata
+// endpoint), and the unspecified address are ALWAYS blocked, even when private
+// callbacks are permitted. RFC1918 and unique-local IPv6 are blocked unless
+// allowPrivate is set, which opts into in-cluster/self-hosted callback
+// receivers (their Service IPs are private) while keeping metadata and loopback
+// off limits.
+func blockedCallbackIP(ip net.IP, allowPrivate bool) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return true
 	}
-	if ip.Equal(net.ParseIP("169.254.169.254")) {
+	if allowPrivate {
+		return false
+	}
+	if ip.IsPrivate() {
 		return true
 	}
 	// Unique-local IPv6 fc00::/7.
@@ -310,7 +318,7 @@ func (s *Server) sendCallback(
 			continue // resolution failure: retried bucket
 		}
 		ip := ips[0]
-		if blockedCallbackIP(ip) {
+		if blockedCallbackIP(ip, s.Config.AllowPrivateCallbacks) {
 			// Bypassed: no dial, no retry, no callback_invalid envelope; the
 			// payload still reaches polling via the caller.
 			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid,

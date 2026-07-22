@@ -71,6 +71,7 @@ func main() {
 	var tlsOpts []func(*tls.Config)
 	var controllerTLSCert, controllerTLSKey, controllerTLSCA string
 	var activatorAddr string
+	var allowPrivateCallbacks bool
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -94,6 +95,9 @@ func main() {
 	flag.StringVar(&controllerTLSKey, "controller-tls-key", "", "The controller's TLS key.")
 	flag.StringVar(&controllerTLSCA, "controller-tls-ca", "", "The Kaalm CA bundle for mTLS with the gateway.")
 	flag.StringVar(&activatorAddr, "activator-addr", ":9443", "The activator/probe listener address.")
+	flag.BoolVar(&allowPrivateCallbacks, "allow-private-callbacks", false,
+		"Permit AgentChannel.callbackUrl hosts that resolve to private (RFC1918/ULA) addresses, for in-cluster receivers; "+
+			"loopback and cloud metadata stay blocked. Must match the gateway's --allow-private-callbacks.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -288,9 +292,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.AgentChannelReconciler{
-		Client:            mgr.GetClient(),
-		Recorder:          mgr.GetEventRecorderFor("agentchannel-controller"),
-		OperatorNamespace: operatorNamespace,
+		Client:                mgr.GetClient(),
+		Recorder:              mgr.GetEventRecorderFor("agentchannel-controller"),
+		OperatorNamespace:     operatorNamespace,
+		AllowPrivateCallbacks: allowPrivateCallbacks,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentChannel")
 		os.Exit(1)

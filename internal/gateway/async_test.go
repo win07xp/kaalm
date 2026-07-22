@@ -120,16 +120,35 @@ func TestRunAsyncPipeline_DeliveryFailureStored(t *testing.T) {
 }
 
 func TestBlockedCallbackIP(t *testing.T) {
+	// Default (allowPrivate=false): the full deny set.
 	blocked := []string{"127.0.0.1", "10.1.2.3", "192.168.0.1", "169.254.169.254", "::1", "fc00::1", "0.0.0.0", "fe80::1"}
 	for _, ip := range blocked {
-		if !blockedCallbackIP(mustIP(t, ip)) {
+		if !blockedCallbackIP(mustIP(t, ip), false) {
 			t.Errorf("%s must be blocked", ip)
 		}
 	}
 	allowed := []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"}
 	for _, ip := range allowed {
-		if blockedCallbackIP(mustIP(t, ip)) {
+		if blockedCallbackIP(mustIP(t, ip), false) {
 			t.Errorf("%s must be allowed", ip)
+		}
+	}
+}
+
+func TestBlockedCallbackIP_AllowPrivate(t *testing.T) {
+	// allowPrivate opts in RFC1918 and ULA (in-cluster receivers)...
+	private := []string{"10.1.2.3", "192.168.0.1", "172.16.5.5", "fc00::1"}
+	for _, ip := range private {
+		if blockedCallbackIP(mustIP(t, ip), true) {
+			t.Errorf("%s must be allowed when allowPrivate is set", ip)
+		}
+	}
+	// ...but loopback, link-local (incl. cloud metadata), and unspecified stay
+	// blocked regardless.
+	stillBlocked := []string{"127.0.0.1", "::1", "169.254.169.254", "fe80::1", "0.0.0.0"}
+	for _, ip := range stillBlocked {
+		if !blockedCallbackIP(mustIP(t, ip), true) {
+			t.Errorf("%s must stay blocked even with allowPrivate", ip)
 		}
 	}
 }

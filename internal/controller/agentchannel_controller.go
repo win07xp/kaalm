@@ -84,6 +84,11 @@ type AgentChannelReconciler struct {
 	// Health polls per-channel gateway delivery health; nil preserves the
 	// existing PlatformConnected condition.
 	Health ChannelHealthClient
+	// AllowPrivateCallbacks relaxes the Rule 22 deny-internal check so a
+	// callbackUrl may resolve to a private (RFC1918/ULA) address, for in-cluster
+	// or self-hosted receivers. Loopback and link-local (cloud metadata) stay
+	// blocked. Must match the gateway's --allow-private-callbacks. Default false.
+	AllowPrivateCallbacks bool
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agentchannels,verbs=get;list;watch;update;patch
@@ -203,7 +208,7 @@ func (r *AgentChannelReconciler) validateChannel(
 	// Rule 22: callbackUrl must be HTTPS and must not point into internal
 	// address space (reconcile-time half; the gateway re-checks pre-dial).
 	if channel.Spec.Webhook.CallbackURL != nil {
-		if reason, msg := validateCallbackURL(*channel.Spec.Webhook.CallbackURL); reason != "" {
+		if reason, msg := validateCallbackURL(*channel.Spec.Webhook.CallbackURL, r.AllowPrivateCallbacks); reason != "" {
 			return reason, msg
 		}
 	}
@@ -341,8 +346,12 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 	return "", ""
 }
 
-// validateCallbackURL is the reconcile-time half of rule 22.
-func validateCallbackURL(raw string) (string, string) {
+// validateCallbackURL is the reconcile-time half of rule 22. Loopback,
+// link-local (which covers the 169.254.169.254 cloud-metadata endpoint), and
+// the unspecified address are always rejected; private (RFC1918/ULA) targets
+// are rejected unless allowPrivate is set, which opts into in-cluster or
+// self-hosted receivers. This mirrors the gateway's pre-dial blockedCallbackIP.
+func validateCallbackURL(raw string, allowPrivate bool) (string, string) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
 		return kaalmv1alpha1.ReasonInvalidCallbackURL, "callbackUrl must be a valid https URL"
@@ -355,8 +364,11 @@ func validateCallbackURL(raw string) (string, string) {
 		return "", ""
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsPrivate() || ip.IsUnspecified() ||
-			ip.Equal(net.ParseIP("169.254.169.254")) {
+		blocked := ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
+		if !allowPrivate && ip.IsPrivate() {
+			blocked = true
+		}
+		if blocked {
 			return kaalmv1alpha1.ReasonInvalidCallbackURL,
 				fmt.Sprintf("callbackUrl host resolves to blocked address %s", ip)
 		}
