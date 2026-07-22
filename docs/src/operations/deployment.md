@@ -47,6 +47,7 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `controller.replicas` | `2` | Operator replica count. Rendering fails below `2`. |
 | `gateway.replicas` | `2` | Gateway replica count. Rendering fails below `2`. |
 | `gateway.maxFallbackDepth` | `3` | Maximum fallback chain depth for LLM provider routing. Sets `KAALM_MAX_FALLBACK_DEPTH` on the gateway Deployment. See [Fallback Logic](../gateways/llm/fallback.md). |
+| `gateway.trustClusterCAForUpstream` | `false` | Also trust the cluster CA (`kaalm-ca`, already mounted) for upstream provider TLS, added to the system roots. Enables in-cluster or self-hosted providers whose HTTPS endpoint is served with a `kaalm-ca-issuer` certificate. Distinct from the operator-supplied `kaalm-upstream-ca` bundle; see [Upstream TLS Configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration). |
 | `gateway.callbackUrl.allowlist` | unset | List of DNS-name suffixes or CIDR blocks. When set, **replaces** the default deny-internal rule for `AgentChannel.spec.webhook.callbackUrl`. |
 | `controller.networkPolicy.dnsSelector` | `{ namespaceLabels: { "kubernetes.io/metadata.name": "kube-system" }, podLabels: { "k8s-app": "kube-dns" } }` | Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy. |
 | `gateway.externalHostnames` | unset | Additional DNS names appended to the `kaalm-gateway-tls` Certificate's SAN list. |
