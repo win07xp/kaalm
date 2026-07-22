@@ -62,7 +62,7 @@ func TestCAPoolLoader_ReloadsOnRotation(t *testing.T) {
 	original, added := newTestCA(t), newTestCA(t)
 	writeCABundle(t, file, original)
 
-	loader := &caPoolLoader{file: file}
+	loader := &caPoolLoader{files: []string{file}}
 	first, err := loader.load()
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestCAPoolLoader_KeepsPoolThroughUnparseableWrite(t *testing.T) {
 	ca := newTestCA(t)
 	writeCABundle(t, file, ca)
 
-	loader := &caPoolLoader{file: file}
+	loader := &caPoolLoader{files: []string{file}}
 	good, err := loader.load()
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestCAPoolLoader_AdditiveKeepsCustomCA(t *testing.T) {
 	// additive starts from the system roots; the custom CA must still be
 	// trusted on top of them (the system roots themselves vary by host, so
 	// only the additive CA is asserted here).
-	loader := &caPoolLoader{file: file, additive: true}
+	loader := &caPoolLoader{files: []string{file}, additive: true}
 	pool, err := loader.load()
 	if err != nil {
 		t.Fatal(err)
@@ -141,8 +141,45 @@ func TestCAPoolLoader_AdditiveKeepsCustomCA(t *testing.T) {
 }
 
 func TestCAPoolLoader_MissingFileErrors(t *testing.T) {
-	loader := &caPoolLoader{file: filepath.Join(t.TempDir(), "absent.crt")}
+	loader := &caPoolLoader{files: []string{filepath.Join(t.TempDir(), "absent.crt")}}
 	if _, err := loader.load(); err == nil {
 		t.Fatal("a missing bundle must report an error rather than silently trusting nothing")
+	}
+}
+
+// The cluster CA and an operator-supplied enterprise bundle arrive as separate
+// projected files (a projected volume cannot concatenate two ConfigMap keys),
+// so the loader has to merge several paths into one pool and notice a rotation
+// of any of them.
+func TestCAPoolLoader_MergesAndReloadsMultipleFiles(t *testing.T) {
+	dir := t.TempDir()
+	clusterFile := filepath.Join(dir, "ca.crt")
+	customFile := filepath.Join(dir, "upstream-ca.crt")
+	cluster, custom, rotated := newTestCA(t), newTestCA(t), newTestCA(t)
+	writeCABundle(t, clusterFile, cluster)
+	writeCABundle(t, customFile, custom)
+
+	loader := &caPoolLoader{files: []string{clusterFile, customFile}}
+	pool, err := loader.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !trusts(pool, cluster) || !trusts(pool, custom) {
+		t.Fatal("both bundles must be merged into one trust pool")
+	}
+
+	// Rotating the second file alone must still refresh the pool.
+	writeCABundle(t, customFile, custom, rotated)
+	bumpMtime(t, customFile)
+
+	after, err := loader.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !trusts(after, rotated) {
+		t.Error("a rotation of any bundle must be picked up")
+	}
+	if !trusts(after, cluster) {
+		t.Error("the unrotated bundle must survive the reload")
 	}
 }

@@ -48,7 +48,9 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.replicas` | `2` | Gateway replica count. Rendering fails below `2`. |
 | `gateway.maxFallbackDepth` | `3` | Maximum fallback chain depth for LLM provider routing. Sets `KAALM_MAX_FALLBACK_DEPTH` on the gateway Deployment. See [Fallback Logic](../gateways/llm/fallback.md). |
 | `gateway.trustClusterCAForUpstream` | `false` | Also trust the cluster CA (`kaalm-ca`, already mounted) for upstream provider TLS, added to the system roots. Enables in-cluster or self-hosted providers whose HTTPS endpoint is served with a `kaalm-ca-issuer` certificate. Distinct from the operator-supplied `kaalm-upstream-ca` bundle; see [Upstream TLS Configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration). |
-| `gateway.callbackUrl.allowlist` | unset | List of DNS-name suffixes or CIDR blocks. When set, **replaces** the default deny-internal rule for `AgentChannel.spec.webhook.callbackUrl`. |
+| `gateway.upstreamCA.configMap` | `""` | Name of an operator-supplied ConfigMap of additional CA certificates to trust for upstream provider TLS (the `kaalm-upstream-ca` bundle). The chart mounts it and points the gateway at it. Composes with `trustClusterCAForUpstream`: enabling both merges the cluster CA and this bundle into one trust pool. |
+| `gateway.upstreamCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
+| `gateway.callbackUrl.allowlist` | unset | List of DNS-name suffixes or CIDR blocks whose `AgentChannel.spec.webhook.callbackUrl` targets are permitted despite the deny-internal default. Loopback, link-local and the cloud-metadata IPs stay refused even when listed. |
 | `controller.networkPolicy.dnsSelector` | `{ namespaceLabels: { "kubernetes.io/metadata.name": "kube-system" }, podLabels: { "k8s-app": "kube-dns" } }` | Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy. |
 | `gateway.externalHostnames` | unset | Additional DNS names appended to the `kaalm-gateway-tls` Certificate's SAN list. |
 | `gateway.channelHealthWindow` | `5m` | Rolling window over which the gateway evaluates `AgentChannel.status.conditions[type=PlatformConnected]`. |
@@ -95,7 +97,7 @@ The chart installs two ClusterIP `Service`s. The whole SAN and endpoint design h
 
 Every certificate SAN, every `$KAALM_GATEWAY_ENDPOINT` value, and every internal RPC in the other docs assumes these names in `kaalm-system`.
 
-The optional `kaalm-upstream-ca` ConfigMap ([Upstream TLS Configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration)) is operator-supplied, not chart-templated. The chart only documents its name.
+The optional `kaalm-upstream-ca` ConfigMap ([Upstream TLS Configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration)) holds operator-supplied CA certificates: you create it, and the chart wires it in when you set `gateway.upstreamCA.configMap` to its name. The chart never templates its contents. It is projected next to the cluster CA under a distinct filename, because a projected volume cannot concatenate two ConfigMap keys into one file; the gateway merges every configured path into a single trust pool and re-reads them when they rotate.
 
 ### Metrics
 

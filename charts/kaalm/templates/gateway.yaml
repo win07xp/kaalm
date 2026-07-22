@@ -56,8 +56,15 @@ spec:
             - --channel-health-window={{ .Values.gateway.channelHealthWindow }}
             - --delivery-backoff={{ .Values.gateway.agentDeliveryRetryBackoff }}
             - --callback-backoff={{ .Values.gateway.callbackRetryBackoff }}
+            {{- $upstreamCAs := list }}
             {{- if .Values.gateway.trustClusterCAForUpstream }}
-            - --upstream-ca=/var/run/kaalm/ca.crt
+            {{- $upstreamCAs = append $upstreamCAs "/var/run/kaalm/ca.crt" }}
+            {{- end }}
+            {{- if .Values.gateway.upstreamCA.configMap }}
+            {{- $upstreamCAs = append $upstreamCAs "/var/run/kaalm/upstream-ca.crt" }}
+            {{- end }}
+            {{- if $upstreamCAs }}
+            - --upstream-ca={{ join "," $upstreamCAs }}
             {{- end }}
             {{- if .Values.gateway.trustClusterCAForCallbacks }}
             - --callback-ca=/var/run/kaalm/ca.crt
@@ -117,6 +124,16 @@ spec:
                   name: kaalm-ca
                   items:
                     - { key: ca.crt, path: ca.crt }
+              {{- with .Values.gateway.upstreamCA.configMap }}
+              # Operator-supplied enterprise bundle. Projected next to the
+              # cluster CA under a distinct filename because a projected volume
+              # cannot concatenate two keys into one file; the gateway merges
+              # both paths into a single trust pool.
+              - configMap:
+                  name: {{ . }}
+                  items:
+                    - { key: {{ $.Values.gateway.upstreamCA.key }}, path: upstream-ca.crt }
+              {{- end }}
 ---
 apiVersion: v1
 kind: Service

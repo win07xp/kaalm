@@ -57,11 +57,13 @@ type Config struct {
 	Replicas func() int
 	// UpstreamTimeout bounds each upstream provider call.
 	UpstreamTimeout time.Duration
-	// UpstreamCAFile is the upstream trust bundle, added to the system roots
-	// and reloaded when its mtime changes so a rotated kaalm-upstream-ca needs
-	// no restart. Takes precedence over UpstreamCAs.
-	UpstreamCAFile string
-	// UpstreamCAs is a prebuilt upstream pool, used when UpstreamCAFile is
+	// UpstreamCAFiles are upstream trust bundles, merged and added to the system
+	// roots and reloaded when any mtime changes so a rotated kaalm-upstream-ca
+	// needs no restart. More than one entry lets the cluster CA and an
+	// operator-supplied bundle be trusted together. Takes precedence over
+	// UpstreamCAs.
+	UpstreamCAFiles []string
+	// UpstreamCAs is a prebuilt upstream pool, used when UpstreamCAFiles is
 	// empty (tests inject one directly).
 	UpstreamCAs *x509.CertPool
 	// DisableSourceIPCheck skips the source-IP cross-check (dev/test only).
@@ -92,11 +94,10 @@ type Config struct {
 	AgentServicePortOverride int32
 	// InsecureSkipAgentVerify disables agent cert verification (dev only).
 	InsecureSkipAgentVerify bool
-	// CallbackCAFile is the callback trust bundle, added to the system roots
-	// and reloaded on mtime change (same contract as UpstreamCAFile). Takes
-	// precedence over CallbackCAs.
-	CallbackCAFile string
-	// CallbackCAs is a prebuilt callback pool, used when CallbackCAFile is
+	// CallbackCAFiles are callback trust bundles, with the same merge and
+	// reload contract as UpstreamCAFiles. Takes precedence over CallbackCAs.
+	CallbackCAFiles []string
+	// CallbackCAs is a prebuilt callback pool, used when CallbackCAFiles is
 	// empty (tests inject one directly).
 	CallbackCAs *x509.CertPool
 	// CallbackPolicy decides which callbackUrl targets may receive async
@@ -142,11 +143,11 @@ type Server struct {
 // initOutboundCAs builds the file-backed outbound trust loaders once.
 func (s *Server) initOutboundCAs() {
 	s.outboundCAOnce.Do(func() {
-		if s.Config.UpstreamCAFile != "" {
-			s.upstreamCAs = &caPoolLoader{file: s.Config.UpstreamCAFile, additive: true}
+		if len(s.Config.UpstreamCAFiles) > 0 {
+			s.upstreamCAs = &caPoolLoader{files: s.Config.UpstreamCAFiles, additive: true}
 		}
-		if s.Config.CallbackCAFile != "" {
-			s.callbackCAs = &caPoolLoader{file: s.Config.CallbackCAFile, additive: true}
+		if len(s.Config.CallbackCAFiles) > 0 {
+			s.callbackCAs = &caPoolLoader{files: s.Config.CallbackCAFiles, additive: true}
 		}
 	})
 }
@@ -343,7 +344,7 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) upstream() *http.Client {
 	s.upstreamOnce.Do(func() {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
-		if s.Config.UpstreamCAFile != "" || s.Config.UpstreamCAs != nil {
+		if len(s.Config.UpstreamCAFiles) > 0 || s.Config.UpstreamCAs != nil {
 			// Build the TLS config per dial rather than once, so a rotated
 			// bundle is picked up without a restart. Pooled connections keep
 			// their existing config until they are recycled; new connections
@@ -375,45 +376,71 @@ func (s *Server) upstream() *http.Client {
 // provider and channel callback) trust pools need; the inbound listener pool
 // verifies only against the Kaalm CA and is not additive.
 type caPoolLoader struct {
-	file     string
+	// files are merged into one pool, so the cluster CA and an operator-supplied
+	// enterprise bundle can be trusted together (a projected volume cannot
+	// concatenate two ConfigMap keys into a single file).
+	files    []string
 	additive bool
 
-	mu    sync.Mutex
-	pool  *x509.CertPool
-	mtime time.Time
+	mu     sync.Mutex
+	pool   *x509.CertPool
+	mtimes []time.Time
 }
 
 func (l *caPoolLoader) load() (*x509.CertPool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	info, err := os.Stat(l.file)
-	if err != nil {
-		return nil, err
+
+	mtimes := make([]time.Time, len(l.files))
+	for i, file := range l.files {
+		info, err := os.Stat(file)
+		if err != nil {
+			if l.pool != nil {
+				return l.pool, nil
+			}
+			return nil, err
+		}
+		mtimes[i] = info.ModTime()
 	}
-	if l.pool != nil && info.ModTime().Equal(l.mtime) {
+	if l.pool != nil && sameMtimes(l.mtimes, mtimes) {
 		return l.pool, nil
 	}
-	pem, err := os.ReadFile(l.file)
-	if err != nil {
-		if l.pool != nil {
-			return l.pool, nil
-		}
-		return nil, err
-	}
+
 	pool := x509.NewCertPool()
 	if l.additive {
 		if system, sysErr := x509.SystemCertPool(); sysErr == nil && system != nil {
 			pool = system
 		}
 	}
-	if !pool.AppendCertsFromPEM(pem) {
-		if l.pool != nil {
-			return l.pool, nil
+	for _, file := range l.files {
+		pem, err := os.ReadFile(file)
+		if err != nil {
+			if l.pool != nil {
+				return l.pool, nil
+			}
+			return nil, err
 		}
-		return nil, fmt.Errorf("no certificates parsed from CA bundle %s", l.file)
+		if !pool.AppendCertsFromPEM(pem) {
+			if l.pool != nil {
+				return l.pool, nil
+			}
+			return nil, fmt.Errorf("no certificates parsed from CA bundle %s", file)
+		}
 	}
-	l.pool, l.mtime = pool, info.ModTime()
+	l.pool, l.mtimes = pool, mtimes
 	return l.pool, nil
+}
+
+func sameMtimes(a, b []time.Time) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !a[i].Equal(b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // certLoader reloads the serving cert and CA bundle from disk when their
@@ -450,6 +477,6 @@ func (l *certLoader) certificate() (*tls.Certificate, error) {
 }
 
 func (l *certLoader) caPool() (*x509.CertPool, error) {
-	l.caOnce.Do(func() { l.ca = &caPoolLoader{file: l.caFile} })
+	l.caOnce.Do(func() { l.ca = &caPoolLoader{files: []string{l.caFile}} })
 	return l.ca.load()
 }

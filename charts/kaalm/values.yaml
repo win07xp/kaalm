@@ -30,6 +30,15 @@ gateway:
   # cert signed by kaalm-ca-issuer. Off by default; public providers need only
   # the system roots.
   trustClusterCAForUpstream: false
+  # An operator-supplied ConfigMap of additional CA certificates to trust for
+  # upstream provider TLS (the kaalm-upstream-ca bundle in the design docs). Set
+  # configMap to its name to have the chart mount it and pass it to the gateway;
+  # leave empty to trust only the system roots. It composes with
+  # trustClusterCAForUpstream: enabling both merges the cluster CA and this
+  # bundle into one trust pool. The gateway re-reads it when it rotates.
+  upstreamCA:
+    configMap: ""
+    key: ca.crt
   # Trust the cluster CA (kaalm-ca) for AgentChannel callbackUrl TLS, in addition
   # to the public system roots. Enable this to deliver async responses to
   # in-cluster or self-hosted callback receivers served with a kaalm-ca-issuer
