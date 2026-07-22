@@ -48,10 +48,10 @@ var _ = Describe("Sandboxed class (S2)", Ordered, func() {
 // its agents, without evicting the running Pods.
 var _ = Describe("Access revocation (S5)", Ordered, func() {
 	BeforeAll(func() {
-		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/s5-access.yaml")
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/revocation.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() {
-			_, _ = utils.Kubectl("delete", "-f", "test/e2e/testdata/s5-access.yaml", "--ignore-not-found")
+			_, _ = utils.Kubectl("delete", "-f", "test/e2e/testdata/revocation.yaml", "--ignore-not-found")
 		})
 		By("the agent reaches Ready while access is granted")
 		Eventually(func() (bool, error) {
@@ -71,10 +71,10 @@ var _ = Describe("Access revocation (S5)", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("(a) the next token-authenticated call is denied 403 access_denied")
-		_, err = utils.Kubectl("apply", "-f", "test/e2e/testdata/s5-caller.yaml")
+		_, err = utils.Kubectl("apply", "-f", "test/e2e/testdata/revocation-caller.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() {
-			_, _ = utils.Kubectl("delete", "-f", "test/e2e/testdata/s5-caller.yaml", "--ignore-not-found")
+			_, _ = utils.Kubectl("delete", "-f", "test/e2e/testdata/revocation-caller.yaml", "--ignore-not-found")
 		})
 		Eventually(func() (string, error) {
 			return utils.ResourceField("pod", "e2e", "s5-caller", "{.status.phase}")
