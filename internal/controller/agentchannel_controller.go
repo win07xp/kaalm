@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/callbackpolicy"
 )
 
 // disconnectTimeout bounds how long the channel finalizer waits for the
@@ -84,11 +85,11 @@ type AgentChannelReconciler struct {
 	// Health polls per-channel gateway delivery health; nil preserves the
 	// existing PlatformConnected condition.
 	Health ChannelHealthClient
-	// AllowPrivateCallbacks relaxes the Rule 22 deny-internal check so a
-	// callbackUrl may resolve to a private (RFC1918/ULA) address, for in-cluster
-	// or self-hosted receivers. Loopback and link-local (cloud metadata) stay
-	// blocked. Must match the gateway's --allow-private-callbacks. Default false.
-	AllowPrivateCallbacks bool
+	// CallbackPolicy decides which callbackUrl targets rule 22 permits. The
+	// zero value denies internal address space; entries come from
+	// gateway.callbackUrl.allowlist and must match the gateway's, since the
+	// gateway repeats the check pre-dial.
+	CallbackPolicy callbackpolicy.Policy
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agentchannels,verbs=get;list;watch;update;patch
@@ -208,7 +209,7 @@ func (r *AgentChannelReconciler) validateChannel(
 	// Rule 22: callbackUrl must be HTTPS and must not point into internal
 	// address space (reconcile-time half; the gateway re-checks pre-dial).
 	if channel.Spec.Webhook.CallbackURL != nil {
-		if reason, msg := validateCallbackURL(*channel.Spec.Webhook.CallbackURL, r.AllowPrivateCallbacks); reason != "" {
+		if reason, msg := validateCallbackURL(*channel.Spec.Webhook.CallbackURL, r.CallbackPolicy); reason != "" {
 			return reason, msg
 		}
 	}
@@ -346,12 +347,10 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 	return "", ""
 }
 
-// validateCallbackURL is the reconcile-time half of rule 22. Loopback,
-// link-local (which covers the 169.254.169.254 cloud-metadata endpoint), and
-// the unspecified address are always rejected; private (RFC1918/ULA) targets
-// are rejected unless allowPrivate is set, which opts into in-cluster or
-// self-hosted receivers. This mirrors the gateway's pre-dial blockedCallbackIP.
-func validateCallbackURL(raw string, allowPrivate bool) (string, string) {
+// validateCallbackURL is the reconcile-time half of rule 22. The target policy
+// itself lives in internal/callbackpolicy, shared with the gateway's pre-dial
+// re-check so the two halves cannot drift.
+func validateCallbackURL(raw string, policy callbackpolicy.Policy) (string, string) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
 		return kaalmv1alpha1.ReasonInvalidCallbackURL, "callbackUrl must be a valid https URL"
@@ -364,11 +363,7 @@ func validateCallbackURL(raw string, allowPrivate bool) (string, string) {
 		return "", ""
 	}
 	for _, ip := range ips {
-		blocked := ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
-		if !allowPrivate && ip.IsPrivate() {
-			blocked = true
-		}
-		if blocked {
+		if !policy.Allowed(host, ip) {
 			return kaalmv1alpha1.ReasonInvalidCallbackURL,
 				fmt.Sprintf("callbackUrl host resolves to blocked address %s", ip)
 		}

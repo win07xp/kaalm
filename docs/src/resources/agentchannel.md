@@ -106,9 +106,10 @@ spec:
     #   - callbackAuth (below) must also be set; every callback POST is signed
     # The check is re-run at each delivery attempt (DNS is re-resolved then to
     # defeat rebinding); see the User Gateway request flow. Platform teams
-    # that need callbacks into the cluster can override this deny-internal
-    # default with an explicit allowlist via the Helm value
-    # gateway.callbackUrl.allowlist (DNS-name suffixes or CIDR blocks).
+    # that need callbacks into the cluster can open this deny-internal
+    # default for specific targets with the Helm value
+    # gateway.callbackUrl.allowlist (DNS-name suffixes or CIDR blocks);
+    # loopback and the cloud-metadata IPs stay refused even when listed.
     # callbackUrl: "https://my-service.example.com/agent-responses"
     #
     # Required when callbackUrl is set (enforced by rule 25 below). Defines the

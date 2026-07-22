@@ -252,29 +252,9 @@ func (s *Server) patchWithRetry(ctx context.Context, requestID string, payload [
 	slog.Error("async response patch failed; payload dropped", "requestId", requestID)
 }
 
-// blockedCallbackIP reports whether an IP falls in the callback deny ranges.
-// Loopback, link-local (which covers the 169.254.169.254 cloud-metadata
-// endpoint), and the unspecified address are ALWAYS blocked, even when private
-// callbacks are permitted. RFC1918 and unique-local IPv6 are blocked unless
-// allowPrivate is set, which opts into in-cluster/self-hosted callback
-// receivers (their Service IPs are private) while keeping metadata and loopback
-// off limits.
-func blockedCallbackIP(ip net.IP, allowPrivate bool) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	if allowPrivate {
-		return false
-	}
-	if ip.IsPrivate() {
-		return true
-	}
-	// Unique-local IPv6 fc00::/7.
-	if v6 := ip.To16(); v6 != nil && ip.To4() == nil && (v6[0]&0xfe) == 0xfc {
-		return true
-	}
-	return false
-}
+// The pre-dial target check lives in internal/callbackpolicy, shared with the
+// AgentChannelReconciler's reconcile-time half of rule 22 so the two cannot
+// drift apart.
 
 // sendCallback delivers the payload to callbackUrl with the pre-dial
 // deny-range re-check (pinned-IP dial defeats DNS rebinding), per-attempt
@@ -318,7 +298,7 @@ func (s *Server) sendCallback(
 			continue // resolution failure: retried bucket
 		}
 		ip := ips[0]
-		if blockedCallbackIP(ip, s.Config.AllowPrivateCallbacks) {
+		if !s.Config.CallbackPolicy.Allowed(host, ip) {
 			// Bypassed: no dial, no retry, no callback_invalid envelope; the
 			// payload still reaches polling via the caller.
 			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid,
@@ -354,11 +334,17 @@ func (s *Server) dialCallbackOnce(
 		port = "443"
 	}
 	pinned := net.JoinHostPort(ip.String(), port)
+	// Re-read the trust bundle per attempt so a rotated CA applies without a
+	// gateway restart; the transport is already rebuilt for every dial.
+	callbackCAs, err := s.callbackCAPool()
+	if err != nil {
+		return 0, err
+	}
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, pinned)
 		},
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname(), RootCAs: s.Config.CallbackCAs},
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname(), RootCAs: callbackCAs},
 	}
 	client := &http.Client{Transport: transport, Timeout: s.Config.AgentReadTimeout}
 

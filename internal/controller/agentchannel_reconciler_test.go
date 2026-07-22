@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/callbackpolicy"
 )
 
 func mkChannel(t *testing.T, name, agentName, path string, mutate func(*kaalmv1alpha1.AgentChannel)) {
@@ -497,28 +498,29 @@ func TestChannel_PruneSkipsNonAsyncConfigMap(t *testing.T) {
 // ---- validateCallbackURL (rule 22, reconcile-time half) ----
 
 func TestValidateCallbackURL(t *testing.T) {
+	allowPrivate := callbackpolicy.New([]string{"10.0.0.0/8", "127.0.0.0/8", "169.254.169.254/32"})
 	cases := []struct {
-		name         string
-		url          string
-		allowPrivate bool
-		wantBad      bool
+		name      string
+		url       string
+		allowlist callbackpolicy.Policy
+		wantBad   bool
 	}{
-		{"not https", "http://example.com/hook", false, true},
-		{"parse error", "://no-scheme", false, true},
-		{"empty host", "https://", false, true},
-		{"loopback literal", "https://127.0.0.1/hook", false, true},
-		{"public literal ok", "https://8.8.8.8/hook", false, false},
-		{"unresolvable deferred", "https://nonexistent.invalid/hook", false, false},
-		{"private blocked by default", "https://10.1.2.3/hook", false, true},
-		{"private allowed when opted in", "https://10.1.2.3/hook", true, false},
-		{"loopback blocked even when opted in", "https://127.0.0.1/hook", true, true},
-		{"metadata blocked even when opted in", "https://169.254.169.254/hook", true, true},
+		{"not https", "http://example.com/hook", callbackpolicy.Policy{}, true},
+		{"parse error", "://no-scheme", callbackpolicy.Policy{}, true},
+		{"empty host", "https://", callbackpolicy.Policy{}, true},
+		{"loopback literal", "https://127.0.0.1/hook", callbackpolicy.Policy{}, true},
+		{"public literal ok", "https://8.8.8.8/hook", callbackpolicy.Policy{}, false},
+		{"unresolvable deferred", "https://nonexistent.invalid/hook", callbackpolicy.Policy{}, false},
+		{"private blocked by default", "https://10.1.2.3/hook", callbackpolicy.Policy{}, true},
+		{"private allowed when allowlisted", "https://10.1.2.3/hook", allowPrivate, false},
+		{"loopback blocked even when allowlisted", "https://127.0.0.1/hook", allowPrivate, true},
+		{"metadata blocked even when allowlisted", "https://169.254.169.254/hook", allowPrivate, true},
 	}
 	for _, c := range cases {
-		reason, _ := validateCallbackURL(c.url, c.allowPrivate)
+		reason, _ := validateCallbackURL(c.url, c.allowlist)
 		bad := reason != ""
 		if bad != c.wantBad {
-			t.Errorf("%s: validateCallbackURL(%q, %v) bad=%v, want %v (reason=%q)", c.name, c.url, c.allowPrivate, bad, c.wantBad, reason)
+			t.Errorf("%s: validateCallbackURL(%q) bad=%v, want %v (reason=%q)", c.name, c.url, bad, c.wantBad, reason)
 		}
 		if bad && reason != kaalmv1alpha1.ReasonInvalidCallbackURL {
 			t.Errorf("%s: reason=%q, want InvalidCallbackURL", c.name, reason)

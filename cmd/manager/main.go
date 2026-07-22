@@ -42,6 +42,7 @@ import (
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -71,7 +72,7 @@ func main() {
 	var tlsOpts []func(*tls.Config)
 	var controllerTLSCert, controllerTLSKey, controllerTLSCA string
 	var activatorAddr string
-	var allowPrivateCallbacks bool
+	var callbackAllowlist string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -95,9 +96,10 @@ func main() {
 	flag.StringVar(&controllerTLSKey, "controller-tls-key", "", "The controller's TLS key.")
 	flag.StringVar(&controllerTLSCA, "controller-tls-ca", "", "The Kaalm CA bundle for mTLS with the gateway.")
 	flag.StringVar(&activatorAddr, "activator-addr", ":9443", "The activator/probe listener address.")
-	flag.BoolVar(&allowPrivateCallbacks, "allow-private-callbacks", false,
-		"Permit AgentChannel.callbackUrl hosts that resolve to private (RFC1918/ULA) addresses, for in-cluster receivers; "+
-			"loopback and cloud metadata stay blocked. Must match the gateway's --allow-private-callbacks.")
+	flag.StringVar(&callbackAllowlist, "callback-url-allowlist", "",
+		"Comma-separated DNS-name suffixes and CIDR blocks whose AgentChannel.callbackUrl targets are permitted "+
+			"despite the deny-internal default; loopback and cloud metadata stay blocked regardless. "+
+			"Must match the gateway's --callback-url-allowlist.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -292,10 +294,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.AgentChannelReconciler{
-		Client:                mgr.GetClient(),
-		Recorder:              mgr.GetEventRecorderFor("agentchannel-controller"),
-		OperatorNamespace:     operatorNamespace,
-		AllowPrivateCallbacks: allowPrivateCallbacks,
+		Client:            mgr.GetClient(),
+		Recorder:          mgr.GetEventRecorderFor("agentchannel-controller"),
+		OperatorNamespace: operatorNamespace,
+		CallbackPolicy:    callbackpolicy.NewFromCSV(callbackAllowlist),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentChannel")
 		os.Exit(1)

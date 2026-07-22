@@ -35,17 +35,15 @@ gateway:
   # in-cluster or self-hosted callback receivers served with a kaalm-ca-issuer
   # cert. Off by default; public receivers need only the system roots.
   trustClusterCAForCallbacks: false
-  # Permit callbackUrl hosts that resolve to private (RFC1918/ULA) addresses,
-  # for in-cluster or self-hosted receivers. Loopback and link-local (cloud
-  # metadata) stay blocked regardless. Off by default: SSRF protection denies
-  # private callback targets unless you opt in. Applies to both the controller's
-  # reconcile-time callbackUrl validation and the gateway's pre-dial check.
-  allowPrivateCallbacks: false
   # Additional DNS names appended to the kaalm-gateway-tls certificate SANs.
   # Required when the User listener is exposed via TLS pass-through Ingress.
   externalHostnames: []
-  # DNS-name suffixes or CIDR blocks that replace the default deny-internal rule
-  # for AgentChannel.spec.webhook.callbackUrl. Empty keeps the deny-internal default.
+  # DNS-name suffixes or CIDR blocks whose AgentChannel.spec.webhook.callbackUrl
+  # targets are permitted despite the deny-internal default, for in-cluster or
+  # self-hosted receivers (for example ".svc.cluster.local" or "10.43.0.0/16").
+  # Empty keeps the deny-internal default. Loopback and link-local (cloud
+  # metadata) stay blocked even if listed. Applies to both the controller's
+  # reconcile-time validation (rule 22) and the gateway's pre-dial re-check.
   callbackUrl:
     allowlist: []
   # Rolling window over which PlatformConnected is evaluated.
