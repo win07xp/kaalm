@@ -20,29 +20,27 @@ both locally and in GitHub Actions. The
 [scenario-coverage map](appendix/scenario-coverage.md) ties each acceptance
 scenario to the tests that verify it.
 
-Two honest caveats, also stated in the release notes:
+Two honest caveats:
 
 - The API is `v1alpha1` and may change in breaking ways between minor releases.
-- No container image or Helm chart is published yet. Installing v0.1.0 means
-  building from source.
+- Each tagged release now publishes multi-arch images and an OCI Helm chart, so
+  installing is a single `helm install` (see the User Guide). The `v0.1.0` tag
+  predates that machinery and installs only from source.
 
 ## Next: v0.2.0
 
-Two workstreams, both already scoped:
+**Release machinery is done:** a tag now builds and pushes the multi-arch
+images and the OCI Helm chart and cuts the GitHub release, so `helm install`
+works without cloning the repo. The remaining v0.2.0 workstream is test
+coverage:
 
-**1. Prove every acceptance scenario on a real cluster.** The
+**Prove every acceptance scenario on a real cluster.** The
 [scenarios](appendix/scenarios.md) (S1 to S15) define "done" for the design, and
 v0.1.0 ships with cluster-level e2e proof for S1, S3, S6, S8, S11, and S13. The
 rest are verified at the unit or envtest level only (S4 fallback, S7 hibernate
 and wake, S10 budget exhaustion, S15 async webhook) or not systematically at all
 (S2, S5, S9, S12, S14). v0.2.0 closes that gap: every scenario gets an e2e spec,
 and the scenario-coverage map goes all green in its e2e column.
-
-**2. Release machinery, so a tag is installable.** A tag-triggered workflow that
-builds and pushes a multi-arch controller and gateway image to a registry,
-packages and publishes the Helm chart, versions the image reference into the
-chart, and attaches both to the GitHub release. After this, `helm install` works
-without cloning the repo.
 
 ## Beyond v0.2.0
 

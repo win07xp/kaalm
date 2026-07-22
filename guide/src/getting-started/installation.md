@@ -1,8 +1,8 @@
 # Installation
 
-v0.1.0 does not publish a container image or a Helm chart yet (that is a v0.2.0
-milestone), so installing means building from a repository checkout. This page
-is deliberately thin until then.
+Kaalm installs with a single Helm command from its OCI registry on ghcr. The
+chart carries the controller, the gateway, RBAC, and the cert-manager and
+trust-manager resources.
 
 ## Prerequisites
 
@@ -18,31 +18,53 @@ of them:
    synthesizes a NetworkPolicy around every agent; on a CNI that ignores them,
    those isolation guarantees silently do not exist.
 
-## Local install (k3d, the tested path)
-
-The repository automates the full loop against a local k3d cluster, including
-the three prerequisites:
+## Install
 
 ```bash
-make k3d-up        # k3d cluster + cert-manager + trust-manager
-make e2e-images    # build controller, gateway, and starter agent images; import into k3d
-make e2e-deploy    # helm install into kaalm-system
+helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
+  --version <version> \
+  -n kaalm-system --create-namespace \
+  --set certManager.clusterResourceNamespace=cert-manager
 ```
 
-## Any other cluster
+Find the current `<version>` on the
+[Releases page](https://github.com/win07xp/kaalm/releases). The chart and the
+controller and gateway images it pulls all share that version, so the install
+is fully pinned.
 
-Build and push the two images somewhere your cluster can pull:
+Two settings worth knowing:
+
+- `certManager.clusterResourceNamespace` must match your cert-manager install's
+  cluster resource namespace (a default cert-manager install uses
+  `cert-manager`).
+- The controller and gateway each have a hard floor of two replicas; the chart
+  refuses to render below it.
+
+Then continue to [Verifying the Install](verifying.md).
+
+## Trying Kaalm locally
+
+The repository automates a local k3d cluster with the three prerequisites
+already installed:
+
+```bash
+make k3d-up   # k3d cluster + cert-manager + trust-manager
+```
+
+Then run the same `helm install` as above against it. This gives you a full
+local install from the published artifacts without building anything.
+
+## From source
+
+To run unreleased changes, or as a contributor, install the chart straight
+from a checkout with images you build yourself:
 
 ```bash
 docker build -t <registry>/kaalm-controller:dev --build-arg BINARY=manager .
 docker build -t <registry>/kaalm-gateway:dev --build-arg BINARY=gateway .
 docker push <registry>/kaalm-controller:dev
 docker push <registry>/kaalm-gateway:dev
-```
 
-Then install the chart from the checkout, pointing it at your images:
-
-```bash
 helm upgrade --install kaalm charts/kaalm \
   -n kaalm-system --create-namespace \
   --set controller.image.repository=<registry>/kaalm-controller \
@@ -52,14 +74,9 @@ helm upgrade --install kaalm charts/kaalm \
   --set certManager.clusterResourceNamespace=cert-manager
 ```
 
-`certManager.clusterResourceNamespace` must match your cert-manager install's
-cluster resource namespace (the default cert-manager install uses
-`cert-manager`).
-
-Note that both the controller and the gateway have a hard floor of two
-replicas; the chart refuses to render below it.
-
-Continue to [Verifying the Install](verifying.md).
+On k3d you can skip the registry and `k3d image import` the two images
+instead; `make e2e-images` builds and imports them, and `make e2e-deploy`
+installs the local chart in one step.
 
 ---
 
