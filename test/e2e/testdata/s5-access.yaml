@@ -31,13 +31,33 @@ spec:
       costPer1MOutputTokens: "2.00"
 ---
 apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s5-class
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  allowedProviders:
+    - name: s5-provider
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
 kind: Agent
 metadata:
   name: s5-agent
   namespace: e2e
 spec:
   agentClassRef:
-    name: e2e-standard
+    name: s5-class
   image: registry.test/agents/starter-go:e2e
   providers:
     - providerRef:
