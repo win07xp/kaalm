@@ -1,0 +1,96 @@
+# The mock LLM provider: an in-cluster upstream the gateway forwards to. It
+# terminates TLS with a kaalm-ca-issuer cert, so the gateway (deployed with
+# gateway.trustClusterCAForUpstream=true) trusts it. Behavior is keyed by the
+# endpoint path prefix; the ModelProvider below uses /ok.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mock-provider-tls
+  namespace: e2e
+spec:
+  secretName: mock-provider-tls
+  issuerRef:
+    name: kaalm-ca-issuer
+    kind: ClusterIssuer
+  usages:
+    - server auth
+  dnsNames:
+    - mock-provider.e2e.svc
+    - mock-provider.e2e.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-provider
+  namespace: e2e
+  labels:
+    app: mock-provider
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-provider
+  template:
+    metadata:
+      labels:
+        app: mock-provider
+    spec:
+      containers:
+        - name: mock-provider
+          image: registry.test/mock/llm-provider:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr=:8443
+            - --tls-cert=/var/run/tls/tls.crt
+            - --tls-key=/var/run/tls/tls.key
+          ports:
+            - containerPort: 8443
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: mock-provider-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-provider
+  namespace: e2e
+spec:
+  selector:
+    app: mock-provider
+  ports:
+    - port: 8443
+      targetPort: 8443
+---
+# Credential Secret for the provider, resolved in the operator namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-mock-key
+  namespace: kaalm-system
+type: Opaque
+stringData:
+  token: dummy-mock-credential
+---
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: e2e-mock
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/ok
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"

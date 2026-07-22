@@ -24,6 +24,12 @@ gateway:
     pullPolicy: IfNotPresent
   # Maximum fallback-chain depth for LLM provider routing (KAALM_MAX_FALLBACK_DEPTH).
   maxFallbackDepth: 3
+  # Trust the cluster CA (kaalm-ca, already mounted at /var/run/kaalm/ca.crt) for
+  # upstream provider TLS, in addition to the public system roots. Enable this to
+  # route to in-cluster or self-hosted providers whose endpoint is served with a
+  # cert signed by kaalm-ca-issuer. Off by default; public providers need only
+  # the system roots.
+  trustClusterCAForUpstream: false
   # Additional DNS names appended to the kaalm-gateway-tls certificate SANs.
   # Required when the User listener is exposed via TLS pass-through Ingress.
   externalHostnames: []

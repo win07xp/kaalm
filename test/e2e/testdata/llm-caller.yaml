@@ -1,0 +1,64 @@
+# A token-authenticated caller (the "existing workload" adoption tier): a Pod
+# with a ServiceAccount token scoped to the kaalm-gateway audience that calls
+# the gateway's LLM endpoint. The gateway validates the token via TokenReview,
+# admits namespace e2e (the provider's allowedNamespaces), and forwards to the
+# mock over TLS. Proves the full path: auth, routing, upstream TLS trust, usage.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llm-caller
+  namespace: e2e
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: llm-caller
+  namespace: e2e
+spec:
+  serviceAccountName: llm-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # Retry through the gateway's source-IP startup race: the anti-spoofing
+        # check (source IP -> Pod namespace) returns 401 until the gateway's Pod
+        # informer observes this freshly-created caller Pod. A real client
+        # retries the same way.
+        - |
+          token=$(cat /var/run/token/token)
+          for i in $(seq 1 20); do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"e2e-mock/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"; cat /tmp/resp; echo
+            if [ "$code" = "200" ]; then echo "HTTP 200"; cat /tmp/resp; exit 0; fi
+            sleep 3
+          done
+          echo "gave up after retries"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt

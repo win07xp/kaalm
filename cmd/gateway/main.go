@@ -65,7 +65,8 @@ func main() {
 	flag.StringVar(&certFile, "tls-cert", "/var/run/kaalm/tls.crt", "serving certificate file")
 	flag.StringVar(&keyFile, "tls-key", "/var/run/kaalm/tls.key", "serving key file")
 	flag.StringVar(&caFile, "tls-ca", "/var/run/kaalm/ca.crt", "Kaalm CA bundle for client verification")
-	flag.StringVar(&upstreamCAFile, "upstream-ca", "", "optional extra CA bundle for upstream provider TLS")
+	flag.StringVar(&upstreamCAFile, "upstream-ca", "",
+		"optional CA bundle to trust for upstream provider TLS, added to the system roots")
 	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
 	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second, "upstream provider call timeout")
 	flag.BoolVar(&disableSourceIPCheck, "disable-source-ip-check", false,
@@ -132,6 +133,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The upstream CA bundle is additive to the system roots: it lets the
+	// gateway reach in-cluster or self-hosted providers signed by a private CA
+	// (e.g. kaalm-ca) without losing the ability to verify public providers.
 	var upstreamCAs *x509.CertPool
 	if upstreamCAFile != "" {
 		pem, err := os.ReadFile(upstreamCAFile)
@@ -139,7 +143,10 @@ func main() {
 			logger.Error("reading upstream CA bundle", "error", err)
 			os.Exit(1)
 		}
-		upstreamCAs = x509.NewCertPool()
+		upstreamCAs, err = x509.SystemCertPool()
+		if err != nil || upstreamCAs == nil {
+			upstreamCAs = x509.NewCertPool()
+		}
 		if !upstreamCAs.AppendCertsFromPEM(pem) {
 			logger.Error("no certificates parsed from upstream CA bundle")
 			os.Exit(1)

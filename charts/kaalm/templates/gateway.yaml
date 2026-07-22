@@ -56,6 +56,9 @@ spec:
             - --channel-health-window={{ .Values.gateway.channelHealthWindow }}
             - --delivery-backoff={{ .Values.gateway.agentDeliveryRetryBackoff }}
             - --callback-backoff={{ .Values.gateway.callbackRetryBackoff }}
+            {{- if .Values.gateway.trustClusterCAForUpstream }}
+            - --upstream-ca=/var/run/kaalm/ca.crt
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom:
