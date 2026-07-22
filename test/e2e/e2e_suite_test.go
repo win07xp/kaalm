@@ -36,6 +36,10 @@ var _ = AfterSuite(func() {
 	for _, f := range []string{
 		"test/e2e/testdata/agenttask.yaml",
 		"test/e2e/testdata/hibernation.yaml",
+		"test/e2e/testdata/promotion-reader.yaml",
+		"test/e2e/testdata/promotion-writer.yaml",
+		"test/e2e/testdata/promotion-agent.yaml",
+		"test/e2e/testdata/promotion.yaml",
 		"test/e2e/testdata/agentchannel.yaml",
 		"test/e2e/testdata/agent.yaml",
 		"test/e2e/testdata/modelprovider.yaml",
