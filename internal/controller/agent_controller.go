@@ -300,6 +300,7 @@ func (r *AgentReconciler) evaluateActivity(
 	})
 
 	last := mergedActivity(reachable, agent.Name, eff.ActivitySource)
+	synthetic := false
 	if last == nil {
 		// No recorded activity: genuine silence only if some replica has
 		// been watching for at least idleTimeout; otherwise a restart wiped
@@ -314,8 +315,12 @@ func (r *AgentReconciler) evaluateActivity(
 		if !qualified || agent.Status.PhaseTransitionTime == nil {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}
 		}
+		// Fall back to PhaseTransitionTime as the silence marker, but remember
+		// it is synthetic: it advances on every setPhase, so it must not be
+		// read as fresh activity below (that would oscillate Idle<->Running).
 		t := agent.Status.PhaseTransitionTime.Time
 		last = &t
+		synthetic = true
 	}
 
 	switch agent.Status.Phase {
@@ -331,18 +336,31 @@ func (r *AgentReconciler) evaluateActivity(
 			return ctrl.Result{Requeue: true}
 		}
 	case kaalmv1alpha1.AgentIdle:
+		// Only real recorded activity returns an Idle agent to Running. The
+		// synthetic fallback marker advances on every transition, so treating
+		// it as fresh activity would flip Idle->Running->Idle forever and never
+		// let a trafficless agent hibernate.
+		//
 		// Compare at second resolution: the stored timestamp lost its
 		// nanoseconds in the apiserver round-trip (metav1.Time marshals to
 		// RFC3339 seconds), and a raw comparison would misread the same
 		// instant as fresh activity on every pass.
-		if agent.Status.LastActivityTime != nil &&
+		if !synthetic && agent.Status.LastActivityTime != nil &&
 			last.Truncate(time.Second).After(agent.Status.LastActivityTime.Time) {
 			r.setPhase(agent, kaalmv1alpha1.AgentRunning)
 			lt := metav1.NewTime(*last)
 			agent.Status.LastActivityTime = &lt
 			return ctrl.Result{Requeue: true}
 		}
-		if eff.HibernationEnabled && now.Sub(*last) > eff.IdleTimeout+eff.HibernationDelay {
+		// Measure the hibernation window from a stable silence marker. The
+		// synthetic path uses LastActivityTime (stamped once at the Idle
+		// transition), not the advancing PhaseTransitionTime, so the delay is
+		// counted from when silence began rather than reset on every pass.
+		silenceStart := last
+		if synthetic && agent.Status.LastActivityTime != nil {
+			silenceStart = &agent.Status.LastActivityTime.Time
+		}
+		if eff.HibernationEnabled && now.Sub(*silenceStart) > eff.IdleTimeout+eff.HibernationDelay {
 			r.setPhase(agent, kaalmv1alpha1.AgentHibernating)
 			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1alpha1.ReasonPhaseChanged,
 				fmt.Sprintf("hibernating: idle for %s past the idle timeout", eff.HibernationDelay))

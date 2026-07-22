@@ -272,6 +272,64 @@ func TestPostJSON(t *testing.T) {
 	})
 }
 
+func TestGetWithBearer(t *testing.T) {
+	t.Run("success with bearer token", func(t *testing.T) {
+		var gotAuth, gotMethod string
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			gotMethod = r.Method
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+		defer srv.Close()
+
+		status, body, err := GetWithBearer(srv.URL, "test-token")
+		if err != nil {
+			t.Fatalf("GetWithBearer returned error: %v", err)
+		}
+		if status != http.StatusOK {
+			t.Errorf("status = %d, want %d", status, http.StatusOK)
+		}
+		if body != `{"ok":true}` {
+			t.Errorf("body = %q, want %q", body, `{"ok":true}`)
+		}
+		if gotAuth != "Bearer test-token" {
+			t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer test-token")
+		}
+		if gotMethod != http.MethodGet {
+			t.Errorf("method = %q, want %q", gotMethod, http.MethodGet)
+		}
+	})
+
+	t.Run("no bearer token omits Authorization header", func(t *testing.T) {
+		var gotAuthValues []string
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuthValues = r.Header["Authorization"]
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		if _, _, err := GetWithBearer(srv.URL, ""); err != nil {
+			t.Fatalf("GetWithBearer returned error: %v", err)
+		}
+		if len(gotAuthValues) > 0 {
+			t.Errorf("Authorization header should be absent, got %v", gotAuthValues)
+		}
+	})
+
+	t.Run("invalid url returns error", func(t *testing.T) {
+		if _, _, err := GetWithBearer("http://%zz", ""); err == nil {
+			t.Fatal("expected error for malformed URL, got nil")
+		}
+	})
+
+	t.Run("connection failure returns error", func(t *testing.T) {
+		if _, _, err := GetWithBearer("https://127.0.0.1:1", ""); err == nil {
+			t.Fatal("expected error for connection failure, got nil")
+		}
+	})
+}
+
 // TestRunMissingBinary exercises Run's plumbing (project-dir resolution,
 // env/argv assembly, and its error-wrapping return path) using a binary name
 // that is guaranteed not to exist. Go's exec.Cmd resolves the executable via
