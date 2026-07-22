@@ -213,7 +213,7 @@ e2e-images: ## Build the controller, gateway, agent, and mock-provider images an
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
 	docker build -t $(AGENT_IMG) examples/starter-go
 	docker pull $(CURL_IMG)
-	k3d image import $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(CURL_IMG) -c $(CLUSTER)
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(CURL_IMG)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
