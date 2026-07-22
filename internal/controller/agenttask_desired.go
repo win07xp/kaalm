@@ -248,26 +248,26 @@ func desiredTaskPod(task *kaalmv1alpha1.AgentTask, eff effectiveTaskSpec, operat
 	env = append(env, eff.Env...)
 
 	volumes := []corev1.Volume{{
-		Name: "kaalm-tls",
+		Name: tlsVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{
 					{Secret: &corev1.SecretProjection{
 						LocalObjectReference: corev1.LocalObjectReference{Name: taskCertificateName(task.Name)},
 						Items: []corev1.KeyToPath{
-							{Key: "tls.crt", Path: "tls.crt"},
-							{Key: "tls.key", Path: "tls.key"},
+							{Key: tlsCertKey, Path: tlsCertKey},
+							{Key: tlsKeyKey, Path: tlsKeyKey},
 						},
 					}},
 					{ConfigMap: &corev1.ConfigMapProjection{
 						LocalObjectReference: corev1.LocalObjectReference{Name: caBundleConfigMap},
-						Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+						Items:                []corev1.KeyToPath{{Key: caCertKey, Path: caCertKey}},
 					}},
 				},
 			},
 		},
 	}}
-	mounts := []corev1.VolumeMount{{Name: "kaalm-tls", MountPath: tlsMountPath, ReadOnly: true}}
+	mounts := []corev1.VolumeMount{{Name: tlsVolumeName, MountPath: tlsMountPath, ReadOnly: true}}
 
 	if eff.PersistenceOn {
 		mountPath := eff.MountPath
@@ -324,15 +324,15 @@ func desiredTaskNetworkPolicy(
 
 	gatewayPeer := networkingv1.NetworkPolicyPeer{
 		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"kubernetes.io/metadata.name": operatorNamespace},
+			MatchLabels: map[string]string{labelKeyNamespaceName: operatorNamespace},
 		},
 		PodSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"app.kubernetes.io/component": "gateway"},
+			MatchLabels: map[string]string{labelKeyComponent: componentGateway},
 		},
 	}
 	dnsPeer := networkingv1.NetworkPolicyPeer{
 		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"},
+			MatchLabels: map[string]string{labelKeyNamespaceName: "kube-system"},
 		},
 	}
 

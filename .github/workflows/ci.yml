@@ -40,12 +40,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: golangci-lint
-        # Pinned at v6 (Node.js 20) deliberately: v7+ supports golangci-lint v2
-        # only, and this repo runs golangci-lint v1.63.4 with a v1 config.
-        # Bumping to a node24 major needs the v1->v2 migration tracked in #17.
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.63.4
+          version: v2.12.2
 
   chart:
     runs-on: ubuntu-latest

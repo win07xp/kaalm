@@ -188,7 +188,7 @@ func TestGetProjectDirStripsE2ESuffix(t *testing.T) {
 	// stripping behavior itself is asserted rather than relying on the
 	// working directory of the test binary.
 	wd := "/home/user/repo/test/e2e"
-	stripped := strings.Replace(wd, "/test/e2e", "", -1)
+	stripped := strings.ReplaceAll(wd, "/test/e2e", "")
 	if stripped != "/home/user/repo" {
 		t.Fatalf("replace logic = %q, want %q", stripped, "/home/user/repo")
 	}

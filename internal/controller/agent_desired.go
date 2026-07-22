@@ -47,6 +47,22 @@ const (
 	caBundleConfigMap  = "kaalm-ca" // trust-manager Bundle target
 	clusterIssuerName  = "kaalm-ca-issuer"
 
+	// The projected TLS volume and its keys, shared by the Agent and AgentTask
+	// desired-state builders so the two cannot drift apart.
+	tlsVolumeName = "kaalm-tls"
+	tlsCertKey    = "tls.crt"
+	tlsKeyKey     = "tls.key"
+	caCertKey     = "ca.crt"
+
+	// Selector keys used when synthesizing NetworkPolicy peers.
+	labelKeyNamespaceName = "kubernetes.io/metadata.name"
+	labelKeyComponent     = "app.kubernetes.io/component"
+
+	schemeHTTPS = "https"
+
+	// componentGateway is the gateway Deployment's component label value.
+	componentGateway = "gateway"
+
 	// annotationPodSpecHash carries the derived-Pod-spec hash for drift
 	// detection (the Deployment pod-template-hash idiom). Never compare
 	// against the live Pod object: apiserver defaulting would report
@@ -360,26 +376,26 @@ func desiredPod(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec, operatorName
 	env = append(env, eff.Env...)
 
 	volumes := []corev1.Volume{{
-		Name: "kaalm-tls",
+		Name: tlsVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{
 					{Secret: &corev1.SecretProjection{
 						LocalObjectReference: corev1.LocalObjectReference{Name: agentCertificateName(agent.Name)},
 						Items: []corev1.KeyToPath{
-							{Key: "tls.crt", Path: "tls.crt"},
-							{Key: "tls.key", Path: "tls.key"},
+							{Key: tlsCertKey, Path: tlsCertKey},
+							{Key: tlsKeyKey, Path: tlsKeyKey},
 						},
 					}},
 					{ConfigMap: &corev1.ConfigMapProjection{
 						LocalObjectReference: corev1.LocalObjectReference{Name: caBundleConfigMap},
-						Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+						Items:                []corev1.KeyToPath{{Key: caCertKey, Path: caCertKey}},
 					}},
 				},
 			},
 		},
 	}}
-	mounts := []corev1.VolumeMount{{Name: "kaalm-tls", MountPath: tlsMountPath, ReadOnly: true}}
+	mounts := []corev1.VolumeMount{{Name: tlsVolumeName, MountPath: tlsMountPath, ReadOnly: true}}
 
 	if eff.PersistenceOn {
 		claim := eff.ExistingClaim
@@ -463,15 +479,15 @@ func desiredNetworkPolicy(
 
 	gatewayPeer := networkingv1.NetworkPolicyPeer{
 		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"kubernetes.io/metadata.name": operatorNamespace},
+			MatchLabels: map[string]string{labelKeyNamespaceName: operatorNamespace},
 		},
 		PodSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"app.kubernetes.io/component": "gateway"},
+			MatchLabels: map[string]string{labelKeyComponent: componentGateway},
 		},
 	}
 	dnsPeer := networkingv1.NetworkPolicyPeer{
 		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"},
+			MatchLabels: map[string]string{labelKeyNamespaceName: "kube-system"},
 		},
 	}
 

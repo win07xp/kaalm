@@ -36,7 +36,7 @@ import (
 
 // gatewayPodLabels selects gateway Pods in the operator namespace, for the
 // GatewayReachable condition and stale-replica pruning.
-var gatewayPodLabels = map[string]string{"app.kubernetes.io/component": "gateway"}
+var gatewayPodLabels = map[string]string{labelKeyComponent: componentGateway}
 
 // gatewayPods returns the live gateway Pod names and how many are Ready.
 func (r *ModelProviderReconciler) gatewayPods(ctx context.Context) (names map[string]bool, ready int, err error) {
