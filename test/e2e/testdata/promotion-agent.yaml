@@ -1,0 +1,19 @@
+# The persistent Agent that adopts the pre-populated claim. existingClaim tells
+# the controller to mount s9-state verbatim (at /var/agent/memory) and provision
+# no s9-agent-memory PVC of its own. sizeGi is omitted (mutually exclusive with
+# existingClaim, rule 27a): the adopted claim brings its own size.
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s9-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s9-persistent
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+    existingClaim: s9-state
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s

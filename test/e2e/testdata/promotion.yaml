@@ -1,0 +1,42 @@
+# Fixtures for the S9 promotion e2e: a new persistent Agent adopts a
+# pre-populated PVC via spec.persistence.existingClaim and the state is read
+# back through it.
+#
+# k3d's local-path provisioner has no VolumeSnapshot support, so the snapshot
+# and clone steps of S9 stay documented as standard Kubernetes; the writer pod
+# stands in for "a task wrote memory to its PVC". What this fixture set proves
+# on a real cluster is the Kaalm-owned primitive: existingClaim adoption (the
+# controller mounts the referenced claim and provisions nothing) plus data
+# read-back.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s9-persistent
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+---
+# The claim the Agent will adopt. WaitForFirstConsumer (local-path default):
+# it binds when the writer pod is scheduled, and the data persists on the node
+# for any later consumer (the Agent, then the reader).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: s9-state
+  namespace: e2e
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

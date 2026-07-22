@@ -1,0 +1,26 @@
+# Seeds the adopted claim with a known marker, standing in for a task that
+# wrote memory to its PVC. Runs as root so the write does not depend on the
+# provisioned directory's ownership; exits 0 (restartPolicy Never) so the spec
+# can wait for Succeeded before the Agent adopts the now-populated claim.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s9-writer
+  namespace: e2e
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+  containers:
+    - name: writer
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "echo PROMOTED-s9 > /data/marker && cat /data/marker"]
+      volumeMounts:
+        - name: state
+          mountPath: /data
+  volumes:
+    - name: state
+      persistentVolumeClaim:
+        claimName: s9-state

@@ -1,0 +1,26 @@
+# Reads the marker back from the adopted claim after the Agent has adopted it,
+# proving the promoted state survived and is present in the volume the new
+# Agent mounts. Mounts s9-state concurrently with the Agent: RWO permits
+# multiple pods on the same node, and k3d is single-node.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s9-reader
+  namespace: e2e
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+  containers:
+    - name: reader
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "cat /data/marker"]
+      volumeMounts:
+        - name: state
+          mountPath: /data
+  volumes:
+    - name: state
+      persistentVolumeClaim:
+        claimName: s9-state
