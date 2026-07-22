@@ -27,6 +27,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/win07xp/kaalm/internal/callbackpolicy"
 )
 
 // Config carries the gateway's runtime settings.
@@ -97,10 +99,10 @@ type Config struct {
 	// CallbackCAs is a prebuilt callback pool, used when CallbackCAFile is
 	// empty (tests inject one directly).
 	CallbackCAs *x509.CertPool
-	// AllowPrivateCallbacks permits callbackUrl hosts that resolve to private
-	// (RFC1918/ULA) addresses, for in-cluster or self-hosted receivers. Loopback
-	// and link-local (cloud metadata) stay blocked. Default false.
-	AllowPrivateCallbacks bool
+	// CallbackPolicy decides which callbackUrl targets may receive async
+	// responses. The zero value denies internal address space; entries come
+	// from gateway.callbackUrl.allowlist. See internal/callbackpolicy.
+	CallbackPolicy callbackpolicy.Policy
 }
 
 // Server is the Kaalm Gateway's :8443 surface.

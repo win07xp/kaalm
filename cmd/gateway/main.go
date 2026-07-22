@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/gateway"
 )
 
@@ -44,7 +45,7 @@ func main() {
 		caFile               string
 		upstreamCAFile       string
 		callbackCAFile       string
-		allowPrivateCB       bool
+		callbackAllowlist    string
 		maxBodyBytes         int64
 		upstreamTimeout      time.Duration
 		disableSourceIPCheck bool
@@ -71,9 +72,9 @@ func main() {
 		"optional CA bundle to trust for upstream provider TLS, added to the system roots")
 	flag.StringVar(&callbackCAFile, "callback-ca", "",
 		"optional CA bundle to trust for channel callbackUrl TLS, added to the system roots")
-	flag.BoolVar(&allowPrivateCB, "allow-private-callbacks", false,
-		"permit callbackUrl hosts that resolve to private (RFC1918/ULA) addresses, for in-cluster receivers; "+
-			"loopback and cloud metadata stay blocked")
+	flag.StringVar(&callbackAllowlist, "callback-url-allowlist", "",
+		"comma-separated DNS-name suffixes and CIDR blocks whose callbackUrl targets are permitted despite the "+
+			"deny-internal default; loopback and cloud metadata stay blocked regardless")
 	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
 	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second, "upstream provider call timeout")
 	flag.BoolVar(&disableSourceIPCheck, "disable-source-ip-check", false,
@@ -163,7 +164,7 @@ func main() {
 		UpstreamTimeout:          upstreamTimeout,
 		UpstreamCAFile:           upstreamCAFile,
 		CallbackCAFile:           callbackCAFile,
-		AllowPrivateCallbacks:    allowPrivateCB,
+		CallbackPolicy:           callbackpolicy.NewFromCSV(callbackAllowlist),
 		DisableSourceIPCheck:     disableSourceIPCheck,
 		UserListenAddr:           userAddr,
 		AgentServiceHostOverride: agentHostOverride,

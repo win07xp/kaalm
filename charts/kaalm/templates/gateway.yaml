@@ -62,8 +62,8 @@ spec:
             {{- if .Values.gateway.trustClusterCAForCallbacks }}
             - --callback-ca=/var/run/kaalm/ca.crt
             {{- end }}
-            {{- if .Values.gateway.allowPrivateCallbacks }}
-            - --allow-private-callbacks
+            {{- with .Values.gateway.callbackUrl.allowlist }}
+            - --callback-url-allowlist={{ join "," . }}
             {{- end }}
           env:
             - name: POD_NAME

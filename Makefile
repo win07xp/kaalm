@@ -221,7 +221,7 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 		--set certManager.clusterResourceNamespace=cert-manager \
 		--set gateway.trustClusterCAForUpstream=true \
 		--set gateway.trustClusterCAForCallbacks=true \
-		--set gateway.allowPrivateCallbacks=true --wait --timeout 5m
+		--set 'gateway.callbackUrl.allowlist={mock-provider.e2e.svc}' --wait --timeout 5m
 
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the chart, run the suite.
