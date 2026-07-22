@@ -29,23 +29,30 @@ Two honest caveats:
 
 ## Next: v0.2.0
 
+Both headline workstreams for this release are complete.
+
 **Release machinery is done:** a tag now builds and pushes the multi-arch
 images and the OCI Helm chart and cuts the GitHub release, so `helm install`
-works without cloning the repo. The remaining v0.2.0 workstream is test
-coverage:
+works without cloning the repo.
 
-**Prove every acceptance scenario on a real cluster.** The
+**Every acceptance scenario is now proven on a real cluster.** The
 [scenarios](appendix/scenarios.md) (S1 to S15) define "done" for the design.
 v0.1.0 verified most of them at the unit or envtest level, or with a manual
-live smoke. v0.2.0 gives each scenario an automated k3d e2e spec so the
-[scenario-coverage map](appendix/scenario-coverage.md) goes all green in its
-e2e column. This is nearly complete: 14 of the 15 scenarios (S1 to S10 except
-S11, plus S12 to S15) now have e2e specs that are green locally and in CI.
-Building them also caught and fixed real defects (a no-traffic hibernation
-loop; the in-cluster async-callback path). The one remaining scenario is
-**S11** (clean teardown on delete), tracked in
-[#30](https://github.com/win07xp/kaalm/issues/30); when its e2e lands the
-column is all green and v0.2.0 ships.
+live smoke. Each one now has an automated k3d e2e spec, so the
+[scenario-coverage map](appendix/scenario-coverage.md) is all green in its e2e
+column, locally and in CI. S2 and S9 keep a scope note: their e2e proves the
+Kaalm-owned primitive, while the gVisor sandbox escape and the
+`VolumeSnapshot` step sit outside the code's test surface.
+
+Building the suite paid for itself by catching defects the unit and envtest
+layers could not: a hibernation-enabled agent that had never made an LLM call
+oscillated between `Running` and `Idle` and never hibernated, and async
+callbacks to an in-cluster receiver were blocked at three independent layers.
+Both are fixed.
+
+What remains is cutting the release itself. The open cleanups and follow-ups
+that fall out of this work are tracked in the
+[issues](https://github.com/win07xp/kaalm/issues).
 
 ## Beyond v0.2.0
 

@@ -1,0 +1,79 @@
+# Fixtures for the S11 clean-teardown e2e.
+#
+# pvcRetention lives on the AgentClass, so proving both arms needs two classes.
+# The finalizer deletes the Pod and waits for it to be fully gone, then either
+# strips the PVC's ownerRef (Retain, so cascade GC leaves it) or leaves the
+# ownerRef in place (Delete, so cascade GC removes it) before removing itself.
+#
+# idleTimeout 0s disables idle/hibernation evaluation entirely, so neither agent
+# can drift out of Running mid-test. terminationGracePeriodSeconds is short
+# because starter-go handles SIGTERM, which keeps the teardown deterministic.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s11-retain
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+    pvcRetention: Retain
+  lifecycle:
+    terminationGracePeriodSeconds: 5
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s11-delete
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+    pvcRetention: Delete
+  lifecycle:
+    terminationGracePeriodSeconds: 5
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s11-retain-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s11-retain
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s11-delete-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s11-delete
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
