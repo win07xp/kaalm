@@ -7,7 +7,6 @@
 package main
 
 import (
-	"container/list"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,7 +17,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -55,7 +53,7 @@ type agent struct {
 	healthPort string
 	gatewayCli *http.Client
 	isTask     bool
-	dedup      *dedupBuffer
+	memory     *store
 }
 
 func main() {
@@ -79,7 +77,7 @@ func main() {
 		reloader:   reloader,
 		gatewayURL: strings.TrimSuffix(os.Getenv("KAALM_GATEWAY_ENDPOINT"), "/"),
 		healthPort: healthPort,
-		dedup:      newDedupBuffer(dedupBufferSize),
+		memory:     newStore(envOr("KAALM_MEMORY_DIR", defaultMemoryDir)),
 	}
 	a.isTask = workloadIsTask(reloader.certificate())
 	a.gatewayCli = &http.Client{
@@ -163,18 +161,20 @@ func (a *agent) handleV1Message(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dedup: return the cached reply for a redelivered messageId without
-	// reprocessing (the gateway retries reuse the same id).
-	if cached, ok := a.dedup.get(env.MessageID); ok {
+	// reprocessing (the gateway retries reuse the same id). Backed by the
+	// mounted volume, so a Pod recreated by a wake still recognizes a
+	// messageId it answered before hibernating (runtime contract item 7).
+	if cached, ok := a.memory.recall(env.MessageID); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	resp, err := handleMessage(r.Context(), env)
+	resp, err := handleMessage(r.Context(), env, a.memory)
 	if err != nil {
 		http.Error(w, "handler error", http.StatusInternalServerError)
 		return
 	}
-	a.dedup.put(env.MessageID, resp)
+	a.memory.remember(env.MessageID, resp, dedupBufferSize)
 	writeJSON(w, resp)
 }
 
@@ -250,54 +250,6 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
-}
-
-// dedupBuffer is an LRU of the last N messageIds and their cached responses
-// (contract item 7). Hibernation-enabled adopters back this with the PVC.
-type dedupBuffer struct {
-	mu    sync.Mutex
-	size  int
-	order *list.List
-	items map[string]*list.Element
-}
-
-type dedupEntry struct {
-	id    string
-	reply ResponseEnvelope
-}
-
-func newDedupBuffer(size int) *dedupBuffer {
-	return &dedupBuffer{size: size, order: list.New(), items: map[string]*list.Element{}}
-}
-
-func (d *dedupBuffer) get(id string) (ResponseEnvelope, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if el, ok := d.items[id]; ok {
-		d.order.MoveToFront(el)
-		return el.Value.(*dedupEntry).reply, true
-	}
-	return ResponseEnvelope{}, false
-}
-
-func (d *dedupBuffer) put(id string, reply ResponseEnvelope) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if el, ok := d.items[id]; ok {
-		el.Value.(*dedupEntry).reply = reply
-		d.order.MoveToFront(el)
-		return
-	}
-	el := d.order.PushFront(&dedupEntry{id: id, reply: reply})
-	d.items[id] = el
-	for d.order.Len() > d.size {
-		oldest := d.order.Back()
-		if oldest == nil {
-			break
-		}
-		d.order.Remove(oldest)
-		delete(d.items, oldest.Value.(*dedupEntry).id)
-	}
 }
 
 // taskAutocompleteStatus returns the status an AgentTask should self-report on

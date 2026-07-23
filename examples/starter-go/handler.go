@@ -2,7 +2,10 @@
 
 package main
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // handleMessage is the single developer-owned extension point. Replace its
 // body with your agent logic. Everything else in this template (TLS, cert
@@ -16,12 +19,23 @@ import "context"
 //
 // To make LLM calls, POST to a.gatewayURL using the mTLS client the template
 // pre-configured (a.gatewayCli): the gateway proxies to your ModelProviders.
-func handleMessage(_ context.Context, env MessageEnvelope) (ResponseEnvelope, error) {
+func handleMessage(_ context.Context, env MessageEnvelope, memory *store) (ResponseEnvelope, error) {
+	// Count this caller's messages in the mounted volume. It is the smallest
+	// honest demonstration that state outlives the Pod: hibernate this agent
+	// and message it again, and the count continues rather than restarting.
+	// Your own agent keeps conversation history here instead.
+	count := memory.note(env.UserID)
+
+	content := "starter-go received: " + env.Content
+	if count > 1 {
+		content += fmt.Sprintf(" (message %d from you)", count)
+	}
+
 	// Reflect the caller identity and derived session id the gateway supplied,
 	// so a session-aware client can correlate replies. sessionId is present only
 	// when the AgentChannel enables session identity.
 	return ResponseEnvelope{
-		Content: "starter-go received: " + env.Content,
+		Content: content,
 		Metadata: map[string]any{
 			"userId":    env.UserID,
 			"sessionId": env.SessionID,
