@@ -53,13 +53,9 @@ Two honest caveats:
 
 ## Next
 
-The v0.2.0 workstreams are done, so the near-term list is short:
-
-- **The beginners' tutorial.** The third book (`learn/`) takes a reader from an
-  empty laptop to a running agent. It was deliberately unwritten until installs
-  were one command, which v0.2.0 delivers, so it is next.
-
-Everything else is in the backlog below.
+The v0.2.0 workstreams are done, and the beginners' tutorial (`learn/`) that
+was waiting on one-command installs is now written and walked against 0.2.0.
+The near-term list is therefore empty; what remains is the backlog below.
 
 ## Beyond
 

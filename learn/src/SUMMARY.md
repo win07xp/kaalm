@@ -10,4 +10,5 @@
 - [Talking to Your Agent](talking-to-your-agent.md)
 - [Giving It a Job](giving-it-a-job.md)
 - [Sleep and Wake](sleep-and-wake.md)
+- [Give It a Real Brain](give-it-a-real-brain.md)
 - [Where to Go Next](where-to-go-next.md)
