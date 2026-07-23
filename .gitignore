@@ -28,6 +28,9 @@ examples/starter-go/starter-go
 __pycache__/
 *.pyc
 
-# Stray root-built binaries
+# Stray root-built binaries. One entry per main package, so a root `go build`
+# of any command cannot be committed by accident (a 9.2 MB mockprovider binary
+# was, before /mockprovider was listed here).
 /gateway
 /manager
+/mockprovider
