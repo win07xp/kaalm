@@ -1,4 +1,4 @@
-# Copyright 2026. Licensed under the Apache License, Version 2.0.
+# Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 FROM python:3.12-slim
 WORKDIR /app
 COPY pyproject.toml ./

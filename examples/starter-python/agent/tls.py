@@ -1,4 +1,4 @@
-# Copyright 2026. Licensed under the Apache License, Version 2.0.
+# Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 """TLS material loading and rotation reload for the Kaalm runtime contract.
 
 The kubelet rotates a projected volume by atomically renaming the ``..data``
