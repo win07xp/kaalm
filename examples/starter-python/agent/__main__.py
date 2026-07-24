@@ -1,4 +1,4 @@
-# Copyright 2026. Licensed under the Apache License, Version 2.0.
+# Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 """Minimal Kaalm runtime-contract agent using aiohttp.
 
 Copy this directory and replace handle_message in handler.py. Everything else

@@ -1,4 +1,4 @@
-# Copyright 2026. Licensed under the Apache License, Version 2.0.
+# Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 FROM golang:1.24 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
