@@ -24,6 +24,7 @@
 # Agent Runtime
 
 - [The Runtime Contract](runtime/contract.md)
+- [Reference Base Images](runtime/base-images.md)
 - [Starter Templates](runtime/starter-templates.md)
 - [Child Resources](runtime/child-resources.md)
 

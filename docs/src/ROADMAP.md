@@ -55,7 +55,25 @@ Two honest caveats:
 
 The v0.2.0 workstreams are done, and the beginners' tutorial (`learn/`) that
 was waiting on one-command installs is now written and walked against 0.2.0.
-The near-term list is therefore empty; what remains is the backlog below.
+
+The current milestone is **v0.3.0, "the on-ramp"**, tracked in the
+[v0.3.0 GitHub milestone](https://github.com/win07xp/kaalm/milestone/2)
+(umbrella issue [#46](https://github.com/win07xp/kaalm/issues/46)):
+
+- **Reference base images**, now designed in
+  [Reference Base Images](runtime/base-images.md): published `kaalm-agent-go`
+  and `kaalm-agent-python` images embedding the runtime contract, a
+  `spec.handler` ConfigMap mount gated by
+  `AgentClass.spec.image.allowHandlerMounts` (validation rules 30 and 31), and
+  acceptance scenario S16. Implementation and the e2e proof are in flight.
+- **Hard budget enforcement** (opt-in; soft limits stay the default), design
+  pending.
+- **The tool plane design chapter** (gateway-brokered MCP tool access), design
+  pending; implementation is the v0.4.0 milestone.
+
+Beyond v0.3.0, the milestone runway to v1.0.0 is laid out in the
+[GitHub milestones](https://github.com/win07xp/kaalm/milestones); items below
+remain the unscheduled backlog.
 
 ## Beyond
 
@@ -69,9 +87,6 @@ they are likely to matter:
 - **Platform channel adapters.** Discord and WhatsApp adapters for the user
   gateway (the v1 channel type is the generic webhook only); see
   [Future platform types](resources/agentchannel.md#future-platform-types-v11).
-- **Reference base images.** Published container images wrapping the runtime
-  contract, replacing copy-the-starter-template as the primary on-ramp; see
-  [Starter Templates](runtime/starter-templates.md).
 - **Agent Sandbox integration.** The `agentSandbox` runtime backend for
   code-executing agents.
 - **Observability deepening.** Concrete Grafana dashboard JSON for the shipped

@@ -8,12 +8,12 @@ The design book is the spec: it documents exactly how the system works. Start at
 
 - `concepts/` - vision, core concepts, personas, system architecture, tenancy and tiers
 - `resources/` - one page per CRD, plus the 29 cross-resource validation rules
-- `runtime/` - the BYO-image runtime contract, starter templates, child resources
+- `runtime/` - the runtime contract, reference base images, starter templates, child resources
 - `gateways/` - gateway overview, `api/` (HTTP wire contract), `llm/`, `user/`
 - `controller/` - operator structure, reconcilers, lifecycles, finalizers
 - `security/` - trust model, RBAC, credentials, TLS, threat model
 - `operations/` - deployment (Helm), observability
-- `appendix/` - S1 to S15 acceptance scenarios and the scenario-coverage map
+- `appendix/` - S1 to S16 acceptance scenarios and the scenario-coverage map
 
 ## Single-sourced facts
 

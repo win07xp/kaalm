@@ -1,6 +1,6 @@
 # Acceptance Scenarios
 
-These scenarios are concrete enough to double as acceptance criteria for v1: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. S1 through S5 belong to Priya, the platform engineer who provisions the capability. S6 through S11 belong to Dev, the application developer who deploys agents. S12 through S15 cover channel integration, where external systems talk to agents through the User Gateway. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
+These scenarios are concrete enough to double as acceptance criteria for v1: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. S1 through S5 belong to Priya, the platform engineer who provisions the capability. S6 through S11 belong to Dev, the application developer who deploys agents. S12 through S15 cover channel integration, where external systems talk to agents through the User Gateway. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused: S16, added with the v0.3.0 base-image design, extends Dev's group. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
 
 ## S1: Install Kaalm and Offer a Standard Agent Class
 
@@ -70,6 +70,14 @@ Same flow as [S7](#s7-hibernate-an-idle-agent-and-wake-it-automatically-on-the-f
 
 Dev creates an `AgentChannel` for a coding agent that typically takes 5-10 minutes to process requests. He sets `spec.webhook.responseMode: async` and configures `spec.webhook.callbackUrl` pointing at his CI system's webhook receiver. When a ticket system POSTs a coding request, the gateway immediately returns HTTP 202 with a `requestId`. The coding agent processes the request, generates a fix, and responds. The gateway POSTs the agent's response (including the PR URL) to the CI system's callback URL. If the CI system is unreachable, Dev can poll `GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}` as a fallback (the `channelPath` value from the 202 response is passed back as the `channelPath` query parameter on poll requests).
 
+## S16: Deploy a First Agent Without Building an Image
+
+Priya wants developers experimenting with agents without each one standing up a build pipeline, but she is not willing to let ConfigMap-sourced code into the production classes. She creates an `AgentClass` named `starter` with `image.allowHandlerMounts: true` and an `allowedImages` list containing only the published reference base images.
+
+Dev writes a twenty-line `handler.py` defining `handle_message(envelope)` and creates it as a ConfigMap: `kubectl create configmap greeter-handler --from-file=handler.py`. He applies an Agent referencing `agentclass/starter`, `image: ghcr.io/win07xp/kaalm-agent-python:<version>`, and `spec.handler.configMapRef.name: greeter-handler`, plus an AgentChannel, and POSTs a message to the channel URL. The reply comes from his handler. No Dockerfile, no registry, no build ran anywhere; the whole loop was `kubectl`.
+
+To ship a change, he creates `greeter-handler-v2` and repoints `spec.handler.configMapRef.name`; the Pod is replaced and answers with the new behavior, and repointing back is an instant rollback. When his handler needs a dependency the base image does not bundle, he graduates to the `FROM` pattern ([Reference Base Images](../runtime/base-images.md)) without touching the contract plumbing.
+
 ## Design Implications
 
 These scenarios drive specific design requirements:
@@ -82,6 +90,7 @@ These scenarios drive specific design requirements:
 - **S9** is not a v1 acceptance criterion but informs the resource model: task and persistent agents should be built from shared primitives. v1 ships the enabling mount primitive, [`Agent.spec.persistence.existingClaim`](../resources/agent.md) (validation rule 27); snapshotting itself is standard Kubernetes `VolumeSnapshot`, not Kaalm machinery.
 - **S10** requires the controller to surface ModelProvider errors as Agent status conditions.
 - **S11** requires finalizers and the configurable `AgentClass.spec.persistence.pvcRetention` field (`Delete | Retain`), which is distinct from the Kubernetes `PersistentVolume.persistentVolumeReclaimPolicy` and operates independently.
-- **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener. Discord and WhatsApp adapters are deferred to v1.1. For S12 specifically, the recommended v1 path is to start from one of the starter templates (see [Starter Templates](../runtime/starter-templates.md)) and replace the agent logic: the template already implements the runtime contract (HTTPS serving, client-cert mTLS, cert-file reload, `messageId` dedup).
+- **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener. Discord and WhatsApp adapters are deferred to v1.1. For S12 specifically, the recommended path since v0.3.0 is a [reference base image](../runtime/base-images.md) with a mounted handler (S16); the [starter templates](../runtime/starter-templates.md) remain the path for agents that outgrow it. Either way the runtime contract (HTTPS serving, client-cert mTLS, cert-file reload, `messageId` dedup) comes implemented.
 - **S14** requires the gateway's authenticated activator to integrate with the User Gateway path for wake-on-demand of hibernated agents.
 - **S15** requires the User Gateway to support async webhook response mode with callback delivery and a polling fallback endpoint.
+- **S16** requires the published reference base images, the `Agent.spec.handler` ConfigMap reference with its `$KAALM_HANDLER_PATH` injection, and the `AgentClass.spec.image.allowHandlerMounts` gate (validation rules 30 and 31). See [Reference Base Images](../runtime/base-images.md).
