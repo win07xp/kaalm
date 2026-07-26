@@ -195,6 +195,31 @@ spec:
                   - name
                   type: object
                 type: array
+              handler:
+                description: |-
+                  Handler references a developer-owned ConfigMap holding handler source
+                  for a reference base image (docs/src/runtime/base-images.md). It is
+                  mounted read-only at /opt/kaalm/handler with KAALM_HANDLER_PATH injected.
+                  Requires AgentClass.spec.image.allowHandlerMounts=true (rule 30); the
+                  ConfigMap must exist in the Agent's namespace (rule 31). Content is not
+                  tracked: edits land on the next Pod creation, repointing the name
+                  replaces the Pod.
+                properties:
+                  configMapRef:
+                    description: |-
+                      ConfigMapRef names a ConfigMap in the Agent's namespace whose keys are
+                      mounted as files under /opt/kaalm/handler.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - configMapRef
+                type: object
               image:
                 description: Image overrides the class default image (subject to the
                   class allowlist).

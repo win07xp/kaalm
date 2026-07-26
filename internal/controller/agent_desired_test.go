@@ -302,3 +302,88 @@ func TestDesiredPVC_ZeroSizeDefaults(t *testing.T) {
 		t.Errorf("zero size must default to 1Gi, got %s", q.String())
 	}
 }
+
+func TestDeriveEffectiveSpec_Handler(t *testing.T) {
+	class := &kaalmv1alpha1.AgentClass{}
+	agent := &kaalmv1alpha1.Agent{Spec: kaalmv1alpha1.AgentSpec{
+		Handler: &kaalmv1alpha1.AgentHandler{
+			ConfigMapRef: kaalmv1alpha1.LocalObjectReference{Name: "greeter-handler"},
+		},
+	}}
+	if eff := deriveEffectiveSpec(agent, class); eff.HandlerConfigMap != "greeter-handler" {
+		t.Errorf("HandlerConfigMap = %q, want greeter-handler", eff.HandlerConfigMap)
+	}
+	if eff := deriveEffectiveSpec(&kaalmv1alpha1.Agent{}, class); eff.HandlerConfigMap != "" {
+		t.Errorf("HandlerConfigMap = %q for a handler-less Agent, want empty", eff.HandlerConfigMap)
+	}
+}
+
+func TestDesiredPod_HandlerMount(t *testing.T) {
+	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+
+	// With a handler: the ConfigMap volume, its read-only mount at the
+	// contract path, and KAALM_HANDLER_PATH must all be present.
+	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, HandlerConfigMap: "greeter-handler"}
+	pod := desiredPod(agent, eff, "kaalm-system")
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == handlerVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil || vol.ConfigMap == nil || vol.ConfigMap.Name != "greeter-handler" {
+		t.Fatalf("handler volume missing or wrong: %+v", pod.Spec.Volumes)
+	}
+	var mount *corev1.VolumeMount
+	for i, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == handlerVolumeName {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil || mount.MountPath != handlerMountPath || !mount.ReadOnly {
+		t.Fatalf("handler mount missing or wrong: %+v", pod.Spec.Containers[0].VolumeMounts)
+	}
+	envMap := map[string]string{}
+	for _, e := range pod.Spec.Containers[0].Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["KAALM_HANDLER_PATH"] != handlerMountPath {
+		t.Errorf("KAALM_HANDLER_PATH = %q, want %q", envMap["KAALM_HANDLER_PATH"], handlerMountPath)
+	}
+
+	// Without a handler: none of the three may appear. The env var's absence
+	// is the default-handler signal for base images.
+	pod = desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-system")
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == handlerVolumeName {
+			t.Error("handler volume present on a handler-less Agent")
+		}
+	}
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == "KAALM_HANDLER_PATH" {
+			t.Error("KAALM_HANDLER_PATH injected on a handler-less Agent")
+		}
+	}
+}
+
+func TestPodSpecHash_HandlerRepoint(t *testing.T) {
+	base := effectiveAgentSpec{Image: "img:v1"}
+	withV1 := base
+	withV1.HandlerConfigMap = "greeter-v1"
+	withV2 := base
+	withV2.HandlerConfigMap = "greeter-v2"
+
+	// Repointing the reference is Pod-replacing spec drift.
+	if podSpecHash(withV1) == podSpecHash(withV2) {
+		t.Error("hash unchanged after handler ConfigMap repoint")
+	}
+	if podSpecHash(base) == podSpecHash(withV1) {
+		t.Error("hash unchanged after adding a handler")
+	}
+	// Handler is omitempty in the hashable subset, so handler-less hashes are
+	// what they were before the field existed.
+	if podSpecHash(base) != podSpecHash(effectiveAgentSpec{Image: "img:v1"}) {
+		t.Error("handler-less hash not stable")
+	}
+}
