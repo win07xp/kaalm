@@ -38,15 +38,16 @@ repeat
 backward:requeue with backoff,\ndo NOT create the Pod;
 repeat while (Certificate Ready=True?) is (no) not (yes)
 
-if (5. every imagePullSecret exists\nin the Agent's namespace?) then (no)
+if (5. every imagePullSecret, and the\nspec.handler ConfigMap if set, exists\nin the Agent's namespace?) then (no)
   :Ready=False
-  reason=ImagePullSecretMissing
+  reason=ImagePullSecretMissing or
+  HandlerConfigMapNotFound
   Pod creation skipped;<<$mutedBg>>
   stop
 else (yes)
 endif
 
-if (5. persistence and hibernation\ncross-checks pass?) then (no)
+if (5. persistence, hibernation, and\nhandler-mount cross-checks pass?) then (no)
   :phase=Degraded
   record preDegradedPhase
   Pod and PVC not created;<<$ctrlBg>>
@@ -55,6 +56,7 @@ if (5. persistence and hibernation\ncross-checks pass?) then (no)
     PersistenceNotAllowed
     HibernationNotAllowed
     HibernationRequiresPersistence
+    HandlerMountNotAllowed
   end note
   stop
 else (yes)

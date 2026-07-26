@@ -3,9 +3,10 @@
 ## Project Overview
 
 **Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
-type. v0.1.0 released 2026-07-21, feature-complete against the v1 design. Next
-milestone (v0.2.0): full S1-S15 e2e coverage and release machinery; see
-`docs/src/ROADMAP.md`.
+type. v0.2.0 released 2026-07-22: one-command install and all acceptance
+scenarios e2e-proven. Current milestone (v0.3.0, "the on-ramp", umbrella issue
+#46): reference base images, hard budget enforcement, tool plane design; see
+`docs/src/ROADMAP.md` and the GitHub milestones.
 
 - API group: `kaalm.io` | Version: `v1alpha1`
 - Stack: Go, controller-runtime (kubebuilder), Helm

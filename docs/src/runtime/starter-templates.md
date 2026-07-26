@@ -1,6 +1,6 @@
 # Starter Templates
 
-Starter templates are minimal, working implementations of the [Agent Runtime Contract](contract.md), intended to be copied and modified. They are **not** a framework and not a published base image. Developers own the copy after `cp`.
+Starter templates are minimal, working implementations of the [Agent Runtime Contract](contract.md), intended to be adapted when an agent outgrows the [reference base images](base-images.md). Since v0.3.0 the base images are the primary on-ramp; the templates are the rung below full custom images, for developers who need to restructure the runtime itself rather than just supply a handler. They are **not** a framework. Developers own their copy.
 
 Two templates ship with v1:
 
@@ -111,11 +111,13 @@ Each template's README contains:
 - The environment variables the template expects: the runtime-contract set (`$KAALM_*`) plus one template-specific toggle, `KAALM_TEMPLATE_HEARTBEAT` (`auto` default, which emits in Agent mode only; set `off` to suppress it entirely, see item 9).
 - A "what to change" checklist pointing at the single handler function.
 
-## Relationship to published base images
+## Relationship to the reference base images
 
-Kaalm v1 ships starter templates instead of published reference base images. A full-featured base image (a container image wrapping the runtime contract with a pinned language runtime and stable ABI) is planned for v1.1. The tradeoff:
+Kaalm v1 and v0.2.0 shipped starter templates instead of published base images, and the templates were then independent copies of the contract code. v0.3.0 ships the [reference base images](base-images.md) and inverts that relationship: the contract runtime is **single-sourced** in the image source, and the templates are thin consumers of it rather than copies.
 
-- **Starter template (v1)**: copy-the-code pattern. Developers own the resulting image. Easier to customize, harder to patch across a fleet.
-- **Base image (v1.1)**: inherit-and-extend pattern. Central team owns contract compliance and can patch all consumers with a single image bump. Requires stable ABI and published versioning.
+- **The Python template** is a `FROM ghcr.io/win07xp/kaalm-agent-python` build: its own code is the `handler.py` and the Dockerfile. It exists as the worked example of the `FROM` rung (extra dependencies, handlers past the ConfigMap size cap).
+- **The Go template** imports the published Go runtime module instead of vendoring the plumbing: its own code is `main.go` wiring a handler into the runtime. It exists as the worked example of restructuring the runtime while keeping the contract.
 
-The runtime contract itself is stable across both patterns, so v1.1 base images will accept the same `handleMessage` signature the templates use.
+A contract fix therefore lands once, in the runtime source, and reaches mount-and-run users on the next image pull, `FROM` users on their next rebuild, and template users on their next module update. The full on-ramp ladder, and when to step down it, is the ranking table in [Reference Base Images](base-images.md#relationship-to-the-starter-templates).
+
+The runtime contract is the invariant across every rung: base images and templates alike accept the same `handleMessage` signature.

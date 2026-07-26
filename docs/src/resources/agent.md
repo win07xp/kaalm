@@ -25,6 +25,16 @@ spec:
     - name: LOG_LEVEL
       value: "info"
 
+  # Optional: handler source for a reference base image. The controller
+  # mounts the named ConfigMap read-only at /opt/kaalm/handler and injects
+  # KAALM_HANDLER_PATH. Requires the referenced AgentClass to have
+  # image.allowHandlerMounts=true (rule 30), and the ConfigMap must exist
+  # in this namespace (rule 31); see Cross-Resource Validation and the
+  # design notes below. Agent-only: AgentTask has no handler field.
+  # handler:
+  #   configMapRef:
+  #     name: greeter-handler
+
   # ModelProviders this agent uses.
   # Optional: omit entirely for agents that do not call LLM providers
   # (e.g., sub-agents, coding agents with IDE integration, pure webhook handlers).
@@ -147,6 +157,16 @@ Mounts a pre-existing PVC instead of provisioning one. This is the enabler for p
 - `maxSizeGi` is not enforced against pre-existing claims; platform teams bound those with namespace ResourceQuota.
 - The reconciler does **not** add an ownerRef to a pre-existing PVC, so `pvcRetention` never applies to it: the Agent finalizer only manages PVCs Kaalm provisioned, and an `existingClaim` PVC survives Agent deletion under either `pvcRetention` setting.
 - AgentTask does not support `existingClaim` in v1; task scratch storage is always task-owned.
+
+### `spec.handler` is a reference, not a volume mount
+
+The Agent spec deliberately exposes no general-purpose volume mounts, and `spec.handler` does not change that. It is a single-purpose reference consumed by the [reference base images](../runtime/base-images.md): the AgentReconciler mounts the named ConfigMap read-only at `/opt/kaalm/handler`, injects `$KAALM_HANDLER_PATH`, and does nothing else with it. Constraints:
+
+- The referenced AgentClass must set `image.allowHandlerMounts: true` (rule 30, default `false`). `allowedImages` is an image review boundary, and a mounted handler injects code into an image that review already approved, so the capability is a per-class grant. Violations degrade the Agent (`reason=HandlerMountNotAllowed`) with the same recoverable handling as rules 24, 26, and 29.
+- The ConfigMap must exist in the Agent's namespace at reconcile time (rule 31), else `Ready=False, reason=HandlerConfigMapNotFound` and the Pod is not created, the same surfacing as rules 23 and 27.
+- The reconciler adds **no ownerRef** to the ConfigMap. It is developer-owned and survives Agent deletion, exactly like an `existingClaim` PVC.
+- ConfigMap **content** is not tracked. Handler source is read at container start; edits land on the next Pod creation (manual delete, wake from hibernation, involuntary recreate, or drift replacement). Repointing `configMapRef.name` at a new ConfigMap is ordinary Pod-replacing spec drift and is the clean redeploy path. See [Handler update semantics](../runtime/base-images.md#handler-update-semantics).
+- The field exists only on the Agent schema. An AgentTask's work is its whole program, not a resident message handler; see [Task mode](../runtime/base-images.md#task-mode).
 
 ### `service` is always ClusterIP
 

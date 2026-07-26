@@ -34,6 +34,14 @@ spec:
       - "ghcr.io/myorg/agents/*:v*"
     # Default image if the Agent spec does not provide one.
     defaultImage: "registry.internal.corp/agents/base:v1"
+    # Whether Agents of this class may mount a handler ConfigMap into a
+    # reference base image (Agent.spec.handler). Default false: a mounted
+    # handler injects code into an image this allowlist already approved,
+    # so the capability is an explicit per-class grant. An Agent with
+    # spec.handler set against a class where this is false is moved to
+    # phase=Degraded (reason=HandlerMountNotAllowed) at reconcile time.
+    # See rule 30 in Cross-Resource Validation.
+    allowHandlerMounts: false
     pullPolicy: IfNotPresent
     imagePullSecrets:
       - name: registry-credentials
@@ -157,6 +165,10 @@ The `Ready` condition reports whether every reference the class makes (its `allo
 AgentClass-derived per-Agent PVCs carry an ownerRef back to the Agent, like other [child resources](../runtime/child-resources.md). That means the default Kubernetes cascade garbage collection removes the PVC when the Agent is deleted.
 
 To honor `Retain`, the Agent finalizer strips the PVC's ownerRef before the Agent's own finalizer is removed; cascade GC then leaves the PVC untouched. When the policy is `Delete`, the finalizer leaves the ownerRef in place and cascade GC removes the PVC. See [Finalizers](../controller/finalizers.md).
+
+### `allowHandlerMounts` guards the image review boundary, not code execution
+
+Anyone who can create an Agent can already run arbitrary code: any image matching `allowedImages`. What a mounted handler ([`Agent.spec.handler`](agent.md), consumed by the [reference base images](../runtime/base-images.md)) uniquely adds is code that *bypasses* image review: the platform team allowlisted `kaalm-agent-python`, not the handler source injected into it. `allowHandlerMounts` therefore defaults to `false`, and enabling it is the class-level statement that, for workloads of this category, namespace-level ConfigMap authorship is an acceptable code provenance. Classes for production fleets built from reviewed images leave it off; a starter or development class turns it on. Enforcement is rule 30 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation), with the same recoverable `Degraded` handling as the persistence and hibernation gates, including on class drift: flipping this to `false` on a live class degrades existing Agents that mount handlers.
 
 ### Image pattern glob semantics
 

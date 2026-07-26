@@ -1,6 +1,6 @@
 # Scenario Coverage
 
-The [acceptance scenarios](scenarios.md) S1 to S15 are the north-star
+The [acceptance scenarios](scenarios.md) S1 to S16 are the north-star
 definition of "done". This page maps each scenario to the implemented behavior
 that exercises it and the automated tests that verify it, so the acceptance
 surface is auditable rather than aspirational.
@@ -19,8 +19,10 @@ Coverage is one of four kinds:
   built it (recorded in the commit message). The v0.2.0 e2e specs below now
   automate what these smokes checked once.
 
-The **e2e** column is the v0.2.0 acceptance surface: every scenario points at
-the spec that proves it on a cluster, and every scenario is green.
+The **e2e** column is the acceptance surface. S1 to S15 form the v0.2.0
+surface: every one points at the spec that proves it on a cluster, and every
+one is green. S16 was added with the v0.3.0 base-image design and its row
+fills in as that milestone's implementation lands.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -39,6 +41,7 @@ the spec that proves it on a cluster, and every scenario is green.
 | S13 Generic webhook exposure | `Golden path` (delivers a sync webhook and returns the reply) | Unit `TestWebhook_ExtractorsAndBadJSON` |
 | S14 Webhook for a hibernated agent | `Hibernate and wake` (S14: `wake_timeout` payload on the polling endpoint) | Unit `TestWebhook_Async*` |
 | S15 Async webhook for a long-running agent | `Session identity and async callback` (S15: 202, signed callback to the receiver, polling fallback) | Unit `TestWebhook_AsyncAcceptAndPoll`, `TestWebhook_AsyncCallbackDelivery` |
+| S16 Zero-build on-ramp (base image + mounted handler) | Pending: designed in [Reference Base Images](../runtime/base-images.md), lands with the v0.3.0 base-image work ([#55](https://github.com/win07xp/kaalm/issues/55)) | Pending: handler-loader unit tests; envtest for rules 30/31 |
 
 The LLM-proxy scenarios (S4, S10, S15) are exercised against an in-cluster mock
 upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy

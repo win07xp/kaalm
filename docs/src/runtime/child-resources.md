@@ -39,6 +39,8 @@ All of the resources above live in the same namespace as the Agent CR, and the r
 
 **There is no per-Agent configuration ConfigMap.** Non-sensitive config (gateway endpoint, ports) is delivered as env vars injected at Pod creation, and config changes are Pod-replacing spec drift by design. The same model applies to AgentTask.
 
+The handler ConfigMap referenced by [`Agent.spec.handler`](../resources/agent.md) is not an exception to this: the controller never creates it. It is a developer-owned ConfigMap that the reconciler mounts read-only, carrying **no ownerRef**, exactly like a `persistence.existingClaim` PVC: referenced, not owned. It survives Agent deletion, and its content is not tracked, so an in-place edit reaches the container only on the next Pod creation, including a wake from hibernation. See [Reference Base Images](base-images.md#handler-update-semantics) and rule 31 in [Cross-Resource Validation](../resources/validation-and-defaulting.md#cross-resource-validation).
+
 ### What survives hibernation
 
 On `Hibernated`, only the Pod is deleted. The PVC, per-Agent `Certificate` (and its Secret), Service (with no endpoints), ServiceAccount, and NetworkPolicy are all retained, so that wake-on-demand can recreate the Pod against unchanged identity and storage. See [Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics).
