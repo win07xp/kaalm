@@ -31,6 +31,12 @@ jobs:
       - name: Unit and envtest suites (with 85% coverage gate)
         run: make cover-check
 
+      - name: Python base image unit suite (docker test stage)
+        run: make python-test
+
+      - name: Python base image contract smoke (real container, mTLS matrix)
+        run: make python-smoke PYTHON_AGENT_IMG=kaalm-agent-python:ci
+
   lint:
     runs-on: ubuntu-latest
     steps:
