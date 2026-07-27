@@ -95,6 +95,8 @@ const (
 	ReasonHibernationRequiresPersist = "HibernationRequiresPersistence"
 	ReasonImagePullSecretMissing     = "ImagePullSecretMissing"
 	ReasonExistingClaimNotFound      = "ExistingClaimNotFound"
+	ReasonHandlerMountNotAllowed     = "HandlerMountNotAllowed"
+	ReasonHandlerConfigMapNotFound   = "HandlerConfigMapNotFound"
 	ReasonWakeIgnored                = "WakeIgnored"
 	ReasonPodRunning                 = "PodRunning"
 	ReasonAllProvidersHealthy        = "AllProvidersHealthy"

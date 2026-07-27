@@ -298,6 +298,41 @@ func TestAgent_ExistingClaimNotFound(t *testing.T) {
 	expectAgentReadyReason(t, "claim-agent", kaalmv1alpha1.ReasonExistingClaimNotFound)
 }
 
+func TestAgent_HandlerConfigMapNotFoundGatesAndRecovers(t *testing.T) {
+	mkWorkloadClass(t, "wc-hcm", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.Image.AllowHandlerMounts = true
+	})
+	mkWorkloadAgent(t, "hcm-agent", "wc-hcm", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Handler = &kaalmv1alpha1.AgentHandler{
+			ConfigMapRef: kaalmv1alpha1.LocalObjectReference{Name: "hcm-handler"},
+		}
+	})
+	// Rule 31: a clear condition, not a Pod wedged on a missing volume source.
+	expectAgentReadyReason(t, "hcm-agent", kaalmv1alpha1.ReasonHandlerConfigMapNotFound)
+
+	// Creating the ConfigMap recovers the gate.
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "hcm-handler", Namespace: "default"},
+		Data:       map[string]string{"handler.py": "def handle_message(envelope): ..."},
+	}
+	if err := testClient.Create(ctxT(), cm); err != nil {
+		t.Fatalf("create handler configmap: %v", err)
+	}
+	expectAgentReadyReason(t, "hcm-agent", "CertificateNotReady")
+
+	// The reconciler never takes ownership of the developer's ConfigMap.
+	eventually(t, func() error {
+		var got corev1.ConfigMap
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hcm-handler"}, &got); err != nil {
+			return err
+		}
+		if len(got.OwnerReferences) != 0 {
+			return errString("handler ConfigMap must carry no ownerRef")
+		}
+		return nil
+	})
+}
+
 // ---- Degraded paths ----
 
 func TestAgent_ImageNotAllowedDegrades(t *testing.T) {
@@ -386,6 +421,46 @@ func TestAgent_HibernationNotAllowedDegrades(t *testing.T) {
 	expectAgentReadyReason(t, "hib2-agent", kaalmv1alpha1.ReasonHibernationNotAllowed)
 }
 
+func TestAgent_HandlerMountNotAllowedDegradesAndRecovers(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "hm-handler", Namespace: "default"},
+		Data:       map[string]string{"handler.py": "def handle_message(envelope): ..."},
+	}
+	if err := testClient.Create(ctxT(), cm); err != nil {
+		t.Fatalf("create handler configmap: %v", err)
+	}
+	mkWorkloadClass(t, "wc-hm", nil) // allowHandlerMounts defaults to false
+	mkWorkloadAgent(t, "hm-agent", "wc-hm", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Handler = &kaalmv1alpha1.AgentHandler{
+			ConfigMapRef: kaalmv1alpha1.LocalObjectReference{Name: "hm-handler"},
+		}
+	})
+	// Rule 30: the class is the authority on ConfigMap-sourced code.
+	expectAgentPhase(t, "hm-agent", kaalmv1alpha1.AgentDegraded)
+	expectAgentReadyReason(t, "hm-agent", kaalmv1alpha1.ReasonHandlerMountNotAllowed)
+
+	// The platform team grants the capability: the Agent recovers, the same
+	// class-drift path that degrades when the gate is flipped off.
+	eventually(t, func() error {
+		var ac kaalmv1alpha1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-hm"}, &ac); err != nil {
+			return err
+		}
+		ac.Spec.Image.AllowHandlerMounts = true
+		return testClient.Update(ctxT(), &ac)
+	})
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, "hm-agent")
+		if ag.Status.Phase == kaalmv1alpha1.AgentDegraded {
+			return errString("still Degraded")
+		}
+		if ag.Status.PreDegradedPhase != "" {
+			return errString("preDegradedPhase not cleared")
+		}
+		return nil
+	})
+}
+
 // ---- Drift and disruption ----
 
 // provisionRunningAgent drives an agent to Running and returns its Pod.
@@ -449,6 +524,75 @@ func TestAgent_SpecDriftReplacesPod(t *testing.T) {
 			return errString("replacement pod has the old hash")
 		}
 		return nil
+	})
+}
+
+func TestAgent_HandlerRepointReplacesPod(t *testing.T) {
+	for _, name := range []string{"greeter-v1", "greeter-v2"} {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Data:       map[string]string{"handler.py": "def handle_message(envelope): ..."},
+		}
+		if err := testClient.Create(ctxT(), cm); err != nil {
+			t.Fatalf("create handler configmap %s: %v", name, err)
+		}
+	}
+	mkWorkloadClass(t, "wc-repoint", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.Image.AllowHandlerMounts = true
+	})
+	mkWorkloadAgent(t, "repoint-agent", "wc-repoint", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Handler = &kaalmv1alpha1.AgentHandler{
+			ConfigMapRef: kaalmv1alpha1.LocalObjectReference{Name: "greeter-v1"},
+		}
+	})
+	markCertReady(t, "repoint-agent")
+	eventually(t, func() error {
+		if agentPod(t, "repoint-agent") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	oldPod := agentPod(t, "repoint-agent")
+	markPodReady(t, oldPod)
+	expectAgentPhase(t, "repoint-agent", kaalmv1alpha1.AgentRunning)
+	oldHash := oldPod.Annotations["kaalm.io/pod-spec-hash"]
+
+	// Repointing the reference is ordinary Pod-replacing spec drift: the
+	// versioned-ConfigMap rollout pattern from the design book.
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, "repoint-agent")
+		ag.Spec.Handler.ConfigMapRef.Name = "greeter-v2"
+		return testClient.Update(ctxT(), ag)
+	})
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if got.DeletionTimestamp.IsZero() {
+			return errString("old pod not yet marked for deletion")
+		}
+		forceDeletePod(t, &got)
+		return nil
+	})
+	eventually(t, func() error {
+		pod := agentPod(t, "repoint-agent")
+		if pod == nil {
+			return errString("no replacement pod yet")
+		}
+		if pod.Name == oldPod.Name || pod.Annotations["kaalm.io/pod-spec-hash"] == oldHash {
+			return errString("pod not replaced by the repoint")
+		}
+		for _, v := range pod.Spec.Volumes {
+			if v.ConfigMap != nil && v.ConfigMap.Name == "greeter-v2" {
+				return nil
+			}
+		}
+		return errString("replacement pod does not mount greeter-v2")
 	})
 }
 

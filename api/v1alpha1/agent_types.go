@@ -39,6 +39,15 @@ type AgentSpec struct {
 	// Env are extra environment variables merged with the injected KAALM_* set.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
+	// Handler references a developer-owned ConfigMap holding handler source
+	// for a reference base image (docs/src/runtime/base-images.md). It is
+	// mounted read-only at /opt/kaalm/handler with KAALM_HANDLER_PATH injected.
+	// Requires AgentClass.spec.image.allowHandlerMounts=true (rule 30); the
+	// ConfigMap must exist in the Agent's namespace (rule 31). Content is not
+	// tracked: edits land on the next Pod creation, repointing the name
+	// replaces the Pod.
+	// +optional
+	Handler *AgentHandler `json:"handler,omitempty"`
 	// Providers lists the ModelProviders this agent may call. Omit for agents
 	// that make no LLM calls.
 	// +optional
@@ -67,6 +76,17 @@ type AgentProviderReference struct {
 	// ProviderRef names the ModelProvider.
 	// +kubebuilder:validation:Required
 	ProviderRef LocalObjectReference `json:"providerRef"`
+}
+
+// AgentHandler references the handler source consumed by a reference base
+// image. The reconciler never owns or tracks the ConfigMap: no ownerRef is
+// added, and it survives Agent deletion (rules 30 and 31,
+// docs/src/resources/validation-and-defaulting.md).
+type AgentHandler struct {
+	// ConfigMapRef names a ConfigMap in the Agent's namespace whose keys are
+	// mounted as files under /opt/kaalm/handler.
+	// +kubebuilder:validation:Required
+	ConfigMapRef LocalObjectReference `json:"configMapRef"`
 }
 
 // AgentPersistence requests durable state. sizeGi and existingClaim are mutually

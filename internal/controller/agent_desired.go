@@ -54,6 +54,12 @@ const (
 	tlsKeyKey     = "tls.key"
 	caCertKey     = "ca.crt"
 
+	// The handler ConfigMap mount consumed by the reference base images.
+	// Deliberately outside /var/run/kaalm, which belongs to the projected TLS
+	// volume and its rotation watch (docs/src/runtime/base-images.md).
+	handlerVolumeName = "kaalm-handler"
+	handlerMountPath  = "/opt/kaalm/handler"
+
 	// Selector keys used when synthesizing NetworkPolicy peers.
 	labelKeyNamespaceName = "kubernetes.io/metadata.name"
 	labelKeyComponent     = "app.kubernetes.io/component"
@@ -99,6 +105,7 @@ type effectiveAgentSpec struct {
 	PodLabels        map[string]string
 	PodAnnotations   map[string]string
 	Providers        []string
+	HandlerConfigMap string
 
 	// Lifecycle knobs, defaulted from the class and capped by it.
 	IdleTimeout        time.Duration
@@ -156,6 +163,9 @@ func deriveEffectiveSpec(agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentC
 	}
 	for _, p := range agent.Spec.Providers {
 		eff.Providers = append(eff.Providers, p.ProviderRef.Name)
+	}
+	if agent.Spec.Handler != nil {
+		eff.HandlerConfigMap = agent.Spec.Handler.ConfigMapRef.Name
 	}
 
 	// Lifecycle: agent values default from the class and are capped by it.
@@ -231,8 +241,10 @@ func namespaceAllowed(ns string, allowed []string) bool {
 }
 
 // hashableSpec is the replacement-triggering subset of the derived Pod spec:
-// image, resources, command, args, env, provider wiring. Only these fields
-// participate in drift detection.
+// image, resources, command, args, env, provider wiring, and handler-mount
+// wiring (the ConfigMap name, never its content). Only these fields
+// participate in drift detection. Handler carries omitempty so the hash of
+// every pre-existing handler-less Agent is unchanged by the field's addition.
 type hashableSpec struct {
 	Image     string                      `json:"image"`
 	Command   []string                    `json:"command,omitempty"`
@@ -240,6 +252,7 @@ type hashableSpec struct {
 	Env       []corev1.EnvVar             `json:"env,omitempty"`
 	Resources corev1.ResourceRequirements `json:"resources"`
 	Providers []string                    `json:"providers,omitempty"`
+	Handler   string                      `json:"handler,omitempty"`
 }
 
 // podSpecHash returns the drift-detection hash for an effective spec.
@@ -253,6 +266,7 @@ func podSpecHash(eff effectiveAgentSpec) string {
 		Env:       eff.Env,
 		Resources: eff.Resources,
 		Providers: providers,
+		Handler:   eff.HandlerConfigMap,
 	}
 	raw, err := json.Marshal(h)
 	if err != nil {
@@ -373,6 +387,11 @@ func desiredPod(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec, operatorName
 		{Name: "KAALM_TLS_CERT", Value: tlsMountPath + "/tls.crt"},
 		{Name: "KAALM_TLS_KEY", Value: tlsMountPath + "/tls.key"},
 	}
+	// Injected iff a handler is configured: its absence is how a base image
+	// knows to serve the built-in default handler (docs/src/runtime/base-images.md).
+	if eff.HandlerConfigMap != "" {
+		env = append(env, corev1.EnvVar{Name: "KAALM_HANDLER_PATH", Value: handlerMountPath})
+	}
 	env = append(env, eff.Env...)
 
 	volumes := []corev1.Volume{{
@@ -413,6 +432,18 @@ func desiredPod(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec, operatorName
 			},
 		})
 		mounts = append(mounts, corev1.VolumeMount{Name: "agent-memory", MountPath: mountPath})
+	}
+
+	if eff.HandlerConfigMap != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: handlerVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: eff.HandlerConfigMap},
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{Name: handlerVolumeName, MountPath: handlerMountPath, ReadOnly: true})
 	}
 
 	probe := func(probePath string) *corev1.Probe {

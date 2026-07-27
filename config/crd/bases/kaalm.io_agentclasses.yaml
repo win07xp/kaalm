@@ -76,6 +76,14 @@ spec:
                 description: Image constrains which images this class permits and
                   how they are pulled.
                 properties:
+                  allowHandlerMounts:
+                    description: |-
+                      AllowHandlerMounts permits Agents of this class to mount a handler
+                      ConfigMap into a reference base image (Agent.spec.handler). Default
+                      false: a mounted handler injects code into an image the allowedImages
+                      review already approved, so the capability is an explicit per-class
+                      grant (rule 30).
+                    type: boolean
                   allowedImages:
                     description: |-
                       AllowedImages is a list of path.Match glob patterns. A workload image must

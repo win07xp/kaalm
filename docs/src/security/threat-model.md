@@ -29,6 +29,7 @@ Agent containers execute LLM-generated code, so they are treated as the untruste
 |---|---|
 | Developer deploys agent with resource bomb | AgentClass.maxLimits enforced; image allowlist prevents arbitrary images |
 | Agent container executes LLM-generated code that attempts container escape | RuntimeClass (gVisor/Kata) provides kernel-level isolation; Pod Security Standards prevent privilege escalation |
+| Namespace member with ConfigMap write injects unreviewed code into an image-review-approved base image via a handler mount ([`Agent.spec.handler`](../resources/agent.md)) | Off by default: rule 30 requires `AgentClass.spec.image.allowHandlerMounts: true`, so image review stays authoritative unless a class explicitly opts out. **Granting the gate makes ConfigMap write access in a namespace equivalent to code execution as that namespace's handler-mounting Agents** (their ServiceAccount, certificate identity, and gateway access), effective at the next Pod recreation; grant it on dedicated classes whose namespaces treat every ConfigMap author as a code author. Injected code runs under the same containment as reviewed code (class SecurityContext, RoleBinding-less SA, synthesized NetworkPolicy, optional RuntimeClass), and a cross-namespace reference is unrepresentable (`configMapRef` is a local reference). See [Reference Base Images](../runtime/base-images.md) and rules 30/31. |
 
 See [§ RuntimeClass](model.md#runtimeclass) for the enforcement details.
 

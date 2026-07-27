@@ -76,6 +76,13 @@ type AgentClassImage struct {
 	// DefaultImage is applied at reconcile time when a workload omits its image.
 	// +optional
 	DefaultImage string `json:"defaultImage,omitempty"`
+	// AllowHandlerMounts permits Agents of this class to mount a handler
+	// ConfigMap into a reference base image (Agent.spec.handler). Default
+	// false: a mounted handler injects code into an image the allowedImages
+	// review already approved, so the capability is an explicit per-class
+	// grant (rule 30).
+	// +optional
+	AllowHandlerMounts bool `json:"allowHandlerMounts,omitempty"`
 	// PullPolicy is the image pull policy for workload containers.
 	// +optional
 	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`

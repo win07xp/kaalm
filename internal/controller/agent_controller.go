@@ -371,10 +371,11 @@ func (r *AgentReconciler) evaluateActivity(
 }
 
 // readyGates evaluates the Ready=False conditions that block Pod creation
-// without degrading: a missing image, a missing existingClaim, and missing
-// imagePullSecrets. It sets the condition on the Agent and reports whether the
-// pass is gated; Secrets and PVCs are unwatched, so gated results carry a
-// requeue interval.
+// without degrading: a missing image, a missing existingClaim, missing
+// imagePullSecrets, and a missing handler ConfigMap (rule 31). It sets the
+// condition on the Agent and reports whether the pass is gated; Secrets, PVCs,
+// and handler ConfigMaps are unwatched, so gated results carry a requeue
+// interval.
 func (r *AgentReconciler) readyGates(
 	ctx context.Context, agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec,
 ) (bool, ctrl.Result, error) {
@@ -400,6 +401,21 @@ func (r *AgentReconciler) readyGates(
 		if apierrors.IsNotFound(err) {
 			r.setReady(agent, false, kaalmv1alpha1.ReasonImagePullSecretMissing,
 				fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, agent.Namespace))
+			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
+		} else if err != nil {
+			return false, ctrl.Result{}, err
+		}
+	}
+	// Rule 31: the handler ConfigMap must exist where the Agent runs. Checked
+	// pre-Pod so a bad reference surfaces as a condition, not a Pod wedged in
+	// ContainerCreating on a missing volume source. The ConfigMap is
+	// developer-owned: no ownerRef is added and content is never tracked.
+	if eff.HandlerConfigMap != "" {
+		var cm corev1.ConfigMap
+		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.HandlerConfigMap}, &cm)
+		if apierrors.IsNotFound(err) {
+			r.setReady(agent, false, kaalmv1alpha1.ReasonHandlerConfigMapNotFound,
+				fmt.Sprintf("handler ConfigMap %q not found in namespace %q", eff.HandlerConfigMap, agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
@@ -493,6 +509,13 @@ func (r *AgentReconciler) degradedReasons(
 	if agent.Spec.Lifecycle.HibernationEnabled && !agent.Spec.Persistence.Enabled {
 		add(kaalmv1alpha1.ReasonHibernationRequiresPersist,
 			"lifecycle.hibernationEnabled=true requires spec.persistence.enabled=true")
+	}
+	// Rule 30: a handler mount must be class-permitted. Drift-sensitive like
+	// rules 24 and 26: flipping allowHandlerMounts off on a live class
+	// degrades existing handler-mounting Agents.
+	if agent.Spec.Handler != nil && !class.Spec.Image.AllowHandlerMounts {
+		add(kaalmv1alpha1.ReasonHandlerMountNotAllowed,
+			fmt.Sprintf("spec.handler set but AgentClass %q has image.allowHandlerMounts=false", class.Name))
 	}
 	return out
 }
