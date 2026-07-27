@@ -147,6 +147,12 @@ status:
 
 Two conditions summarize provider health: `Ready` reports whether the spec is valid and credentials check out, and `Healthy` reports the result of the periodic upstream probe. The probe runs by default; set `healthCheck.enabled: false` to disable it (for example for a provider type with no probe, or an offline test fixture). `healthCheck.intervalSeconds` sets the probe cadence (default 60) and `healthCheck.timeoutSeconds` bounds each probe request (default 10). `budgetUsage` shows per-namespace spend for the current period, and `clusterSpentUSD` shows the sum across all namespaces.
 
+Each `budgetUsage` entry's `state` is a small per-namespace state machine over the current period:
+
+![Per-namespace budget state machine for one ModelProvider and one period. The period opening enters Normal. Normal moves to Throttled when spend crosses a degrade policy's atPercent, with requests rerouted to the degradeTo model. Normal or Throttled move to Blocked when spend crosses a block policy's atPercent or a request would exceed perNamespaceUSD or clusterUSD; a note records that Blocked answers requests with 429 budget_exhausted and a Retry-After equal to the seconds until the next period reset. The only arrows out of Throttled and Blocked back to Normal are the period rollover. A closing note records that warn policies emit an event and change no state, that spend is monotonic within a period, that the state is per provider and namespace, and that this status field is display truth while enforcement reads each gateway replica's live counter plus its peers' partials.](../diagrams/budget-namespace-states.svg)
+
+Reading the diagram: the asymmetry is the point. Within a period the arrows only ever move right, because spend is monotonic; nothing un-throttles or un-blocks a namespace except the clock. If a state seems wrong mid-period, the correcting levers are the spec (raise the budget, edit the policy), which re-evaluates immediately, not the counter.
+
 ## Design Notes
 
 ### Credential scoping

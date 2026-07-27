@@ -1,0 +1,40 @@
+@startuml budget-namespace-states
+' Per-namespace budget enforcement state for one ModelProvider and one period,
+' as reported in status.budgetUsage[].state.
+' Source of truth: docs/src/resources/modelprovider.md +
+' docs/src/gateways/llm/budgets-and-rate-limits.md
+!include _style.puml
+
+state "Normal" as Normal
+state "Throttled" as Throttled
+state "Blocked" as Blocked
+
+[*] --> Normal : period opens\n(daily / weekly / monthly,\nresets at midnight UTC)
+
+Normal --> Throttled : spend crosses a degrade\npolicy atPercent: requests\nreroute to degradeTo
+Normal --> Blocked : spend crosses a block policy\natPercent, or a request would\nexceed perNamespaceUSD\nor clusterUSD
+Throttled --> Blocked : block threshold or\nceiling reached
+
+Blocked --> Normal : period rollover
+Throttled --> Normal : period rollover
+
+note right of Blocked
+  requests answered
+  429 budget_exhausted with
+  Retry-After = seconds to the
+  next period reset
+end note
+
+note bottom of Normal
+  warn policies emit an event and
+  change no state. Spend is monotonic
+  within a period, so the only way
+  back is the rollover. The state is
+  per (provider, namespace) and is
+  display truth; enforcement reads
+  each gateway replica's live counter
+  plus its peers' partials (see
+  Budget State Management).
+end note
+
+@enduml

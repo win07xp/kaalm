@@ -1,0 +1,45 @@
+@startuml agentchannel-phase-reduction
+' AgentChannel phase machine: a memoryless reduction of the bound Agent's phase.
+' Source of truth: docs/src/controller/reconcilers.md (Channel phase reduction)
+!include _style.puml
+
+state "Active" as Active
+state "Degraded" as Degraded
+state "Failed" as Failed
+
+[*] --> Active : first reconcile:\nagentRef resolves, Agent in\nany non-terminal phase
+[*] --> Failed : first reconcile:\nagentRef does not resolve\n(AgentNotFound)
+
+Active --> Degraded : bound Agent enters\nFailed or Degraded
+Degraded --> Active : bound Agent recovers to\nany other non-terminal phase
+Active --> Failed : bound Agent deleted\n(agentRef stops resolving)
+Degraded --> Failed : bound Agent deleted
+Failed --> Active : Agent (re)created:\nreduction resumes from\nits current phase
+
+note right of Active
+  covers Running, Idle, Hibernated,
+  Resuming, Pending, Provisioning,
+  and Hibernating: transient gaps are
+  the delivery layer's job (wake on
+  demand, bounded retry) and surface
+  via PlatformConnected, not phase
+end note
+
+state "any phase" as AnyPhase #F5F5F5
+state "Terminating" as Terminating
+
+AnyPhase --> Terminating : deletion requested\n(gateway delete handshake,\nthen the finalizer)
+
+note bottom of AnyPhase
+  The machine is memoryless: phase
+  is recomputed from the bound
+  Agent on every reconcile, and is
+  unset before the first one. It is
+  one of three orthogonal axes:
+  Ready reports spec validation,
+  PlatformConnected reports
+  delivery health.
+end note
+
+Failed -[hidden]-> AnyPhase
+@enduml
