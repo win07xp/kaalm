@@ -2,8 +2,8 @@ name: Release
 
 # Cutting a release is a single action: push a semver tag.
 #   git tag v0.2.0 && git push origin v0.2.0
-# This builds and pushes the multi-arch controller and gateway images and the
-# Helm chart to ghcr, then creates the GitHub release. Pre-release tags
+# This builds and pushes the multi-arch controller, gateway, and agent-python
+# base images and the Helm chart to ghcr, then creates the GitHub release. Pre-release tags
 # (v0.2.0-rc.1) are matched too and are the safe way to smoke-test: their
 # images/chart carry the pre-release version and never move the `latest` tag.
 # See RELEASING.md.
@@ -28,8 +28,16 @@ jobs:
         include:
           - component: controller
             binary: manager
+            context: .
+            dockerfile: Dockerfile
           - component: gateway
             binary: gateway
+            context: .
+            dockerfile: Dockerfile
+          - component: agent-python
+            binary: unused # the Python Dockerfile declares but ignores BINARY
+            context: images/agent-python
+            dockerfile: images/agent-python/Dockerfile
     steps:
       - uses: actions/checkout@v5
 
@@ -54,7 +62,8 @@ jobs:
       - name: Build and push ${{ matrix.component }}
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           build-args: BINARY=${{ matrix.binary }}
           tags: ${{ steps.meta.outputs.tags }}

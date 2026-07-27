@@ -1,0 +1,26 @@
+# Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
+[project]
+name = "kaalm-agent"
+version = "0.3.0"
+description = "Kaalm reference base image runtime: the runtime contract plus the kaalm handler ABI"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.10",
+    "watchdog>=4.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-aiohttp>=1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["kaalm_agent", "kaalm"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

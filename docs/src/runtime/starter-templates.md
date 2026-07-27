@@ -96,14 +96,13 @@ examples/
     main.go            # server + tls reload + heartbeat
     handler.go         # handleMessage(envelope), replace this
     README.md
-  starter-python/
-    Dockerfile
-    pyproject.toml
-    agent/
-      __main__.py      # server + tls reload + heartbeat
-      handler.py       # handle_message(envelope), replace this
+  starter-python/      # the FROM rung: the base image owns the runtime
+    Dockerfile         # FROM kaalm-agent-python + COPY handler.py + ENV
+    handler.py         # handle_message(envelope), replace this
     README.md
 ```
+
+Since v0.3.0 the Python template carries no contract code of its own: it is a `FROM ghcr.io/win07xp/kaalm-agent-python` build (source in `images/agent-python/`), and the ten items above are supplied by the base image. The Go template still vendors its implementation until the Go runtime module lands (see [Reference Base Images](base-images.md#relationship-to-the-starter-templates)).
 
 Each template's README contains:
 

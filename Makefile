@@ -205,6 +205,19 @@ MOCKPROVIDER_IMG ?= registry.test/mock/llm-provider:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
 CURL_IMG ?= curlimages/curl:8.10.1
+PYTHON_AGENT_IMG ?= ghcr.io/win07xp/kaalm-agent-python:$(CHART_APP_VERSION)
+
+.PHONY: python-test
+python-test: ## Run the Python base image unit suite (the image's test stage; needs docker).
+	docker build --target test images/agent-python
+
+.PHONY: python-image
+python-image: ## Build the kaalm-agent-python reference base image.
+	docker build -t $(PYTHON_AGENT_IMG) images/agent-python
+
+.PHONY: python-smoke
+python-smoke: python-image ## Contract smoke against the built image: TLS, mTLS matrix, echo, mounted handler, fail-fast.
+	hack/python-image-smoke.sh $(PYTHON_AGENT_IMG)
 
 .PHONY: e2e-images
 e2e-images: ## Build the controller, gateway, agent, and mock-provider images and import them into k3d.

@@ -1,40 +1,41 @@
 # starter-python
 
-A minimal, working implementation of the [Kaalm Runtime Contract](../../docs/src/runtime/contract.md),
-built on `aiohttp`. Feature-parity with [starter-go](../starter-go). Copy this
-directory, replace one function, and you have a compliant agent image.
+The worked example of the **`FROM` rung** of the Kaalm on-ramp: a
+[reference base image](../../docs/src/runtime/base-images.md) owns the entire
+[runtime contract](../../docs/src/runtime/contract.md), and this directory is
+everything you own on top of it, a `handler.py` and a three-line Dockerfile.
 
-## What it implements for you
+Since v0.3.0 the contract code is single-sourced in the base image
+(`images/agent-python/` in this repo); this template no longer carries a copy.
+Reach for this rung when you have outgrown mount-and-run
+(`Agent.spec.handler`): you need pip dependencies the base image does not
+bundle, or your handler passed the ConfigMap size cap.
 
-- HTTPS serving on `$KAALM_HEALTH_PORT` with `/livez` and `/readyz` (item 1).
-- Graceful SIGTERM draining (item 2).
-- mTLS client-cert presentation and CA trust on all gateway calls (item 3).
-- `POST /v1/message` with per-path mTLS: `401` without a client cert, `403`
-  unless the SAN is the gateway Service DNS (item 4).
-- Cert/CA reload on rotation via a `watchdog` observer on the mount
-  **directory** (the `..data` swap), swapping both SSL contexts (item 4).
-- `messageId` deduplication over the last 1024 IDs (item 7).
-- A heartbeat loop in Agent mode only, detected from the client cert SAN
-  (item 5), toggled by `KAALM_TEMPLATE_HEARTBEAT` (`auto` default / `off`).
-- A `complete_task` coroutine with the bounded `StalePodCompletion` retry
-  (item 6).
+## What the base image implements for you
+
+Everything the contract requires: HTTPS serving with `/livez` and `/readyz`,
+per-path mTLS on `POST /v1/message`, cert and CA rotation reload, persistent
+`messageId` dedup that survives hibernation, the Agent-mode heartbeat loop
+with task-mode detection (`KAALM_TEMPLATE_HEARTBEAT`: `auto` default, `off` to
+suppress), graceful SIGTERM, and the task-completion helper. See
+[Reference Base Images](../../docs/src/runtime/base-images.md).
 
 ## What you change
 
-Exactly one coroutine, `handle_message` in `agent/handler.py`. To call an LLM,
-POST to `agent.gateway_url` with an `aiohttp` session using
-`agent.reloader.client_context`; the gateway proxies to your ModelProviders.
+Exactly one function: `handle_message(envelope)` in `handler.py`, sync or
+async. Capabilities come from `import kaalm`:
 
-## Environment
+- `await kaalm.gateway.post("/v1/chat/completions", json={...})` calls an LLM
+  through the gateway with the Pod's mTLS identity (use a qualified model
+  name like `anthropic-shared/claude-opus-4-6`).
+- `kaalm.memory.get/put/delete` is persistent state: PVC-backed when
+  `spec.persistence` is enabled (so it survives hibernation), in-memory
+  otherwise.
 
-The controller injects the `$KAALM_*` runtime-contract variables.
-`KAALM_TEMPLATE_HEARTBEAT` (`auto` default, `off` to suppress) is the one
-template toggle. The same hibernation footgun applies as in
-[starter-go](../starter-go): the heartbeat is unconditional, so keep
-`activitySource` at the default `gatewayTraffic` unless you set the toggle to
-`off` and gate emission on real work.
+Extra dependencies go into the Dockerfile as a
+`RUN pip install --no-cache-dir <packages>` line before the `COPY`.
 
-## Deploy
+## Build and deploy
 
 ```bash
 docker build -t registry.example/agents/starter-python:v1 .
@@ -57,3 +58,11 @@ spec:
   image: "registry.example/agents/starter-python:v1"
 EOF
 ```
+
+The `FROM` tag pins a published release; on an unreleased tree build the base
+image locally first (`make python-image PYTHON_AGENT_IMG=kaalm-agent-python:dev`)
+and pass `--build-arg BASE=kaalm-agent-python:dev`.
+
+Note the baked handler needs no `spec.handler` and no `allowHandlerMounts`
+grant: those govern ConfigMap-mounted code. A `FROM` image goes through
+ordinary image review and the `allowedImages` gate, like any custom image.

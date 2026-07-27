@@ -60,9 +60,12 @@ The image installs no dependencies at runtime. The class security defaults mount
 FROM ghcr.io/win07xp/kaalm-agent-python:0.3.0
 RUN pip install --no-cache-dir httpx beautifulsoup4
 COPY handler.py /opt/kaalm/handler/handler.py
+ENV KAALM_HANDLER_PATH=/opt/kaalm/handler
 ```
 
-A `FROM` build keeps the central-patching property (rebuild against the bumped tag) and sheds the ConfigMap size cap; it costs a build pipeline. This is the intended middle rung between mount-and-run and a fully custom image.
+The `ENV` line is load-bearing: the controller injects `$KAALM_HANDLER_PATH` only for ConfigMap-mounted handlers, so a `FROM` build declares it itself. The variable stays the single signal in every configuration, and if an Agent sets `spec.handler` on a `FROM`-built image anyway, the mount shadows the baked directory and the mounted handler wins.
+
+A `FROM` build keeps the central-patching property (rebuild against the bumped tag) and sheds the ConfigMap size cap; it costs a build pipeline. This is the intended middle rung between mount-and-run and a fully custom image. Note that a baked handler needs no `allowHandlerMounts` grant: rules 30 and 31 govern ConfigMap-mounted code, while a `FROM` image passes through ordinary image review and the `allowedImages` gate like any custom image.
 
 ## The Go image
 

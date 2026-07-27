@@ -34,6 +34,11 @@ class CertReloader:
         self._lock = threading.Lock()
         self._server_ctx: ssl.SSLContext | None = None
         self._client_ctx: ssl.SSLContext | None = None
+        # Bumped on every successful reload. Long-lived HTTP sessions snapshot
+        # an SSL context at connector creation; comparing generations lets the
+        # gateway client rebuild its session after a rotation instead of
+        # carrying a stale context for the life of the process.
+        self.generation = 0
         self.reload()
 
     def reload(self) -> None:
@@ -54,6 +59,7 @@ class CertReloader:
         with self._lock:
             self._server_ctx = server_ctx
             self._client_ctx = client_ctx
+            self.generation += 1
 
     @property
     def server_context(self) -> ssl.SSLContext:

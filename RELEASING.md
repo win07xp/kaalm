@@ -11,8 +11,9 @@ git push origin v0.2.0
 That publishes, for the tag `vX.Y.Z`:
 
 - **Images** (multi-arch `linux/amd64` + `linux/arm64`):
-  `ghcr.io/win07xp/kaalm-controller:X.Y.Z` and
-  `ghcr.io/win07xp/kaalm-gateway:X.Y.Z` (the `latest` tag also moves for
+  `ghcr.io/win07xp/kaalm-controller:X.Y.Z`,
+  `ghcr.io/win07xp/kaalm-gateway:X.Y.Z`, and the reference base image
+  `ghcr.io/win07xp/kaalm-agent-python:X.Y.Z` (the `latest` tag also moves for
   non-pre-release versions).
 - **Chart** (OCI): `oci://ghcr.io/win07xp/charts/kaalm` version `X.Y.Z`,
   with `appVersion` stamped to `X.Y.Z` so it pins the matching images.
