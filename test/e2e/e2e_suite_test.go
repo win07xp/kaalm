@@ -34,6 +34,7 @@ var _ = AfterSuite(func() {
 	By("tearing down e2e objects (chart and cluster are left in place)")
 	// Order: workloads first, then cluster-scoped, then the namespace.
 	for _, f := range []string{
+		"test/e2e/testdata/base-image.yaml",
 		"test/e2e/testdata/agenttask.yaml",
 		"test/e2e/testdata/teardown.yaml",
 		"test/e2e/testdata/session_callback.yaml",

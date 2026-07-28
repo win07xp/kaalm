@@ -1,0 +1,156 @@
+# Fixtures for S16 (zero-build on-ramp): an AgentClass that grants handler
+# mounts and allowlists exactly the two reference base images, the handler
+# ConfigMaps, and Agents running the images. The images are the locally built
+# ones imported under in-cluster names by `make e2e-images`
+# (registry.test/agents/kaalm-agent-{go,python}:e2e), so nothing at test time
+# can silently pull a published tag.
+#
+# s16-missing references a ConfigMap that deliberately does not exist here:
+# the spec asserts the rule 31 gate (Ready=False, HandlerConfigMapNotFound,
+# no Pod) and then creates s16-missing-handler imperatively to watch the gate
+# recover.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s16-starter
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages:
+      - registry.test/agents/kaalm-agent-go:e2e
+      - registry.test/agents/kaalm-agent-python:e2e
+    allowHandlerMounts: true
+    pullPolicy: IfNotPresent
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s16-hook
+  namespace: e2e
+type: Opaque
+stringData:
+  token: s16-webhook-bearer-token
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: s16-handler
+  namespace: e2e
+data:
+  handler.py: |
+    def handle_message(envelope):
+        return {
+            "content": "greeter v1: " + str(envelope.get("content", "")),
+            "attachments": [],
+            "metadata": {},
+        }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: s16-handler-v2
+  namespace: e2e
+data:
+  handler.py: |
+    def handle_message(envelope):
+        return {
+            "content": "greeter v2: " + str(envelope.get("content", "")),
+            "attachments": [],
+            "metadata": {},
+        }
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s16-go
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s16-starter
+  image: registry.test/agents/kaalm-agent-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: s16-go-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s16-go
+  type: webhook
+  webhook:
+    path: /channels/e2e/s16-go-channel
+    responseMode: sync
+    # Without a content extractor the gateway falls back to the raw body,
+    # JSON-encoded as a string; the S16 assertions pin exact replies
+    # ("echo: ping"), so extract the text field.
+    content:
+      fromBody: content.text
+    auth:
+      type: bearer
+      secretRef:
+        name: s16-hook
+        key: token
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s16-py
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s16-starter
+  image: registry.test/agents/kaalm-agent-python:e2e
+  handler:
+    configMapRef:
+      name: s16-handler
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: s16-py-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s16-py
+  type: webhook
+  webhook:
+    path: /channels/e2e/s16-py-channel
+    responseMode: sync
+    content:
+      fromBody: content.text
+    auth:
+      type: bearer
+      secretRef:
+        name: s16-hook
+        key: token
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s16-missing
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s16-starter
+  image: registry.test/agents/kaalm-agent-python:e2e
+  handler:
+    configMapRef:
+      name: s16-missing-handler
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s

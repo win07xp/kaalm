@@ -65,7 +65,8 @@ The current milestone is **v0.3.0, "the on-ramp"**, tracked in the
   and `kaalm-agent-python` images embedding the runtime contract, a
   `spec.handler` ConfigMap mount gated by
   `AgentClass.spec.image.allowHandlerMounts` (validation rules 30 and 31), and
-  acceptance scenario S16. Implementation and the e2e proof are in flight.
+  acceptance scenario S16. The images, the mount, and the S16 e2e proof are
+  implemented; what remains is the v0.3.0 release that publishes the images.
 - **Hard budget enforcement** (opt-in; soft limits stay the default), design
   pending.
 - **The tool plane design chapter** (gateway-brokered MCP tool access), design
