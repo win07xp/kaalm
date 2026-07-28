@@ -1,10 +1,12 @@
 name: Release
 
 # Cutting a release is a single action: push a semver tag.
-#   git tag v0.2.0 && git push origin v0.2.0
-# This builds and pushes the multi-arch controller, gateway, and agent-python
-# base images and the Helm chart to ghcr, then creates the GitHub release. Pre-release tags
-# (v0.2.0-rc.1) are matched too and are the safe way to smoke-test: their
+#   git tag v0.3.0 && git push origin v0.3.0
+# This builds and pushes the multi-arch controller, gateway, and agent base
+# images (agent-python, agent-go) and the Helm chart to ghcr, pushes the
+# agentruntime/vX.Y.Z sub-module tag so the Go runtime module resolves at
+# that version, then creates the GitHub release. Pre-release tags
+# (v0.3.0-rc.1) are matched too and are the safe way to smoke-test: their
 # images/chart carry the pre-release version and never move the `latest` tag.
 # See RELEASING.md.
 
@@ -38,6 +40,10 @@ jobs:
             binary: unused # the Python Dockerfile declares but ignores BINARY
             context: images/agent-python
             dockerfile: images/agent-python/Dockerfile
+          - component: agent-go
+            binary: unused # compiled in-Dockerfile from the agentruntime module
+            context: .
+            dockerfile: images/agent-go/Dockerfile
     steps:
       - uses: actions/checkout@v5
 
@@ -69,6 +75,23 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
+
+  # go get github.com/win07xp/kaalm/agentruntime@vX.Y.Z resolves through the
+  # sub-module tag agentruntime/vX.Y.Z; publish it alongside the release tag.
+  # The v* trigger does not match agentruntime/v*, so this cannot recurse.
+  module-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Push the agentruntime sub-module tag
+        run: |
+          tag="agentruntime/${GITHUB_REF_NAME}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "tag ${tag} already exists; leaving it as is"
+            exit 0
+          fi
+          git tag "${tag}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${tag}"
 
   chart:
     runs-on: ubuntu-latest

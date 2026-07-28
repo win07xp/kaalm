@@ -12,9 +12,15 @@ That publishes, for the tag `vX.Y.Z`:
 
 - **Images** (multi-arch `linux/amd64` + `linux/arm64`):
   `ghcr.io/win07xp/kaalm-controller:X.Y.Z`,
-  `ghcr.io/win07xp/kaalm-gateway:X.Y.Z`, and the reference base image
-  `ghcr.io/win07xp/kaalm-agent-python:X.Y.Z` (the `latest` tag also moves for
+  `ghcr.io/win07xp/kaalm-gateway:X.Y.Z`, and the reference base images
+  `ghcr.io/win07xp/kaalm-agent-python:X.Y.Z` and
+  `ghcr.io/win07xp/kaalm-agent-go:X.Y.Z` (the `latest` tag also moves for
   non-pre-release versions).
+- **Go module tag** `agentruntime/vX.Y.Z`, so
+  `go get github.com/win07xp/kaalm/agentruntime@vX.Y.Z` resolves for starter
+  template copies and custom Go agents. Note that once a module version has
+  been fetched through the public proxy it is recorded in the checksum
+  database permanently; deleting the git tag does not unpublish it.
 - **Chart** (OCI): `oci://ghcr.io/win07xp/charts/kaalm` version `X.Y.Z`,
   with `appVersion` stamped to `X.Y.Z` so it pins the matching images.
 - **GitHub release** `vX.Y.Z` with generated notes and the chart `.tgz`
@@ -45,12 +51,15 @@ git push origin v0.2.0-rc.1
 
 The images and chart carry `0.2.0-rc.1`; the GitHub release is marked as a
 pre-release by the generated notes tooling. Delete the tag and its packages
-afterward if you do not want them lingering.
+afterward if you do not want them lingering (including the
+`agentruntime/v0.2.0-rc.1` module tag the workflow pushed, with the proxy
+caveat above).
 
 ## One-time: make the ghcr packages public
 
-The first push creates the `kaalm-controller`, `kaalm-gateway`, and `kaalm`
-(chart) packages as **private**. A workflow cannot change package visibility,
+The first push creates the `kaalm-controller`, `kaalm-gateway`,
+`kaalm-agent-python`, `kaalm-agent-go`, and `kaalm` (chart) packages as
+**private**. A workflow cannot change package visibility,
 so do it once by hand after the first release: on GitHub, go to each package
 (Profile -> Packages), then Package settings -> Change visibility -> Public.
 Until then, `helm install` and `docker pull` require authentication.

@@ -1,10 +1,9 @@
 // Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 
-// Command starter-go is the Go starter template: a complete Kaalm agent that
-// imports the contract runtime from the agentruntime module instead of
-// vendoring it. Copy this directory, replace the handler in handler.go, and
-// you own exactly your agent's logic; the contract stays patchable with a
-// module update. See docs/src/runtime/starter-templates.md.
+// Command kaalm-agent is the reference agent inside the kaalm-agent-go base
+// image: the full runtime contract serving the built-in default handler.
+// Apply an Agent with this image and no handler of any kind, and it comes up,
+// heartbeats, hibernates, wakes, and echoes (docs/src/runtime/base-images.md).
 package main
 
 import (
@@ -27,7 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("starting runtime: %v", err)
 	}
-	if err := a.Run(ctx, handler(a)); err != nil {
+	if err := a.Run(ctx, nil); err != nil {
 		log.Fatalf("runtime failed: %v", err)
 	}
 }

@@ -1,38 +1,58 @@
 # starter-go
 
-A minimal, working implementation of the [Kaalm Runtime Contract](../../docs/src/runtime/contract.md).
-Copy this directory, replace one function, and you have a compliant agent image.
-This is not a framework and not a base image: after `cp` you own the code.
+A complete Kaalm agent that imports the contract runtime from the
+[`agentruntime` module](../../agentruntime) instead of vendoring it. Copy this
+directory, replace the handler, and you own exactly your agent's logic: the
+[runtime contract](../../docs/src/runtime/contract.md) stays Kaalm's code and
+reaches you as a module update, not a re-copy.
 
-## What it implements for you
+This is the third rung of the
+[on-ramp ladder](../../docs/src/runtime/base-images.md#relationship-to-the-starter-templates).
+If you have not outgrown the first two (mount a handler ConfigMap into
+`kaalm-agent-python`, or `FROM` a base image), start there instead.
 
-Every item of the runtime contract, so you don't rebuild the error-prone parts:
+## What the runtime module implements for you
 
-- HTTPS serving on `$KAALM_HEALTH_PORT` with `/livez` and `/readyz` (item 1).
-- Graceful SIGTERM draining (item 2).
-- mTLS client-cert presentation and CA trust on all gateway calls (item 3).
-- `POST /v1/message` with per-path mTLS verification: `401` without a client
-  cert, `403` unless the SAN is the gateway Service DNS (item 4).
-- Cert/CA reload on rotation, watching the mount **directory** for the `..data`
-  swap rather than the leaf files (item 4). This is the subtlest part: a
-  leaf-path watch silently misses every rotation.
-- `messageId` deduplication over the last 1024 IDs, returning the cached reply
-  for gateway-retry duplicates (item 7).
-- A heartbeat loop that runs in Agent mode only, detecting AgentTask mode from
-  the client cert SAN (item 5).
-- A `completeTask` helper with the bounded `StalePodCompletion` retry (item 6).
+Every item of the runtime contract, so you don't rebuild the error-prone
+parts: HTTPS serving with `/livez` and `/readyz`, graceful draining, mTLS on
+all gateway calls, per-path client-cert verification on `POST /v1/message`
+(401 without a cert, 403 unless the SAN is the gateway Service DNS),
+certificate rotation via the `..data` directory watch, `messageId`
+deduplication persisted across hibernation, the Agent-mode heartbeat loop
+with task-mode detection from the cert SAN, and the `CompleteTask` helper
+with the bounded `StalePodCompletion` retry.
 
 ## What you change
 
-Exactly one function, `handleMessage` in `handler.go`. Everything else is
-contract boilerplate. To call an LLM, POST to `a.gatewayURL` using the
-pre-configured mTLS client `a.gatewayCli`; the gateway proxies to your
-ModelProviders.
+`handler.go`. The handler closes over the `*agentruntime.Agent`, which is how
+it reaches the runtime's capabilities:
+
+- `a.Memory`: persistent key-value state (PVC-backed when the Agent enables
+  persistence), for anything that must survive hibernation.
+- `a.Gateway`: the preconfigured mTLS client. To call an LLM, POST a
+  qualified model request to `/v1/chat/completions` through it; the gateway
+  proxies to your ModelProviders.
+
+`main.go` is wiring and should not need changes.
+
+## Building a copy of this template
+
+```bash
+cp -r examples/starter-go my-agent && cd my-agent
+go mod tidy    # pins the published agentruntime version, writes go.sum
+docker build -t registry.example/agents/my-agent:v1 .
+```
+
+The [Dockerfile](Dockerfile) compiles your program and layers the binary onto
+the `kaalm-agent-go` base image, replacing its default-handler binary at
+`/kaalm-agent` (the image's entrypoint). Inside the Kaalm repo itself the
+build works differently (the unreleased runtime is compiled from the tree via
+`test/e2e/starter-go/Dockerfile`); your copy never needs that.
 
 ## Environment
 
 The controller injects the `$KAALM_*` runtime-contract variables. One
-template-specific toggle:
+runtime toggle:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -47,9 +67,6 @@ never hibernate. Either leave `activitySource` at the default, or set
 ## Deploy a test Agent
 
 ```bash
-docker build -t registry.example/agents/starter-go:v1 .
-# push, or import into your local cluster
-
 kubectl apply -f - <<'EOF'
 apiVersion: kaalm.io/v1alpha1
 kind: AgentClass
@@ -62,11 +79,11 @@ spec:
 apiVersion: kaalm.io/v1alpha1
 kind: Agent
 metadata:
-  name: starter-go
+  name: my-agent
   namespace: default
 spec:
   agentClassRef: { name: starter }
-  image: "registry.example/agents/starter-go:v1"
+  image: "registry.example/agents/my-agent:v1"
 EOF
 ```
 
@@ -75,11 +92,11 @@ Agent to route webhook traffic to `/v1/message`.
 
 ## As an AgentTask
 
-The same image runs as an AgentTask. Call `a.completeTask(ctx, "success",
-"done", map[string]string{"result": "..."})` from your task logic. The template
+The same image runs as an AgentTask. Call `a.CompleteTask(ctx, "success",
+"done", map[string]string{"result": "..."})` from your task logic. The runtime
 detects task mode from the cert SAN and does not start the heartbeat loop.
 
 For smoke and e2e runs, set `KAALM_TASK_AUTOCOMPLETE=success` (via the
 AgentTask `spec.env`) to have the task report that status on startup through
-`completeTask`. Leave it unset in real tasks, which report completion from
+`CompleteTask`. Leave it unset in real tasks, which report completion from
 their own work.

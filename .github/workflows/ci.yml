@@ -37,6 +37,14 @@ jobs:
       - name: Python base image contract smoke (real container, mTLS matrix)
         run: make python-smoke PYTHON_AGENT_IMG=kaalm-agent-python:ci
 
+      - name: Agent runtime module and Go starter tests (native, -race)
+        run: make runtime-test
+
+      # The image build runs the module suite in its test stage (build FROM
+      # test), so this step also proves the exact path a release build takes.
+      - name: Go base image contract smoke (real container, mTLS matrix)
+        run: make go-agent-smoke GO_AGENT_IMG=kaalm-agent-go:ci
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -49,6 +57,16 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+      - name: golangci-lint (agentruntime)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: agentruntime
+      - name: golangci-lint (starter-go)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: examples/starter-go
 
   chart:
     runs-on: ubuntu-latest

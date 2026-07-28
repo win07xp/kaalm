@@ -1,6 +1,6 @@
 // Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 
-package main
+package agentruntime
 
 import (
 	"crypto/tls"
@@ -23,6 +23,7 @@ type certReloader struct {
 	mu     sync.RWMutex
 	cert   *tls.Certificate
 	caPool *x509.CertPool // both the inbound ClientCAs and the outbound RootCAs
+	gen    uint64         // bumped on every successful reload; see reloadingTransport
 }
 
 func newCertReloader(certFile, keyFile, caFile string) (*certReloader, error) {
@@ -48,6 +49,7 @@ func (r *certReloader) reload() error {
 	}
 	r.mu.Lock()
 	r.cert, r.caPool = &cert, pool
+	r.gen++
 	r.mu.Unlock()
 	return nil
 }
@@ -62,6 +64,12 @@ func (r *certReloader) pool() *x509.CertPool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.caPool
+}
+
+func (r *certReloader) generation() uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.gen
 }
 
 // watch anchors an fsnotify watcher on the mount directory and reloads on any
@@ -128,7 +136,10 @@ func (r *certReloader) serverTLSConfig() *tls.Config {
 }
 
 // clientTLSConfig presents the agent cert and trusts the CA for outbound
-// gateway calls; both are pulled live from the reloader on each dial.
+// gateway calls. The client certificate is pulled live from the reloader on
+// each dial, but RootCAs is a snapshot: crypto/tls has no per-dial callback
+// for it, which is why outbound clients go through a reloadingTransport that
+// rebuilds on rotation instead of holding one of these forever.
 func (r *certReloader) clientTLSConfig() *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
