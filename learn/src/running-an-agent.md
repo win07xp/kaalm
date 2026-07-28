@@ -1,31 +1,12 @@
 # Running an Agent
 
-An agent is your code in a container. Kaalm does not supply the code, so the
-first job is to build an image, and the starter template is the shortest path
-to one that already speaks Kaalm's protocol correctly.
-
-## Build the agent image
-
-```bash
-git clone https://github.com/win07xp/kaalm.git
-cd kaalm
-docker build -t my-agent:1 examples/starter-go
-```
-
-That image is a small Go program that answers messages by echoing them back.
-It is not clever, and that is the point for now: it lets everything else in
-this book work without an API key. Later you replace one function in it with
-your own logic.
-
-The cluster cannot reach images sitting on your laptop, so hand it over:
-
-```bash
-k3d image import my-agent:1 -c kaalm-tutorial
-```
-
-```
-INFO[0003] Successfully imported 1 image(s) into 1 cluster(s)
-```
+An agent is code in a container. You do not have to write or build any of it
+to get one running: Kaalm publishes reference images that already speak the
+operator's protocol, and out of the box they answer every message by echoing
+it back. That is not clever, and that is the point for now: it lets everything
+else in this book work without an API key, and without Docker builds. Two
+chapters from here you hand this agent your own code, still without building
+anything.
 
 ## Write the manifest
 
@@ -41,7 +22,7 @@ spec:
   runtime:
     backend: pod
   image:
-    pullPolicy: IfNotPresent
+    allowHandlerMounts: true
   persistence:
     enabled: true
     defaultSizeGi: 1
@@ -58,7 +39,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: my-agent:1
+  image: ghcr.io/win07xp/kaalm-agent-python:0.3.0
   persistence:
     enabled: true
   lifecycle:
@@ -66,18 +47,21 @@ spec:
     activitySource: gatewayTraffic
 ```
 
-Reading the class: agents of this class run as pods, may use storage, and may
-be put to sleep. `pullPolicy: IfNotPresent` tells the cluster to use the image
-you imported instead of trying to download it, which matters because
-`my-agent:1` exists nowhere on the internet.
+Reading the class: agents of this class run as pods, may use storage, may be
+put to sleep, and may run code you hand them as configuration
+(`allowHandlerMounts: true`) instead of code baked into an image. That last
+permission is the one this tutorial is built around; you use it in
+[Make It Yours](make-it-yours.md).
 
 The two timers are set aggressively short so that you can watch hibernation
 happen in this sitting. A real class would use something like the 30 minutes
 the shipped `standard` class defaults to.
 
-Reading the agent: run `my-agent:1` under the `tutorial` class, give it
-storage, and allow it to sleep. It is short because the class already answered
-most of the questions.
+Reading the agent: run the published Python reference image under the
+`tutorial` class, give it storage, and allow it to sleep. It is short because
+the class already answered most of the questions. The image comes straight
+from Kaalm's registry; the cluster downloads it the first time an agent asks
+for it, and nothing on your laptop builds anything.
 
 > **A PVC**, a persistent volume claim, is a request for a piece of disk that
 > outlives the program using it. `persistence.enabled: true` asks Kaalm for
@@ -104,7 +88,7 @@ kubectl get agents
 
 ```
 NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   20s
+helper   Running   True    tutorial   7s
 ```
 
 It passes through `Pending` and `Provisioning` on the way, so if you are quick
@@ -113,7 +97,7 @@ started and is answering its health checks.
 
 ## What happened behind the scenes
 
-From those few lines of YAML, Kaalm created a pod to run your image, a piece
+From those few lines of YAML, Kaalm created a pod to run the image, a piece
 of storage and attached it, a certificate giving this agent its own identity, a
 service so other things can reach it, and a network policy restricting who is
 allowed to. You can see the storage it made:
@@ -123,8 +107,8 @@ kubectl get pvc
 ```
 
 ```
-NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-helper-memory   Bound    pvc-6a91ee09-50a1-461b-a2e4-da964ead5f77   1Gi        RWO            local-path     82s
+NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+helper-memory   Bound    pvc-5babc3ae-fbec-4fa9-856d-1e6ee45113e5   1Gi        RWO            local-path     <unset>                 7s
 ```
 
 `Bound` means real disk is attached and ready. Note the name: `helper-memory`,

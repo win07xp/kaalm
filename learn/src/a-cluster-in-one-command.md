@@ -73,12 +73,12 @@ leaving credentials behind when you delete an agent.
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 0.2.0 \
+  --version 0.3.0 \
   --namespace kaalm-system --create-namespace \
   --set certManager.clusterResourceNamespace=cert-manager
 ```
 
-`0.2.0` is the release this book was walked against. Newer releases are on the
+`0.3.0` is the release this book was walked against. Newer releases are on the
 [releases page](https://github.com/win07xp/kaalm/releases) and install the same
 way.
 
@@ -91,11 +91,11 @@ kubectl get pods -n kaalm-system
 ```
 
 ```
-NAME                               READY   STATUS    RESTARTS   AGE
-kaalm-controller-6b948dcf4-df862   1/1     Running   0          27s
-kaalm-controller-6b948dcf4-ptv4p   1/1     Running   0          27s
-kaalm-gateway-578ddc44d4-8wc5r     1/1     Running   0          27s
-kaalm-gateway-578ddc44d4-kskhx     1/1     Running   0          27s
+NAME                                READY   STATUS    RESTARTS   AGE
+kaalm-controller-6f75c5d79f-hx6gc   1/1     Running   0          22s
+kaalm-controller-6f75c5d79f-w6t4d   1/1     Running   0          22s
+kaalm-gateway-7c888cfb45-wc6j8      1/1     Running   0          22s
+kaalm-gateway-7c888cfb45-wxzzp      1/1     Running   0          22s
 ```
 
 > **A pod** is one running instance of your program, the smallest thing

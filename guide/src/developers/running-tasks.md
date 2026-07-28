@@ -28,8 +28,9 @@ spec:
   ttlSecondsAfterFinished: 30
 ```
 
-(The `KAALM_TASK_AUTOCOMPLETE` variable is a starter-template test hook;
-your task image reports completion itself.)
+(The `KAALM_TASK_AUTOCOMPLETE` variable is a test hook the reference base
+images and starter templates share; your task image reports completion
+itself.)
 
 ## The two completion modes
 
@@ -37,7 +38,8 @@ your task image reports completion itself.)
   when done, carrying a status and any declared artifacts. This is the mode
   for agents that produce a result (the sample task in
   `config/samples/kaalm_v1alpha1_agenttask.yaml` declares a `report-url`
-  artifact). The starter templates implement the call for you.
+  artifact). The base images and starter templates implement the call for
+  you.
 - **`exitCode`**: the container's exit status is the verdict; zero succeeds.
   Use this for agents that behave like batch jobs. Artifacts cannot be
   declared in this mode; there is nobody to report them.
