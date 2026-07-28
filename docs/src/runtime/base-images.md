@@ -133,4 +133,4 @@ That replaces the copy-the-code relationship the templates had in v1 and v0.2.0,
 
 ## Acceptance scenario
 
-[S16](../appendix/scenarios.md#s16-deploy-a-first-agent-without-building-an-image) exercises the on-ramp end to end: a class grants `allowHandlerMounts`, a handler travels as a ConfigMap, an Agent runs it from the published Python image with no build step, and repointing the reference rolls the handler. The e2e spec that proves it on a cluster is tracked in the [scenario coverage map](../appendix/scenario-coverage.md).
+[S16](../appendix/scenarios.md#s16-deploy-a-first-agent-without-building-an-image) exercises the on-ramp end to end: a class grants `allowHandlerMounts`, a handler travels as a ConfigMap, an Agent runs it from the published Python image with no build step, and repointing the reference rolls the handler. The e2e spec that proves it on a cluster is recorded in the [scenario coverage map](../appendix/scenario-coverage.md).

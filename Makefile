@@ -211,6 +211,12 @@ CONTROLLER_IMG ?= ghcr.io/win07xp/kaalm-controller:$(CHART_APP_VERSION)
 GATEWAY_IMG ?= ghcr.io/win07xp/kaalm-gateway:$(CHART_APP_VERSION)
 AGENT_IMG ?= registry.test/agents/starter-go:e2e
 MOCKPROVIDER_IMG ?= registry.test/mock/llm-provider:e2e
+# In-cluster names for the base images. The S16 spec references these, so the
+# suite exercises the locally built images and nothing at test time can
+# silently pull a published tag. The testdata YAML hardcodes them; change both
+# together.
+E2E_GO_BASE_IMG ?= registry.test/agents/kaalm-agent-go:e2e
+E2E_PYTHON_BASE_IMG ?= registry.test/agents/kaalm-agent-python:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
 CURL_IMG ?= curlimages/curl:8.10.1
@@ -243,14 +249,17 @@ go-agent-smoke: go-agent-image ## Contract smoke against the built image: TLS, m
 	hack/go-image-smoke.sh $(GO_AGENT_IMG)
 
 .PHONY: e2e-images
-e2e-images: ## Build the controller, gateway, agent, and mock-provider images and import them into k3d.
+e2e-images: ## Build the controller, gateway, agent, base, and mock-provider images and import them into k3d.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
 	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
+	docker build -t $(PYTHON_AGENT_IMG) images/agent-python
+	docker tag $(GO_AGENT_IMG) $(E2E_GO_BASE_IMG)
+	docker tag $(PYTHON_AGENT_IMG) $(E2E_PYTHON_BASE_IMG)
 	docker pull $(CURL_IMG)
-	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(CURL_IMG)
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.

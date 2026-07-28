@@ -21,8 +21,9 @@ Coverage is one of four kinds:
 
 The **e2e** column is the acceptance surface. S1 to S15 form the v0.2.0
 surface: every one points at the spec that proves it on a cluster, and every
-one is green. S16 was added with the v0.3.0 base-image design and its row
-fills in as that milestone's implementation lands.
+one is green. S16 was added with the v0.3.0 base-image design and is green
+against the locally built base images; the published images land with the
+v0.3.0 release.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -41,7 +42,7 @@ fills in as that milestone's implementation lands.
 | S13 Generic webhook exposure | `Golden path` (delivers a sync webhook and returns the reply) | Unit `TestWebhook_ExtractorsAndBadJSON` |
 | S14 Webhook for a hibernated agent | `Hibernate and wake` (S14: `wake_timeout` payload on the polling endpoint) | Unit `TestWebhook_Async*` |
 | S15 Async webhook for a long-running agent | `Session identity and async callback` (S15: 202, signed callback to the receiver, polling fallback) | Unit `TestWebhook_AsyncAcceptAndPoll`, `TestWebhook_AsyncCallbackDelivery` |
-| S16 Zero-build on-ramp (base image + mounted handler) | Pending: designed in [Reference Base Images](../runtime/base-images.md), lands with the v0.3.0 base-image work ([#55](https://github.com/win07xp/kaalm/issues/55)) | Pending: handler-loader unit tests; envtest for rules 30/31 |
+| S16 Zero-build on-ramp (base image + mounted handler) | `Zero-build on-ramp (S16)` (default Go handler answers via the channel; a mounted Python handler answers with handler-specific output; repointing the ConfigMap rolls the handler; a missing ConfigMap gates with `HandlerConfigMapNotFound`, creates no Pod, and recovers) | Unit: the Python loader suite (`images/agent-python/tests/test_loader.py`); envtest `TestAgent_HandlerConfigMapNotFoundGatesAndRecovers`, `TestAgent_HandlerMountNotAllowedDegradesAndRecovers` |
 
 The LLM-proxy scenarios (S4, S10, S15) are exercised against an in-cluster mock
 upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy
