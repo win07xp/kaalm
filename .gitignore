@@ -15,7 +15,6 @@ bin/*
 Dockerfile.cross
 *.test
 *.out
-go.work
 !vendor/**/zz_generated.*
 .idea
 .vscode
