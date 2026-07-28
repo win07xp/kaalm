@@ -7,17 +7,18 @@ k3d cluster delete kaalm-tutorial
 ```
 
 ```
-INFO[0002] Successfully deleted cluster kaalm-tutorial!
+INFO[0001] Successfully deleted cluster kaalm-tutorial!
 ```
 
-That is everything: the cluster, Kaalm, your agent, its storage, the lot. The
-images you built stay in Docker until you remove them; nothing else survives.
+That is everything: the cluster, Kaalm, your agent, its storage, the lot.
+Nothing survives on your laptop except the files you wrote.
 
-What you keep is the part that matters. The manifests you wrote (`agent.yaml`,
-`channel.yaml`, `task.yaml`) describe an agent, a front door, and a job in
-about sixty lines, and they work the same against a real cluster as against the
-one you just deleted. That is the point of declaring things rather than
-operating them.
+And those are the part that matters. Three manifests and one handler
+(`agent.yaml`, `channel.yaml`, `task.yaml`, `handler.py`) describe an agent,
+a front door, a job, and the agent's actual behavior in well under a hundred
+lines, and they work the same against a real cluster as against the one you
+just deleted. That is the point of declaring things rather than operating
+them.
 
 ## What you actually learned
 
@@ -41,15 +42,19 @@ organized by the symptom you are actually seeing.
 **Understand the machine.** The
 [design book](https://github.com/win07xp/kaalm) is the specification: how the
 controller reconciles, how the gateway routes and bills, how the TLS identity
-fabric is built, and the fifteen acceptance scenarios the whole system is
+fabric is built, and the sixteen acceptance scenarios the whole system is
 tested against. Start with its architecture chapter.
 
-**Write your own agent.** You already have the template. Replace
-`handleMessage` and keep the rest, which handles the parts that are easy to get
-wrong: TLS with certificate rotation, verifying the gateway, deduplicating
-redelivered messages, heartbeats, and persisting state so hibernation does not
-lose the thread. The runtime contract chapter in the design book is the
-authority on what an agent must do.
+**Write a bigger agent.** You already write handlers; that is the whole
+programming model. When one outgrows a ConfigMap, usually the day it needs a
+dependency the base image does not bundle, the same handler moves into a
+`FROM ghcr.io/win07xp/kaalm-agent-python` image, and beyond that lie the
+starter templates and fully custom images. Whatever the packaging, the image
+keeps handling the parts that are easy to get wrong: TLS with certificate
+rotation, verifying the gateway, deduplicating redelivered messages, and
+persisting state so hibernation does not lose the thread. The runtime
+contract chapter in the design book is the authority on what an agent must
+do.
 
 ## What this tutorial skipped
 

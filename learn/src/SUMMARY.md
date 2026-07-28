@@ -8,6 +8,7 @@
 - [Looking Around](looking-around.md)
 - [Running an Agent](running-an-agent.md)
 - [Talking to Your Agent](talking-to-your-agent.md)
+- [Make It Yours](make-it-yours.md)
 - [Giving It a Job](giving-it-a-job.md)
 - [Sleep and Wake](sleep-and-wake.md)
 - [Give It a Real Brain](give-it-a-real-brain.md)

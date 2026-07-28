@@ -26,15 +26,15 @@ Ctrl-C when it settles:
 
 ```
 NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   82s
+helper   Hibernated   False   tutorial   3m18s
 ```
 
 > **What counts as activity?** Kaalm watches the model calls an agent makes
-> through the gateway, because that is the traffic that costs money. This
-> starter agent never calls a model, so it is idle by that measure from the
-> moment it starts. That is why it hibernates on the timer even though you were
-> chatting with it. An agent that actually calls a model stays awake while it
-> is working.
+> through the gateway, because that is the traffic that costs money. The
+> handler you wrote never calls a model, so this agent is idle by that measure
+> from the moment it starts. That is why it hibernates on the timer even
+> though you were chatting with it. An agent that actually calls a model stays
+> awake while it is working.
 
 ## What survived
 
@@ -56,7 +56,7 @@ kubectl get agents
 
 ```
 NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   82s
+helper   Hibernated   False   tutorial   3m18s
 ```
 
 And so does its storage:
@@ -66,8 +66,8 @@ kubectl get pvc
 ```
 
 ```
-NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-helper-memory   Bound    pvc-6a91ee09-50a1-461b-a2e4-da964ead5f77   1Gi        RWO            local-path     82s
+NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+helper-memory   Bound    pvc-5babc3ae-fbec-4fa9-856d-1e6ee45113e5   1Gi        RWO            local-path     <unset>                 3m17s
 ```
 
 That is the trick in one screen: the expensive part (a running program) is
@@ -87,7 +87,7 @@ curl -sk -X POST https://127.0.0.1:18080/channels/default/helper-webhook \
 ```
 
 ```json
-{"content":"starter-go received: are you awake (message 3 from you)","attachments":null,"metadata":{"sessionId":"","userId":""}}
+{"content": "helper here: are you awake (message 3 from you)"}
 ```
 
 Read that reply again. **Message 3.**
@@ -106,7 +106,7 @@ kubectl get agents
 
 ```
 NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   114s
+helper   Running   True    tutorial   3m26s
 ```
 
 Awake again, ready to go quiet and repeat the cycle.

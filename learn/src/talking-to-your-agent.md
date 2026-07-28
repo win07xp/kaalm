@@ -58,7 +58,7 @@ kubectl get agentchannels
 
 ```
 NAME             AGENT    PHASE    CONNECTED   AGE
-helper-webhook   helper   Active   10s
+helper-webhook   helper   Active               2s
 ```
 
 `Active` means the gateway has accepted the path and the token, and is now
@@ -85,7 +85,7 @@ curl -sk -X POST https://127.0.0.1:18080/channels/default/helper-webhook \
 ```
 
 ```json
-{"content":"starter-go received: hello there","attachments":null,"metadata":{"sessionId":"","userId":""}}
+{"content": "echo: hello there", "attachments": [], "metadata": {}}
 ```
 
 That round trip went further than it looks. Your request hit the gateway, which
@@ -97,24 +97,12 @@ certificates Kaalm issued), delivered the message, and handed you the reply.
 to a port-forward on localhost rather than the gateway's real name. Inside the
 cluster nothing skips verification.
 
-## It remembers you
+## The reply is canned, and that is next
 
-Send a second message:
+`echo:` is the image's built-in default handler talking. Every reference image
+answers like this until you hand it real code, which is exactly what makes it
+safe to poke at: the loop you just proved (token, gateway, mTLS, delivery,
+reply) is the hard part, and it now works. The code is the easy part, and it is
+the next chapter.
 
-```bash
-curl -sk -X POST https://127.0.0.1:18080/channels/default/helper-webhook \
-  -H "Authorization: Bearer tutorial-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"are you still there"}'
-```
-
-```json
-{"content":"starter-go received: are you still there (message 2 from you)","attachments":null,"metadata":{"sessionId":"","userId":""}}
-```
-
-**"message 2 from you".** The agent is counting, and it is keeping that count
-on the volume Kaalm gave it, not in memory. That distinction looks academic
-right now. It is the whole point of the chapter after next, when the program
-holding that count gets shut down entirely and a new one takes its place.
-
-Next: [Giving It a Job](giving-it-a-job.md).
+Next: [Make It Yours](make-it-yours.md).

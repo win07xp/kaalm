@@ -56,6 +56,47 @@ condition (`kubectl describe agentclass standard`) goes True when the spec is
 coherent (for example, every `allowedProviders` entry names a ModelProvider
 that exists).
 
+## A starter class for handler mounts
+
+The reference base images can run handler source that developers ship as a
+ConfigMap (`Agent.spec.handler`; the developer's side is
+[Deploying from a Base Image](../developers/deploying-from-a-base-image.md)).
+That capability is off by default, because it changes what `allowedImages`
+means: your allowlist is an image review boundary, and a mounted handler
+injects code that no image review ever saw. Granting it is a per-class
+statement that, for workloads of this category, namespace-level ConfigMap
+authorship is acceptable code provenance.
+
+Offer it as its own class rather than loosening a production one:
+
+```yaml
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: starter
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages:
+      - ghcr.io/win07xp/kaalm-agent-go:0.3.0
+      - ghcr.io/win07xp/kaalm-agent-python:0.3.0
+    allowHandlerMounts: true
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+    maxSizeGi: 5
+  lifecycle:
+    defaultIdleTimeout: 30m
+    hibernationAllowed: true
+```
+
+Pinning `allowedImages` to exactly the published base images keeps the grant
+narrow: mounted code runs only inside the runtime you chose, never inside an
+arbitrary allowlisted image. Flipping `allowHandlerMounts` back to `false`
+later degrades existing Agents that mount handlers, with the same recoverable
+handling as the other class gates.
+
 ## A sandboxed class for code-executing agents
 
 Agents that execute untrusted code (a coding agent running arbitrary build

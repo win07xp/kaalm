@@ -1,9 +1,14 @@
 # Building Your Own Agent Image
 
-An agent image is any container that honors the runtime contract. The
-templates under `examples/starter-go` and `examples/starter-python` implement
-all of it; this page is the contract from the implementer's seat, so you can
-grow out of a template or start clean.
+An agent image is any container that honors the runtime contract. Most
+agents never need one: the ladder starts at a published base image with a
+mounted handler ([Deploying from a Base Image](deploying-from-a-base-image.md)),
+climbs to a `FROM` build on that base when you need extra dependencies, and
+only ends here, at owning the whole image, when you need another runtime or
+full control. The templates under `examples/starter-go` and
+`examples/starter-python` implement all of the contract; this page is the
+contract from the implementer's seat, so you can grow out of a template or
+start clean.
 
 ## What the operator hands your container
 
@@ -15,6 +20,7 @@ Environment:
 | `KAALM_GATEWAY_ENDPOINT` | Base HTTPS URL of the gateway's LLM listener; all outbound calls go here |
 | `KAALM_TLS_CERT` / `KAALM_TLS_KEY` | Your per-agent certificate and key, mounted at `/var/run/kaalm/` |
 | `KAALM_CA_CERT` | The cluster CA bundle, same mount |
+| `KAALM_HANDLER_PATH` | Only when `Agent.spec.handler` is set: the directory the handler ConfigMap is mounted at (`/opt/kaalm/handler`). Its absence is how a base image knows to serve its built-in default; a `FROM` build that bakes a handler sets it itself |
 
 The certificate is your identity: the gateway authenticates you by its SAN,
 and it doubles as your serving certificate. Your `spec.env` entries are
@@ -59,7 +65,9 @@ only as an override for the heartbeat loop; there is no force-on.
 
 ## Growing out of a template versus starting clean
 
-Start from a template if your language is Go or Python: the TLS wiring,
+Before either: if a base image plus a mounted or `FROM`-baked handler covers
+your case, stay there and skip this whole page. Start from a template if
+your language is Go or Python and you need the whole program: the TLS wiring,
 rotation reload, envelope parsing, dedup, and completion retry logic are the
 fiddly parts, and they are exactly what the templates already do. Start
 clean only when you need another runtime, and port the template's structure
@@ -70,7 +78,7 @@ logic; everything else is contract plumbing you should rarely touch.
 
 ## Testing an image before pointing an Agent at it
 
-The honest answer for v0.2.0: the fastest full-fidelity loop is the e2e
+The honest answer: the fastest full-fidelity loop is the e2e
 cluster, because the contract is mostly about TLS identity, and that needs
 the real certificate machinery:
 
@@ -86,7 +94,7 @@ can unit test without any of the above.
 ---
 
 *How this works: design book pages Runtime, Runtime Contract (the normative
-version of this checklist, including the dedup rationale), Runtime, Starter
-Templates (what each template implements and the planned v1.1 base images),
-and Gateways, API, Task Complete (the identity gate you are retrying
-against).*
+version of this checklist, including the dedup rationale), Runtime,
+Reference Base Images (the bottom rungs of the ladder), Runtime, Starter
+Templates (what each template implements), and Gateways, API, Task Complete
+(the identity gate you are retrying against).*

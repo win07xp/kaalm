@@ -44,6 +44,7 @@ kind: ConfigMap
 metadata:
   name: s16-handler
   namespace: e2e
+immutable: true
 data:
   handler.py: |
     def handle_message(envelope):
@@ -58,6 +59,7 @@ kind: ConfigMap
 metadata:
   name: s16-handler-v2
   namespace: e2e
+immutable: true
 data:
   handler.py: |
     def handle_message(envelope):
