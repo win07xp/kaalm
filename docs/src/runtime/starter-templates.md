@@ -90,11 +90,11 @@ There is deliberately no value that forces heartbeats on in task mode: the endpo
 
 ```
 examples/
-  starter-go/
-    Dockerfile
-    go.mod
-    main.go            # server + tls reload + heartbeat
-    handler.go         # handleMessage(envelope), replace this
+  starter-go/          # the template rung: imports the runtime module
+    Dockerfile         # compiles the program, layers it onto kaalm-agent-go
+    go.mod             # requires github.com/win07xp/kaalm/agentruntime
+    main.go            # wiring only: New() + Run(ctx, handler(a))
+    handler.go         # the developer-owned handler, replace this
     README.md
   starter-python/      # the FROM rung: the base image owns the runtime
     Dockerfile         # FROM kaalm-agent-python + COPY handler.py + ENV
@@ -102,7 +102,7 @@ examples/
     README.md
 ```
 
-Since v0.3.0 the Python template carries no contract code of its own: it is a `FROM ghcr.io/win07xp/kaalm-agent-python` build (source in `images/agent-python/`), and the ten items above are supplied by the base image. The Go template still vendors its implementation until the Go runtime module lands (see [Reference Base Images](base-images.md#relationship-to-the-starter-templates)).
+Since v0.3.0 neither template carries contract code of its own. The Python template is a `FROM ghcr.io/win07xp/kaalm-agent-python` build (source in `images/agent-python/`), and the Go template imports the [`agentruntime` module](base-images.md#the-go-image) (source in `agentruntime/`); the ten items above are supplied by the base image and the module respectively.
 
 Each template's README contains:
 
@@ -119,4 +119,4 @@ Kaalm v1 and v0.2.0 shipped starter templates instead of published base images, 
 
 A contract fix therefore lands once, in the runtime source, and reaches mount-and-run users on the next image pull, `FROM` users on their next rebuild, and template users on their next module update. The full on-ramp ladder, and when to step down it, is the ranking table in [Reference Base Images](base-images.md#relationship-to-the-starter-templates).
 
-The runtime contract is the invariant across every rung: base images and templates alike accept the same `handleMessage` signature.
+The runtime contract is the invariant across every rung: one envelope in, one response out, whether the handler is Python's `handle_message(envelope)` or Go's `Handler` function.

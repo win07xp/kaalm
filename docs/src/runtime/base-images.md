@@ -72,7 +72,30 @@ A `FROM` build keeps the central-patching property (rebuild against the bumped t
 Go compiles, so there is no source mount to offer, and Kaalm does not pretend otherwise. `kaalm-agent-go` is two honest things:
 
 - **A runnable reference agent.** It ships the default handler, so it is the zero-build way to see a full-lifecycle Agent work end to end: apply an Agent with this image and no `spec.handler` at all, and it comes up, hibernates, wakes, and echoes. The e2e suite's baseline leans on this, and the learn book's first agent follows the same path from v0.3.0.
-- **The canonical parent for compiled handlers.** The contract runtime is published as a lightweight Go module (standard library plus fsnotify, no controller-runtime dependency tree), and the image is the multi-stage build target for binaries built against it. A custom Go agent is a `main.go` that calls the runtime with its handler, compiled and layered onto the base image.
+- **The canonical parent for compiled handlers.** The contract runtime is published as a lightweight Go module, `github.com/win07xp/kaalm/agentruntime` (standard library plus fsnotify, no controller-runtime dependency tree; each release pushes the matching `agentruntime/vX.Y.Z` module tag). The image is the build target for binaries built against it: a custom Go agent is a `main.go` that calls the runtime with its handler, compiled and layered onto the base image.
+
+The module's surface mirrors the Python `kaalm` module in concept, idiomatic Go in shape. `New()` reads the standard Kaalm environment; `Run(ctx, handler)` serves the contract until canceled, with `nil` selecting the default handler; and a handler reaches capabilities by closing over the `Agent`, whose `Gateway` (rotation-aware mTLS client) and `Memory` (persistent store behind the same `user/` key wall) correspond one to one with `kaalm.gateway` and `kaalm.memory`. Like that surface, the module's exported API is append-only within a minor series.
+
+```go
+a, err := agentruntime.New()
+// ...
+err = a.Run(ctx, func(ctx context.Context, env agentruntime.Envelope) (agentruntime.Response, error) {
+	resp, err := a.Gateway.Post(ctx, "/v1/chat/completions", llmRequest(env))
+	// ...
+})
+```
+
+Layering onto the image is one `COPY`: the entrypoint runs `/kaalm-agent`, and a build that replaces that file replaces the agent.
+
+```dockerfile
+FROM golang:1.24 AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -o /agent .
+
+FROM ghcr.io/win07xp/kaalm-agent-go:0.3.0
+COPY --from=build /agent /kaalm-agent
+```
 
 Two mechanisms were considered for mounted Go handlers and rejected. Go plugins (`plugin.Open` of a mounted `.so`) require the plugin and host to be built by byte-identical toolchains and dependency graphs, a version-matching contract Kaalm cannot impose on users. Mounted pre-compiled binaries collide with the ConfigMap cap: real Go binaries run megabytes against a 1MiB limit. Both would have manufactured the appearance of zero-build Go while shipping its failure modes.
 

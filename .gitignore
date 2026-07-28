@@ -24,6 +24,8 @@ Dockerfile.cross
 
 # Starter-template build artifacts
 examples/starter-go/starter-go
+# `go build ./examples/starter-go/` from the repo root drops the binary here
+/starter-go
 __pycache__/
 *.pyc
 

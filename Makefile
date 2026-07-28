@@ -67,10 +67,15 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 COVERAGE_THRESHOLD ?= 85
 
 .PHONY: cover-check
+# GOWORK=off: the gate measures the operator module exactly as its release
+# builds compile it (module mode, its own go.sum). Workspace mode changes how
+# -coverpkg attributes cross-package coverage (the union drops from ~87% to a
+# false ~75% with identical tests). The agentruntime module has its own suite
+# (make runtime-test).
 cover-check: manifests generate fmt vet setup-envtest ## Run tests with union coverage and fail below COVERAGE_THRESHOLD%.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-		go test $$(go list ./... | grep -v /e2e) \
-		-coverpkg=$$(go list ./... | grep -v /e2e | paste -sd,) -coverprofile cover.out
+		GOWORK=off go test $$(GOWORK=off go list ./... | grep -v /e2e) \
+		-coverpkg=$$(GOWORK=off go list ./... | grep -v /e2e | paste -sd,) -coverprofile cover.out
 	@total=$$(go tool cover -func=cover.out | awk '/^total:/{print $$3}' | tr -d '%'); \
 	awk -v t="$$total" -v thr="$(COVERAGE_THRESHOLD)" 'BEGIN{ \
 		printf "total project coverage: %s%% (gate: %s%%)\n", t, thr; \
@@ -78,12 +83,16 @@ cover-check: manifests generate fmt vet setup-envtest ## Run tests with union co
 		printf "coverage gate passed\n" }'
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: golangci-lint ## Run golangci-lint on every workspace module.
 	$(GOLANGCI_LINT) run
+	cd agentruntime && $(GOLANGCI_LINT) run
+	cd examples/starter-go && $(GOLANGCI_LINT) run
 
 .PHONY: lint-fix
-lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
+lint-fix: golangci-lint ## Run golangci-lint with fixes on every workspace module.
 	$(GOLANGCI_LINT) run --fix
+	cd agentruntime && $(GOLANGCI_LINT) run --fix
+	cd examples/starter-go && $(GOLANGCI_LINT) run --fix
 
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
@@ -219,12 +228,27 @@ python-image: ## Build the kaalm-agent-python reference base image.
 python-smoke: python-image ## Contract smoke against the built image: TLS, mTLS matrix, echo, mounted handler, fail-fast.
 	hack/python-image-smoke.sh $(PYTHON_AGENT_IMG)
 
+GO_AGENT_IMG ?= ghcr.io/win07xp/kaalm-agent-go:$(CHART_APP_VERSION)
+
+.PHONY: runtime-test
+runtime-test: ## Unit tests for the agentruntime module and the Go starter (native, -race).
+	go test -race ./agentruntime/... ./examples/starter-go/...
+
+.PHONY: go-agent-image
+go-agent-image: ## Build the kaalm-agent-go base image (its test stage gates every build, so this also runs the suite).
+	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
+
+.PHONY: go-agent-smoke
+go-agent-smoke: go-agent-image ## Contract smoke against the built image: TLS, mTLS matrix, echo, dedup across replacement.
+	hack/go-image-smoke.sh $(GO_AGENT_IMG)
+
 .PHONY: e2e-images
 e2e-images: ## Build the controller, gateway, agent, and mock-provider images and import them into k3d.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
-	docker build -t $(AGENT_IMG) examples/starter-go
+	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
+	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
 	docker pull $(CURL_IMG)
 	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(CURL_IMG)
 

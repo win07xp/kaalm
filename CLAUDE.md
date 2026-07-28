@@ -26,8 +26,9 @@ number, so numbering is immutable.
 ## Build Commands
 
 ```bash
-go build ./...                          # build
+go build ./...                          # build (root module; go.work spans agentruntime + starter-go too)
 go test ./...                           # unit tests
+make runtime-test                       # agentruntime module + Go starter tests (-race)
 go test ./internal/controller/... -run TestName  # single test
 make cover-check                        # coverage gate (>=85% union coverage, same as CI)
 make e2e                                # full k3d e2e suite

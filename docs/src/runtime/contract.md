@@ -120,7 +120,7 @@ Activity timestamps are maintained in-memory in the gateway. The controller quer
 
 ## Starter templates
 
-Kaalm ships starter templates (one Go, one Python) under `examples/starter-go/` and `examples/starter-python/` as part of v1. Each template implements the full runtime contract end-to-end: HTTPS serving on `$KAALM_HEALTH_PORT`, mTLS client certificate presentation on gateway calls, cert-file watch and reload, a `/v1/message` handler skeleton, `messageId`-based deduplication, and a task-completion helper with the bounded `StalePodCompletion` retry from item 6.
+Kaalm ships starter templates (one Go, one Python) under `examples/starter-go/` and `examples/starter-python/`, first introduced in v1. Each template delivers the full runtime contract end-to-end: HTTPS serving on `$KAALM_HEALTH_PORT`, mTLS client certificate presentation on gateway calls, cert-file watch and reload, a `/v1/message` handler skeleton, `messageId`-based deduplication, and a task-completion helper with the bounded `StalePodCompletion` retry from item 6. Since v0.3.0 they deliver it by consuming the single-sourced runtime (the Go module, the Python base image) rather than by carrying their own copies.
 
 The templates target Kaalm-managed (mTLS-tier) workloads; gateway-only-tier workloads are pre-existing images configured per [Tiered On-Ramp](../operations/deployment.md#tiered-on-ramp). See [Starter Templates](starter-templates.md).
 
