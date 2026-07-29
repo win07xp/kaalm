@@ -28,6 +28,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	toolscache "k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -117,6 +118,16 @@ func main() {
 		o.Scheme = scheme
 		o.Client.Cache = &client.CacheOptions{
 			DisableFor: []client.Object{&corev1.Secret{}},
+		}
+		// The ConfigMap informer (budget watch-fold) must be scoped to the
+		// operator namespace: the gateway's Role grants list/watch there
+		// only, and an unscoped informer would issue a forbidden
+		// cluster-wide LIST and hang, the same failure mode the Secret
+		// comment above describes.
+		o.Cache.ByObject = map[client.Object]cache.ByObject{
+			&corev1.ConfigMap{}: {Namespaces: map[string]cache.Config{
+				operatorNamespace: {},
+			}},
 		}
 	})
 	if err != nil {
@@ -234,7 +245,7 @@ func main() {
 		podName, _ = os.Hostname()
 	}
 	publisher := &gateway.BudgetPublisher{
-		Client: clientset, Store: store, Ledger: server.Budget,
+		Client: clientset, Ledger: server.Budget,
 		OperatorNamespace: operatorNamespace, PodName: podName,
 		Providers: func(ctx context.Context) []*kaalmv1alpha1.ModelProvider {
 			var list kaalmv1alpha1.ModelProviderList
@@ -250,6 +261,23 @@ func main() {
 	}
 	publisher.SeedFromCanonical(ctx)
 	go publisher.Run(ctx)
+
+	// The watch-driven half of the budget fold: peer partials land in the
+	// enforcement view one watch propagation after they are published, which
+	// hard enforcement's boundary region depends on (the tick remains the
+	// backstop). The cache scopes ConfigMaps to the operator namespace above.
+	if informer, err := cl.GetCache().GetInformer(ctx, &corev1.ConfigMap{}); err == nil {
+		_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj any) {
+				gateway.FoldBudgetConfigMapEvent(ctx, obj, podName, store, server.Budget)
+			},
+			UpdateFunc: func(_, newObj any) {
+				gateway.FoldBudgetConfigMapEvent(ctx, newObj, podName, store, server.Budget)
+			},
+		})
+	} else {
+		logger.Warn("budget ConfigMap informer unavailable; folds ride the tick only", "error", err)
+	}
 
 	// The gateway's half of the channel-delete handshake: once a channel is
 	// observed Terminating, confirm disconnection with the annotation the

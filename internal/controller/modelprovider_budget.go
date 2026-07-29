@@ -98,39 +98,27 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		return err
 	}
 
-	current := map[string]float64{}  // ns -> USD, current period
-	previous := map[string]float64{} // ns -> USD, prior-period entries pending archive
-	previousPeriod := ""
-	changed := false
-	for k, raw := range cm.Data {
-		if k == gateway.CanonicalKey {
-			continue
-		}
-		// Prune keys left behind by scaled-down or replaced replicas.
-		if !liveGateways[k] {
-			delete(cm.Data, k)
-			changed = true
-			continue
-		}
-		period, spend, err := gateway.ParseBudgetPartial(raw)
+	fold := foldBudgetKeys(&cm, liveGateways, currentPeriod)
+	current, previous, previousPeriod := fold.current, fold.previous, fold.previousPeriod
+	changed := fold.changed
+
+	// current-period spend everyone must see = live partials + retired.
+	for ns, v := range fold.retired {
+		current[ns] += v
+	}
+	if fold.retiredChanged {
+		rawRetired, err := json.Marshal(gateway.RetiredPartial(currentPeriod, fold.retired))
 		if err != nil {
-			continue
+			return err
 		}
-		if period == currentPeriod {
-			for ns, v := range spend {
-				current[ns] += v
-			}
-			continue
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
 		}
-		// Rollover: archive the old-period totals and delete the stale key;
-		// the live replica rewrites a new-period partial on its next publish.
-		previousPeriod = period
-		for ns, v := range spend {
-			previous[ns] += v
-		}
-		delete(cm.Data, k)
+		cm.Data[gateway.RetiredKey] = string(rawRetired)
 		changed = true
 	}
+
+	r.setBoundaryMargin(mp, fold.marginRaised)
 
 	canonical := map[string]string{}
 	for ns, v := range current {
@@ -169,6 +157,83 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		providerBudgetCanonical.WithLabelValues(mp.Name, ns, currentPeriod).Set(v)
 	}
 	return nil
+}
+
+// budgetFold is foldBudgetKeys' result: the reducer's view of one budget
+// ConfigMap pass.
+type budgetFold struct {
+	current        map[string]float64 // ns -> USD, current period, live replicas
+	retired        map[string]float64 // ns -> USD, current period, pruned replicas
+	previous       map[string]float64 // ns -> USD, prior-period entries pending archive
+	previousPeriod string
+	changed        bool
+	retiredChanged bool
+	marginRaised   bool
+}
+
+// foldBudgetKeys walks every key in the budget ConfigMap once: summing live
+// current-period partials (and their margin flags), folding pruned replicas'
+// current-period totals into the retired view (deleting a key must not
+// delete the spend it recorded; load-bearing under hard enforcement, where a
+// rollout would otherwise erase every replaced replica's published spend),
+// and archiving prior-period entries.
+func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentPeriod string) budgetFold {
+	f := budgetFold{
+		current:  map[string]float64{},
+		retired:  map[string]float64{},
+		previous: map[string]float64{},
+	}
+	sum := func(dst map[string]float64, src map[string]float64) {
+		for ns, v := range src {
+			dst[ns] += v
+		}
+	}
+	for k, raw := range cm.Data {
+		if k == gateway.CanonicalKey {
+			continue
+		}
+		period, spend, margin, err := gateway.ParseBudgetPartial(raw)
+		switch {
+		case k == gateway.RetiredKey:
+			// Reconciler-owned: carried while current, archived at rollover.
+			if err != nil {
+				continue
+			}
+			if period == currentPeriod {
+				sum(f.retired, spend)
+			} else {
+				f.previousPeriod = period
+				sum(f.previous, spend)
+				delete(cm.Data, k)
+				f.changed = true
+			}
+		case !liveGateways[k]:
+			if err == nil && period == currentPeriod {
+				sum(f.retired, spend)
+				f.retiredChanged = true
+			} else if err == nil && period != currentPeriod {
+				f.previousPeriod = period
+				sum(f.previous, spend)
+			}
+			delete(cm.Data, k)
+			f.changed = true
+		case err != nil:
+		case period == currentPeriod:
+			sum(f.current, spend)
+			if margin {
+				f.marginRaised = true
+			}
+		default:
+			// Rollover: archive the old-period totals and delete the stale
+			// key; the live replica rewrites a new-period partial on its
+			// next publish.
+			f.previousPeriod = period
+			sum(f.previous, spend)
+			delete(cm.Data, k)
+			f.changed = true
+		}
+	}
+	return f
 }
 
 // budgetUsageEntries renders per-namespace spend into status entries with the

@@ -23,8 +23,8 @@ The **e2e** column is the acceptance surface. S1 to S15 form the v0.2.0
 surface: every one points at the spec that proves it on a cluster, and every
 one is green. S16 was added with the v0.3.0 base-image design and is green
 against the locally built base images; the published images land with the
-v0.3.0 release. S17 was added with the v0.3.0 hard-budget design and its row
-fills in as that implementation lands.
+v0.3.0 release. S17 was added with the v0.3.0 hard-budget design and is
+green.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -44,10 +44,10 @@ fills in as that implementation lands.
 | S14 Webhook for a hibernated agent | `Hibernate and wake` (S14: `wake_timeout` payload on the polling endpoint) | Unit `TestWebhook_Async*` |
 | S15 Async webhook for a long-running agent | `Session identity and async callback` (S15: 202, signed callback to the receiver, polling fallback) | Unit `TestWebhook_AsyncAcceptAndPoll`, `TestWebhook_AsyncCallbackDelivery` |
 | S16 Zero-build on-ramp (base image + mounted handler) | `Zero-build on-ramp (S16)` (default Go handler answers via the channel; a mounted Python handler answers with handler-specific output; repointing the ConfigMap rolls the handler; a missing ConfigMap gates with `HandlerConfigMapNotFound`, creates no Pod, and recovers) | Unit: the Python loader suite (`images/agent-python/tests/test_loader.py`); envtest `TestAgent_HandlerConfigMapNotFoundGatesAndRecovers`, `TestAgent_HandlerMountNotAllowedDegradesAndRecovers` |
-| S17 Hard budget cap (opt-in enforcement) | Pending: designed in [Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement), lands with the v0.3.0 hard-budget work ([#57](https://github.com/win07xp/kaalm/issues/57)) | Pending: boundary-admission unit suite; envtest for rules 32 to 34 |
+| S17 Hard budget cap (opt-in enforcement) | `Hard budget cap (S17)` (hard provider blocks at the ceiling naming which ceiling fired; post-exhaustion requests are rejected with the mock's request counter proving no upstream call; the soft twin behaves as S10 documents) | Unit `TestHardAdmit_*`, `TestProxyHard_*` (boundary admission, sticky slot, fail-closed, stream settle); envtest `TestModelProvider_HardBudget*`, `TestModelProvider_BoundaryMarginRaisedCondition` (rules 32 to 34, margin condition) |
 
-The LLM-proxy scenarios (S4, S10, S15) are exercised against an in-cluster mock
-upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy
+The LLM-proxy scenarios (S4, S10, S15, S17) are exercised against an
+in-cluster mock upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy
 behavior is additionally exercised by the `Golden path` cross-namespace deny
 probe.
 

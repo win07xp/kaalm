@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,12 @@ func BudgetConfigMapName(providerName string) string { return "kaalm-budget-" + 
 // CanonicalKey is the reconciler-owned roll-up key in the budget ConfigMap.
 const CanonicalKey = "_canonical"
 
+// RetiredKey is the reconciler-owned, period-tagged accumulator that keeps a
+// pruned replica's published current-period spend alive: without it a rolling
+// restart would erase every replaced replica's spend from every view, which
+// voids a hard ceiling once per rollout. Replicas fold it like a peer partial.
+const RetiredKey = "_retired"
+
 // budgetPartial is the JSON value under each per-replica key. The period tag
 // lets the reducer drop stale entries during rollover.
 type budgetPartial struct {
@@ -46,7 +53,16 @@ type budgetPartial struct {
 	// Spend is per-namespace USD as decimal strings, flattened into the same
 	// JSON object as period on the wire.
 	Spend map[string]string `json:"-"`
+	// MarginExceeded reports that this replica's observed traffic required a
+	// wider boundary margin than configured (hard enforcement). On the wire
+	// it is the underscore-prefixed, non-numeric "_marginExceeded" field, so
+	// an older parser cannot mistake it for namespace spend.
+	MarginExceeded bool `json:"-"`
 }
+
+// marginExceededField is the flag field inside a partial. Underscore-prefixed
+// fields are flags, never spend; values are never bare numbers.
+const marginExceededField = "_marginExceeded"
 
 // MarshalJSON flattens period and the namespace map into one object, matching
 // the documented ConfigMap layout.
@@ -55,19 +71,30 @@ func (p budgetPartial) MarshalJSON() ([]byte, error) {
 	for ns, v := range p.Spend {
 		out[ns] = v
 	}
+	if p.MarginExceeded {
+		out[marginExceededField] = "true"
+	}
 	return json.Marshal(out)
 }
 
-// ParseBudgetPartial decodes a per-replica ConfigMap value.
-func ParseBudgetPartial(raw string) (period string, spend map[string]float64, err error) {
+// ParseBudgetPartial decodes a per-replica ConfigMap value. Underscore-
+// prefixed fields are flags, not spend; the only defined one is returned as
+// marginExceeded.
+func ParseBudgetPartial(raw string) (period string, spend map[string]float64, marginExceeded bool, err error) {
 	var flat map[string]string
 	if err := json.Unmarshal([]byte(raw), &flat); err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	spend = map[string]float64{}
 	for k, v := range flat {
 		if k == "period" {
 			period = v
+			continue
+		}
+		if strings.HasPrefix(k, "_") {
+			if k == marginExceededField && v == "true" {
+				marginExceeded = true
+			}
 			continue
 		}
 		f, err := strconv.ParseFloat(v, 64)
@@ -76,7 +103,17 @@ func ParseBudgetPartial(raw string) (period string, spend map[string]float64, er
 		}
 		spend[k] = f
 	}
-	return period, spend, nil
+	return period, spend, marginExceeded, nil
+}
+
+// RetiredPartial builds the reconciler-owned _retired accumulator value in
+// the same wire shape as a replica partial.
+func RetiredPartial(period string, spend map[string]float64) any {
+	out := map[string]string{}
+	for ns, v := range spend {
+		out[ns] = strconv.FormatFloat(v, 'f', 2, 64)
+	}
+	return budgetPartial{Period: period, Spend: out}
 }
 
 // PeriodKey computes the budget period identifier for a scheme at time t
@@ -135,20 +172,61 @@ func costOf(provider *kaalmv1alpha1.ModelProvider, modelID string, usage Usage) 
 // stale. See docs/src/gateways/llm/budgets-and-rate-limits.md.
 type BudgetLedger struct {
 	now func() time.Time
+	// replicas returns the live gateway replica count for the effective
+	// margin; nil means one replica.
+	replicas func() int
+	// kick carries provider names whose settles want an immediate partial
+	// publish; the publisher selects on it. Sends never block.
+	kick chan string
+	// stalenessWindow bounds both fail-closed signals. Derived, not a knob:
+	// three publish intervals.
+	stalenessWindow time.Duration
 
 	mu        sync.Mutex
 	providers map[string]*providerLedger
 }
 
+// rateBucketWidth is the observed-spend-rate bucket, matching the publish
+// interval so single-call spikes are covered by maxCostPerCall instead.
+const rateBucketWidth = 10 * time.Second
+
+// clusterSlotKey is the admission-slot key for the provider-wide (cluster
+// ceiling) slot. Namespaces cannot be empty, so it cannot collide.
+const clusterSlotKey = ""
+
 type providerLedger struct {
 	period string
 	own    map[string]float64
 	peers  map[string]float64
+
+	// Hard-enforcement state, all guarded by the ledger mutex
+	// (docs/src/gateways/llm/budgets-and-rate-limits.md#hard-enforcement).
+	// adm maps a governed-ceiling key (a namespace, or clusterSlotKey) to
+	// the settle token of the holder; an absent key is a free slot.
+	adm       map[string]uint64
+	nextToken uint64
+	// Observed-traffic tracker: running max settled cost of one call, and
+	// the peak spend rate over fixed buckets, monotone within the period.
+	maxCostPerCall  float64
+	rateBucketStart time.Time
+	rateBucketSum   float64
+	peakRatePerSec  float64
+	// dirtySince is the oldest settle not yet published (zero = clean);
+	// lastFoldOK is the last successful peer-view refresh. Both feed the
+	// fail-closed check.
+	dirtySince   time.Time
+	lastFoldOK   time.Time
+	marginRaised bool
 }
 
 // NewBudgetLedger builds an empty ledger.
 func NewBudgetLedger() *BudgetLedger {
-	return &BudgetLedger{now: time.Now, providers: map[string]*providerLedger{}}
+	return &BudgetLedger{
+		now:             time.Now,
+		kick:            make(chan string, 64),
+		stalenessWindow: 3 * defaultPublishInterval,
+		providers:       map[string]*providerLedger{},
+	}
 }
 
 // ledgerFor returns the provider's ledger, rolling the period over (and
@@ -157,13 +235,23 @@ func (b *BudgetLedger) ledgerFor(providerName, scheme string) *providerLedger {
 	period := PeriodKey(scheme, b.now())
 	l, ok := b.providers[providerName]
 	if !ok {
-		l = &providerLedger{period: period, own: map[string]float64{}, peers: map[string]float64{}}
+		l = &providerLedger{period: period, own: map[string]float64{}, peers: map[string]float64{}, adm: map[string]uint64{}}
 		b.providers[providerName] = l
 	}
 	if l.period != period {
 		l.period = period
 		l.own = map[string]float64{}
 		l.peers = map[string]float64{}
+		// A held slot vanishes with the period: the next admit computes
+		// near-zero utilization, outside any boundary, so no invariant is at
+		// risk; in-flight settles land in the new period (like any midnight-
+		// spanning call) and skip slot mutation via their token mismatch.
+		l.adm = map[string]uint64{}
+		l.maxCostPerCall = 0
+		l.rateBucketStart = time.Time{}
+		l.rateBucketSum = 0
+		l.peakRatePerSec = 0
+		l.marginRaised = false
 	}
 	return l
 }
@@ -176,7 +264,12 @@ func (b *BudgetLedger) Add(provider *kaalmv1alpha1.ModelProvider, namespace stri
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.ledgerFor(provider.Name, scheme).own[namespace] += costUSD
+	l := b.ledgerFor(provider.Name, scheme)
+	l.own[namespace] += costUSD
+	b.trackLocked(l, costUSD)
+	if l.dirtySince.IsZero() {
+		l.dirtySince = b.now()
+	}
 }
 
 // FoldPeers replaces the peer view for a provider from freshly read
@@ -186,6 +279,7 @@ func (b *BudgetLedger) FoldPeers(provider *kaalmv1alpha1.ModelProvider, peers ma
 	defer b.mu.Unlock()
 	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
 	l.peers = peers
+	l.lastFoldOK = b.now()
 }
 
 // InitCanonical seeds the peer view from the reconciler's _canonical roll-up
@@ -195,18 +289,33 @@ func (b *BudgetLedger) InitCanonical(provider *kaalmv1alpha1.ModelProvider, cano
 }
 
 // OwnPartial snapshots this replica's counters for publishing.
-func (b *BudgetLedger) OwnPartial(providerName string) (period string, spend map[string]string, ok bool) {
+func (b *BudgetLedger) OwnPartial(providerName string) (period string, spend map[string]string, marginRaised, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	l, exists := b.providers[providerName]
 	if !exists || len(l.own) == 0 {
-		return "", nil, false
+		return "", nil, false, false
 	}
 	out := map[string]string{}
 	for ns, v := range l.own {
 		out[ns] = strconv.FormatFloat(v, 'f', 2, 64)
 	}
-	return l.period, out, true
+	return l.period, out, l.marginRaised, true
+}
+
+// MarkPublished records a successful partial publish whose ledger snapshot
+// was taken at snapshot. It clears the write-path staleness signal unless a
+// newer settle landed after the snapshot.
+func (b *BudgetLedger) MarkPublished(providerName string, snapshot time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	l, exists := b.providers[providerName]
+	if !exists {
+		return
+	}
+	if !l.dirtySince.IsZero() && !l.dirtySince.After(snapshot) {
+		l.dirtySince = time.Time{}
+	}
 }
 
 // spent returns the enforcement view: own live counter plus peer partials.
@@ -232,54 +341,92 @@ type budgetDecision struct {
 	DegradeTo  string
 	RetryAfter int // seconds until the next period, for block
 	Percent    int
+	// Ceiling attributes the utilization to "namespace" or "cluster"
+	// (whichever ratio is worse) so a block names what fired.
+	Ceiling string
+	// Hard-enforcement outcomes (mutually exclusive with an admitted
+	// request; see Admit): Throttled means the boundary admission slot is
+	// held; Unavailable means the replica cannot verify budget state inside
+	// the boundary region and fails closed.
+	Throttled   bool
+	Unavailable bool
+	// BoundaryEngaged marks an admitted request that holds a boundary slot;
+	// MarginRaisedNow marks the transition that first widened the margin
+	// beyond the configured floor (for the metric's rising edge).
+	BoundaryEngaged bool
+	MarginRaisedNow bool
+}
+
+// utilization is the per-ceiling view the enforcement decision reads.
+type utilization struct {
+	nsPct, clPct   float64 // percent of each ceiling used; 0 when unset
+	nsUSD, clUSD   float64 // the ceilings themselves; 0 when unset
+	worst          float64
+	worstIsCluster bool
+}
+
+// utilizationLocked computes both ceiling ratios from own + peers spend.
+func utilizationLocked(budget kaalmv1alpha1.ModelProviderBudget, l *providerLedger, namespace string) utilization {
+	var u utilization
+	if ceiling, err := strconv.ParseFloat(budget.PerNamespaceUSD, 64); err == nil && ceiling > 0 {
+		u.nsUSD = ceiling
+		u.nsPct = l.spent(namespace) / ceiling * 100
+		u.worst = u.nsPct
+	}
+	if budget.ClusterUSD != nil {
+		if ceiling, err := strconv.ParseFloat(*budget.ClusterUSD, 64); err == nil && ceiling > 0 {
+			u.clUSD = ceiling
+			u.clPct = l.clusterSpent() / ceiling * 100
+			if u.clPct > u.worst {
+				u.worst = u.clPct
+				u.worstIsCluster = true
+			}
+		}
+	}
+	return u
+}
+
+// decide applies the policy ladder to a utilization: the highest-threshold
+// policy at or below the worst ratio wins.
+func (b *BudgetLedger) decide(budget kaalmv1alpha1.ModelProviderBudget, u utilization) budgetDecision {
+	d := budgetDecision{Percent: int(u.worst), Ceiling: "namespace"}
+	if u.worstIsCluster {
+		d.Ceiling = "cluster"
+	}
+	var winner *kaalmv1alpha1.ModelProviderBudgetPolicy
+	for i := range budget.Policies {
+		p := &budget.Policies[i]
+		if u.worst >= float64(p.AtPercent) && (winner == nil || p.AtPercent > winner.AtPercent) {
+			winner = p
+		}
+	}
+	if winner == nil {
+		return d
+	}
+	d.Action = winner.Action
+	if winner.Action == kaalmv1alpha1.BudgetActionDegrade && winner.DegradeTo != nil {
+		d.DegradeTo = *winner.DegradeTo
+	}
+	if winner.Action == kaalmv1alpha1.BudgetActionBlock {
+		d.RetryAfter = int(time.Until(nextPeriodStart(budget.Period, b.now())).Seconds()) + 1
+	}
+	return d
 }
 
 // Enforce evaluates the provider's budget policies for a namespace using
 // last-known spend state (no pre-call estimation). The highest-threshold
 // policy at or below the current utilization wins. Utilization is the worse
-// of the per-namespace and cluster-wide ratios.
+// of the per-namespace and cluster-wide ratios. Soft-mode semantics only;
+// hard-mode callers go through Admit.
 func (b *BudgetLedger) Enforce(provider *kaalmv1alpha1.ModelProvider, namespace string) budgetDecision {
 	budget := provider.Spec.Budget
-	scheme := budget.Period
-	if PeriodKey(scheme, b.now()) == "" || len(budget.Policies) == 0 {
+	if PeriodKey(budget.Period, b.now()) == "" || len(budget.Policies) == 0 {
 		return budgetDecision{}
 	}
 	b.mu.Lock()
-	l := b.ledgerFor(provider.Name, scheme)
-	nsSpent := l.spent(namespace)
-	clusterSpent := l.clusterSpent()
+	u := utilizationLocked(budget, b.ledgerFor(provider.Name, budget.Period), namespace)
 	b.mu.Unlock()
-
-	percent := 0.0
-	if ceiling, err := strconv.ParseFloat(budget.PerNamespaceUSD, 64); err == nil && ceiling > 0 {
-		percent = nsSpent / ceiling * 100
-	}
-	if budget.ClusterUSD != nil {
-		if ceiling, err := strconv.ParseFloat(*budget.ClusterUSD, 64); err == nil && ceiling > 0 {
-			if p := clusterSpent / ceiling * 100; p > percent {
-				percent = p
-			}
-		}
-	}
-
-	var winner *kaalmv1alpha1.ModelProviderBudgetPolicy
-	for i := range budget.Policies {
-		p := &budget.Policies[i]
-		if percent >= float64(p.AtPercent) && (winner == nil || p.AtPercent > winner.AtPercent) {
-			winner = p
-		}
-	}
-	if winner == nil {
-		return budgetDecision{Percent: int(percent)}
-	}
-	d := budgetDecision{Action: winner.Action, Percent: int(percent)}
-	if winner.Action == kaalmv1alpha1.BudgetActionDegrade && winner.DegradeTo != nil {
-		d.DegradeTo = *winner.DegradeTo
-	}
-	if winner.Action == kaalmv1alpha1.BudgetActionBlock {
-		d.RetryAfter = int(time.Until(nextPeriodStart(scheme, b.now())).Seconds()) + 1
-	}
-	return d
+	return b.decide(budget, u)
 }
 
 // BudgetPublisher runs the replica side of the budget counter exchange: every
@@ -289,20 +436,34 @@ func (b *BudgetLedger) Enforce(provider *kaalmv1alpha1.ModelProvider, namespace 
 // same staleness bound as a watch-driven fold: at most one publish interval.
 type BudgetPublisher struct {
 	Client            kubernetes.Interface
-	Store             Store
 	Ledger            *BudgetLedger
 	OperatorNamespace string
 	PodName           string
 	Interval          time.Duration
 	// Providers enumerates the ModelProviders to exchange for.
 	Providers func(ctx context.Context) []*kaalmv1alpha1.ModelProvider
+	// now is the clock, overridable in tests; nil means time.Now.
+	now func() time.Time
 }
 
-// Run loops until ctx is done.
+// defaultPublishInterval is the partial-publish tick; the ledger's staleness
+// window derives from it (three intervals).
+const defaultPublishInterval = 10 * time.Second
+
+func (p *BudgetPublisher) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
+}
+
+// Run loops until ctx is done: the tick publishes and folds every interval,
+// and the ledger's kick channel triggers an immediate publish for a provider
+// whose settle happened inside the boundary region.
 func (p *BudgetPublisher) Run(ctx context.Context) {
 	interval := p.Interval
 	if interval == 0 {
-		interval = 10 * time.Second
+		interval = defaultPublishInterval
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -312,13 +473,26 @@ func (p *BudgetPublisher) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			p.tick(ctx)
+		case name := <-p.Ledger.kick:
+			p.publishByName(ctx, name)
+		}
+	}
+}
+
+// publishByName resolves one provider from the cached list and publishes its
+// partial immediately (the settle-publish path).
+func (p *BudgetPublisher) publishByName(ctx context.Context, name string) {
+	for _, provider := range p.Providers(ctx) {
+		if provider.Name == name {
+			p.publish(ctx, provider)
+			return
 		}
 	}
 }
 
 func (p *BudgetPublisher) tick(ctx context.Context) {
 	for _, provider := range p.Providers(ctx) {
-		if PeriodKey(provider.Spec.Budget.Period, time.Now()) == "" {
+		if PeriodKey(provider.Spec.Budget.Period, p.clock()) == "" {
 			continue
 		}
 		p.publish(ctx, provider)
@@ -327,11 +501,12 @@ func (p *BudgetPublisher) tick(ctx context.Context) {
 }
 
 func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
-	period, spend, ok := p.Ledger.OwnPartial(provider.Name)
+	snapshot := p.clock()
+	period, spend, marginRaised, ok := p.Ledger.OwnPartial(provider.Name)
 	if !ok {
 		return
 	}
-	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend})
+	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend, MarginExceeded: marginRaised})
 	if err != nil {
 		return
 	}
@@ -341,24 +516,38 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1alpha1.M
 		metav1.ApplyOptions{FieldManager: p.PodName, Force: true})
 	if err != nil {
 		slog.Warn("budget partial publish failed", "provider", provider.Name, "error", err)
+		return
 	}
+	p.Ledger.MarkPublished(provider.Name, snapshot)
 }
 
 func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
 	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, BudgetConfigMapName(provider.Name), metav1.GetOptions{})
 	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			slog.Warn("budget fold read failed", "provider", provider.Name, "error", err)
+		if apierrors.IsNotFound(err) {
+			// No ConfigMap means no peer has published yet: an empty,
+			// healthy peer view, not a read failure. Folding it keeps the
+			// read-path staleness signal honest for a provider with no
+			// spend anywhere.
+			p.Ledger.FoldPeers(provider, map[string]float64{})
+			return
 		}
+		slog.Warn("budget fold read failed", "provider", provider.Name, "error", err)
 		return
 	}
-	currentPeriod := PeriodKey(provider.Spec.Budget.Period, time.Now())
+	p.Ledger.FoldPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock())))
+}
+
+// FoldPartials sums every current-period partial in a budget ConfigMap except
+// the caller's own key: peers plus the reconciler's _retired accumulator.
+// _canonical is never on the enforcement path.
+func FoldPartials(data map[string]string, ownPodName, currentPeriod string) map[string]float64 {
 	peers := map[string]float64{}
-	for key, raw := range cm.Data {
-		if key == p.PodName || key == CanonicalKey {
+	for key, raw := range data {
+		if key == ownPodName || key == CanonicalKey {
 			continue
 		}
-		period, spend, err := ParseBudgetPartial(raw)
+		period, spend, _, err := ParseBudgetPartial(raw)
 		if err != nil || period != currentPeriod {
 			continue
 		}
@@ -366,7 +555,7 @@ func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1alpha1.Mode
 			peers[ns] += v
 		}
 	}
-	p.Ledger.FoldPeers(provider, peers)
+	return peers
 }
 
 // SeedFromCanonical initializes the ledger from each provider's _canonical

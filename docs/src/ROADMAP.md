@@ -72,7 +72,7 @@ The current milestone is **v0.3.0, "the on-ramp"**, tracked in the
   per-provider `budget.enforcement: hard` with boundary-region serialized
   admission, a stated spend guarantee, fail-closed posture, validation rules
   32 to 34, and acceptance scenario S17. The gateway implementation and the
-  S17 e2e proof are in flight.
+  S17 e2e proof are merged; the mode ships with the v0.3.0 release.
 - **The tool plane design chapter** (gateway-brokered MCP tool access), design
   pending; implementation is the v0.4.0 milestone.
 

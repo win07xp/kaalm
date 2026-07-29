@@ -50,6 +50,10 @@ type forwardResult struct {
 	err        error                        // transport error, if any
 	provider   string                       // the candidate that produced this result
 	chosen     *kaalmv1alpha1.ModelProvider // the candidate resource, for usage accounting
+	// settle frees the winning candidate's boundary admission slot with the
+	// request's actual cost (hard enforcement). Nil outside the boundary
+	// region; idempotent; the caller MUST invoke it on every outcome path.
+	settle func(costUSD float64)
 }
 
 // fallbackReasonSuccess is the metric reason label for a fallback attempt that
@@ -65,6 +69,8 @@ func failClassName(c failClass) string {
 		return "timeout"
 	case classBudget:
 		return "budget_blocked"
+	case classBudgetUnavailable:
+		return "budget_unavailable"
 	case classUpstream:
 		return "upstream_error"
 	default:
@@ -76,12 +82,13 @@ func failClassName(c failClass) string {
 type failClass int
 
 const (
-	classNone      failClass = iota
-	classConnect             // connection/DNS/TLS error
-	classTimeout             // pre-stream timeout
-	classUpstream            // 5xx, upstream 429, 401/403
-	classBudget              // budget-blocked candidate (consumed a slot)
-	classNonFallle           // 400/422/other 4xx: not fallbackable
+	classNone              failClass = iota
+	classConnect                     // connection/DNS/TLS error
+	classTimeout                     // pre-stream timeout
+	classUpstream                    // 5xx, upstream 429, 401/403
+	classBudget                      // budget-blocked or throttled candidate (consumed a slot)
+	classNonFallle                   // 400/422/other 4xx: not fallbackable
+	classBudgetUnavailable           // hard-enforcement fail-closed candidate (consumed a slot)
 )
 
 // isFallbackable classifies an upstream HTTP status. Transport errors are
@@ -110,6 +117,13 @@ type walkState struct {
 	attemptCount int
 	maxDepth     int
 	visited      map[string]bool
+	// observed collects failure classes across the walk for the exhaustion
+	// mapping; maxRetryAfter carries the largest budget Retry-After seen.
+	observed      map[failClass]bool
+	maxRetryAfter int
+	// primarySettle is the pre-flight boundary settle for the primary
+	// candidate (hard enforcement); the walk never re-admits the primary.
+	primarySettle func(costUSD float64)
 }
 
 // tryWithFallbacks walks the fallback tree depth-first in declared order,
@@ -137,17 +151,57 @@ func (s *Server) tryWithFallbacks(
 	}
 	st.attemptCount++
 
+	// Budget admission. The primary was admitted pre-flight (its settle
+	// rides in via st.primarySettle); every other candidate is admitted
+	// here under the same rules. Blocked, throttled, or failed-closed
+	// candidates consume the attempt slot and fall through to children.
+	var settle func(float64)
 	if s.Budget != nil {
-		if d := s.Budget.Enforce(provider, st.namespace); d.Action == kaalmv1alpha1.BudgetActionBlock {
-			// Consumed a slot; fall through to children without forwarding.
-			if res, ok := s.walkChildren(ctx, provider, st, attempt); ok {
-				return res, true
+		if provider.Name == st.primary.Name {
+			settle = st.primarySettle
+		} else {
+			d, sfn := s.Budget.Admit(provider, st.namespace)
+			if d.MarginRaisedNow {
+				s.Metrics.BudgetBoundary(provider.Name, st.namespace, "margin_raised")
 			}
-			return forwardResult{class: classBudget}, false
+			switch {
+			case d.Unavailable:
+				s.Metrics.BudgetBoundary(provider.Name, st.namespace, "fail_closed")
+				st.observed[classBudgetUnavailable] = true
+				if res, ok := s.walkChildren(ctx, provider, st, attempt); ok {
+					return res, true
+				}
+				return forwardResult{class: classBudgetUnavailable}, false
+			case d.Throttled:
+				s.Metrics.BudgetBoundary(provider.Name, st.namespace, "throttled")
+				st.observed[classBudget] = true
+				if st.maxRetryAfter < 1 {
+					st.maxRetryAfter = 1
+				}
+				if res, ok := s.walkChildren(ctx, provider, st, attempt); ok {
+					return res, true
+				}
+				return forwardResult{class: classBudget}, false
+			case d.Action == kaalmv1alpha1.BudgetActionBlock:
+				st.observed[classBudget] = true
+				if d.RetryAfter > st.maxRetryAfter {
+					st.maxRetryAfter = d.RetryAfter
+				}
+				if res, ok := s.walkChildren(ctx, provider, st, attempt); ok {
+					return res, true
+				}
+				return forwardResult{class: classBudget}, false
+			default:
+				settle = sfn
+				if sfn != nil {
+					s.Metrics.BudgetBoundary(provider.Name, st.namespace, "engaged")
+				}
+			}
 		}
 	}
 
 	res := attempt(ctx, provider)
+	res.settle = settle
 	if res.class == classNone && res.err == nil && res.resp != nil &&
 		res.resp.StatusCode >= 200 && res.resp.StatusCode <= 299 {
 		return res, true
@@ -157,7 +211,12 @@ func (s *Server) tryWithFallbacks(
 		return res, true
 	}
 
-	// Fallbackable failure: record it and walk children.
+	// Fallbackable failure: free this candidate's slot BEFORE descending,
+	// so no slot is ever held across another provider's upstream call.
+	if settle != nil {
+		settle(0)
+		res.settle = nil
+	}
 	if res.class == classUpstream && res.resp != nil &&
 		(res.resp.StatusCode == 401 || res.resp.StatusCode == 403) {
 		s.recordEvent(provider, kaalmv1alpha1.ReasonCredentialsInvalid,
@@ -211,20 +270,37 @@ func (s *Server) staticallyIneligible(provider *kaalmv1alpha1.ModelProvider, st 
 }
 
 // exhaustionError maps the failure classes observed across the walk to a
-// terminal error, per the depth-cap-semantics table.
-func exhaustionError(observed map[failClass]bool, providerName string) (int, errorBody) {
+// terminal error, per the depth-cap-semantics table. A walk exhausted
+// entirely by budget outcomes is a budget error, never 502: 429 when every
+// outcome was a block or throttle, 503 when fail-closed candidates are why.
+func exhaustionError(observed map[failClass]bool, maxRetryAfter int, providerName string) (int, errorBody, int) {
+	budgetOnly := len(observed) > 0
+	for class := range observed {
+		if class != classBudget && class != classBudgetUnavailable {
+			budgetOnly = false
+			break
+		}
+	}
 	switch {
+	case budgetOnly && observed[classBudgetUnavailable]:
+		return http.StatusServiceUnavailable, errorBody{
+			Type: errBudgetUnavailable, Provider: providerName, Retryable: true,
+			Message: "budget state could not be verified for the provider and all fallbacks; failing closed"}, 1
+	case budgetOnly:
+		return http.StatusTooManyRequests, errorBody{
+			Type: errBudgetExhausted, Provider: providerName, Retryable: true,
+			Message: "the provider and all fallbacks are budget-blocked"}, maxRetryAfter
 	case len(observed) == 1 && observed[classConnect]:
 		return http.StatusServiceUnavailable, errorBody{
 			Type: errProviderUnavailable, Provider: providerName,
-			Message: "all providers were unreachable"}
+			Message: "all providers were unreachable"}, 0
 	case len(observed) == 1 && observed[classTimeout]:
 		return http.StatusGatewayTimeout, errorBody{
 			Type: errProviderTimeout, Provider: providerName,
-			Message: "all provider attempts timed out"}
+			Message: "all provider attempts timed out"}, 0
 	default:
 		return http.StatusBadGateway, errorBody{
 			Type: errProviderError, Provider: providerName,
-			Message: "the provider and all fallbacks failed"}
+			Message: "the provider and all fallbacks failed"}, 0
 	}
 }

@@ -105,3 +105,23 @@ func TestCallbackRecordedAndIntrospected(t *testing.T) {
 		t.Errorf("callback not recorded: %+v", recorded)
 	}
 }
+
+func TestRequestCounterAndIntrospection(t *testing.T) {
+	m := &mock{}
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/s17hard/v1/chat/completions", strings.NewReader(`{}`))
+		m.chat(httptest.NewRecorder(), req)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	m.chat(httptest.NewRecorder(), req)
+
+	rec := httptest.NewRecorder()
+	m.introspectRequests(rec, httptest.NewRequest(http.MethodGet, "/introspect/requests", nil))
+	var counts map[string]int
+	if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil {
+		t.Fatalf("decoding counts: %v", err)
+	}
+	if counts["/s17hard"] != 3 || counts["/"] != 1 {
+		t.Fatalf("counts = %v, want /s17hard:3 and /:1", counts)
+	}
+}

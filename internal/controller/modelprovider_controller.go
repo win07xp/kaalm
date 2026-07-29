@@ -97,6 +97,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	var problems []string
 	problems = append(problems, r.validateFallback(ctx, &mp)...)
 	problems = append(problems, validateDegradeTargets(&mp)...)
+	problems = append(problems, validateHardPricing(&mp)...)
 	r.costSanity(&mp)
 	if len(problems) > 0 {
 		sort.Strings(problems)
@@ -104,6 +105,10 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		for _, p := range problems {
 			if strings.Contains(p, "degradeTo") {
 				reason = kaalmv1alpha1.ReasonInvalidDegradeTarget
+				break
+			}
+			if strings.Contains(p, "unpriced") {
+				reason = kaalmv1alpha1.ReasonHardBudgetUnpriced
 				break
 			}
 		}
@@ -250,6 +255,56 @@ func validateDegradeTargets(mp *kaalmv1alpha1.ModelProvider) []string {
 		}
 	}
 	return problems
+}
+
+// validateHardPricing checks rule 33: hard budget enforcement requires every
+// catalog model priced with values the gateway ledger can parse. An unpriced
+// model costs zero in the ledger, so a cap over it is silently vacuous. The
+// check must match the ledger's decimal parsing exactly, which is why it is
+// reconcile-time rather than CRD CEL.
+func validateHardPricing(mp *kaalmv1alpha1.ModelProvider) []string {
+	if mp.Spec.Budget.Enforcement != kaalmv1alpha1.BudgetEnforcementHard {
+		return nil
+	}
+	var problems []string
+	for _, m := range mp.Spec.Models {
+		_, errIn := strconv.ParseFloat(m.CostPer1MInputTokens, 64)
+		_, errOut := strconv.ParseFloat(m.CostPer1MOutputTokens, 64)
+		if errIn != nil || errOut != nil {
+			problems = append(problems, fmt.Sprintf("model %q is unpriced; hard budget enforcement requires a fully priced catalog (rule 33)", m.ID))
+		}
+	}
+	return problems
+}
+
+// setBoundaryMargin surfaces the gateway's _marginExceeded flag as the
+// BoundaryMarginRaised condition, with a Warning event on the rising edge:
+// observed traffic required a wider boundary margin than
+// budget.hard.boundaryMarginPercent configures. The guarantee held; the knob
+// is undersized for the deployment.
+func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1alpha1.ModelProvider, raised bool) {
+	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1alpha1.ConditionBoundaryMarginRaised)
+	if raised {
+		apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
+			Type:   kaalmv1alpha1.ConditionBoundaryMarginRaised,
+			Status: metav1.ConditionTrue,
+			Reason: kaalmv1alpha1.ReasonBoundaryMarginRaised,
+			Message: "a gateway replica widened the effective boundary margin beyond " +
+				"budget.hard.boundaryMarginPercent to uphold the hard-enforcement guarantee",
+		})
+		if !was {
+			r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1alpha1.ConditionBoundaryMarginRaised,
+				"observed traffic exceeded the configured boundary margin; size the knob from the overspend-bound formula")
+		}
+		return
+	}
+	if was || apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1alpha1.ConditionBoundaryMarginRaised) != nil {
+		apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
+			Type:   kaalmv1alpha1.ConditionBoundaryMarginRaised,
+			Status: metav1.ConditionFalse,
+			Reason: kaalmv1alpha1.ReasonBoundaryMarginOK,
+		})
+	}
 }
 
 // costSanity emits an advisory Warning when a degrade target is not the cheapest

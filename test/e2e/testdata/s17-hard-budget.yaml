@@ -1,0 +1,175 @@
+# Fixtures for S17 (hard budget cap): a hard-enforcement provider and a soft
+# twin, both pointed at the mock's /bigusage behavior through distinct
+# endpoint prefixes so the mock's per-prefix request counter can prove
+# whether a call reached the upstream. One call costs ~$15 against the $10
+# ceiling, so the first successful call exhausts the budget.
+#
+# The callers are gateway-only-tier (projected ServiceAccount tokens); no
+# Agent is needed because S17 asserts provider-side enforcement, and the
+# Agent-side Degraded mirror is S10's covered ground.
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: s17-hard
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/bigusage/s17h
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  budget:
+    period: daily
+    perNamespaceUSD: "10"
+    enforcement: hard
+    hard:
+      boundaryMarginPercent: 5
+    policies:
+      - atPercent: 100
+        action: block
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: s17-soft
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/bigusage/s17s
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  budget:
+    period: daily
+    perNamespaceUSD: "10"
+    policies:
+      - atPercent: 100
+        action: block
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s17-caller
+  namespace: e2e
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s17-hard-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s17-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # Drive spend past the ceiling, then exit on the first 429. The body
+        # must carry the ceiling attribution the hard design specifies.
+        - |
+          token=$(cat /var/run/token/token)
+          for i in $(seq 1 40); do
+            code=$(curl -sS -D /tmp/hdr -o /tmp/body -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"s17-hard/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"; grep -i '^retry-after' /tmp/hdr || true; cat /tmp/body; echo
+            if [ "$code" = "429" ]; then
+              echo "GOT HTTP 429"; grep -i '^retry-after' /tmp/hdr; cat /tmp/body; exit 0
+            fi
+            sleep 2
+          done
+          echo "never blocked"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s17-soft-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s17-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # The soft twin behaves exactly as S10 documents: spend accrues, the
+        # block lands after the fold, 429 budget_exhausted with Retry-After.
+        - |
+          token=$(cat /var/run/token/token)
+          for i in $(seq 1 40); do
+            code=$(curl -sS -D /tmp/hdr -o /tmp/body -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"s17-soft/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"; grep -i '^retry-after' /tmp/hdr || true; cat /tmp/body; echo
+            if [ "$code" = "429" ]; then
+              echo "GOT HTTP 429"; grep -i '^retry-after' /tmp/hdr; cat /tmp/body; exit 0
+            fi
+            sleep 2
+          done
+          echo "never blocked"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt

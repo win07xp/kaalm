@@ -42,6 +42,7 @@ type Metrics struct {
 	llmSpend       *prometheus.CounterVec
 	llmFallback    *prometheus.CounterVec
 	budgetThreshld *prometheus.CounterVec
+	budgetBoundary *prometheus.CounterVec
 	channelMsgs    *prometheus.CounterVec
 	channelWake    *prometheus.CounterVec
 	channelCB      *prometheus.CounterVec
@@ -71,6 +72,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		budgetThreshld: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_budget_threshold_events_total", Help: "Budget threshold actions fired.",
 		}, []string{labelProvider, labelNamespace, "action"}),
+		budgetBoundary: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "kaalm_llm_budget_boundary_events_total", Help: "Hard-enforcement boundary events.",
+		}, []string{labelProvider, labelNamespace, "event"}),
 		channelMsgs: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_channel_messages_total", Help: "Channel messages by outcome.",
 		}, []string{"channel_type", labelNamespace, labelStatus}),
@@ -136,6 +140,15 @@ func (m *Metrics) BudgetThreshold(provider, namespace, action string) {
 		return
 	}
 	m.budgetThreshld.WithLabelValues(provider, namespace, action).Inc()
+}
+
+// BudgetBoundary counts one hard-enforcement boundary event
+// (engaged | throttled | fail_closed | margin_raised).
+func (m *Metrics) BudgetBoundary(provider, namespace, event string) {
+	if m == nil {
+		return
+	}
+	m.budgetBoundary.WithLabelValues(provider, namespace, event).Inc()
 }
 
 // ChannelMessage counts one webhook delivery by outcome.

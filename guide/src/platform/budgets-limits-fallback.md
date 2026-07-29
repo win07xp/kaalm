@@ -4,11 +4,13 @@ This page is the operating manual for the guardrails on a ModelProvider: what
 each knob does, what the calling agent experiences when it fires, and how to
 read the aftermath from status.
 
-One design fact up front: budgets are **soft limits**. Each gateway replica
-keeps a local ledger and replicas exchange totals through a ConfigMap, so a
-burst of parallel requests can overshoot a ceiling slightly before every
-replica has caught up. Budgets are guardrails against runaway spend, not
-billing-grade metering.
+One design fact up front: budgets are **soft limits by default**. Each
+gateway replica keeps a local ledger and replicas exchange totals through a
+ConfigMap, so a burst of parallel requests can overshoot a ceiling slightly
+before every replica has caught up. Soft budgets are guardrails against
+runaway spend, not billing-grade metering. Since v0.3.0 a provider can opt
+in to hard enforcement, which turns its block policies into a cap with a
+stated guarantee; that task is [below](#turning-on-hard-enforcement).
 
 ## Budget policies: warn, degrade, block
 
@@ -53,7 +55,57 @@ the period resets. The namespace's `state: Blocked` in provider status is
 your side of the same picture. Each affected Agent also carries a `Degraded`
 condition (reason `BudgetExhausted`) visible in `kubectl describe agent`,
 with its phase preserved; the condition clears on its own when the budget
-frees up.
+frees up. All of this is identical under hard enforcement; what hard adds
+is the behavior just below and at the ceiling.
+
+## Turning on hard enforcement
+
+For a provider whose invoice must not exceed the manifest, set
+`budget.enforcement: hard`:
+
+```yaml
+budget:
+  period: monthly
+  perNamespaceUSD: "500"
+  enforcement: hard
+  hard:
+    boundaryMarginPercent: 5
+  policies:
+    - atPercent: 100
+      action: block
+```
+
+Three validation gates apply: hard requires at least one `block` policy
+(rejected at apply time otherwise), every model in the catalog must be
+priced (`Ready=False, reason=HardBudgetUnpriced` until it is), and
+`boundaryMarginPercent` must sit strictly below every block threshold (also
+apply-time). `warn` and `degrade` policies keep working exactly as in soft
+mode.
+
+What changes at runtime happens only near the ceiling. A few points below
+each block threshold (the margin), requests to that provider serialize: one
+in-flight request at a time per namespace, with concurrent requests
+answered `429 budget_throttled` and `Retry-After: 1`, which callers should
+retry on a short backoff (the opposite of `budget_exhausted`'s
+wait-for-the-period guidance). The request that would cross the ceiling is
+rejected with no call to the upstream provider, and the block message names
+which ceiling fired. If a gateway replica cannot verify budget state inside
+that region, it answers `503 budget_state_unavailable` rather than spending
+blind, and recovers on its next successful exchange.
+
+Two things to watch after enabling it:
+
+- A `BoundaryMarginRaised` condition on the provider means observed traffic
+  needed a wider margin than your `boundaryMarginPercent`; the gateway
+  widened it automatically and the guarantee held, but size the knob
+  deliberately using the overspend-bound formula in the design book.
+- A namespace that lives near its ceiling (month-end, typically) lives with
+  serialized admission until the period resets. If a team needs throughput
+  at high utilization, widen their budget rather than their margin.
+
+The exact guarantee, its fine print (streams, usage-less responses), and
+the mechanism live in the design book's Budgets and Rate Limits chapter,
+Hard Enforcement section.
 
 ## Reading spend
 
