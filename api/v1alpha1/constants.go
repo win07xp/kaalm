@@ -120,14 +120,27 @@ const (
 	ReasonWoken                      = "Woken"
 	ReasonTaskSucceeded              = "TaskSucceeded"
 	ReasonTaskFailed                 = "TaskFailed"
+	ReasonHardBudgetUnpriced         = "HardBudgetUnpriced"
+	ReasonBoundaryMarginRaised       = "ObservedTrafficExceededMargin"
+	ReasonBoundaryMarginOK           = "MarginSufficient"
 )
 
-// Budget policy actions (ModelProvider.spec.budget.policies[].action) and the
-// per-namespace enforcement states reported in status.budgetUsage[].state.
+// ConditionBoundaryMarginRaised reports that a hard-enforcement gateway
+// replica observed traffic requiring a wider boundary margin than
+// budget.hard.boundaryMarginPercent configures (rule 34's floor semantics;
+// docs/src/gateways/llm/budgets-and-rate-limits.md).
+const ConditionBoundaryMarginRaised = "BoundaryMarginRaised"
+
+// Budget policy actions (ModelProvider.spec.budget.policies[].action), the
+// enforcement modes, and the per-namespace enforcement states reported in
+// status.budgetUsage[].state.
 const (
 	BudgetActionWarn    = "warn"
 	BudgetActionDegrade = "degrade"
 	BudgetActionBlock   = "block"
+
+	BudgetEnforcementSoft = "soft"
+	BudgetEnforcementHard = "hard"
 
 	BudgetStateNormal    = "Normal"
 	BudgetStateThrottled = "Throttled"

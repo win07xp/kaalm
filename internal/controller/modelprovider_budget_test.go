@@ -115,6 +115,19 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 		if _, exists := got.Data["dead-gw-9"]; exists {
 			return errString("stale replica key not pruned")
 		}
+		// Pruning must not erase published spend: dead-gw-9's current-period
+		// totals fold into _retired, and the canonical sum includes them.
+		retiredRaw, exists := got.Data[gateway.RetiredKey]
+		if !exists {
+			return errString("_retired not written on prune")
+		}
+		retPeriod, retSpend, _, err := gateway.ParseBudgetPartial(retiredRaw)
+		if err != nil {
+			return err
+		}
+		if retPeriod != period || retSpend["team-a"] != 999.00 {
+			return errString("_retired contents wrong: " + retiredRaw)
+		}
 		raw, exists := got.Data[gateway.CanonicalKey]
 		if !exists {
 			return errString("_canonical not written")
@@ -123,13 +136,14 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 		if err := json.Unmarshal([]byte(raw), &canonical); err != nil {
 			return err
 		}
-		if canonical["team-a"] != "90.00" || canonical["team-b"] != "10.00" {
+		if canonical["team-a"] != "1089.00" || canonical["team-b"] != "10.00" {
 			return errString("canonical sums wrong: " + raw)
 		}
 		return nil
 	})
 
-	// Status: team-a at 90% is Blocked (>=80 block policy), team-b Normal.
+	// Status: team-a far past the 80 block threshold is Blocked, team-b
+	// Normal. The retired spend counts: 50 + 40 + 999 = 1089 of 100.
 	eventually(t, func() error {
 		var mp kaalmv1alpha1.ModelProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp); err != nil {
@@ -146,10 +160,10 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 		if states["team-a"] != "Blocked" || states["team-b"] != "Normal" {
 			return errString(fmt.Sprintf("states wrong: %v", states))
 		}
-		if percents["team-a"] != 90 {
+		if percents["team-a"] != 1089 {
 			return errString(fmt.Sprintf("percent wrong: %v", percents))
 		}
-		if mp.Status.ClusterSpentUSD != "100.00" {
+		if mp.Status.ClusterSpentUSD != "1099.00" {
 			return errString("clusterSpentUSD wrong: " + mp.Status.ClusterSpentUSD)
 		}
 		return nil

@@ -65,12 +65,44 @@ spec:
                   type: string
                 type: array
               budget:
-                description: Budget sets soft spend guardrails.
+                description: |-
+                  Budget sets spend guardrails: soft by default, with an opt-in hard cap
+                  (docs/src/gateways/llm/budgets-and-rate-limits.md).
                 properties:
                   clusterUSD:
                     description: ClusterUSD is an optional cluster-wide spend ceiling
                       for the period.
                     type: string
+                  enforcement:
+                    default: soft
+                    description: |-
+                      Enforcement selects the budget mode. Soft (the default) is guardrails
+                      with a bounded, quantified overspend. Hard turns the block policies
+                      into a cap with a stated guarantee, at the cost of serialized
+                      admission near the ceiling; it requires a block policy (rule 32) and
+                      a fully priced catalog (rule 33). See
+                      docs/src/gateways/llm/budgets-and-rate-limits.md.
+                    enum:
+                    - soft
+                    - hard
+                    type: string
+                  hard:
+                    description: Hard tunes hard enforcement. Read only when enforcement
+                      is hard.
+                    properties:
+                      boundaryMarginPercent:
+                        default: 5
+                        description: |-
+                          BoundaryMarginPercent is how many percentage points below each block
+                          threshold the boundary region (serialized admission) engages. It is a
+                          floor: the gateway widens the effective margin from observed traffic
+                          and raises the BoundaryMarginRaised condition when the floor proved
+                          undersized. Must sit strictly below every block threshold (rule 34).
+                        format: int32
+                        maximum: 100
+                        minimum: 0
+                        type: integer
+                    type: object
                   perNamespaceUSD:
                     description: |-
                       PerNamespaceUSD is the per-namespace spend ceiling for the period, as a
@@ -115,6 +147,15 @@ spec:
                       type: object
                     type: array
                 type: object
+                x-kubernetes-validations:
+                - message: 'hard budget enforcement requires at least one action:
+                    block policy (rule 32)'
+                  rule: '!has(self.enforcement) || self.enforcement != ''hard'' ||
+                    (has(self.policies) && self.policies.exists(p, p.action == ''block''))'
+                - message: hard.boundaryMarginPercent must sit strictly below every
+                    block policy's atPercent (rule 34)
+                  rule: '!has(self.hard) || !has(self.policies) || self.policies.all(p,
+                    p.action != ''block'' || self.hard.boundaryMarginPercent < p.atPercent)'
               credentialsRef:
                 description: |-
                   CredentialsRef points at the Secret key holding the provider credential,

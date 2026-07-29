@@ -47,6 +47,10 @@ const (
 	errControllerDown      = "controller_unavailable"
 	errResponseTooLarge    = "response_too_large"
 	errSyncDeadline        = "sync_deadline_exceeded"
+	errRateLimited         = "rate_limited"
+	errBudgetExhausted     = "budget_exhausted"
+	errBudgetThrottled     = "budget_throttled"
+	errBudgetUnavailable   = "budget_state_unavailable"
 )
 
 // writeError emits the envelope with the given status. retryAfter > 0 adds a

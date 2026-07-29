@@ -126,28 +126,19 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Budget check on the PRIMARY (last-known spend state): degrade rewrites
-	// the model, block returns 429 with no fallback (a capped namespace must
-	// not drain a fallback provider's budget).
-	if decision := s.Budget.Enforce(provider, c.Namespace); decision.Action != "" {
-		switch decision.Action {
-		case kaalmv1alpha1.BudgetActionBlock:
-			s.Metrics.BudgetThreshold(providerName, c.Namespace, kaalmv1alpha1.BudgetActionBlock)
-			writeError(w, http.StatusTooManyRequests, errorBody{
-				Type: "budget_exhausted", Provider: providerName, Retryable: true,
-				Message: fmt.Sprintf("budget for namespace %s on provider %s is exhausted (%d%% used)",
-					c.Namespace, providerName, decision.Percent)}, decision.RetryAfter)
-			return
-		case kaalmv1alpha1.BudgetActionDegrade:
-			s.Metrics.BudgetThreshold(providerName, c.Namespace, kaalmv1alpha1.BudgetActionDegrade)
-			if decision.DegradeTo != "" && decision.DegradeTo != modelID {
-				modelID = decision.DegradeTo
-			}
-		case kaalmv1alpha1.BudgetActionWarn:
-			s.Metrics.BudgetThreshold(providerName, c.Namespace, kaalmv1alpha1.BudgetActionWarn)
-			slog.Warn("budget threshold crossed", "namespace", c.Namespace,
-				"provider", providerName, "percent", decision.Percent)
-		}
+	// Budget admission on the PRIMARY (last-known spend state, no pre-call
+	// estimation): degrade rewrites the model; block, throttle, and
+	// fail-closed all return with no fallback (a capped namespace must not
+	// drain a fallback provider's budget). Inside a hard provider's
+	// boundary region, Admit also acquires the serialized admission slot;
+	// the deferred settle(0) is the safety net for every early-return path
+	// (settle is idempotent, so the real settle always wins).
+	decision, primarySettle := s.Budget.Admit(provider, c.Namespace)
+	if primarySettle != nil {
+		defer primarySettle(0)
+	}
+	if !s.applyBudgetDecision(w, decision, primarySettle != nil, providerName, c.Namespace, &modelID) {
+		return
 	}
 
 	// Rate limit per (namespace, model), sharing the configured ceiling
@@ -155,7 +146,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	if !s.RateLimiter.Allow(provider, c.Namespace, modelID) {
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "rate_limited")
 		writeError(w, http.StatusTooManyRequests, errorBody{
-			Type: "rate_limited", Provider: providerName, Retryable: true,
+			Type: errRateLimited, Provider: providerName, Retryable: true,
 			Message: fmt.Sprintf("rate limit exceeded for namespace %s on model %s", c.Namespace, modelID)}, 1)
 		return
 	}
@@ -179,15 +170,15 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// Walk the fallback tree. Each attempt forwards to one candidate with its
 	// own credential and endpoint; the first 2xx (or a non-fallbackable 4xx)
 	// wins. observed collects the failure classes for the exhaustion mapping.
-	observed := map[failClass]bool{}
 	st := &walkState{
 		primary: provider, namespace: c.Namespace, modelID: modelID,
 		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
+		observed: map[failClass]bool{}, primarySettle: primarySettle,
 	}
 	res, ok := s.tryWithFallbacks(r.Context(), provider, st, func(ctx context.Context, cand *kaalmv1alpha1.ModelProvider) forwardResult {
 		fr := s.forwardOnce(ctx, r, cand, outBody, adapter, typeAdapter, modelID)
 		if fr.class != classNone {
-			observed[fr.class] = true
+			st.observed[fr.class] = true
 		}
 		// Count every attempt on a non-primary candidate as a fallback,
 		// whatever its outcome (a succeeding attempt is labeled "success").
@@ -201,15 +192,18 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return fr
 	})
 	if !ok {
-		status, body := exhaustionError(observed, providerName)
+		status, body, retryAfter := exhaustionError(st.observed, st.maxRetryAfter, providerName)
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "error")
-		writeError(w, status, body, 0)
+		writeError(w, status, body, retryAfter)
 		return
 	}
 	defer func() { _ = res.resp.Body.Close() }()
 
 	// A non-fallbackable failure (400/422/other 4xx) is relayed verbatim.
 	if res.resp.StatusCode < 200 || res.resp.StatusCode > 299 {
+		if res.settle != nil {
+			res.settle(0)
+		}
 		s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "error")
 		copyDownstreamHeaders(w.Header(), res.resp.Header)
 		w.WriteHeader(res.resp.StatusCode)
@@ -219,11 +213,13 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 
 	s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "ok")
 	if isSSE(res.resp) {
-		s.relayStream(w, res.resp, adapter, c.Namespace, res.chosen, modelID)
+		s.relayStream(w, res.resp, adapter, c.Namespace, res.chosen, modelID, res.settle)
 		return
 	}
 	if usage, ok := adapter.extractUsage(res.body); ok {
-		s.recordUsage(res.chosen, c.Namespace, modelID, usage)
+		s.settleUsage(res.chosen, c.Namespace, modelID, usage, res.settle)
+	} else if res.settle != nil {
+		res.settle(0)
 	}
 	copyDownstreamHeaders(w.Header(), res.resp.Header)
 	w.WriteHeader(res.resp.StatusCode)
@@ -275,12 +271,71 @@ func (s *Server) forwardOnce(
 	return fr
 }
 
-// recordUsage folds token usage into spend, budget, and metrics.
-func (s *Server) recordUsage(provider *kaalmv1alpha1.ModelProvider, namespace, modelID string, usage Usage) {
+// applyBudgetDecision renders a budget admission outcome: it writes the
+// terminal response for fail-closed, throttled, and blocked outcomes
+// (returning false), applies the degrade rewrite through modelID, and emits
+// the metrics. See the admission comment at the call site.
+func (s *Server) applyBudgetDecision(
+	w http.ResponseWriter, decision budgetDecision, engaged bool,
+	providerName, namespace string, modelID *string,
+) bool {
+	if decision.MarginRaisedNow {
+		s.Metrics.BudgetBoundary(providerName, namespace, "margin_raised")
+	}
+	switch {
+	case decision.Unavailable:
+		s.Metrics.BudgetBoundary(providerName, namespace, "fail_closed")
+		writeError(w, http.StatusServiceUnavailable, errorBody{
+			Type: errBudgetUnavailable, Provider: providerName, Retryable: true,
+			Message: fmt.Sprintf("budget state for provider %s cannot be verified inside the boundary region; failing closed", providerName)}, 1)
+		return false
+	case decision.Throttled:
+		s.Metrics.BudgetBoundary(providerName, namespace, "throttled")
+		writeError(w, http.StatusTooManyRequests, errorBody{
+			Type: errBudgetThrottled, Provider: providerName, Retryable: true,
+			Message: fmt.Sprintf("boundary admission for namespace %s on provider %s is busy; retry shortly", namespace, providerName)}, 1)
+		return false
+	case decision.Action == kaalmv1alpha1.BudgetActionBlock:
+		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1alpha1.BudgetActionBlock)
+		ceiling := "namespace budget exhausted: " + namespace
+		if decision.Ceiling == "cluster" {
+			ceiling = "cluster budget exhausted"
+		}
+		writeError(w, http.StatusTooManyRequests, errorBody{
+			Type: errBudgetExhausted, Provider: providerName, Retryable: true,
+			Message: fmt.Sprintf("%s on provider %s (%d%% used)",
+				ceiling, providerName, decision.Percent)}, decision.RetryAfter)
+		return false
+	case decision.Action == kaalmv1alpha1.BudgetActionDegrade:
+		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1alpha1.BudgetActionDegrade)
+		if decision.DegradeTo != "" && decision.DegradeTo != *modelID {
+			*modelID = decision.DegradeTo
+		}
+	case decision.Action == kaalmv1alpha1.BudgetActionWarn:
+		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1alpha1.BudgetActionWarn)
+		slog.Warn("budget threshold crossed", "namespace", namespace,
+			"provider", providerName, "percent", decision.Percent)
+	}
+	if engaged {
+		s.Metrics.BudgetBoundary(providerName, namespace, "engaged")
+	}
+	return true
+}
+
+// settleUsage folds token usage into spend, budget, and metrics. When the
+// request holds a boundary admission slot (hard enforcement), the cost lands
+// through its settle so the slot frees and the cost records in one atomic
+// step; otherwise it lands through the plain ledger Add.
+func (s *Server) settleUsage(provider *kaalmv1alpha1.ModelProvider, namespace, modelID string, usage Usage, settle func(float64)) {
+	cost := costOf(provider, modelID, usage)
 	s.Spend.Record(namespace, provider.Name, modelID, usage)
-	s.Budget.Add(provider, namespace, costOf(provider, modelID, usage))
+	if settle != nil {
+		settle(cost)
+	} else {
+		s.Budget.Add(provider, namespace, cost)
+	}
 	s.Metrics.Tokens(provider.Name, modelID, namespace, usage)
-	s.Metrics.Spend(provider.Name, namespace, costOf(provider, modelID, usage))
+	s.Metrics.Spend(provider.Name, namespace, cost)
 }
 
 // copyForwardedHeaders applies the forwarded-header contract: strip inbound
@@ -327,12 +382,25 @@ func isSSE(resp *http.Response) bool {
 func (s *Server) relayStream(
 	w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
 	namespace string, provider *kaalmv1alpha1.ModelProvider, modelID string,
+	settle func(float64),
 ) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
 
 	var usage Usage
+	// Settle on EVERY exit, including the early return on a downstream
+	// write error: near a hard ceiling, dropping accumulated usage would
+	// under-settle exactly where undercounting voids the cap, and a held
+	// admission slot must always free.
+	defer func() {
+		if usage != (Usage{}) {
+			s.settleUsage(provider, namespace, modelID, usage, settle)
+		} else if settle != nil {
+			settle(0)
+		}
+	}()
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -353,9 +421,5 @@ func (s *Server) relayStream(
 		// was accumulated before the read failed.
 		slog.Warn("SSE relay read error", "namespace", namespace,
 			"provider", provider.Name, "model", modelID, "err", err)
-	}
-	if usage != (Usage{}) {
-		s.Spend.Record(namespace, provider.Name, modelID, usage)
-		s.Budget.Add(provider, namespace, costOf(provider, modelID, usage))
 	}
 }

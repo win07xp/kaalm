@@ -80,7 +80,7 @@ func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 	if !ok {
 		t.Fatalf("own partial key missing: %v", cm.Data)
 	}
-	period, spend, err := ParseBudgetPartial(raw)
+	period, spend, _, err := ParseBudgetPartial(raw)
 	if err != nil || period != PeriodKey("monthly", time.Now()) || spend["team-a"] != 42 {
 		t.Errorf("published partial wrong: %q %v %v", period, spend, err)
 	}

@@ -45,7 +45,8 @@ type ModelProviderSpec struct {
 	// "*" allows all; empty allows none.
 	// +optional
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
-	// Budget sets soft spend guardrails.
+	// Budget sets spend guardrails: soft by default, with an opt-in hard cap
+	// (docs/src/gateways/llm/budgets-and-rate-limits.md).
 	// +optional
 	Budget ModelProviderBudget `json:"budget,omitempty"`
 	// RateLimits set the cluster-wide request and token ceilings.
@@ -81,7 +82,9 @@ type ModelProviderModel struct {
 	CostPer1MOutputTokens string `json:"costPer1MOutputTokens,omitempty"`
 }
 
-// ModelProviderBudget sets soft spend guardrails.
+// ModelProviderBudget sets spend guardrails: soft by default, hard by opt-in.
+// +kubebuilder:validation:XValidation:rule="!has(self.enforcement) || self.enforcement != 'hard' || (has(self.policies) && self.policies.exists(p, p.action == 'block'))",message="hard budget enforcement requires at least one action: block policy (rule 32)"
+// +kubebuilder:validation:XValidation:rule="!has(self.hard) || !has(self.policies) || self.policies.all(p, p.action != 'block' || self.hard.boundaryMarginPercent < p.atPercent)",message="hard.boundaryMarginPercent must sit strictly below every block policy's atPercent (rule 34)"
 type ModelProviderBudget struct {
 	// Period is the budget accounting window.
 	// +kubebuilder:validation:Enum=monthly;weekly;daily;none
@@ -98,6 +101,33 @@ type ModelProviderBudget struct {
 	// ClusterUSD is an optional cluster-wide spend ceiling for the period.
 	// +optional
 	ClusterUSD *string `json:"clusterUSD,omitempty"`
+	// Enforcement selects the budget mode. Soft (the default) is guardrails
+	// with a bounded, quantified overspend. Hard turns the block policies
+	// into a cap with a stated guarantee, at the cost of serialized
+	// admission near the ceiling; it requires a block policy (rule 32) and
+	// a fully priced catalog (rule 33). See
+	// docs/src/gateways/llm/budgets-and-rate-limits.md.
+	// +kubebuilder:validation:Enum=soft;hard
+	// +kubebuilder:default=soft
+	// +optional
+	Enforcement string `json:"enforcement,omitempty"`
+	// Hard tunes hard enforcement. Read only when enforcement is hard.
+	// +optional
+	Hard *ModelProviderBudgetHard `json:"hard,omitempty"`
+}
+
+// ModelProviderBudgetHard tunes the hard-enforcement boundary region.
+type ModelProviderBudgetHard struct {
+	// BoundaryMarginPercent is how many percentage points below each block
+	// threshold the boundary region (serialized admission) engages. It is a
+	// floor: the gateway widens the effective margin from observed traffic
+	// and raises the BoundaryMarginRaised condition when the floor proved
+	// undersized. Must sit strictly below every block threshold (rule 34).
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=5
+	// +optional
+	BoundaryMarginPercent int32 `json:"boundaryMarginPercent,omitempty"`
 }
 
 // ModelProviderBudgetPolicy is a threshold action.

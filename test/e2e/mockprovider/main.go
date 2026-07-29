@@ -29,7 +29,9 @@ limitations under the License.
 //
 // GET .../v1/models returns 200 for probe compatibility. POST /callback records
 // async-webhook deliveries; GET /introspect/callbacks returns them for
-// assertions.
+// assertions. Every chat call is counted by its endpoint prefix and exposed
+// at GET /introspect/requests, so specs can assert that a request never
+// reached the upstream (S17's hard-budget proof).
 package main
 
 import (
@@ -54,6 +56,18 @@ type recordedCallback struct {
 type mock struct {
 	mu        sync.Mutex
 	callbacks []recordedCallback
+	// requests counts chat calls by endpoint prefix (the path with the
+	// /v1/chat/completions suffix stripped; "/" for a bare path).
+	requests map[string]int
+}
+
+// chatPrefix reduces a chat path to its counting key.
+func chatPrefix(path string) string {
+	prefix := strings.TrimSuffix(path, "/v1/chat/completions")
+	if prefix == "" {
+		return "/"
+	}
+	return prefix
 }
 
 // chatCompletion is the minimal OpenAI-shaped success body. The gateway reads
@@ -90,6 +104,13 @@ func behaviorFor(path string) (status int, in, out int64) {
 }
 
 func (m *mock) chat(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	if m.requests == nil {
+		m.requests = map[string]int{}
+	}
+	m.requests[chatPrefix(r.URL.Path)]++
+	m.mu.Unlock()
+
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	var parsed map[string]any
 	_ = json.Unmarshal(body, &parsed)
@@ -131,6 +152,18 @@ func (m *mock) introspect(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(m.callbacks)
 }
 
+// introspectRequests returns the per-prefix chat call counts.
+func (m *mock) introspectRequests(w http.ResponseWriter, _ *http.Request) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if m.requests == nil {
+		_, _ = w.Write([]byte("{}"))
+		return
+	}
+	_ = json.NewEncoder(w).Encode(m.requests)
+}
+
 func (m *mock) handler() http.Handler {
 	mux := http.NewServeMux()
 	// Chat completions and models match on any prefix (the provider endpoint
@@ -147,6 +180,7 @@ func (m *mock) handler() http.Handler {
 	})
 	mux.HandleFunc("/callback", m.callback)
 	mux.HandleFunc("/introspect/callbacks", m.introspect)
+	mux.HandleFunc("/introspect/requests", m.introspectRequests)
 	return mux
 }
 

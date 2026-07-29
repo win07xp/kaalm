@@ -213,7 +213,7 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 	if cfg.MaxFallbackDepth == 0 {
 		cfg.MaxFallbackDepth = 3
 	}
-	return &Server{
+	s := &Server{
 		Config: cfg,
 		Store:  store,
 		Auth: &Authenticator{
@@ -227,6 +227,10 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 		ChannelHealth: NewChannelHealthStore(cfg.ChannelHealthWindow),
 		RateLimiter:   NewRateLimiter(cfg.Replicas),
 	}
+	// The effective boundary margin extrapolates observed traffic across the
+	// live replica count (hard budget enforcement).
+	s.Budget.SetReplicas(cfg.Replicas)
+	return s
 }
 
 // Handler builds the :8443 mux with the per-path auth regimes. The mapping

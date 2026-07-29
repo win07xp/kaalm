@@ -208,7 +208,7 @@ func TestBudgetLedger_PeerFoldAndPartials(t *testing.T) {
 		t.Errorf("own 40 + peers 70 = 110%% should block, got %+v", d)
 	}
 
-	period, spend, ok := b.OwnPartial("prov")
+	period, spend, _, ok := b.OwnPartial("prov")
 	if !ok || spend["team-a"] != "40.00" {
 		t.Errorf("own partial wrong: %v %v %v", period, spend, ok)
 	}
@@ -238,7 +238,7 @@ func TestParseBudgetPartialRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	period, spend, err := ParseBudgetPartial(string(raw))
+	period, spend, _, err := ParseBudgetPartial(string(raw))
 	if err != nil || period != "2026-07" || spend["team-a"] != 12.34 {
 		t.Errorf("round trip failed: %q %v %v", period, spend, err)
 	}
@@ -246,7 +246,7 @@ func TestParseBudgetPartialRoundTrip(t *testing.T) {
 
 func TestParseBudgetPartial_BadFloat(t *testing.T) {
 	// A non-numeric namespace value is skipped, not fatal.
-	period, spend, err := ParseBudgetPartial(`{"period":"2099-01","team-a":"1.5","team-b":"notanumber"}`)
+	period, spend, _, err := ParseBudgetPartial(`{"period":"2099-01","team-a":"1.5","team-b":"notanumber"}`)
 	if err != nil || period != "2099-01" {
 		t.Fatalf("parse err=%v period=%q", err, period)
 	}
@@ -257,7 +257,7 @@ func TestParseBudgetPartial_BadFloat(t *testing.T) {
 		t.Error("unparseable value must be skipped")
 	}
 	// Invalid JSON errors.
-	if _, _, err := ParseBudgetPartial("not json"); err == nil {
+	if _, _, _, err := ParseBudgetPartial("not json"); err == nil {
 		t.Error("invalid JSON must error")
 	}
 }

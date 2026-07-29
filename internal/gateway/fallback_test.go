@@ -87,7 +87,7 @@ func (h *fallbackHarness) provider(name, ptype string, fallbacks ...string) *kaa
 // exhaustion) plus the total attemptCount budget consumed (which counts
 // budget-blocked candidates that never forward).
 func (h *fallbackHarness) run(primary *kaalmv1alpha1.ModelProvider) (string, int, bool) {
-	st := &walkState{primary: primary, namespace: "team-a", modelID: "m1", maxDepth: 3, visited: map[string]bool{}}
+	st := &walkState{primary: primary, namespace: "team-a", modelID: "m1", maxDepth: 3, visited: map[string]bool{}, observed: map[failClass]bool{}}
 	res, ok := h.server.tryWithFallbacks(context.Background(), primary, st,
 		func(_ context.Context, cand *kaalmv1alpha1.ModelProvider) forwardResult {
 			status := h.results[cand.Name]
@@ -209,14 +209,27 @@ func TestFallback_BudgetBlockedPrimaryHandledByCaller(t *testing.T) {
 }
 
 func TestExhaustionErrorMapping(t *testing.T) {
-	if st, _ := exhaustionError(map[failClass]bool{classConnect: true}, "p"); st != http.StatusServiceUnavailable {
+	if st, _, _ := exhaustionError(map[failClass]bool{classConnect: true}, 0, "p"); st != http.StatusServiceUnavailable {
 		t.Errorf("all-connect = %d, want 503", st)
 	}
-	if st, _ := exhaustionError(map[failClass]bool{classTimeout: true}, "p"); st != http.StatusGatewayTimeout {
+	if st, _, _ := exhaustionError(map[failClass]bool{classTimeout: true}, 0, "p"); st != http.StatusGatewayTimeout {
 		t.Errorf("all-timeout = %d, want 504", st)
 	}
-	if st, _ := exhaustionError(map[failClass]bool{classUpstream: true, classConnect: true}, "p"); st != http.StatusBadGateway {
+	if st, _, _ := exhaustionError(map[failClass]bool{classUpstream: true, classConnect: true}, 0, "p"); st != http.StatusBadGateway {
 		t.Errorf("mixed = %d, want 502", st)
+	}
+	// A walk exhausted entirely by budget outcomes is a budget error, not 502.
+	if st, body, ra := exhaustionError(map[failClass]bool{classBudget: true}, 77, "p"); st != http.StatusTooManyRequests ||
+		body.Type != errBudgetExhausted || ra != 77 {
+		t.Errorf("budget-only = %d/%s/%d, want 429/budget_exhausted/77", st, body.Type, ra)
+	}
+	if st, body, _ := exhaustionError(map[failClass]bool{classBudget: true, classBudgetUnavailable: true}, 0, "p"); st != http.StatusServiceUnavailable ||
+		body.Type != errBudgetUnavailable {
+		t.Errorf("budget+unavailable = %d/%s, want 503/budget_state_unavailable", st, body.Type)
+	}
+	// A mixed walk (budget plus upstream failures) keeps the 502 mapping.
+	if st, _, _ := exhaustionError(map[failClass]bool{classBudget: true, classUpstream: true}, 0, "p"); st != http.StatusBadGateway {
+		t.Errorf("budget+upstream = %d, want 502", st)
 	}
 }
 

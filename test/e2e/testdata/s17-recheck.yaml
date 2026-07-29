@@ -1,0 +1,65 @@
+# S17's post-exhaustion probe, applied by the spec only after the hard
+# provider's budgetUsage state is Blocked: two sequential requests that must
+# BOTH be rejected 429 budget_exhausted, while the mock's request counter
+# proves neither reached the upstream.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s17-hard-recheck
+  namespace: e2e
+spec:
+  serviceAccountName: s17-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # A fresh pod's first calls can 401 (source-IP startup race) or time
+        # out (netpol ipset lag), so startup noise is tolerated. The budget
+        # assertions are strict: any 200 means a request was forwarded past
+        # the cap and fails immediately; success requires two 429s. The
+        # spec's mock-counter check is the independent no-upstream proof.
+        - |
+          token=$(cat /var/run/token/token)
+          got429=0
+          for i in $(seq 1 20); do
+            code=$(curl -sS --max-time 10 -D /tmp/hdr -o /tmp/body -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"s17-hard/mock-model","messages":[{"role":"user","content":"over"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "recheck $i: HTTP $code"; cat /tmp/body; echo
+            if [ "$code" = "200" ]; then
+              echo "FORWARDED PAST CAP"; exit 1
+            fi
+            if [ "$code" = "429" ]; then
+              got429=$((got429+1))
+              if [ "$got429" = "2" ]; then echo "BOTH REJECTED"; exit 0; fi
+            fi
+            sleep 2
+          done
+          echo "never answered with 429"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
