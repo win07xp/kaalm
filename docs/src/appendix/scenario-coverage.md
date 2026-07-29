@@ -1,6 +1,6 @@
 # Scenario Coverage
 
-The [acceptance scenarios](scenarios.md) S1 to S16 are the north-star
+The [acceptance scenarios](scenarios.md) S1 to S17 are the north-star
 definition of "done". This page maps each scenario to the implemented behavior
 that exercises it and the automated tests that verify it, so the acceptance
 surface is auditable rather than aspirational.
@@ -23,7 +23,8 @@ The **e2e** column is the acceptance surface. S1 to S15 form the v0.2.0
 surface: every one points at the spec that proves it on a cluster, and every
 one is green. S16 was added with the v0.3.0 base-image design and is green
 against the locally built base images; the published images land with the
-v0.3.0 release.
+v0.3.0 release. S17 was added with the v0.3.0 hard-budget design and its row
+fills in as that implementation lands.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -43,6 +44,7 @@ v0.3.0 release.
 | S14 Webhook for a hibernated agent | `Hibernate and wake` (S14: `wake_timeout` payload on the polling endpoint) | Unit `TestWebhook_Async*` |
 | S15 Async webhook for a long-running agent | `Session identity and async callback` (S15: 202, signed callback to the receiver, polling fallback) | Unit `TestWebhook_AsyncAcceptAndPoll`, `TestWebhook_AsyncCallbackDelivery` |
 | S16 Zero-build on-ramp (base image + mounted handler) | `Zero-build on-ramp (S16)` (default Go handler answers via the channel; a mounted Python handler answers with handler-specific output; repointing the ConfigMap rolls the handler; a missing ConfigMap gates with `HandlerConfigMapNotFound`, creates no Pod, and recovers) | Unit: the Python loader suite (`images/agent-python/tests/test_loader.py`); envtest `TestAgent_HandlerConfigMapNotFoundGatesAndRecovers`, `TestAgent_HandlerMountNotAllowedDegradesAndRecovers` |
+| S17 Hard budget cap (opt-in enforcement) | Pending: designed in [Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement), lands with the v0.3.0 hard-budget work ([#57](https://github.com/win07xp/kaalm/issues/57)) | Pending: boundary-admission unit suite; envtest for rules 32 to 34 |
 
 The LLM-proxy scenarios (S4, S10, S15) are exercised against an in-cluster mock
 upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy

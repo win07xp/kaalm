@@ -21,7 +21,7 @@ start
 :kubectl apply;
 
 |$ctrlBg|apiserver / CEL|
-if (CRD CEL gate\n**16 17 21 25 27**) then (violates)
+if (CRD CEL gate\n**16 17 21 25 27 32 34**) then (violates)
   |$agentBg|Developer|
   :**rejected**\nbefore storage; <<#FFCDD2>>
   stop
@@ -37,7 +37,7 @@ endif
 switch (reconcile-time gate)
 case (resolution\nor validity)
   |$gwBg|status|
-  :**Ready=False**\nreason per rule (see table)\n**1 11 12 13 14 15 18**\n**19 22 23 25 27 28 31**; <<#FFCDD2>>
+  :**Ready=False**\nreason per rule (see table)\n**1 11 12 13 14 15 18**\n**19 22 23 25 27 28 31 33**; <<#FFCDD2>>
   stop
 case (class\nmismatch)
   |$gwBg|status|
@@ -78,6 +78,7 @@ legend bottom
   | 27 | ExistingClaimNotFound | 14 | AgentServiceDisabled |
   | 28 | SystemNamespaceForbidden | 18 | InvalidDegradeTarget |
   | 30 | HandlerMountNotAllowed | 31 | HandlerConfigMapNotFound |
+  | 33 | HardBudgetUnpriced | | |
   | 1, 11, 12, 13 | Ready=False (reference resolution) | 6-10 | clamped, no reject |
 endlegend
 

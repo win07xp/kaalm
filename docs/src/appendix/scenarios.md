@@ -1,6 +1,6 @@
 # Acceptance Scenarios
 
-These scenarios are concrete enough to double as acceptance criteria for v1: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. S1 through S5 belong to Priya, the platform engineer who provisions the capability. S6 through S11 belong to Dev, the application developer who deploys agents. S12 through S15 cover channel integration, where external systems talk to agents through the User Gateway. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused: S16, added with the v0.3.0 base-image design, extends Dev's group. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
+These scenarios are concrete enough to double as acceptance criteria for v1: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. S1 through S5 belong to Priya, the platform engineer who provisions the capability. S6 through S11 belong to Dev, the application developer who deploys agents. S12 through S15 cover channel integration, where external systems talk to agents through the User Gateway. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused: S16, added with the v0.3.0 base-image design, extends Dev's group, and S17, added with the v0.3.0 hard-budget design, extends Priya's. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
 
 ## S1: Install Kaalm and Offer a Standard Agent Class
 
@@ -78,6 +78,14 @@ Dev writes a twenty-line `handler.py` defining `handle_message(envelope)` and cr
 
 To ship a change, he creates `greeter-handler-v2` and repoints `spec.handler.configMapRef.name`; the Pod is replaced and answers with the new behavior, and repointing back is an instant rollback. When his handler needs a dependency the base image does not bundle, he graduates to the `FROM` pattern ([Reference Base Images](../runtime/base-images.md)) without touching the contract plumbing.
 
+## S17: Cap a Provider's Spend, Hard
+
+Priya's finance team accepts soft guardrails everywhere except one provider: the expensive frontier-model account, where the number on the invoice must not exceed the number in the manifest. On that ModelProvider she sets `budget.enforcement: hard`, keeps the existing `degrade` policy at 80 percent, and relies on the `block` policy at 100. Everything else stays as it was; her other providers remain soft.
+
+Dev's team spends normally through the month. As their namespace's utilization enters the boundary region a few points under the ceiling, their requests to that provider briefly serialize, and a dashboard shows an occasional `429 budget_throttled` retry. When the ceiling is reached, the request that would cross it is rejected with `429 budget_exhausted` naming the namespace ceiling, a `Retry-After` pointing at the period reset, and no call reaches the upstream provider at all: the invoice cannot grow past the manifest by more than the in-flight bound the design states. A soft provider under the same load would have overshot by a bounded window and blocked after the fact.
+
+The month ends, the period rolls over, and the namespace flows freely again. Priya never tuned the boundary margin: when one team's burst traffic needed a wider margin than the default, the gateway widened it on its own and raised the `BoundaryMarginRaised` condition on the provider, which is how she learned to set the knob deliberately for next month.
+
 ## Design Implications
 
 These scenarios drive specific design requirements:
@@ -94,3 +102,4 @@ These scenarios drive specific design requirements:
 - **S14** requires the gateway's authenticated activator to integrate with the User Gateway path for wake-on-demand of hibernated agents.
 - **S15** requires the User Gateway to support async webhook response mode with callback delivery and a polling fallback endpoint.
 - **S16** requires the published reference base images, the `Agent.spec.handler` ConfigMap reference with its `$KAALM_HANDLER_PATH` injection, and the `AgentClass.spec.image.allowHandlerMounts` gate (validation rules 30 and 31). See [Reference Base Images](../runtime/base-images.md).
+- **S17** requires the opt-in hard budget mode: `budget.enforcement` with the boundary-region admission machinery, validation rules 32 to 34, and the `_retired` durability key in the budget exchange. See [Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement).

@@ -70,6 +70,19 @@ spec:
     # "monthly" (calendar month) | "daily" | "weekly" | "none"
     period: monthly
     perNamespaceUSD: "500.00"
+    # "soft" (default) | "hard". Soft is guardrails with a bounded, quantified
+    # overspend. Hard turns the block policies into a cap with a stated
+    # guarantee, at the cost of serialized admission near the ceiling; it
+    # requires at least one block policy (rule 32) and a fully priced model
+    # catalog (rule 33). See Budgets and Rate Limits, Hard Enforcement.
+    enforcement: hard
+    hard:
+      # How many percentage points below each block threshold the boundary
+      # region (serialized admission) engages. A floor: the gateway widens
+      # the effective margin from observed traffic when needed and raises
+      # the BoundaryMarginRaised condition. Must sit strictly below every
+      # block policy's atPercent (rule 34). Default 5.
+      boundaryMarginPercent: 5
     # Enforcement policy applied as budget is consumed.
     policies:
       - atPercent: 80
@@ -95,13 +108,19 @@ spec:
   # Fallback chain. If this provider is unavailable (network error, 5xx,
   # timeout), the gateway tries the next provider in order. A budget-blocked
   # primary does NOT trigger fallback: the gateway returns 429
-  # budget_exhausted immediately. A budget-blocked *fallback* candidate is
-  # skipped (an attempt slot IS consumed) and its own `spec.fallback` children
-  # are walked. If the entire walk is exhausted by error, budget-block, or
-  # maxFallbackDepth, the gateway returns a fallback-exhausted error, never
-  # 429: 502 provider_error in the general case, or 503/504 when every
-  # attempt failed unreachable / timed out (see Depth cap
-  # semantics for the failure-class mapping). The
+  # budget_exhausted immediately. Under hard enforcement the same
+  # short-circuit applies to a throttled (429 budget_throttled) or
+  # failed-closed (503 budget_state_unavailable) primary. A budget-blocked
+  # *fallback* candidate is skipped (an attempt slot IS consumed) and its
+  # own `spec.fallback` children are walked; hard-mode candidates are
+  # governed by the same admission rules mid-walk. If the entire walk is
+  # exhausted by upstream error or maxFallbackDepth, the gateway returns a
+  # fallback-exhausted error: 502 provider_error in the general case, or
+  # 503/504 when every attempt failed unreachable / timed out (see Depth
+  # cap semantics for the failure-class mapping). Since v0.3.0, a walk
+  # exhausted entirely by budget outcomes returns 429 budget_exhausted
+  # (or 503 budget_state_unavailable when fail-closed candidates are the
+  # cause), never 502. The
   # gateway walks each fallback provider's own fallback chain, up to the
   # gateway-level maxFallbackDepth setting (default 3). Referenced providers
   # must also allow the namespace, and must carry the same spec.type as this
@@ -145,13 +164,13 @@ status:
   clusterSpentUSD: "699.50"
 ```
 
-Two conditions summarize provider health: `Ready` reports whether the spec is valid and credentials check out, and `Healthy` reports the result of the periodic upstream probe. The probe runs by default; set `healthCheck.enabled: false` to disable it (for example for a provider type with no probe, or an offline test fixture). `healthCheck.intervalSeconds` sets the probe cadence (default 60) and `healthCheck.timeoutSeconds` bounds each probe request (default 10). `budgetUsage` shows per-namespace spend for the current period, and `clusterSpentUSD` shows the sum across all namespaces.
+Two conditions summarize provider health: `Ready` reports whether the spec is valid and credentials check out, and `Healthy` reports the result of the periodic upstream probe. Hard-enforcement providers can carry a third, `BoundaryMarginRaised`: the gateway observed traffic that required a wider boundary margin than `hard.boundaryMarginPercent` configures, so the knob is undersized for the deployment (the guarantee held anyway; see [Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). The probe runs by default; set `healthCheck.enabled: false` to disable it (for example for a provider type with no probe, or an offline test fixture). `healthCheck.intervalSeconds` sets the probe cadence (default 60) and `healthCheck.timeoutSeconds` bounds each probe request (default 10). `budgetUsage` shows per-namespace spend for the current period, and `clusterSpentUSD` shows the sum across all namespaces.
 
 Each `budgetUsage` entry's `state` is a small per-namespace state machine over the current period:
 
 ![Per-namespace budget state machine for one ModelProvider and one period. The period opening enters Normal. Normal moves to Throttled when spend crosses a degrade policy's atPercent, with requests rerouted to the degradeTo model. Normal or Throttled move to Blocked when spend crosses a block policy's atPercent or a request would exceed perNamespaceUSD or clusterUSD; a note records that Blocked answers requests with 429 budget_exhausted and a Retry-After equal to the seconds until the next period reset. The only arrows out of Throttled and Blocked back to Normal are the period rollover. A closing note records that warn policies emit an event and change no state, that spend is monotonic within a period, that the state is per provider and namespace, and that this status field is display truth while enforcement reads each gateway replica's live counter plus its peers' partials.](../diagrams/budget-namespace-states.svg)
 
-Reading the diagram: the asymmetry is the point. Within a period the arrows only ever move right, because spend is monotonic; nothing un-throttles or un-blocks a namespace except the clock. If a state seems wrong mid-period, the correcting levers are the spec (raise the budget, edit the policy), which re-evaluates immediately, not the counter.
+Reading the diagram: the asymmetry is the point. Within a period the arrows only ever move right, because spend is monotonic; nothing un-throttles or un-blocks a namespace except the clock. If a state seems wrong mid-period, the correcting levers are the spec (raise the budget, edit the policy), which re-evaluates immediately, not the counter. One known seam: the reconciler derives this display state with a simpler rule (Blocked dominates) than the gateway's highest-threshold-wins enforcement decision, so the two can disagree transiently at threshold edges. The drift is display-only; enforcement never reads this field. Hard enforcement changes nothing in this state machine: the boundary region is a transient gateway admission mode, not a namespace state.
 
 ## Design Notes
 
@@ -173,7 +192,7 @@ Per-replica rollover detection, archival of previous-period totals to status, an
 
 ### Budget enforcement hierarchy
 
-Every routed request checks both `clusterUSD` (sum across namespaces) and `perNamespaceUSD` (the calling namespace's share). The request is blocked with `429 budget_exhausted` if either `clusterSpent + cost > clusterUSD` OR `nsSpent + cost > perNamespaceUSD`. `error.message` names which ceiling fired (`"cluster budget exhausted"` vs `"namespace budget exhausted: <ns>"`) so operators can attribute the block. `Retry-After` is the delta-seconds to the next period reset (see the boundary rules above). Setting `clusterUSD` without `perNamespaceUSD` (or vice versa) is supported: the unset ceiling is simply not enforced. See [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management) for replica-side accounting.
+Every routed request evaluates both ceilings against last-known spend: utilization is the worse of `nsSpent / perNamespaceUSD` and `clusterSpent / clusterUSD`, and the highest policy threshold at or below that utilization fires. There is no pre-request cost estimation, deliberately: a request's cost is knowable only after the response (streaming especially), so soft mode counts after the fact within its stated bound, and hard mode bounds the crossing with serialized admission rather than estimates ([Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). When a block fires, `error.message` names which ceiling won (`"cluster budget exhausted"` vs `"namespace budget exhausted: <ns>"`) so operators can attribute it, and `Retry-After` is the delta-seconds to the next period reset. Setting `clusterUSD` without `perNamespaceUSD` (or vice versa) is supported: the unset ceiling is simply not enforced. See [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management) for replica-side accounting.
 
 ### Glob semantics in `allowedNamespaces`
 

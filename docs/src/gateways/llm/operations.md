@@ -52,6 +52,7 @@ The gateway exposes Prometheus metrics on `:9090/metrics`:
 - `kaalm_llm_spend_usd_total{provider,namespace}`
 - `kaalm_llm_fallback_total{from_provider,to_provider,reason}`
 - `kaalm_llm_budget_utilization{provider,namespace,period}` (gauge, 0-1)
+- `kaalm_llm_budget_boundary_events_total{provider,namespace,event}` (event = engaged|throttled|fail_closed|margin_raised; emitted only by hard-enforcement providers, see [Hard Enforcement](budgets-and-rate-limits.md#hard-enforcement))
 
 Note the naming: the counters carry the `_total` suffix and `kaalm_llm_budget_utilization` does not, because it is a gauge rather than a monotonic counter.
 

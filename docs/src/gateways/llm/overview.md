@@ -1,6 +1,6 @@
 # LLM Gateway
 
-The LLM Gateway is the shared cluster-level component responsible for mediating LLM traffic between agent containers and upstream providers. It is where spend tracking, budget guardrails, rate limiting, fallback, and credential isolation live.
+The LLM Gateway is the shared cluster-level component responsible for mediating LLM traffic between agent containers and upstream providers. It is where spend tracking, budget guardrails (soft by default, hard by opt-in), rate limiting, fallback, and credential isolation live.
 
 The pages in this chapter follow a single request through the gateway. [Request Handling](request-handling.md#request-flow) walks the end-to-end request flow, streaming, and model identification; [Workload Identity](workload-identity.md) covers how the gateway establishes which namespace a caller belongs to; and [Listener TLS](listener-tls.md) covers the certificates and per-path client-auth rules on the listener itself. [Provider Routing and Adapters](provider-routing.md) covers picking a ModelProvider and translating to its wire format, [Budgets and Rate Limits](budgets-and-rate-limits.md#budget-state-management) covers spend accounting and throttling, and [Fallback Logic](fallback.md) covers what happens when the chosen provider fails. [LLM Gateway Operations](operations.md#gateway-readiness) collects readiness, observability, and failure modes.
 
