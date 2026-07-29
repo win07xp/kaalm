@@ -32,7 +32,7 @@ Reading the diagram: the two red edges into ModelProvider are the shape that mat
 
 Both gateways are call surfaces of a single replicated Deployment in `kaalm-system`, with a separate internal health port for kubelet probes.
 
-The **LLM Gateway** listens on `:8443` (TLS, plus internal mTLS endpoints) and mediates all agent-to-provider traffic in the outbound direction: agent to LLM provider. It provides spend visibility, soft budget guardrails, rate limiting, fallback routing, and credential isolation. Using it is optional per agent.
+The **LLM Gateway** listens on `:8443` (TLS, plus internal mTLS endpoints) and mediates all agent-to-provider traffic in the outbound direction: agent to LLM provider. It provides spend visibility, budget guardrails (soft by default, hard opt-in), rate limiting, fallback routing, and credential isolation. Using it is optional per agent.
 
 The **User Gateway** listens on `:8080` (TLS) and handles the inbound direction plus its return path: it receives webhook messages from outside, normalizes them into a standard envelope, delivers them to the agent's HTTP endpoint, and hosts the async response polling endpoint. In v1 it supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1.
 

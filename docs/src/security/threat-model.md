@@ -63,13 +63,13 @@ Note the `escalate`/`bind` grants on `roles`/`rolebindings` (see [Operator Servi
 
 ## Tenant Isolation and Budgets
 
-Budgets are guardrails, not hard caps. That is a deliberate choice, and two rows here restate the consequence so it is not mistaken for a bug.
+Budgets are guardrails by default, not hard caps; providers that need a cap opt in to [hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement), which states its guarantee and its bounds. Two rows here restate the default's consequence so it is not mistaken for a bug.
 
 | Threat | Mitigation |
 |---|---|
-| One tenant exhausts another tenant's budget via shared provider | Per-namespace spend accounting; `allowedNamespaces` restricts access; budgets are soft limits with bounded overspend |
+| One tenant exhausts another tenant's budget via shared provider | Per-namespace spend accounting; `allowedNamespaces` restricts access; budgets are soft limits with bounded overspend, or hard-capped when the provider opts in |
 | Agent makes requests to unauthorized provider | Gateway validates model against ModelProvider.models and namespace against allowedNamespaces |
-| Budget guardrails exceeded under high concurrency | Budgets are documented as soft limits with bounded overspend; hard caps at the provider account level recommended for strict requirements |
+| Budget guardrails exceeded under high concurrency | Soft mode documents its bounded overspend; hard enforcement bounds the crossing to the stated in-flight guarantee; provider account limits remain defense in depth |
 | Gateway-only tenant uses a provider their AgentClass would have denied in the mTLS tier | **Expected behavior, not a vulnerability.** See note below. |
 
 ### Notes

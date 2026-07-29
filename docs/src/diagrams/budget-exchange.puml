@@ -36,17 +36,19 @@ note over cm
   rollover, when replicas transition independently.
 end note
 
-== 3. On every ConfigMap change (watch) ==
+== 3. On every ConfigMap change (watch), 10s tick as backstop ==
 
 loop watch event
   cm --> r0 : changed
-  r0 -> r0 : fold **peers' current-period partials**\ninto its enforcement view
+  r0 -> r0 : fold **peers' current-period partials**\nplus **_retired** into its enforcement view
 end
 note over r0, cm #FFE4B5
   **Load-bearing.** The value a replica enforces against is
   its own live counter **plus every peer's latest partial**,
-  at most one 10s write interval stale. Without this fold,
-  a long-lived replica would never observe peer spend and
+  stale by at most one peer publish interval: 10s under soft
+  enforcement, one immediate settle-publish under hard
+  enforcement's boundary region. Without this fold, a
+  long-lived replica would never observe peer spend and
   enforcement drift would grow **unbounded** within a period.
 end note
 
@@ -54,7 +56,7 @@ end note
 
 rec -> cm : read all keys
 cm --> rec : per-replica partials
-rec -> rec : **filter** out entries whose **period**\nis not the current period\n**prune** keys with no live gateway Pod name\n**sum** the remaining partials
+rec -> rec : **filter** out entries whose **period**\nis not the current period\n**prune** keys with no live gateway Pod name,\nfolding them into **_retired** first\n**sum** the remaining partials plus _retired
 rec -> cm : write **_canonical**
 rec -> rec : update ModelProvider **status.budgetUsage**
 

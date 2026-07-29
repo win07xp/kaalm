@@ -7,13 +7,13 @@ The design book is the spec: it documents exactly how the system works. Start at
 ## Layout of src/
 
 - `concepts/` - vision, core concepts, personas, system architecture, tenancy and tiers
-- `resources/` - one page per CRD, plus the 29 cross-resource validation rules
+- `resources/` - one page per CRD, plus the cross-resource validation rules
 - `runtime/` - the runtime contract, reference base images, starter templates, child resources
 - `gateways/` - gateway overview, `api/` (HTTP wire contract), `llm/`, `user/`
 - `controller/` - operator structure, reconcilers, lifecycles, finalizers
 - `security/` - trust model, RBAC, credentials, TLS, threat model
 - `operations/` - deployment (Helm), observability
-- `appendix/` - S1 to S16 acceptance scenarios, the scenario-coverage map, and the lifecycle index
+- `appendix/` - the acceptance scenarios (S1 to S17), the scenario-coverage map, and the lifecycle index
 
 ## Single-sourced facts
 

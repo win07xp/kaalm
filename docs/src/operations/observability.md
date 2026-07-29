@@ -67,6 +67,7 @@ The Kaalm-specific metrics across all three components:
 | LLM Gateway | `kaalm_llm_spend_usd_total` | counter | `provider`, `namespace` |
 | LLM Gateway | `kaalm_llm_fallback_total` | counter | `from_provider`, `to_provider`, `reason` |
 | LLM Gateway | `kaalm_llm_budget_utilization` | gauge | `provider`, `namespace`, `period` |
+| LLM Gateway | `kaalm_llm_budget_boundary_events_total` | counter | `provider`, `namespace`, `event` |
 | User Gateway | `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` |
 | User Gateway | `kaalm_channel_message_duration_seconds` | histogram | `channel_type` |
 | User Gateway | `kaalm_channel_wake_total` | counter | `namespace` |
@@ -122,7 +123,7 @@ Architecturally-significant Event groups, with the reasons attached:
 
 - **Phase transitions** on Agent and AgentTask (`Normal`, `PhaseChanged`).
 - **Hibernation / wake** on Agent (`Normal`, `Hibernated` / `Woken`; `Warning`, `WakeIgnored`). See [Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics) and [Wake trigger](../controller/hibernation-and-wake.md#wake-trigger).
-- **Provider health and budget** on ModelProvider (`Warning`, `ProviderUnhealthy` / `BudgetExhausted`).
+- **Provider health and budget** on ModelProvider (`Warning`, `ProviderUnhealthy` / `BudgetExhausted` / `BoundaryMarginRaised`).
 - **Validation failures** on any CRD (`Warning`, `InvalidReference` plus reconciler-specific reasons).
 - **Fallback misconfiguration** on ModelProvider (`Warning`, `FallbackIneligible` from both reconcile-time and runtime paths; `DegradeTargetNotCheapest` advisory).
 - **Callback failures** on AgentChannel (`Warning`, `CallbackInvalid` when the `callbackUrl` fails the pre-dial deny-range / allowlist re-check; `CallbackRejected` when the receiver terminally rejects the POST). These are the per-occurrence signal paired with the persistent `PlatformConnected=False` condition; see [Async Webhook Response](../gateways/api/async-responses.md).

@@ -67,8 +67,12 @@ The current milestone is **v0.3.0, "the on-ramp"**, tracked in the
   `AgentClass.spec.image.allowHandlerMounts` (validation rules 30 and 31), and
   acceptance scenario S16. The images, the mount, and the S16 e2e proof are
   implemented; what remains is the v0.3.0 release that publishes the images.
-- **Hard budget enforcement** (opt-in; soft limits stay the default), design
-  pending.
+- **Hard budget enforcement** (opt-in; soft limits stay the default), now
+  designed in [Hard Enforcement](gateways/llm/budgets-and-rate-limits.md#hard-enforcement):
+  per-provider `budget.enforcement: hard` with boundary-region serialized
+  admission, a stated spend guarantee, fail-closed posture, validation rules
+  32 to 34, and acceptance scenario S17. The gateway implementation and the
+  S17 e2e proof are in flight.
 - **The tool plane design chapter** (gateway-brokered MCP tool access), design
   pending; implementation is the v0.4.0 milestone.
 
@@ -93,8 +97,6 @@ they are likely to matter:
 - **Observability deepening.** Concrete Grafana dashboard JSON for the shipped
   metric catalogs, and OpenTelemetry tracing across the gateway to agent to
   provider hops; see [Observability](operations/observability.md).
-- **Hard budget enforcement.** Synchronous per-request aggregation, replacing
-  the v1 soft-limit design where overshoot within a sync window is accepted.
 - **Cross-format provider fallback.** Translation between provider API formats
   (for example Anthropic to OpenAI) so fallback chains can cross `spec.type`.
 - **Larger horizons.** Agent-to-agent orchestration, a web UI, multi-cluster
