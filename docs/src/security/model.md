@@ -52,7 +52,7 @@ AgentClass can override these defaults, but the operator emits warnings for any 
 
 AgentClass includes network policy fields that the controller translates into `NetworkPolicy` resources.
 
-**Egress**: by default, deny all egress except to the Kaalm gateway in `kaalm-system` and DNS. Because the gateway is a separate Pod (not a sidecar), this is enforceable with standard Kubernetes NetworkPolicy without requiring a service mesh. The platform team adds explicit allowlist entries for MCP servers, external APIs, and so on via two fields:
+**Egress**: by default, deny all egress except to the Kaalm gateway in `kaalm-system` and DNS. Because the gateway is a separate Pod (not a sidecar), this is enforceable with standard Kubernetes NetworkPolicy without requiring a service mesh. The platform team adds explicit allowlist entries for external APIs and other direct egress via two fields (from v0.4.0, MCP tool servers are preferentially reached through the gateway's [tool plane](../gateways/tool-plane.md), which needs no per-agent egress at all; the fields remain the escape hatch):
 
 - **`spec.network.egress.allowedCIDRs`**: array of CIDR blocks. Maps directly to `NetworkPolicy.egress.to.ipBlock.cidr` and works on every CNI that implements Kubernetes NetworkPolicy. This is the portable primitive and should be preferred.
 - **`spec.network.egress.allowedHosts`**: array of DNS names. Only enforceable on CNIs that support FQDN egress policies (Cilium via `CiliumNetworkPolicy.toFQDNs`, Calico Enterprise). Standard `NetworkPolicy` has no equivalent. On unsupported CNIs the AgentClassReconciler emits a `Warning` event and ignores the field; `allowedCIDRs` alone governs egress. See [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).

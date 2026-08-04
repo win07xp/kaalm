@@ -128,14 +128,12 @@ In v1, the only supported backend is `pod`. The CRD schema rejects `agentSandbox
 
 ### MCP (Model Context Protocol)
 
-Kaalm does not mandate MCP but is compatible with it. Agent containers are free to connect to MCP servers for tool access.
-
-What Kaalm does govern is egress to those servers, via the AgentClass:
+Kaalm does not mandate MCP but is compatible with it, and its posture has two eras. In v1, agent containers connect to MCP servers directly, and what Kaalm governs is egress to those servers via the AgentClass:
 
 - [`network.egress.allowedCIDRs`](../resources/agentclass.md#spec) is portable and works on every NP-capable CNI.
 - `network.egress.allowedHosts` is FQDN-based and works only on FQDN-policy CNIs, for example Cilium or Calico Enterprise.
 
-See [AgentClass design notes](../resources/agentclass.md#design-notes). MCP server provisioning itself is out of scope for v1.
+Since the v0.3.0 design, MCP access is additionally a governed plane: the gateway brokers tool traffic with credential injection, tenancy gates, and per-call audit, implemented in v0.4.0 (see [The Tool Plane](../gateways/tool-plane.md)). Direct egress remains the documented escape hatch. MCP server provisioning itself stays out of scope in both eras: Kaalm brokers access to tool servers, it does not run them. See [AgentClass design notes](../resources/agentclass.md#design-notes).
 
 ### LLM Providers
 

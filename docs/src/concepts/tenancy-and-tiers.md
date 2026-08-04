@@ -80,7 +80,7 @@ See [The Kaalm Gateway](../gateways/overview.md) for the per-request enforcement
 Synthesized per-Pod NetworkPolicies bound Kaalm-managed Pods' egress to the AgentClass-permitted set:
 
 - **LLM provider traffic is gateway-mediated**, with no direct provider egress. This is what makes the spend and rate-limit controls above unbypassable for these Pods.
-- **Plus any AgentClass-allowed direct egress** (`allowedCIDRs`, `allowedHosts`, e.g. MCP servers).
+- **Plus any AgentClass-allowed direct egress** (`allowedCIDRs`, `allowedHosts`). In v1 this is the only route to MCP servers, and it is governed at the IP level only; from v0.4.0 the [tool plane](../gateways/tool-plane.md) gives MCP traffic the same gateway-mediated, unbypassable treatment as LLM traffic, and direct egress becomes the documented escape hatch.
 
 See [Per-Agent and Per-Task Child Resources](../runtime/child-resources.md).
 

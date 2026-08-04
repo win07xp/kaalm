@@ -1,6 +1,6 @@
 # Acceptance Scenarios
 
-These scenarios are concrete enough to double as acceptance criteria for v1: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. S1 through S5 belong to Priya, the platform engineer who provisions the capability. S6 through S11 belong to Dev, the application developer who deploys agents. S12 through S15 cover channel integration, where external systems talk to agents through the User Gateway. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused: S16, added with the v0.3.0 base-image design, extends Dev's group, and S17, added with the v0.3.0 hard-budget design, extends Priya's. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
+These scenarios are concrete enough to double as acceptance criteria for v1: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. S1 through S5 belong to Priya, the platform engineer who provisions the capability. S6 through S11 belong to Dev, the application developer who deploys agents. S12 through S15 cover channel integration, where external systems talk to agents through the User Gateway. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused: S16, added with the v0.3.0 base-image design, extends Dev's group; S17, added with the v0.3.0 hard-budget design, extends Priya's; and S18, added with the v0.3.0 tool-plane design, spans both seats and is proven by the v0.4.0 implementation. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
 
 ## S1: Install Kaalm and Offer a Standard Agent Class
 
@@ -86,6 +86,14 @@ Dev's team spends normally through the month. As their namespace's utilization e
 
 The month ends, the period rolls over, and the namespace flows freely again. Priya never tuned the boundary margin: when one team's burst traffic needed a wider margin than the default, the gateway widened it on its own and raised the `BoundaryMarginRaised` condition on the provider, which is how she learned to set the knob deliberately for next month.
 
+## S18: Grant an Agent a Governed Tool
+
+Priya's teams want their agents searching the web and querying internal services, and today that means every team pasting the search vendor's API key into its own pods and Priya punching CIDR holes she cannot audit. She registers a `ToolProvider` named `search-tools`: the MCP server's endpoint, its credential in a Secret in `kaalm-system`, and an `allowedNamespaces` list. She adds `search-tools` to the `standard` class's `allowedToolProviders`.
+
+Dev adds a `tools` entry to his agent naming `search-tools` and narrowing it to the `web_search` tool. His agent's MCP client points at the gateway's `/v1/mcp/search-tools` route instead of the vendor. When it lists tools, it sees exactly `web_search`; when it calls one, the gateway checks the three gates, injects the credential upstream, and forwards. No search credential exists anywhere in Dev's namespace, `kubectl exec` into the pod proves it, and every call leaves an audit record naming the agent, the tool, and the outcome.
+
+A teammate in a namespace outside the allowlist gets `403 access_denied` from the same route. Dev's own agent calling a tool outside its grant gets `403 tool_denied`. Priya reads both denials off the audit trail, which is the point: tool access became something she grants, meters, and can revoke, instead of something that happens inside pods she cannot see.
+
 ## Design Implications
 
 These scenarios drive specific design requirements:
@@ -103,3 +111,4 @@ These scenarios drive specific design requirements:
 - **S15** requires the User Gateway to support async webhook response mode with callback delivery and a polling fallback endpoint.
 - **S16** requires the published reference base images, the `Agent.spec.handler` ConfigMap reference with its `$KAALM_HANDLER_PATH` injection, and the `AgentClass.spec.image.allowHandlerMounts` gate (validation rules 30 and 31). See [Reference Base Images](../runtime/base-images.md).
 - **S17** requires the opt-in hard budget mode: `budget.enforcement` with the boundary-region admission machinery, validation rules 32 to 34, and the `_retired` durability key in the budget exchange. See [Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement).
+- **S18** requires the tool plane: the `ToolProvider` CRD, the class and workload grant chain (validation rules 35 to 38), and the gateway's `/v1/mcp/*` broker with credential injection and session ownership binding. Designed in [The Tool Plane](../gateways/tool-plane.md); implementation lands with v0.4.0.

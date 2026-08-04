@@ -6,7 +6,7 @@
 
 Kaalm is a Kubernetes-native platform that makes AI agents a first-class workload type. It provides a set of custom resources and a controller that manage the full lifecycle of agents, from deployment and hibernation through resumption and teardown, alongside two managed gateway types: an **LLM Gateway** (TLS-secured) for controlled access to AI model providers, and a **User Gateway** for connecting agents to user-facing channels via webhooks (Discord, WhatsApp, and other platform-specific adapters are planned for v1.1).
 
-Kaalm is **not** an agent framework, an agent marketplace, or an IDE. It does not define how an agent thinks, which tools it uses, or how users talk to it at the application layer. It defines how an agent is **run**: what image, under what isolation policy, against which LLM providers, with what lifecycle, within what cost guardrails, and over what user-facing channels.
+Kaalm is **not** an agent framework, an agent marketplace, or an IDE. It does not define how an agent thinks, which tools it uses, or how users talk to it at the application layer; since the v0.3.0 design it does govern how tool access is granted, brokered, and audited (the [tool plane](../gateways/tool-plane.md), implemented in v0.4.0), without ever shipping a tool itself. It defines how an agent is **run**: what image, under what isolation policy, against which LLM providers, with what lifecycle, within what cost guardrails, and over what user-facing channels.
 
 ## The Problem
 
@@ -45,7 +45,7 @@ Several projects overlap with parts of Kaalm's scope. Kaalm is designed to be ad
 
 **Agent Sandbox (SIG Apps)** is a lower-level primitive. It provides a Sandbox CRD for a single, stateful, isolated pod with features like pause/resume, warm pools, and optional gVisor/Kata isolation. Agent Sandbox is an excellent *runtime backend* for Kaalm agents that need strong isolation: Kaalm can create Sandbox resources rather than raw Pods when configured to do so. Agent Sandbox does not provide agent-level abstractions (no concept of a persistent vs. task agent, no ModelProvider management, no platform/developer split, no channel integration).
 
-**KAgent (CNCF Sandbox)** is a more opinionated framework with a specific runtime (Python ADK or Go ADK), a built-in tool set oriented around DevOps/infrastructure agents, and per-agent `ModelConfig` resources. KAgent is a strong choice for teams wanting a batteries-included DevOps agent platform. Kaalm is more general-purpose: any container satisfying a minimal [runtime contract](../runtime/contract.md) can be an Agent, and ModelProvider is a cluster-scoped shared resource with centralized budget control rather than a per-agent configuration.
+**KAgent (CNCF Sandbox)** is a more opinionated framework with a specific runtime (Python ADK or Go ADK), a built-in tool set oriented around DevOps/infrastructure agents, and per-agent `ModelConfig` resources. KAgent is a strong choice for teams wanting a batteries-included DevOps agent platform. Kaalm is more general-purpose: any container satisfying a minimal [runtime contract](../runtime/contract.md) can be an Agent, and ModelProvider is a cluster-scoped shared resource with centralized budget control rather than a per-agent configuration. The distinction survives the [tool plane](../gateways/tool-plane.md): Kaalm brokers and governs access to tools, and ships none of its own.
 
 **KubeClaw / Sympozium** focuses on fleet orchestration of agents that administer the cluster itself, with a sidecar-per-skill pattern and ephemeral RBAC. Its scope is narrower (cluster administration agents) and its architectural pattern (sidecar skills) is more opinionated.
 
@@ -55,7 +55,7 @@ Kaalm's differentiator is the **generalized, policy-driven workload abstraction*
 
 1. **General-purpose over framework-specific.** Any container that satisfies the [runtime contract](../runtime/contract.md) can be an Agent. No assumption about language, framework, or agent architecture.
 2. **Two-tier platform/developer model.** Cluster-scoped resources (AgentClass, ModelProvider) let platform teams set guardrails. Namespace-scoped resources (Agent, AgentTask, AgentChannel) let developers self-serve within those guardrails.
-3. **Composable with the ecosystem.** Agent Sandbox can be used as a runtime backend. MCP can be used for tool integration. No reinvention of primitives that already exist.
+3. **Composable with the ecosystem.** Agent Sandbox can be used as a runtime backend. MCP is the tool protocol, brokered by the gateway from v0.4.0 (the [tool plane](../gateways/tool-plane.md)) rather than reimplemented. No reinvention of primitives that already exist.
 4. **Opinionated defaults, BYO escape hatches.** A minimal runtime contract makes the simple case simple. v1 ships starter templates (one Go, one Python) under `examples/` that implement the full contract end-to-end: adopters copy the template and replace the agent logic. Full-featured reference base images (published as container images that wrap the contract) are planned for a future release. Custom images are a first-class path.
 5. **Policy at the boundary, not in the workload.** Budget guardrails, isolation policy, and provider access control live in cluster-scoped resources, not in individual Agent manifests.
 6. **Kubernetes-native semantics.** Lifecycle mirrors familiar primitives: AgentClass is to Agent as StorageClass is to PVC; AgentTask is to Agent as Job is to Deployment.
@@ -102,7 +102,7 @@ Every concern in the system has exactly one owner. This table is the quick refer
 | Runtime isolation | RuntimeClass via AgentClass, or Sandbox backend |
 | LLM traffic / spend tracking | LLM Gateway in kaalm-system (shared) |
 | Channel message routing | User Gateway in kaalm-system (shared) |
-| Tool access | MCP (external, not managed by Kaalm in v1) |
+| Tool access | MCP; direct and ungoverned in v1, gateway-brokered from v0.4.0 (the [tool plane](../gateways/tool-plane.md)) |
 | External exposure | Kubernetes Ingress / Gateway API (user-managed, not Kaalm) |
 | Observability | Controller + Gateway Prometheus metrics; see [Observability](../operations/observability.md) |
 | In-cluster TLS issuance | cert-manager + trust-manager (prerequisite); see [Deployment](../operations/deployment.md) |
