@@ -13,7 +13,7 @@ The design book is the spec: it documents exactly how the system works. Start at
 - `controller/` - operator structure, reconcilers, lifecycles, finalizers
 - `security/` - trust model, RBAC, credentials, TLS, threat model
 - `operations/` - deployment (Helm), observability
-- `appendix/` - the acceptance scenarios (S1 to S17), the scenario-coverage map, and the lifecycle index
+- `appendix/` - the acceptance scenarios (S1 to S18), the scenario-coverage map, and the lifecycle index
 
 ## Single-sourced facts
 

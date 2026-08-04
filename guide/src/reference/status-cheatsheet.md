@@ -2,7 +2,7 @@
 
 Everything Kaalm tells you through `kubectl get` and `describe`, resource
 by resource. Conditions listed are the ones the controller actually sets in
-v0.2.0.
+v0.3.0.
 
 ## Agent
 
@@ -27,7 +27,9 @@ Conditions: `Ready` (the roll-up), `GatewayReachable` (the controller's view
 of the gateway), and `Degraded` (reason `BudgetExhausted`, present only while
 a referenced provider reports the namespace budget-blocked; phase is
 preserved). A wake can also be refused with event reason `WakeIgnored` (for
-example, hibernation not in effect).
+example, hibernation not in effect). Handler-mount problems surface as
+Ready-condition reasons: `HandlerMountNotAllowed` (the class does not allow
+mounts) and `HandlerConfigMapNotFound`.
 
 ## AgentTask
 
@@ -62,9 +64,13 @@ Spec problems show as Ready-condition reasons: `InvalidPath`,
 
 - `Ready`: spec valid and credentials resolve. False reasons:
   `CredentialsMissing`, `CredentialsInvalid`, `InvalidDegradeTarget`,
-  `FallbackIneligible`.
+  `FallbackIneligible`, `HardBudgetUnpriced` (hard enforcement requires a
+  fully priced model catalog).
 - `Healthy`: the periodic upstream probe (`UpstreamReachable` when good).
   Ready without Healthy means valid config, unreachable provider.
+- `BoundaryMarginRaised` (hard enforcement only): observed traffic forced the
+  gateway to admit more conservatively than the configured
+  `boundaryMarginPercent`; a signal to raise the knob, not an outage.
 
 Budget state lives in status:
 

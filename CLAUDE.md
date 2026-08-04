@@ -3,10 +3,12 @@
 ## Project Overview
 
 **Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
-type. v0.2.0 released 2026-07-22: one-command install and all acceptance
-scenarios e2e-proven. Current milestone (v0.3.0, "the on-ramp", umbrella issue
-#46): reference base images, hard budget enforcement, tool plane design; see
-`docs/src/ROADMAP.md` and the GitHub milestones.
+type. v0.3.0 released 2026-08-04: reference base images with zero-build handler
+mounts, opt-in hard budget enforcement, and the tool plane design. Current
+milestone (v0.4.0, "the tool plane", umbrella issue #47): implement
+gateway-brokered MCP access (ToolProvider CRD, rules 35 to 38, S18), plus
+framework agent docs (#68); see `docs/src/ROADMAP.md` and the GitHub
+milestones.
 
 - API group: `kaalm.io` | Version: `v1alpha1`
 - Stack: Go, controller-runtime (kubebuilder), Helm
@@ -16,8 +18,8 @@ scenarios e2e-proven. Current milestone (v0.3.0, "the on-ramp", umbrella issue
 ## Documentation
 
 Three mdBooks: `docs/` (the design book, which is the spec), `guide/`
-(task-oriented user guide, complete), and `learn/` (beginner tutorial, stubs
-only until v0.2.0 ships an installable release). Build all with `make books`.
+(task-oriented user guide, complete), and `learn/` (beginner tutorial, written
+and walked against 0.3.0). Build all with `make books`.
 Each book has its own CLAUDE.md with its authoring rules. Conventions that
 bind all prose in this repo: no em-dashes or en-dashes; the numbered
 validation rules, runtime-contract items, and scenario IDs are cited by

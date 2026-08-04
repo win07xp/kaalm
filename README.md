@@ -5,8 +5,10 @@ type. You declare an agent; Kaalm runs it, gives it its own identity and
 storage, routes its model calls through a gateway that holds the credentials,
 and puts it to sleep when nobody is talking to it.
 
-**Status: v0.2.0.** Installs with one Helm command. All fifteen acceptance
-scenarios are proven on a real cluster on every pull request.
+**Status: v0.3.0.** Installs with one Helm command, and your first agent needs
+no image build: mount a handler file into a published base image. All seventeen
+implemented acceptance scenarios are proven on a real cluster on every pull
+request.
 
 ## What it looks like
 
@@ -29,7 +31,8 @@ That is a running container with its own TLS identity, a volume that outlives
 it, a service, a network policy restricting who may reach it, and hibernation
 when it goes idle. Your code never sees a provider API key: it calls the
 gateway, and the gateway injects the credential, checks the agent is allowed
-that provider, and records what it cost.
+that provider, and records what it cost. Budgets are soft limits by default,
+with opt-in hard enforcement that turns the block threshold into a guarantee.
 
 ## Install
 
@@ -38,7 +41,7 @@ installs neither. With those in place:
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 0.2.0 \
+  --version 0.3.0 \
   --namespace kaalm-system --create-namespace \
   --set certManager.clusterResourceNamespace=cert-manager
 ```
