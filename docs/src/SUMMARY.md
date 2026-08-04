@@ -46,6 +46,7 @@
   - [Budgets and Rate Limits](gateways/llm/budgets-and-rate-limits.md)
   - [Fallback Logic](gateways/llm/fallback.md)
   - [LLM Gateway Operations](gateways/llm/operations.md)
+- [The Tool Plane](gateways/tool-plane.md)
 - [User Gateway](gateways/user/overview.md)
   - [Platform Adapters and Channel Health](gateways/user/platform-adapters.md)
   - [Activation and Activity Tracking](gateways/user/activation-and-activity.md)

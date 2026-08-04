@@ -52,10 +52,13 @@ When the LLM Gateway cannot fulfill a request, it returns the structured envelop
 | 429 | `rate_limited` | yes | Per-namespace rate limit exceeded; includes `Retry-After` header (short backoff, typically seconds) |
 | 429 | `budget_exhausted` | yes | Budget blocked per policy; `Retry-After` header set to the start of the next budget period |
 | 429 | `budget_throttled` | yes | Hard enforcement only: the boundary region's admission slot is busy; `Retry-After: 1` (see row notes) |
+| 403 | `tool_denied` | no | Tool plane, since v0.4.0: the named tool is outside the workload's grant (see row notes) |
 | 502 | `provider_error` | no | Upstream provider returned an error after the fallback chain was exhausted |
 | 503 | `internal_unavailable` | yes | Gateway's `TokenReview` call to the apiserver failed (see row notes); `Retry-After: 1` |
 | 503 | `provider_unavailable` | no | All providers (primary + fallback) unreachable |
 | 503 | `budget_state_unavailable` | yes | Hard enforcement only: the replica cannot verify budget state inside the boundary region and fails closed (see row notes) |
+| 503 | `tool_unavailable` | yes | Tool plane, since v0.4.0: the tool server is unreachable, refusing, or rejected the injected credential |
+| 504 | `tool_timeout` | no | Tool plane, since v0.4.0: the brokered tool call exceeded its upstream timeout |
 | 504 | `provider_timeout` | no | Upstream provider timed out after the fallback chain was exhausted |
 
 Row notes:
@@ -65,6 +68,7 @@ Row notes:
 - **413 `request_too_large`.** Reduce prompt size, paginate batch calls, or externalize large attachments and reference them by URL. A fresh attempt with the same body hits the same condition. The limit is applied before provider routing, so `error.provider` is absent.
 - **429 `budget_exhausted`.** Retryable only at or after the `Retry-After` moment, which is typically hours to days away. Since v0.3.0 the message names which ceiling fired: `namespace budget exhausted: <ns>` or `cluster budget exhausted`.
 - **429 `budget_throttled`.** [Hard enforcement](../llm/budgets-and-rate-limits.md#hard-enforcement) serializes admission near a block ceiling; this is the response to a request that found the admission slot held. A short-backoff retry is correct here, the opposite of `budget_exhausted`'s guidance: the slot frees as soon as the in-flight request settles.
+- **Tool plane types (since v0.4.0).** `tool_denied` is deliberately distinct from `access_denied`: the namespace and class gates reuse `access_denied` exactly as the LLM tenancy chain does, while `tool_denied` names a per-tool narrowing miss so tool-level policy is auditable on its own. See [The Tool Plane](../tool-plane.md).
 - **503 `budget_state_unavailable`.** A hard-enforcement replica inside the boundary region could not publish its spend or refresh its peer view within the staleness window, and refuses to spend blind. Retryable: the condition clears on the first successful exchange. Requests outside the boundary region are unaffected.
 - **502 `provider_error`, 503 `provider_unavailable`, 504 `provider_timeout`.** The gateway has already retried through the entire fallback chain on the agent's behalf, so these are not retryable: escalate to a different model/budget or operator intervention rather than retry. For `provider_timeout`, the per-attempt bound is `gateway.providerFirstByteTimeout` (default `120s`).
 - **503 `internal_unavailable`.** The gateway's `TokenReview` call to the apiserver failed for a bearer-token request that missed the token cache. This affects the gateway-only tier only; mTLS callers and cached-token requests are unaffected (see [Failure Modes](../llm/operations.md#failure-modes)). Emitted with `Retry-After: 1` and clears when the apiserver recovers. The type name is deliberately reused from [`/v1/task/complete`](task-complete.md) and the [User Gateway table](errors.md#user-gateway-error-responses) below.
@@ -77,7 +81,7 @@ Row notes:
 
 **`Retry-After` format.** Emitted as integer `delta-seconds` (RFC 7231 § 7.1.3) on every error that includes one. For `budget_exhausted` this can be a large value (for example, ~2,592,000 for a 30-day budget boundary). Clients should parse it as integer seconds, not as an HTTP-date.
 
-**The `error.provider` field.** Present only on errors scoped to a single named provider: `access_denied` (403), `rate_limited` (429), `budget_exhausted` (429), `budget_throttled` (429), and `budget_state_unavailable` (503). It is absent on pre-routing errors (`invalid_request`, `unauthorized`, `request_too_large`, `internal_unavailable`), where no provider has yet been resolved. On fallback-exhausted errors (`provider_error`, `provider_unavailable`, `provider_timeout`), `provider` carries the **originally-requested** provider, not the last fallback attempted, so callers see a stable identifier they can correlate to the qualified `provider/model` they sent.
+**The `error.provider` field.** Present only on errors scoped to a single named provider: `access_denied` (403), `rate_limited` (429), `budget_exhausted` (429), `budget_throttled` (429), `budget_state_unavailable` (503), and, since v0.4.0, `tool_denied` (403), `tool_unavailable` (503), and `tool_timeout` (504). It is absent on pre-routing errors (`invalid_request`, `unauthorized`, `request_too_large`, `internal_unavailable`), where no provider has yet been resolved. On fallback-exhausted errors (`provider_error`, `provider_unavailable`, `provider_timeout`), `provider` carries the **originally-requested** provider, not the last fallback attempted, so callers see a stable identifier they can correlate to the qualified `provider/model` they sent.
 
 ## User Gateway Error Responses
 

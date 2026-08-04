@@ -82,7 +82,8 @@ spec:
     egress:
       # Allowed external destinations beyond the Kaalm gateway, expressed as
       # CIDR blocks. Agent containers call providers through the gateway; this
-      # governs other egress (MCP, tools). Enforced on any CNI that implements
+      # governs other direct egress (from v0.4.0, MCP tool traffic
+    # preferentially rides the gateway's tool plane instead). Enforced on any CNI that implements
       # standard Kubernetes NetworkPolicy.
       allowedCIDRs:
         - "10.42.0.0/16"         # internal MCP subnet

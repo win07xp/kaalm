@@ -68,6 +68,8 @@ The Kaalm-specific metrics across all three components:
 | LLM Gateway | `kaalm_llm_fallback_total` | counter | `from_provider`, `to_provider`, `reason` |
 | LLM Gateway | `kaalm_llm_budget_utilization` | gauge | `provider`, `namespace`, `period` |
 | LLM Gateway | `kaalm_llm_budget_boundary_events_total` | counter | `provider`, `namespace`, `event` |
+| LLM Gateway | `kaalm_tool_calls_total` (lands with v0.4.0) | counter | `provider`, `namespace`, `tool`, `status` |
+| LLM Gateway | `kaalm_tool_call_duration_seconds` (lands with v0.4.0) | histogram | `provider`, `tool` |
 | User Gateway | `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` |
 | User Gateway | `kaalm_channel_message_duration_seconds` | histogram | `channel_type` |
 | User Gateway | `kaalm_channel_wake_total` | counter | `namespace` |

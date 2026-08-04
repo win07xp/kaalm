@@ -77,8 +77,10 @@ spec:
     enabled: true
     port: 8080
 
-  # Optional: declare MCP servers the agent will connect to.
-  # Used to scope NetworkPolicy egress rules. Does not provision the servers.
+  # Inert as shipped, removed in v0.4.0: nothing reads this field, and the
+  # egress scoping it once promised was never implemented (egress comes from
+  # the AgentClass fields). Superseded by the tool plane's spec.tools grant;
+  # see The Tool Plane in the gateways section.
   mcpServers:
     - name: github-tools
       url: "https://mcp.internal.corp/github"

@@ -73,8 +73,12 @@ The current milestone is **v0.3.0, "the on-ramp"**, tracked in the
   admission, a stated spend guarantee, fail-closed posture, validation rules
   32 to 34, and acceptance scenario S17. The gateway implementation and the
   S17 e2e proof are merged; the mode ships with the v0.3.0 release.
-- **The tool plane design chapter** (gateway-brokered MCP tool access), design
-  pending; implementation is the v0.4.0 milestone.
+- **The tool plane**, now designed in [The Tool Plane](gateways/tool-plane.md):
+  gateway-brokered MCP access through a cluster-scoped `ToolProvider`, the
+  class and workload grant chain (validation rules 35 to 38), credential
+  injection with stateless session ownership, per-call audit, and acceptance
+  scenario S18. Design only in v0.3.0; the implementation is the whole of the
+  v0.4.0 milestone.
 
 Beyond v0.3.0, the milestone runway to v1.0.0 is laid out in the
 [GitHub milestones](https://github.com/win07xp/kaalm/milestones); items below

@@ -1,6 +1,6 @@
 # Gateway Overview
 
-The gateway is a single replicated Deployment in `kaalm-system`. It hosts two logical gateways: the [LLM Gateway](llm/request-handling.md#request-flow) for outbound agent-to-provider traffic and the [User Gateway](user/overview.md#request-flow) for inbound channel traffic. Together its two TLS listeners host three call surfaces: `:8443` serves the LLM proxy and the internal mTLS endpoints, `:8080` serves inbound channel webhooks and the async response polling endpoint, and a separate internal health port serves kubelet probes (see [Internal Endpoints and Ports](#internal-endpoints-and-ports)).
+The gateway is a single replicated Deployment in `kaalm-system`. It hosts two logical gateways: the [LLM Gateway](llm/request-handling.md#request-flow) for outbound agent-to-provider traffic and the [User Gateway](user/overview.md#request-flow) for inbound channel traffic. Together its two TLS listeners host three call surfaces: `:8443` serves the LLM proxy and the internal mTLS endpoints, `:8080` serves inbound channel webhooks and the async response polling endpoint, and a separate internal health port serves kubelet probes (see [Internal Endpoints and Ports](#internal-endpoints-and-ports)). A fourth surface, the brokered [tool plane](tool-plane.md) (`/v1/mcp/*` on `:8443`), is designed and lands with v0.4.0.
 
 ![The single Kaalm Gateway Deployment in kaalm-system and its four ports, with a trust boundary separating untrusted callers from the cluster. Outside the boundary, external webhook callers reach a user-provisioned Ingress, which routes to :8080 (the User listener, per-AgentChannel auth, serving /channels/* and /v1/channels/responses/*). Inside the cluster, Agent and AgentTask Pods call :8443 (the LLM listener, VerifyClientCertIfGiven) using an mTLS SAN or an SA bearer token, and the controller calls the same port with a controller-SAN client cert to reach GET /v1/activity and GET /v1/channels/health. Kubelet probes terminate on :8081 (TLS, no client auth, /healthz and /readyz) and Prometheus scrapes :9090/metrics. A red line marks the route that does not exist: the Ingress cannot reach :8443, because the controller-only paths are not hosted on :8080.](../diagrams/gateway-listener-ports.svg)
 
@@ -44,6 +44,7 @@ All paths on `:8443` share the same listener and serve TLS; client-auth requirem
 | Path family | Client auth |
 |---|---|
 | LLM proxy (`/v1/messages`, `/v1/chat/completions`, provider-specific paths) | mTLS with Agent/AgentTask SAN, **or** `TokenReview`-validated SA bearer token (gateway-only tier) |
+| Tool plane (`/v1/mcp/*`, since v0.4.0; see [The Tool Plane](tool-plane.md)) | Same dual mode as the LLM proxy paths |
 | `POST /v1/task/complete` | mTLS, Agent/AgentTask SAN admitted at listener; AgentTask only at handler (Agent callers rejected with 403) |
 | `POST /v1/agent/heartbeat` | mTLS, Agent/AgentTask SAN admitted at listener; Agent only at handler (AgentTask callers rejected with 403) |
 | `GET /v1/activity`, `GET /v1/channels/health` | mTLS, Controller SAN required (Agent/AgentTask certs rejected with 403) |
