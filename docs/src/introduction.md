@@ -2,7 +2,7 @@
 
 Kaalm (Kubernetes AI/Agent Loop Manager) is a Kubernetes-native operator that makes AI agents a first-class workload type. You declare agents, their policies, their model access, and their inbound channels as custom resources. The operator turns those declarations into running Pods, TLS identities, network policies, budgets, and lifecycle automation.
 
-The project is currently in the design phase. This book is the complete design: it is written to be implemented from, and it doubles as onboarding material for anyone joining the project. Every number, field name, and rule in it is deliberate.
+This book is the complete design and the shipped operator implements it: it was written to be implemented from, and it doubles as onboarding material for anyone joining the project. Every number, field name, and rule in it is deliberate. Where the implementation stands against the design, release by release, is recorded in the [Roadmap](ROADMAP.md).
 
 ## How this book is organized
 
@@ -15,7 +15,7 @@ The parts build on each other. Reading front to back never requires a concept th
 5. **The Controller** documents the operator: its reconcilers, the Agent and AgentTask state machines, hibernation and wake, change propagation, and finalizers.
 6. **Security** covers the trust model, RBAC, credential handling, TLS and certificates, and the threat model.
 7. **Operations** covers deployment via Helm and observability.
-8. The appendix holds the fifteen acceptance scenarios that double as v1 acceptance criteria.
+8. The appendix holds the eighteen acceptance scenarios that double as v1 acceptance criteria.
 
 ## Where to start
 

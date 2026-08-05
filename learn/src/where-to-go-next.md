@@ -42,7 +42,7 @@ organized by the symptom you are actually seeing.
 **Understand the machine.** The
 [design book](https://github.com/win07xp/kaalm) is the specification: how the
 controller reconciles, how the gateway routes and bills, how the TLS identity
-fabric is built, and the seventeen acceptance scenarios the whole system is
+fabric is built, and the eighteen acceptance scenarios the whole system is
 tested against. Start with its architecture chapter.
 
 **Write a bigger agent.** You already write handlers; that is the whole
