@@ -29,7 +29,7 @@ as the v0.4.0 implementation lands.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
-| S1 Install + standard class | `Deployment` (five CRDs) + `Golden path` (AgentClass to Ready) | Envtest `TestAgentClass_*` |
+| S1 Install + standard class | `Deployment` (six CRDs) + `Golden path` (AgentClass to Ready) | Envtest `TestAgentClass_*` |
 | S2 Sandboxed class (RuntimeClass, allowlist) | `Sandboxed class (S2)` (runtimeClassName passthrough; image-allowlist rejection) | Unit `TestDeriveEffectiveSpec_*`, `TestDesiredPod_*` |
 | S3 Shared provider + per-namespace budget | `Golden path` (ModelProvider to Ready) + `Fallback and budget` (S10 block) | Unit `TestBudgetLedger_EnforceThresholds`, `TestProxy_BudgetDegradeAndBlock` |
 | S4 Fallback chain for availability | `Fallback and budget` (S4: walks to the fallback provider) | Unit `TestFallback_*`, `TestIntegration_FallbackChainWalksToBackup` |

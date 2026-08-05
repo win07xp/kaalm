@@ -18,10 +18,11 @@ Platform teams face a structural tension: they want to offer agents as a self-se
 
 ## What Kaalm Provides
 
-Kaalm introduces five custom resources:
+Kaalm introduces six custom resources:
 
 - **AgentClass** (cluster-scoped): a policy resource, analogous to StorageClass, that defines the runtime configuration, isolation level, resource limits, and allowed providers for a category of agents. Platform teams own these. See [AgentClass](../resources/agentclass.md).
 - **ModelProvider** (cluster-scoped): a managed abstraction over an LLM provider that holds API keys, provides visibility into token usage and spend, handles fallback, and can be shared across namespaces under policy control. Platform teams own these. See [ModelProvider](../resources/modelprovider.md).
+- **ToolProvider** (cluster-scoped, since v0.4.0): the same managed abstraction over an external MCP tool server: the gateway holds its credential and brokers tool calls under policy control. Platform teams own these. See [ToolProvider](../resources/toolprovider.md).
 - **Agent** (namespace-scoped): a developer-facing workload resource that describes a single agent: its image, its persistence needs, which AgentClass it belongs to, which ModelProviders it uses (if any), and its lifecycle mode (persistent or task). Developers own these. See [Agent](../resources/agent.md).
 - **AgentTask** (namespace-scoped): a Job-like resource for ephemeral, goal-driven agents with a defined completion condition and artifact collection. Developers own these. See [AgentTask](../resources/agenttask.md).
 - **AgentChannel** (namespace-scoped): a resource that connects a running Agent to a user-facing communication channel (Discord, WhatsApp, iMessage, a generic webhook, etc.). Developers own these. See [AgentChannel](../resources/agentchannel.md).
@@ -65,7 +66,7 @@ Kaalm's differentiator is the **generalized, policy-driven workload abstraction*
 
 **In scope:**
 
-- All five CRDs and the reconciling controller
+- All six CRDs and the reconciling controller (ToolProvider since v0.4.0)
 - Persistent and task-mode agent lifecycle (including idle detection, hibernation, wake-on-demand, timeout, artifact collection); see [Controller Lifecycle](../controller/agent-lifecycle.md)
 - LLM Gateway: TLS-secured cluster-level proxy with spend tracking, budget guardrails (soft by default, hard opt-in since v0.3.0), rate limiting, same-type fallback chains (no cross-format translation), and provider credential isolation. Two authentication modes: mTLS for Kaalm-managed Pods and `TokenReview`-validated ServiceAccount tokens for existing workloads. See [Namespace Identification](../gateways/llm/workload-identity.md).
 - User Gateway: channel integration via AgentChannel (generic webhook in v1 with sync and async response modes; Discord and WhatsApp adapters in v1.1)

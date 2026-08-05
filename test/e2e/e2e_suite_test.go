@@ -61,12 +61,12 @@ var _ = AfterSuite(func() {
 })
 
 var _ = Describe("Deployment", func() {
-	It("has all five Kaalm CRDs installed", func() {
+	It("has all six Kaalm CRDs installed", func() {
 		out, err := utils.Kubectl("get", "crds", "-o", "name")
 		Expect(err).NotTo(HaveOccurred())
 		for _, crd := range []string{
-			"agentclasses.kaalm.io", "modelproviders.kaalm.io", "agents.kaalm.io",
-			"agenttasks.kaalm.io", "agentchannels.kaalm.io",
+			"agentclasses.kaalm.io", "modelproviders.kaalm.io", "toolproviders.kaalm.io",
+			"agents.kaalm.io", "agenttasks.kaalm.io", "agentchannels.kaalm.io",
 		} {
 			Expect(out).To(ContainSubstring(crd))
 		}

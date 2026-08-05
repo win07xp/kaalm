@@ -49,10 +49,11 @@ const (
 )
 
 var (
-	testClient   client.Client
-	testEnv      *envtest.Environment
-	fakeHealth   *fakeHealthChecker
-	fakeActivity *fakeActivityClient
+	testClient     client.Client
+	testEnv        *envtest.Environment
+	fakeHealth     *fakeHealthChecker
+	fakeToolHealth *fakeToolHealthChecker
+	fakeActivity   *fakeActivityClient
 )
 
 // fakeActivityClient serves canned gateway activity data. total 0 with no
@@ -118,6 +119,57 @@ func (f *fakeHealthChecker) Probe(
 	return ProviderProbeResult{Healthy: true}
 }
 
+// fakeToolHealthChecker is fakeHealthChecker's ToolProvider twin: a canned
+// probe result per provider name, defaulting to Healthy, recording the
+// credential each probe carried.
+type fakeToolHealthChecker struct {
+	mu          sync.Mutex
+	results     map[string]ProviderProbeResult
+	calls       map[string]int
+	credentials map[string]string
+}
+
+func newFakeToolHealth() *fakeToolHealthChecker {
+	return &fakeToolHealthChecker{
+		results:     map[string]ProviderProbeResult{},
+		calls:       map[string]int{},
+		credentials: map[string]string{},
+	}
+}
+
+func (f *fakeToolHealthChecker) set(name string, res ProviderProbeResult) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.results[name] = res
+}
+
+func (f *fakeToolHealthChecker) count(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[name]
+}
+
+// credential reports the credential value the most recent probe for name
+// carried, so tests can prove what was (or was not) resolved.
+func (f *fakeToolHealthChecker) credential(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.credentials[name]
+}
+
+func (f *fakeToolHealthChecker) Probe(
+	_ context.Context, provider *kaalmv1alpha1.ToolProvider, credential string,
+) ProviderProbeResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls[provider.Name]++
+	f.credentials[provider.Name] = credential
+	if res, ok := f.results[provider.Name]; ok {
+		return res
+	}
+	return ProviderProbeResult{Healthy: true}
+}
+
 func TestMain(m *testing.M) {
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
@@ -170,6 +222,13 @@ func TestMain(m *testing.M) {
 	if err := (&ModelProviderReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testOperatorNamespace, Health: fakeHealth,
+	}).SetupWithManager(mgr); err != nil {
+		panic(err)
+	}
+	fakeToolHealth = newFakeToolHealth()
+	if err := (&ToolProviderReconciler{
+		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
+		OperatorNamespace: testOperatorNamespace, Health: fakeToolHealth,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}

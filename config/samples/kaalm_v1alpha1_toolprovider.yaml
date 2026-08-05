@@ -1,0 +1,23 @@
+apiVersion: kaalm.io/v1alpha1
+kind: ToolProvider
+metadata:
+  name: search-tools
+spec:
+  type: mcp
+  # In-cluster and external https endpoints are equally valid.
+  endpoint: https://mcp-search.tools.svc:8443
+  # Resolved only from the operator namespace (kaalm-system). Omit the block
+  # entirely for a server that requires no authentication.
+  credentialsRef:
+    name: search-tools-key
+    key: token
+  allowedNamespaces:
+    - "team-*"
+  # Optional declared catalog. When present it is a ceiling: the broker
+  # rejects calls to uncataloged tools and grants are validated against it.
+  tools:
+    - id: web_search
+    - id: fetch_page
+  healthCheck:
+    enabled: true
+    intervalSeconds: 60

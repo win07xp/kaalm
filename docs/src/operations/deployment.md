@@ -12,13 +12,13 @@ Kaalm has three hard prerequisites, none of which the chart installs for you:
 
 The chart targets the `kaalm-system` namespace. Install with `--namespace kaalm-system --create-namespace`.
 
-![A deployment inventory of the Helm chart, organised by where each object lands. A red frame at the top holds the three hard prerequisites the chart does not install: the cert-manager controller, the trust-manager controller, and a NetworkPolicy-enforcing CNI. A cluster-scoped frame holds the five CRDs from the chart's crds/ directory, which helm install applies and helm upgrade never touches, the two ClusterIssuers, the ClusterRoles and ClusterRoleBindings, and the sample standard AgentClass. An kaalm-system frame holds the controller and gateway Deployments with their replica floors, PDBs and controller-only anti-affinity, the two ClusterIP Services with their ports, the ServiceAccounts and namespaced Roles, the leader-election Lease, and the gateway and controller leaf Certificates. A cert-manager frame holds the kaalm-ca Certificate and Secret and the trust-manager Bundle. A user namespace frame holds the projected kaalm-ca ConfigMap.](../diagrams/helm-install-inventory.svg)
+![A deployment inventory of the Helm chart, organised by where each object lands. A red frame at the top holds the three hard prerequisites the chart does not install: the cert-manager controller, the trust-manager controller, and a NetworkPolicy-enforcing CNI. A cluster-scoped frame holds the six CRDs from the chart's crds/ directory, which helm install applies and helm upgrade never touches, the two ClusterIssuers, the ClusterRoles and ClusterRoleBindings, and the sample standard AgentClass. An kaalm-system frame holds the controller and gateway Deployments with their replica floors, PDBs and controller-only anti-affinity, the two ClusterIP Services with their ports, the ServiceAccounts and namespaced Roles, the leader-election Lease, and the gateway and controller leaf Certificates. A cert-manager frame holds the kaalm-ca Certificate and Secret and the trust-manager Bundle. A user namespace frame holds the projected kaalm-ca ConfigMap.](../diagrams/helm-install-inventory.svg)
 
 **Reading the diagram.** It answers "what lands where", not "how the pieces relate". The three dashed grey boxes in the red frame are prerequisites: everything else is chart-installed. The trust chain those cert-manager objects form is drawn once, on [In-cluster TLS](../security/tls.md#trust-chain).
 
 ### CRDs
 
-The five CRDs (AgentClass, ModelProvider, Agent, AgentTask, AgentChannel) ship in the chart's `crds/` directory. Helm applies that directory on `helm install` and **never touches it on `helm upgrade`**, so CRD schema changes need an explicit step. See [Upgrade and Migration](#upgrade-and-migration).
+The six CRDs (AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel) ship in the chart's `crds/` directory. Helm applies that directory on `helm install` and **never touches it on `helm upgrade`**, so CRD schema changes need an explicit step. See [Upgrade and Migration](#upgrade-and-migration).
 
 ### The two Deployments
 

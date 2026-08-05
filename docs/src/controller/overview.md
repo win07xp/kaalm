@@ -1,6 +1,6 @@
 # Operator Structure
 
-The Kaalm operator is the control plane: it turns the declarative CRDs in [Resource Overview](../resources/overview.md) into running Pods, Services, Secrets, and status. This chapter describes it from the inside out. The [Reconcilers](reconcilers.md) page walks through the reconcile steps for each of the five CRDs, then [Agent Lifecycle](agent-lifecycle.md), [Hibernation and Wake](hibernation-and-wake.md#hibernation-mechanics), [Change Propagation](change-propagation.md#agentclass-change-handling), [AgentTask Lifecycle](task-lifecycle.md), and [Finalizers](finalizers.md) cover the state machines those steps drive. [Errors, Events, and Testing](operations.md#error-handling) closes the chapter with the operator's failure handling, emitted Events, metrics, and test strategy.
+The Kaalm operator is the control plane: it turns the declarative CRDs in [Resource Overview](../resources/overview.md) into running Pods, Services, Secrets, and status. This chapter describes it from the inside out. The [Reconcilers](reconcilers.md) page walks through the reconcile steps for each of the six CRDs, then [Agent Lifecycle](agent-lifecycle.md), [Hibernation and Wake](hibernation-and-wake.md#hibernation-mechanics), [Change Propagation](change-propagation.md#agentclass-change-handling), [AgentTask Lifecycle](task-lifecycle.md), and [Finalizers](finalizers.md) cover the state machines those steps drive. [Errors, Events, and Testing](operations.md#error-handling) closes the chapter with the operator's failure handling, emitted Events, metrics, and test strategy.
 
 This page covers what the binary is, what it serves, and how often it reconciles.
 
@@ -8,7 +8,7 @@ This page covers what the binary is, what it serves, and how often it reconciles
 
 The operator is a single binary built with `controller-runtime` (kubebuilder scaffolding is fine but not required). It hosts:
 
-- Five reconcilers: `AgentClassReconciler`, `ModelProviderReconciler`, `AgentReconciler`, `AgentTaskReconciler`, `AgentChannelReconciler`.
+- Six reconcilers: `AgentClassReconciler`, `ModelProviderReconciler`, `ToolProviderReconciler`, `AgentReconciler`, `AgentTaskReconciler`, `AgentChannelReconciler`.
 - An activator endpoint (`POST /v1/activate/{namespace}/{agentName}`) called by the gateway to trigger hibernated agent wake-up. This endpoint is exposed via a ClusterIP Service (`kaalm-controller.kaalm-system.svc.cluster.local`, default port 9443).
 - A health/readiness endpoint (`/healthz`, `/readyz`) on the same Service. The listener serves TLS with `tls.Config.ClientAuth = VerifyClientCertIfGiven` so kubelet (which presents no client cert) can complete the handshake; per-path middleware enforces mTLS-with-SAN only on `/v1/activate`, so the probes are unauthenticated at the path level.
 - A metrics endpoint (Prometheus format) exposing controller internals (reconcile counts, errors, queue depth). It listens on `:8080/metrics`, the standard controller-runtime port, and is documented in [Observability](operations.md#observability).

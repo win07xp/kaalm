@@ -63,6 +63,7 @@ rules:
   - agentclasses
   - agents
   - modelproviders
+  - toolproviders
   verbs:
   - get
   - list
@@ -87,6 +88,7 @@ rules:
   - agents/status
   - agenttasks/status
   - modelproviders/status
+  - toolproviders/status
   verbs:
   - get
   - patch

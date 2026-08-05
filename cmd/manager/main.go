@@ -249,6 +249,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ModelProvider")
 		os.Exit(1)
 	}
+	if err := (&controller.ToolProviderReconciler{
+		Client:            mgr.GetClient(),
+		Recorder:          mgr.GetEventRecorderFor("toolprovider-controller"),
+		OperatorNamespace: operatorNamespace,
+		Health:            &controller.MCPToolHealthChecker{},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ToolProvider")
+		os.Exit(1)
+	}
 	// The controller TLS identity enables the gateway-facing pieces: the
 	// activity fan-out client and the activator listener. Without it, idle
 	// and hibernation transitions are deferred (no activity data).

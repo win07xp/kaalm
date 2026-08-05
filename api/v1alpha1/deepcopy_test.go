@@ -572,6 +572,72 @@ func TestModelProviderListDeepCopy(t *testing.T) {
 	}
 }
 
+func newFullToolProvider() *ToolProvider {
+	return &ToolProvider{
+		TypeMeta:   metav1.TypeMeta{Kind: "ToolProvider", APIVersion: "kaalm.io/v1alpha1"},
+		ObjectMeta: fullObjectMeta("tools-1"),
+		Spec: ToolProviderSpec{
+			Type:              "mcp",
+			Endpoint:          "https://mcp-search.tools.svc:8443",
+			CredentialsRef:    &SecretKeyReference{Name: "search-tools-key", Key: "token"},
+			AllowedNamespaces: []string{"team-*"},
+			Tools: []ToolProviderTool{
+				{ID: "web_search"},
+				{ID: "fetch_page"},
+			},
+			HealthCheck: &ToolProviderHealthCheck{
+				Enabled:         true,
+				IntervalSeconds: 60,
+				TimeoutSeconds:  5,
+			},
+		},
+		Status: ToolProviderStatus{
+			ObservedGeneration: 3,
+			Conditions:         fullConditions(),
+		},
+	}
+}
+
+func mutateToolProvider(tp *ToolProvider) {
+	tp.Labels["k"] = mutatedStr
+	tp.Spec.CredentialsRef.Name = mutatedStr
+	tp.Spec.AllowedNamespaces[0] = mutatedStr
+	tp.Spec.Tools[0].ID = mutatedStr
+	tp.Spec.HealthCheck.IntervalSeconds = 999
+	tp.Status.Conditions[0].Message = mutatedStr
+}
+
+func TestToolProviderDeepCopy(t *testing.T) {
+	checkDeepCopy(t, "ToolProvider", newFullToolProvider(), (*ToolProvider).DeepCopy, mutateToolProvider)
+
+	original := newFullToolProvider()
+	obj := original.DeepCopyObject()
+	got, ok := obj.(*ToolProvider)
+	if !ok {
+		t.Fatalf("DeepCopyObject returned %T, want *ToolProvider", obj)
+	}
+	if !reflect.DeepEqual(original, got) {
+		t.Fatalf("ToolProvider DeepCopyObject() not deeply equal to original")
+	}
+}
+
+func TestToolProviderListDeepCopy(t *testing.T) {
+	list := &ToolProviderList{
+		TypeMeta: metav1.TypeMeta{Kind: "ToolProviderList", APIVersion: "kaalm.io/v1alpha1"},
+		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
+		Items:    []ToolProvider{*newFullToolProvider(), *newFullToolProvider()},
+	}
+	checkDeepCopy(t, "ToolProviderList", list, (*ToolProviderList).DeepCopy, func(l *ToolProviderList) {
+		l.Items[0].Name = mutatedStr
+		l.Items = append(l.Items, ToolProvider{})
+	})
+
+	obj := list.DeepCopyObject()
+	if _, ok := obj.(*ToolProviderList); !ok {
+		t.Fatalf("DeepCopyObject returned %T, want *ToolProviderList", obj)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Nested (non-leaf) types are exercised above only through a parent's
 // DeepCopyInto (e.g. `in.Persistence.DeepCopyInto(&out.Persistence)`), which
@@ -757,6 +823,19 @@ func TestNestedTypesDirectDeepCopy(t *testing.T) {
 	checkDeepCopy(t, "ModelProviderBudgetPolicy/direct", &policy, (*ModelProviderBudgetPolicy).DeepCopy, func(p *ModelProviderBudgetPolicy) {
 		*p.DegradeTo = mutatedStr
 	})
+
+	toolProviderSpec := newFullToolProvider().Spec
+	checkDeepCopy(t, "ToolProviderSpec/direct", &toolProviderSpec, (*ToolProviderSpec).DeepCopy, func(s *ToolProviderSpec) {
+		s.CredentialsRef.Key = mutatedStr
+		s.AllowedNamespaces[0] = mutatedStr
+		s.Tools[0].ID = mutatedStr
+		s.HealthCheck.IntervalSeconds = 1
+	})
+
+	toolProviderStatus := newFullToolProvider().Status
+	checkDeepCopy(t, "ToolProviderStatus/direct", &toolProviderStatus, (*ToolProviderStatus).DeepCopy, func(s *ToolProviderStatus) {
+		s.Conditions[0].Message = mutatedStr
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -827,6 +906,14 @@ func TestLeafTypesDeepCopy(t *testing.T) {
 		c.OnTimeout = "Succeed"
 	})
 
+	checkDeepCopy(t, "ToolProviderTool", &ToolProviderTool{ID: "web_search"}, (*ToolProviderTool).DeepCopy, func(tl *ToolProviderTool) {
+		tl.ID = mutatedStr
+	})
+
+	checkDeepCopy(t, "ToolProviderHealthCheck", &ToolProviderHealthCheck{Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}, (*ToolProviderHealthCheck).DeepCopy, func(h *ToolProviderHealthCheck) {
+		h.IntervalSeconds = 1
+	})
+
 	checkDeepCopy(t, "ModelProviderRateLimits", &ModelProviderRateLimits{RequestsPerMinute: 100, TokensPerMinute: 1000}, (*ModelProviderRateLimits).DeepCopy, func(r *ModelProviderRateLimits) {
 		r.RequestsPerMinute = 999
 	})
@@ -889,6 +976,12 @@ func TestDeepCopyNilReceivers(t *testing.T) {
 	checkNilDeepCopy(t, "ModelProviderSpec", (*ModelProviderSpec).DeepCopy)
 	checkNilDeepCopy(t, "ModelProviderStatus", (*ModelProviderStatus).DeepCopy)
 	checkNilDeepCopy(t, "SecretKeyReference", (*SecretKeyReference).DeepCopy)
+	checkNilDeepCopy(t, "ToolProvider", (*ToolProvider).DeepCopy)
+	checkNilDeepCopy(t, "ToolProviderHealthCheck", (*ToolProviderHealthCheck).DeepCopy)
+	checkNilDeepCopy(t, "ToolProviderList", (*ToolProviderList).DeepCopy)
+	checkNilDeepCopy(t, "ToolProviderSpec", (*ToolProviderSpec).DeepCopy)
+	checkNilDeepCopy(t, "ToolProviderStatus", (*ToolProviderStatus).DeepCopy)
+	checkNilDeepCopy(t, "ToolProviderTool", (*ToolProviderTool).DeepCopy)
 
 	checkNilDeepCopyObject(t, "Agent", (*Agent).DeepCopyObject)
 	checkNilDeepCopyObject(t, "AgentChannel", (*AgentChannel).DeepCopyObject)
@@ -900,6 +993,8 @@ func TestDeepCopyNilReceivers(t *testing.T) {
 	checkNilDeepCopyObject(t, "AgentTaskList", (*AgentTaskList).DeepCopyObject)
 	checkNilDeepCopyObject(t, "ModelProvider", (*ModelProvider).DeepCopyObject)
 	checkNilDeepCopyObject(t, "ModelProviderList", (*ModelProviderList).DeepCopyObject)
+	checkNilDeepCopyObject(t, "ToolProvider", (*ToolProvider).DeepCopyObject)
+	checkNilDeepCopyObject(t, "ToolProviderList", (*ToolProviderList).DeepCopyObject)
 }
 
 // ---------------------------------------------------------------------------

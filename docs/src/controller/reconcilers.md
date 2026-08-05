@@ -1,8 +1,8 @@
 # Reconcilers
 
-The operator hosts five reconcilers, one per CRD. This page is the implementation spec for each: what it watches, and what every reconciliation pass does, step by step.
+The operator hosts six reconcilers, one per CRD. This page is the implementation spec for each: what it watches, and what every reconciliation pass does, step by step.
 
-Read them in dependency order. `AgentClassReconciler` and `ModelProviderReconciler` validate the platform-level resources that the workload reconcilers depend on. `AgentReconciler` is the most complex: it owns the full child-resource tree for a persistent agent. `AgentTaskReconciler` mirrors it for one-shot work, and `AgentChannelReconciler` owns no Pods at all: it validates, scopes credential access, and reports status.
+Read them in dependency order. `AgentClassReconciler`, `ModelProviderReconciler`, and `ToolProviderReconciler` validate the platform-level resources that the workload reconcilers depend on. `AgentReconciler` is the most complex: it owns the full child-resource tree for a persistent agent. `AgentTaskReconciler` mirrors it for one-shot work, and `AgentChannelReconciler` owns no Pods at all: it validates, scopes credential access, and reports status.
 
 For the state machines and transitions these reconcilers drive, see [Agent Lifecycle](agent-lifecycle.md). For the CRDs they implement, see [Resource Overview](../resources/overview.md).
 
@@ -83,6 +83,18 @@ For each policy whose `action: degrade`, compute `avgCost(model) = (costPer1MInp
 This is **advisory only**: it does **not** set `Ready=False`, because platform teams may have non-cost reasons (latency, capability, quality) to prefer a specific degrade target. The warning exists because a "degrade" policy labelled as cost-saving but pointing at a more expensive model is almost always a misconfiguration, and catching it at the reconciler is cheaper than discovering it from a monthly bill.
 
 It runs after step 6's existence check so that a missing `degradeTo` surfaces as the more serious `InvalidDegradeTarget` error without a contradictory cost warning.
+
+## ToolProviderReconciler
+
+Since v0.4.0. Watches: `ToolProvider`, plus credential Secrets in the operator namespace (a list-and-filter map function; ToolProviders are cluster-scoped and few, so no index is needed). The Secret watch makes a credential created after its provider recover event-driven.
+
+Reconciliation is the ModelProviderReconciler's shape minus budgets, fallback, and the gateway mirror:
+
+1. Resolve `spec.credentialsRef`, only when set, and only from the operator namespace: a same-named Secret in a tenant namespace never satisfies the ref. A missing Secret or missing/empty key sets `Ready=False, reason=CredentialsMissing`. A nil ref is valid (unauthenticated servers exist); the probe then carries no credential, and the Ready message says so.
+2. If health checks are enabled (a nil `healthCheck` block defaults to enabled at reconcile time, exactly as on ModelProvider), run the MCP liveness probe: an `initialize` handshake (including the `notifications/initialized` notification and any `Mcp-Session-Id` the server issues) followed by `tools/list`, bounded by `healthCheck.timeoutSeconds` (default 10s). Result handling mirrors the [ModelProvider probe](#liveness-probe): success sets `Healthy=True, reason=UpstreamReachable`; a 401/403 anywhere in the sequence sets both `Healthy=False` and `Ready=False` with `reason=CredentialsInvalid`; any other failure sets `Healthy=False, reason=ProviderUnhealthy` with a Warning event and does not change `Ready`. The probe requeues at `healthCheck.intervalSeconds` (default 60).
+3. Set `Ready=True, reason=CredentialsValid` when the credential resolves (or none is configured).
+
+Deliberately absent until the rest of the tool plane lands: the finalizer and held-while-referenced deletion behavior (there are no reference surfaces to hold for until the grant fields exist), the grant-chain validation of rules 35 to 38, and any gateway-facing state. See [The Tool Plane](../gateways/tool-plane.md#versioning-and-delivery) for the delivery boundary.
 
 ## AgentReconciler
 
