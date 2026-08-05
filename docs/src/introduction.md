@@ -8,7 +8,7 @@ This book is the complete design and the shipped operator implements it: it was 
 
 The parts build on each other. Reading front to back never requires a concept that has not been introduced yet.
 
-1. **Orientation** explains the problem Kaalm solves, the vocabulary used everywhere else (the five custom resources, the two gateways, the adoption tiers, workload identity, lifecycle phases), the personas the design serves, and the system topology.
+1. **Orientation** explains the problem Kaalm solves, the vocabulary used everywhere else (the six custom resources, the two gateways, the adoption tiers, workload identity, lifecycle phases), the personas the design serves, and the system topology.
 2. **Resource Model** is the API reference: one page per custom resource with its full spec, status, and design notes, followed by the cross-resource validation rules and defaulting behavior.
 3. **Agent Runtime** covers the contract a container image must satisfy to run under Kaalm, the starter templates that implement it, and the child resources the operator manages for each agent.
 4. **The Gateways** documents the shared gateway Deployment: the HTTP wire contract, then the LLM Gateway (agent to model provider) and the User Gateway (external caller to agent).

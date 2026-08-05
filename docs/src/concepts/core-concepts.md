@@ -2,7 +2,7 @@
 
 This page introduces every term the rest of the book leans on. Later chapters define nothing new; they only go deeper on what is named here.
 
-## The Five Custom Resources
+## The Custom Resources
 
 Kaalm workloads come in two shapes. An **Agent** is a long-lived workload that the controller can hibernate and wake on demand. An Agent may have an inbound webhook channel attached via an AgentChannel. An **AgentTask** is an ephemeral one-shot job: no inbound endpoint, no hibernation, torn down on completion. Both run as Pods under the policy template defined by an AgentClass.
 
@@ -10,6 +10,7 @@ Kaalm workloads come in two shapes. An **Agent** is a long-lived workload that t
 |---|---|---|---|
 | AgentClass | Cluster | Full lifecycle only (chart default in both) | Policy template: runtime, isolation, allowed providers, network egress |
 | ModelProvider | Cluster | Both | LLM provider config: credentials Secret, allowed namespaces, fallback chain |
+| ToolProvider | Cluster | Both (since v0.4.0) | External tool server config: endpoint, credentials Secret, tool catalog, allowed namespaces |
 | Agent | Namespace | Full lifecycle only | Long-lived agent workload |
 | AgentTask | Namespace | Full lifecycle only | Ephemeral task workload |
 | AgentChannel | Namespace | Full lifecycle only | Inbound webhook channel binding to an Agent |
@@ -18,11 +19,12 @@ In plain language:
 
 - **AgentClass** is a platform-team-owned policy resource, analogous to StorageClass: it decides how a category of agents is allowed to run, not what any one agent does.
 - **ModelProvider** is a platform-team-owned wrapper around one LLM provider: it holds the API key Secret so individual teams never do, and says which namespaces may use the provider.
+- **ToolProvider** (since v0.4.0) is the same wrapper around one external tool server, so agents call tools through the gateway the way they call models: the credential stays with the platform team, and the resource says which namespaces may use the server.
 - **Agent** is the developer-facing resource for one long-running agent: its image, its persistence needs, which AgentClass governs it, and which ModelProviders it may call.
 - **AgentTask** is the developer-facing, Job-like resource for a goal-driven agent that runs once, reports a defined completion condition, hands back artifacts, and goes away.
 - **AgentChannel** connects a running Agent to a user-facing communication channel, so people outside the cluster can message it.
 
-The five resources form one reference graph, split along the scope boundary in the table above: the cluster-scoped policy resources the platform team owns, and the namespaced workload resources developers point at them.
+The resources form one reference graph, split along the scope boundary in the table above: the cluster-scoped policy resources the platform team owns, and the namespaced workload resources developers point at them. ToolProvider sits on the policy side; its reference edges (the class allowlist and the workload grants) land with the v0.4.0 tool plane implementation, and the diagram below gains them then.
 
 ![Reference graph of the five Kaalm CRDs. Cluster scope holds AgentClass and ModelProvider; namespace scope holds Agent, AgentTask, and AgentChannel. Agent and AgentTask each name an AgentClass through spec.agentClassRef and a ModelProvider through spec.providers[].providerRef, while AgentClass independently names ModelProviders through spec.allowedProviders, so two separate edges converge on the same ModelProvider. AgentChannel names an Agent through spec.agentRef, never an AgentTask. ModelProvider points at itself through spec.fallback and at a Secret in kaalm-system through spec.credentialsRef.](../diagrams/crd-reference-graph.svg)
 

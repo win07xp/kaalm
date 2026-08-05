@@ -56,7 +56,7 @@ Both tiers depend on cert-manager (for the gateway and controller serving certs)
 
 At a type level, the chart deploys:
 
-- The five CRDs introduced under [Custom Resources](core-concepts.md#the-five-custom-resources) (AgentClass, ModelProvider, Agent, AgentTask, AgentChannel)
+- The six CRDs introduced under [Custom Resources](core-concepts.md#the-custom-resources) (AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel)
 - Controller and Gateway Deployments. Both default to two replicas with a PodDisruptionBudget, rolling-update strategy, and pod anti-affinity. The chart enforces a **floor of 2 replicas** on both, so that the wake-on-demand "hard control-plane dependency" claim under [The Kaalm Gateway](../gateways/overview.md) survives voluntary disruptions and single-replica involuntary failures. See [Deployment](../operations/deployment.md) for the operational rationale and the chart-level enforcement.
 - Per-Deployment `ServiceAccount`s, `ClusterRole`s, and `ClusterRoleBinding`s, plus companion namespaced `Role`s/`RoleBinding`s in `kaalm-system` for the grants that must not be cluster-wide (Leases, Secrets, ConfigMaps: see [RBAC Model](../security/rbac.md))
 - cert-manager `ClusterIssuer`s (a self-signed root and the Kaalm CA issuer) and `Certificate`s for the gateway and controller serving certs. Per-Agent and per-AgentTask `Certificate`s are issued at reconcile time, not by the chart.
@@ -69,7 +69,7 @@ For the full chart contents, the certificate inventory, the operational Helm val
 
 ## Control Plane
 
-The Kaalm control plane is a single operator (Go, built on `controller-runtime`) running as a Deployment in the `kaalm-system` namespace. It hosts five reconcilers, one per CRD:
+The Kaalm control plane is a single operator (Go, built on `controller-runtime`) running as a Deployment in the `kaalm-system` namespace. It hosts six reconcilers, one per CRD:
 
 1. [**Agent Reconciler**](../controller/reconcilers.md#agentreconciler) watches `Agent` resources. It provisions the [per-Agent child-resource set](../runtime/child-resources.md) and drives the [persistent-agent state machine](../controller/agent-lifecycle.md): idle detection, hibernation, wake-on-demand.
 
@@ -79,7 +79,9 @@ The Kaalm control plane is a single operator (Go, built on `controller-runtime`)
 
 4. [**AgentClass Reconciler**](../controller/reconcilers.md#agentclassreconciler) watches `AgentClass` resources. It validates that referenced ModelProviders exist, maintains usage counts, and updates status conditions.
 
-5. [**AgentChannel Reconciler**](../controller/reconcilers.md#agentchannelreconciler) watches `AgentChannel` resources. It validates that the referenced Agent exists with a Service enabled, and validates channel credentials and `callbackUrl` (per [validation rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)). It sets `status.conditions[type=Ready]` from those validations, which is the gate the gateway uses to admit webhook traffic. It separately populates `status.conditions[type=PlatformConnected]`, which is observational only, by polling the gateway via [`GET /v1/channels/health`](../gateways/api/internal-endpoints.md#get-v1channelshealth).
+5. [**ToolProvider Reconciler**](../controller/reconcilers.md#toolproviderreconciler) (since v0.4.0) watches `ToolProvider` resources. It resolves the optional credential Secret from the operator namespace and maintains server health status via an MCP-speaking probe.
+
+6. [**AgentChannel Reconciler**](../controller/reconcilers.md#agentchannelreconciler) watches `AgentChannel` resources. It validates that the referenced Agent exists with a Service enabled, and validates channel credentials and `callbackUrl` (per [validation rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)). It sets `status.conditions[type=Ready]` from those validations, which is the gate the gateway uses to admit webhook traffic. It separately populates `status.conditions[type=PlatformConnected]`, which is observational only, by polling the gateway via [`GET /v1/channels/health`](../gateways/api/internal-endpoints.md#get-v1channelshealth).
 
 On that last point, the two conditions are not interchangeable: the gateway gates webhook routing on `Ready` alone, while `PlatformConnected` exists for user and operator visibility. See [Channel Health Tracking](../gateways/user/platform-adapters.md#channel-health-tracking) for the rolling-window tri-state contract and the per-replica reduction rules.
 

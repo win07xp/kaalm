@@ -150,7 +150,7 @@ One piece of existing API does not survive this ranking. `Agent.spec.mcpServers`
 
 ## Versioning and Delivery
 
-This chapter is design, merged in v0.3.0; every mechanism above lands with the v0.4.0 milestone, tracked in its umbrella issue. Until then, the `:8443` listener serves no `/v1/mcp/*` paths (unrecognized paths are rejected with 400, as today), the CRD does not exist, and rules 35 to 38 are allocated but unenforced. The scenario below and its coverage row carry the same annotation, so the acceptance surface stays honest about what is proven versus designed.
+This chapter is design, merged in v0.3.0; every mechanism above lands with the v0.4.0 milestone, tracked in its umbrella issue. Delivery is in progress: the [ToolProvider resource](../resources/toolprovider.md) and its reconciler (credential resolution, the MCP health probe) exist. The `:8443` listener still serves no `/v1/mcp/*` paths (unrecognized paths are rejected with 400, as today), the grant fields do not exist yet, and rules 35 to 38 remain allocated but unenforced until the grant chain and the broker land. The scenario below and its coverage row carry the same annotation, so the acceptance surface stays honest about what is proven versus designed.
 
 ## Acceptance Scenario
 

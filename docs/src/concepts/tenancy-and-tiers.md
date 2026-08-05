@@ -28,7 +28,7 @@ The chart-level framing (Helm values, prerequisites, install order) is in [Deplo
 
 ## Multi-tenancy
 
-v1 assumes a single platform team owns the cluster-scoped policy resources (AgentClass, ModelProvider) while individual tenants operate at namespace boundaries via Agent, AgentTask, and AgentChannel. See [Custom Resources](core-concepts.md#the-five-custom-resources) for the scope split.
+v1 assumes a single platform team owns the cluster-scoped policy resources (AgentClass, ModelProvider, ToolProvider) while individual tenants operate at namespace boundaries via Agent, AgentTask, and AgentChannel. See [Custom Resources](core-concepts.md#the-custom-resources) for the scope split.
 
 Tenant isolation is layered. No single one of the layers below is the boundary; they compose, and each subsection names what it is responsible for.
 

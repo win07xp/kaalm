@@ -16,6 +16,7 @@
 - [Resource Overview](resources/overview.md)
 - [AgentClass](resources/agentclass.md)
 - [ModelProvider](resources/modelprovider.md)
+- [ToolProvider](resources/toolprovider.md)
 - [Agent](resources/agent.md)
 - [AgentTask](resources/agenttask.md)
 - [AgentChannel](resources/agentchannel.md)

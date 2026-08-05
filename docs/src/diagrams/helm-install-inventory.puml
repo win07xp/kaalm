@@ -19,7 +19,7 @@ rectangle "**NOT installed by the chart: three hard prerequisites**" as prereq #
 
 ' ---------- cluster-scoped ----------
 rectangle "**cluster-scoped**" as band #line:9E9E9E;line.dashed;text:555555 {
-  rectangle "**the 5 CRDs**, from the chart's **crds/** directory\nAgentClass, ModelProvider, Agent,\nAgentTask, AgentChannel\n....\n//helm install applies crds/.//\n**helm upgrade never touches it**, so schema\n//changes need an explicit//\n//kubectl apply ~--server-side -f crds/ first.//\n....\n//Keeping them out of templates/ also means//\n//helm uninstall never deletes them, which//\n//would cascade-delete every CR of that kind//\n//cluster-wide.//" as crds #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**the 6 CRDs**, from the chart's **crds/** directory\nAgentClass, ModelProvider, ToolProvider,\nAgent, AgentTask, AgentChannel\n....\n//helm install applies crds/.//\n**helm upgrade never touches it**, so schema\n//changes need an explicit//\n//kubectl apply ~--server-side -f crds/ first.//\n....\n//Keeping them out of templates/ also means//\n//helm uninstall never deletes them, which//\n//would cascade-delete every CR of that kind//\n//cluster-wide.//" as crds #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 
   rectangle "**2 ClusterIssuers**\nkaalm-selfsigned (self-signed)\nkaalm-ca-issuer (CA)" as issuers #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 
