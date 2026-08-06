@@ -121,6 +121,7 @@ const (
 	ReasonTaskSucceeded              = "TaskSucceeded"
 	ReasonTaskFailed                 = "TaskFailed"
 	ReasonHardBudgetUnpriced         = "HardBudgetUnpriced"
+	ReasonToolNotInCatalog           = "ToolNotInCatalog"
 	ReasonBoundaryMarginRaised       = "ObservedTrafficExceededMargin"
 	ReasonBoundaryMarginOK           = "MarginSufficient"
 )
@@ -149,11 +150,12 @@ const (
 
 // Finalizers, one per CRD. See docs/src/controller/finalizers.md.
 const (
-	AgentFinalizer    = "kaalm.io/agent-finalizer"
-	TaskFinalizer     = "kaalm.io/task-finalizer"
-	ProviderFinalizer = "kaalm.io/provider-finalizer"
-	ClassFinalizer    = "kaalm.io/class-finalizer"
-	ChannelFinalizer  = "kaalm.io/channel-finalizer"
+	AgentFinalizer        = "kaalm.io/agent-finalizer"
+	TaskFinalizer         = "kaalm.io/task-finalizer"
+	ProviderFinalizer     = "kaalm.io/provider-finalizer"
+	ToolProviderFinalizer = "kaalm.io/toolprovider-finalizer"
+	ClassFinalizer        = "kaalm.io/class-finalizer"
+	ChannelFinalizer      = "kaalm.io/channel-finalizer"
 )
 
 // Well-known annotations and labels. See docs/src/controller/ and

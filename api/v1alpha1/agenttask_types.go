@@ -38,6 +38,12 @@ type AgentTaskSpec struct {
 	// Providers lists the ModelProviders this task may call.
 	// +optional
 	Providers []AgentProviderReference `json:"providers,omitempty"`
+	// Tools grants access to ToolProviders, per server with optional per-tool
+	// narrowing, exactly as on Agent (rules 35 to 38; a violation settles the
+	// task as Failed, since tasks have no Degraded phase). No grant means no
+	// tools. See docs/src/gateways/tool-plane.md.
+	// +optional
+	Tools []AgentToolGrant `json:"tools,omitempty"`
 	// Resources requested by the task container, clamped to the class maximum.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`

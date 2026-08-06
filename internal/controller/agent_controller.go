@@ -495,6 +495,9 @@ func (r *AgentReconciler) degradedReasons(
 				fmt.Sprintf("provider %q does not allow namespace %q", name, agent.Namespace))
 		}
 	}
+	// Rules 35 to 38: tool grant resolution, class allowlist, namespace
+	// admission, and catalog membership.
+	out = append(out, toolGrantViolations(ctx, r.Client, agent.Namespace, agent.Spec.Tools, class)...)
 	// Rule 24: persistence must be class-permitted.
 	if agent.Spec.Persistence.Enabled && !class.Spec.Persistence.Enabled {
 		add(kaalmv1alpha1.ReasonPersistenceNotAllowed,
@@ -903,6 +906,7 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&cmapi.Certificate{}).
 		Watches(&kaalmv1alpha1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass)).
 		Watches(&kaalmv1alpha1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider)).
+		Watches(&kaalmv1alpha1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider)).
 		Complete(r)
 }
 
@@ -921,6 +925,18 @@ func (r *AgentReconciler) agentsForClass(ctx context.Context, obj client.Object)
 func (r *AgentReconciler) agentsForProvider(ctx context.Context, obj client.Object) []reconcile.Request {
 	var agents kaalmv1alpha1.AgentList
 	if err := r.List(ctx, &agents, client.MatchingFields{IndexProviderRef: obj.GetName()}); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(agents.Items))
+	for _, a := range agents.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
+	}
+	return reqs
+}
+
+func (r *AgentReconciler) agentsForToolProvider(ctx context.Context, obj client.Object) []reconcile.Request {
+	var agents kaalmv1alpha1.AgentList
+	if err := r.List(ctx, &agents, client.MatchingFields{IndexToolProviderRef: obj.GetName()}); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(agents.Items))

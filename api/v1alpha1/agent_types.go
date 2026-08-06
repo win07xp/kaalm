@@ -52,6 +52,15 @@ type AgentSpec struct {
 	// that make no LLM calls.
 	// +optional
 	Providers []AgentProviderReference `json:"providers,omitempty"`
+	// Tools grants access to ToolProviders, per server with optional per-tool
+	// narrowing. Each grant must resolve (rule 35), be admitted by the
+	// provider's allowedNamespaces (rule 36), appear in the class's
+	// allowedToolProviders (rule 37), and name only cataloged tools when the
+	// provider declares a catalog (rule 38). Omit for agents that call no
+	// brokered tools; no grant means no tools.
+	// See docs/src/gateways/tool-plane.md.
+	// +optional
+	Tools []AgentToolGrant `json:"tools,omitempty"`
 	// Resources requested by the agent container, clamped to the class maximum.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
@@ -66,9 +75,6 @@ type AgentSpec struct {
 	// time (the CRD default on enabled only fires when the block is present).
 	// +optional
 	Service *AgentService `json:"service,omitempty"`
-	// MCPServers are referenced only for NetworkPolicy egress scoping.
-	// +optional
-	MCPServers []AgentMCPServer `json:"mcpServers,omitempty"`
 }
 
 // AgentProviderReference names a ModelProvider the agent may use.
@@ -76,6 +82,19 @@ type AgentProviderReference struct {
 	// ProviderRef names the ModelProvider.
 	// +kubebuilder:validation:Required
 	ProviderRef LocalObjectReference `json:"providerRef"`
+}
+
+// AgentToolGrant grants a workload access to one ToolProvider, optionally
+// narrowed to specific tools. Shared by Agent and AgentTask.
+type AgentToolGrant struct {
+	// ProviderRef names the ToolProvider.
+	// +kubebuilder:validation:Required
+	ProviderRef LocalObjectReference `json:"providerRef"`
+	// Tools narrows the grant to these tool names. Empty or omitted means
+	// every tool the server offers, bounded by the provider's declared
+	// catalog when one exists.
+	// +optional
+	Tools []string `json:"tools,omitempty"`
 }
 
 // AgentHandler references the handler source consumed by a reference base
@@ -140,12 +159,6 @@ type AgentService struct {
 	// Port is the Service port exposing the agent's health/message listener.
 	// +optional
 	Port int32 `json:"port,omitempty"`
-}
-
-// AgentMCPServer is an MCP endpoint the agent may reach (egress scoping only).
-type AgentMCPServer struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
 }
 
 // AgentStatus is the observed state of an Agent.

@@ -202,8 +202,8 @@ func TestToolProvider_NilHealthCheckRunsProbe(t *testing.T) {
 }
 
 func TestToolProvider_DeleteIsUnblocked(t *testing.T) {
-	// No finalizer yet (it lands with the grant chain), so deletion completes
-	// immediately.
+	// Unreferenced by any Agent, AgentTask, or AgentClass: the finalizer
+	// releases immediately and deletion completes.
 	mkSecret(t, "tp-del-key")
 	mkToolProvider(t, "tp-del", nil)
 	expectReady(t, toolProviderConditions("tp-del"),
@@ -222,5 +222,117 @@ func TestToolProvider_DeleteIsUnblocked(t *testing.T) {
 			return nil
 		}
 		return errString("toolprovider still present")
+	})
+}
+
+// awaitToolProviderFinalizer waits until the reconciler has installed the
+// finalizer, so a subsequent Delete exercises the hold rather than racing it.
+func awaitToolProviderFinalizer(t *testing.T, name string) {
+	t.Helper()
+	eventually(t, func() error {
+		var tp kaalmv1alpha1.ToolProvider
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &tp); err != nil {
+			return err
+		}
+		for _, f := range tp.Finalizers {
+			if f == kaalmv1alpha1.ToolProviderFinalizer {
+				return nil
+			}
+		}
+		return errString("finalizer not yet installed")
+	})
+}
+
+func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
+	mkOpenTP(t, "tp-held", nil)
+	// The class deliberately does NOT allowlist the provider: the agent sits
+	// Degraded on rule 37, and its grant still holds the deletion, proving
+	// the hold is by reference, not by validity. A class allowlist entry
+	// would be its own independent hold (covered by the class test below).
+	mkWorkloadClass(t, "wc-held", nil)
+	mkWorkloadAgent(t, "held-agent", "wc-held", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Tools = []kaalmv1alpha1.AgentToolGrant{grantOf("tp-held")}
+	})
+	awaitToolProviderFinalizer(t, "tp-held")
+
+	var tp kaalmv1alpha1.ToolProvider
+	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &tp); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if err := testClient.Delete(ctxT(), &tp); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	// Held in Terminating while the agent references it: the object persists
+	// with a deletion timestamp. Polled, because testClient reads the manager
+	// cache, which lags the delete by a beat.
+	eventually(t, func() error {
+		var got kaalmv1alpha1.ToolProvider
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got); err != nil {
+			return errString("toolprovider was removed while still referenced: " + err.Error())
+		}
+		if got.DeletionTimestamp.IsZero() {
+			return errString("no deletion timestamp yet")
+		}
+		return nil
+	})
+
+	// Removing the referrer releases the hold.
+	var ag kaalmv1alpha1.Agent
+	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "held-agent", Namespace: "default"}, &ag); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if err := testClient.Delete(ctxT(), &ag); err != nil {
+		t.Fatalf("delete agent: %v", err)
+	}
+	eventually(t, func() error {
+		var got kaalmv1alpha1.ToolProvider
+		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got)) {
+			return nil
+		}
+		return errString("toolprovider still held after the referrer went away")
+	})
+}
+
+func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
+	mkOpenTP(t, "tp-clsheld", nil)
+	mkWorkloadClass(t, "wc-clsheld", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.AllowedToolProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "tp-clsheld"}}
+	})
+	awaitToolProviderFinalizer(t, "tp-clsheld")
+
+	var tp kaalmv1alpha1.ToolProvider
+	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &tp); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if err := testClient.Delete(ctxT(), &tp); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	eventually(t, func() error {
+		var got kaalmv1alpha1.ToolProvider
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got); err != nil {
+			return errString("toolprovider was removed while a class still allowlists it: " + err.Error())
+		}
+		if got.DeletionTimestamp.IsZero() {
+			return errString("no deletion timestamp yet")
+		}
+		return nil
+	})
+
+	// Dropping the class's allowlist entry releases the hold (the update
+	// event maps through the OLD object's references too).
+	eventually(t, func() error {
+		var ac kaalmv1alpha1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-clsheld"}, &ac); err != nil {
+			return err
+		}
+		ac.Spec.AllowedToolProviders = nil
+		return testClient.Update(ctxT(), &ac)
+	})
+	eventually(t, func() error {
+		var got kaalmv1alpha1.ToolProvider
+		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got)) {
+			return nil
+		}
+		return errString("toolprovider still held after the class dropped it")
 	})
 }

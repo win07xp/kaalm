@@ -2,7 +2,7 @@
 
 ToolProvider is a cluster-scoped resource that defines a managed external tool server, since v0.4.0. It holds the server's endpoint, an optional credential reference, an optional tool catalog, and the namespace tenancy gate. It deliberately rhymes with [ModelProvider](modelprovider.md), field for field, because the entire tenancy and credential model transfers: the resource provides tools the way a ModelProvider provides models, and the gateway brokers calls to it the way it proxies LLM calls. The design, the taxonomy behind it, and the broker mechanics live in [The Tool Plane](../gateways/tool-plane.md); this page is the resource reference.
 
-Because it is cluster-scoped, a ToolProvider is a platform-team resource: the platform team registers the capability once, holds its credential in `kaalm-system`, and admits namespaces to it via `spec.allowedNamespaces`. Workloads then reference it through the grant chain (`AgentClass.spec.allowedToolProviders` plus `Agent.spec.tools`), which lands with the rest of the v0.4.0 tool plane along with the broker that enforces it.
+Because it is cluster-scoped, a ToolProvider is a platform-team resource: the platform team registers the capability once, holds its credential in `kaalm-system`, and admits namespaces to it via `spec.allowedNamespaces`. Workloads reference it through the grant chain (`AgentClass.spec.allowedToolProviders` plus `spec.tools` on Agent and AgentTask), validated at reconcile time by rules 35 to 38; the broker that enforces the grants at call time lands with the rest of the v0.4.0 tool plane.
 
 ## Spec
 
@@ -92,4 +92,4 @@ A generic HTTP 200 proves nothing about a tool server, so the health probe runs 
 
 ### Deletion
 
-The held-while-referenced finalizer (ModelProvider's Terminating behavior) lands with the grant chain, which creates the references a deletion would need to wait on. Until then, deleting a ToolProvider completes immediately.
+A ToolProvider is held in Terminating while any Agent, AgentTask, or AgentClass references it, exactly as ModelProvider is: the finalizer releases when the last grant or allowlist entry goes away. The hold is by reference, not by validity, so even a workload whose grant is currently violating a rule keeps its provider pinned.

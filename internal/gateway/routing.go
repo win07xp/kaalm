@@ -130,10 +130,11 @@ func containsProviderRef(refs []kaalmv1alpha1.AgentProviderReference, name strin
 }
 
 // namespaceGlobAllowed matches ns against exact names or path.Match globs. An
-// empty list allows every namespace.
+// empty list allows none, as the provider docs have always stated: "*" is the
+// explicit opt-in to every namespace (behavior aligned in v0.4.0).
 func namespaceGlobAllowed(ns string, allowed []string) bool {
 	if len(allowed) == 0 {
-		return true
+		return false
 	}
 	for _, pattern := range allowed {
 		if ok, err := path.Match(pattern, ns); err == nil && ok {

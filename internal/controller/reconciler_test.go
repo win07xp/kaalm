@@ -47,9 +47,10 @@ func mkProvider(t *testing.T, name string, mutate func(*kaalmv1alpha1.ModelProvi
 	mp := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: kaalmv1alpha1.ModelProviderSpec{
-			Type:           "openai",
-			Endpoint:       "https://api.example.com",
-			CredentialsRef: kaalmv1alpha1.SecretKeyReference{Name: name + "-key", Key: "token"},
+			Type:              "openai",
+			Endpoint:          "https://api.example.com",
+			CredentialsRef:    kaalmv1alpha1.SecretKeyReference{Name: name + "-key", Key: "token"},
+			AllowedNamespaces: []string{"*"},
 		},
 	}
 	if mutate != nil {

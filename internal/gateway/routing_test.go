@@ -104,8 +104,12 @@ func TestOpenAIStreamUsageAndFixup(t *testing.T) {
 }
 
 func TestNamespaceGlobAllowed(t *testing.T) {
-	if !namespaceGlobAllowed("team-a", []string{"team-*"}) || !namespaceGlobAllowed("x", nil) {
-		t.Error("glob and empty-list semantics wrong")
+	if !namespaceGlobAllowed("team-a", []string{"team-*"}) || !namespaceGlobAllowed("x", []string{"*"}) {
+		t.Error("glob and wildcard semantics wrong")
+	}
+	// Since v0.4.0 an empty list allows none: "*" is the explicit opt-in.
+	if namespaceGlobAllowed("x", nil) {
+		t.Error("empty allowedNamespaces must deny every namespace")
 	}
 	if namespaceGlobAllowed("prod", []string{"team-*", "dev"}) {
 		t.Error("non-matching namespace admitted")

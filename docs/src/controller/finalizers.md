@@ -11,6 +11,7 @@ Each reconciler adds a finalizer to its resource on first reconciliation:
 | Agent | `kaalm.io/agent-finalizer` |
 | AgentTask | `kaalm.io/task-finalizer` |
 | ModelProvider | `kaalm.io/provider-finalizer` |
+| ToolProvider | `kaalm.io/toolprovider-finalizer` |
 | AgentClass | `kaalm.io/class-finalizer` |
 | AgentChannel | `kaalm.io/channel-finalizer` |
 
@@ -49,6 +50,10 @@ On delete, hold the resource in `Terminating` (the finalizer is not removed) whi
 No gateway-side teardown is required. The gateway's own ModelProvider watch drops the provider from its routing table, and the [credential Secret](../gateways/llm/provider-routing.md#credential-handling) is an independent resource the platform team deletes separately.
 
 Gateway-only-tier callers hold no Agent/AgentTask reference, so they do not block deletion. Their next request to the deleted provider fails with `400 invalid_request` (unknown provider).
+
+## ToolProvider
+
+Since v0.4.0. On delete, hold the resource in `Terminating` while any Agent or AgentTask grants it (`spec.tools`) or any AgentClass allowlists it (`spec.allowedToolProviders`). The hold is by reference, not by validity: a workload whose grant currently violates rules 35 to 38 still pins its provider. Once the last reference clears, the finalizer is removed and deletion completes. No teardown is swept: the credential Secret is an independent resource, exactly as for ModelProvider.
 
 ## AgentClass
 

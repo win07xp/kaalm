@@ -84,6 +84,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Validate.
 	var problems []string
 	problems = append(problems, r.missingProviders(ctx, &ac)...)
+	problems = append(problems, r.missingToolProviders(ctx, &ac)...)
 	problems = append(problems, invalidCIDRs(&ac)...)
 	problems = append(problems, invalidHosts(&ac)...)
 
@@ -177,6 +178,22 @@ func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1
 	return missing
 }
 
+func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaalmv1alpha1.AgentClass) []string {
+	var missing []string
+	for _, ref := range ac.Spec.AllowedToolProviders {
+		var tp kaalmv1alpha1.ToolProvider
+		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &tp); err != nil {
+			if apierrors.IsNotFound(err) {
+				missing = append(missing, fmt.Sprintf("allowedToolProvider %q does not exist", ref.Name))
+				continue
+			}
+			// Transient get errors are skipped conservatively, matching
+			// missingProviders.
+		}
+	}
+	return missing
+}
+
 func invalidCIDRs(ac *kaalmv1alpha1.AgentClass) []string {
 	var bad []string
 	for _, c := range ac.Spec.Network.Egress.AllowedCIDRs {
@@ -227,9 +244,24 @@ func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kaalmv1alpha1.AgentClass{}).
 		Watches(&kaalmv1alpha1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider)).
+		Watches(&kaalmv1alpha1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider)).
 		Watches(&kaalmv1alpha1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
 		Watches(&kaalmv1alpha1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
 		Complete(r)
+}
+
+// classesForToolProvider re-enqueues every AgentClass whose
+// allowedToolProviders lists the changed ToolProvider.
+func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj client.Object) []reconcile.Request {
+	var classes kaalmv1alpha1.AgentClassList
+	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: obj.GetName()}); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(classes.Items))
+	for _, c := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	}
+	return reqs
 }
 
 // classesForProvider re-enqueues every AgentClass whose allowedProviders lists the

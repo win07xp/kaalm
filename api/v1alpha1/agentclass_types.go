@@ -40,6 +40,10 @@ type AgentClassSpec struct {
 	// An empty list allows none.
 	// +optional
 	AllowedProviders []LocalObjectReference `json:"allowedProviders,omitempty"`
+	// AllowedToolProviders lists the ToolProviders workloads of this class may
+	// be granted (rule 37). An empty list allows none.
+	// +optional
+	AllowedToolProviders []LocalObjectReference `json:"allowedToolProviders,omitempty"`
 	// Network governs egress and ingress policy synthesized per workload.
 	// +optional
 	Network AgentClassNetwork `json:"network,omitempty"`

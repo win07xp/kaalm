@@ -23,7 +23,7 @@ if (AgentClass found?) then (no)
 else (yes)
 endif
 
-if (2. every providerRef resolves,\nis in allowedProviders, and\nadmits this namespace?) then (no)
+if (2. every provider and tool grant\nresolves, is class-allowed, and\nadmits this namespace?) then (no)
   :phase=Degraded
   reason=ClassConstraintViolation
   record preDegradedPhase;<<$ctrlBg>>
