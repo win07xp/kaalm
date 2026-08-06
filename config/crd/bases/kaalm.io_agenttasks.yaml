@@ -321,6 +321,39 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              tools:
+                description: |-
+                  Tools grants access to ToolProviders, per server with optional per-tool
+                  narrowing, exactly as on Agent (rules 35 to 38; a violation settles the
+                  task as Failed, since tasks have no Degraded phase). No grant means no
+                  tools. See docs/src/gateways/tool-plane.md.
+                items:
+                  description: |-
+                    AgentToolGrant grants a workload access to one ToolProvider, optionally
+                    narrowed to specific tools. Shared by Agent and AgentTask.
+                  properties:
+                    providerRef:
+                      description: ProviderRef names the ToolProvider.
+                      properties:
+                        name:
+                          description: Name of the referenced object.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    tools:
+                      description: |-
+                        Tools narrows the grant to these tool names. Empty or omitted means
+                        every tool the server offers, bounded by the provider's declared
+                        catalog when one exists.
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - providerRef
+                  type: object
+                type: array
               ttlSecondsAfterFinished:
                 description: TTLSecondsAfterFinished bounds how long a terminal task
                   is retained.

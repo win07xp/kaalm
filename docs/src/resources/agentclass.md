@@ -77,6 +77,12 @@ spec:
     - name: anthropic-shared
     - name: openai-fallback
 
+  # Tool access (since v0.4.0): which ToolProviders may workloads of this
+  # class be granted (rule 37)? Empty list = none, the same default as
+  # allowedProviders.
+  allowedToolProviders:
+    - name: search-tools
+
   # Network policy hints (the controller translates these into NetworkPolicy resources)
   network:
     egress:
@@ -153,7 +159,7 @@ status:
   tasksInUse: 2         # count of AgentTasks currently using this class
 ```
 
-The `Ready` condition reports whether every reference the class makes (its `allowedProviders` list) resolves to an existing, healthy ModelProvider. `agentsInUse` and `tasksInUse` count the Agents and AgentTasks currently using this class, which tells the platform team what a change to the class will affect.
+The `Ready` condition reports whether every reference the class makes (its `allowedProviders` and `allowedToolProviders` lists) resolves to an existing provider. `agentsInUse` and `tasksInUse` count the Agents and AgentTasks currently using this class, which tells the platform team what a change to the class will affect.
 
 ## Design Notes
 
@@ -195,6 +201,8 @@ Prefer `allowedCIDRs` for egress governance; layer `allowedHosts` on top only wh
 For a full-lifecycle Agent or AgentTask, the gateway enforces a chain, not a pair. Three tenancy layers must all admit the request: the workload's own `spec.providers`, this class's `allowedProviders`, and the target `ModelProvider.allowedNamespaces`. A fourth check, that the requested model exists in `ModelProvider.spec.models`, is a model-resolution prerequisite rather than a tenancy boundary, and it applies regardless.
 
 In the gateway-only tier the class layer **disappears entirely**. Those callers are not Agents and reference no AgentClass, so there is nothing for `allowedProviders` to gate; `ModelProvider.allowedNamespaces` is the only tenancy check they face. Platform teams who need class-scoped provider policy must onboard workloads through the full lifecycle tier.
+
+Since v0.4.0 the same chain exists for tools, gate for gate: the workload's `spec.tools`, this class's `allowedToolProviders` (rule 37), and the target `ToolProvider.allowedNamespaces` (rule 36), with the per-tool narrowing and catalog check (rule 38) layered on top. See [The Tool Plane](../gateways/tool-plane.md#grants).
 
 See [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating) for the enforced chain end to end, including which gate produces which error, and [Provider Routing](../gateways/llm/provider-routing.md) for how the gateway resolves each layer.
 

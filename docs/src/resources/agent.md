@@ -77,13 +77,20 @@ spec:
     enabled: true
     port: 8080
 
-  # Inert as shipped, removed in v0.4.0: nothing reads this field, and the
-  # egress scoping it once promised was never implemented (egress comes from
-  # the AgentClass fields). Superseded by the tool plane's spec.tools grant;
-  # see The Tool Plane in the gateways section.
-  mcpServers:
-    - name: github-tools
-      url: "https://mcp.internal.corp/github"
+  # Tool grants (since v0.4.0): gateway-brokered access to ToolProviders,
+  # per server with optional per-tool narrowing. Each grant must resolve
+  # (rule 35), be admitted by the provider's allowedNamespaces (rule 36),
+  # appear in the class's allowedToolProviders (rule 37), and name only
+  # cataloged tools when the provider declares a catalog (rule 38). Omitted
+  # means no brokered tools: no grant, no tools. See The Tool Plane in the
+  # gateways section. (The inert mcpServers field this replaces was removed
+  # in v0.4.0.)
+  tools:
+    - providerRef:
+        name: search-tools
+      # Optional narrowing; empty or omitted means every tool the server
+      # offers.
+      tools: ["web_search"]
 ```
 
 ## Status

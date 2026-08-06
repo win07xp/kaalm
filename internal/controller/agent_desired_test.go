@@ -115,8 +115,12 @@ func TestNamespaceAllowed(t *testing.T) {
 	if namespaceAllowed("prod", []string{"team-*"}) {
 		t.Error("glob should not match")
 	}
-	if !namespaceAllowed("anything", nil) {
-		t.Error("empty list allows all")
+	if !namespaceAllowed("anything", []string{"*"}) {
+		t.Error("wildcard should allow every namespace")
+	}
+	// Since v0.4.0 an empty list allows none: "*" is the explicit opt-in.
+	if namespaceAllowed("anything", nil) {
+		t.Error("empty list must deny every namespace")
 	}
 }
 

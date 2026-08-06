@@ -227,10 +227,11 @@ func imageAllowed(image string, allowed []string) bool {
 }
 
 // namespaceAllowed reports whether ns matches at least one glob in allowed. An
-// empty list allows every namespace.
+// empty list allows none, as the provider docs have always stated: "*" is the
+// explicit opt-in to every namespace (behavior aligned in v0.4.0).
 func namespaceAllowed(ns string, allowed []string) bool {
 	if len(allowed) == 0 {
-		return true
+		return false
 	}
 	for _, pattern := range allowed {
 		if ok, err := path.Match(pattern, ns); err == nil && ok {

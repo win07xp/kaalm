@@ -27,6 +27,13 @@ spec:
   providers:
     - providerRef: { name: anthropic-shared }
 
+  # Tool grants (since v0.4.0), identical to Agent.spec.tools: rules 35 to 38
+  # gate them, settling as terminal Failed since tasks have no Degraded
+  # phase. See The Tool Plane in the gateways section.
+  tools:
+    - providerRef: { name: search-tools }
+      tools: ["web_search"]   # optional narrowing; omitted means every tool
+
   resources:
     requests: { cpu: "1", memory: "2Gi" }
     limits:   { cpu: "2", memory: "4Gi" }

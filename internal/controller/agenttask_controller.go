@@ -529,6 +529,11 @@ func (r *AgentTaskReconciler) taskViolation(
 				fmt.Sprintf("provider %q does not allow namespace %q", name, task.Namespace)
 		}
 	}
+	// Rules 35 to 38 for the task's tool grants; the first violation wins,
+	// terminal like every other task violation.
+	if v := toolGrantViolations(ctx, r.Client, task.Namespace, task.Spec.Tools, class); len(v) > 0 {
+		return v[0].Reason, v[0].Message
+	}
 	if task.Spec.Persistence.Enabled && !class.Spec.Persistence.Enabled {
 		return kaalmv1alpha1.ReasonPersistenceNotAllowed,
 			fmt.Sprintf("persistence requested but AgentClass %q has persistence.enabled=false", class.Name)

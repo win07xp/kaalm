@@ -78,7 +78,7 @@ Cluster-scoped because tool access is platform policy, exactly as model access i
 
 Validation follows the established families, numbered additively and enforced when v0.4.0 lands (each rule is annotated accordingly in [Cross-Resource Validation](../resources/validation-and-defaulting.md#cross-resource-validation)):
 
-- **Rule 35**: every `Agent.spec.tools[].providerRef` must resolve to an existing ToolProvider (the rule 3 analog).
+- **Rule 35**: every workload's `spec.tools[].providerRef` must resolve to an existing ToolProvider (the rule 3 analog).
 - **Rule 36**: every referenced ToolProvider must admit the workload's namespace via `allowedNamespaces` (the rule 4 analog).
 - **Rule 37**: every referenced ToolProvider must appear in the class's `allowedToolProviders` (the rule 5 analog). Rules 35 to 37 join the class-mismatch handling family of rules 2 through 5: recoverable `Degraded`, never a stranded workload.
 - **Rule 38**: when the ToolProvider declares a `tools` catalog, every tool name in a workload's grant must appear in it; a violation is a recoverable `Ready=False` condition naming the missing tools, following the rule 18 shape.
@@ -92,7 +92,7 @@ Access is granted per server, narrowed per tool, mirroring the provider grant ch
 allowedToolProviders:
   - name: search-tools
 
-# Agent.spec
+# Agent.spec and AgentTask.spec, identical shape
 tools:
   - providerRef:
       name: search-tools
@@ -100,6 +100,8 @@ tools:
     # offers (bounded by the declared catalog when one exists).
     tools: ["web_search"]
 ```
+
+Grants live on both workload kinds. A goal-driven one-shot task is, if anything, the tool-hungriest workload shape, so an AgentTask declares `spec.tools` exactly as an Agent does and rules 35 to 38 gate it identically; the only difference is how a violation settles, terminal `Failed` rather than recoverable `Degraded`, because tasks have no Degraded phase (the same split rules 2, 5, and 24 already follow).
 
 The broker enforces narrowing at both protocol surfaces. A `tools/call` naming an ungranted tool is rejected with `403 tool_denied`, the distinct status that makes per-tool policy auditable. A `tools/list` response is filtered to the granted set before it reaches the agent, so the model never sees a tool it cannot call; filtering the list is strictly stronger than rejecting the call, because it removes the temptation from the prompt itself. For gateway-only-tier callers, which carry no workload identity, the grant chain reduces to `allowedNamespaces` alone, exactly as it does for `spec.providers` today ([Workload Identity](llm/workload-identity.md)).
 
@@ -146,11 +148,11 @@ The tool plane does not remove the escape hatch; it re-ranks it. In order of dec
 | Brokered (`/v1/mcp/*`) | Held by the gateway, injected per call | Rate limits, per-call audit, metrics | The default for MCP tool servers from v0.4.0 |
 | Direct egress (`allowedCIDRs` / `allowedHosts`) | Held by the agent pod | None beyond IP-level policy | Non-MCP protocols, or tools the platform team deliberately exempts |
 
-One piece of existing API does not survive this ranking. `Agent.spec.mcpServers` shipped inert: nothing in the controller reads it, and the egress scoping its comment promises was never implemented, so no behavior exists for anyone to depend on. Under the tool plane its premise is inverted anyway, since brokered tools need no per-agent egress at all. **The field is removed in v0.4.0.** The direct tier remains expressible through the class egress fields, which are the mechanism that actually works today and the honest name for what "direct" means: an IP-level hole, with the governance trade the table states.
+One piece of pre-tool-plane API did not survive this ranking. `Agent.spec.mcpServers` shipped inert: nothing in the controller ever read it, and the egress scoping its comment promised was never implemented, so no behavior existed for anyone to depend on. Under the tool plane its premise is inverted anyway, since brokered tools need no per-agent egress at all. **The field was removed in v0.4.0.** The direct tier remains expressible through the class egress fields, which are the mechanism that actually works today and the honest name for what "direct" means: an IP-level hole, with the governance trade the table states.
 
 ## Versioning and Delivery
 
-This chapter is design, merged in v0.3.0; every mechanism above lands with the v0.4.0 milestone, tracked in its umbrella issue. Delivery is in progress: the [ToolProvider resource](../resources/toolprovider.md) and its reconciler (credential resolution, the MCP health probe) exist. The `:8443` listener still serves no `/v1/mcp/*` paths (unrecognized paths are rejected with 400, as today), the grant fields do not exist yet, and rules 35 to 38 remain allocated but unenforced until the grant chain and the broker land. The scenario below and its coverage row carry the same annotation, so the acceptance surface stays honest about what is proven versus designed.
+This chapter is design, merged in v0.3.0; every mechanism above lands with the v0.4.0 milestone, tracked in its umbrella issue. Delivery is in progress: the [ToolProvider resource](../resources/toolprovider.md), its reconciler, the grant fields on both workload kinds, and reconcile-time enforcement of rules 35 to 38 all exist, and `Agent.spec.mcpServers` is gone. The `:8443` listener still serves no `/v1/mcp/*` paths (unrecognized paths are rejected with 400, as today); the broker with its call-time enforcement, session ownership, and audit surface is what remains. The scenario below and its coverage row carry the same annotation, so the acceptance surface stays honest about what is proven versus designed.
 
 ## Acceptance Scenario
 

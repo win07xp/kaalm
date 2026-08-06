@@ -12,6 +12,8 @@ spec:
   credentialsRef:
     name: e2e-vertex-key
     key: token
+  # Since v0.4.0 an omitted allowedNamespaces list allows none.
+  allowedNamespaces: ["*"]
   models:
     - id: gemini-1.5-pro
       costPer1MInputTokens: "1.25"

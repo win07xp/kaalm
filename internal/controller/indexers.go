@@ -38,6 +38,12 @@ const (
 	// IndexAllowedProviders indexes AgentClasses by each
 	// spec.allowedProviders[].name.
 	IndexAllowedProviders = "spec.allowedProviders.name"
+	// IndexToolProviderRef indexes Agents and AgentTasks by each
+	// spec.tools[].providerRef.name (a multi-value index).
+	IndexToolProviderRef = "spec.tools.providerRef.name"
+	// IndexAllowedToolProviders indexes AgentClasses by each
+	// spec.allowedToolProviders[].name.
+	IndexAllowedToolProviders = "spec.allowedToolProviders.name"
 )
 
 // SetupIndexers registers the field indexers the reconcilers depend on. It must
@@ -75,6 +81,26 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	}); err != nil {
 		return err
 	}
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.Agent{}, IndexToolProviderRef, func(o client.Object) []string {
+		return toolGrantNames(o.(*kaalmv1alpha1.Agent).Spec.Tools)
+	}); err != nil {
+		return err
+	}
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentTask{}, IndexToolProviderRef, func(o client.Object) []string {
+		return toolGrantNames(o.(*kaalmv1alpha1.AgentTask).Spec.Tools)
+	}); err != nil {
+		return err
+	}
+	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentClass{}, IndexAllowedToolProviders, func(o client.Object) []string {
+		ac := o.(*kaalmv1alpha1.AgentClass)
+		names := make([]string, 0, len(ac.Spec.AllowedToolProviders))
+		for _, p := range ac.Spec.AllowedToolProviders {
+			names = append(names, p.Name)
+		}
+		return names
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -82,6 +108,14 @@ func providerRefNames(refs []kaalmv1alpha1.AgentProviderReference) []string {
 	names := make([]string, 0, len(refs))
 	for _, r := range refs {
 		names = append(names, r.ProviderRef.Name)
+	}
+	return names
+}
+
+func toolGrantNames(grants []kaalmv1alpha1.AgentToolGrant) []string {
+	names := make([]string, 0, len(grants))
+	for _, g := range grants {
+		names = append(names, g.ProviderRef.Name)
 	}
 	return names
 }

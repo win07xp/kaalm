@@ -72,6 +72,25 @@ spec:
                   - name
                   type: object
                 type: array
+              allowedToolProviders:
+                description: |-
+                  AllowedToolProviders lists the ToolProviders workloads of this class may
+                  be granted (rule 37). An empty list allows none.
+                items:
+                  description: |-
+                    LocalObjectReference names another Kaalm resource by name, in the same scope
+                    as the referrer (same namespace for namespaced kinds, cluster-wide for
+                    cluster-scoped kinds). Used for agentClassRef, providerRef, allowedProviders
+                    entries, fallback entries, and agentRef.
+                  properties:
+                    name:
+                      description: Name of the referenced object.
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               image:
                 description: Image constrains which images this class permits and
                   how they are pulled.

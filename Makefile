@@ -59,6 +59,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
+	@rm -f cover.out
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # Minimum acceptable project-wide statement coverage (the union across all
@@ -73,6 +74,10 @@ COVERAGE_THRESHOLD ?= 85
 # false ~75% with identical tests). The agentruntime module has its own suite
 # (make runtime-test).
 cover-check: manifests generate fmt vet setup-envtest ## Run tests with union coverage and fail below COVERAGE_THRESHOLD%.
+	@# A pre-existing cover.out can accumulate stale profile sections across
+	@# runs (ranges from older source versions then read as uncovered,
+	@# deflating the union by 15+ points). Always start clean.
+	@rm -f cover.out
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
 		GOWORK=off go test $$(GOWORK=off go list ./... | grep -v /e2e) \
 		-coverpkg=$$(GOWORK=off go list ./... | grep -v /e2e | paste -sd,) -coverprofile cover.out

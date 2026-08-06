@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -36,9 +37,10 @@ import (
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
-// ToolProviderReconciler validates a ToolProvider's credentials and probes it
-// for liveness over MCP. The grant chain (rules 35 to 38), the finalizer, and
-// the reference watches land with the rest of the tool plane. See
+// ToolProviderReconciler validates a ToolProvider's credentials, probes it
+// for liveness over MCP, and holds it in Terminating while referenced by an
+// Agent, AgentTask, or AgentClass. The grant checks of rules 35 to 38 run on
+// the workload reconcilers (toolGrantViolations). See
 // docs/src/controller/reconcilers.md (ToolProviderReconciler).
 type ToolProviderReconciler struct {
 	client.Client
@@ -51,6 +53,8 @@ type ToolProviderReconciler struct {
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kaalm.io,resources=agents;agenttasks;agentclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -63,9 +67,13 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !tp.DeletionTimestamp.IsZero() {
-		// No finalizer yet: it arrives with the grant chain, which creates the
-		// references a deletion would need to wait on.
-		return ctrl.Result{}, nil
+		return r.reconcileDelete(ctx, &tp)
+	}
+	if controllerutil.AddFinalizer(&tp, kaalmv1alpha1.ToolProviderFinalizer) {
+		if err := r.Update(ctx, &tp); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	tp.Status.ObservedGeneration = tp.Generation
@@ -110,6 +118,47 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	r.setCondition(&tp, kaalmv1alpha1.ConditionReady, true, kaalmv1alpha1.ReasonCredentialsValid, readyMsg)
 	logger.V(1).Info("reconciled ToolProvider", "type", tp.Spec.Type)
 	return r.finish(ctx, &tp, requeue)
+}
+
+func (r *ToolProviderReconciler) reconcileDelete(
+	ctx context.Context, tp *kaalmv1alpha1.ToolProvider,
+) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(tp, kaalmv1alpha1.ToolProviderFinalizer) {
+		return ctrl.Result{}, nil
+	}
+	referenced, err := r.isReferenced(ctx, tp.Name)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if referenced {
+		// Hold in Terminating while any Agent, AgentTask, or AgentClass
+		// references it. Their watches re-enqueue us when a referrer goes away.
+		return ctrl.Result{}, nil
+	}
+	controllerutil.RemoveFinalizer(tp, kaalmv1alpha1.ToolProviderFinalizer)
+	return ctrl.Result{}, r.Update(ctx, tp)
+}
+
+func (r *ToolProviderReconciler) isReferenced(ctx context.Context, name string) (bool, error) {
+	var agents kaalmv1alpha1.AgentList
+	if err := r.List(ctx, &agents, client.MatchingFields{IndexToolProviderRef: name}); err != nil {
+		return false, err
+	}
+	if len(agents.Items) > 0 {
+		return true, nil
+	}
+	var tasks kaalmv1alpha1.AgentTaskList
+	if err := r.List(ctx, &tasks, client.MatchingFields{IndexToolProviderRef: name}); err != nil {
+		return false, err
+	}
+	if len(tasks.Items) > 0 {
+		return true, nil
+	}
+	var classes kaalmv1alpha1.AgentClassList
+	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: name}); err != nil {
+		return false, err
+	}
+	return len(classes.Items) > 0, nil
 }
 
 // credential resolves the referenced Secret key from the operator namespace
@@ -160,13 +209,45 @@ func (r *ToolProviderReconciler) finish(
 	return res, r.Status().Update(ctx, tp)
 }
 
-// SetupWithManager wires the reconciler and the credential-Secret watch.
-// Reference watches arrive with the grant chain.
+// SetupWithManager wires the reconciler, the credential-Secret watch, and the
+// reference watches that release the deletion hold when a referrer goes away.
 func (r *ToolProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kaalmv1alpha1.ToolProvider{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.toolProvidersForSecret)).
+		Watches(&kaalmv1alpha1.Agent{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
+		Watches(&kaalmv1alpha1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
+		Watches(&kaalmv1alpha1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForClass)).
 		Complete(r)
+}
+
+func toolProvidersForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
+	var grants []kaalmv1alpha1.AgentToolGrant
+	switch w := obj.(type) {
+	case *kaalmv1alpha1.Agent:
+		grants = w.Spec.Tools
+	case *kaalmv1alpha1.AgentTask:
+		grants = w.Spec.Tools
+	default:
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(grants))
+	for _, g := range grants {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: g.ProviderRef.Name}})
+	}
+	return reqs
+}
+
+func toolProvidersForClass(_ context.Context, obj client.Object) []reconcile.Request {
+	ac, ok := obj.(*kaalmv1alpha1.AgentClass)
+	if !ok {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(ac.Spec.AllowedToolProviders))
+	for _, ref := range ac.Spec.AllowedToolProviders {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: ref.Name}})
+	}
+	return reqs
 }
 
 // toolProvidersForSecret re-enqueues every ToolProvider whose credentialsRef

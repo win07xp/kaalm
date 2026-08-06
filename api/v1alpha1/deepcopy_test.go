@@ -129,8 +129,8 @@ func newFullAgent() *Agent {
 				WakeTimeout:        metav1.Duration{Duration: 2 * time.Minute},
 			},
 			Service: &AgentService{Enabled: true, Port: 8080},
-			MCPServers: []AgentMCPServer{
-				{Name: "mcp1", URL: "https://mcp.example.com"},
+			Tools: []AgentToolGrant{
+				{ProviderRef: LocalObjectReference{Name: "search-tools"}, Tools: []string{"web_search"}},
 			},
 		},
 		Status: AgentStatus{
@@ -157,7 +157,7 @@ func mutateAgent(a *Agent) {
 	*a.Spec.Persistence.SizeGi = 999
 	*a.Spec.Persistence.ExistingClaim = mutatedStr
 	a.Spec.Service.Port = 9999
-	a.Spec.MCPServers[0].Name = mutatedStr
+	a.Spec.Tools[0].Tools[0] = mutatedStr
 	a.Status.Conditions[0].Message = mutatedStr
 	*a.Status.LastActivityTime = metav1.NewTime(time.Unix(999, 0))
 }
@@ -314,7 +314,8 @@ func newFullAgentClass() *AgentClass {
 				StorageClassName: ptr("standard"),
 				PVCRetention:     "Retain",
 			},
-			AllowedProviders: []LocalObjectReference{{Name: "provider-a"}},
+			AllowedProviders:     []LocalObjectReference{{Name: "provider-a"}},
+			AllowedToolProviders: []LocalObjectReference{{Name: "search-tools"}},
 			Network: AgentClassNetwork{
 				Egress: AgentClassEgress{
 					AllowedCIDRs: []string{"10.0.0.0/8"},
@@ -359,6 +360,7 @@ func mutateAgentClass(c *AgentClass) {
 	c.Spec.Resources.MaxLimits[corev1.ResourceCPU] = resource.MustParse("99")
 	*c.Spec.Persistence.StorageClassName = mutatedStr
 	c.Spec.AllowedProviders[0].Name = mutatedStr
+	c.Spec.AllowedToolProviders[0].Name = mutatedStr
 	c.Spec.Network.Egress.AllowedCIDRs[0] = mutatedStr
 	*c.Spec.Security.PodSecurityContext.RunAsNonRoot = false
 	*c.Spec.Lifecycle.TerminationGracePeriodSeconds = 0
@@ -428,6 +430,9 @@ func newFullAgentTask() *AgentTask {
 				{Name: "output-1"},
 			},
 			TTLSecondsAfterFinished: ptr(int32(3600)),
+			Tools: []AgentToolGrant{
+				{ProviderRef: LocalObjectReference{Name: "search-tools"}, Tools: []string{"web_search"}},
+			},
 		},
 		Status: AgentTaskStatus{
 			ObservedGeneration:   4,
@@ -452,6 +457,7 @@ func mutateAgentTask(a *AgentTask) {
 	*a.Spec.Persistence.SizeGi = 999
 	a.Spec.Artifacts[0].Name = mutatedStr
 	*a.Spec.TTLSecondsAfterFinished = 1
+	a.Spec.Tools[0].Tools[0] = mutatedStr
 	a.Status.Conditions[0].Message = mutatedStr
 	*a.Status.StartTime = metav1.NewTime(time.Unix(999, 0))
 	a.Status.ArtifactValues["output-1"] = mutatedStr
@@ -656,7 +662,7 @@ func TestNestedTypesDirectDeepCopy(t *testing.T) {
 		*s.Persistence.SizeGi = 999
 		*s.Persistence.ExistingClaim = mutatedStr
 		s.Service.Port = 9999
-		s.MCPServers[0].Name = mutatedStr
+		s.Tools[0].Tools[0] = mutatedStr
 	})
 
 	agentStatus := newFullAgent().Status
@@ -716,6 +722,7 @@ func TestNestedTypesDirectDeepCopy(t *testing.T) {
 		s.Image.AllowedImages[0] = mutatedStr
 		*s.Persistence.StorageClassName = mutatedStr
 		s.AllowedProviders[0].Name = mutatedStr
+		s.AllowedToolProviders[0].Name = mutatedStr
 		s.Network.Egress.AllowedCIDRs[0] = mutatedStr
 		*s.Security.PodSecurityContext.RunAsNonRoot = false
 		*s.Lifecycle.TerminationGracePeriodSeconds = 0
@@ -854,9 +861,9 @@ func TestLeafTypesDeepCopy(t *testing.T) {
 		r.Key = mutatedStr
 	})
 
-	checkDeepCopy(t, "AgentMCPServer", &AgentMCPServer{Name: "mcp1", URL: "https://mcp.example.com"}, (*AgentMCPServer).DeepCopy, func(s *AgentMCPServer) {
-		s.Name = mutatedStr
-		s.URL = mutatedStr
+	checkDeepCopy(t, "AgentToolGrant", &AgentToolGrant{ProviderRef: LocalObjectReference{Name: "search-tools"}, Tools: []string{"web_search"}}, (*AgentToolGrant).DeepCopy, func(g *AgentToolGrant) {
+		g.ProviderRef.Name = mutatedStr
+		g.Tools[0] = mutatedStr
 	})
 
 	checkDeepCopy(t, "AgentProviderReference", &AgentProviderReference{ProviderRef: LocalObjectReference{Name: "provider-a"}}, (*AgentProviderReference).DeepCopy, func(p *AgentProviderReference) {
@@ -948,7 +955,7 @@ func TestDeepCopyNilReceivers(t *testing.T) {
 	checkNilDeepCopy(t, "AgentClassStatus", (*AgentClassStatus).DeepCopy)
 	checkNilDeepCopy(t, "AgentLifecycle", (*AgentLifecycle).DeepCopy)
 	checkNilDeepCopy(t, "AgentList", (*AgentList).DeepCopy)
-	checkNilDeepCopy(t, "AgentMCPServer", (*AgentMCPServer).DeepCopy)
+	checkNilDeepCopy(t, "AgentToolGrant", (*AgentToolGrant).DeepCopy)
 	checkNilDeepCopy(t, "AgentPersistence", (*AgentPersistence).DeepCopy)
 	checkNilDeepCopy(t, "AgentProviderReference", (*AgentProviderReference).DeepCopy)
 	checkNilDeepCopy(t, "AgentService", (*AgentService).DeepCopy)

@@ -248,22 +248,6 @@ spec:
                   wakeTimeout:
                     type: string
                 type: object
-              mcpServers:
-                description: MCPServers are referenced only for NetworkPolicy egress
-                  scoping.
-                items:
-                  description: AgentMCPServer is an MCP endpoint the agent may reach
-                    (egress scoping only).
-                  properties:
-                    name:
-                      type: string
-                    url:
-                      type: string
-                  required:
-                  - name
-                  - url
-                  type: object
-                type: array
               persistence:
                 description: Persistence requests a PVC for durable agent state.
                 properties:
@@ -391,6 +375,42 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              tools:
+                description: |-
+                  Tools grants access to ToolProviders, per server with optional per-tool
+                  narrowing. Each grant must resolve (rule 35), be admitted by the
+                  provider's allowedNamespaces (rule 36), appear in the class's
+                  allowedToolProviders (rule 37), and name only cataloged tools when the
+                  provider declares a catalog (rule 38). Omit for agents that call no
+                  brokered tools; no grant means no tools.
+                  See docs/src/gateways/tool-plane.md.
+                items:
+                  description: |-
+                    AgentToolGrant grants a workload access to one ToolProvider, optionally
+                    narrowed to specific tools. Shared by Agent and AgentTask.
+                  properties:
+                    providerRef:
+                      description: ProviderRef names the ToolProvider.
+                      properties:
+                        name:
+                          description: Name of the referenced object.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    tools:
+                      description: |-
+                        Tools narrows the grant to these tool names. Empty or omitted means
+                        every tool the server offers, bounded by the provider's declared
+                        catalog when one exists.
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - providerRef
+                  type: object
+                type: array
             required:
             - agentClassRef
             type: object

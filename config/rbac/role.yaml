@@ -78,6 +78,7 @@ rules:
   - agents/finalizers
   - agenttasks/finalizers
   - modelproviders/finalizers
+  - toolproviders/finalizers
   verbs:
   - update
 - apiGroups:

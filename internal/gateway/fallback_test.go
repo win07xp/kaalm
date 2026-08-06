@@ -72,8 +72,9 @@ func (h *fallbackHarness) provider(name, ptype string, fallbacks ...string) *kaa
 	p := &kaalmv1alpha1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: kaalmv1alpha1.ModelProviderSpec{
-			Type:   ptype,
-			Models: []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
+			Type:              ptype,
+			AllowedNamespaces: []string{"*"},
+			Models:            []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
 		},
 	}
 	for _, f := range fallbacks {
