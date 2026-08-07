@@ -119,6 +119,9 @@ type fakeStore struct {
 	podsByIP  map[string]*corev1.Pod
 	channels  map[string]*kaalmv1alpha1.AgentChannel // key: webhook path
 	secrets   map[string]string                      // key: ns/name/key
+
+	toolProviders map[string]*kaalmv1alpha1.ToolProvider
+	toolCreds     map[string]string
 }
 
 func newFakeStore() *fakeStore {
@@ -131,7 +134,26 @@ func newFakeStore() *fakeStore {
 		podsByIP:  map[string]*corev1.Pod{},
 		channels:  map[string]*kaalmv1alpha1.AgentChannel{},
 		secrets:   map[string]string{},
+
+		toolProviders: map[string]*kaalmv1alpha1.ToolProvider{},
+		toolCreds:     map[string]string{},
 	}
+}
+
+func (f *fakeStore) ToolProviderByName(_ context.Context, name string) (*kaalmv1alpha1.ToolProvider, bool) {
+	tp, ok := f.toolProviders[name]
+	return tp, ok
+}
+
+func (f *fakeStore) ToolCredential(_ context.Context, tp *kaalmv1alpha1.ToolProvider) (string, error) {
+	if tp.Spec.CredentialsRef == nil {
+		return "", nil
+	}
+	cred, ok := f.toolCreds[tp.Name]
+	if !ok {
+		return "", fmt.Errorf("no credential for %s", tp.Name)
+	}
+	return cred, nil
 }
 
 func (f *fakeStore) AgentByName(_ context.Context, ns, name string) (*kaalmv1alpha1.Agent, bool) {
@@ -215,6 +237,7 @@ func newHarness(t *testing.T, upstreamFn http.HandlerFunc) *harness {
 		MaxBodyBytes:      1 << 20,
 		UpstreamTimeout:   10 * time.Second,
 		UpstreamCAs:       upstreamPool,
+		SessionKey:        []byte("test-session-key"),
 	}
 	h.server = NewServer(cfg, h.store, NewTokenAuthenticator(h.reviewer), h.spend)
 

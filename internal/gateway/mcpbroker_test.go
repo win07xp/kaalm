@@ -1,0 +1,512 @@
+/*
+Copyright 2026 The Kaalm Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package gateway
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+)
+
+// seedToolRoute installs an agent in team-a granting ToolProvider "search"
+// (catalog web_search + fetch_page, narrowed to web_search), the class
+// allowlist, the credential, and the source-IP Pod mapping.
+func (h *harness) seedToolRoute() {
+	h.store.agents["team-a/sup"] = &kaalmv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
+		Spec: kaalmv1alpha1.AgentSpec{
+			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "std"},
+			Tools: []kaalmv1alpha1.AgentToolGrant{
+				{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "search"}, Tools: []string{"web_search"}},
+			},
+		},
+	}
+	h.store.classes["std"] = &kaalmv1alpha1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "std"},
+		Spec: kaalmv1alpha1.AgentClassSpec{
+			AllowedToolProviders: []kaalmv1alpha1.LocalObjectReference{{Name: "search"}},
+		},
+	}
+	h.store.toolProviders["search"] = &kaalmv1alpha1.ToolProvider{
+		ObjectMeta: metav1.ObjectMeta{Name: "search"},
+		Spec: kaalmv1alpha1.ToolProviderSpec{
+			Type:              "mcp",
+			Endpoint:          h.upstream.URL,
+			CredentialsRef:    &kaalmv1alpha1.SecretKeyReference{Name: "search-key", Key: "token"},
+			AllowedNamespaces: []string{"team-*"},
+			Tools: []kaalmv1alpha1.ToolProviderTool{
+				{ID: "web_search"}, {ID: "fetch_page"},
+			},
+		},
+	}
+	h.store.toolCreds["search"] = "tool-cred-1"
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "sup-abc", Namespace: "team-a"},
+	}
+}
+
+func mcpCall(tool string) map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+		"params": map[string]any{"name": tool, "arguments": map[string]any{}},
+	}
+}
+
+// expectMCPError asserts the broker denied with the given status and
+// error.type, returning the decoded body message.
+func expectMCPError(t *testing.T, resp *http.Response, status int, errType string) string {
+	t.Helper()
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != status {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want %d: %s", resp.StatusCode, status, body)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var envelope struct {
+		Error errorBody `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &envelope)
+	if envelope.Error.Type != errType {
+		t.Fatalf("error.type = %q, want %q (raw body: %s)", envelope.Error.Type, errType, raw)
+	}
+	return envelope.Error.Message
+}
+
+func TestMCPBroker_MTLSHappyPath(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Mcp-Session-Id", "up-sess-1")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"ok"}]}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"),
+		map[string]string{"x-api-key": "attacker-supplied", "Authorization": "Bearer stolen"})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+
+	up := <-h.upreqs
+	if got := up.header.Get("Authorization"); got != "Bearer tool-cred-1" {
+		t.Errorf("tool credential not injected: %q", got)
+	}
+	if up.header.Get("X-Api-Key") != "" {
+		t.Error("inbound auth material must be stripped")
+	}
+
+	// The upstream session id is wrapped, never revealed.
+	wrapped := resp.Header.Get("Mcp-Session-Id")
+	if wrapped == "" || strings.Contains(wrapped, "up-sess-1") {
+		t.Fatalf("session id not wrapped: %q", wrapped)
+	}
+	identity := callerIdentity(&caller{Namespace: "team-a",
+		Workload: &Identity{Namespace: "team-a", Name: "sup", Kind: KindAgent}})
+	if raw, ok := unwrapSessionID([]byte("test-session-key"), wrapped, identity); !ok || raw != "up-sess-1" {
+		t.Fatalf("wrapped session does not verify for the caller: %q %v", raw, ok)
+	}
+
+	var body map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body["result"] == nil {
+		t.Fatalf("result not relayed: %v", body)
+	}
+}
+
+func TestMCPBroker_BearerTierHappyPath(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
+	})
+	h.seedToolRoute()
+	h.reviewer.username = "system:serviceaccount:team-b:runner"
+	h.reviewer.authenticated = true
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-b"},
+	}
+
+	// team-b matches team-*; gateway-only callers reduce to the namespace
+	// gate and may call any cataloged tool, including uncataloged narrowings
+	// no workload grant exists for.
+	resp := postJSON(t, h.client(nil), h.url("/v1/mcp/search"), mcpCall("fetch_page"),
+		map[string]string{"Authorization": "Bearer projected-token"})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("bearer tier status %d: %s", resp.StatusCode, body)
+	}
+	up := <-h.upreqs
+	if got := up.header.Get("Authorization"); got != "Bearer tool-cred-1" {
+		t.Errorf("credential not injected on bearer tier: %q", got)
+	}
+}
+
+func TestMCPBroker_EnforcementMatrix(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+	cl := h.client(&cert)
+
+	// Unknown provider.
+	resp := postJSON(t, cl, h.url("/v1/mcp/nope"), mcpCall("web_search"), nil)
+	expectMCPError(t, resp, http.StatusBadRequest, errInvalidRequest)
+
+	// Namespace not admitted.
+	h.store.toolProviders["search"].Spec.AllowedNamespaces = []string{"prod-only"}
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
+
+	// Empty allowedNamespaces denies every namespace.
+	h.store.toolProviders["search"].Spec.AllowedNamespaces = nil
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
+	h.store.toolProviders["search"].Spec.AllowedNamespaces = []string{"team-*"}
+
+	// No grant on the workload.
+	h.store.agents["team-a/sup"].Spec.Tools = nil
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	msg := expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
+	if !strings.Contains(msg, "no tool grant") {
+		t.Errorf("message = %q, want the missing-grant explanation", msg)
+	}
+	h.store.agents["team-a/sup"].Spec.Tools = []kaalmv1alpha1.AgentToolGrant{
+		{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "search"}, Tools: []string{"web_search"}},
+	}
+
+	// Class allowlist miss.
+	h.store.classes["std"].Spec.AllowedToolProviders = nil
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
+	h.store.classes["std"].Spec.AllowedToolProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "search"}}
+
+	// Narrowing miss: fetch_page is cataloged but not granted.
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("fetch_page"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errToolDenied)
+
+	// Catalog ceiling: a granted-but-uncataloged tool is denied.
+	h.store.agents["team-a/sup"].Spec.Tools[0].Tools = []string{"rogue_tool"}
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("rogue_tool"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errToolDenied)
+	h.store.agents["team-a/sup"].Spec.Tools[0].Tools = []string{"web_search"}
+
+	// Disallowed method.
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"),
+		map[string]any{"jsonrpc": "2.0", "id": 1, "method": "resources/list"}, nil)
+	msg = expectMCPError(t, resp, http.StatusForbidden, errToolDenied)
+	if !strings.Contains(msg, "resources/list") {
+		t.Errorf("message = %q, want it to name the method", msg)
+	}
+
+	// Batch requests.
+	raw, _ := json.Marshal([]any{mcpCall("web_search")})
+	req, _ := http.NewRequest(http.MethodPost, h.url("/v1/mcp/search"), strings.NewReader(string(raw)))
+	req.Header.Set("Content-Type", "application/json")
+	batchResp, err := cl.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectMCPError(t, batchResp, http.StatusBadRequest, errInvalidRequest)
+}
+
+func TestMCPBroker_ToolsListFiltered(t *testing.T) {
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			list := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search"},{"name":"fetch_page"},{"name":"hidden"}]}}`
+			h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				if mode == "sse" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprintf(w, ": ping\n\ndata: %s\n\n", list)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, list)
+			})
+			h.seedToolRoute()
+			cert := agentCert(t, h.ca)
+
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+				map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status %d: %s", resp.StatusCode, body)
+			}
+			if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+				t.Fatalf("filtered tools/list must be normalized to JSON, got %q", ct)
+			}
+			var parsed struct {
+				Result struct {
+					Tools []struct {
+						Name string `json:"name"`
+					} `json:"tools"`
+				} `json:"result"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+				t.Fatal(err)
+			}
+			// Grant narrows to web_search; "hidden" is uncataloged and
+			// ungranted; fetch_page is cataloged but ungranted.
+			if len(parsed.Result.Tools) != 1 || parsed.Result.Tools[0].Name != "web_search" {
+				t.Fatalf("filtered tools = %+v, want exactly web_search", parsed.Result.Tools)
+			}
+		})
+	}
+}
+
+func TestMCPBroker_ToolsListFullForBearerTier(t *testing.T) {
+	list := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search"},{"name":"fetch_page"}]}}`
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, list)
+	})
+	h.seedToolRoute()
+	h.reviewer.username = "system:serviceaccount:team-b:runner"
+	h.reviewer.authenticated = true
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-b"},
+	}
+
+	resp := postJSON(t, h.client(nil), h.url("/v1/mcp/search"),
+		map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+		map[string]string{"Authorization": "Bearer projected-token"})
+	defer func() { _ = resp.Body.Close() }()
+	var parsed struct {
+		Result struct {
+			Tools []json.RawMessage `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Result.Tools) != 2 {
+		t.Fatalf("bearer tier sees %d tools, want the full catalog of 2", len(parsed.Result.Tools))
+	}
+}
+
+func TestMCPBroker_SessionOwnership(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":7,"result":{"echoSession":%q}}`, r.Header.Get("Mcp-Session-Id"))
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+	identity := callerIdentity(&caller{Namespace: "team-a",
+		Workload: &Identity{Namespace: "team-a", Name: "sup", Kind: KindAgent}})
+
+	// A wrapped id round-trips to the raw upstream id.
+	wrapped := wrapSessionID([]byte("test-session-key"), "up-sess-9", identity)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"),
+		map[string]string{"Mcp-Session-Id": wrapped})
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Result struct {
+			EchoSession string `json:"echoSession"`
+		} `json:"result"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Result.EchoSession != "up-sess-9" {
+		t.Fatalf("upstream saw session %q, want the raw id", body.Result.EchoSession)
+	}
+
+	// Another caller's wrapped id is rejected before forwarding.
+	other := wrapSessionID([]byte("test-session-key"), "up-sess-9",
+		callerIdentity(&caller{Namespace: "team-a", Workload: &Identity{Namespace: "team-a", Name: "other", Kind: KindAgent}}))
+	resp2 := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"),
+		map[string]string{"Mcp-Session-Id": other})
+	expectMCPError(t, resp2, http.StatusForbidden, errAccessDenied)
+
+	// Garbage is rejected.
+	resp3 := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"),
+		map[string]string{"Mcp-Session-Id": "garbage"})
+	expectMCPError(t, resp3, http.StatusForbidden, errAccessDenied)
+}
+
+func TestMCPBroker_SSEStreamRelayed(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}\n\n")
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	defer func() { _ = resp.Body.Close() }()
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("stream content type = %q", ct)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(raw), "notifications/progress") || !strings.Contains(string(raw), `"ok":true`) {
+		t.Fatalf("stream not relayed intact: %s", raw)
+	}
+}
+
+func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
+	t.Run("refused connection", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+		h.seedToolRoute()
+		h.upstream.Close() // reachable address, refused connection
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+	})
+
+	t.Run("upstream 500", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+	})
+
+	t.Run("upstream 401 masks the gateway credential", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+	})
+
+	t.Run("upstream 404 relayed for session semantics", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, want the upstream 404 relayed (MCP expired-session signal)", resp.StatusCode)
+		}
+	})
+
+	t.Run("redirect refused", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "https://attacker.example/", http.StatusFound)
+		})
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		blocked := make(chan struct{})
+		h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			select {
+			case <-blocked:
+			case <-r.Context().Done():
+			}
+		})
+		// LIFO: blocked must close before the harness cleanup waits on the
+		// parked handler.
+		t.Cleanup(func() { close(blocked) })
+		h.server.Config.MCPUpstreamTimeout = 200 * time.Millisecond
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		expectMCPError(t, resp, http.StatusGatewayTimeout, errToolTimeout)
+	})
+}
+
+func TestMCPBroker_SizeCaps(t *testing.T) {
+	t.Run("request too large", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+		h.server.Config.MCPMaxBodyBytes = 128
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		big := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+			"params": map[string]any{"name": "web_search", "arguments": strings.Repeat("x", 512)}}
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), big, nil)
+		expectMCPError(t, resp, http.StatusRequestEntityTooLarge, errRequestTooLarge)
+	})
+
+	t.Run("response too large", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":7,"result":{"blob":%q}}`, strings.Repeat("y", 4096))
+		})
+		h.server.Config.MCPMaxBodyBytes = 1024
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		// A small request under the cap; the response is what exceeds it.
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		expectMCPError(t, resp, http.StatusRequestEntityTooLarge, errResponseTooLarge)
+	})
+}
+
+func TestMCPBroker_RateLimited(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
+	})
+	h.seedToolRoute()
+	h.store.toolProviders["search"].Spec.RateLimits = kaalmv1alpha1.ToolProviderRateLimits{RequestsPerMinute: 1}
+	cert := agentCert(t, h.ca)
+
+	first := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	_ = first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first call status %d", first.StatusCode)
+	}
+	second := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	expectMCPError(t, second, http.StatusTooManyRequests, errRateLimited)
+	if second.Header.Get("Retry-After") == "" {
+		t.Error("429 must carry Retry-After")
+	}
+}
+
+func TestMCPBroker_UnauthenticatedCredentiallessServer(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":7,"result":{"auth":%q}}`, r.Header.Get("Authorization"))
+	})
+	h.seedToolRoute()
+	h.store.toolProviders["search"].Spec.CredentialsRef = nil
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Result struct {
+			Auth string `json:"auth"`
+		} `json:"result"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Result.Auth != "" {
+		t.Fatalf("credential-less server received Authorization %q", body.Result.Auth)
+	}
+}

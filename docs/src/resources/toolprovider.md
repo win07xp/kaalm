@@ -49,6 +49,12 @@ spec:
     - id: web_search
     - id: fetch_page
 
+  # Per-namespace request ceiling for brokered calls. Cluster-wide; each
+  # gateway replica divides it by the live replica count, exactly as
+  # ModelProvider rate limits are enforced. Zero or omitted = no limit.
+  rateLimits:
+    requestsPerMinute: 120
+
   # Health check configuration. The probe speaks the protocol it governs:
   # an MCP initialize handshake followed by tools/list.
   healthCheck:
@@ -89,6 +95,10 @@ A generic HTTP 200 proves nothing about a tool server, so the health probe runs 
 ### The catalog is a ceiling, not a mirror
 
 `spec.tools` does not have to enumerate what the server offers; leaving it empty delegates to the server's own `tools/list`. Declaring it buys three things at once: the broker refuses calls to anything outside it, grants are validated against it at reconcile time (rule 38), and the `tool` metric label's cardinality is bounded by it, which is why declared catalogs are recommended ([Audit and Metering](../gateways/tool-plane.md#audit-and-metering)).
+
+### Rate limits carry no token dimension
+
+`rateLimits` has exactly one knob because tool calls have exactly one countable unit: the call. The USD-budget question is settled in [Audit and Metering](../gateways/tool-plane.md#audit-and-metering) (rule 33's argument: a cap over unpriced calls is a lie); when per-call pricing arrives, it arrives as a catalog cost, not a second rate limit.
 
 ### Deletion
 

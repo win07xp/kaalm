@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"flag"
 	"fmt"
@@ -165,6 +166,21 @@ func main() {
 		validateCABundle(file, "callback", logger)
 	}
 
+	// The MCP session key binds session ids to caller identities across
+	// replicas; the chart provides it. A missing key gets a per-process
+	// random fallback: sessions then survive only on this replica, which is
+	// fine for local runs and loudly wrong for real ones.
+	sessionKey := []byte(os.Getenv("KAALM_MCP_SESSION_KEY"))
+	if len(sessionKey) == 0 {
+		sessionKey = make([]byte, 32)
+		if _, err := rand.Read(sessionKey); err != nil {
+			logger.Error("generating fallback MCP session key", "error", err)
+			os.Exit(1)
+		}
+		logger.Warn("KAALM_MCP_SESSION_KEY is not set; using a per-process key, " +
+			"MCP sessions will not survive replica hops")
+	}
+
 	store := &gateway.KubeStore{Reader: cl.GetClient(), OperatorNamespace: operatorNamespace}
 	tokens := gateway.NewTokenAuthenticator(&gateway.KubeTokenReviewer{Client: clientset})
 	async := &gateway.KubeAsyncRecords{Client: clientset, OperatorNamespace: operatorNamespace}
@@ -177,6 +193,7 @@ func main() {
 		CAFile:                   caFile,
 		MaxBodyBytes:             maxBodyBytes,
 		UpstreamTimeout:          upstreamTimeout,
+		SessionKey:               sessionKey,
 		UpstreamCAFiles:          splitPaths(upstreamCAFile),
 		CallbackCAFiles:          splitPaths(callbackCAFile),
 		CallbackPolicy:           callbackpolicy.NewFromCSV(callbackAllowlist),
