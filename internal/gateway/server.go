@@ -66,6 +66,15 @@ type Config struct {
 	// UpstreamCAs is a prebuilt upstream pool, used when UpstreamCAFiles is
 	// empty (tests inject one directly).
 	UpstreamCAs *x509.CertPool
+	// MCPMaxBodyBytes caps brokered MCP request and response bodies; zero
+	// falls back to MaxBodyBytes.
+	MCPMaxBodyBytes int64
+	// MCPUpstreamTimeout bounds each brokered tool call; zero falls back to
+	// UpstreamTimeout.
+	MCPUpstreamTimeout time.Duration
+	// SessionKey is the gateway-shared HMAC key binding MCP session ids to
+	// caller identities (docs/src/gateways/tool-plane.md, The Broker).
+	SessionKey []byte
 	// DisableSourceIPCheck skips the source-IP cross-check (dev/test only).
 	DisableSourceIPCheck bool
 
@@ -127,6 +136,9 @@ type Server struct {
 	Async AsyncRecords
 	// Completions patches per-task completion mailboxes.
 	Completions CompletionWriter
+
+	mcpClientOnce sync.Once
+	mcpClient     *http.Client
 
 	upstreamOnce   sync.Once
 	upstreamClient *http.Client
@@ -242,6 +254,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/messages", s.Auth.LLMPaths(s.handleLLMProxy))
 	mux.HandleFunc("/v1/chat/completions", s.Auth.LLMPaths(s.handleLLMProxy))
 	mux.HandleFunc("/v1/completions", s.Auth.LLMPaths(s.handleLLMProxy))
+	// The tool plane's broker surface, under the same dual-mode auth as the
+	// LLM proxy paths (docs/src/gateways/tool-plane.md, The Broker).
+	mux.HandleFunc("/v1/mcp/", s.Auth.LLMPaths(s.handleMCPBroker))
 
 	// Agent-report paths: mTLS-only, kind split at the handler. The
 	// task-complete body lands with the user-gateway phase.
@@ -342,6 +357,28 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+// mcpHTTPClient shares the provider-facing transport (same trust pool and
+// rotation behavior) but never follows redirects, and leaves timing to the
+// per-call request context.
+func (s *Server) mcpHTTPClient() *http.Client {
+	s.mcpClientOnce.Do(func() {
+		s.mcpClient = &http.Client{
+			Transport: s.upstream().Transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errNoRedirects
+			},
+		}
+	})
+	return s.mcpClient
+}
+
+func (s *Server) mcpUpstreamTimeout() time.Duration {
+	if s.Config.MCPUpstreamTimeout > 0 {
+		return s.Config.MCPUpstreamTimeout
+	}
+	return s.Config.UpstreamTimeout
 }
 
 // upstream returns the shared provider-facing HTTP client.

@@ -57,7 +57,17 @@ func NewRateLimiter(replicas func() int) *RateLimiter {
 // Allow reports whether a request may proceed, consuming one token when it
 // can. A provider with no requestsPerMinute limit always allows.
 func (r *RateLimiter) Allow(provider *kaalmv1alpha1.ModelProvider, namespace, model string) bool {
-	limit := provider.Spec.RateLimits.RequestsPerMinute
+	return r.allow(provider.Spec.RateLimits.RequestsPerMinute, namespace+"/"+model)
+}
+
+// AllowTool is the brokered-call analog, keyed per (namespace, ToolProvider)
+// under a prefix no namespace name can produce (":" is not a DNS label
+// character), so tool buckets never collide with LLM model buckets.
+func (r *RateLimiter) AllowTool(tp *kaalmv1alpha1.ToolProvider, namespace string) bool {
+	return r.allow(tp.Spec.RateLimits.RequestsPerMinute, "mcp:"+namespace+"/"+tp.Name)
+}
+
+func (r *RateLimiter) allow(limit int32, key string) bool {
 	if limit <= 0 {
 		return true
 	}
@@ -69,7 +79,6 @@ func (r *RateLimiter) Allow(provider *kaalmv1alpha1.ModelProvider, namespace, mo
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := namespace + "/" + model
 	now := r.now()
 	b := r.buckets[key]
 	if b == nil {

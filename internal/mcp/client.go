@@ -96,14 +96,14 @@ func (c *Client) ListTools(ctx context.Context, session Session) ([]Tool, error)
 // notification (nil ID) it returns a zero response once the server accepts
 // the POST. A JSON-RPC error object is returned as an *RPCError, a non-2xx
 // status as an *HTTPError.
-func (c *Client) post(ctx context.Context, session Session, msg request) (response, http.Header, error) {
+func (c *Client) post(ctx context.Context, session Session, msg request) (Response, http.Header, error) {
 	body, err := json.Marshal(msg)
 	if err != nil {
-		return response{}, nil, err
+		return Response{}, nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return response{}, nil, err
+		return Response{}, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -123,57 +123,70 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (respon
 	}
 	httpResp, err := cl.Do(req)
 	if err != nil {
-		return response{}, nil, err
+		return Response{}, nil, err
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return response{}, nil, &HTTPError{StatusCode: httpResp.StatusCode}
+		return Response{}, nil, &HTTPError{StatusCode: httpResp.StatusCode}
 	}
 	if msg.ID == nil {
 		// Notification: any 2xx acceptance is the whole contract.
-		return response{}, httpResp.Header, nil
+		return Response{}, httpResp.Header, nil
 	}
 
-	reader := io.LimitReader(httpResp.Body, maxResponseBytes)
-	var resp response
-	ct := httpResp.Header.Get("Content-Type")
-	switch {
-	case strings.HasPrefix(ct, "text/event-stream"):
-		resp, err = readSSEResponse(reader, *msg.ID)
-	default:
-		var raw []byte
-		if raw, err = io.ReadAll(reader); err == nil {
-			err = json.Unmarshal(raw, &resp)
-		}
-	}
+	rawID, err := json.Marshal(*msg.ID)
 	if err != nil {
-		return response{}, nil, err
+		return Response{}, nil, err
+	}
+	resp, err := ParseResponse(httpResp.Header.Get("Content-Type"),
+		io.LimitReader(httpResp.Body, maxResponseBytes), rawID)
+	if err != nil {
+		return Response{}, nil, err
 	}
 	if resp.Error != nil {
-		return response{}, nil, resp.Error
+		return Response{}, nil, resp.Error
 	}
 	return resp, httpResp.Header, nil
+}
+
+// ParseResponse decodes the JSON-RPC response matching rawID from an MCP
+// streamable-HTTP response body: a plain JSON object, or an SSE stream whose
+// events are scanned for the matching response (other events are skipped).
+// Shared by the probe client and the broker's tools/list filter.
+func ParseResponse(contentType string, r io.Reader, rawID []byte) (Response, error) {
+	if strings.HasPrefix(contentType, "text/event-stream") {
+		return readSSEResponse(r, rawID)
+	}
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return Response{}, err
+	}
+	var resp Response
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return Response{}, err
+	}
+	return resp, nil
 }
 
 // readSSEResponse scans an SSE stream for the JSON-RPC response whose id
 // matches the request. Other events (server notifications, unrelated ids)
 // are skipped; the stream ending without a match is an error.
-func readSSEResponse(r io.Reader, wantID int64) (response, error) {
+func readSSEResponse(r io.Reader, rawID []byte) (Response, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxResponseBytes)
 	var data strings.Builder
-	flush := func() (response, bool) {
+	flush := func() (Response, bool) {
 		defer data.Reset()
 		if data.Len() == 0 {
-			return response{}, false
+			return Response{}, false
 		}
-		var resp response
+		var resp Response
 		if err := json.Unmarshal([]byte(data.String()), &resp); err != nil {
-			return response{}, false
+			return Response{}, false
 		}
-		if resp.ID == nil || *resp.ID != wantID {
-			return response{}, false
+		if !IDEqual(resp.ID, rawID) {
+			return Response{}, false
 		}
 		return resp, true
 	}
@@ -189,10 +202,10 @@ func readSSEResponse(r io.Reader, wantID int64) (response, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return response{}, err
+		return Response{}, err
 	}
 	if resp, ok := flush(); ok {
 		return resp, nil
 	}
-	return response{}, fmt.Errorf("stream ended without a response for request %d", wantID)
+	return Response{}, fmt.Errorf("stream ended without a response for request id %s", string(rawID))
 }

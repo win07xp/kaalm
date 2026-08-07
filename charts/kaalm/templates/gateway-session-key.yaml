@@ -1,0 +1,19 @@
+# The gateway-shared HMAC key binding MCP session ids to caller identities
+# (docs/src/gateways/tool-plane.md, The Broker). Generated once: the lookup
+# reuses the existing value on upgrade, so live MCP sessions survive helm
+# upgrade. Deleting the Secret rotates the key and invalidates open sessions.
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "kaalm-gateway-session-key" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kaalm-gateway-session-key
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- if $existing }}
+  key: {{ index $existing.data "key" }}
+  {{- else }}
+  key: {{ randAlphaNum 64 | b64enc }}
+  {{- end }}

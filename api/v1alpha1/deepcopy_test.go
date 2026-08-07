@@ -591,6 +591,7 @@ func newFullToolProvider() *ToolProvider {
 				{ID: "web_search"},
 				{ID: "fetch_page"},
 			},
+			RateLimits: ToolProviderRateLimits{RequestsPerMinute: 120},
 			HealthCheck: &ToolProviderHealthCheck{
 				Enabled:         true,
 				IntervalSeconds: 60,
@@ -921,6 +922,10 @@ func TestLeafTypesDeepCopy(t *testing.T) {
 		h.IntervalSeconds = 1
 	})
 
+	checkDeepCopy(t, "ToolProviderRateLimits", &ToolProviderRateLimits{RequestsPerMinute: 120}, (*ToolProviderRateLimits).DeepCopy, func(r *ToolProviderRateLimits) {
+		r.RequestsPerMinute = 1
+	})
+
 	checkDeepCopy(t, "ModelProviderRateLimits", &ModelProviderRateLimits{RequestsPerMinute: 100, TokensPerMinute: 1000}, (*ModelProviderRateLimits).DeepCopy, func(r *ModelProviderRateLimits) {
 		r.RequestsPerMinute = 999
 	})
@@ -986,6 +991,7 @@ func TestDeepCopyNilReceivers(t *testing.T) {
 	checkNilDeepCopy(t, "ToolProvider", (*ToolProvider).DeepCopy)
 	checkNilDeepCopy(t, "ToolProviderHealthCheck", (*ToolProviderHealthCheck).DeepCopy)
 	checkNilDeepCopy(t, "ToolProviderList", (*ToolProviderList).DeepCopy)
+	checkNilDeepCopy(t, "ToolProviderRateLimits", (*ToolProviderRateLimits).DeepCopy)
 	checkNilDeepCopy(t, "ToolProviderSpec", (*ToolProviderSpec).DeepCopy)
 	checkNilDeepCopy(t, "ToolProviderStatus", (*ToolProviderStatus).DeepCopy)
 	checkNilDeepCopy(t, "ToolProviderTool", (*ToolProviderTool).DeepCopy)

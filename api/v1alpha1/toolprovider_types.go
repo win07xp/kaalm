@@ -54,11 +54,24 @@ type ToolProviderSpec struct {
 	// +listMapKey=id
 	// +optional
 	Tools []ToolProviderTool `json:"tools,omitempty"`
+	// RateLimits sets the per-namespace request ceiling for brokered calls.
+	// The configured value is a cluster-wide ceiling; each gateway replica
+	// divides it by the live replica count, exactly as ModelProvider rate
+	// limits are enforced. Zero or omitted means no limit.
+	// +optional
+	RateLimits ToolProviderRateLimits `json:"rateLimits,omitempty"`
 	// HealthCheck configures the periodic upstream liveness probe. A nil block
 	// defaults to an enabled probe at reconcile time (the CRD default on enabled
 	// only fires when the block is present).
 	// +optional
 	HealthCheck *ToolProviderHealthCheck `json:"healthCheck,omitempty"`
+}
+
+// ToolProviderRateLimits sets the brokered-call ceiling. Tool calls carry no
+// token dimension, so unlike ModelProvider there is only a request rate.
+type ToolProviderRateLimits struct {
+	// +optional
+	RequestsPerMinute int32 `json:"requestsPerMinute,omitempty"`
 }
 
 // ToolProviderTool is one entry in the declared catalog.
