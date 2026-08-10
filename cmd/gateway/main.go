@@ -1,7 +1,7 @@
-// Command gateway is the Kaalm Gateway: the LLM listener on :8443 with
-// per-path client authentication, the provider proxy, and a dedicated health
-// port. The User listener (:8080) and the controller-facing internal handlers
-// land in later phases. See docs/src/gateways/.
+// Command gateway is the Kaalm Gateway: the cluster listener on :8443 (the
+// LLM proxy, the MCP tool broker, and the internal endpoints, with per-path
+// client authentication), the Ingress-fronted user listener on :8080, and a
+// dedicated health port. See docs/src/gateways/.
 package main
 
 import (
@@ -65,7 +65,7 @@ func main() {
 		deliveryBackoff      string
 		callbackBackoff      string
 	)
-	flag.StringVar(&listenAddr, "listen-addr", ":8443", "LLM listener address")
+	flag.StringVar(&listenAddr, "listen-addr", ":8443", "cluster listener (:8443) address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
 	flag.StringVar(&certFile, "tls-cert", "/var/run/kaalm/tls.crt", "serving certificate file")
 	flag.StringVar(&keyFile, "tls-key", "/var/run/kaalm/tls.key", "serving key file")

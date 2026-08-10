@@ -36,7 +36,8 @@ type Config struct {
 	// OperatorNamespace hosts the gateway (kaalm-system); the controller
 	// SAN check and the gateway endpoint derivation use it.
 	OperatorNamespace string
-	// ListenAddr is the LLM listener (default :8443).
+	// ListenAddr is the cluster listener (default :8443): the LLM proxy, the
+	// MCP tool broker, and the internal endpoints.
 	ListenAddr string
 	// HealthAddr serves /healthz and /readyz over TLS with no client auth on
 	// a dedicated port, outside the listener auth profiles.
@@ -267,7 +268,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(s.handleActivity))
 	mux.HandleFunc("/v1/channels/health", s.Auth.ControllerPaths(s.handleChannelsHealth))
 
-	// Anything else on the LLM listener is an unrecognized path.
+	// Anything else on the cluster listener is an unrecognized path.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "unrecognized path "+r.URL.Path)
 	})
@@ -312,7 +313,7 @@ func (s *Server) TLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
-// Run serves the LLM listener and the health port until ctx is cancelled.
+// Run serves the cluster listener and the health port until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	tlsCfg, err := s.TLSConfig()
 	if err != nil {

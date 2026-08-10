@@ -248,7 +248,7 @@ Error payloads (`delivery_failed`, `wake_timeout`, `controller_unavailable`, `re
 
 **`GET /v1/channels/responses/{requestId}?channelPath={url-encoded-webhook-path}`**
 
-Served over HTTPS on the User Gateway listener (port 8080, TLS using `kaalm-gateway-tls`, the same certificate used by the LLM listener). External callers reach it through the cluster Ingress that fronts port 8080; see [TLS and Ingress](../user/overview.md#tls-and-ingress).
+Served over HTTPS on the User Gateway listener (port 8080, TLS using `kaalm-gateway-tls`, the same certificate used by the cluster listener). External callers reach it through the cluster Ingress that fronts port 8080; see [TLS and Ingress](../user/overview.md#tls-and-ingress).
 
 The endpoint returns the agent's response or error payload if available. The `channelPath` query parameter is the URL-encoded webhook path of the originating AgentChannel, exactly the `channelPath` value the caller received in the 202 response body. The gateway uses it to look up the AgentChannel's auth configuration and authenticate the request. Callers must preserve the value verbatim from the 202 response and URL-encode it when assembling the query string; it should not be constructed independently.
 

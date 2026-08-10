@@ -1,9 +1,10 @@
 {{- include "kaalm.replicaFloor" .Values.gateway.replicas -}}
 {{/*
-The gateway Deployment, Service, and PodDisruptionBudget. The two logical
-gateways (LLM proxy on :8443, User webhook on :8080) share one Deployment; the
-multi-replica state model degrades gracefully to one replica, so the floor is
-for upgrade/drain headroom rather than correctness. See
+The gateway Deployment, Service, and PodDisruptionBudget. One Deployment,
+two listeners: the cluster listener on :8443 (LLM proxy, MCP tool broker,
+internal endpoints) and the Ingress-fronted user listener on :8080 (channel
+webhooks). The multi-replica state model degrades gracefully to one replica,
+so the floor is for upgrade/drain headroom rather than correctness. See
 docs/src/operations/deployment.md.
 */}}
 ---
@@ -89,7 +90,7 @@ spec:
           ports:
             - name: user
               containerPort: 8080
-            - name: llm
+            - name: cluster
               containerPort: 8443
             - name: metrics
               containerPort: 9090
@@ -156,7 +157,7 @@ spec:
     - name: user
       port: 8080
       targetPort: 8080
-    - name: llm
+    - name: cluster
       port: 8443
       targetPort: 8443
     - name: metrics

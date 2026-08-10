@@ -12,7 +12,7 @@ Kubelet liveness/readiness probe endpoints (`/healthz`, `/readyz`) terminate on 
 
 ## Reserved Gateway Paths
 
-The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints: `/v1/` is served on the LLM Gateway listener at `:8443` for gateway-internal calls and on the User Gateway listener at `:8080` for the async polling endpoint, and is otherwise reserved on `:8080` against webhook path collisions:
+The following path prefixes are reserved for gateway-internal use and must not be used as `AgentChannel.spec.webhook.path` values. These paths conflict with gateway-internal endpoints: `/v1/` is served on the cluster listener at `:8443` for gateway-internal calls and on the User Gateway listener at `:8080` for the async polling endpoint, and is otherwise reserved on `:8080` against webhook path collisions:
 
 - `/v1/` reserves all current and future gateway-internal endpoints (LLM proxy paths, task completion, heartbeat, async polling, channel health, activity). The controller's `POST /v1/activate/{namespace}/{agentName}` lives on the controller Service (port 9443), not the gateway, and is therefore unreachable from a webhook path regardless of this rule. See [Operator Structure](../../controller/overview.md) and [Activator](../user/activation-and-activity.md#the-activator) for the activator wire contract.
 

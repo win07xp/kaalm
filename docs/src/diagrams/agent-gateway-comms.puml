@@ -14,7 +14,7 @@ box "a user namespace" #FCFCFC
   participant "**AgentTask**\ncontainer" as task $agentBg
 end box
 
-participant "**Gateway**\n:8443 LLM listener" as gw $gwBg
+participant "**Gateway**\n:8443 cluster listener" as gw $gwBg
 participant "**Controller**" as ctrl $ctrlBg
 
 note over agent

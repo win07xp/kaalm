@@ -17,7 +17,7 @@ Environment:
 | Variable | Meaning |
 |---|---|
 | `KAALM_HEALTH_PORT` | The port to serve on (default 8080) |
-| `KAALM_GATEWAY_ENDPOINT` | Base HTTPS URL of the gateway's LLM listener; all outbound calls go here |
+| `KAALM_GATEWAY_ENDPOINT` | Base HTTPS URL of the gateway's cluster listener; all outbound calls go here |
 | `KAALM_TLS_CERT` / `KAALM_TLS_KEY` | Your per-agent certificate and key, mounted at `/var/run/kaalm/` |
 | `KAALM_CA_CERT` | The cluster CA bundle, same mount |
 | `KAALM_HANDLER_PATH` | Only when `Agent.spec.handler` is set: the directory the handler ConfigMap is mounted at (`/opt/kaalm/handler`). Its absence is how a base image knows to serve its built-in default; a `FROM` build that bakes a handler sets it itself |

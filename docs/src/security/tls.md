@@ -1,6 +1,6 @@
 # TLS and Certificates
 
-This page is the canonical reference for Kaalm's in-cluster trust chain: how the Kaalm CA is created, how leaf certificates are issued and rotated, how trust is distributed to workload namespaces, and what happens when a certificate or the CA itself must be replaced. The [LLM listener TLS page](../gateways/llm/listener-tls.md) and the [deployment page](../operations/deployment.md#certificate-lifecycle) summarize this material and link here.
+This page is the canonical reference for Kaalm's in-cluster trust chain: how the Kaalm CA is created, how leaf certificates are issued and rotated, how trust is distributed to workload namespaces, and what happens when a certificate or the CA itself must be replaced. The [cluster listener TLS page](../gateways/listener-tls.md) and the [deployment page](../operations/deployment.md#certificate-lifecycle) summarize this material and link here.
 
 ## In-Cluster TLS
 
@@ -21,7 +21,7 @@ cert-manager must run with **`--enable-certificate-owner-ref=true`** (Helm: `ext
 4. The chart installs a `Certificate` for the gateway serving cert (`kaalm-gateway-tls`), issued from `kaalm-ca-issuer`.
    - SANs: `kaalm-gateway.kaalm-system.svc.cluster.local`, `kaalm-gateway.kaalm-system.svc`, `localhost`.
    - The Helm value `gateway.externalHostnames` (see [Helm Chart Contents](../operations/deployment.md#helm-chart-contents)) extends this SAN list with operator-supplied public hostnames. It is required when the User listener is exposed via TLS pass-through Ingress.
-   - The gateway cert serves both listeners: the LLM listener on port 8443 and the User listener on port 8080. Despite the conventional HTTP association of port 8080, the User listener is TLS-only. There is no plaintext gateway listener. An Ingress fronting the User listener must use HTTPS as its backend protocol. External webhook traffic arrives via Ingress configured for backend re-encrypt or TLS pass-through, so there is no plaintext hop anywhere. See [TLS and Ingress](../gateways/user/overview.md#tls-and-ingress).
+   - The gateway cert serves both listeners: the cluster listener on port 8443 and the User listener on port 8080. Despite the conventional HTTP association of port 8080, the User listener is TLS-only. There is no plaintext gateway listener. An Ingress fronting the User listener must use HTTPS as its backend protocol. External webhook traffic arrives via Ingress configured for backend re-encrypt or TLS pass-through, so there is no plaintext hop anywhere. See [TLS and Ingress](../gateways/user/overview.md#tls-and-ingress).
 5. The chart installs a `Certificate` for the controller's activator, activity-API, and channels-health serving cert (`kaalm-controller-tls`), also issued from `kaalm-ca-issuer`. The controller's HTTPS endpoints on port 9443 use it, and the gateway trusts `kaalm-ca` to verify it. Both the gateway and controller `Certificate` resources declare `usages: [server auth, client auth]`, because each also presents its cert as a client cert when dialing the other's authenticated endpoints (see [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication)).
 6. Per-Agent and per-AgentTask `Certificate` resources are created at reconcile time by the [AgentReconciler](../controller/reconcilers.md#agentreconciler) and [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler), not by the chart. The reconcilers gate Pod creation on the per-workload `Certificate` reaching `Ready=True`, requeueing until issuance completes, so a Pod never hangs on a missing projected Secret. The two lifecycle walkthroughs below cover these certs step by step.
 
@@ -50,7 +50,7 @@ Agent and AgentTask Pods mount the projected ConfigMap at `/var/run/kaalm/ca.crt
 
 ### Traffic Directions
 
-- **Agent → Gateway (LLM traffic)**: the LLM Gateway listener serves TLS using the `kaalm-gateway-tls` Secret. Agents verify it against the projected Kaalm CA. See [TLS on the LLM Gateway Listener](../gateways/llm/listener-tls.md).
+- **Agent → Gateway (LLM traffic)**: the cluster listener serves TLS using the `kaalm-gateway-tls` Secret. Agents verify it against the projected Kaalm CA. See [TLS on the Cluster Listener](../gateways/listener-tls.md).
 - **Gateway → Agent (channel message delivery)**: delivery on `POST /v1/message` is bidirectional mTLS. The gateway verifies the agent's cert-manager-issued `{agentName}-tls` against `kaalm-ca`, and the agent verifies the gateway's `kaalm-gateway-tls` against the same CA, requiring a SAN match on the gateway Service DNS (see [The Runtime Contract](../runtime/contract.md) bullet 4 for the agent-side enforcement). This protects user messages, which may contain PII or sensitive data, from network-level sniffing on shared nodes, and removes the need to treat NetworkPolicy as the sole access control on the message path.
 - **Controller endpoints (activator, activity, health)**: the controller's HTTPS endpoints on port 9443 use `kaalm-controller-tls`; the gateway trusts `kaalm-ca` to verify. See [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication).
 

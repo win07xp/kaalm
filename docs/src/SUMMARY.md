@@ -32,6 +32,7 @@
 # The Gateways
 
 - [Gateway Overview](gateways/overview.md)
+  - [Cluster Listener TLS](gateways/listener-tls.md)
 - [HTTP API](gateways/api/overview.md)
   - [Channel Webhook](gateways/api/channel-webhook.md)
   - [Task Completion](gateways/api/task-complete.md)
@@ -42,7 +43,6 @@
 - [LLM Gateway](gateways/llm/overview.md)
   - [Request Handling](gateways/llm/request-handling.md)
   - [Workload Identity](gateways/llm/workload-identity.md)
-  - [Listener TLS](gateways/llm/listener-tls.md)
   - [Provider Routing and Adapters](gateways/llm/provider-routing.md)
   - [Budgets and Rate Limits](gateways/llm/budgets-and-rate-limits.md)
   - [Fallback Logic](gateways/llm/fallback.md)

@@ -53,7 +53,7 @@ type providerAdapter interface {
 }
 
 // adapterForPath maps a request path to the adapter that registered it.
-// Unrecognized paths on the LLM listener are rejected with 400.
+// Unrecognized paths on the cluster listener are rejected with 400.
 func adapterForPath(urlPath string) (providerAdapter, bool) {
 	path, _, _ := strings.Cut(urlPath, "?") // strip any query string for matching
 	switch path {
