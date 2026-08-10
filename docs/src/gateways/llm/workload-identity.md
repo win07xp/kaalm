@@ -90,6 +90,7 @@ Not every path accepts both modes:
 | Path | Accepted identity |
 |---|---|
 | LLM proxy paths (`/v1/messages`, `/v1/chat/completions`, `/v1/completions`, provider-specific paths) | mTLS (either SAN shape) or SA bearer token |
+| Tool plane (`/v1/mcp/*`, since v0.4.0) | mTLS (either SAN shape) or SA bearer token; the same dual-mode profile, per-plane authorization at the [broker](../tool-plane.md#the-broker) |
 | `POST /v1/task/complete` | mTLS only; AgentTask at the handler, Agent callers rejected with 403 |
 | `POST /v1/agent/heartbeat` | mTLS only; Agent at the handler, AgentTask callers rejected with 403 |
 | `GET /v1/activity`, `GET /v1/channels/health` | mTLS with the controller SAN; Agent/AgentTask certs rejected with 403 |

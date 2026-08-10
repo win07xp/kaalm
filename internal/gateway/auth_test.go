@@ -63,7 +63,7 @@ func TestSourceIP(t *testing.T) {
 	}
 }
 
-func TestLLMPaths_BearerErrorBranches(t *testing.T) {
+func TestDualModePaths_BearerErrorBranches(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	h.seedRoute()
 	// A plain Deployment pod in team-b (not Kaalm-managed) so the precheck

@@ -43,11 +43,13 @@ All paths on `:8443` share the same listener and serve TLS; client-auth requirem
 
 | Path family | Client auth |
 |---|---|
-| LLM proxy (`/v1/messages`, `/v1/chat/completions`, provider-specific paths) | mTLS with Agent/AgentTask SAN, **or** `TokenReview`-validated SA bearer token (gateway-only tier) |
-| Tool plane (`/v1/mcp/*`, since v0.4.0; see [The Tool Plane](tool-plane.md)) | Same dual mode as the LLM proxy paths |
+| LLM proxy (`/v1/messages`, `/v1/chat/completions`, provider-specific paths) | The dual-mode caller-identity profile: mTLS with Agent/AgentTask SAN, **or** `TokenReview`-validated SA bearer token (gateway-only tier) |
+| Tool plane (`/v1/mcp/*`, since v0.4.0; see [The Tool Plane](tool-plane.md)) | The same dual-mode caller-identity profile |
 | `POST /v1/task/complete` | mTLS, Agent/AgentTask SAN admitted at listener; AgentTask only at handler (Agent callers rejected with 403) |
 | `POST /v1/agent/heartbeat` | mTLS, Agent/AgentTask SAN admitted at listener; Agent only at handler (AgentTask callers rejected with 403) |
 | `GET /v1/activity`, `GET /v1/channels/health` | mTLS, Controller SAN required (Agent/AgentTask certs rejected with 403) |
+
+The LLM proxy and tool plane rows deliberately share one authentication profile: establishing the caller's identity is plane-independent, so the dual-mode middleware carries no plane-specific logic, and what differs per plane is authorization (the provider chain versus the [tool grant chain](tool-plane.md#grants)), enforced by each handler.
 
 See [/v1/task/complete](api/task-complete.md) and [§ /v1/agent/heartbeat](api/agent-endpoints.md#post-v1agentheartbeat) for the handler-level caller-type checks. `/v1/task/complete` additionally enforces a Pod-identity check (the calling Pod's UID must match `AgentTask.status.currentPodUID`; a mismatch is rejected with `403 StalePodCompletion`) and a terminal-phase check (`status.phase ∈ {Succeeded, Failed, TimedOut}` is rejected with `403 TaskAlreadyCompleted`). Both are gated **after** the AgentTask SAN admission and the `agentReported` mode check; see [Per-Agent and Per-Task Child Resources](../runtime/child-resources.md) for the field-stamping protocol.
 

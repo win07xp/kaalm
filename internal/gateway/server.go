@@ -251,12 +251,12 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// LLM proxy paths: dual-mode (mTLS SAN or bearer token).
-	mux.HandleFunc("/v1/messages", s.Auth.LLMPaths(s.handleLLMProxy))
-	mux.HandleFunc("/v1/chat/completions", s.Auth.LLMPaths(s.handleLLMProxy))
-	mux.HandleFunc("/v1/completions", s.Auth.LLMPaths(s.handleLLMProxy))
-	// The tool plane's broker surface, under the same dual-mode auth as the
-	// LLM proxy paths (docs/src/gateways/tool-plane.md, The Broker).
-	mux.HandleFunc("/v1/mcp/", s.Auth.LLMPaths(s.handleMCPBroker))
+	mux.HandleFunc("/v1/messages", s.Auth.DualModePaths(s.handleLLMProxy))
+	mux.HandleFunc("/v1/chat/completions", s.Auth.DualModePaths(s.handleLLMProxy))
+	mux.HandleFunc("/v1/completions", s.Auth.DualModePaths(s.handleLLMProxy))
+	// The tool plane's broker surface, on the shared dual-mode
+	// caller-identity profile (docs/src/gateways/tool-plane.md, The Broker).
+	mux.HandleFunc("/v1/mcp/", s.Auth.DualModePaths(s.handleMCPBroker))
 
 	// Agent-report paths: mTLS-only, kind split at the handler. The
 	// task-complete body lands with the user-gateway phase.
