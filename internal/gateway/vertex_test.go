@@ -71,6 +71,33 @@ func TestVertexUsageExtraction(t *testing.T) {
 	}
 }
 
+// Grounding with Google Search reports executed queries in
+// groundingMetadata.webSearchQueries; the adapter counts them as the
+// "google_search" server tool.
+func TestVertexUsageExtraction_Grounding(t *testing.T) {
+	v := vertexAdapter{}
+	u, ok := v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":88,"candidatesTokenCount":12},` +
+		`"candidates":[{"groundingMetadata":{"webSearchQueries":["euro 2024 winner","who won euro 2024"]}}]}`))
+	if !ok || u.ServerTools["google_search"] != 2 {
+		t.Errorf("grounded usage = %+v ok=%v, want google_search:2", u, ok)
+	}
+
+	// Streaming: groundingMetadata arrives on its own chunk before the final
+	// usageMetadata chunk; both must survive.
+	var acc Usage
+	v.accumulateStreamUsage([]byte(`{"candidates":[{"groundingMetadata":{"webSearchQueries":["q1"]}}]}`), &acc)
+	v.accumulateStreamUsage([]byte(`{"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`), &acc)
+	if acc.InputTokens != 5 || acc.OutputTokens != 3 || acc.ServerTools["google_search"] != 1 {
+		t.Errorf("grounded stream usage = %+v", acc)
+	}
+
+	// Ungrounded responses report no server tools.
+	u, _ = v.extractUsage([]byte(`{"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1},"candidates":[{}]}`))
+	if u.ServerTools != nil {
+		t.Errorf("ungrounded response must yield nil ServerTools: %v", u.ServerTools)
+	}
+}
+
 func TestVertexCredentialHeader(t *testing.T) {
 	h := http.Header{}
 	vertexAdapter{}.injectCredential(h, "ya29.minted-token")

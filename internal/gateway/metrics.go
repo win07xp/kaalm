@@ -29,6 +29,7 @@ const (
 	labelProvider  = "provider"
 	labelStatus    = "status"
 	labelNamespace = "namespace"
+	labelTool      = "tool"
 )
 
 // Metrics is the gateway's Prometheus catalog (docs/src/operations/observability.md).
@@ -43,6 +44,9 @@ type Metrics struct {
 	llmFallback    *prometheus.CounterVec
 	budgetThreshld *prometheus.CounterVec
 	budgetBoundary *prometheus.CounterVec
+	llmServerTools *prometheus.CounterVec
+	toolCalls      *prometheus.CounterVec
+	toolDuration   *prometheus.HistogramVec
 	channelMsgs    *prometheus.CounterVec
 	channelWake    *prometheus.CounterVec
 	channelCB      *prometheus.CounterVec
@@ -75,6 +79,15 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		budgetBoundary: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_llm_budget_boundary_events_total", Help: "Hard-enforcement boundary events.",
 		}, []string{labelProvider, labelNamespace, "event"}),
+		llmServerTools: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "kaalm_llm_server_tool_use_total", Help: "Provider-side tool calls extracted from response usage.",
+		}, []string{labelProvider, labelNamespace, labelTool}),
+		toolCalls: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "kaalm_tool_calls_total", Help: "Brokered MCP calls by outcome.",
+		}, []string{labelProvider, labelNamespace, labelTool, labelStatus}),
+		toolDuration: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "kaalm_tool_call_duration_seconds", Help: "Brokered MCP call duration, forwarded calls only.",
+		}, []string{labelProvider, labelTool}),
 		channelMsgs: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_channel_messages_total", Help: "Channel messages by outcome.",
 		}, []string{"channel_type", labelNamespace, labelStatus}),
@@ -124,6 +137,32 @@ func (m *Metrics) Spend(provider, namespace string, usd float64) {
 		return
 	}
 	m.llmSpend.WithLabelValues(provider, namespace).Add(usd)
+}
+
+// ServerToolUse counts provider-side tool calls extracted from a response.
+func (m *Metrics) ServerToolUse(provider, namespace, tool string, count int64) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.llmServerTools.WithLabelValues(provider, namespace, tool).Add(float64(count))
+}
+
+// ToolCall counts one brokered MCP call. status is "ok", a wire error type,
+// or "upstream_error"; tool is already bounded by the declared catalog
+// (see docs/src/gateways/tool-plane.md, Audit and Metering).
+func (m *Metrics) ToolCall(provider, namespace, tool, status string) {
+	if m == nil {
+		return
+	}
+	m.toolCalls.WithLabelValues(provider, namespace, tool, status).Inc()
+}
+
+// ToolCallDuration records a forwarded brokered call's wall-clock.
+func (m *Metrics) ToolCallDuration(provider, tool string, seconds float64) {
+	if m == nil {
+		return
+	}
+	m.toolDuration.WithLabelValues(provider, tool).Observe(seconds)
 }
 
 // Fallback counts one fallback attempt.

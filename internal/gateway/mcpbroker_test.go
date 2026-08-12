@@ -17,14 +17,17 @@ limitations under the License.
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -508,5 +511,168 @@ func TestMCPBroker_UnauthenticatedCredentiallessServer(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&body)
 	if body.Result.Auth != "" {
 		t.Fatalf("credential-less server received Authorization %q", body.Result.Auth)
+	}
+}
+
+// ---- audit and metrics ----
+
+// mcpCalls reads the kaalm_tool_calls_total counter for one (tool, status)
+// tuple on the seedToolRoute fixture (provider "search", namespace team-a).
+func mcpCalls(h *harness, tool, status string) float64 {
+	return testutil.ToFloat64(h.server.Metrics.toolCalls.WithLabelValues("search", "team-a", tool, status))
+}
+
+func TestMCPBroker_MetricsAcrossOutcomes(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+	cl := h.client(&cert)
+
+	// Allowed call: ok status under the real tool label, duration observed.
+	resp := postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	_ = resp.Body.Close()
+	if got := mcpCalls(h, "web_search", "ok"); got != 1 {
+		t.Errorf("ok counter = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(h.server.Metrics.toolDuration); n != 1 {
+		t.Errorf("duration series = %d, want 1 (forwarded call observed)", n)
+	}
+
+	// Cataloged but ungranted: tool_denied under the real label.
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("fetch_page"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errToolDenied)
+	if got := mcpCalls(h, "fetch_page", errToolDenied); got != 1 {
+		t.Errorf("tool_denied counter = %v, want 1", got)
+	}
+
+	// A wire-supplied name outside the catalog collapses, so callers cannot
+	// inflate label cardinality.
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("rm_rf"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errToolDenied)
+	if got := mcpCalls(h, "uncataloged", errToolDenied); got != 1 {
+		t.Errorf("uncataloged counter = %v, want 1", got)
+	}
+
+	// Local denials never touch the duration histogram.
+	if n := testutil.CollectAndCount(h.server.Metrics.toolDuration); n != 1 {
+		t.Errorf("duration series after denials = %d, want still 1", n)
+	}
+}
+
+func TestMCPBroker_MetricsNamespaceDenied(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
+	h.seedToolRoute()
+	h.store.toolProviders["search"].Spec.AllowedNamespaces = []string{"prod-*"}
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
+	// The namespace gate fires before the body is parsed: no method, no tool.
+	if got := mcpCalls(h, "", errAccessDenied); got != 1 {
+		t.Errorf("access_denied counter = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(h.server.Metrics.toolDuration); n != 0 {
+		t.Errorf("local denial observed a duration: %d series", n)
+	}
+}
+
+// A relayed protocol-level 4xx is a completed brokered exchange: status label
+// upstream_error, duration observed (the upstream was really consulted).
+func TestMCPBroker_MetricsUpstream4xxRelay(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"session expired"}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want the relayed 404", resp.StatusCode)
+	}
+	if got := mcpCalls(h, "web_search", "upstream_error"); got != 1 {
+		t.Errorf("upstream_error counter = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(h.server.Metrics.toolDuration); n != 1 {
+		t.Errorf("forwarded 4xx must observe a duration: %d series", n)
+	}
+}
+
+// Without a declared catalog every tool label collapses to the sentinel,
+// even on allowed calls: wire-supplied names are unbounded.
+func TestMCPBroker_MetricsCataloglessSentinel(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
+	})
+	h.seedToolRoute()
+	h.store.toolProviders["search"].Spec.Tools = nil
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if got := mcpCalls(h, "uncataloged", "ok"); got != 1 {
+		t.Errorf("sentinel counter = %v, want 1", got)
+	}
+}
+
+// The audit record: one info-level structured line with the fields the tool
+// plane chapter promises, real tool name included, bodies never.
+func TestMCPResult_AuditRecord(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	s := &Server{} // nil Metrics no-ops; only the log line is under test
+	c := &caller{Namespace: "team-a",
+		Workload: &Identity{Namespace: "team-a", Name: "sup", Kind: KindAgent}}
+	tp := &kaalmv1alpha1.ToolProvider{}
+	tp.Name = "search"
+	s.mcpResult(c, tp, "search", "tools/call", "rm_rf", http.StatusForbidden,
+		errToolDenied, `tool "rm_rf" is not granted to this workload`,
+		time.Now().Add(-50*time.Millisecond), 128, 0, false)
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("audit record is not one JSON line: %v (%s)", err, buf.String())
+	}
+	want := map[string]any{
+		"level": "INFO", "msg": "mcp call", "namespace": "team-a",
+		"provider": "search", "method": "tools/call", "tool": "rm_rf",
+		"status": float64(http.StatusForbidden), "error_type": errToolDenied,
+		"request_bytes": float64(128), "response_bytes": float64(0),
+		"workload": "sup", "workload_kind": "Agent",
+		"detail": `tool "rm_rf" is not granted to this workload`,
+	}
+	for key, expected := range want {
+		if rec[key] != expected {
+			t.Errorf("record[%q] = %v, want %v", key, rec[key], expected)
+		}
+	}
+	dur, ok := rec["duration_seconds"].(float64)
+	if !ok || dur <= 0 {
+		t.Errorf("duration_seconds = %v, want positive", rec["duration_seconds"])
+	}
+
+	// Bearer-tier callers carry no workload fields, successes no detail.
+	buf.Reset()
+	s.mcpResult(&caller{Namespace: "team-b"}, nil, "search", "ping", "", 200, "", "",
+		time.Now(), 10, 20, true)
+	var bearer map[string]any
+	_ = json.Unmarshal(buf.Bytes(), &bearer)
+	if _, present := bearer["workload"]; present {
+		t.Error("bearer-tier record must not carry a workload field")
+	}
+	if bearer["namespace"] != "team-b" {
+		t.Errorf("bearer namespace = %v", bearer["namespace"])
 	}
 }

@@ -101,6 +101,8 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bodyLog("llm request", body)
+
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		badRequest(w, "request body is not valid JSON")
@@ -205,6 +207,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 			res.settle(0)
 		}
 		s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "error")
+		bodyLog("llm response", res.body)
 		copyDownstreamHeaders(w.Header(), res.resp.Header)
 		w.WriteHeader(res.resp.StatusCode)
 		_, _ = w.Write(res.body)
@@ -221,6 +224,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	} else if res.settle != nil {
 		res.settle(0)
 	}
+	bodyLog("llm response", res.body)
 	copyDownstreamHeaders(w.Header(), res.resp.Header)
 	w.WriteHeader(res.resp.StatusCode)
 	_, _ = w.Write(res.body)
@@ -336,6 +340,9 @@ func (s *Server) settleUsage(provider *kaalmv1alpha1.ModelProvider, namespace, m
 	}
 	s.Metrics.Tokens(provider.Name, modelID, namespace, usage)
 	s.Metrics.Spend(provider.Name, namespace, cost)
+	for tool, count := range usage.ServerTools {
+		s.Metrics.ServerToolUse(provider.Name, namespace, tool, count)
+	}
 }
 
 // copyForwardedHeaders applies the forwarded-header contract: strip inbound
@@ -394,7 +401,7 @@ func (s *Server) relayStream(
 	// under-settle exactly where undercounting voids the cap, and a held
 	// admission slot must always free.
 	defer func() {
-		if usage != (Usage{}) {
+		if !usage.isZero() {
 			s.settleUsage(provider, namespace, modelID, usage, settle)
 		} else if settle != nil {
 			settle(0)
@@ -407,6 +414,7 @@ func (s *Server) relayStream(
 		line := scanner.Bytes()
 		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
 			adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage)
+			bodyLog("llm stream", data)
 		}
 		if _, err := w.Write(append(line, '\n')); err != nil {
 			return

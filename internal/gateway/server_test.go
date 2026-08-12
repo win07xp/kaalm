@@ -37,6 +37,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -240,6 +242,9 @@ func newHarness(t *testing.T, upstreamFn http.HandlerFunc) *harness {
 		SessionKey:        []byte("test-session-key"),
 	}
 	h.server = NewServer(cfg, h.store, NewTokenAuthenticator(h.reviewer), h.spend)
+	// Registry-backed metrics so every harness test also exercises the
+	// emission paths; per-harness registries keep tests independent.
+	h.server.Metrics = NewMetrics(prometheus.NewRegistry())
 
 	serverCert := h.ca.issue(t, "kaalm-gateway.kaalm-system.svc.cluster.local", "localhost")
 	tlsCfg := &tls.Config{
@@ -404,6 +409,34 @@ func TestProxy_AnthropicCredentialHeader(t *testing.T) {
 	}
 	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 5 {
 		t.Errorf("anthropic usage not recorded: %+v", u)
+	}
+}
+
+// A provider-side tool reported in the response usage lands on the
+// kaalm_llm_server_tool_use_total counter next to the token metrics
+// (docs/src/gateways/tool-plane.md, Provider-side tools).
+func TestProxy_ServerToolUseMetric(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"input_tokens":6039,"output_tokens":931,` +
+			`"server_tool_use":{"web_search_requests":2}}}`))
+	})
+	h.seedRoute()
+	h.store.providers["prov"].Spec.Type = providerTypeAnthropic
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/messages"),
+		map[string]any{"model": "prov/m1"}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.llmServerTools.WithLabelValues("prov", "team-a", "web_search")); got != 2 {
+		t.Errorf("server tool use = %v, want 2", got)
+	}
+	// Token accounting is unaffected by the extra usage facet.
+	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 6039 || u.OutputTokens != 931 {
+		t.Errorf("tokens not recorded alongside server tools: %+v", u)
 	}
 }
 
@@ -587,7 +620,7 @@ func TestProxy_StreamingRelay(t *testing.T) {
 	// MemorySpend guards Record/Total with a mutex, so this read is race-free.
 	var u Usage
 	for i := 0; i < 100; i++ {
-		if u = h.spend.Total("team-a", "prov", "m1"); u != (Usage{}) {
+		if u = h.spend.Total("team-a", "prov", "m1"); !u.isZero() {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

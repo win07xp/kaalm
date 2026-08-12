@@ -102,6 +102,73 @@ func TestExtractUsage_MalformedAndZero(t *testing.T) {
 	}
 }
 
+// Recorded Anthropic response shape with a server-side tool: usage carries
+// server_tool_use with per-tool "_requests" counters (web search docs).
+func TestAnthropicExtractUsage_ServerToolUse(t *testing.T) {
+	body := []byte(`{"usage":{"input_tokens":6039,"output_tokens":931,` +
+		`"server_tool_use":{"web_search_requests":2}}}`)
+	u, ok := anthropicAdapter{}.extractUsage(body)
+	if !ok {
+		t.Fatal("usage with server tools must extract")
+	}
+	if u.InputTokens != 6039 || u.OutputTokens != 931 {
+		t.Errorf("tokens = %+v", u)
+	}
+	if u.ServerTools["web_search"] != 2 {
+		t.Errorf("ServerTools = %v, want web_search:2", u.ServerTools)
+	}
+
+	// A malformed server_tool_use value loses only the tool counts, never
+	// the tokens (the facets decode separately).
+	body = []byte(`{"usage":{"input_tokens":5,"output_tokens":2,` +
+		`"server_tool_use":{"web_search_requests":"three"}}}`)
+	u, ok = anthropicAdapter{}.extractUsage(body)
+	if !ok || u.InputTokens != 5 || u.OutputTokens != 2 {
+		t.Fatalf("tokens must survive a malformed server_tool_use: %+v ok=%v", u, ok)
+	}
+	if u.ServerTools != nil {
+		t.Errorf("malformed server_tool_use must yield nil, got %v", u.ServerTools)
+	}
+}
+
+func TestServerToolCounts_Normalization(t *testing.T) {
+	got := serverToolCounts([]byte(`{"web_search_requests":3,"code_execution_requests":1,"idle":0}`))
+	if got["web_search"] != 3 || got["code_execution"] != 1 {
+		t.Errorf("counts = %v", got)
+	}
+	if _, present := got["idle"]; present {
+		t.Error("zero counts must be dropped")
+	}
+	if serverToolCounts(nil) != nil || serverToolCounts([]byte(`{}`)) != nil {
+		t.Error("empty input must yield nil")
+	}
+}
+
+// Streamed server_tool_use counts are cumulative on message_delta: the last
+// snapshot wins, mirroring the output_tokens treatment.
+func TestAnthropicStream_ServerToolUseCumulative(t *testing.T) {
+	var u Usage
+	a := anthropicAdapter{}
+	a.accumulateStreamUsage([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":40}}}`), &u)
+	a.accumulateStreamUsage([]byte(`{"type":"message_delta","usage":{"output_tokens":10,"server_tool_use":{"web_search_requests":1}}}`), &u)
+	a.accumulateStreamUsage([]byte(`{"type":"message_delta","usage":{"output_tokens":25,"server_tool_use":{"web_search_requests":3}}}`), &u)
+	if u.InputTokens != 40 || u.OutputTokens != 25 {
+		t.Errorf("tokens = %+v", u)
+	}
+	if u.ServerTools["web_search"] != 3 {
+		t.Errorf("ServerTools = %v, want cumulative web_search:3", u.ServerTools)
+	}
+}
+
+// The OpenAI chat-completions format carries no usage-level server-tool
+// counts on the paths the gateway proxies; the adapter extracts none.
+func TestOpenAIExtractUsage_NoServerTools(t *testing.T) {
+	u, ok := openaiAdapter{}.extractUsage([]byte(`{"usage":{"prompt_tokens":9,"completion_tokens":4}}`))
+	if !ok || u.ServerTools != nil {
+		t.Errorf("openai must extract tokens only: %+v ok=%v", u, ok)
+	}
+}
+
 func TestAccumulateStreamUsage_Malformed(t *testing.T) {
 	var u Usage
 	// Malformed data is ignored for every adapter.
