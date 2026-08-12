@@ -92,7 +92,7 @@ After authentication, the gateway asserts that the ConfigMap's `kaalm.io/channel
 
 ### 6. Message delivery
 
-The gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS. The gateway verifies the agent's TLS certificate against the Kaalm CA (`kaalm-ca`, managed by cert-manager, see [TLS on the LLM Gateway Listener](../llm/listener-tls.md)).
+The gateway posts the normalized envelope to `POST /v1/message` on the Agent's ClusterIP Service over HTTPS. The gateway verifies the agent's TLS certificate against the Kaalm CA (`kaalm-ca`, managed by cert-manager, see [TLS on the Cluster Listener](../listener-tls.md)).
 
 ### 6a. Delivery retry
 
@@ -153,13 +153,13 @@ Signing happens on every attempt, initial and each retry, using a fresh timestam
 
 ## TLS and Ingress
 
-The User Gateway listener on `:8080` serves TLS using the same `kaalm-gateway-tls` Certificate as the LLM listener: both listeners share a single cert whose SAN set covers the gateway's in-cluster Service DNS names. No plaintext path exists on the gateway; all webhook, activator, activity, and async-polling traffic is TLS end-to-end.
+The User Gateway listener on `:8080` serves TLS using the same `kaalm-gateway-tls` Certificate as the cluster listener: both listeners share a single cert whose SAN set covers the gateway's in-cluster Service DNS names. No plaintext path exists on the gateway; all webhook, activator, activity, and async-polling traffic is TLS end-to-end.
 
-**Listener separation**: port 8080 serves only externally-reachable channel traffic, namely webhook intake under `/channels/*` and the async polling fallback under `/v1/channels/responses/*`. All internal mTLS-authenticated endpoints (`/v1/activity`, `/v1/channels/health`) live on the LLM Gateway listener on `:8443`. This split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert. See [TLS on the LLM Gateway Listener](../llm/listener-tls.md) for the 8443 endpoint set.
+**Listener separation**: port 8080 serves only externally-reachable channel traffic, namely webhook intake under `/channels/*` and the async polling fallback under `/v1/channels/responses/*`. All internal mTLS-authenticated endpoints (`/v1/activity`, `/v1/channels/health`) live on the cluster listener on `:8443`. This split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert. See [TLS on the Cluster Listener](../listener-tls.md) for the 8443 endpoint set.
 
 **Recommended Ingress configuration**: external webhook traffic arrives at a cluster Ingress that terminates TLS with the cluster's public certificate and then connects to the gateway backend. Two Ingress modes are supported; operators pick one:
 
 - **Backend re-encrypt (HTTPS-to-HTTPS)**: the Ingress controller speaks HTTPS to the gateway on port 8080, presenting the Kaalm CA as the backend CA bundle (or disabling verification if the controller trusts cluster-internal names). This is the recommended default because it works with off-the-shelf Ingress controllers (NGINX, Traefik, HAProxy, most cloud LB Ingress classes).
 - **TLS pass-through**: the Ingress forwards raw TLS bytes to the gateway without terminating, so the external client speaks TLS directly with the gateway. This preserves end-to-end TLS with the gateway's cert but requires the Ingress controller to support pass-through SNI routing and requires clients to trust the gateway's cert chain. Operators using pass-through must set the Helm value `gateway.externalHostnames` to add the public hostname to the gateway cert's SAN list: the default SAN set covers only in-cluster Service DNS, which would fail verification for an external client dialing the public hostname. See [Helm Chart Contents](../../operations/deployment.md#helm-chart-contents).
 
-Internal callers inside the cluster verify the gateway's cert against `kaalm-ca` (projected by `trust-manager` into every namespace) when dialing the gateway directly. Cluster-local webhook producers and async-polling callers dial the User listener on `:8080`; the controller's activity fan-out dials the LLM listener on `:8443` (see [§ Activity Tracking API](activation-and-activity.md#activity-tracking-api)).
+Internal callers inside the cluster verify the gateway's cert against `kaalm-ca` (projected by `trust-manager` into every namespace) when dialing the gateway directly. Cluster-local webhook producers and async-polling callers dial the User listener on `:8080`; the controller's activity fan-out dials the cluster listener on `:8443` (see [§ Activity Tracking API](activation-and-activity.md#activity-tracking-api)).

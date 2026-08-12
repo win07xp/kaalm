@@ -96,9 +96,10 @@ rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
-  # Provider routing, task completion, and the source-IP-to-Pod cross-check.
+  # Provider routing, tool brokering, task completion, and the
+  # source-IP-to-Pod cross-check.
   - apiGroups: ["kaalm.io"]
-    resources: ["agents", "agenttasks", "agentclasses", "modelproviders"]
+    resources: ["agents", "agenttasks", "agentclasses", "modelproviders", "toolproviders"]
     verbs: ["get", "list", "watch"]
   # AgentChannel routing plus the channel-disconnected annotation in the
   # delete handshake.

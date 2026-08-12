@@ -110,6 +110,17 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              rateLimits:
+                description: |-
+                  RateLimits sets the per-namespace request ceiling for brokered calls.
+                  The configured value is a cluster-wide ceiling; each gateway replica
+                  divides it by the live replica count, exactly as ModelProvider rate
+                  limits are enforced. Zero or omitted means no limit.
+                properties:
+                  requestsPerMinute:
+                    format: int32
+                    type: integer
+                type: object
               tools:
                 description: |-
                   Tools is the optional declared catalog, keyed by id. When present it is

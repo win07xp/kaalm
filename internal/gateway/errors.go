@@ -51,6 +51,9 @@ const (
 	errBudgetExhausted     = "budget_exhausted"
 	errBudgetThrottled     = "budget_throttled"
 	errBudgetUnavailable   = "budget_state_unavailable"
+	errToolDenied          = "tool_denied"
+	errToolUnavailable     = "tool_unavailable"
+	errToolTimeout         = "tool_timeout"
 )
 
 // writeError emits the envelope with the given status. retryAfter > 0 adds a

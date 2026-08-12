@@ -158,7 +158,7 @@ The Certificate is named `{agentName}-tls` in the Agent's namespace, owned by th
 
 **Pod creation is gated on `Certificate.status.conditions[type=Ready].status == True`.** If the cert is not yet ready (first-time issuance typically takes a few seconds), the reconciler requeues with backoff and **does not create the Pod**: otherwise the Pod would hang on its projected Secret mount until cert-manager caught up.
 
-Subsequent rotation is transparent: cert-manager rotates per `renewBefore`, kubelet propagates the new Secret contents into the Pod's projected volume, and the agent reloads via the file-watch pattern (see [Starter Templates](../runtime/starter-templates.md)). CA rotation requires no reconciler participation, and a CA re-key is a manual dual-trust runbook; see [In-cluster TLS](../security/tls.md#in-cluster-tls) for the full trust chain, and [TLS on the LLM Gateway Listener](../gateways/llm/listener-tls.md).
+Subsequent rotation is transparent: cert-manager rotates per `renewBefore`, kubelet propagates the new Secret contents into the Pod's projected volume, and the agent reloads via the file-watch pattern (see [Starter Templates](../runtime/starter-templates.md)). CA rotation requires no reconciler participation, and a CA re-key is a manual dual-trust runbook; see [In-cluster TLS](../security/tls.md#in-cluster-tls) for the full trust chain, and [TLS on the Cluster Listener](../gateways/listener-tls.md).
 
 ### Pre-Pod-creation checks
 

@@ -9,7 +9,7 @@ The gateway supports two authentication modes that cover the two Helm tiers:
 1. **mTLS client certificate**: the primary, zero-config path for Kaalm-managed Agent/AgentTask Pods.
 2. **`TokenReview`-verified ServiceAccount bearer token**: the path for gateway-only-tier workloads. These are existing Deployments that were not created by the Kaalm controller and therefore have no cert-manager-issued client cert.
 
-A request that presents neither a client certificate nor a `Authorization: Bearer <token>` header is rejected with `401 Unauthorized`. A request presenting both is processed by the mTLS path; the bearer token is ignored. At the handshake layer the listener runs `ClientAuth: tls.VerifyClientCertIfGiven`, and per-path HTTP middleware enforces which mode each path accepts. See [Per-path client-auth enforcement](listener-tls.md#per-path-client-auth-enforcement).
+A request that presents neither a client certificate nor a `Authorization: Bearer <token>` header is rejected with `401 Unauthorized`. A request presenting both is processed by the mTLS path; the bearer token is ignored. At the handshake layer the listener runs `ClientAuth: tls.VerifyClientCertIfGiven`, and per-path HTTP middleware enforces which mode each path accepts. See [Per-path client-auth enforcement](../listener-tls.md#per-path-client-auth-enforcement).
 
 A [source-IP cross-check](#source-ip-cross-check-both-modes) runs against both modes: the Pod at the request's source IP must be in the namespace that authentication identified. This is defense in depth; it is not the identity mechanism.
 
@@ -21,7 +21,7 @@ Both modes ride on the gateway's TLS listener, so every caller must also verify 
 
 ## Mode 1: mTLS Client Certificate
 
-The LLM Gateway listener requires a client certificate on connections from Pods created by the AgentReconciler or AgentTaskReconciler. Agents and tasks present the cert at `$KAALM_TLS_CERT` (`/var/run/kaalm/tls.crt`) with key at `$KAALM_TLS_KEY` (`/var/run/kaalm/tls.key`). The gateway verifies it against the Kaalm CA, using the trust bundle from the trust-manager-projected `kaalm-ca` ConfigMap (see [TLS on the LLM Gateway Listener](listener-tls.md) for where the CA material lives), and extracts identity from the certificate's SAN. A certificate that fails CA verification is rejected at the TLS handshake itself; handshake failures produce no HTTP response and never appear in the [LLM Gateway error table](../api/errors.md#llm-gateway-error-responses). Two SAN shapes are recognized:
+The cluster listener requires a client certificate on connections from Pods created by the AgentReconciler or AgentTaskReconciler. Agents and tasks present the cert at `$KAALM_TLS_CERT` (`/var/run/kaalm/tls.crt`) with key at `$KAALM_TLS_KEY` (`/var/run/kaalm/tls.key`). The gateway verifies it against the Kaalm CA, using the trust bundle from the trust-manager-projected `kaalm-ca` ConfigMap (see [TLS on the Cluster Listener](../listener-tls.md) for where the CA material lives), and extracts identity from the certificate's SAN. A certificate that fails CA verification is rejected at the TLS handshake itself; handshake failures produce no HTTP response and never appear in the [LLM Gateway error table](../api/errors.md#llm-gateway-error-responses). Two SAN shapes are recognized:
 
 - `{name}.{namespace}.svc.cluster.local`: issued by the AgentReconciler and matches the Agent's Service DNS. Exactly **5 labels** when split on `.`.
 - `{name}.{namespace}.task.kaalm.io`: issued by the AgentTaskReconciler. AgentTasks have no Service, so a non-Service shape is used to make the workload type explicit rather than implying a Service the task does not have. Exactly **5 labels** when split on `.`.
@@ -90,10 +90,11 @@ Not every path accepts both modes:
 | Path | Accepted identity |
 |---|---|
 | LLM proxy paths (`/v1/messages`, `/v1/chat/completions`, `/v1/completions`, provider-specific paths) | mTLS (either SAN shape) or SA bearer token |
+| Tool plane (`/v1/mcp/*`, since v0.4.0) | mTLS (either SAN shape) or SA bearer token; the same dual-mode profile, per-plane authorization at the [broker](../tool-plane.md#the-broker) |
 | `POST /v1/task/complete` | mTLS only; AgentTask at the handler, Agent callers rejected with 403 |
 | `POST /v1/agent/heartbeat` | mTLS only; Agent at the handler, AgentTask callers rejected with 403 |
 | `GET /v1/activity`, `GET /v1/channels/health` | mTLS with the controller SAN; Agent/AgentTask certs rejected with 403 |
 
-The agent-only endpoints have no SA-bearer alternative. The full mapping, and the middleware that implements it, is specified in [Per-path client-auth enforcement](listener-tls.md#per-path-client-auth-enforcement).
+The agent-only endpoints have no SA-bearer alternative. The full mapping, and the middleware that implements it, is specified in [Per-path client-auth enforcement](../listener-tls.md#per-path-client-auth-enforcement).
 
 See [Agent to Gateway Authentication](../../security/rbac.md#agent-to-gateway-authentication) for the full security analysis of both modes, including threat-model coverage.

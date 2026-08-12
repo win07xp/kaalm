@@ -114,3 +114,33 @@ func TestNewRateLimiter_DefaultReplicas(t *testing.T) {
 		t.Errorf("explicit replicas = %d", rl2.Replicas())
 	}
 }
+
+func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
+	rl := NewRateLimiter(nil)
+	unlimited := &kaalmv1alpha1.ToolProvider{}
+	unlimited.Name = "open"
+	for i := 0; i < 5; i++ {
+		if !rl.AllowTool(unlimited, "team-a") {
+			t.Fatal("a ToolProvider with no rate limit must always allow")
+		}
+	}
+
+	tp := &kaalmv1alpha1.ToolProvider{}
+	tp.Name = "search"
+	tp.Spec.RateLimits.RequestsPerMinute = 2
+	allowed := 0
+	for i := 0; i < 5; i++ {
+		if rl.AllowTool(tp, "team-a") {
+			allowed++
+		}
+	}
+	if allowed != 2 {
+		t.Errorf("allowed %d calls, want the 2-per-minute ceiling", allowed)
+	}
+	// A different namespace holds its own bucket. (Cross-plane collisions
+	// are unreachable by construction: the "mcp:" prefix contains a
+	// character no namespace name can, so no LLM key can equal a tool key.)
+	if !rl.AllowTool(tp, "team-b") {
+		t.Error("second namespace must carry its own bucket")
+	}
+}

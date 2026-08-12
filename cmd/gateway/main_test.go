@@ -1,7 +1,7 @@
-// Command gateway is the Kaalm Gateway: the LLM listener on :8443 with
-// per-path client authentication, the provider proxy, and a dedicated health
-// port. The User listener (:8080) and the controller-facing internal handlers
-// land in later phases. See docs/src/gateways/.
+// Command gateway is the Kaalm Gateway: the cluster listener on :8443 (the
+// LLM proxy, the MCP tool broker, and the internal endpoints, with per-path
+// client authentication), the Ingress-fronted user listener on :8080, and a
+// dedicated health port. See docs/src/gateways/.
 package main
 
 import (

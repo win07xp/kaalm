@@ -140,7 +140,7 @@ Operators who run either controller with a non-default namespace must set the va
 
 ### The gateway serving cert
 
-`kaalm-gateway-tls` serves both gateway listeners: the LLM listener on port 8443 and the User listener on port 8080, from the same cert. **Despite the conventional HTTP association of port 8080, the User listener is TLS-only.** An Ingress fronting it must use HTTPS as its backend protocol. External webhook traffic arrives via Ingress configured for backend re-encrypt (or TLS pass-through); there is no plaintext listener on the gateway. See [TLS and Ingress](../gateways/user/overview.md#tls-and-ingress).
+`kaalm-gateway-tls` serves both gateway listeners: the cluster listener on port 8443 and the User listener on port 8080, from the same cert. **Despite the conventional HTTP association of port 8080, the User listener is TLS-only.** An Ingress fronting it must use HTTPS as its backend protocol. External webhook traffic arrives via Ingress configured for backend re-encrypt (or TLS pass-through); there is no plaintext listener on the gateway. See [TLS and Ingress](../gateways/user/overview.md#tls-and-ingress).
 
 ### CA projection into user namespaces
 

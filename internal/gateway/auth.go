@@ -83,9 +83,13 @@ func (a *Authenticator) crossCheck(r *http.Request, namespace string) bool {
 	return pod.Namespace == namespace
 }
 
-// LLMPaths authenticates the dual-mode LLM proxy paths: Mode 1 when a client
-// cert is present (any bearer header is ignored; mTLS wins), Mode 2 when not.
-func (a *Authenticator) LLMPaths(next http.HandlerFunc) http.HandlerFunc {
+// DualModePaths authenticates the caller-identity profile shared by the LLM
+// proxy and the MCP broker: Mode 1 when a client cert is present (any bearer
+// header is ignored; mTLS wins), Mode 2 (TokenReview bearer, the gateway-only
+// tier) when not. The profile establishes only WHO is calling; each plane's
+// authorization (the provider chain, the tool grant chain) lives with its
+// handler, and nothing plane-specific may be added here.
+func (a *Authenticator) DualModePaths(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if cert := peerCert(r); cert != nil {
 			id, err := ParseWorkloadSAN(cert)

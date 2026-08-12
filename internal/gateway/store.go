@@ -34,6 +34,11 @@ type Store interface {
 	ProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ModelProvider, bool)
 	// Credential resolves the provider's credential Secret key value.
 	Credential(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) (string, error)
+	// ToolProviderByName looks up a ToolProvider for the MCP broker.
+	ToolProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ToolProvider, bool)
+	// ToolCredential resolves the tool provider's credential Secret key
+	// value. A nil credentialsRef (an unauthenticated server) yields "".
+	ToolCredential(ctx context.Context, provider *kaalmv1alpha1.ToolProvider) (string, error)
 	// PodByIP resolves a source IP to a Pod for the cross-check and the
 	// Mode 2 ownership precheck. ok is false when no Pod matches.
 	PodByIP(ctx context.Context, ip string) (*corev1.Pod, bool)

@@ -60,7 +60,7 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	@rm -f cover.out
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -count=1 $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # Minimum acceptable project-wide statement coverage (the union across all
 # non-e2e packages, so cross-package tests get credit). Overridable: make
@@ -74,12 +74,15 @@ COVERAGE_THRESHOLD ?= 85
 # false ~75% with identical tests). The agentruntime module has its own suite
 # (make runtime-test).
 cover-check: manifests generate fmt vet setup-envtest ## Run tests with union coverage and fail below COVERAGE_THRESHOLD%.
-	@# A pre-existing cover.out can accumulate stale profile sections across
-	@# runs (ranges from older source versions then read as uncovered,
-	@# deflating the union by 15+ points). Always start clean.
+	@# Two stale-profile hazards deflate the union by many points, both from
+	@# ranges of OLDER file revisions reading as uncovered: a pre-existing
+	@# cover.out accumulates sections across runs (hence the rm), and cached
+	@# test results from unchanged packages replay coverage blocks carrying
+	@# old line geometry for -coverpkg dependencies that DID change (hence
+	@# -count=1, which forces every package to re-run and re-instrument).
 	@rm -f cover.out
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-		GOWORK=off go test $$(GOWORK=off go list ./... | grep -v /e2e) \
+		GOWORK=off go test -count=1 $$(GOWORK=off go list ./... | grep -v /e2e) \
 		-coverpkg=$$(GOWORK=off go list ./... | grep -v /e2e | paste -sd,) -coverprofile cover.out
 	@total=$$(go tool cover -func=cover.out | awk '/^total:/{print $$3}' | tr -d '%'); \
 	awk -v t="$$total" -v thr="$(COVERAGE_THRESHOLD)" 'BEGIN{ \

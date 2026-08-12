@@ -76,6 +76,35 @@ func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*kaalmv1al
 	return &p, true
 }
 
+// ToolProviderByName looks up a ToolProvider in the cache.
+func (k *KubeStore) ToolProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ToolProvider, bool) {
+	var tp kaalmv1alpha1.ToolProvider
+	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &tp); err != nil {
+		return nil, false
+	}
+	return &tp, true
+}
+
+// ToolCredential reads the tool provider's credential Secret key from the
+// operator namespace, exactly as Credential does for ModelProvider. A nil
+// credentialsRef is an unauthenticated server: no credential, no error.
+func (k *KubeStore) ToolCredential(ctx context.Context, provider *kaalmv1alpha1.ToolProvider) (string, error) {
+	ref := provider.Spec.CredentialsRef
+	if ref == nil {
+		return "", nil
+	}
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: k.OperatorNamespace, Name: ref.Name}
+	if err := k.Reader.Get(ctx, key, &sec); err != nil {
+		return "", err
+	}
+	val, ok := sec.Data[ref.Key]
+	if !ok || len(val) == 0 {
+		return "", fmt.Errorf("key %q missing in Secret %s", ref.Key, key)
+	}
+	return string(val), nil
+}
+
 // Credential reads the provider's credential Secret key from the operator
 // namespace via the cache (which doubles as the rotation watch: an updated
 // Secret is re-read on the next request).

@@ -36,7 +36,8 @@ type Config struct {
 	// OperatorNamespace hosts the gateway (kaalm-system); the controller
 	// SAN check and the gateway endpoint derivation use it.
 	OperatorNamespace string
-	// ListenAddr is the LLM listener (default :8443).
+	// ListenAddr is the cluster listener (default :8443): the LLM proxy, the
+	// MCP tool broker, and the internal endpoints.
 	ListenAddr string
 	// HealthAddr serves /healthz and /readyz over TLS with no client auth on
 	// a dedicated port, outside the listener auth profiles.
@@ -66,6 +67,15 @@ type Config struct {
 	// UpstreamCAs is a prebuilt upstream pool, used when UpstreamCAFiles is
 	// empty (tests inject one directly).
 	UpstreamCAs *x509.CertPool
+	// MCPMaxBodyBytes caps brokered MCP request and response bodies; zero
+	// falls back to MaxBodyBytes.
+	MCPMaxBodyBytes int64
+	// MCPUpstreamTimeout bounds each brokered tool call; zero falls back to
+	// UpstreamTimeout.
+	MCPUpstreamTimeout time.Duration
+	// SessionKey is the gateway-shared HMAC key binding MCP session ids to
+	// caller identities (docs/src/gateways/tool-plane.md, The Broker).
+	SessionKey []byte
 	// DisableSourceIPCheck skips the source-IP cross-check (dev/test only).
 	DisableSourceIPCheck bool
 
@@ -127,6 +137,9 @@ type Server struct {
 	Async AsyncRecords
 	// Completions patches per-task completion mailboxes.
 	Completions CompletionWriter
+
+	mcpClientOnce sync.Once
+	mcpClient     *http.Client
 
 	upstreamOnce   sync.Once
 	upstreamClient *http.Client
@@ -239,9 +252,12 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// LLM proxy paths: dual-mode (mTLS SAN or bearer token).
-	mux.HandleFunc("/v1/messages", s.Auth.LLMPaths(s.handleLLMProxy))
-	mux.HandleFunc("/v1/chat/completions", s.Auth.LLMPaths(s.handleLLMProxy))
-	mux.HandleFunc("/v1/completions", s.Auth.LLMPaths(s.handleLLMProxy))
+	mux.HandleFunc("/v1/messages", s.Auth.DualModePaths(s.handleLLMProxy))
+	mux.HandleFunc("/v1/chat/completions", s.Auth.DualModePaths(s.handleLLMProxy))
+	mux.HandleFunc("/v1/completions", s.Auth.DualModePaths(s.handleLLMProxy))
+	// The tool plane's broker surface, on the shared dual-mode
+	// caller-identity profile (docs/src/gateways/tool-plane.md, The Broker).
+	mux.HandleFunc("/v1/mcp/", s.Auth.DualModePaths(s.handleMCPBroker))
 
 	// Agent-report paths: mTLS-only, kind split at the handler. The
 	// task-complete body lands with the user-gateway phase.
@@ -252,7 +268,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(s.handleActivity))
 	mux.HandleFunc("/v1/channels/health", s.Auth.ControllerPaths(s.handleChannelsHealth))
 
-	// Anything else on the LLM listener is an unrecognized path.
+	// Anything else on the cluster listener is an unrecognized path.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "unrecognized path "+r.URL.Path)
 	})
@@ -297,7 +313,7 @@ func (s *Server) TLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
-// Run serves the LLM listener and the health port until ctx is cancelled.
+// Run serves the cluster listener and the health port until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	tlsCfg, err := s.TLSConfig()
 	if err != nil {
@@ -342,6 +358,28 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+// mcpHTTPClient shares the provider-facing transport (same trust pool and
+// rotation behavior) but never follows redirects, and leaves timing to the
+// per-call request context.
+func (s *Server) mcpHTTPClient() *http.Client {
+	s.mcpClientOnce.Do(func() {
+		s.mcpClient = &http.Client{
+			Transport: s.upstream().Transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errNoRedirects
+			},
+		}
+	})
+	return s.mcpClient
+}
+
+func (s *Server) mcpUpstreamTimeout() time.Duration {
+	if s.Config.MCPUpstreamTimeout > 0 {
+		return s.Config.MCPUpstreamTimeout
+	}
+	return s.Config.UpstreamTimeout
 }
 
 // upstream returns the shared provider-facing HTTP client.

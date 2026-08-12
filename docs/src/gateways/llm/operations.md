@@ -14,7 +14,7 @@ Readiness is a gate, not a formality. A gateway replica that is listening but ha
 
 The probe is `GET /readyz` on the internal health port (`:8081` by default, Helm value `gateway.healthPort`). That port serves TLS with no client auth and exposes only `/healthz` and `/readyz`. It returns `200` only when **all** of the following are true:
 
-1. The **LLM listener** on `:8443` is bound and accepting TLS connections. The probe performs a local dial to confirm.
+1. The **cluster listener** on `:8443` is bound and accepting TLS connections. The probe performs a local dial to confirm.
 2. The **User listener** on `:8080` is bound and accepting TLS connections (both listeners use the `kaalm-gateway-tls` certificate). The probe performs a local TLS dial to confirm.
 3. **All informer caches** the request path depends on have completed their initial sync (`cache.WaitForCacheSync` returned true for each).
 4. The **gateway serving certificate** (`kaalm-gateway-tls`) has been loaded from disk. On startup, the gateway reads the mounted Secret; if the Secret does not yet exist (cert-manager has not issued it), readiness fails. This matters on initial chart install, where the Pod may start before cert-manager completes issuance.

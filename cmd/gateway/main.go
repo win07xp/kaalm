@@ -1,11 +1,12 @@
-// Command gateway is the Kaalm Gateway: the LLM listener on :8443 with
-// per-path client authentication, the provider proxy, and a dedicated health
-// port. The User listener (:8080) and the controller-facing internal handlers
-// land in later phases. See docs/src/gateways/.
+// Command gateway is the Kaalm Gateway: the cluster listener on :8443 (the
+// LLM proxy, the MCP tool broker, and the internal endpoints, with per-path
+// client authentication), the Ingress-fronted user listener on :8080, and a
+// dedicated health port. See docs/src/gateways/.
 package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"flag"
 	"fmt"
@@ -64,7 +65,7 @@ func main() {
 		deliveryBackoff      string
 		callbackBackoff      string
 	)
-	flag.StringVar(&listenAddr, "listen-addr", ":8443", "LLM listener address")
+	flag.StringVar(&listenAddr, "listen-addr", ":8443", "cluster listener (:8443) address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
 	flag.StringVar(&certFile, "tls-cert", "/var/run/kaalm/tls.crt", "serving certificate file")
 	flag.StringVar(&keyFile, "tls-key", "/var/run/kaalm/tls.key", "serving key file")
@@ -165,6 +166,21 @@ func main() {
 		validateCABundle(file, "callback", logger)
 	}
 
+	// The MCP session key binds session ids to caller identities across
+	// replicas; the chart provides it. A missing key gets a per-process
+	// random fallback: sessions then survive only on this replica, which is
+	// fine for local runs and loudly wrong for real ones.
+	sessionKey := []byte(os.Getenv("KAALM_MCP_SESSION_KEY"))
+	if len(sessionKey) == 0 {
+		sessionKey = make([]byte, 32)
+		if _, err := rand.Read(sessionKey); err != nil {
+			logger.Error("generating fallback MCP session key", "error", err)
+			os.Exit(1)
+		}
+		logger.Warn("KAALM_MCP_SESSION_KEY is not set; using a per-process key, " +
+			"MCP sessions will not survive replica hops")
+	}
+
 	store := &gateway.KubeStore{Reader: cl.GetClient(), OperatorNamespace: operatorNamespace}
 	tokens := gateway.NewTokenAuthenticator(&gateway.KubeTokenReviewer{Client: clientset})
 	async := &gateway.KubeAsyncRecords{Client: clientset, OperatorNamespace: operatorNamespace}
@@ -177,6 +193,7 @@ func main() {
 		CAFile:                   caFile,
 		MaxBodyBytes:             maxBodyBytes,
 		UpstreamTimeout:          upstreamTimeout,
+		SessionKey:               sessionKey,
 		UpstreamCAFiles:          splitPaths(upstreamCAFile),
 		CallbackCAFiles:          splitPaths(callbackCAFile),
 		CallbackPolicy:           callbackpolicy.NewFromCSV(callbackAllowlist),

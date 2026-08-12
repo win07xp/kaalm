@@ -2,7 +2,7 @@
 
 "Internal" here means controller use only: these two endpoints are mTLS-only, they additionally require the controller's SAN (Agent and AgentTask client certs are rejected with `403`), and their authentication model is defined in [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
 
-Both endpoints share a deliberate placement decision: they are served on the LLM Gateway listener (port 8443), not the User listener (port 8080). Port 8080 only serves inbound webhook traffic (`/channels/*`) and the async polling fallback (`/v1/channels/responses/*`); mTLS-authenticated internal endpoints live on 8443. This listener split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert.
+Both endpoints share a deliberate placement decision: they are served on the cluster listener (port 8443), not the User listener (port 8080). Port 8080 only serves inbound webhook traffic (`/channels/*`) and the async polling fallback (`/v1/channels/responses/*`); mTLS-authenticated internal endpoints live on 8443. This listener split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert.
 
 ## GET /v1/activity
 

@@ -19,7 +19,7 @@ On receiving SIGTERM, the agent should finish in-flight work and exit within the
 
 ## 3. Gateway communication
 
-The controller injects `$KAALM_GATEWAY_ENDPOINT`: an HTTPS URL pointing to the gateway's LLM listener (port 8443). This is the base URL for all agent to gateway calls:
+The controller injects `$KAALM_GATEWAY_ENDPOINT`: an HTTPS URL pointing to the gateway's cluster listener (port 8443). This is the base URL for all agent to gateway calls:
 
 - LLM requests.
 - Heartbeats: [`POST /v1/agent/heartbeat`](../gateways/api/agent-endpoints.md#post-v1agentheartbeat), Agents only, see item 5.
