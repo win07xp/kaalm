@@ -105,8 +105,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Download the pinned release binary directly instead of piping the
+      # install script from k3d's main branch: retries ride out transient
+      # CDN errors (a raw.githubusercontent.com 503 failed this step once),
+      # and CI never executes unpinned script content.
       - name: Install k3d
-        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.7.4 bash
+        run: |
+          sudo curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /usr/local/bin/k3d \
+            https://github.com/k3d-io/k3d/releases/download/v5.7.4/k3d-linux-amd64
+          sudo chmod +x /usr/local/bin/k3d
+          k3d version
 
       - name: Install Helm
         uses: azure/setup-helm@v5
