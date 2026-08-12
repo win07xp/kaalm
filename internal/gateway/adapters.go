@@ -23,10 +23,20 @@ import (
 	"strings"
 )
 
-// Usage is the token spend extracted from a provider response.
+// Usage is the token spend extracted from a provider response, plus any
+// provider-side tool calls its usage surface reported.
 type Usage struct {
 	InputTokens  int64
 	OutputTokens int64
+	// ServerTools counts provider-side tool calls by normalized tool id
+	// (for example "web_search"). Nil when the response reported none.
+	ServerTools map[string]int64
+}
+
+// isZero reports whether nothing was extracted. Usage carries a map, so
+// struct equality is unavailable; "did we see usage" checks go through here.
+func (u Usage) isZero() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0 && len(u.ServerTools) == 0
 }
 
 // providerAdapter carries the per-provider knowledge: request-format paths,
@@ -104,21 +114,50 @@ func (anthropicAdapter) injectCredential(h http.Header, credential string) {
 func (anthropicAdapter) extractUsage(body []byte) (Usage, bool) {
 	var resp struct {
 		Usage struct {
-			InputTokens  int64 `json:"input_tokens"`
-			OutputTokens int64 `json:"output_tokens"`
+			InputTokens   int64           `json:"input_tokens"`
+			OutputTokens  int64           `json:"output_tokens"`
+			ServerToolUse json.RawMessage `json:"server_tool_use"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return Usage{}, false
 	}
-	if resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0 {
+	u := Usage{
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
+		ServerTools:  serverToolCounts(resp.Usage.ServerToolUse),
+	}
+	if u.isZero() {
 		return Usage{}, false
 	}
-	return Usage{InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens}, true
+	return u, true
+}
+
+// serverToolCounts decodes an Anthropic usage.server_tool_use object
+// ({"web_search_requests": 1}) into normalized per-tool counts
+// ("web_search" -> 1). Decoded separately from the token fields so an
+// unexpected value shape loses only the tool counts, never the tokens.
+func serverToolCounts(raw json.RawMessage) map[string]int64 {
+	var counts map[string]int64
+	if len(raw) == 0 || json.Unmarshal(raw, &counts) != nil {
+		return nil
+	}
+	var tools map[string]int64
+	for key, n := range counts {
+		if n <= 0 {
+			continue
+		}
+		if tools == nil {
+			tools = make(map[string]int64, len(counts))
+		}
+		tools[strings.TrimSuffix(key, "_requests")] = n
+	}
+	return tools
 }
 
 // accumulateStreamUsage: input_tokens arrive on message_start, cumulative
-// output_tokens on the final message_delta. message_stop carries no usage.
+// output_tokens (and cumulative server_tool_use counts) on message_delta.
+// message_stop carries no usage.
 func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	var evt struct {
 		Type    string `json:"type"`
@@ -128,7 +167,8 @@ func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 			} `json:"usage"`
 		} `json:"message"`
 		Usage struct {
-			OutputTokens int64 `json:"output_tokens"`
+			OutputTokens  int64           `json:"output_tokens"`
+			ServerToolUse json.RawMessage `json:"server_tool_use"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &evt); err != nil {
@@ -140,6 +180,10 @@ func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	case "message_delta":
 		if evt.Usage.OutputTokens > 0 {
 			u.OutputTokens = evt.Usage.OutputTokens
+		}
+		// Counts are cumulative, so the latest snapshot replaces the last.
+		if tools := serverToolCounts(evt.Usage.ServerToolUse); tools != nil {
+			u.ServerTools = tools
 		}
 	}
 }

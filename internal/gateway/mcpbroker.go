@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	"github.com/win07xp/kaalm/internal/mcp"
@@ -161,11 +162,63 @@ type mcpRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
-// mcpResult is the single seam every terminal broker outcome passes through;
-// the audit record and metrics (the next tool plane slice) hang here.
-func (s *Server) mcpResult(c *caller, provider, method, tool string, status int, errType string) {
-	slog.Debug("mcp broker result", "namespace", c.Namespace, "provider", provider,
-		"method", method, "tool", tool, "status", status, "error_type", errType)
+// mcpResult is the single funnel every terminal broker outcome passes
+// through. It emits the per-call audit record (one info-level structured log
+// line, never bodies) and the broker metrics. tp is nil when the call died
+// before the ToolProvider resolved; forwarded marks calls that reached the
+// upstream and gates the duration histogram, which observes real upstream
+// latency rather than microsecond-scale local denials. See
+// docs/src/gateways/tool-plane.md (Audit and Metering).
+func (s *Server) mcpResult(
+	c *caller, tp *kaalmv1alpha1.ToolProvider, provider, method, tool string,
+	status int, errType, detail string, start time.Time, reqBytes, respBytes int64, forwarded bool,
+) {
+	seconds := time.Since(start).Seconds()
+	attrs := []any{"namespace", c.Namespace, "provider", provider,
+		"method", method, "tool", tool, "status", status, "error_type", errType,
+		"duration_seconds", seconds, "request_bytes", reqBytes, "response_bytes", respBytes}
+	if c.Workload != nil {
+		attrs = append(attrs, "workload", c.Workload.Name, "workload_kind", string(c.Workload.Kind))
+	}
+	// The denial reason (for example which gate refused, or that a session id
+	// belongs to another caller) so same-typed denials stay distinguishable.
+	if detail != "" {
+		attrs = append(attrs, "detail", detail)
+	}
+	slog.Info("mcp call", attrs...)
+
+	statusLabel := errType
+	if statusLabel == "" {
+		if status >= 200 && status < 300 {
+			statusLabel = "ok"
+		} else {
+			statusLabel = "upstream_error"
+		}
+	}
+	toolLabel := boundedToolLabel(tp, tool)
+	s.Metrics.ToolCall(provider, c.Namespace, toolLabel, statusLabel)
+	if forwarded {
+		s.Metrics.ToolCallDuration(provider, toolLabel, seconds)
+	}
+}
+
+// boundedToolLabel bounds the metric's tool label by the DECLARED catalog:
+// with spec.tools present, cataloged ids pass verbatim and anything else
+// collapses to "uncataloged"; without one, every tool collapses, because
+// wire-supplied names are unbounded and a compromised server could inflate
+// the label set at will. The audit record carries the real name regardless.
+func boundedToolLabel(tp *kaalmv1alpha1.ToolProvider, tool string) string {
+	if tool == "" {
+		return ""
+	}
+	if tp != nil {
+		for _, t := range tp.Spec.Tools {
+			if t.ID == tool {
+				return tool
+			}
+		}
+	}
+	return "uncataloged"
 }
 
 // handleMCPBroker serves POST /v1/mcp/{toolProvider}.
@@ -173,8 +226,16 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r.Context())
 	providerName := strings.TrimPrefix(r.URL.Path, "/v1/mcp/")
 
+	// Outcome state the deny closure funnels into mcpResult: tp stays nil
+	// until resolved, reqBytes zero until the body is read, and forwarded
+	// flips once the call reaches the upstream.
+	start := time.Now()
+	var tp *kaalmv1alpha1.ToolProvider
+	var reqBytes int64
+	forwarded := false
+
 	deny := func(status int, errType, message string, retryAfter int, method, tool string) {
-		s.mcpResult(c, providerName, method, tool, status, errType)
+		s.mcpResult(c, tp, providerName, method, tool, status, errType, message, start, reqBytes, 0, forwarded)
 		writeError(w, status, errorBody{Type: errType, Message: message,
 			Provider: providerName, Retryable: retryAfter > 0 || status == http.StatusServiceUnavailable}, retryAfter)
 	}
@@ -187,12 +248,13 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusBadRequest, errInvalidRequest, "path must be /v1/mcp/{toolProvider}", 0, "", "")
 		return
 	}
-	tp, ok := s.Store.ToolProviderByName(r.Context(), providerName)
+	resolved, ok := s.Store.ToolProviderByName(r.Context(), providerName)
 	if !ok {
 		deny(http.StatusBadRequest, errInvalidRequest,
 			fmt.Sprintf("unknown tool provider %q", providerName), 0, "", "")
 		return
 	}
+	tp = resolved
 
 	filter, denial := s.authorizeToolRoute(r.Context(), c, tp)
 	if denial != nil {
@@ -217,6 +279,8 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusBadRequest, errInvalidRequest, "reading request body: "+err.Error(), 0, "", "")
 		return
 	}
+	reqBytes = int64(len(body))
+	bodyLog("mcp request", body)
 	if trimmed := bytes.TrimLeft(body, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
 		deny(http.StatusBadRequest, errInvalidRequest, "JSON-RPC batch requests are not supported", 0, "", "")
 		return
@@ -279,6 +343,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	copyMCPHeaders(upReq, r, upstreamSession, credential)
 
+	forwarded = true
 	resp, err := s.mcpHTTPClient().Do(upReq)
 	if err != nil {
 		switch {
@@ -314,32 +379,35 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Mcp-Session-Id", wrapSessionID(s.Config.SessionKey, sid, identity))
 	}
 
-	if msg.Method == "tools/list" && resp.StatusCode < 300 {
-		s.relayFilteredToolsList(w, c, resp, msg, filter, providerName)
-		return
+	var respBytes int64
+	var relayStatus int
+	var relayErrType string
+	switch {
+	case msg.Method == "tools/list" && resp.StatusCode < 300:
+		respBytes, relayStatus, relayErrType = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
+	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
+		respBytes = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes())
+		relayStatus = resp.StatusCode
+	default:
+		respBytes, relayStatus, relayErrType = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes())
 	}
-
-	s.mcpResult(c, providerName, msg.Method, toolName, resp.StatusCode, "")
-	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		relayMCPStream(w, r, resp, s.mcpMaxBodyBytes())
-		return
-	}
-	relayMCPBuffered(w, resp, s.mcpMaxBodyBytes())
+	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, "",
+		start, reqBytes, respBytes, forwarded)
 }
 
 // relayFilteredToolsList buffers a tools/list response (either encoding),
 // filters the tool set to the caller's grant, and replies as plain JSON: the
-// model never sees a tool it cannot call.
+// model never sees a tool it cannot call. It returns the outcome triple the
+// caller funnels into mcpResult.
 func (s *Server) relayFilteredToolsList(
-	w http.ResponseWriter, c *caller, resp *http.Response, msg mcpRequest, filter *toolFilter, providerName string,
-) {
+	w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter, providerName string,
+) (respBytes int64, status int, errType string) {
 	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"),
 		io.LimitReader(resp.Body, s.mcpMaxBodyBytes()), msg.ID)
 	if err != nil {
-		s.mcpResult(c, providerName, msg.Method, "", http.StatusBadGateway, errToolUnavailable)
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
 			Message: "tool provider returned an unparseable tools/list response", Provider: providerName, Retryable: true}, 0)
-		return
+		return 0, http.StatusServiceUnavailable, errToolUnavailable
 	}
 	if parsed.Error == nil && parsed.Result != nil {
 		var result map[string]json.RawMessage
@@ -361,53 +429,70 @@ func (s *Server) relayFilteredToolsList(
 			parsed.Result = newResult
 		}
 	}
-	s.mcpResult(c, providerName, msg.Method, "", http.StatusOK, "")
+	encoded, err := json.Marshal(parsed)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errorBody{Type: errInternalUnavailable,
+			Message: "re-encoding tools/list response", Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusInternalServerError, errInternalUnavailable
+	}
+	bodyLog("mcp response", encoded)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(parsed)
+	n, _ := w.Write(encoded)
+	return int64(n), http.StatusOK, ""
 }
 
-// relayMCPBuffered copies a JSON response through, capped.
-func relayMCPBuffered(w http.ResponseWriter, resp *http.Response, maxBytes int64) {
+// relayMCPBuffered copies a JSON response through, capped. It returns the
+// outcome triple the caller funnels into mcpResult.
+func relayMCPBuffered(w http.ResponseWriter, resp *http.Response, maxBytes int64) (respBytes int64, status int, errType string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
 			Message: "reading tool provider response: " + err.Error(), Retryable: true}, 0)
-		return
+		return 0, http.StatusServiceUnavailable, errToolUnavailable
 	}
 	if int64(len(body)) > maxBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
 			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)}, 0)
-		return
+		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
 	}
+	bodyLog("mcp response", body)
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+	n, _ := w.Write(body)
+	return int64(n), resp.StatusCode, ""
 }
 
 // relayMCPStream forwards SSE events as they arrive, flushing per line,
-// bounded by the response cap and the caller's disconnect.
-func relayMCPStream(w http.ResponseWriter, r *http.Request, resp *http.Response, maxBytes int64) {
+// bounded by the response cap and the caller's disconnect. It returns the
+// bytes relayed downstream.
+func relayMCPStream(w http.ResponseWriter, r *http.Request, resp *http.Response, maxBytes int64) int64 {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
 
+	var written int64
 	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxBytes))
 	scanner.Buffer(make([]byte, 0, 64*1024), int(maxBytes))
 	for scanner.Scan() {
 		select {
 		case <-r.Context().Done():
-			return
+			return written
 		default:
 		}
-		if _, err := fmt.Fprintf(w, "%s\n", scanner.Text()); err != nil {
-			return
+		line := scanner.Bytes()
+		bodyLog("mcp stream", line)
+		n, err := w.Write(append(line, '\n'))
+		written += int64(n)
+		if err != nil {
+			return written
 		}
 		if flusher != nil {
 			flusher.Flush()
 		}
 	}
+	return written
 }
 
 // copyMCPHeaders applies the forwarded-header contract: hop-by-hop and

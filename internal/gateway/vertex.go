@@ -53,26 +53,62 @@ func (vertexAdapter) extractUsage(body []byte) (Usage, bool) {
 			PromptTokenCount     int64 `json:"promptTokenCount"`
 			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
 		} `json:"usageMetadata"`
+		Candidates []vertexCandidate `json:"candidates"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return Usage{}, false
 	}
-	u := resp.UsageMetadata
-	if u.PromptTokenCount == 0 && u.CandidatesTokenCount == 0 {
+	u := Usage{
+		InputTokens:  resp.UsageMetadata.PromptTokenCount,
+		OutputTokens: resp.UsageMetadata.CandidatesTokenCount,
+		ServerTools:  vertexServerTools(resp.Candidates),
+	}
+	if u.isZero() {
 		return Usage{}, false
 	}
-	return Usage{InputTokens: u.PromptTokenCount, OutputTokens: u.CandidatesTokenCount}, true
+	return u, true
 }
 
-// accumulateStreamUsage: usageMetadata arrives on the final streamed chunk.
+// vertexCandidate is the slice of a Vertex candidate the usage extraction
+// reads: grounding with Google Search reports its executed queries in
+// groundingMetadata.webSearchQueries.
+type vertexCandidate struct {
+	GroundingMetadata struct {
+		WebSearchQueries []string `json:"webSearchQueries"`
+	} `json:"groundingMetadata"`
+}
+
+// vertexServerTools counts executed grounding queries across candidates as
+// the "google_search" server tool. Nil when no grounding ran.
+func vertexServerTools(candidates []vertexCandidate) map[string]int64 {
+	var queries int64
+	for _, c := range candidates {
+		queries += int64(len(c.GroundingMetadata.WebSearchQueries))
+	}
+	if queries == 0 {
+		return nil
+	}
+	return map[string]int64{"google_search": queries}
+}
+
+// accumulateStreamUsage: usageMetadata arrives on the final streamed chunk;
+// groundingMetadata arrives once, on the chunk closing its candidate, so a
+// non-empty count replaces the last snapshot rather than accumulating.
 func (vertexAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	var chunk struct {
 		UsageMetadata *struct {
 			PromptTokenCount     int64 `json:"promptTokenCount"`
 			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
 		} `json:"usageMetadata"`
+		Candidates []vertexCandidate `json:"candidates"`
 	}
-	if err := json.Unmarshal(data, &chunk); err != nil || chunk.UsageMetadata == nil {
+	if err := json.Unmarshal(data, &chunk); err != nil {
+		return
+	}
+	if tools := vertexServerTools(chunk.Candidates); tools != nil {
+		u.ServerTools = tools
+	}
+	if chunk.UsageMetadata == nil {
 		return
 	}
 	u.InputTokens = chunk.UsageMetadata.PromptTokenCount

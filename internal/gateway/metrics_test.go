@@ -60,6 +60,23 @@ func TestMetrics_CountersAndHistogram(t *testing.T) {
 		t.Errorf("fallback = %v, want 1", got)
 	}
 
+	m.ServerToolUse("prov", "team-a", "web_search", 3)
+	m.ServerToolUse("prov", "team-a", "web_search", 0)  // no-op path
+	m.ServerToolUse("prov", "team-a", "web_search", -1) // no-op path
+	if got := testutil.ToFloat64(m.llmServerTools.WithLabelValues("prov", "team-a", "web_search")); got != 3 {
+		t.Errorf("serverToolUse = %v, want 3", got)
+	}
+
+	m.ToolCall("search", "team-a", "web_search", "ok")
+	if got := testutil.ToFloat64(m.toolCalls.WithLabelValues("search", "team-a", "web_search", "ok")); got != 1 {
+		t.Errorf("toolCalls = %v, want 1", got)
+	}
+
+	m.ToolCallDuration("search", "web_search", 0.2)
+	if n := testutil.CollectAndCount(m.toolDuration); n == 0 {
+		t.Error("ToolCallDuration histogram recorded nothing")
+	}
+
 	m.BudgetThreshold("prov", "team-a", "block")
 	if got := testutil.ToFloat64(m.budgetThreshld.WithLabelValues("prov", "team-a", "block")); got != 1 {
 		t.Errorf("budgetThreshold = %v, want 1", got)
@@ -99,6 +116,9 @@ func TestMetrics_NilReceiverNoOps(t *testing.T) {
 	m.Tokens("p", "m", "ns", Usage{InputTokens: 1})
 	m.Spend("p", "ns", 1)
 	m.Fallback("a", "b", "r")
+	m.ServerToolUse("p", "ns", "web_search", 1)
+	m.ToolCall("p", "ns", "web_search", "ok")
+	m.ToolCallDuration("p", "web_search", 0.1)
 	m.BudgetThreshold("p", "ns", "warn")
 	m.ChannelMessage("ns", "ok")
 	m.ChannelWake("ns")

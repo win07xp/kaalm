@@ -68,8 +68,9 @@ The Kaalm-specific metrics across all three components:
 | LLM Gateway | `kaalm_llm_fallback_total` | counter | `from_provider`, `to_provider`, `reason` |
 | LLM Gateway | `kaalm_llm_budget_utilization` | gauge | `provider`, `namespace`, `period` |
 | LLM Gateway | `kaalm_llm_budget_boundary_events_total` | counter | `provider`, `namespace`, `event` |
-| LLM Gateway | `kaalm_tool_calls_total` (lands with v0.4.0) | counter | `provider`, `namespace`, `tool`, `status` |
-| LLM Gateway | `kaalm_tool_call_duration_seconds` (lands with v0.4.0) | histogram | `provider`, `tool` |
+| LLM Gateway | `kaalm_llm_server_tool_use_total` | counter | `provider`, `namespace`, `tool` |
+| Tool broker | `kaalm_tool_calls_total` | counter | `provider`, `namespace`, `tool`, `status` |
+| Tool broker | `kaalm_tool_call_duration_seconds` | histogram | `provider`, `tool` |
 | User Gateway | `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` |
 | User Gateway | `kaalm_channel_message_duration_seconds` | histogram | `channel_type` |
 | User Gateway | `kaalm_channel_wake_total` | counter | `namespace` |
@@ -84,10 +85,11 @@ For full semantics (when each metric increments, what each label value means, re
 - [Observability](../controller/operations.md#observability)
 - [Observability](../gateways/llm/operations.md#observability)
 - [Observability](../gateways/user/operations.md#observability)
+- [Audit and Metering](../gateways/tool-plane.md#audit-and-metering) (tool broker)
 
 ### Cardinality
 
-The `namespace` label appears on most metrics and dominates cardinality in clusters with many active tenants. The `model` and `provider` labels are bounded by `ModelProvider.spec.models` and the count of declared providers. Enum labels (`status`, `result`, `mode`, `phase`, `trigger`, `action`, `direction`, `ready`, `platform_connected`) carry a handful of values each.
+The `namespace` label appears on most metrics and dominates cardinality in clusters with many active tenants. The `model` and `provider` labels are bounded by `ModelProvider.spec.models` and the count of declared providers. The `tool` label is bounded by declared catalogs: on the broker metrics it carries only ids from `ToolProvider.spec.tools` (everything else collapses to `uncataloged`; see [Audit and Metering](../gateways/tool-plane.md#audit-and-metering)), and on `kaalm_llm_server_tool_use_total` it carries the provider-side tool vocabulary, a handful of values per provider type. Enum labels (`status`, `result`, `mode`, `phase`, `trigger`, `action`, `direction`, `ready`, `platform_connected`) carry a handful of values each.
 
 **No metric carries per-Agent or per-AgentTask identity as a label.** That resolution belongs in logs and Events, not metrics, to keep cardinality bounded as the cluster scales to thousands of agents.
 
@@ -103,6 +105,7 @@ Both the controller and the gateway emit **structured JSON logs to stdout** (klo
 **Hard rule: in the default build, prompt and response bodies are never logged at any level.** This holds at `info`, at `debug`, and on every code path. Specifically:
 
 - The **LLM Gateway** logs request metadata only: namespace, workload identity, model, status, latency, and prompt/response token counts. Prompt content and provider responses are never serialized to logs.
+- The **tool broker** logs the per-call audit record (caller identity, ToolProvider, tool, method, outcome, duration, sizes; see [Audit and Metering](../gateways/tool-plane.md#audit-and-metering)). Tool-call arguments and results are never logged.
 - The **User Gateway** logs webhook envelope metadata: channel, request id, status, latency. Channel message bodies (inbound webhook payloads) and agent reply bodies are never logged.
 - **Reconciler logs** cite resource names and condition reasons, never Secret content, channel auth tokens, or provider API keys.
 
@@ -110,7 +113,7 @@ This is a hard rule because logs are typically shipped to lower-trust aggregatio
 
 ### Debug-build escape hatch
 
-A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies for contract bring-up and integration debugging. The escape hatch exists at the build layer only:
+A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies on the LLM proxy paths, and tool-call request and response bodies on the MCP broker routes, for contract bring-up and integration debugging. The escape hatch exists at the build layer only:
 
 - The official Helm chart only ships default builds. Debug-build images carry the `-debug` tag suffix and emit a startup banner, so an operator who accidentally pulls one notices.
 - There is **no runtime Helm value, environment variable, feature flag, or admin endpoint** that flips body logging on in a default build. The gate is build-time only.
