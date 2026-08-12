@@ -24,8 +24,8 @@ surface: every one points at the spec that proves it on a cluster, and every
 one is green. S16 was added with the v0.3.0 base-image design and is green
 against the locally built base images; the published images land with the
 v0.3.0 release. S17 was added with the v0.3.0 hard-budget design and is
-green. S18 was added with the v0.3.0 tool-plane design and its row fills in
-as the v0.4.0 implementation lands.
+green. S18 was added with the v0.3.0 tool-plane design and is green against
+the v0.4.0 implementation.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -46,7 +46,7 @@ as the v0.4.0 implementation lands.
 | S15 Async webhook for a long-running agent | `Session identity and async callback` (S15: 202, signed callback to the receiver, polling fallback) | Unit `TestWebhook_AsyncAcceptAndPoll`, `TestWebhook_AsyncCallbackDelivery` |
 | S16 Zero-build on-ramp (base image + mounted handler) | `Zero-build on-ramp (S16)` (default Go handler answers via the channel; a mounted Python handler answers with handler-specific output; repointing the ConfigMap rolls the handler; a missing ConfigMap gates with `HandlerConfigMapNotFound`, creates no Pod, and recovers) | Unit: the Python loader suite (`images/agent-python/tests/test_loader.py`); envtest `TestAgent_HandlerConfigMapNotFoundGatesAndRecovers`, `TestAgent_HandlerMountNotAllowedDegradesAndRecovers` |
 | S17 Hard budget cap (opt-in enforcement) | `Hard budget cap (S17)` (hard provider blocks at the ceiling naming which ceiling fired; post-exhaustion requests are rejected with the mock's request counter proving no upstream call; the soft twin behaves as S10 documents) | Unit `TestHardAdmit_*`, `TestProxyHard_*` (boundary admission, sticky slot, fail-closed, stream settle); envtest `TestModelProvider_HardBudget*`, `TestModelProvider_BoundaryMarginRaisedCondition` (rules 32 to 34, margin condition) |
-| S18 Governed tool access (tool plane) | Pending: designed in [The Tool Plane](../gateways/tool-plane.md), lands with the v0.4.0 milestone | Pending: broker unit suite; envtest for rules 35 to 38 |
+| S18 Governed tool access (tool plane) | `Governed tool access (S18)` (ToolProvider Ready with its credential in `kaalm-system` and absent from the workload namespace by inspection; an agent-identity caller gets a filtered `tools/list`, a granted call through, `tool_denied` on an ungranted tool, and `access_denied` on a foreign session id; an outside namespace gets `access_denied`; the mock MCP server's request counters prove denied calls never reached the upstream, and the gateway logs carry the audit record) | Unit `TestMCPBroker_*`, `TestSession*` (broker enforcement, session ownership, metrics); envtest `TestToolProvider_*`, `TestAgentToolGrant_*`, `TestTaskToolGrant_*` (rules 35 to 38) |
 
 The LLM-proxy scenarios (S4, S10, S15, S17) are exercised against an
 in-cluster mock upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy

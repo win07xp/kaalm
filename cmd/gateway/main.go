@@ -97,6 +97,11 @@ func main() {
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Install it as the process default: the gateway packages log through
+	// package-level slog (including the broker's per-call audit record), and
+	// without this they would fall back to Go's plain text logger, breaking
+	// the JSON log convention (docs/src/operations/observability.md).
+	slog.SetDefault(logger)
 
 	operatorNamespace := os.Getenv("POD_NAMESPACE")
 	if operatorNamespace == "" {
