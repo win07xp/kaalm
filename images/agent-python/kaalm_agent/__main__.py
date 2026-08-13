@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ import kaalm
 
 from . import loader
 from .gateway import GatewayClient
+from .httpclient import make_http_async_client, make_http_client
 from .memory import Store, UserMemory
 from .tls import CertReloader, peer_san_matches_gateway, workload_is_task
 
@@ -128,8 +130,14 @@ def build() -> Agent:
     gateway = GatewayClient(gateway_url, reloader)
 
     # Bind the ABI before the handler import: a handler's top-level
-    # `import kaalm` must observe bound members.
-    kaalm._bind(gateway=gateway, memory=UserMemory(store))
+    # `import kaalm` must observe bound members. The http client factories
+    # close over the reloader so every client they mint follows rotation.
+    kaalm._bind(
+        gateway=gateway,
+        memory=UserMemory(store),
+        http_client=functools.partial(make_http_client, reloader),
+        http_async_client=functools.partial(make_http_async_client, reloader),
+    )
 
     handler, source = loader.load_or_exit(log)
     log.info("handler: %s", source)

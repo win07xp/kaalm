@@ -1,0 +1,5 @@
+# Pinned against the LangGraph 1.x line current at authoring time. All of
+# these ride httpx 0.x, matching the base image's bundled httpx.
+langgraph==1.2.11
+langchain-openai==1.4.3
+langgraph-checkpoint-sqlite==3.1.1

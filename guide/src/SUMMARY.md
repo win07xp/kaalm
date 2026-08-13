@@ -23,6 +23,7 @@
 - [Calling Tools Through the Gateway](developers/calling-tools.md)
 - [Agent Lifecycle Day-to-Day](developers/lifecycle.md)
 - [Deploying from a Base Image](developers/deploying-from-a-base-image.md)
+- [Running Framework Agents](developers/framework-agents.md)
 - [Building Your Own Agent Image](developers/building-your-own-image.md)
 
 # Reference

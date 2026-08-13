@@ -152,7 +152,7 @@ The `kaalm-ca` `Bundle` projects the CA into every non-system user namespace, in
 
 ## Tiered On-Ramp
 
-The Helm chart supports a tiered on-ramp, so a platform team can get value from the gateway before adopting the agent lifecycle.
+The Helm chart supports a tiered on-ramp, so a platform team can get value from the gateway before adopting the agent lifecycle. For teams arriving with existing framework agents (LangGraph, LangChain), the user guide's Running Framework Agents page maps both tiers onto that starting point, with worked examples under `examples/langgraph-*/`.
 
 ### Tier 1: gateway only
 

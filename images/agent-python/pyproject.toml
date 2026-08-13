@@ -6,6 +6,7 @@ description = "Kaalm reference base image runtime: the runtime contract plus the
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.10",
+    "httpx>=0.28,<1",
     "watchdog>=4.0",
 ]
 
