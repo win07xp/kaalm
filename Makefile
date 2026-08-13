@@ -243,6 +243,12 @@ python-image: ## Build the kaalm-agent-python reference base image.
 python-smoke: python-image ## Contract smoke against the built image: TLS, mTLS matrix, echo, mounted handler, fail-fast.
 	hack/python-image-smoke.sh $(PYTHON_AGENT_IMG)
 
+.PHONY: examples-smoke
+examples-smoke: python-image ## Build the framework example images: FROM-rung examples against the local base, the task example standalone. Each Dockerfile import-checks its handler.
+	docker build --build-arg BASE=$(PYTHON_AGENT_IMG) examples/langgraph-chat
+	docker build --build-arg BASE=$(PYTHON_AGENT_IMG) examples/langgraph-tools
+	docker build examples/langgraph-task
+
 GO_AGENT_IMG ?= ghcr.io/win07xp/kaalm-agent-go:$(CHART_APP_VERSION)
 
 .PHONY: runtime-test

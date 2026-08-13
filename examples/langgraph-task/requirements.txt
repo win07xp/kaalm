@@ -1,0 +1,6 @@
+# Pinned against the LangGraph 1.x line current at authoring time. httpx is
+# used directly for the mTLS gateway client and stays 0.x with the rest of
+# the stack.
+langgraph==1.2.11
+langchain-openai==1.4.3
+httpx>=0.28,<1

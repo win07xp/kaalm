@@ -37,6 +37,11 @@ jobs:
       - name: Python base image contract smoke (real container, mTLS matrix)
         run: make python-smoke PYTHON_AGENT_IMG=kaalm-agent-python:ci
 
+      # Reuses the kaalm-agent-python:ci image the smoke step just built;
+      # each example Dockerfile import-checks its handler at build time.
+      - name: Framework example images build (LangGraph, against the local base)
+        run: make examples-smoke PYTHON_AGENT_IMG=kaalm-agent-python:ci
+
       - name: Agent runtime module and Go starter tests (native, -race)
         run: make runtime-test
 

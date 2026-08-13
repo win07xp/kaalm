@@ -1,0 +1,25 @@
+# The langgraph-task example as an AgentTask. The goal arrives through
+# spec.env (nothing is injected for it), and the declared artifact must be
+# reported on success.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: summarize-once
+  namespace: default
+spec:
+  agentClassRef:
+    name: standard
+  image: registry.example.com/agents/langgraph-task:0.1.0
+  providers:
+    - providerRef:
+        name: openai-shared
+  env:
+    - name: KAALM_MODEL
+      value: openai-shared/gpt-5.2
+    - name: TASK_INPUT_TEXT
+      value: "Paste the text to summarize here, or template this manifest."
+  completion:
+    condition: agentReported
+    timeout: 30m
+  artifacts:
+    - name: summary
