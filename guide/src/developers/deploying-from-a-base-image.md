@@ -103,7 +103,9 @@ The moment your handler needs a dependency the base image does not bundle,
 move to the `FROM` pattern: same base image, same handler file, plus a
 one-line `pip install`. The class gate no longer applies (a `FROM` build
 passes ordinary image review via `allowedImages`), and the trade-offs are on
-[Building Your Own Agent Image](building-your-own-image.md).
+[Building Your Own Agent Image](building-your-own-image.md). If the
+dependency you need is an agent framework, that is its own page:
+[Running Framework Agents](framework-agents.md).
 
 ## If the handler never runs
 

@@ -59,14 +59,17 @@ The image installs no dependencies at runtime. The class security defaults mount
 
 ```dockerfile
 FROM ghcr.io/win07xp/kaalm-agent-python:0.3.0
+# The image runs as nonroot; installing needs root, serving does not.
+USER 0
 RUN pip install --no-cache-dir beautifulsoup4 lxml
+USER 65532:65532
 COPY handler.py /opt/kaalm/handler/handler.py
 ENV KAALM_HANDLER_PATH=/opt/kaalm/handler
 ```
 
 The `ENV` line is load-bearing: the controller injects `$KAALM_HANDLER_PATH` only for ConfigMap-mounted handlers, so a `FROM` build declares it itself. The variable stays the single signal in every configuration, and if an Agent sets `spec.handler` on a `FROM`-built image anyway, the mount shadows the baked directory and the mounted handler wins.
 
-A `FROM` build keeps the central-patching property (rebuild against the bumped tag) and sheds the ConfigMap size cap; it costs a build pipeline. This is the intended middle rung between mount-and-run and a fully custom image. Note that a baked handler needs no `allowHandlerMounts` grant: rules 30 and 31 govern ConfigMap-mounted code, while a `FROM` image passes through ordinary image review and the `allowedImages` gate like any custom image.
+A `FROM` build keeps the central-patching property (rebuild against the bumped tag) and sheds the ConfigMap size cap; it costs a build pipeline. This is the intended middle rung between mount-and-run and a fully custom image. Note that a baked handler needs no `allowHandlerMounts` grant: rules 30 and 31 govern ConfigMap-mounted code, while a `FROM` image passes through ordinary image review and the `allowedImages` gate like any custom image. The worked form of this rung is the LangGraph example pair under `examples/langgraph-chat/` and `examples/langgraph-tools/`, walked by the user guide's Running Framework Agents page.
 
 ## The Go image
 
