@@ -47,18 +47,19 @@ Handler source is read once, at container start. The reconciler does not track C
 - **`$KAALM_HANDLER_PATH` unset**: the runtime serves the built-in [default handler](#the-default-handler).
 - **Set but unloadable**: a missing `handler.py`, an import error, or a missing `handle_message` function logs the exact failure and exits nonzero. The container enters `CrashLoopBackOff`, which is the loud, visible outcome a configured-but-broken handler must have. There is deliberately no silent fallback to the default handler: an agent that answers with echo when it was configured to do real work is a debugging trap.
 
-The runtime exposes one importable module, `kaalm`, as the handler's window into the machinery it sits on. Its surface in v0.3.0 is exactly two members:
+The runtime exposes one importable module, `kaalm`, as the handler's window into the machinery it sits on. Its surface is exactly four members:
 
 - `kaalm.gateway`: a preconfigured HTTP client session for `$KAALM_GATEWAY_ENDPOINT`, carrying the Pod's mTLS identity and CA trust, kept current by the same rotation watch the runtime already runs. A handler makes an LLM call by POSTing a qualified model request through it; it never touches certificate files.
 - `kaalm.memory`: the runtime's persistent store, namespaced under a `user/` key prefix so handler state can never collide with the contract-mandated dedup buffer (contract item 7). Backed by the PVC when `spec.persistence.enabled: true`, in-memory otherwise, with the same degradation semantics as the starter's store.
+- `kaalm.http_client()` and `kaalm.http_async_client()` (since v0.4.0): factories returning standard `httpx.Client` and `httpx.AsyncClient` objects that carry the same mTLS identity and CA trust and follow certificate rotation internally. They exist for the code the runtime does not own: framework SDKs accept a stock httpx client (the names mirror the `http_client=` / `http_async_client=` keyword arguments the LangChain, OpenAI, and Anthropic SDKs take), but a client hand-built from the certificate files snapshots its SSL context at construction, so an agent that neither hibernates nor restarts through most of the leaf certificate's 90-day duration would keep presenting the stale certificate past its expiry while its health probes stay green. The factories' transports rebuild on the runtime's rotation watch, which closes that edge. Extra keyword arguments pass through to the httpx constructor; `transport`, `verify`, and `cert` are owned by the factory and rejected, and proxy environment variables are ignored unless explicitly re-enabled, because a proxy mount would route around the identity-bearing transport.
 
-This surface is append-only within a minor release series: a handler written against `kaalm-agent-python:0.3` runs unchanged on every `0.3.x`.
+This surface is append-only within a minor release series: a handler written against `kaalm-agent-python:0.3` runs unchanged on every `0.3.x`. The v0.4.0 factories are a pure append, so a `0.3` handler happens to run unchanged on `0.4` too.
 
 The image installs no dependencies at runtime. The class security defaults mount the root filesystem read-only and the synthesized NetworkPolicy has no PyPI egress, and both are features. What the image bundles (the standard library plus its own HTTP stack) is the handler's dependency budget; needing more is the signal to graduate to `FROM`:
 
 ```dockerfile
 FROM ghcr.io/win07xp/kaalm-agent-python:0.3.0
-RUN pip install --no-cache-dir httpx beautifulsoup4
+RUN pip install --no-cache-dir beautifulsoup4 lxml
 COPY handler.py /opt/kaalm/handler/handler.py
 ENV KAALM_HANDLER_PATH=/opt/kaalm/handler
 ```

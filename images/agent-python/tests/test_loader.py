@@ -142,7 +142,9 @@ async def test_handler_can_import_kaalm_after_bind(handler_dir, monkeypatch):
         def get(self, key, default=None):
             return "remembered"
 
-    kaalm._bind(gateway=object(), memory=FakeMemory())
+    kaalm._bind(
+        gateway=object(), memory=FakeMemory(), http_client=object(), http_async_client=object()
+    )
     d = handler_dir(
         "import kaalm\n"
         "async def handle_message(envelope):\n"

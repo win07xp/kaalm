@@ -1,18 +1,24 @@
 # Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
 """The handler-facing ABI of the Kaalm reference base images.
 
-Exactly two members in v0.3 (docs/src/runtime/base-images.md), and the surface
-is append-only within a minor release series:
+Exactly four members since v0.4.0 (docs/src/runtime/base-images.md), and the
+surface is append-only within a minor release series:
 
 - ``kaalm.gateway``: a preconfigured client for $KAALM_GATEWAY_ENDPOINT
   carrying the Pod's mTLS identity and CA trust.
 - ``kaalm.memory``: the runtime's persistent store, confined to the ``user/``
   key prefix. Backed by the PVC when persistence is enabled, in-memory
   otherwise.
+- ``kaalm.http_client()`` / ``kaalm.http_async_client()``: factories for
+  httpx.Client / httpx.AsyncClient objects carrying the same mTLS identity
+  and CA trust, rebuilt internally on certificate rotation. Their names
+  mirror the ``http_client=`` / ``http_async_client=`` keyword arguments the
+  framework SDKs take; extra keyword arguments pass through to the httpx
+  constructor.
 
-The runtime binds both before the handler is imported; importing this module
-anywhere else raises, on first attribute access, rather than handing out
-half-configured objects.
+The runtime binds all members before the handler is imported; importing this
+module anywhere else raises, on first attribute access, rather than handing
+out half-configured objects.
 """
 
 from __future__ import annotations
@@ -21,13 +27,15 @@ from typing import Any
 
 _bound: dict[str, Any] = {}
 
-_MEMBERS = ("gateway", "memory")
+_MEMBERS = ("gateway", "http_async_client", "http_client", "memory")
 
 
-def _bind(*, gateway: Any, memory: Any) -> None:
+def _bind(*, gateway: Any, memory: Any, http_client: Any, http_async_client: Any) -> None:
     """Called once by the runtime at startup, before the handler is imported."""
     _bound["gateway"] = gateway
     _bound["memory"] = memory
+    _bound["http_client"] = http_client
+    _bound["http_async_client"] = http_async_client
 
 
 def __getattr__(name: str) -> Any:
