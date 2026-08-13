@@ -1,10 +1,18 @@
 # Credential Handling
 
-Kaalm handles two kinds of long-lived secret material: **LLM API keys**, which authenticate Kaalm to model providers, and **channel credentials**, which authenticate inbound webhook callers to Kaalm and sign Kaalm's outbound callbacks. The two have deliberately different homes. LLM keys live in one cluster-wide location and are never copied; channel credentials live in each agent's own namespace.
+Kaalm handles three kinds of long-lived secret material: **LLM API keys**, which authenticate Kaalm to model providers, **tool server credentials** (since v0.4.0), which authenticate Kaalm's broker to MCP tool servers, and **channel credentials**, which authenticate inbound webhook callers to Kaalm and sign Kaalm's outbound callbacks. Their homes are deliberate. LLM keys and tool credentials live in one cluster-wide location and are never copied; channel credentials live in each agent's own namespace.
 
-One rule spans both: **agent containers never hold credential material.** The gateway is the only component that uses credentials on the data path, and it is a separate Pod in `kaalm-system`. That separation is what makes the isolation enforceable with nothing more exotic than a Kubernetes NetworkPolicy, covered in [Protecting Agent Containers from LLM Provider Access](#protecting-agent-containers-from-llm-provider-access) below.
+One rule spans all three: **agent containers never hold credential material.** The gateway is the only component that uses credentials on the data path, and it is a separate Pod in `kaalm-system`. That separation is what makes the isolation enforceable with nothing more exotic than a Kubernetes NetworkPolicy, covered in [Protecting Agent Containers from LLM Provider Access](#protecting-agent-containers-from-llm-provider-access) below.
 
 TLS certificate material (agent serving certs, AgentTask client certs, and the CA trust chain) follows a separate lifecycle managed by cert-manager. See [In-cluster TLS (Bidirectional)](tls.md#in-cluster-tls).
+
+## The Credential Map
+
+One figure for the whole economy: every credential class, who mints it, who holds it, who verifies it, and what it unlocks. The lifecycle sections below and the figures on [TLS](tls.md) and [Workload Identity](../gateways/llm/workload-identity.md) are the deep dives.
+
+![A component diagram mapping every credential class across four frames. A minters frame holds the platform engineer, cert-manager with trust-manager, and the kubelet. The platform engineer creates two Secrets in kaalm-system, the provider API key and the tool credential, and both flow to the gateway watch-based and never copied. cert-manager mints the per-workload leaf certificate inside the Agent or AgentTask Pod, 90 days renewed 30 early, loaded and reloaded on rotation by kaalm.gateway and the kaalm.http_client factories, which present it to the gateway over mTLS where the SAN names the workload; a note records that this verified identity unlocks provider and tool grants, the budget, and the audit name. trust-manager projects the public kaalm-ca ConfigMap into the namespace, which is how every caller knows it reached the real gateway. The kubelet projects a kaalm-gateway-audience ServiceAccount token into a tier-1 workload, whose bearer path through TokenReview yields namespace identity only. A framework SDK's placeholder api_key is drawn dashed and dies at the gateway, stripped. The gateway node verifies SAN plus source IP, TokenReview, and session ownership, strips inbound auth headers, mints workload-bound MCP session ids, and holds keys in process memory only. The only red edges leave the gateway for the LLM provider and the MCP tool server, injecting the API key and the tool credential, the only hop either ever travels.](../diagrams/credential-map.svg)
+
+**Reading the diagram.** The frames are the argument. The only credential material inside a team namespace is identity: the workload's own leaf certificate and the public CA bundle it verifies the gateway with. Everything with spending power sits in `kaalm-system` and crosses exactly one hop, in red, on the gateway's upstream leg. And identity is what policy keys off: the verified SAN (or, for the gateway-only tier, the TokenReview namespace) selects the grants, the budget, and the audit name, which is why the base images' `kaalm.gateway` client and the `kaalm.http_client()` factories exist to present it, and follow its rotation, without handler code.
 
 ## Lifecycle of an LLM API Key
 
@@ -20,6 +28,19 @@ Step 6 is the reason rotation is a single Secret update: with no fan-out copies,
 ![A sequence diagram of the six-step LLM API key lifecycle, with a user namespace holding the Agent Pod and an kaalm-system frame holding the Secret, the operator ServiceAccount and the gateway ServiceAccount, and the LLM provider outside the cluster. A platform engineer creates the Secret in kaalm-system; exactly two ServiceAccounts may read it, both through a namespaced Role. The gateway loads it at startup and holds it in process memory; the operator reads it once per health probe and retains nothing between probes. On the used step the agent sends an LLM request carrying no credential, the gateway injects the API key on the upstream leg only, and the completion returns to the agent still carrying no credential; the agent cannot read kaalm-system Secrets at all. Rotation is a single in-place Secret update that fires the gateway's watch.](../diagrams/llm-key-lifecycle.svg)
 
 **Reading the diagram.** The namespace frames are the argument. No credential-bearing arrow ever crosses out of `kaalm-system`: the key reaches the provider on the gateway's upstream leg and nowhere else. Read the three holders by retention, too, since they differ: the gateway keeps the key in memory for the life of the process, the operator only for the length of one probe, and the agent never at all.
+
+## Lifecycle of a Tool Server Credential (since v0.4.0)
+
+The tool credential is the LLM key's shape applied to the [tool plane](../gateways/tool-plane.md), and every property above transfers:
+
+1. **Stored**: in a Secret in `kaalm-system`, created by platform engineers.
+2. **Referenced**: by `ToolProvider.spec.credentialsRef`, resolved only from the operator namespace. The reference is optional: a nil `credentialsRef` is an unauthenticated tool server, and the broker injects nothing.
+3. **Read**: by the same two ServiceAccounts as an LLM key. The gateway resolves it per brokered call through its cache and injects it as a bearer token on the upstream leg; the operator reads it transiently for the ToolProvider health probe and for `Ready` validation, retaining nothing.
+4. **Used**: only on calls the broker admits. A call denied by the namespace gate, the grant chain, or session ownership dies before the credential is touched, so the credential is never spent authenticating a request policy already rejected.
+5. **Rotated**: a single Secret update; the cache read means the next brokered call carries the new value. A credential the tool server rejects surfaces as `503 tool_unavailable` to the caller and a Warning event on the ToolProvider, never as an error inside an agent.
+6. **Never copied**: no per-agent or per-namespace copies, nothing mounted into any pod.
+
+Step 4 is the property the agent-visible half of the plane rests on: an agent's `spec.tools` grant names the ToolProvider, but the credential behind it has no path into the agent's namespace at all.
 
 ## Lifecycle of a Channel Credential (AgentChannel)
 
