@@ -9,9 +9,9 @@ that is the job of the companion design book, which documents every resource,
 the security model, and the wire contracts in full. Pages here end with a short
 "How this works" block linking into the design book for the curious.
 
-## The mental model, in five resources
+## The mental model, in six resources
 
-Two are cluster-scoped and owned by the platform team:
+Three are cluster-scoped and owned by the platform team:
 
 - **AgentClass** is a policy template: which images may run, how much storage an
   agent may claim, what lifecycle limits apply. Think of it as a runtime class
@@ -19,6 +19,10 @@ Two are cluster-scoped and owned by the platform team:
 - **ModelProvider** is a managed LLM provider: the credential (kept out of team
   namespaces), the model catalog with prices, which namespaces may use it, and
   the budget attached to that use.
+- **ToolProvider** is a managed MCP tool server, the same idea applied to
+  tools: the credential stays out of team namespaces, an optional declared
+  catalog bounds what can be called, and an allowlist decides which
+  namespaces may use it.
 
 Three are namespaced and owned by application teams:
 
@@ -29,9 +33,9 @@ Three are namespaced and owned by application teams:
 - **AgentChannel** connects an Agent to the outside world through an inbound
   webhook.
 
-Every LLM call an agent makes goes through the Kaalm gateway, which injects
-the provider credential server-side, so API keys never appear in an agent's
-namespace, container, or environment.
+Every LLM call an agent makes, and every brokered tool call, goes through
+the Kaalm gateway, which injects the credential server-side, so API keys
+never appear in an agent's namespace, container, or environment.
 
 ## Which chapters are for you
 
