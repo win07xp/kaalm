@@ -1,0 +1,81 @@
+# S18: the agent-identity caller. It mounts s18-agent's cert-manager client
+# certificate (the workload identity the gateway authenticates; the source-IP
+# cross-check is namespace-level, so a same-namespace pod presenting the cert
+# IS the agent as far as the gateway is concerned) and walks the scenario's
+# beats against the broker, echoing a MARKER line per step for the spec to
+# assert on. The initialize loop retries through the gateway's source-IP
+# startup race exactly as llm-caller does.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s18-caller
+  namespace: e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          gw=https://kaalm-gateway.kaalm-system.svc:8443/v1/mcp/search-tools
+          post() { # $1 body, $2 out-file, $3 optional session id
+            # On connection failure curl itself prints 000 via -w; swallow
+            # the nonzero exit so the retry loop sees it (llm-caller pattern).
+            curl -sS -o "$2" -w '%{http_code}' -D /tmp/headers \
+              --cacert /var/run/ca/ca.crt \
+              --cert /var/run/agent-tls/tls.crt --key /var/run/agent-tls/tls.key \
+              -H "Content-Type: application/json" \
+              ${3:+-H "Mcp-Session-Id: $3"} \
+              -d "$1" "$gw" || true
+          }
+
+          init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"s18-caller","version":"e2e"}}}'
+          code=000
+          for i in $(seq 1 20); do
+            code=$(post "$init" /tmp/init)
+            echo "attempt $i: HTTP $code"
+            # Retry the transient startups: 401 is the gateway's source-IP
+            # informer race, 5xx is the mock still warming behind its Service.
+            case "$code" in 000|401|502|503|504) sleep 3 ;; *) break ;; esac
+          done
+          if [ "$code" != "200" ]; then echo "MARKER initialize FAILED HTTP $code"; cat /tmp/init; exit 1; fi
+          sess=$(grep -i '^Mcp-Session-Id:' /tmp/headers | cut -d' ' -f2 | tr -d '\r')
+          if [ -z "$sess" ]; then echo "MARKER initialize NO-SESSION"; exit 1; fi
+          case "$sess" in *mcp-sess-*) echo "MARKER initialize LEAKED-UPSTREAM-ID"; exit 1;; esac
+          echo "MARKER initialize HTTP $code session-wrapped"
+
+          code=$(post '{"jsonrpc":"2.0","method":"notifications/initialized"}' /tmp/note "$sess")
+          echo "MARKER initialized-note HTTP $code"
+
+          code=$(post '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' /tmp/list "$sess")
+          echo "MARKER tools-list HTTP $code body: $(cat /tmp/list)"
+
+          code=$(post '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"web_search","arguments":{}}}' /tmp/granted "$sess")
+          echo "MARKER call-granted HTTP $code body: $(cat /tmp/granted)"
+
+          code=$(post '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"fetch_page","arguments":{}}}' /tmp/ungranted "$sess")
+          echo "MARKER call-ungranted HTTP $code body: $(cat /tmp/ungranted)"
+
+          code=$(post '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"web_search","arguments":{}}}' /tmp/forged "Zm9yZWlnbg.Zm9yZ2VkbWFj")
+          echo "MARKER forged-session HTTP $code body: $(cat /tmp/forged)"
+
+          echo "MARKER done"
+      volumeMounts:
+        - name: agent-tls
+          mountPath: /var/run/agent-tls
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: agent-tls
+      secret:
+        secretName: s18-agent-tls
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt

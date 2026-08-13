@@ -1,0 +1,54 @@
+# S18: a bearer-tier caller in a namespace OUTSIDE the ToolProvider's
+# allowedNamespaces (default is not in ["e2e"]). The gateway authenticates the
+# token, then the broker's namespace gate refuses: 403 access_denied. -k
+# because namespace default carries no kaalm-ca bundle; the assertion is the
+# status and error type, not the trust chain (proven by the e2e-side callers).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s18-outsider
+  namespace: default
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s18-outsider
+  namespace: default
+spec:
+  serviceAccountName: s18-outsider
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          token=$(cat /var/run/token/token)
+          body='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"s18-outsider","version":"e2e"}}}'
+          for i in $(seq 1 20); do
+            code=$(curl -sSk -o /tmp/resp -w '%{http_code}' \
+              -H "Authorization: Bearer $token" \
+              -H "Content-Type: application/json" \
+              -d "$body" \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/mcp/search-tools) || true
+            echo "attempt $i: HTTP $code"
+            # 401 is the transient source-IP race; anything else is the answer.
+            if [ "$code" != "401" ] && [ "$code" != "000" ]; then
+              echo "MARKER outsider HTTP $code body: $(cat /tmp/resp)"; exit 0
+            fi
+            sleep 3
+          done
+          echo "MARKER outsider NO-DEFINITIVE-RESPONSE"; exit 1
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/token
+          readOnly: true
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: kaalm-gateway
+              expirationSeconds: 3600
+              path: token

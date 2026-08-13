@@ -1,0 +1,141 @@
+# S18: the tool plane fixtures. A mock MCP server (TLS under the cluster CA,
+# same pattern as mockprovider) that REQUIRES the bearer token held in
+# kaalm-system, a ToolProvider brokering it, and a dedicated class + agent
+# carrying the grant chain (class allowlist; workload grant narrowed to
+# web_search). The health probe stays disabled following the ModelProvider
+# e2e precedent: the controller's probe client trusts system roots only, so
+# it cannot verify the cluster-CA cert (issue #86 tracks the trust knob).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mock-mcp-tls
+  namespace: e2e
+spec:
+  secretName: mock-mcp-tls
+  issuerRef:
+    name: kaalm-ca-issuer
+    kind: ClusterIssuer
+  usages:
+    - server auth
+  dnsNames:
+    - mock-mcp.e2e.svc
+    - mock-mcp.e2e.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-mcp
+  namespace: e2e
+  labels:
+    app: mock-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-mcp
+  template:
+    metadata:
+      labels:
+        app: mock-mcp
+    spec:
+      containers:
+        - name: mock-mcp
+          image: registry.test/mock/mcp-server:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr=:8443
+            - --tls-cert=/var/run/tls/tls.crt
+            - --tls-key=/var/run/tls/tls.key
+            # Must match the e2e-tool-key Secret below: brokered calls
+            # succeed only because the gateway injected that value.
+            - --require-bearer=e2e-tool-credential
+          ports:
+            - containerPort: 8443
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: mock-mcp-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-mcp
+  namespace: e2e
+spec:
+  selector:
+    app: mock-mcp
+  ports:
+    - port: 8443
+      targetPort: 8443
+---
+# The tool credential, resolved ONLY from the operator namespace. Its value
+# never appears in namespace e2e; the S18 spec asserts exactly that.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-tool-key
+  namespace: kaalm-system
+type: Opaque
+stringData:
+  token: e2e-tool-credential
+---
+apiVersion: kaalm.io/v1alpha1
+kind: ToolProvider
+metadata:
+  name: search-tools
+spec:
+  type: mcp
+  endpoint: https://mock-mcp.e2e.svc:8443
+  credentialsRef:
+    name: e2e-tool-key
+    key: token
+  allowedNamespaces:
+    - e2e
+  tools:
+    - id: web_search
+    - id: fetch_page
+  healthCheck:
+    enabled: false
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: s18-class
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+  allowedToolProviders:
+    - name: search-tools
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: s18-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s18-class
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationDelay: 0s
+    idleTimeout: 0s
+    wakeTimeout: 0s
+  tools:
+    - providerRef:
+        name: search-tools
+      tools: ["web_search"]
