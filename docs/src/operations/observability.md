@@ -22,7 +22,7 @@ Detailed Grafana dashboards, distributed tracing, and an audit-export pipeline a
 
 - Prometheus metrics on dedicated ports (controller `:8080/metrics`, gateway `:9090/metrics`)
 - Structured JSON logs from controller and gateway with a hard PII-safety rule
-- Kubernetes Events on all five Kaalm CRDs
+- Kubernetes Events on all six Kaalm CRDs
 - A small recommended-alerts set tied to architectural failure modes
 - Dashboard topology sketches (per-namespace, per-provider, cluster)
 
