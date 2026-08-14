@@ -3,14 +3,14 @@
 Three checks confirm a working install: the CRDs exist, both components run,
 and the bundled starter class is Ready.
 
-## 1. The five CRDs
+## 1. The six CRDs
 
 ```bash
 kubectl get crds | grep kaalm.io
 ```
 
-Expect all five: `agentclasses`, `agents`, `agenttasks`, `agentchannels`,
-`modelproviders`.
+Expect all six: `agentclasses`, `agents`, `agenttasks`, `agentchannels`,
+`modelproviders`, `toolproviders`.
 
 ## 2. The two components
 
