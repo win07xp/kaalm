@@ -124,11 +124,12 @@ customresourcedefinition.apiextensions.k8s.io/agentclasses.kaalm.io
 customresourcedefinition.apiextensions.k8s.io/agents.kaalm.io
 customresourcedefinition.apiextensions.k8s.io/agenttasks.kaalm.io
 customresourcedefinition.apiextensions.k8s.io/modelproviders.kaalm.io
+customresourcedefinition.apiextensions.k8s.io/toolproviders.kaalm.io
 ```
 
 > **A CRD**, a custom resource definition, teaches the cluster a new kind of
 > object. Kubernetes ships knowing about pods and a few dozen other things; it
-> does not ship knowing what an agent is. Installing Kaalm taught it five new
+> does not ship knowing what an agent is. Installing Kaalm taught it six new
 > nouns, which is why `kubectl get agents` will work in the next chapter even
 > though "agent" is not a Kubernetes concept.
 
