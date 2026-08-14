@@ -19,7 +19,7 @@ unfamiliar, it is one of these four with different arguments.
 
 ## Ask about the new nouns
 
-Kaalm taught your cluster five kinds of object. Ask about them:
+Kaalm taught your cluster six kinds of object. Ask about them:
 
 ```bash
 kubectl get agents

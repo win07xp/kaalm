@@ -22,7 +22,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: ghcr.io/win07xp/kaalm-agent-go:0.3.0
+  image: ghcr.io/win07xp/kaalm-agent-go:0.4.0
   env:
     - name: KAALM_TASK_AUTOCOMPLETE
       value: success

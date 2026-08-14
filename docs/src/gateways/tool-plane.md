@@ -1,6 +1,6 @@
 # The Tool Plane
 
-Since v0.3.0 the design includes a **tool plane**: gateway-brokered access to MCP tool servers, governed the way LLM access has been governed since v1. This chapter is the design; the implementation is the whole of the v0.4.0 milestone, and nothing described here ships in v0.3.0. Where a section states wire behavior, it states the v0.4.0 contract.
+Since v0.3.0 the design includes a **tool plane**: gateway-brokered access to MCP tool servers, governed the way LLM access has been governed since v1. This chapter was merged as the design one release ahead of its implementation, which shipped as the whole of v0.4.0. Where a section states wire behavior, it states the shipped v0.4.0 contract.
 
 The world before this chapter is asymmetric, and the book already says so in its own words. LLM provider traffic is gateway-mediated with no direct provider egress, "what makes the spend and rate-limit controls unbypassable" ([Tenancy and Tiers](../concepts/tenancy-and-tiers.md#networkpolicy-as-the-cross-tenant-boundary)). Tool traffic is the opposite: a class-wide CIDR hole in the default-deny egress policy, port-unrestricted, credential-unmediated, unmetered, and audit-invisible. An agent that calls a tool server today holds that server's credential in its own pod, which is precisely the arrangement [Credential Handling](../security/credentials.md) exists to forbid for LLM keys. The tool plane closes the asymmetry by extending the pattern Kaalm already proved once: the agent calls the gateway, the gateway authenticates the workload, injects the credential, applies the tenancy gates, and forwards. Nothing about the existing LLM plane, the runtime contract, or the direct-egress escape hatch changes; the tool plane is an addition that re-ranks the options, not a replacement.
 
@@ -153,7 +153,7 @@ One piece of pre-tool-plane API did not survive this ranking. `Agent.spec.mcpSer
 
 ## Versioning and Delivery
 
-This chapter was merged as design in v0.3.0 and is implemented by the v0.4.0 milestone, tracked in its umbrella issue: the [ToolProvider resource](../resources/toolprovider.md), its reconciler, the grant fields on both workload kinds, reconcile-time enforcement of rules 35 to 38, the broker (`/v1/mcp/*` with call-time enforcement at both protocol surfaces, credential injection, stateless session ownership, and rate limits), the audit record and metric surface above, and the removal of `Agent.spec.mcpServers`. The S18 scenario is proven on a real cluster by the e2e suite; see the [scenario coverage map](../appendix/scenario-coverage.md).
+This chapter was merged as design in v0.3.0 and shipped in v0.4.0: the [ToolProvider resource](../resources/toolprovider.md), its reconciler, the grant fields on both workload kinds, reconcile-time enforcement of rules 35 to 38, the broker (`/v1/mcp/*` with call-time enforcement at both protocol surfaces, credential injection, stateless session ownership, and rate limits), the audit record and metric surface above, and the removal of `Agent.spec.mcpServers`. The S18 scenario is proven on a real cluster by the e2e suite; see the [scenario coverage map](../appendix/scenario-coverage.md).
 
 ## Acceptance Scenario
 

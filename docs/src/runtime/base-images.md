@@ -1,6 +1,6 @@
 # Reference Base Images
 
-Reference base images are published container images that embed the full [runtime contract](contract.md), so that deploying an agent no longer starts with owning contract code. Two ship with v0.3.0, built and versioned by the same release workflow as the controller and gateway:
+Reference base images are published container images that embed the full [runtime contract](contract.md), so that deploying an agent no longer starts with owning contract code. Two ship since v0.3.0, built and versioned by the same release workflow as the controller and gateway:
 
 - `ghcr.io/win07xp/kaalm-agent-python`: the zero-build on-ramp. It loads a developer-supplied handler from a mounted ConfigMap at startup, so a first agent needs `kubectl` and nothing else.
 - `ghcr.io/win07xp/kaalm-agent-go`: the reference runtime. It runs the built-in default handler out of the box and serves as the canonical parent for compiled handlers built with the shared runtime module.
@@ -15,7 +15,7 @@ The zero-build path rests on one narrow API addition. An Agent may reference a C
 
 ```yaml
 spec:
-  image: "ghcr.io/win07xp/kaalm-agent-python:0.3.0"
+  image: "ghcr.io/win07xp/kaalm-agent-python:0.4.0"
   handler:
     configMapRef:
       name: greeter-handler
@@ -58,7 +58,7 @@ This surface is append-only within a minor release series: a handler written aga
 The image installs no dependencies at runtime. The class security defaults mount the root filesystem read-only and the synthesized NetworkPolicy has no PyPI egress, and both are features. What the image bundles (the standard library plus its own HTTP stack) is the handler's dependency budget; needing more is the signal to graduate to `FROM`:
 
 ```dockerfile
-FROM ghcr.io/win07xp/kaalm-agent-python:0.3.0
+FROM ghcr.io/win07xp/kaalm-agent-python:0.4.0
 # The image runs as nonroot; installing needs root, serving does not.
 USER 0
 RUN pip install --no-cache-dir beautifulsoup4 lxml
@@ -97,7 +97,7 @@ WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -o /agent .
 
-FROM ghcr.io/win07xp/kaalm-agent-go:0.3.0
+FROM ghcr.io/win07xp/kaalm-agent-go:0.4.0
 COPY --from=build /agent /kaalm-agent
 ```
 

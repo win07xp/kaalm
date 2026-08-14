@@ -30,7 +30,7 @@ Do not restate them:
 
 ## Diagrams
 
-44 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
+47 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
 Regenerate with:
 
 ```bash
