@@ -5,7 +5,7 @@ against it, and what comes next.
 
 ## Where the project stands
 
-**v0.4.0 shipped on 2026-08-13**
+**v0.4.0 shipped on 2026-08-14**
 ([release](https://github.com/win07xp/kaalm/releases/tag/v0.4.0)). It installs
 with a single `helm install` from the published OCI chart, and every
 implemented acceptance scenario (S1 to S18) is proven on a real cluster.

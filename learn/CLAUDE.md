@@ -8,10 +8,10 @@ details. Build with `mdbook build learn` (or `make books` for all books).
 
 Written against Kaalm 0.3.0 and re-walked for 0.4.0. Every command and every
 block of output on these pages came from one run, in order, on a fresh k3d
-cluster. The 0.4.0 walk follows the same two-pass playbook as 0.3.0 and
-0.2.0: a pre-release walk against locally built artifacts, then a
-confirmation walk against the published artifacts after the tag (issue #77;
-the 0.3.0 passes were issue #56, zero drift).
+cluster. The 0.4.0 walk ran the same two-pass playbook as 0.3.0 and 0.2.0:
+a pre-release walk against locally built artifacts (which caught the one
+drift, five CRDs becoming six), then a confirmation walk against the
+published artifacts on 2026-08-14 (issue #77), which found zero drift.
 
 The install is pinned to `--version 0.4.0` on purpose. The pin is not really
 about the install line: it is what makes the later chapters' output true, since

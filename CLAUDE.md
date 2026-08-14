@@ -3,7 +3,7 @@
 ## Project Overview
 
 **Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
-type. v0.4.0 released 2026-08-13: the tool plane implemented end to end
+type. v0.4.0 released 2026-08-14: the tool plane implemented end to end
 (ToolProvider CRD, grant rules 35 to 38, the gateway MCP broker, per-call
 audit, S18 proven), plus framework agents (LangGraph examples, rotation-aware
 Python ABI clients). Current milestone (v0.5.0, "the console and
