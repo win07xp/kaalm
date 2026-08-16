@@ -64,6 +64,10 @@
 - [Finalizers](controller/finalizers.md)
 - [Errors, Events, and Testing](controller/operations.md)
 
+# The Console
+
+- [Console Overview](console/overview.md)
+
 # Security
 
 - [Security Model and Isolation](security/model.md)

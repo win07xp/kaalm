@@ -80,7 +80,7 @@ they are likely to matter:
   code-executing agents.
 - **Cross-format provider fallback.** Translation between provider API formats
   (for example Anthropic to OpenAI) so fallback chains can cross `spec.type`.
-- **Larger horizons.** Agent-to-agent orchestration, a web UI, multi-cluster
+- **Larger horizons.** Agent-to-agent orchestration, multi-cluster
   federation, and agent-aware scheduling (GPU awareness, priority, preemption).
 
 ## How this page is maintained

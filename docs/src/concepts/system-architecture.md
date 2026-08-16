@@ -65,6 +65,8 @@ At a type level, the chart deploys:
 
 Those last three bullets are the chart's half of the trust chain that lets every in-cluster component verify every other; how the chain is rooted and how workloads consume it is in [In-cluster TLS](../security/tls.md#in-cluster-tls).
 
+Since the v0.5.0 design there is also an optional third Deployment, the console, disabled by default. It is a read-only client of the Kubernetes API and the gateway, it sits outside the two-replica floor, and it changes nothing about the division of work above. See [Console Overview](../console/overview.md).
+
 For the full chart contents, the certificate inventory, the operational Helm values, and the per-tier setup details, see [Deployment](../operations/deployment.md).
 
 ## Control Plane

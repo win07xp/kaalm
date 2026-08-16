@@ -11,9 +11,10 @@ The design book is the spec: it documents exactly how the system works. Start at
 - `runtime/` - the runtime contract, reference base images, starter templates, child resources
 - `gateways/` - gateway overview, `api/` (HTTP wire contract), `llm/`, `user/`
 - `controller/` - operator structure, reconcilers, lifecycles, finalizers
+- `console/` - the optional operator console (read API, authn, test-chat)
 - `security/` - trust model, RBAC, credentials, TLS, threat model
 - `operations/` - deployment (Helm), observability
-- `appendix/` - the acceptance scenarios (S1 to S18), the scenario-coverage map, and the lifecycle index
+- `appendix/` - the acceptance scenarios (S1 to S19), the scenario-coverage map, and the lifecycle index
 
 ## Single-sourced facts
 
@@ -30,7 +31,7 @@ Do not restate them:
 
 ## Diagrams
 
-47 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
+48 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
 Regenerate with:
 
 ```bash

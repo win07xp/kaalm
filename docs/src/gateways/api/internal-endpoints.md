@@ -1,8 +1,8 @@
 # Internal Endpoints
 
-"Internal" here means controller use only: these two endpoints are mTLS-only, they additionally require the controller's SAN (Agent and AgentTask client certs are rejected with `403`), and their authentication model is defined in [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
+"Internal" here means Kaalm's own components only: these three endpoints are mTLS-only, each additionally requires a specific peer SAN (the controller's for the two `GET` endpoints, the console's for `POST /v1/test-chat`; Agent and AgentTask client certs are rejected with `403`), and their authentication model is defined in [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
 
-Both endpoints share a deliberate placement decision: they are served on the cluster listener (port 8443), not the User listener (port 8080). Port 8080 only serves inbound webhook traffic (`/channels/*`) and the async polling fallback (`/v1/channels/responses/*`); mTLS-authenticated internal endpoints live on 8443. This listener split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert.
+All three endpoints share a deliberate placement decision: they are served on the cluster listener (port 8443), not the User listener (port 8080). Port 8080 only serves inbound webhook traffic (`/channels/*`) and the async polling fallback (`/v1/channels/responses/*`); mTLS-authenticated internal endpoints live on 8443. This listener split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert.
 
 ## GET /v1/activity
 
@@ -103,3 +103,29 @@ The request carries no auth header; authentication is the mTLS client cert prese
 The third channel in the example (`new-channel`) shows `state: "empty"`: this replica has no in-window observations for that path. The controller decides whether this means the channel is genuinely silent (`Unknown` with `reason=NoRecentTraffic`) or whether observation is incomplete (preserve existing condition) by comparing `replicaStartedAt` to the window length and checking other replicas. See [Channel Health Tracking](../user/platform-adapters.md#channel-health-tracking) and [AgentChannelReconciler](../../controller/reconcilers.md#agentchannelreconciler) step 4.
 
 **Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only channels whose target Agent is in the requested namespace are returned.
+
+## POST /v1/test-chat
+
+Called by the optional [console](../../console/overview.md) (since the v0.5.0 design) to deliver one operator-authored test message to one agent and return the reply. Authenticated via **mTLS**: the caller must present the console's `kaalm-console-tls` client cert, verified against `kaalm-ca`, with a SAN matching the console Service DNS (`kaalm-console.kaalm-system.svc.cluster.local` or `.svc`). The gateway does not re-authorize the human behind the request: the console performs the `TokenReview` and `SubjectAccessReview` before calling ([Authentication](../../console/overview.md#authentication)), and possession of the console SAN carries that authorization, the same trust class as the controller on the two endpoints above.
+
+**Request:**
+
+```json
+{
+  "namespace": "team-support",
+  "agent": "support-assistant",
+  "userId": "priya@example.com",
+  "content": "are you alive?"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | yes | The target Agent's namespace |
+| `agent` | string | yes | The target Agent's name |
+| `userId` | string | yes | The console-authenticated identity, placed in the delivery envelope's `userId` verbatim so the message is attributable to a person |
+| `content` | string | yes | The message text |
+
+The gateway builds a standard [`POST /v1/message` envelope](agent-endpoints.md#request-body-sent-by-the-gateway): a fresh `messageId`, `channelType: "console"`, `channelId: "/console/{namespace}/{agent}"`, the given `userId`, a `sessionId` that is always derived per [Session identity](agent-endpoints.md#session-identity-the-sessionid-derivation), and empty `attachments` and `metadata`. Delivery is the sync channel path end to end: wake-on-demand for a hibernated agent, the agent-delivery retry pipeline, response validation, and the `syncDeliveryDeadline` bound.
+
+**Response:** `200 OK` with the agent's reply envelope verbatim (`content`, plus pass-through `attachments` and `metadata`). Failures use the [User Gateway error mapping](errors.md#user-gateway-error-responses) exactly as sync mode does: `502` for `delivery_failed`; `504` for `wake_timeout`, `controller_unavailable`, and `sync_deadline_exceeded`; `413` for `response_too_large`. `400 Bad Request` for a missing field, and `404 Not Found` when the named Agent does not exist. As on the two endpoints above, a request without a client cert is rejected `401 Unauthorized` and a non-matching SAN `403 Forbidden`.
