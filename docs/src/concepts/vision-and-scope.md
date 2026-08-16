@@ -78,12 +78,12 @@ Kaalm's differentiator is the combination none of its neighbors has: **dollar-de
 - cert-manager-based TLS certificate lifecycle for the gateway and per-agent serving certs; see [Certificate Lifecycle](../operations/deployment.md#certificate-lifecycle)
 - Starter templates (one Go, one Python) under `examples/` that implement the runtime contract; see [Starter Templates](../runtime/starter-templates.md)
 - Helm chart with [tiered on-ramp](../operations/deployment.md#tiered-on-ramp) (gateway-only → full agent lifecycle with channels)
+- An optional operator console (designed for v0.5.0, default off): read-only fleet visibility plus one governed test-chat action; see [Console Overview](../console/overview.md)
 
 **Out of scope for v1** (may land in later versions):
 
 - Agent-to-agent communication and multi-agent orchestration
 - Observability stack (traces, cost dashboards, audit export)
-- A web UI or dashboard
 - Multi-cluster federation
 - Advanced scheduling (GPU-awareness, priority classes, preemption policies specific to agents)
 - Hard budget enforcement (synchronous per-request aggregation)

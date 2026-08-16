@@ -1,0 +1,55 @@
+@startuml console-overview
+' The optional operator console in one picture: how a human reaches it, what
+' it reads, and the single governed write path (test-chat) through the
+' gateway. The swap rule is drawn inside the console node: one data layer,
+' two replaceable faces.
+' Source of truth: docs/src/console/overview.md
+!include _style.puml
+
+skinparam nodesep 20
+skinparam ranksep 36
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "Priya, the operator" as priya #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+
+rectangle "namespace: kaalm-system" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "kaalm-console (optional, default off)" as consolebox #line:0D47A1;line.dashed;text:0a2540 {
+    rectangle "HTML pages\nhtml/template" as pages #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+    rectangle "JSON read API\n/api/v1" as api #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+    rectangle "one data layer\nwatches the six CRDs" as data #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  }
+  rectangle "gateway" as gw #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+}
+
+rectangle "Kubernetes API server" as kube #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+
+rectangle "a user namespace" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "Agent Pod\n(may be hibernated)" as agent #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+
+priya -[#8B4513,bold]-> pages : port-forward,\npaste a token
+priya -[#8B4513]-> api : or Authorization: Bearer\nper request
+
+pages -[#0D47A1]-> data
+api -[#0D47A1]-> data
+note right of pages
+  the swap rule: a richer
+  frontend replaces the
+  pages, never the API
+end note
+
+data -[#0D47A1]-> kube : get, list, watch\nstatus only, no Secrets
+consolebox -[#9E9E9E]-> kube : TokenReview +\nSubjectAccessReview
+
+consolebox -[#1B5E20,bold]-> gw : POST /v1/test-chat\nmTLS, console SAN
+note on link
+  a governed message: wake,
+  budgets, grants, audit,
+  and activity all apply
+end note
+
+gw -[#1B5E20,bold]-> agent : POST /v1/message\nthe channel path
+
+@enduml
