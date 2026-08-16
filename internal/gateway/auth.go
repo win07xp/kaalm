@@ -186,3 +186,24 @@ func (a *Authenticator) ControllerPaths(next http.HandlerFunc) http.HandlerFunc 
 		next(w, r)
 	}
 }
+
+// ConsolePaths authenticates the console-only endpoint (/v1/test-chat): a
+// client cert whose SAN matches the console Service DNS. The gateway does not
+// re-authorize the human behind the request; the console runs TokenReview and
+// SubjectAccessReview before calling, and possession of the console SAN
+// carries that authorization (docs/src/security/rbac.md, Internal Endpoint
+// Authentication).
+func (a *Authenticator) ConsolePaths(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cert := peerCert(r)
+		if cert == nil {
+			unauthorized(w, "client certificate required")
+			return
+		}
+		if !IsConsoleCert(cert, a.OperatorNamespace) {
+			forbidden(w, errAccessDenied, "this path requires the console identity")
+			return
+		}
+		next(w, r)
+	}
+}

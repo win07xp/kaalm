@@ -21,14 +21,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
+	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
 // Config carries the gateway's runtime settings.
@@ -145,11 +144,11 @@ type Server struct {
 	upstreamClient *http.Client
 
 	outboundCAOnce sync.Once
-	upstreamCAs    *caPoolLoader
-	callbackCAs    *caPoolLoader
+	upstreamCAs    *tlsutil.CAPoolLoader
+	callbackCAs    *tlsutil.CAPoolLoader
 
 	agentClientOnce   sync.Once
-	agentClientLoader *certLoader
+	agentClientLoader *tlsutil.CertLoader
 	agentClientErr    error
 }
 
@@ -157,10 +156,10 @@ type Server struct {
 func (s *Server) initOutboundCAs() {
 	s.outboundCAOnce.Do(func() {
 		if len(s.Config.UpstreamCAFiles) > 0 {
-			s.upstreamCAs = &caPoolLoader{files: s.Config.UpstreamCAFiles, additive: true}
+			s.upstreamCAs = &tlsutil.CAPoolLoader{Files: s.Config.UpstreamCAFiles, Additive: true}
 		}
 		if len(s.Config.CallbackCAFiles) > 0 {
-			s.callbackCAs = &caPoolLoader{files: s.Config.CallbackCAFiles, additive: true}
+			s.callbackCAs = &tlsutil.CAPoolLoader{Files: s.Config.CallbackCAFiles, Additive: true}
 		}
 	})
 }
@@ -171,7 +170,7 @@ func (s *Server) initOutboundCAs() {
 func (s *Server) upstreamCAPool() (*x509.CertPool, error) {
 	s.initOutboundCAs()
 	if s.upstreamCAs != nil {
-		return s.upstreamCAs.load()
+		return s.upstreamCAs.Load()
 	}
 	return s.Config.UpstreamCAs, nil
 }
@@ -180,7 +179,7 @@ func (s *Server) upstreamCAPool() (*x509.CertPool, error) {
 func (s *Server) callbackCAPool() (*x509.CertPool, error) {
 	s.initOutboundCAs()
 	if s.callbackCAs != nil {
-		return s.callbackCAs.load()
+		return s.callbackCAs.Load()
 	}
 	return s.Config.CallbackCAs, nil
 }
@@ -268,6 +267,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(s.handleActivity))
 	mux.HandleFunc("/v1/channels/health", s.Auth.ControllerPaths(s.handleChannelsHealth))
 
+	// Console-only path: console SAN required
+	// (docs/src/gateways/api/internal-endpoints.md, POST /v1/test-chat).
+	mux.HandleFunc("/v1/test-chat", s.Auth.ConsolePaths(s.handleTestChat))
+
 	// Anything else on the cluster listener is an unrecognized path.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "unrecognized path "+r.URL.Path)
@@ -279,11 +282,11 @@ func (s *Server) Handler() http.Handler {
 // bearer-token callers complete the handshake, with the serving cert and CA
 // pool reloaded from disk on rotation (kubelet swaps the projected volume).
 func (s *Server) TLSConfig() (*tls.Config, error) {
-	loader := &certLoader{certFile: s.Config.CertFile, keyFile: s.Config.KeyFile, caFile: s.Config.CAFile}
-	if _, err := loader.certificate(); err != nil {
+	loader := &tlsutil.CertLoader{CertFile: s.Config.CertFile, KeyFile: s.Config.KeyFile, CAFile: s.Config.CAFile}
+	if _, err := loader.Certificate(); err != nil {
 		return nil, err
 	}
-	pool, err := loader.caPool()
+	pool, err := loader.CAPool()
 	if err != nil {
 		return nil, err
 	}
@@ -292,12 +295,12 @@ func (s *Server) TLSConfig() (*tls.Config, error) {
 		ClientAuth: tls.VerifyClientCertIfGiven,
 		ClientCAs:  pool,
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return loader.certificate()
+			return loader.Certificate()
 		},
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
 			// Rebuild ClientCAs when the CA bundle rotates: a CA change must
 			// refresh the inbound trust pool, not only the serving cert.
-			pool, err := loader.caPool()
+			pool, err := loader.CAPool()
 			if err != nil {
 				return nil, err
 			}
@@ -306,7 +309,7 @@ func (s *Server) TLSConfig() (*tls.Config, error) {
 				ClientAuth: tls.VerifyClientCertIfGiven,
 				ClientCAs:  pool,
 				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-					return loader.certificate()
+					return loader.Certificate()
 				},
 			}, nil
 		},
@@ -412,113 +415,5 @@ func (s *Server) upstream() *http.Client {
 	return s.upstreamClient
 }
 
-// caPoolLoader reloads a CA bundle from disk when its mtime changes, keeping
-// the previous pool through a partial write. additive adds the bundle to the
-// system roots instead of replacing them, which is what the outbound (upstream
-// provider and channel callback) trust pools need; the inbound listener pool
-// verifies only against the Kaalm CA and is not additive.
-type caPoolLoader struct {
-	// files are merged into one pool, so the cluster CA and an operator-supplied
-	// enterprise bundle can be trusted together (a projected volume cannot
-	// concatenate two ConfigMap keys into a single file).
-	files    []string
-	additive bool
-
-	mu     sync.Mutex
-	pool   *x509.CertPool
-	mtimes []time.Time
-}
-
-func (l *caPoolLoader) load() (*x509.CertPool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	mtimes := make([]time.Time, len(l.files))
-	for i, file := range l.files {
-		info, err := os.Stat(file)
-		if err != nil {
-			if l.pool != nil {
-				return l.pool, nil
-			}
-			return nil, err
-		}
-		mtimes[i] = info.ModTime()
-	}
-	if l.pool != nil && sameMtimes(l.mtimes, mtimes) {
-		return l.pool, nil
-	}
-
-	pool := x509.NewCertPool()
-	if l.additive {
-		if system, sysErr := x509.SystemCertPool(); sysErr == nil && system != nil {
-			pool = system
-		}
-	}
-	for _, file := range l.files {
-		pem, err := os.ReadFile(file)
-		if err != nil {
-			if l.pool != nil {
-				return l.pool, nil
-			}
-			return nil, err
-		}
-		if !pool.AppendCertsFromPEM(pem) {
-			if l.pool != nil {
-				return l.pool, nil
-			}
-			return nil, fmt.Errorf("no certificates parsed from CA bundle %s", file)
-		}
-	}
-	l.pool, l.mtimes = pool, mtimes
-	return l.pool, nil
-}
-
-func sameMtimes(a, b []time.Time) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !a[i].Equal(b[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-// certLoader reloads the serving cert and CA bundle from disk when their
-// mtimes change, so cert-manager rotation needs no process restart.
-type certLoader struct {
-	certFile, keyFile, caFile string
-
-	mu        sync.Mutex
-	cert      *tls.Certificate
-	certMtime time.Time
-	caOnce    sync.Once
-	ca        *caPoolLoader
-}
-
-func (l *certLoader) certificate() (*tls.Certificate, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	info, err := os.Stat(l.certFile)
-	if err != nil {
-		return nil, err
-	}
-	if l.cert != nil && info.ModTime().Equal(l.certMtime) {
-		return l.cert, nil
-	}
-	cert, err := tls.LoadX509KeyPair(l.certFile, l.keyFile)
-	if err != nil {
-		if l.cert != nil {
-			return l.cert, nil // keep serving the old cert through a partial write
-		}
-		return nil, err
-	}
-	l.cert, l.certMtime = &cert, info.ModTime()
-	return l.cert, nil
-}
-
-func (l *certLoader) caPool() (*x509.CertPool, error) {
-	l.caOnce.Do(func() { l.ca = &caPoolLoader{files: []string{l.caFile}} })
-	return l.ca.load()
-}
+// The rotation-aware certificate and CA-bundle loaders live in
+// internal/tlsutil, shared with the console.

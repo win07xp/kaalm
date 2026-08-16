@@ -617,3 +617,33 @@ func TestWebhook_RawBodyInvalidUTF8(t *testing.T) {
 		t.Errorf("invalid UTF-8 raw body = %d", resp.StatusCode)
 	}
 }
+
+// A successful channel delivery must record gatewayTraffic activity: the
+// channel half of the GET /v1/activity contract. Before v0.5.0 only the LLM
+// proxy recorded traffic, so a chat-only agent hibernated mid-conversation.
+func TestWebhook_DeliveryRecordsActivity(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"content":"hi"}`))
+	})
+	h.seedChannel("sync")
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("delivery = %d, want 200", resp.StatusCode)
+	}
+	snap := h.server.Activity.Snapshot("team-a")
+	src, ok := snap.Agents["sup"]
+	if !ok || src.GatewayTraffic == nil {
+		t.Error("channel delivery must record gatewayTraffic for the agent")
+	}
+
+	// A failed delivery records nothing: activity means the agent answered.
+	h2 := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) })
+	h2.seedChannel("sync")
+	resp = h2.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	_ = resp.Body.Close()
+	if _, ok := h2.server.Activity.Snapshot("team-a").Agents["sup"]; ok {
+		t.Error("a failed delivery must not count as activity")
+	}
+}

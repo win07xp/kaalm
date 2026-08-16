@@ -91,8 +91,18 @@ func ParseWorkloadSAN(cert *x509.Certificate) (Identity, error) {
 // IsControllerCert reports whether the certificate's SAN list names the
 // controller Service DNS, which authorizes the controller-only paths.
 func IsControllerCert(cert *x509.Certificate, operatorNamespace string) bool {
-	long := fmt.Sprintf("kaalm-controller.%s.svc.cluster.local", operatorNamespace)
-	short := fmt.Sprintf("kaalm-controller.%s.svc", operatorNamespace)
+	return isServiceCert(cert, "kaalm-controller", operatorNamespace)
+}
+
+// IsConsoleCert reports whether the certificate's SAN list names the console
+// Service DNS, which authorizes POST /v1/test-chat.
+func IsConsoleCert(cert *x509.Certificate, operatorNamespace string) bool {
+	return isServiceCert(cert, "kaalm-console", operatorNamespace)
+}
+
+func isServiceCert(cert *x509.Certificate, service, operatorNamespace string) bool {
+	long := fmt.Sprintf("%s.%s.svc.cluster.local", service, operatorNamespace)
+	short := fmt.Sprintf("%s.%s.svc", service, operatorNamespace)
 	for _, san := range cert.DNSNames {
 		if san == long || san == short {
 			return true

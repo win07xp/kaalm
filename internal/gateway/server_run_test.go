@@ -31,6 +31,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
 // certFiles writes a leaf cert.pem/key.pem signed by ca plus the ca.pem bundle
@@ -132,24 +134,24 @@ func TestServer_TLSConfig_Errors(t *testing.T) {
 func TestCertLoader_CachesByMtime(t *testing.T) {
 	ca := newTestCA(t)
 	certFile, keyFile, caFile := certFiles(t, ca, "gw")
-	l := &certLoader{certFile: certFile, keyFile: keyFile, caFile: caFile}
+	l := &tlsutil.CertLoader{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
 
-	c1, err := l.certificate()
+	c1, err := l.Certificate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	c2, err := l.certificate()
+	c2, err := l.Certificate()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c1 != c2 {
 		t.Error("unchanged cert file must return the cached certificate")
 	}
-	p1, err := l.caPool()
+	p1, err := l.CAPool()
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, _ := l.caPool()
+	p2, _ := l.CAPool()
 	if p1 != p2 {
 		t.Error("unchanged CA file must return the cached pool")
 	}
