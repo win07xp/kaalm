@@ -28,6 +28,10 @@ import (
 // identityKey carries the authenticated Identity through a request context.
 type identityKey struct{}
 
+func withIdentity(ctx context.Context, id Identity) context.Context {
+	return context.WithValue(ctx, identityKey{}, id)
+}
+
 func identityFrom(ctx context.Context) Identity {
 	id, _ := ctx.Value(identityKey{}).(Identity)
 	return id
@@ -93,7 +97,7 @@ func (s *Server) requireAPI(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, id)))
+		next(w, r.WithContext(withIdentity(r.Context(), id)))
 	}
 }
 

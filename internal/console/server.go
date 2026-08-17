@@ -86,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/namespaces/{ns}/spend", s.requireAPI(s.apiSpend))
 	mux.HandleFunc("POST /api/v1/namespaces/{ns}/agents/{name}/chat", s.requireAPI(s.apiChat))
 
+	s.uiRoutes(mux)
 	return mux
 }
 

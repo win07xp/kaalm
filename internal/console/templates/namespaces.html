@@ -1,0 +1,11 @@
+{{template "head" .}}
+<h2>Namespaces</h2>
+{{if .Namespaces}}
+<table>
+  <tr><th>Namespace</th></tr>
+  {{range .Namespaces}}<tr><td><a href="/ns/{{.}}">{{.}}</a></td></tr>{{end}}
+</table>
+{{else}}
+<p class="empty">Your token can read no namespaces with Kaalm agents.</p>
+{{end}}
+{{template "foot" .}}

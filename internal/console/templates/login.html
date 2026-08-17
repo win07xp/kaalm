@@ -1,0 +1,11 @@
+{{template "head" .}}
+<h2>Log in</h2>
+<p>Paste a Kubernetes bearer token (a ServiceAccount token or your OIDC token).
+The console validates it with the cluster; what you may see is what your
+token may read.</p>
+{{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+<form class="login" method="post" action="/login">
+  <input type="password" name="token" placeholder="token" autocomplete="off" autofocus>
+  <button type="submit">Log in</button>
+</form>
+{{template "foot" .}}
