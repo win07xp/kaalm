@@ -26,15 +26,19 @@ import (
 )
 
 // uiClient is an http client with a cookie jar and no redirect following,
-// so redirects are assertable.
-func uiClient(t *testing.T) *http.Client {
+// so redirects are assertable. It trusts the harness's TLS server: the
+// console serves TLS only, and the session cookie is Secure, so the tests
+// must ride https like production does (older Go cookiejars correctly
+// refuse to send Secure cookies over plain http).
+func uiClient(t *testing.T, h *apiHarness) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &http.Client{
-		Jar: jar,
+		Transport: h.srv.Client().Transport,
+		Jar:       jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -64,7 +68,7 @@ func page(t *testing.T, c *http.Client, url string) (int, string) {
 
 func TestUI_LoginFlow(t *testing.T) {
 	h := newAPIHarness(t)
-	c := uiClient(t)
+	c := uiClient(t, h)
 
 	// Logged out, every page redirects to /login.
 	status, _ := page(t, c, h.srv.URL+"/")
@@ -112,7 +116,7 @@ func TestUI_LoginFlow(t *testing.T) {
 
 func TestUI_HomeFiltersNamespaces(t *testing.T) {
 	h := newAPIHarness(t)
-	c := uiClient(t)
+	c := uiClient(t, h)
 	login(t, h, c, "dev-token")
 	_, body := page(t, c, h.srv.URL+"/")
 	if !strings.Contains(body, "team-a") || strings.Contains(body, "team-b") {
@@ -122,7 +126,7 @@ func TestUI_HomeFiltersNamespaces(t *testing.T) {
 
 func TestUI_NamespacePanels(t *testing.T) {
 	h := newAPIHarness(t)
-	c := uiClient(t)
+	c := uiClient(t, h)
 	login(t, h, c, "priya-token")
 
 	status, body := page(t, c, h.srv.URL+"/ns/team-a")
@@ -145,7 +149,7 @@ func TestUI_NamespacePanels(t *testing.T) {
 	}
 
 	// A namespace the identity may not view is denied.
-	c2 := uiClient(t)
+	c2 := uiClient(t, h)
 	login(t, h, c2, "dev-token")
 	if status, _ := page(t, c2, h.srv.URL+"/ns/team-b"); status != 403 {
 		t.Errorf("denied namespace page = %d, want 403", status)
@@ -154,7 +158,7 @@ func TestUI_NamespacePanels(t *testing.T) {
 
 func TestUI_AgentPageAndChat(t *testing.T) {
 	h := newAPIHarness(t)
-	c := uiClient(t)
+	c := uiClient(t, h)
 	login(t, h, c, "priya-token")
 
 	status, body := page(t, c, h.srv.URL+"/ns/team-a/agents/support-assistant")
@@ -196,7 +200,7 @@ func TestUI_AgentPageAndChat(t *testing.T) {
 	}
 
 	// Viewing is not chatting: dev sees the page but the form is refused.
-	c2 := uiClient(t)
+	c2 := uiClient(t, h)
 	login(t, h, c2, "dev-token")
 	resp, err = c2.PostForm(h.srv.URL+"/ns/team-a/agents/support-assistant/chat",
 		url.Values{"content": {"hi"}})

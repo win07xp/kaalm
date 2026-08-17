@@ -64,7 +64,7 @@ func newAPIHarness(t *testing.T) *apiHarness {
 	s := NewServer(Config{OperatorNamespace: "kaalm-system"},
 		seededData(t), reviewer, NewGate(authz), chat)
 	h := &apiHarness{server: s, authz: authz, chat: chat}
-	h.srv = httptest.NewServer(s.Handler())
+	h.srv = httptest.NewTLSServer(s.Handler())
 	t.Cleanup(h.srv.Close)
 	return h
 }
@@ -75,7 +75,7 @@ func (h *apiHarness) get(t *testing.T, path, token string) *http.Response {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestAPI_Chat(t *testing.T) {
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := h.srv.Client().Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +204,7 @@ func TestAPI_SessionCookieAuth(t *testing.T) {
 	}
 	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/namespaces/team-a/agents", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: value})
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
