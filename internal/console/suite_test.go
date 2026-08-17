@@ -48,7 +48,7 @@ func TestMain(m *testing.M) {
 		// The data-layer envtest skips without assets (plain `go test`);
 		// make test / cover-check provide them. Print why so a skip in CI is
 		// diagnosable rather than silent.
-		os.Stderr.WriteString("console envtest unavailable: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("console envtest unavailable: " + err.Error() + "\n")
 	}
 	if err == nil {
 		scheme := runtime.NewScheme()

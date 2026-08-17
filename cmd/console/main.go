@@ -53,7 +53,8 @@ func main() {
 	flag.StringVar(&certFile, "tls-cert", "/var/run/kaalm/tls.crt", "serving and client certificate (kaalm-console-tls)")
 	flag.StringVar(&keyFile, "tls-key", "/var/run/kaalm/tls.key", "certificate key")
 	flag.StringVar(&caFile, "tls-ca", "/var/run/kaalm/ca.crt", "Kaalm CA bundle for verifying the gateway")
-	flag.StringVar(&gatewayURL, "gateway-url", "", "gateway cluster listener base URL (default derived from POD_NAMESPACE)")
+	flag.StringVar(&gatewayURL, "gateway-url", "",
+		"gateway cluster listener base URL (default derived from POD_NAMESPACE)")
 	flag.BoolVar(&insecureSkipGateway, "insecure-skip-gateway-verify", false, "skip gateway cert verification (dev only)")
 	flag.Parse()
 
