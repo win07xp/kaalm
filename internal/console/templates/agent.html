@@ -1,0 +1,46 @@
+{{template "head" .}}
+<div class="crumbs"><a href="/">namespaces</a> / <a href="/ns/{{.Namespace}}">{{.Namespace}}</a> / {{.Agent.Name}}</div>
+
+<h2>{{.Agent.Name}}</h2>
+<table>
+  <tr><th>Phase</th><td class="phase-{{.Agent.Phase}}">{{.Agent.Phase}}</td></tr>
+  <tr><th>Ready</th><td>{{if .Agent.Ready}}yes{{else}}no{{end}}</td></tr>
+  <tr><th>Class</th><td>{{.Agent.Class}}</td></tr>
+  {{if .Agent.HibernatedAt}}<tr><th>Hibernated at</th><td>{{fmtTime .Agent.HibernatedAt}}</td></tr>{{end}}
+  {{if .Agent.LastActivityTime}}<tr><th>Last activity</th><td>{{fmtTime .Agent.LastActivityTime}}</td></tr>{{end}}
+  {{if .Agent.PodName}}<tr><th>Pod</th><td>{{.Agent.PodName}}</td></tr>{{end}}
+  {{if .Agent.PVCName}}<tr><th>PVC</th><td>{{.Agent.PVCName}}</td></tr>{{end}}
+  {{if .Agent.Providers}}<tr><th>Providers</th><td>{{range $i, $p := .Agent.Providers}}{{if $i}}, {{end}}{{$p}}{{end}}</td></tr>{{end}}
+</table>
+
+{{if .Agent.Tools}}
+<h2>Tool grants</h2>
+<table>
+  <tr><th>ToolProvider</th><th>Tools</th></tr>
+  {{range .Agent.Tools}}
+  <tr><td>{{.Provider}}</td><td>{{if .Tools}}{{range $i, $t := .Tools}}{{if $i}}, {{end}}{{$t}}{{end}}{{else}}all cataloged tools{{end}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
+{{if .Agent.Conditions}}
+<h2>Conditions</h2>
+<table>
+  <tr><th>Type</th><th>Status</th><th>Reason</th><th>Message</th></tr>
+  {{range .Agent.Conditions}}
+  <tr><td>{{.Type}}</td><td>{{.Status}}</td><td>{{.Reason}}</td><td>{{.Message}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
+<h2>Test chat</h2>
+<p>Sends one governed message through the gateway as you ({{.User}}). A
+hibernated agent wakes; whatever the agent spends answering is metered
+against this namespace's budget.</p>
+{{if .ChatError}}<div class="err">{{.ChatError}}</div>{{end}}
+{{if .Reply}}<div class="reply">{{.Reply}}</div>{{end}}
+<form class="chat" method="post" action="/ns/{{.Namespace}}/agents/{{.Agent.Name}}/chat">
+  <textarea name="content" placeholder="say something to {{.Agent.Name}}"></textarea>
+  <button type="submit">Send</button>
+</form>
+{{template "foot" .}}

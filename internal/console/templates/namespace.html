@@ -1,0 +1,57 @@
+{{template "head" .}}
+<div class="crumbs"><a href="/">namespaces</a> / {{.Namespace}}</div>
+
+<h2>Fleet</h2>
+{{if .Fleet}}
+<table>
+  <tr><th>Agent</th><th>Phase</th><th>Ready</th><th>Class</th><th>Hibernated at</th><th>Last activity</th></tr>
+  {{range .Fleet}}
+  <tr>
+    <td><a href="/ns/{{$.Namespace}}/agents/{{.Name}}">{{.Name}}</a></td>
+    <td class="phase-{{.Phase}}">{{.Phase}}</td>
+    <td>{{if .Ready}}yes{{else}}no{{end}}</td>
+    <td>{{.Class}}</td>
+    <td>{{fmtTime .HibernatedAt}}</td>
+    <td>{{fmtTime .LastActivityTime}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}<p class="empty">No agents in this namespace.</p>{{end}}
+
+<h2>Spend against budget</h2>
+{{if .Spend}}
+<table>
+  <tr><th>Provider</th><th>Period</th><th>Spent (USD)</th><th>Ceiling (USD)</th><th>Used</th><th>State</th></tr>
+  {{range .Spend}}
+  <tr><td>{{.Provider}}</td><td>{{.Period}}</td><td>{{.SpentUSD}}</td><td>{{.CeilingUSD}}</td><td>{{.PercentUsed}}%</td><td>{{.State}}</td></tr>
+  {{end}}
+</table>
+{{else}}<p class="empty">No spend recorded for this namespace yet.</p>{{end}}
+
+<h2>Task history</h2>
+{{if .Tasks}}
+<table>
+  <tr><th>Task</th><th>Phase</th><th>Started</th><th>Completed</th><th>Retries</th><th>Artifacts</th></tr>
+  {{range .Tasks}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td class="phase-{{.Phase}}">{{.Phase}}</td>
+    <td>{{fmtTime .StartTime}}</td>
+    <td>{{fmtTime .CompletionTime}}</td>
+    <td>{{.Retries}}</td>
+    <td>{{range $i, $n := .ArtifactNames}}{{if $i}}, {{end}}{{$n}}{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}<p class="empty">No tasks in this namespace.</p>{{end}}
+
+<h2>Channel health</h2>
+{{if .Channels}}
+<table>
+  <tr><th>Channel</th><th>Agent</th><th>Phase</th><th>Ready</th><th>Platform connected</th><th>Reason</th></tr>
+  {{range .Channels}}
+  <tr><td>{{.Name}}</td><td>{{.Agent}}</td><td class="phase-{{.Phase}}">{{.Phase}}</td><td>{{.Ready}}</td><td>{{.PlatformConnected}}</td><td>{{.Reason}}</td></tr>
+  {{end}}
+</table>
+{{else}}<p class="empty">No channels in this namespace.</p>{{end}}
+{{template "foot" .}}

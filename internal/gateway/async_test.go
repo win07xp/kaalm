@@ -65,7 +65,7 @@ func (f *failingAsync) CountPending(context.Context, string, string) (int, error
 func TestPatchWithRetry_Exhaustion(t *testing.T) {
 	fa := &failingAsync{}
 	s := &Server{Async: fa, Config: Config{CallbackBackoff: []time.Duration{time.Millisecond, time.Millisecond}}}
-	s.patchWithRetry(context.Background(), "req-1", []byte(`{}`))
+	s.patchWithRetry(context.Background(), "req-1", "team-a", []byte(`{}`))
 	// One immediate attempt plus one per backoff entry = 3 total.
 	if fa.patches != 3 {
 		t.Errorf("patch attempts = %d, want 3", fa.patches)
@@ -77,7 +77,7 @@ func TestPatchWithRetry_ContextCancel(t *testing.T) {
 	s := &Server{Async: fa, Config: Config{CallbackBackoff: []time.Duration{time.Hour}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the delayed retry aborts on ctx.Done before firing
-	s.patchWithRetry(ctx, "req-1", []byte(`{}`))
+	s.patchWithRetry(ctx, "req-1", "team-a", []byte(`{}`))
 	if fa.patches != 1 {
 		t.Errorf("patch attempts = %d, want 1 (cancelled before retry)", fa.patches)
 	}

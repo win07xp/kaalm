@@ -199,6 +199,15 @@ func (s *Server) handleAsyncAccept(
 	go s.runAsyncPipeline(requestID, channel.DeepCopy(), agent.DeepCopy(), env)
 }
 
+// Callback delivery outcomes, the status vocabulary of
+// kaalm_channel_callback_total (docs/src/gateways/user/operations.md).
+const (
+	callbackDelivered = "delivered"
+	callbackExhausted = "exhausted"
+	callbackRejected  = "rejected"
+	callbackInvalid   = "invalid"
+)
+
 // runAsyncPipeline executes wake, delivery, and response dispatch after the
 // 202. The full retry budget runs without a wall-clock deadline.
 func (s *Server) runAsyncPipeline(
@@ -207,9 +216,12 @@ func (s *Server) runAsyncPipeline(
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	respBody, errType, err := s.wakeAndDeliver(ctx, channel, agent, env)
+	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Webhook.Path, agent, env)
 	var payload []byte
 	if err != nil {
+		if errType == errResponseTooLarge {
+			s.Metrics.ResponseTooLarge(agent.Namespace, "async")
+		}
 		message := err.Error()
 		retryable := errType == errControllerDown
 		payload, _ = json.Marshal(map[string]any{
@@ -226,16 +238,21 @@ func (s *Server) runAsyncPipeline(
 	}
 
 	if channel.Spec.Webhook.CallbackURL != nil {
-		if s.sendCallback(ctx, channel, requestID, payload) {
+		callbackStart := time.Now()
+		outcome := s.sendCallback(ctx, channel, requestID, payload)
+		s.Metrics.ChannelCallback(channel.Namespace, outcome)
+		s.Metrics.ChannelCallbackDuration(channel.Namespace, time.Since(callbackStart).Seconds())
+		if outcome == callbackDelivered {
 			return // delivered via callback; nothing to store
 		}
 	}
-	s.patchWithRetry(ctx, requestID, payload)
+	s.patchWithRetry(ctx, requestID, channel.Namespace, payload)
 }
 
 // patchWithRetry patches the polling record on the shared bounded schedule.
-// Exhaustion drops the payload (v1 limitation) with an error log.
-func (s *Server) patchWithRetry(ctx context.Context, requestID string, payload []byte) {
+// Exhaustion drops the payload (v1 limitation) with an error log and the
+// kaalm_channel_async_patch_failed_total signal.
+func (s *Server) patchWithRetry(ctx context.Context, requestID, namespace string, payload []byte) {
 	backoff := append([]time.Duration{0}, s.Config.CallbackBackoff...)
 	for _, delay := range backoff {
 		if delay > 0 {
@@ -249,6 +266,7 @@ func (s *Server) patchWithRetry(ctx context.Context, requestID string, payload [
 			return
 		}
 	}
+	s.Metrics.AsyncPatchFailed(namespace)
 	slog.Error("async response patch failed; payload dropped", "requestId", requestID)
 }
 
@@ -259,15 +277,15 @@ func (s *Server) patchWithRetry(ctx context.Context, requestID string, payload [
 // sendCallback delivers the payload to callbackUrl with the pre-dial
 // deny-range re-check (pinned-IP dial defeats DNS rebinding), per-attempt
 // signing with a fresh timestamp, and the retried/terminal/bypassed buckets.
-// Returns true when delivered.
+// Returns the callback outcome (delivered | rejected | invalid | exhausted).
 func (s *Server) sendCallback(
 	ctx context.Context, channel *kaalmv1alpha1.AgentChannel, requestID string, payload []byte,
-) bool {
+) string {
 	cbURL := *channel.Spec.Webhook.CallbackURL
 	parsed, err := url.Parse(cbURL)
 	if err != nil || parsed.Scheme != "https" {
 		s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid, "callbackUrl is not https")
-		return false
+		return callbackInvalid
 	}
 	secret := ""
 	if channel.Spec.Webhook.CallbackAuth != nil {
@@ -275,7 +293,7 @@ func (s *Server) sendCallback(
 		if err != nil {
 			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid,
 				"callbackAuth secret unavailable: "+err.Error())
-			return false
+			return callbackInvalid
 		}
 	}
 
@@ -284,7 +302,7 @@ func (s *Server) sendCallback(
 		if delay > 0 {
 			select {
 			case <-ctx.Done():
-				return false
+				return callbackExhausted
 			case <-time.After(delay):
 			}
 		}
@@ -303,24 +321,24 @@ func (s *Server) sendCallback(
 			// payload still reaches polling via the caller.
 			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid,
 				fmt.Sprintf("callbackUrl host resolves to blocked address %s", ip))
-			return false
+			return callbackInvalid
 		}
 
 		status, err := s.dialCallbackOnce(ctx, parsed, ip, channel, secret, requestID, payload)
 		if err == nil && status >= 200 && status <= 299 {
-			return true
+			return callbackDelivered
 		}
 		switch status {
 		case 401, 403, 404, 405, 410, 415:
 			// Terminal: the receiver permanently rejects this POST.
 			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackRejected,
 				fmt.Sprintf("callback receiver returned %d", status))
-			return false
+			return callbackRejected
 		}
 		// Everything else (connect/TLS errors, timeouts, 408/429/422/5xx)
 		// is the retried bucket.
 	}
-	return false
+	return callbackExhausted
 }
 
 // dialCallbackOnce signs and POSTs one callback attempt against the pinned

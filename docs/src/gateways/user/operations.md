@@ -11,6 +11,8 @@ The gateway exposes Prometheus metrics on `:9090/metrics`.
 - `kaalm_channel_messages_total{channel_type,namespace,status}`
 - `kaalm_channel_message_duration_seconds{channel_type}`
 
+`channel_type` is `webhook` for channel deliveries and `console` for [test-chat](../api/internal-endpoints.md#post-v1test-chat) deliveries (since the v0.5.0 console). `status` is `delivered` or the failing error type: `delivery_failed`, `wake_timeout`, `controller_unavailable`, or `response_too_large`. The duration histogram covers the whole delivery pipeline, wake included.
+
 **Wake-on-demand.** These two metrics are meant to be read together. `kaalm_channel_wake_total` tells you how often the activator fired; `kaalm_channel_wake_duration_seconds` tells you how long each wake took and how it ended. Together they make wake-on-demand latency observable end to end, which is what lets you put an SLO on the hard control-plane dependency called out in [The Kaalm Gateway](../overview.md).
 
 - `kaalm_channel_wake_total{namespace}` (count of hibernation wakes triggered)

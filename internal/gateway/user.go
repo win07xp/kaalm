@@ -30,6 +30,7 @@ import (
 	"time"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
 // ActivatorClient asks the controller to wake a hibernated Agent. Injected so
@@ -146,72 +147,113 @@ func (s *Server) handleSyncDelivery(
 	w http.ResponseWriter, ctx context.Context,
 	channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent, env MessageEnvelope,
 ) {
-	deadline := time.Now().Add(s.Config.SyncDeliveryDeadline)
-	ctx, cancel := context.WithDeadline(ctx, deadline)
+	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(s.Config.SyncDeliveryDeadline))
 	defer cancel()
 
-	respBody, errType, err := s.wakeAndDeliver(ctx, channel, agent, env)
+	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Webhook.Path, agent, env)
 	if err != nil {
-		if ctx.Err() != nil {
-			// The sync wall-clock budget fired before the pipeline settled.
-			writeError(w, http.StatusGatewayTimeout, errorBody{
-				Type: errSyncDeadline, Retryable: true,
-				Message: fmt.Sprintf("sync-mode wall-clock exceeded %s", s.Config.SyncDeliveryDeadline)}, 0)
-			return
-		}
-		switch errType {
-		case errControllerDown:
-			writeError(w, http.StatusGatewayTimeout, errorBody{
-				Type: errType, Retryable: true,
-				Message: "controller activator endpoint unreachable; wake could not be triggered"}, 5)
-		case errWakeTimeout:
-			writeError(w, http.StatusGatewayTimeout, errorBody{
-				Type: errType, Message: err.Error()}, 0)
-		case errResponseTooLarge:
-			writeError(w, http.StatusRequestEntityTooLarge, errorBody{
-				Type: errType, Message: err.Error()}, 0)
-		default:
-			writeError(w, http.StatusBadGateway, errorBody{
-				Type: errDeliveryFailed, Message: err.Error()}, 0)
-		}
+		s.writeSyncError(w, ctx, agent.Namespace, errType, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(respBody)
 }
 
+// writeSyncError maps a wakeAndDeliver failure onto the sync-mode HTTP
+// contract, shared by the sync webhook path and test-chat.
+func (s *Server) writeSyncError(w http.ResponseWriter, ctx context.Context, namespace, errType string, err error) {
+	if ctx.Err() != nil {
+		// The sync wall-clock budget fired before the pipeline settled.
+		writeError(w, http.StatusGatewayTimeout, errorBody{
+			Type: errSyncDeadline, Retryable: true,
+			Message: fmt.Sprintf("sync-mode wall-clock exceeded %s", s.Config.SyncDeliveryDeadline)}, 0)
+		return
+	}
+	switch errType {
+	case errControllerDown:
+		writeError(w, http.StatusGatewayTimeout, errorBody{
+			Type: errType, Retryable: true,
+			Message: "controller activator endpoint unreachable; wake could not be triggered"}, 5)
+	case errWakeTimeout:
+		writeError(w, http.StatusGatewayTimeout, errorBody{
+			Type: errType, Message: err.Error()}, 0)
+	case errResponseTooLarge:
+		s.Metrics.ResponseTooLarge(namespace, "sync")
+		writeError(w, http.StatusRequestEntityTooLarge, errorBody{
+			Type: errType, Message: err.Error()}, 0)
+	default:
+		writeError(w, http.StatusBadGateway, errorBody{
+			Type: errDeliveryFailed, Message: err.Error()}, 0)
+	}
+}
+
 // wakeAndDeliver wakes a hibernated agent when needed, then runs the bounded
 // delivery pipeline. Returns the raw agent response body on success.
+// healthPath is the channel webhook path for channel-health recording; the
+// test-chat path passes "" so /console/... traffic never enters a channel
+// health report. The delivery outcome and duration are metered here for
+// every caller (sync, async, test-chat).
 func (s *Server) wakeAndDeliver(
-	ctx context.Context, channel *kaalmv1alpha1.AgentChannel,
+	ctx context.Context, healthPath string,
 	agent *kaalmv1alpha1.Agent, env MessageEnvelope,
 ) (respBody []byte, errType string, err error) {
+	start := time.Now()
+	defer func() {
+		status := "delivered"
+		if errType != "" {
+			status = errType
+		}
+		s.Metrics.ChannelMessage(env.ChannelType, agent.Namespace, status)
+		s.Metrics.ChannelMessageDuration(env.ChannelType, time.Since(start).Seconds())
+	}()
+
 	if agent.Status.Phase == kaalmv1alpha1.AgentHibernated {
 		if s.Activator == nil {
-			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonAgentNotReady,
+			s.recordChannelFailure(healthPath, healthReasonAgentNotReady,
 				"agent hibernated and no activator configured")
 			return nil, errControllerDown, fmt.Errorf("no activator configured")
 		}
+		s.Metrics.ChannelWake(agent.Namespace)
+		wakeStart := time.Now()
 		if err := s.Activator.Wake(ctx, agent.Namespace, agent.Name); err != nil {
-			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonAgentNotReady,
+			s.Metrics.ChannelWakeDuration(agent.Namespace, "controller_unavailable", time.Since(wakeStart).Seconds())
+			s.recordChannelFailure(healthPath, healthReasonAgentNotReady,
 				"activator unreachable: "+err.Error())
 			return nil, errControllerDown, err
 		}
 		if err := s.waitAgentReachable(ctx, agent); err != nil {
+			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", time.Since(wakeStart).Seconds())
 			return nil, errWakeTimeout, fmt.Errorf(
 				"agent did not become ready within wakeTimeout (%s)", s.wakeTimeout(agent))
 		}
+		s.Metrics.ChannelWakeDuration(agent.Namespace, "ready", time.Since(wakeStart).Seconds())
 	}
 	respBody, err = s.deliverToAgent(ctx, agent, env)
 	if err != nil {
 		if strings.Contains(err.Error(), "response body exceeded") {
 			return nil, errResponseTooLarge, err
 		}
-		s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonDispatchFailed, err.Error())
+		s.recordChannelFailure(healthPath, healthReasonDispatchFailed, err.Error())
 		return nil, errDeliveryFailed, err
 	}
-	s.ChannelHealth.RecordSuccess(channel.Spec.Webhook.Path)
+	// A successful delivery is agent traffic for idle detection: the channel
+	// half of the gatewayTraffic contract on GET /v1/activity.
+	if s.Activity != nil {
+		s.Activity.RecordTraffic(agent.Namespace, agent.Name)
+	}
+	if healthPath != "" {
+		s.ChannelHealth.RecordSuccess(healthPath)
+	}
 	return respBody, "", nil
+}
+
+// recordChannelFailure records a channel-health failure unless the delivery
+// has no backing channel (test-chat).
+func (s *Server) recordChannelFailure(healthPath, reason, message string) {
+	if healthPath == "" {
+		return
+	}
+	s.ChannelHealth.RecordFailure(healthPath, reason, message)
 }
 
 func (s *Server) wakeTimeout(agent *kaalmv1alpha1.Agent) time.Duration {
@@ -349,12 +391,12 @@ func (s *Server) agentHTTPClient(agent *kaalmv1alpha1.Agent) (*http.Client, erro
 	// always configures the gateway cert for the bidirectional mTLS contract.
 	if s.Config.CertFile != "" {
 		s.agentClientOnce.Do(func() {
-			loader := &certLoader{certFile: s.Config.CertFile, keyFile: s.Config.KeyFile, caFile: s.Config.CAFile}
-			if _, err := loader.certificate(); err != nil {
+			loader := &tlsutil.CertLoader{CertFile: s.Config.CertFile, KeyFile: s.Config.KeyFile, CAFile: s.Config.CAFile}
+			if _, err := loader.Certificate(); err != nil {
 				s.agentClientErr = err
 				return
 			}
-			if _, err := loader.caPool(); err != nil {
+			if _, err := loader.CAPool(); err != nil {
 				s.agentClientErr = err
 				return
 			}
@@ -363,11 +405,11 @@ func (s *Server) agentHTTPClient(agent *kaalmv1alpha1.Agent) (*http.Client, erro
 		if s.agentClientErr != nil {
 			return nil, s.agentClientErr
 		}
-		cert, err := s.agentClientLoader.certificate()
+		cert, err := s.agentClientLoader.Certificate()
 		if err != nil {
 			return nil, err
 		}
-		pool, err := s.agentClientLoader.caPool()
+		pool, err := s.agentClientLoader.CAPool()
 		if err != nil {
 			return nil, err
 		}
@@ -380,12 +422,12 @@ func (s *Server) agentHTTPClient(agent *kaalmv1alpha1.Agent) (*http.Client, erro
 // NewControllerActivator builds the production activator client from the
 // gateway's own TLS identity, pinned to the controller Service DNS.
 func NewControllerActivator(operatorNamespace, certFile, keyFile, caFile string) (*ControllerActivator, error) {
-	loader := &certLoader{certFile: certFile, keyFile: keyFile, caFile: caFile}
-	cert, err := loader.certificate()
+	loader := &tlsutil.CertLoader{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
+	cert, err := loader.Certificate()
 	if err != nil {
 		return nil, err
 	}
-	pool, err := loader.caPool()
+	pool, err := loader.CAPool()
 	if err != nil {
 		return nil, err
 	}

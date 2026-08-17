@@ -82,9 +82,18 @@ func TestMetrics_CountersAndHistogram(t *testing.T) {
 		t.Errorf("budgetThreshold = %v, want 1", got)
 	}
 
-	m.ChannelMessage("team-a", "ok")
-	if got := testutil.ToFloat64(m.channelMsgs.WithLabelValues("webhook", "team-a", "ok")); got != 1 {
+	m.ChannelMessage("webhook", "team-a", "delivered")
+	if got := testutil.ToFloat64(m.channelMsgs.WithLabelValues("webhook", "team-a", "delivered")); got != 1 {
 		t.Errorf("channelMessage = %v, want 1", got)
+	}
+	m.ChannelMessage("console", "team-a", "delivered")
+	if got := testutil.ToFloat64(m.channelMsgs.WithLabelValues("console", "team-a", "delivered")); got != 1 {
+		t.Errorf("channelMessage(console) = %v, want 1", got)
+	}
+
+	m.ChannelMessageDuration("webhook", 0.3)
+	if n := testutil.CollectAndCount(m.channelMsgDur); n == 0 {
+		t.Error("ChannelMessageDuration histogram recorded nothing")
 	}
 
 	m.ChannelWake("team-a")
@@ -92,9 +101,19 @@ func TestMetrics_CountersAndHistogram(t *testing.T) {
 		t.Errorf("channelWake = %v, want 1", got)
 	}
 
+	m.ChannelWakeDuration("team-a", "ready", 1.5)
+	if n := testutil.CollectAndCount(m.channelWakeDur); n == 0 {
+		t.Error("ChannelWakeDuration histogram recorded nothing")
+	}
+
 	m.ChannelCallback("team-a", "delivered")
 	if got := testutil.ToFloat64(m.channelCB.WithLabelValues("team-a", "delivered")); got != 1 {
 		t.Errorf("channelCallback = %v, want 1", got)
+	}
+
+	m.ChannelCallbackDuration("team-a", 0.4)
+	if n := testutil.CollectAndCount(m.channelCBDur); n == 0 {
+		t.Error("ChannelCallbackDuration histogram recorded nothing")
 	}
 
 	m.ResponseTooLarge("team-a", "sync")
@@ -120,9 +139,12 @@ func TestMetrics_NilReceiverNoOps(t *testing.T) {
 	m.ToolCall("p", "ns", "web_search", "ok")
 	m.ToolCallDuration("p", "web_search", 0.1)
 	m.BudgetThreshold("p", "ns", "warn")
-	m.ChannelMessage("ns", "ok")
+	m.ChannelMessage("webhook", "ns", "ok")
+	m.ChannelMessageDuration("webhook", 0.1)
 	m.ChannelWake("ns")
+	m.ChannelWakeDuration("ns", "ready", 0.1)
 	m.ChannelCallback("ns", "ok")
+	m.ChannelCallbackDuration("ns", 0.1)
 	m.ResponseTooLarge("ns", "async")
 	m.AsyncPatchFailed("ns")
 }

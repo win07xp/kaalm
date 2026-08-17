@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
 // writeCABundle writes the given CAs as a concatenated PEM bundle.
@@ -62,8 +64,8 @@ func TestCAPoolLoader_ReloadsOnRotation(t *testing.T) {
 	original, added := newTestCA(t), newTestCA(t)
 	writeCABundle(t, file, original)
 
-	loader := &caPoolLoader{files: []string{file}}
-	first, err := loader.load()
+	loader := &tlsutil.CAPoolLoader{Files: []string{file}}
+	first, err := loader.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +74,7 @@ func TestCAPoolLoader_ReloadsOnRotation(t *testing.T) {
 	}
 
 	// An unchanged bundle must not be re-parsed on every call.
-	cached, err := loader.load()
+	cached, err := loader.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,7 @@ func TestCAPoolLoader_ReloadsOnRotation(t *testing.T) {
 	writeCABundle(t, file, original, added)
 	bumpMtime(t, file)
 
-	rotated, err := loader.load()
+	rotated, err := loader.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +103,8 @@ func TestCAPoolLoader_KeepsPoolThroughUnparseableWrite(t *testing.T) {
 	ca := newTestCA(t)
 	writeCABundle(t, file, ca)
 
-	loader := &caPoolLoader{files: []string{file}}
-	good, err := loader.load()
+	loader := &tlsutil.CAPoolLoader{Files: []string{file}}
+	good, err := loader.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +115,7 @@ func TestCAPoolLoader_KeepsPoolThroughUnparseableWrite(t *testing.T) {
 	}
 	bumpMtime(t, file)
 
-	after, err := loader.load()
+	after, err := loader.Load()
 	if err != nil {
 		t.Fatalf("a partial write must not surface an error while a pool is held: %v", err)
 	}
@@ -130,8 +132,8 @@ func TestCAPoolLoader_AdditiveKeepsCustomCA(t *testing.T) {
 	// additive starts from the system roots; the custom CA must still be
 	// trusted on top of them (the system roots themselves vary by host, so
 	// only the additive CA is asserted here).
-	loader := &caPoolLoader{files: []string{file}, additive: true}
-	pool, err := loader.load()
+	loader := &tlsutil.CAPoolLoader{Files: []string{file}, Additive: true}
+	pool, err := loader.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +143,8 @@ func TestCAPoolLoader_AdditiveKeepsCustomCA(t *testing.T) {
 }
 
 func TestCAPoolLoader_MissingFileErrors(t *testing.T) {
-	loader := &caPoolLoader{files: []string{filepath.Join(t.TempDir(), "absent.crt")}}
-	if _, err := loader.load(); err == nil {
+	loader := &tlsutil.CAPoolLoader{Files: []string{filepath.Join(t.TempDir(), "absent.crt")}}
+	if _, err := loader.Load(); err == nil {
 		t.Fatal("a missing bundle must report an error rather than silently trusting nothing")
 	}
 }
@@ -159,8 +161,8 @@ func TestCAPoolLoader_MergesAndReloadsMultipleFiles(t *testing.T) {
 	writeCABundle(t, clusterFile, cluster)
 	writeCABundle(t, customFile, custom)
 
-	loader := &caPoolLoader{files: []string{clusterFile, customFile}}
-	pool, err := loader.load()
+	loader := &tlsutil.CAPoolLoader{Files: []string{clusterFile, customFile}}
+	pool, err := loader.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +174,7 @@ func TestCAPoolLoader_MergesAndReloadsMultipleFiles(t *testing.T) {
 	writeCABundle(t, customFile, custom, rotated)
 	bumpMtime(t, customFile)
 
-	after, err := loader.load()
+	after, err := loader.Load()
 	if err != nil {
 		t.Fatal(err)
 	}

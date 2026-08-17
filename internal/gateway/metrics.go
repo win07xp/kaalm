@@ -48,8 +48,11 @@ type Metrics struct {
 	toolCalls      *prometheus.CounterVec
 	toolDuration   *prometheus.HistogramVec
 	channelMsgs    *prometheus.CounterVec
+	channelMsgDur  *prometheus.HistogramVec
 	channelWake    *prometheus.CounterVec
+	channelWakeDur *prometheus.HistogramVec
 	channelCB      *prometheus.CounterVec
+	channelCBDur   *prometheus.HistogramVec
 	tooLarge       *prometheus.CounterVec
 	patchFailed    *prometheus.CounterVec
 }
@@ -91,12 +94,21 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		channelMsgs: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_channel_messages_total", Help: "Channel messages by outcome.",
 		}, []string{"channel_type", labelNamespace, labelStatus}),
+		channelMsgDur: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "kaalm_channel_message_duration_seconds", Help: "Channel message delivery duration, wake included.",
+		}, []string{"channel_type"}),
 		channelWake: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_channel_wake_total", Help: "Wake-on-demand triggers.",
 		}, []string{labelNamespace}),
+		channelWakeDur: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "kaalm_channel_wake_duration_seconds", Help: "Wake duration from activation to ready or failure.",
+		}, []string{labelNamespace, "result"}),
 		channelCB: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_channel_callback_total", Help: "Async callback attempts by outcome.",
 		}, []string{labelNamespace, labelStatus}),
+		channelCBDur: f.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "kaalm_channel_callback_duration_seconds", Help: "Async callback delivery effort duration.",
+		}, []string{labelNamespace}),
 		tooLarge: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_channel_response_too_large_total", Help: "Oversized agent responses.",
 		}, []string{labelNamespace, "mode"}),
@@ -190,12 +202,23 @@ func (m *Metrics) BudgetBoundary(provider, namespace, event string) {
 	m.budgetBoundary.WithLabelValues(provider, namespace, event).Inc()
 }
 
-// ChannelMessage counts one webhook delivery by outcome.
-func (m *Metrics) ChannelMessage(namespace, status string) {
+// ChannelMessage counts one message delivery by outcome: "delivered" or the
+// sync error type. channelType is the envelope's channelType ("webhook" for
+// channel deliveries, "console" for test-chat).
+func (m *Metrics) ChannelMessage(channelType, namespace, status string) {
 	if m == nil {
 		return
 	}
-	m.channelMsgs.WithLabelValues("webhook", namespace, status).Inc()
+	m.channelMsgs.WithLabelValues(channelType, namespace, status).Inc()
+}
+
+// ChannelMessageDuration records one delivery pipeline's wall-clock,
+// including any wake.
+func (m *Metrics) ChannelMessageDuration(channelType string, seconds float64) {
+	if m == nil {
+		return
+	}
+	m.channelMsgDur.WithLabelValues(channelType).Observe(seconds)
 }
 
 // ChannelWake counts one wake trigger.
@@ -206,12 +229,30 @@ func (m *Metrics) ChannelWake(namespace string) {
 	m.channelWake.WithLabelValues(namespace).Inc()
 }
 
-// ChannelCallback counts one callback attempt.
+// ChannelWakeDuration records one wake's wall-clock by result
+// (ready | controller_unavailable | wake_timeout).
+func (m *Metrics) ChannelWakeDuration(namespace, result string, seconds float64) {
+	if m == nil {
+		return
+	}
+	m.channelWakeDur.WithLabelValues(namespace, result).Observe(seconds)
+}
+
+// ChannelCallback counts one callback delivery effort by outcome.
 func (m *Metrics) ChannelCallback(namespace, status string) {
 	if m == nil {
 		return
 	}
 	m.channelCB.WithLabelValues(namespace, status).Inc()
+}
+
+// ChannelCallbackDuration records one callback delivery effort's wall-clock
+// across its whole retry schedule.
+func (m *Metrics) ChannelCallbackDuration(namespace string, seconds float64) {
+	if m == nil {
+		return
+	}
+	m.channelCBDur.WithLabelValues(namespace).Observe(seconds)
 }
 
 // ResponseTooLarge counts one oversized reply.

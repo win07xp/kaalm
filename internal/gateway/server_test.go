@@ -43,6 +43,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
 // ---- test PKI ----
@@ -529,6 +530,7 @@ func TestAuthMatrix(t *testing.T) {
 	h.seedRoute()
 	taskCert := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
 	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
+	consoleCert := h.ca.issue(t, "kaalm-console.kaalm-system.svc.cluster.local")
 	gatewayShapedCert := h.ca.issue(t, "something.kaalm-system.svc") // valid CA, no recognized SAN
 	agentC := agentCert(t, h.ca)
 	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
@@ -548,6 +550,12 @@ func TestAuthMatrix(t *testing.T) {
 		// 400 = past auth into the handler (missing namespace param).
 		{"controller cert on activity passes auth", &controllerCert, "/v1/activity", 400},
 		{"controller cert on channels-health passes auth", &controllerCert, "/v1/channels/health", 400},
+		// 400 = past auth into the handler (empty request body).
+		{"console cert on test-chat passes auth", &consoleCert, "/v1/test-chat", 400},
+		{"controller cert on test-chat", &controllerCert, "/v1/test-chat", 403},
+		{"console cert on controller path", &consoleCert, "/v1/activity", 403},
+		{"agent cert on test-chat", &agentC, "/v1/test-chat", 403},
+		{"no cert on test-chat", nil, "/v1/test-chat", 401},
 		{"task cert on task-complete reaches handler", &taskCert, "/v1/task/complete", 403},
 		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 200},
 		{"unknown path", &agentC, "/v2/other", 400},
@@ -660,14 +668,14 @@ func TestProxy_RogueCACertFailsHandshake(t *testing.T) {
 func TestCertLoader_PartialWriteFallback(t *testing.T) {
 	ca := newTestCA(t)
 	certFile, keyFile, caFile := certFiles(t, ca, "gw")
-	l := &certLoader{certFile: certFile, keyFile: keyFile, caFile: caFile}
+	l := &tlsutil.CertLoader{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
 
 	// Prime the caches.
-	cert, err := l.certificate()
+	cert, err := l.Certificate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool, err := l.caPool()
+	pool, err := l.CAPool()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -675,7 +683,7 @@ func TestCertLoader_PartialWriteFallback(t *testing.T) {
 	// A corrupt cert (partial write) keeps serving the cached certificate.
 	time.Sleep(10 * time.Millisecond)
 	writeFile(t, certFile, []byte("-----BEGIN CERTIFICATE-----\ngarbage\n-----END CERTIFICATE-----"))
-	got, err := l.certificate()
+	got, err := l.Certificate()
 	if err != nil || got != cert {
 		t.Errorf("corrupt cert must fall back to cached: got=%v err=%v", got, err)
 	}
@@ -683,7 +691,7 @@ func TestCertLoader_PartialWriteFallback(t *testing.T) {
 	// A corrupt CA bundle keeps serving the cached pool.
 	time.Sleep(10 * time.Millisecond)
 	writeFile(t, caFile, []byte("not a certificate at all"))
-	gotPool, err := l.caPool()
+	gotPool, err := l.CAPool()
 	if err != nil || gotPool != pool {
 		t.Errorf("corrupt CA must fall back to cached pool: err=%v", err)
 	}

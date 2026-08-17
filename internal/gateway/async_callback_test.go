@@ -123,16 +123,16 @@ func TestSendCallback_Rejections(t *testing.T) {
 	httpURL := "http://insecure.example.com/cb"
 	ch := base.DeepCopy()
 	ch.Spec.Webhook.CallbackURL = &httpURL
-	if s.sendCallback(context.Background(), ch, "r1", []byte(`{}`)) {
-		t.Error("non-https callback must not deliver")
+	if got := s.sendCallback(context.Background(), ch, "r1", []byte(`{}`)); got != callbackInvalid {
+		t.Errorf("non-https callback outcome = %q, want %q", got, callbackInvalid)
 	}
 
 	// Unparseable URL.
 	badURL := "://nope"
 	ch2 := base.DeepCopy()
 	ch2.Spec.Webhook.CallbackURL = &badURL
-	if s.sendCallback(context.Background(), ch2, "r2", []byte(`{}`)) {
-		t.Error("unparseable callback URL must not deliver")
+	if got := s.sendCallback(context.Background(), ch2, "r2", []byte(`{}`)); got != callbackInvalid {
+		t.Errorf("unparseable callback URL outcome = %q, want %q", got, callbackInvalid)
 	}
 
 	// HTTPS with callbackAuth whose secret cannot be resolved.
@@ -141,8 +141,8 @@ func TestSendCallback_Rejections(t *testing.T) {
 	ch3.Spec.Webhook.CallbackURL = &httpsURL
 	ch3.Spec.Webhook.CallbackAuth = &kaalmv1alpha1.ChannelAuth{Type: authTypeBearer} // no secretRef
 	s.Store = newFakeStore()
-	if s.sendCallback(context.Background(), ch3, "r3", []byte(`{}`)) {
-		t.Error("unresolvable callbackAuth secret must not deliver")
+	if got := s.sendCallback(context.Background(), ch3, "r3", []byte(`{}`)); got != callbackInvalid {
+		t.Errorf("unresolvable callbackAuth secret outcome = %q, want %q", got, callbackInvalid)
 	}
 }
 

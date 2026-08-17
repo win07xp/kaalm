@@ -1,0 +1,44 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaalm Console</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; color: #1a1a2e; background: #f7f7fb; }
+  header { display: flex; align-items: baseline; gap: 1rem; padding: 0.7rem 1.2rem; background: #1a1a2e; color: #fff; }
+  header .brand { font-weight: 700; }
+  header a, header span { color: #cfd2e8; text-decoration: none; font-size: 0.9rem; }
+  header form { margin-left: auto; }
+  header button { background: none; border: 1px solid #cfd2e8; color: #cfd2e8; border-radius: 4px; padding: 0.15rem 0.6rem; cursor: pointer; }
+  main { max-width: 68rem; margin: 1.2rem auto; padding: 0 1.2rem; }
+  h2 { font-size: 1.05rem; margin: 1.6rem 0 0.5rem; }
+  table { border-collapse: collapse; width: 100%; background: #fff; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.45rem 0.7rem; border-bottom: 1px solid #e4e4ef; }
+  th { background: #ededf5; font-weight: 600; }
+  .empty { color: #777; font-size: 0.9rem; padding: 0.5rem 0; }
+  .phase-Running { color: #14691e; font-weight: 600; }
+  .phase-Hibernated { color: #6a5acd; font-weight: 600; }
+  .phase-Degraded, .phase-Failed { color: #b02a2a; font-weight: 600; }
+  .err { background: #fbe9e9; border: 1px solid #e0b4b4; padding: 0.6rem 0.9rem; border-radius: 4px; margin: 0.8rem 0; }
+  .reply { background: #eaf6ea; border: 1px solid #b7d9b7; padding: 0.6rem 0.9rem; border-radius: 4px; margin: 0.8rem 0; white-space: pre-wrap; }
+  form.chat textarea { width: 100%; box-sizing: border-box; min-height: 4rem; margin: 0.4rem 0; }
+  form.chat button, form.login button { background: #1a1a2e; color: #fff; border: 0; border-radius: 4px; padding: 0.4rem 1rem; cursor: pointer; }
+  form.login input[type=password] { width: 100%; box-sizing: border-box; padding: 0.4rem; margin: 0.4rem 0; }
+  .crumbs { font-size: 0.85rem; margin-bottom: 0.8rem; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Kaalm Console</span>
+  {{if .User}}<span>{{.User}}</span>
+  <form method="post" action="/logout"><button type="submit">log out</button></form>{{end}}
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
