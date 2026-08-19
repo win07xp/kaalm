@@ -38,6 +38,8 @@ The floor is operational, not correctness-driven, on both components:
 - **Controller.** Leader election picks one active replica; the second is a warm standby for failover. Critically, the second replica also serves the activator endpoint, because the activator handler runs on **every** replica (see [Control Plane](../concepts/system-architecture.md#control-plane)), so two replicas keep the activator reachable across voluntary disruptions. Leader election and the activator both work with one replica, but a single-replica controller breaks wake-on-demand availability during drains and single-replica involuntary failures, which contradicts the "hard control-plane dependency" framing in [The Kaalm Gateway](../gateways/overview.md). The PDB matters for the same reason: without it, a multi-node drain or an autoscaler downscale could evict both replicas simultaneously, surfacing as `controller_unavailable` 504s for any in-flight webhook to a hibernated Agent (see [Activator](../gateways/user/activation-and-activity.md#the-activator) step 5).
 - **Gateway.** At one replica, `minAvailable: 1` blocks all voluntary eviction (node drains stall) and `maxUnavailable: 1` rolling updates have no headroom, so chart upgrades would briefly take the gateway offline for both LLM proxy and inbound webhook traffic. The multi-replica state model in [The Kaalm Gateway](../gateways/overview.md) (spend ConfigMap exchange, divide-by-replicas rate buckets, controller activity fan-out) degrades gracefully to one replica, so correctness is not the reason for the floor.
 
+With `console.enabled`, the chart adds a third, optional Deployment, `kaalm-console`, deliberately outside everything above: one replica, no PodDisruptionBudget, no floor. See [Console Overview](../console/overview.md) and the `console.enabled` note below.
+
 ### Configuration reference
 
 This table is the canonical list of Kaalm's Helm values. Every tunable named elsewhere in this book resolves to a row here.
@@ -65,12 +67,18 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.maxMessageBodyBytes` | `1Mi` | Caps inbound webhook bodies on `:8080`. Over-cap POSTs get `413` at the listener level, before path resolution and auth. See [Request Flow step 2](../gateways/user/overview.md#request-flow). |
 | `gateway.maxLLMRequestBodyBytes` | `4Mi` | Caps inbound LLM-proxy request bodies on `:8443`. Over-cap gives `413 request_too_large` before namespace identification. See [LLM Proxy Endpoints](../gateways/api/overview.md#llm-proxy-endpoints). |
 | `gateway.healthPort` | `8081` | Port for the gateway's internal kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). See [Gateway Readiness](../gateways/llm/operations.md#gateway-readiness). |
+| `console.enabled` | `false` | Installs the optional [operator console](../console/overview.md): the `kaalm-console` Deployment, Service, RBAC, and certificate. Off renders none of them. |
+| `console.image.repository` / `.tag` / `.pullPolicy` | `ghcr.io/win07xp/kaalm-console`, appVersion, `IfNotPresent` | The console image. |
+| `console.healthPort` | `8081` | Port for the console's kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). |
+| `console.resources` | unset | Resource requests and limits for the console container, passed verbatim. |
 | `certManager.clusterResourceNamespace` | `"cert-manager"` | Namespace holding the CA `Certificate` and `kaalm-ca` Secret. Must match your cert-manager and trust-manager deployment. See [Certificate Lifecycle](#certificate-lifecycle). |
 | `trustManager.bundleSelector` | unset | Object with `matchLabels` / `matchExpressions`, passed verbatim into the `kaalm-ca` `Bundle`'s `target.namespaceSelector`. |
 
 The values that need more than a sentence of explanation follow.
 
 **`gateway.callbackUrl.allowlist`.** Leaving it unset preserves the default: `https://` only, with loopback, link-local, RFC1918, unique-local IPv6, and cloud-metadata IPs denied. When you set it, the [AgentChannelReconciler](../controller/reconcilers.md#agentchannelreconciler) and the gateway's delivery-time re-check admit only hosts matching one of the configured entries. See [Cross-Resource Validation rule 22](../resources/validation-and-defaulting.md#cross-resource-validation).
+
+**`console.enabled`.** The console Deployment is fixed at one replica with no PodDisruptionBudget and no replica floor: login sessions are held in memory, so a second replica would break logins rather than add availability, and a read surface carries no wake-on-demand style dependency. The chart deliberately ships no `console.replicas` knob. Exposure is also deliberate: no Ingress and no LoadBalancer are templated; operators reach it by port-forward or front it themselves. See [Console Overview](../console/overview.md).
 
 **`controller.networkPolicy.dnsSelector`.** The object has the shape `{ namespaceLabels: {...}, podLabels: {...} }` and supplies the `namespaceSelector` and `podSelector` for the DNS egress rule. The default matches kubeadm, EKS, GKE, AKS, and the upstream CoreDNS chart. Override it for clusters that run DNS in a non-standard namespace or with custom labels. See [Protecting agent containers from LLM provider access](../security/credentials.md#protecting-agent-containers-from-llm-provider-access).
 
@@ -88,12 +96,13 @@ The values that need more than a sentence of explanation follow.
 
 ### Services
 
-The chart installs two ClusterIP `Service`s. The whole SAN and endpoint design hangs on their stable DNS names:
+The chart installs two ClusterIP `Service`s (three with `console.enabled`). The whole SAN and endpoint design hangs on their stable DNS names:
 
 | Service | Ports |
 |---|---|
 | `kaalm-gateway` | `:8080` user listener, `:8443` LLM/internal mTLS listener, `:9090` metrics |
 | `kaalm-controller` | `:9443` activator, `:8080` metrics |
+| `kaalm-console` (optional) | `:8443` pages and read API |
 
 Every certificate SAN, every `$KAALM_GATEWAY_ENDPOINT` value, and every internal RPC in the other docs assumes these names in `kaalm-system`.
 
@@ -123,6 +132,7 @@ Admission webhooks are not used. The cert-manager dependency is solely for TLS l
 | `ClusterIssuer` (CA) | `kaalm-ca-issuer` | Sources the `kaalm-ca` Secret and signs all Kaalm-issued leaf certs. |
 | `Certificate` | `kaalm-gateway-tls` | Gateway serving cert, used by both listeners. |
 | `Certificate` | `kaalm-controller-tls` | The controller's activator endpoint. |
+| `Certificate` (optional) | `kaalm-console-tls` | The console's serving cert, and its client cert for the gateway's test-chat endpoint. Created only with `console.enabled`. |
 | `Certificate` (one per Agent) | per-Agent | Created by the [AgentReconciler](../controller/reconcilers.md#agentreconciler) at provisioning time, owned by the Agent via ownerRef. See [Lifecycle of an agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate). |
 | `Certificate` (one per AgentTask) | per-AgentTask | Created by the [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) at provisioning time, owned by the AgentTask via ownerRef. See [Lifecycle of an AgentTask TLS client certificate](../security/tls.md#lifecycle-of-an-agenttask-tls-client-certificate). |
 | `Bundle` (trust-manager) | `kaalm-ca` | Projects the Kaalm CA as a ConfigMap into every non-system user namespace. |

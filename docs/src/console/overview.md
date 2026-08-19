@@ -37,8 +37,8 @@ What the console may do, stated as hard boundaries rather than a feature list:
 ## Placement
 
 The console is its own Deployment, `kaalm-console` in `kaalm-system`,
-disabled by default (`console.enabled`, a chart value; the values table lands
-with the Helm wiring). Off means off: a default install creates no console
+disabled by default (`console.enabled`; see the
+[configuration reference](../operations/deployment.md#configuration-reference)). Off means off: a default install creates no console
 Deployment, Service, RBAC objects, or Certificate. The console adds no CRDs,
 no fields, and no validation rules; enabling it is configuration, not API
 surface.
