@@ -113,6 +113,7 @@ func isFallbackable(status int) (bool, failClass) {
 type walkState struct {
 	primary      *kaalmv1alpha1.ModelProvider
 	namespace    string
+	workload     string
 	modelID      string
 	attemptCount int
 	maxDepth     int
@@ -160,7 +161,7 @@ func (s *Server) tryWithFallbacks(
 		if provider.Name == st.primary.Name {
 			settle = st.primarySettle
 		} else {
-			d, sfn := s.Budget.Admit(provider, st.namespace)
+			d, sfn := s.Budget.Admit(provider, st.namespace, st.workload)
 			if d.MarginRaisedNow {
 				s.Metrics.BudgetBoundary(provider.Name, st.namespace, "margin_raised")
 			}

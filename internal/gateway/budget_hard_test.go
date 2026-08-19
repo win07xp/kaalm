@@ -63,18 +63,18 @@ func advance(nanos *int64, d time.Duration) { atomic.AddInt64(nanos, int64(d)) }
 func TestHardAdmit_SerializedAdmission(t *testing.T) {
 	mp := hardProvider(blockAt100())
 	b, _ := fakeClockLedger(mp)
-	b.Add(mp, "team-a", 96) // boundary starts at 95
+	b.Add(mp, "team-a", "agent/test", 96) // boundary starts at 95
 
-	d1, settle1 := b.Admit(mp, "team-a")
+	d1, settle1 := b.Admit(mp, "team-a", "agent/test")
 	if settle1 == nil || !d1.BoundaryEngaged || d1.Throttled {
 		t.Fatalf("first admit = %+v settle=%v, want engaged with settle", d1, settle1 != nil)
 	}
-	d2, settle2 := b.Admit(mp, "team-a")
+	d2, settle2 := b.Admit(mp, "team-a", "agent/test")
 	if !d2.Throttled || settle2 != nil {
 		t.Fatalf("second admit = %+v, want throttled", d2)
 	}
 	settle1(5) // 96 + 5 = 101%
-	d3, settle3 := b.Admit(mp, "team-a")
+	d3, settle3 := b.Admit(mp, "team-a", "agent/test")
 	if d3.Action != kaalmv1alpha1.BudgetActionBlock || settle3 != nil {
 		t.Fatalf("post-settle admit = %+v, want block (settled cost must be visible atomically)", d3)
 	}
@@ -90,16 +90,16 @@ func TestHardAdmit_StickySlot(t *testing.T) {
 	b, _ := fakeClockLedger(mp)
 	b.FoldPeers(mp, map[string]float64{"team-a": 96})
 
-	_, settle := b.Admit(mp, "team-a")
+	_, settle := b.Admit(mp, "team-a", "agent/test")
 	if settle == nil {
 		t.Fatal("expected boundary admission")
 	}
 	b.FoldPeers(mp, map[string]float64{}) // peers pruned: utilization drops to 0
-	if d, s := b.Admit(mp, "team-a"); !d.Throttled || s != nil {
+	if d, s := b.Admit(mp, "team-a", "agent/test"); !d.Throttled || s != nil {
 		t.Fatalf("admit with held slot after fold = %+v, want throttled", d)
 	}
 	settle(0)
-	if d, s := b.Admit(mp, "team-a"); d.Throttled || s != nil || d.BoundaryEngaged {
+	if d, s := b.Admit(mp, "team-a", "agent/test"); d.Throttled || s != nil || d.BoundaryEngaged {
 		t.Fatalf("admit after settle at 0%% = %+v settle=%v, want plain pass", d, s != nil)
 	}
 }
@@ -111,9 +111,9 @@ func TestHardAdmit_SettleIdempotenceAndRollover(t *testing.T) {
 	mp := hardProvider(blockAt100())
 	mp.Spec.Budget.Period = "daily"
 	b, nanos := fakeClockLedger(mp)
-	b.Add(mp, "team-a", 96)
+	b.Add(mp, "team-a", "agent/test", 96)
 
-	_, settle := b.Admit(mp, "team-a")
+	_, settle := b.Admit(mp, "team-a", "agent/test")
 	if settle == nil {
 		t.Fatal("expected boundary admission")
 	}
@@ -126,7 +126,7 @@ func TestHardAdmit_SettleIdempotenceAndRollover(t *testing.T) {
 		t.Fatalf("own after double settle = %v, want 98", got)
 	}
 
-	_, settle2 := b.Admit(mp, "team-a")
+	_, settle2 := b.Admit(mp, "team-a", "agent/test")
 	if settle2 == nil {
 		t.Fatal("expected boundary admission before midnight")
 	}
@@ -140,7 +140,7 @@ func TestHardAdmit_SettleIdempotenceAndRollover(t *testing.T) {
 		t.Fatalf("post-rollover own=%v slots=%d, want 3 and 0", newOwn, slots)
 	}
 	b.FoldPeers(mp, map[string]float64{}) // refresh read path in the new period
-	if d, s := b.Admit(mp, "team-a"); d.BoundaryEngaged || s != nil {
+	if d, s := b.Admit(mp, "team-a", "agent/test"); d.BoundaryEngaged || s != nil {
 		t.Fatalf("post-rollover admit = %+v, want slot-free at ~3%%", d)
 	}
 }
@@ -153,14 +153,14 @@ func TestHardAdmit_ClusterCeilingSlot(t *testing.T) {
 	cluster := "100"
 	mp.Spec.Budget.ClusterUSD = &cluster
 	b, _ := fakeClockLedger(mp)
-	b.Add(mp, "team-a", 50)
-	b.Add(mp, "team-b", 46) // cluster at 96%
+	b.Add(mp, "team-a", "agent/test", 50)
+	b.Add(mp, "team-b", "agent/test", 46) // cluster at 96%
 
-	d1, settle1 := b.Admit(mp, "team-a")
+	d1, settle1 := b.Admit(mp, "team-a", "agent/test")
 	if settle1 == nil || !d1.BoundaryEngaged {
 		t.Fatalf("team-a admit = %+v, want cluster-boundary admission", d1)
 	}
-	if d2, s2 := b.Admit(mp, "team-b"); !d2.Throttled || s2 != nil {
+	if d2, s2 := b.Admit(mp, "team-b", "agent/test"); !d2.Throttled || s2 != nil {
 		t.Fatalf("team-b admit with cluster slot held = %+v, want throttled", d2)
 	}
 	settle1(0)
@@ -169,10 +169,10 @@ func TestHardAdmit_ClusterCeilingSlot(t *testing.T) {
 	mp2 := hardProvider(blockAt100())
 	mp2.ObjectMeta = metav1.ObjectMeta{Name: "prov2"}
 	b2, _ := fakeClockLedger(mp2)
-	b2.Add(mp2, "team-a", 96)
-	b2.Add(mp2, "team-b", 96)
-	_, sA := b2.Admit(mp2, "team-a")
-	dB, sB := b2.Admit(mp2, "team-b")
+	b2.Add(mp2, "team-a", "agent/test", 96)
+	b2.Add(mp2, "team-b", "agent/test", 96)
+	_, sA := b2.Admit(mp2, "team-a", "agent/test")
+	dB, sB := b2.Admit(mp2, "team-b", "agent/test")
 	if sA == nil || sB == nil || dB.Throttled {
 		t.Fatalf("independent ns slots: a=%v b=%v dB=%+v", sA != nil, sB != nil, dB)
 	}
@@ -187,15 +187,15 @@ func TestHardAdmit_FailClosed(t *testing.T) {
 
 	// Write path: an unpublishable settle older than the window.
 	b, nanos := fakeClockLedger(mp)
-	b.Add(mp, "team-a", 96) // sets dirtySince
-	b.FoldPeers(mp, nil)    // keep the read path fresh at t0
+	b.Add(mp, "team-a", "agent/test", 96) // sets dirtySince
+	b.FoldPeers(mp, nil)                  // keep the read path fresh at t0
 	advance(nanos, 31*time.Second)
 	b.FoldPeers(mp, nil) // read path fresh again; write path still stale
-	if d, s := b.Admit(mp, "team-a"); !d.Unavailable || s != nil {
+	if d, s := b.Admit(mp, "team-a", "agent/test"); !d.Unavailable || s != nil {
 		t.Fatalf("stale-dirty admit = %+v, want fail-closed", d)
 	}
 	b.MarkPublished("prov", b.now())
-	if d, s := b.Admit(mp, "team-a"); d.Unavailable || s == nil {
+	if d, s := b.Admit(mp, "team-a", "agent/test"); d.Unavailable || s == nil {
 		t.Fatalf("post-publish admit = %+v, want admission", d)
 	} else {
 		s(0)
@@ -203,14 +203,14 @@ func TestHardAdmit_FailClosed(t *testing.T) {
 
 	// Read path: no successful fold within the window.
 	b2, nanos2 := fakeClockLedger(mp)
-	b2.Add(mp2ForProv(mp), "team-a", 96)
+	b2.Add(mp2ForProv(mp), "team-a", "agent/test", 96)
 	b2.MarkPublished("prov", b2.now()) // write path clean
 	advance(nanos2, 31*time.Second)
-	if d, s := b2.Admit(mp, "team-a"); !d.Unavailable || s != nil {
+	if d, s := b2.Admit(mp, "team-a", "agent/test"); !d.Unavailable || s != nil {
 		t.Fatalf("stale-fold admit = %+v, want fail-closed", d)
 	}
 	b2.FoldPeers(mp, nil)
-	if d, s := b2.Admit(mp, "team-a"); d.Unavailable || s == nil {
+	if d, s := b2.Admit(mp, "team-a", "agent/test"); d.Unavailable || s == nil {
 		t.Fatalf("post-fold admit = %+v, want admission", d)
 	} else {
 		s(0)
@@ -220,7 +220,7 @@ func TestHardAdmit_FailClosed(t *testing.T) {
 	b3, nanos3 := fakeClockLedger(mp)
 	snapshot := b3.now()
 	advance(nanos3, 5*time.Second)
-	b3.Add(mp, "team-a", 96) // dirty at t+5
+	b3.Add(mp, "team-a", "agent/test", 96) // dirty at t+5
 	b3.MarkPublished("prov", snapshot)
 	b3.mu.Lock()
 	stillDirty := !b3.providers["prov"].dirtySince.IsZero()
@@ -244,13 +244,13 @@ func TestHardAdmit_EffectiveMarginAndWireFlag(t *testing.T) {
 
 	// Build the tracker: maxCostPerCall = 2; bucket 0 sums 2 over 10s, so
 	// closing it sets peakRatePerSec = 0.2.
-	b.Add(mp, "team-a", 2)
+	b.Add(mp, "team-a", "agent/test", 2)
 	advance(nanos, 10*time.Second)
-	b.Add(mp, "team-a", 1)
+	b.Add(mp, "team-a", "agent/test", 1)
 	b.FoldPeers(mp, map[string]float64{"team-a": 80}) // total 83%
 
 	// marginUSD = 3x2 + 2x0.2x30 = 18 of the 100 ceiling: boundary at 82.
-	d, settle := b.Admit(mp, "team-a")
+	d, settle := b.Admit(mp, "team-a", "agent/test")
 	if settle == nil || !d.BoundaryEngaged {
 		t.Fatalf("admit at 83%% with widened margin = %+v, want engaged", d)
 	}
@@ -258,7 +258,7 @@ func TestHardAdmit_EffectiveMarginAndWireFlag(t *testing.T) {
 		t.Fatal("expected the margin-raised rising edge")
 	}
 	settle(0)
-	if d2, s2 := b.Admit(mp, "team-a"); d2.MarginRaisedNow {
+	if d2, s2 := b.Admit(mp, "team-a", "agent/test"); d2.MarginRaisedNow {
 		t.Fatal("margin-raised must fire only on the rising edge")
 	} else if s2 != nil {
 		s2(0)
@@ -299,7 +299,7 @@ func TestHardAdmit_RaceHammer(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 200; i++ {
-				_, settle := b.Admit(mp, "team-a")
+				_, settle := b.Admit(mp, "team-a", "agent/test")
 				if settle != nil {
 					settle(0.001)
 					atomic.AddInt64(&settled, 1)
@@ -372,7 +372,7 @@ func TestBudgetPublisher_SettleKick(t *testing.T) {
 	mp := hardProvider(blockAt100())
 	ledger := NewBudgetLedger()
 	ledger.FoldPeers(mp, nil)
-	ledger.Add(mp, "team-a", 96)
+	ledger.Add(mp, "team-a", "agent/test", 96)
 
 	// The fake clientset cannot SSA-create, so the ConfigMap must pre-exist
 	// (same caveat as TestBudgetPublisher_PublishAndFold).
@@ -387,7 +387,7 @@ func TestBudgetPublisher_SettleKick(t *testing.T) {
 	defer cancel()
 	go pub.Run(ctx)
 
-	_, settle := ledger.Admit(mp, "team-a")
+	_, settle := ledger.Admit(mp, "team-a", "agent/test")
 	if settle == nil {
 		t.Fatal("expected boundary admission")
 	}
@@ -427,7 +427,7 @@ func TestBudgetPublisher_SettleKickFailureThenTick(t *testing.T) {
 		Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system",
 		PodName: "gw-0", Interval: time.Hour, Providers: providersFn(mp),
 	}
-	ledger.Add(mp, "team-a", 1)
+	ledger.Add(mp, "team-a", "agent/test", 1)
 	pub.publishByName(context.Background(), "prov")
 	ledger.mu.Lock()
 	dirty := !ledger.providers["prov"].dirtySince.IsZero()
@@ -466,7 +466,7 @@ func TestFallback_ThrottledHardCandidateSkipsToChild(t *testing.T) {
 		Policies:    []kaalmv1alpha1.ModelProviderBudgetPolicy{blockAt100()},
 	}
 	h.server.Budget.FoldPeers(blocked, map[string]float64{"team-a": 96})
-	if _, settle := h.server.Budget.Admit(blocked, "team-a"); settle == nil {
+	if _, settle := h.server.Budget.Admit(blocked, "team-a", "agent/test"); settle == nil {
 		t.Fatal("setup: expected to hold blocked-hard's slot")
 	}
 

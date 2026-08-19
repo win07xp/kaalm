@@ -267,9 +267,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/activity", s.Auth.ControllerPaths(s.handleActivity))
 	mux.HandleFunc("/v1/channels/health", s.Auth.ControllerPaths(s.handleChannelsHealth))
 
-	// Console-only path: console SAN required
-	// (docs/src/gateways/api/internal-endpoints.md, POST /v1/test-chat).
+	// Console-only paths: console SAN required
+	// (docs/src/gateways/api/internal-endpoints.md).
 	mux.HandleFunc("/v1/test-chat", s.Auth.ConsolePaths(s.handleTestChat))
+	mux.HandleFunc("/v1/spend", s.Auth.ConsolePaths(s.handleSpend))
 
 	// Anything else on the cluster listener is an unrecognized path.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

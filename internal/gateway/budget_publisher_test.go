@@ -60,7 +60,7 @@ func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"},
 	})
 	ledger := NewBudgetLedger()
-	ledger.Add(p, "team-a", 42) // own spend to publish
+	ledger.Add(p, "team-a", "agent/test", 42) // own spend to publish
 
 	pub := &BudgetPublisher{
 		Client:            client,
@@ -182,7 +182,7 @@ func TestBudgetPublisher_TickAndRun(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"},
 	})
 	ledger := NewBudgetLedger()
-	ledger.Add(p, "team-a", 10)
+	ledger.Add(p, "team-a", "agent/test", 10)
 	pub := &BudgetPublisher{
 		Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system",
 		PodName: "gw-0", Interval: 5 * time.Millisecond,

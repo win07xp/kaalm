@@ -121,7 +121,7 @@ func (b *BudgetLedger) effectiveMarginPctLocked(l *providerLedger, ceilingUSD, c
 // boundary region it try-acquires the governed admission slots and returns
 // a settle the caller MUST invoke exactly once with the request's actual
 // cost (zero if nothing was spent); settle is idempotent and rollover-safe.
-func (b *BudgetLedger) Admit(provider *kaalmv1alpha1.ModelProvider, namespace string) (budgetDecision, func(costUSD float64)) {
+func (b *BudgetLedger) Admit(provider *kaalmv1alpha1.ModelProvider, namespace, workload string) (budgetDecision, func(costUSD float64)) {
 	budget := provider.Spec.Budget
 	scheme := budget.Period
 	if PeriodKey(scheme, b.now()) == "" || len(budget.Policies) == 0 {
@@ -194,7 +194,7 @@ func (b *BudgetLedger) Admit(provider *kaalmv1alpha1.ModelProvider, namespace st
 	var once sync.Once
 	settle := func(costUSD float64) {
 		once.Do(func() {
-			b.settle(providerName, scheme, capturedPeriod, namespace, keys, token, costUSD)
+			b.settle(providerName, scheme, capturedPeriod, namespace, workload, keys, token, costUSD)
 		})
 	}
 	return d, settle
@@ -205,7 +205,7 @@ func (b *BudgetLedger) Admit(provider *kaalmv1alpha1.ModelProvider, namespace st
 // real spend. A settle that crosses a period rollover lands its cost in the
 // current period (the same attribution a midnight-spanning call gets under
 // soft mode) and skips slot mutation via the token mismatch.
-func (b *BudgetLedger) settle(providerName, scheme, capturedPeriod, namespace string, keys []string, token uint64, costUSD float64) {
+func (b *BudgetLedger) settle(providerName, scheme, capturedPeriod, namespace, workload string, keys []string, token uint64, costUSD float64) {
 	b.mu.Lock()
 	l := b.ledgerFor(providerName, scheme)
 	if l.period == capturedPeriod {
@@ -218,6 +218,7 @@ func (b *BudgetLedger) settle(providerName, scheme, capturedPeriod, namespace st
 	dirty := false
 	if costUSD != 0 {
 		l.own[namespace] += costUSD
+		l.ownW[namespace+"/"+workload] += costUSD
 		b.trackLocked(l, costUSD)
 		if l.dirtySince.IsZero() {
 			l.dirtySince = b.now()
