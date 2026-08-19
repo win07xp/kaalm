@@ -1,0 +1,79 @@
+# Fixtures for the operator-console e2e (S19). Self-contained: own namespace,
+# own hibernation-capable class (same shape as the S7 fixture: persistence +
+# hibernationAllowed + positive timers, generous wake budget for the
+# freshly-woken-pod ipset lag), and the viewer identity whose RBAC is exactly
+# what the console's SubjectAccessReview gate checks.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: console-e2e
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: console-e2e-hibernating
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+  lifecycle:
+    hibernationAllowed: true
+    defaultIdleTimeout: 2s
+    defaultHibernationDelay: 2s
+    defaultWakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: console-agent
+  namespace: console-e2e
+spec:
+  agentClassRef:
+    name: console-e2e-hibernating
+  image: registry.test/agents/starter-go:e2e
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationEnabled: true
+---
+# The authorized operator: may view the namespace (list agents) and test-chat
+# (create agentchannels), which is exactly the console's authorization
+# mapping (docs/src/console/overview.md, Authentication).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: console-viewer
+  namespace: console-e2e
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: console-viewer
+  namespace: console-e2e
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agents", "agenttasks", "agentchannels"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kaalm.io"]
+    resources: ["agentchannels"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: console-viewer
+  namespace: console-e2e
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: console-viewer
+subjects:
+  - kind: ServiceAccount
+    name: console-viewer
+    namespace: console-e2e

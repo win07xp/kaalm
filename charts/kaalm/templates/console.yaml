@@ -1,0 +1,182 @@
+{{- if .Values.console.enabled }}
+{{/*
+The optional operator console (docs/src/console/overview.md). Everything the
+console needs lives in this one guarded file plus its Certificate below, so
+"off means off" is auditable at a glance: a default install renders none of
+these objects. One replica by design: login sessions are in memory, and a
+read surface carries no availability requirement, so there is no replicas
+knob to turn it into broken logins.
+*/}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kaalm-console
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+---
+# The console's whole reach (docs/src/console/overview.md, Placement): read
+# the six CRDs and namespaces, validate tokens, ask authorization questions.
+# No Secrets, no ConfigMaps, no Pods, no writes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaalm-console
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agentclasses", "modelproviders", "toolproviders", "agents", "agenttasks", "agentchannels"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kaalm-console
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kaalm-console
+subjects:
+  - kind: ServiceAccount
+    name: kaalm-console
+    namespace: {{ .Release.Namespace }}
+---
+# The console serving/client certificate: serves the UI and the read API,
+# and dials the gateway's POST /v1/test-chat presenting the console SAN
+# (docs/src/security/rbac.md, Internal Endpoint Authentication).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kaalm-console-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+spec:
+  secretName: kaalm-console-tls
+  duration: 2160h     # 90d
+  renewBefore: 720h   # 30d
+  issuerRef:
+    name: kaalm-ca-issuer
+    kind: ClusterIssuer
+  usages:
+    - server auth
+    - client auth
+  dnsNames:
+    - kaalm-console.{{ .Release.Namespace }}.svc.cluster.local
+    - kaalm-console.{{ .Release.Namespace }}.svc
+    - localhost
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kaalm-console
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kaalm
+      app.kubernetes.io/component: console
+  template:
+    metadata:
+      labels:
+        {{- include "kaalm.labels" . | nindent 8 }}
+        app.kubernetes.io/component: console
+    spec:
+      serviceAccountName: kaalm-console
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: console
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          args:
+            - --listen-addr=:8443
+            - --health-addr=:{{ .Values.console.healthPort }}
+            - --tls-cert=/var/run/kaalm/tls.crt
+            - --tls-key=/var/run/kaalm/tls.key
+            - --tls-ca=/var/run/kaalm/ca.crt
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: health
+              containerPort: {{ .Values.console.healthPort }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.console.healthPort }}
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.console.healthPort }}
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with .Values.console.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: kaalm-tls
+              mountPath: /var/run/kaalm
+              readOnly: true
+      volumes:
+        - name: kaalm-tls
+          projected:
+            sources:
+              - secret:
+                  name: kaalm-console-tls
+                  items:
+                    - { key: tls.crt, path: tls.crt }
+                    - { key: tls.key, path: tls.key }
+              - configMap:
+                  name: kaalm-ca
+                  items:
+                    - { key: ca.crt, path: ca.crt }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kaalm-console
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  selector:
+    app.kubernetes.io/name: kaalm
+    app.kubernetes.io/component: console
+  ports:
+    - name: https
+      port: 8443
+      targetPort: 8443
+{{- end }}

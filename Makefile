@@ -218,6 +218,7 @@ CLUSTER ?= kaalm-dev
 CHART_APP_VERSION := $(shell grep '^appVersion:' charts/kaalm/Chart.yaml | awk '{print $$2}' | tr -d '"')
 CONTROLLER_IMG ?= ghcr.io/win07xp/kaalm-controller:$(CHART_APP_VERSION)
 GATEWAY_IMG ?= ghcr.io/win07xp/kaalm-gateway:$(CHART_APP_VERSION)
+CONSOLE_IMG ?= ghcr.io/win07xp/kaalm-console:$(CHART_APP_VERSION)
 AGENT_IMG ?= registry.test/agents/starter-go:e2e
 MOCKPROVIDER_IMG ?= registry.test/mock/llm-provider:e2e
 MOCKMCP_IMG ?= registry.test/mock/mcp-server:e2e
@@ -265,9 +266,10 @@ go-agent-smoke: go-agent-image ## Contract smoke against the built image: TLS, m
 	hack/go-image-smoke.sh $(GO_AGENT_IMG)
 
 .PHONY: e2e-images
-e2e-images: ## Build the controller, gateway, agent, base, and mock-provider images and import them into k3d.
+e2e-images: ## Build the controller, gateway, console, agent, base, and mock-provider images and import them into k3d.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
+	docker build -t $(CONSOLE_IMG) --build-arg BINARY=console .
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
 	docker build -t $(MOCKMCP_IMG) -f test/e2e/mockmcp/Dockerfile .
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
@@ -276,7 +278,7 @@ e2e-images: ## Build the controller, gateway, agent, base, and mock-provider ima
 	docker tag $(GO_AGENT_IMG) $(E2E_GO_BASE_IMG)
 	docker tag $(PYTHON_AGENT_IMG) $(E2E_PYTHON_BASE_IMG)
 	docker pull $(CURL_IMG)
-	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG)
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(CONSOLE_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
@@ -284,7 +286,8 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 		--set certManager.clusterResourceNamespace=cert-manager \
 		--set gateway.trustClusterCAForUpstream=true \
 		--set gateway.trustClusterCAForCallbacks=true \
-		--set 'gateway.callbackUrl.allowlist={mock-provider.e2e.svc}' --wait --timeout 5m
+		--set 'gateway.callbackUrl.allowlist={mock-provider.e2e.svc}' \
+		--set console.enabled=true --wait --timeout 5m
 
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the chart, run the suite.

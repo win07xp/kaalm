@@ -95,3 +95,18 @@ trustManager:
 # keep so an uninstall does not orphan running Agents.
 standardAgentClass:
   enabled: true
+
+# The optional operator console (docs/src/console/overview.md): read-only
+# fleet visibility plus one governed test-chat action. Off by default; a
+# default install creates no console objects at all. Enabling creates the
+# kaalm-console Deployment, Service, RBAC, and certificate. One replica by
+# design (login sessions are held in memory), so there is no replicas knob.
+console:
+  enabled: false
+  image:
+    repository: ghcr.io/win07xp/kaalm-console
+    tag: ""            # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  # Dedicated health/readiness port (kubelet probes).
+  healthPort: 8081
+  resources: {}

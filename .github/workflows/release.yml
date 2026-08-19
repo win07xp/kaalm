@@ -36,6 +36,10 @@ jobs:
             binary: gateway
             context: .
             dockerfile: Dockerfile
+          - component: console
+            binary: console
+            context: .
+            dockerfile: Dockerfile
           - component: agent-python
             binary: unused # the Python Dockerfile declares but ignores BINARY
             context: images/agent-python
