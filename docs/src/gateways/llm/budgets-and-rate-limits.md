@@ -96,6 +96,45 @@ The ModelProviderReconciler cross-references ConfigMap keys against the current 
 
 Deleting a key must not delete the spend it recorded: before removing a current-period key, the reconciler folds its totals into the `_retired` accumulator. Under soft enforcement the distinction is cosmetic (without it, a rollout would produce a small bounded undercount); under [hard enforcement](#hard-enforcement) it is load-bearing, because a rolling restart that erased every replaced replica's published spend would void the ceiling once per rollout.
 
+## Per-Workload Spend
+
+Since v0.5.0 the ledger also answers "which agent spent it": beside the
+per-namespace enforcement counters, each replica accumulates per-workload
+spend keyed `{namespace}/{workload}`, where the workload is the attested
+`agent/{name}` or `task/{name}` from the caller's certificate SAN, or the
+visible `(unattributed)` bucket for gateway-only-tier callers, which
+authenticate by token and carry no workload identity. Keeping that bucket
+visible is what makes the per-workload rows always sum to the namespace
+figure. Spend lands at the same single settle point the namespace counters
+use, under the same mutex, and rolls over with the same period reset; the
+admission math never reads the workload maps, so hard enforcement is
+untouched by construction.
+
+Persistence rides the same exchange in a second object,
+`kaalm-agentspend-{provider}`: each replica publishes its workload partial
+with the same server-side-apply one-key-per-replica pattern and the same
+period tag, folds peers back on the tick and on the ConfigMap watch, and
+seeds from `_canonical` at startup. A separate ConfigMap for two reasons.
+First, safety: the budget fold sums every non-underscore key in the budget
+ConfigMap as namespace spend, so workload keys inside it would silently
+corrupt utilization. Second, capacity: both objects live under the ~1 MiB
+cap, and at the design target of 1000+ agents the workload keys need the
+room. The reducer half mirrors the budget reducer: a pruned replica's
+current-period partial folds into `_retired` before its key deletes, stale
+periods drop, and `_canonical` carries live plus retired.
+
+Three deliberate boundaries. The breakdown keeps the **current period
+only**: the namespace figures archive one prior generation in
+`ModelProvider.status`, the breakdown does not, and it never enters
+provider status at all (namespaces times workloads would grow the CR
+against the same object cap). It never becomes a metric label: the
+cardinality doctrine stands, and per-workload resolution lives in the
+[console read API](../../console/overview.md) via the gateway's
+[GET /v1/spend](../api/internal-endpoints.md#get-v1spend), which any single
+replica answers from its folded union, current to within one publish
+interval. And it is priced spend: calls to unpriced models cost zero and do
+not appear, the same soft-guardrail posture the namespace figures have.
+
 ## Hard Enforcement
 
 Setting `spec.budget.enforcement: hard` on a ModelProvider (default `soft`) turns that provider's `action: block` thresholds into a cap with a stated guarantee. Nothing else changes: `warn` and `degrade` policies remain advisory in both modes, both ceilings (`perNamespaceUSD` and `clusterUSD`) participate through the same worse-of-two utilization, and outside the boundary region described below the machinery is byte-for-byte the soft machinery. Three validation rules gate the mode: hard requires at least one `block` policy (rule 32), every catalog model priced (rule 33, because an unpriced call costs zero and a cap over zeros is a lie), and a coherent boundary margin (rule 34). See [Cross-Resource Validation](../../resources/validation-and-defaulting.md#cross-resource-validation).
