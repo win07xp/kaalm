@@ -21,6 +21,8 @@ limitations under the License.
 package console
 
 import (
+	"encoding/json"
+	"sort"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -63,6 +65,17 @@ type AgentDetail struct {
 	Endpoint   string         `json:"endpoint,omitempty"`
 	PodName    string         `json:"podName,omitempty"`
 	PVCName    string         `json:"pvcName,omitempty"`
+	// Spend is this agent's own current-period spend per provider, attached
+	// from the gateway's per-workload view (empty when the agent has spent
+	// nothing or the gateway is unreachable). Added in v0.5.0, additively.
+	Spend []AgentSpendRow `json:"spend,omitempty"`
+}
+
+// AgentSpendRow is one provider's current-period spend by this agent.
+type AgentSpendRow struct {
+	Provider string `json:"provider"`
+	Period   string `json:"period"`
+	SpentUSD string `json:"spentUSD"`
 }
 
 // ToolGrant is one granted ToolProvider with its optional per-tool narrowing.
@@ -90,6 +103,22 @@ type ChannelRow struct {
 	Ready             string `json:"ready"`
 	PlatformConnected string `json:"platformConnected"`
 	Reason            string `json:"reason,omitempty"`
+}
+
+// WorkloadSpend is one provider's per-workload breakdown for the namespace
+// being viewed, read live from the gateway's folded ledger (current period
+// only). Rows are sorted by workload.
+type WorkloadSpend struct {
+	Provider string             `json:"provider"`
+	Period   string             `json:"period"`
+	Rows     []WorkloadSpendRow `json:"rows"`
+}
+
+// WorkloadSpendRow is one workload's spend: agent/{name}, task/{name}, or
+// the unattributed bucket for gateway-only-tier callers.
+type WorkloadSpendRow struct {
+	Workload string `json:"workload"`
+	SpentUSD string `json:"spentUSD"`
 }
 
 // SpendRow is one provider's budget usage for the namespace being viewed.
@@ -180,6 +209,31 @@ func spendRows(p *kaalmv1alpha1.ModelProvider, namespace string) []SpendRow {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// workloadSpendFromGateway maps the gateway's GET /v1/spend body into
+// sorted breakdown rows.
+func workloadSpendFromGateway(body []byte) ([]WorkloadSpend, error) {
+	var wire struct {
+		Providers map[string]struct {
+			Period    string            `json:"period"`
+			Workloads map[string]string `json:"workloads"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]WorkloadSpend, 0, len(wire.Providers))
+	for provider, v := range wire.Providers {
+		ws := WorkloadSpend{Provider: provider, Period: v.Period, Rows: make([]WorkloadSpendRow, 0, len(v.Workloads))}
+		for workload, usd := range v.Workloads {
+			ws.Rows = append(ws.Rows, WorkloadSpendRow{Workload: workload, SpentUSD: usd})
+		}
+		sort.Slice(ws.Rows, func(i, j int) bool { return ws.Rows[i].Workload < ws.Rows[j].Workload })
+		out = append(out, ws)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	return out, nil
 }
 
 func conditionRows(conds []metav1.Condition) []ConditionRow {

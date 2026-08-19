@@ -26,18 +26,34 @@ import (
 	"testing"
 )
 
-// fakeChat records the last call and relays a scripted response.
+// fakeChat records the last call and relays scripted responses for both
+// gateway surfaces.
 type fakeChat struct {
 	status  int
 	body    []byte
 	lastNS  string
 	lastAg  string
 	lastUID string
+	// spendStatus/spendBody script WorkloadSpend; zero status means 200
+	// with an empty providers object.
+	spendStatus int
+	spendBody   []byte
+	spendErr    error
 }
 
 func (f *fakeChat) Chat(_ context.Context, ns, agent, userID, _ string) (int, []byte, error) {
 	f.lastNS, f.lastAg, f.lastUID = ns, agent, userID
 	return f.status, f.body, nil
+}
+
+func (f *fakeChat) WorkloadSpend(_ context.Context, ns string) (int, []byte, error) {
+	if f.spendErr != nil {
+		return 0, nil, f.spendErr
+	}
+	if f.spendStatus == 0 {
+		return 200, []byte(`{"providers":{}}`), nil
+	}
+	return f.spendStatus, f.spendBody, nil
 }
 
 type apiHarness struct {
