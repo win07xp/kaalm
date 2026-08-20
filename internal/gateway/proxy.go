@@ -77,6 +77,20 @@ var hopByHopHeaders = []string{"Connection", "TE", "Upgrade", "Proxy-Authorizati
 // third-party provider logs.
 var authMaterialHeaders = []string{"Authorization", "X-Api-Key", "Api-Key"}
 
+// workloadKey attributes spend to the attested workload. Token-mode callers
+// (gateway-only tier) carry a namespace but no workload identity and land in
+// the visible unattributed bucket, so per-workload rows still sum to the
+// namespace total.
+func workloadKey(c *caller) string {
+	if c.Workload == nil {
+		return UnattributedWorkload
+	}
+	if c.Workload.Kind == KindAgentTask {
+		return "task/" + c.Workload.Name
+	}
+	return "agent/" + c.Workload.Name
+}
+
 // handleLLMProxy is the LLM proxy happy path: parse, authorize, inject the
 // credential under the forwarded-header contract, relay (buffered or SSE),
 // and account for usage. Budget checks, rate limits, and the fallback chain
@@ -135,7 +149,8 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// boundary region, Admit also acquires the serialized admission slot;
 	// the deferred settle(0) is the safety net for every early-return path
 	// (settle is idempotent, so the real settle always wins).
-	decision, primarySettle := s.Budget.Admit(provider, c.Namespace)
+	workload := workloadKey(c)
+	decision, primarySettle := s.Budget.Admit(provider, c.Namespace, workload)
 	if primarySettle != nil {
 		defer primarySettle(0)
 	}
@@ -173,7 +188,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// own credential and endpoint; the first 2xx (or a non-fallbackable 4xx)
 	// wins. observed collects the failure classes for the exhaustion mapping.
 	st := &walkState{
-		primary: provider, namespace: c.Namespace, modelID: modelID,
+		primary: provider, namespace: c.Namespace, workload: workload, modelID: modelID,
 		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
 		observed: map[failClass]bool{}, primarySettle: primarySettle,
 	}
@@ -216,11 +231,11 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 
 	s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "ok")
 	if isSSE(res.resp) {
-		s.relayStream(w, res.resp, adapter, c.Namespace, res.chosen, modelID, res.settle)
+		s.relayStream(w, res.resp, adapter, c.Namespace, workload, res.chosen, modelID, res.settle)
 		return
 	}
 	if usage, ok := adapter.extractUsage(res.body); ok {
-		s.settleUsage(res.chosen, c.Namespace, modelID, usage, res.settle)
+		s.settleUsage(res.chosen, c.Namespace, workload, modelID, usage, res.settle)
 	} else if res.settle != nil {
 		res.settle(0)
 	}
@@ -330,13 +345,13 @@ func (s *Server) applyBudgetDecision(
 // request holds a boundary admission slot (hard enforcement), the cost lands
 // through its settle so the slot frees and the cost records in one atomic
 // step; otherwise it lands through the plain ledger Add.
-func (s *Server) settleUsage(provider *kaalmv1alpha1.ModelProvider, namespace, modelID string, usage Usage, settle func(float64)) {
+func (s *Server) settleUsage(provider *kaalmv1alpha1.ModelProvider, namespace, workload, modelID string, usage Usage, settle func(float64)) {
 	cost := costOf(provider, modelID, usage)
 	s.Spend.Record(namespace, provider.Name, modelID, usage)
 	if settle != nil {
 		settle(cost)
 	} else {
-		s.Budget.Add(provider, namespace, cost)
+		s.Budget.Add(provider, namespace, workload, cost)
 	}
 	s.Metrics.Tokens(provider.Name, modelID, namespace, usage)
 	s.Metrics.Spend(provider.Name, namespace, cost)
@@ -388,7 +403,7 @@ func isSSE(resp *http.Response) bool {
 // stream completes; a stream ending without usage counts as zero spend.
 func (s *Server) relayStream(
 	w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
-	namespace string, provider *kaalmv1alpha1.ModelProvider, modelID string,
+	namespace, workload string, provider *kaalmv1alpha1.ModelProvider, modelID string,
 	settle func(float64),
 ) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
@@ -402,7 +417,7 @@ func (s *Server) relayStream(
 	// admission slot must always free.
 	defer func() {
 		if !usage.isZero() {
-			s.settleUsage(provider, namespace, modelID, usage, settle)
+			s.settleUsage(provider, namespace, workload, modelID, usage, settle)
 		} else if settle != nil {
 			settle(0)
 		}

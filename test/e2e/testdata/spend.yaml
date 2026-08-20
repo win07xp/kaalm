@@ -1,0 +1,173 @@
+# Fixtures for the per-workload spend e2e (#100): two mTLS agent-identity
+# callers with distinct call counts, so the console must show two distinct
+# rows that sum to the namespace figure. The callers are curl pods mounting
+# each Agent's own {name}-tls certificate Secret: an attested agent-identity
+# LLM call without teaching the starter handler to speak to providers. The
+# provider points at the shared mock's /bigusage arm (5M+5M tokens per call),
+# so each call costs exactly 15.00 USD at the catalog prices below.
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: console-spend
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/bigusage
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - console-e2e
+  budget:
+    period: monthly
+    perNamespaceUSD: "100"
+    policies:
+      - atPercent: 100
+        action: block
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: console-spend-class
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  allowedProviders:
+    - name: console-spend
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: spend-a
+  namespace: console-e2e
+spec:
+  agentClassRef:
+    name: console-spend-class
+  image: registry.test/agents/starter-go:e2e
+  providers:
+    - providerRef:
+        name: console-spend
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: spend-b
+  namespace: console-e2e
+spec:
+  agentClassRef:
+    name: console-spend-class
+  image: registry.test/agents/starter-go:e2e
+  providers:
+    - providerRef:
+        name: console-spend
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spend-caller-a
+  namespace: console-e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # 1 successful call(s) with the agent's own mTLS identity. The
+        # retry loop absorbs the gateway's source-IP startup race exactly as
+        # the token caller fixture does; each success is counted once.
+        - |
+          done=0
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+              --cert /var/run/kaalm/tls.crt --key /var/run/kaalm/tls.key \
+              --cacert /var/run/ca/ca.crt \
+              -H "Content-Type: application/json" \
+              -d '{"model":"console-spend/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              done=$((done+1))
+              if [ "$done" -ge 1 ]; then echo "made $done calls"; exit 0; fi
+            fi
+            sleep 3
+          done
+          echo "gave up with $done calls"; exit 1
+      volumeMounts:
+        - name: tls
+          mountPath: /var/run/kaalm
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: tls
+      secret:
+        secretName: spend-a-tls
+    - name: ca
+      configMap:
+        name: kaalm-ca
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spend-caller-b
+  namespace: console-e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # 2 successful call(s) with the agent's own mTLS identity. The
+        # retry loop absorbs the gateway's source-IP startup race exactly as
+        # the token caller fixture does; each success is counted once.
+        - |
+          done=0
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+              --cert /var/run/kaalm/tls.crt --key /var/run/kaalm/tls.key \
+              --cacert /var/run/ca/ca.crt \
+              -H "Content-Type: application/json" \
+              -d '{"model":"console-spend/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              done=$((done+1))
+              if [ "$done" -ge 2 ]; then echo "made $done calls"; exit 0; fi
+            fi
+            sleep 3
+          done
+          echo "gave up with $done calls"; exit 1
+      volumeMounts:
+        - name: tls
+          mountPath: /var/run/kaalm
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: tls
+      secret:
+        secretName: spend-b-tls
+    - name: ca
+      configMap:
+        name: kaalm-ca

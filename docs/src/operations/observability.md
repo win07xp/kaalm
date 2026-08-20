@@ -91,7 +91,7 @@ For full semantics (when each metric increments, what each label value means, re
 
 The `namespace` label appears on most metrics and dominates cardinality in clusters with many active tenants. The `model` and `provider` labels are bounded by `ModelProvider.spec.models` and the count of declared providers. The `tool` label is bounded by declared catalogs: on the broker metrics it carries only ids from `ToolProvider.spec.tools` (everything else collapses to `uncataloged`; see [Audit and Metering](../gateways/tool-plane.md#audit-and-metering)), and on `kaalm_llm_server_tool_use_total` it carries the provider-side tool vocabulary, a handful of values per provider type. Enum labels (`status`, `result`, `mode`, `phase`, `trigger`, `action`, `direction`, `ready`, `platform_connected`) carry a handful of values each.
 
-**No metric carries per-Agent or per-AgentTask identity as a label.** That resolution belongs in logs and Events, not metrics, to keep cardinality bounded as the cluster scales to thousands of agents.
+**No metric carries per-Agent or per-AgentTask identity as a label.** That resolution belongs in logs, Events, and (since v0.5.0) the console read API backed by the gateway's [per-workload spend ledger](../gateways/llm/budgets-and-rate-limits.md#per-workload-spend), not metrics, to keep cardinality bounded as the cluster scales to thousands of agents.
 
 ## Logs
 

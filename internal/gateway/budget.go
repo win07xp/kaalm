@@ -37,6 +37,18 @@ import (
 // BudgetConfigMapName returns the per-provider budget ConfigMap name.
 func BudgetConfigMapName(providerName string) string { return "kaalm-budget-" + providerName }
 
+// AgentSpendConfigMapName returns the per-provider workload-spend ConfigMap
+// name. Workload spend lives in its own object so the budget enforcement
+// fold never sees its keys and the two never contend for the 1 MiB object
+// cap (docs/src/gateways/llm/budgets-and-rate-limits.md#per-workload-spend).
+func AgentSpendConfigMapName(providerName string) string { return "kaalm-agentspend-" + providerName }
+
+// UnattributedWorkload is the visible spend bucket for gateway-only-tier
+// callers, which authenticate by token and carry a namespace but no workload
+// identity. Keeping the bucket visible is what lets per-workload rows sum to
+// the namespace total.
+const UnattributedWorkload = "(unattributed)"
+
 // CanonicalKey is the reconciler-owned roll-up key in the budget ConfigMap.
 const CanonicalKey = "_canonical"
 
@@ -198,6 +210,13 @@ type providerLedger struct {
 	period string
 	own    map[string]float64
 	peers  map[string]float64
+	// ownW / peersW are the per-workload spend view, keyed
+	// "{namespace}/{workload}" where workload is agent/{name}, task/{name},
+	// or the unattributed bucket ("/" cannot appear in a namespace name, so
+	// the split is unambiguous). Purely additive beside the enforcement
+	// maps: admission math never reads them.
+	ownW   map[string]float64
+	peersW map[string]float64
 
 	// Hard-enforcement state, all guarded by the ledger mutex
 	// (docs/src/gateways/llm/budgets-and-rate-limits.md#hard-enforcement).
@@ -235,13 +254,20 @@ func (b *BudgetLedger) ledgerFor(providerName, scheme string) *providerLedger {
 	period := PeriodKey(scheme, b.now())
 	l, ok := b.providers[providerName]
 	if !ok {
-		l = &providerLedger{period: period, own: map[string]float64{}, peers: map[string]float64{}, adm: map[string]uint64{}}
+		l = &providerLedger{
+			period: period,
+			own:    map[string]float64{}, peers: map[string]float64{},
+			ownW: map[string]float64{}, peersW: map[string]float64{},
+			adm: map[string]uint64{},
+		}
 		b.providers[providerName] = l
 	}
 	if l.period != period {
 		l.period = period
 		l.own = map[string]float64{}
 		l.peers = map[string]float64{}
+		l.ownW = map[string]float64{}
+		l.peersW = map[string]float64{}
 		// A held slot vanishes with the period: the next admit computes
 		// near-zero utilization, outside any boundary, so no invariant is at
 		// risk; in-flight settles land in the new period (like any midnight-
@@ -256,8 +282,9 @@ func (b *BudgetLedger) ledgerFor(providerName, scheme string) *providerLedger {
 	return l
 }
 
-// Add records spend for a namespace after a call completes.
-func (b *BudgetLedger) Add(provider *kaalmv1alpha1.ModelProvider, namespace string, costUSD float64) {
+// Add records spend for a namespace and its attested workload after a call
+// completes.
+func (b *BudgetLedger) Add(provider *kaalmv1alpha1.ModelProvider, namespace, workload string, costUSD float64) {
 	scheme := provider.Spec.Budget.Period
 	if PeriodKey(scheme, b.now()) == "" || costUSD == 0 {
 		return
@@ -266,6 +293,7 @@ func (b *BudgetLedger) Add(provider *kaalmv1alpha1.ModelProvider, namespace stri
 	defer b.mu.Unlock()
 	l := b.ledgerFor(provider.Name, scheme)
 	l.own[namespace] += costUSD
+	l.ownW[namespace+"/"+workload] += costUSD
 	b.trackLocked(l, costUSD)
 	if l.dirtySince.IsZero() {
 		l.dirtySince = b.now()
@@ -286,6 +314,72 @@ func (b *BudgetLedger) FoldPeers(provider *kaalmv1alpha1.ModelProvider, peers ma
 // at startup (read exactly once per provider per replica lifetime).
 func (b *BudgetLedger) InitCanonical(provider *kaalmv1alpha1.ModelProvider, canonical map[string]float64) {
 	b.FoldPeers(provider, canonical)
+}
+
+// FoldWorkloadPeers replaces the per-workload peer view for a provider from
+// freshly read current-period workload partials (own key excluded by the
+// caller). It deliberately does not touch lastFoldOK: workload spend is a
+// visibility surface, never an enforcement input.
+func (b *BudgetLedger) FoldWorkloadPeers(provider *kaalmv1alpha1.ModelProvider, peers map[string]float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
+	l.peersW = peers
+}
+
+// OwnWorkloadPartial snapshots this replica's per-workload counters for
+// publishing, in the same wire shape as the budget partial.
+func (b *BudgetLedger) OwnWorkloadPartial(providerName string) (period string, spend map[string]string, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	l, exists := b.providers[providerName]
+	if !exists || len(l.ownW) == 0 {
+		return "", nil, false
+	}
+	out := map[string]string{}
+	for k, v := range l.ownW {
+		out[k] = strconv.FormatFloat(v, 'f', 2, 64)
+	}
+	return l.period, out, true
+}
+
+// WorkloadProviderSpend is one provider's per-workload view for a namespace:
+// the folded union of this replica's live counters and every peer's latest
+// partial, so any single replica can serve the read.
+type WorkloadProviderSpend struct {
+	Period    string            `json:"period"`
+	Workloads map[string]string `json:"workloads"`
+}
+
+// WorkloadSpend returns every provider's per-workload spend rows for one
+// namespace, USD as decimal strings.
+func (b *BudgetLedger) WorkloadSpend(namespace string) map[string]WorkloadProviderSpend {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	prefix := namespace + "/"
+	out := map[string]WorkloadProviderSpend{}
+	for providerName, l := range b.providers {
+		sums := map[string]float64{}
+		for key, v := range l.ownW {
+			if workload, ok := strings.CutPrefix(key, prefix); ok {
+				sums[workload] += v
+			}
+		}
+		for key, v := range l.peersW {
+			if workload, ok := strings.CutPrefix(key, prefix); ok {
+				sums[workload] += v
+			}
+		}
+		if len(sums) == 0 {
+			continue
+		}
+		rows := map[string]string{}
+		for workload, v := range sums {
+			rows[workload] = strconv.FormatFloat(v, 'f', 2, 64)
+		}
+		out[providerName] = WorkloadProviderSpend{Period: l.period, Workloads: rows}
+	}
+	return out
 }
 
 // OwnPartial snapshots this replica's counters for publishing.
@@ -519,6 +613,29 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1alpha1.M
 		return
 	}
 	p.Ledger.MarkPublished(provider.Name, snapshot)
+	p.publishWorkloads(ctx, provider)
+}
+
+// publishWorkloads publishes this replica's per-workload partial into the
+// provider's agent-spend ConfigMap: same SSA one-key-per-replica exchange,
+// deliberately outside the budget ConfigMap so the enforcement fold never
+// sees workload keys. Best-effort: workload spend is visibility, not
+// enforcement, so a failed publish only logs.
+func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
+	period, spend, ok := p.Ledger.OwnWorkloadPartial(provider.Name)
+	if !ok {
+		return
+	}
+	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend})
+	if err != nil {
+		return
+	}
+	apply := applycorev1.ConfigMap(AgentSpendConfigMapName(provider.Name), p.OperatorNamespace).
+		WithData(map[string]string{p.PodName: string(raw)})
+	if _, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Apply(ctx, apply,
+		metav1.ApplyOptions{FieldManager: p.PodName, Force: true}); err != nil {
+		slog.Warn("workload spend partial publish failed", "provider", provider.Name, "error", err)
+	}
 }
 
 func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
@@ -536,6 +653,20 @@ func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1alpha1.Mode
 		return
 	}
 	p.Ledger.FoldPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock())))
+	p.foldWorkloads(ctx, provider)
+}
+
+// foldWorkloads refreshes the per-workload peer view from the agent-spend
+// ConfigMap, so any single replica serves the folded union on GET /v1/spend.
+func (p *BudgetPublisher) foldWorkloads(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
+	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, AgentSpendConfigMapName(provider.Name), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			p.Ledger.FoldWorkloadPeers(provider, map[string]float64{})
+		}
+		return
+	}
+	p.Ledger.FoldWorkloadPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock())))
 }
 
 // FoldPartials sums every current-period partial in a budget ConfigMap except
@@ -581,5 +712,33 @@ func (p *BudgetPublisher) SeedFromCanonical(ctx context.Context) {
 			}
 		}
 		p.Ledger.InitCanonical(provider, canonical)
+	}
+	p.seedWorkloadsFromCanonical(ctx)
+}
+
+// seedWorkloadsFromCanonical initializes the per-workload peer view from each
+// provider's agent-spend _canonical key at startup, so a restarted replica
+// serves the full current-period breakdown immediately.
+func (p *BudgetPublisher) seedWorkloadsFromCanonical(ctx context.Context) {
+	for _, provider := range p.Providers(ctx) {
+		cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, AgentSpendConfigMapName(provider.Name), metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		raw, ok := cm.Data[CanonicalKey]
+		if !ok {
+			continue
+		}
+		var flat map[string]string
+		if err := json.Unmarshal([]byte(raw), &flat); err != nil {
+			continue
+		}
+		canonical := map[string]float64{}
+		for k, v := range flat {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				canonical[k] = f
+			}
+		}
+		p.Ledger.FoldWorkloadPeers(provider, canonical)
 	}
 }

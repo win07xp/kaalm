@@ -147,6 +147,7 @@ type namespacePage struct {
 	Namespace string
 	Fleet     []FleetRow
 	Spend     []SpendRow
+	Workloads []WorkloadSpend
 	Tasks     []TaskRow
 	Channels  []ChannelRow
 }
@@ -178,6 +179,7 @@ func (s *Server) uiNamespace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page.Spend, _ = s.Data.Spend(r.Context(), ns)
+	page.Workloads = s.workloadSpend(r.Context(), ns)
 	page.Tasks, _ = s.Data.Tasks(r.Context(), ns)
 	page.Channels, _ = s.Data.Channels(r.Context(), ns)
 	s.render(w, "namespace.html", page)
@@ -209,6 +211,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, reply, chat
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
+	detail.Spend = agentSpendRows(s.workloadSpend(r.Context(), ns), detail.Name)
 	s.render(w, "agent.html", agentPage{
 		User: identityFrom(r.Context()).Username, Namespace: ns,
 		Agent: detail, Reply: reply, ChatError: chatError,
@@ -237,7 +240,7 @@ func (s *Server) uiChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	status, body, err := s.Chat.Chat(r.Context(), ns, name, id.Username, content)
+	status, body, err := s.Gateway.Chat(r.Context(), ns, name, id.Username, content)
 	if err != nil {
 		slog.Error("test-chat gateway call failed", "namespace", ns, "agent", name, "userId", id.Username, "err", err)
 		s.renderAgent(w, r, "", "the gateway could not be reached")

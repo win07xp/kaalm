@@ -198,7 +198,7 @@ func TestFallback_BudgetBlockedPrimaryHandledByCaller(t *testing.T) {
 		Period: "monthly", PerNamespaceUSD: "10",
 		Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{{AtPercent: 100, Action: "block"}},
 	}
-	h.server.Budget.Add(blocked, "team-a", 20) // 200% -> blocked
+	h.server.Budget.Add(blocked, "team-a", "agent/test", 20) // 200% -> blocked
 	h.provider("child", "anthropic")
 	h.results["primary"] = 503
 	h.results["child"] = 200

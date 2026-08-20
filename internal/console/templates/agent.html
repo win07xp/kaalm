@@ -23,6 +23,16 @@
 </table>
 {{end}}
 
+{{if .Agent.Spend}}
+<h2>Spend this period</h2>
+<table>
+  <tr><th>Provider</th><th>Period</th><th>Spent (USD)</th></tr>
+  {{range .Agent.Spend}}
+  <tr><td>{{.Provider}}</td><td>{{.Period}}</td><td>{{.SpentUSD}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
 {{if .Agent.Conditions}}
 <h2>Conditions</h2>
 <table>

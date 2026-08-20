@@ -26,6 +26,9 @@ import (
 // budgetConfigMapPrefix names the per-provider budget exchange ConfigMaps.
 const budgetConfigMapPrefix = "kaalm-budget-"
 
+// agentSpendConfigMapPrefix names the per-provider workload-spend ConfigMaps.
+const agentSpendConfigMapPrefix = "kaalm-agentspend-"
+
 // FoldBudgetConfigMapEvent is the watch-driven half of the budget fold
 // (docs/src/gateways/llm/budgets-and-rate-limits.md#cross-replica-enforcement-view):
 // every add or update of a kaalm-budget-* ConfigMap refolds that provider's
@@ -37,6 +40,21 @@ const budgetConfigMapPrefix = "kaalm-budget-"
 func FoldBudgetConfigMapEvent(ctx context.Context, obj any, podName string, store Store, ledger *BudgetLedger) {
 	cm, ok := obj.(*corev1.ConfigMap)
 	if !ok {
+		return
+	}
+	// The agent-spend prefix must be checked first: it also carries the
+	// plain budget prefix ("kaalm-budget-" is not a prefix of
+	// "kaalm-agentspend-", but keep the order explicit and safe).
+	if providerName, ok := strings.CutPrefix(cm.Name, agentSpendConfigMapPrefix); ok && providerName != "" {
+		provider, ok := store.ProviderByName(ctx, providerName)
+		if !ok {
+			return
+		}
+		currentPeriod := PeriodKey(provider.Spec.Budget.Period, ledger.now())
+		if currentPeriod == "" {
+			return
+		}
+		ledger.FoldWorkloadPeers(provider, FoldPartials(cm.Data, podName, currentPeriod))
 		return
 	}
 	providerName, ok := strings.CutPrefix(cm.Name, budgetConfigMapPrefix)

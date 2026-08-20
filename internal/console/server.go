@@ -50,11 +50,11 @@ type Server struct {
 	Reviewer TokenReviewer
 	Gate     *Gate
 	Sessions *SessionStore
-	Chat     ChatClient
+	Gateway  GatewayClient
 }
 
 // NewServer wires a Server from its parts, applying defaults.
-func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, chat ChatClient) *Server {
+func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, gw GatewayClient) *Server {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8443"
 	}
@@ -67,7 +67,7 @@ func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, chat 
 		Reviewer: NewCachingReviewer(reviewer),
 		Gate:     gate,
 		Sessions: NewSessionStore(reviewer),
-		Chat:     chat,
+		Gateway:  gw,
 	}
 }
 

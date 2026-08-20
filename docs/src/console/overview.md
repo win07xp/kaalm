@@ -88,19 +88,26 @@ would show, continuously watched.
 |---|---|
 | Fleet view | `Agent.status`: `phase`, `hibernatedAt`, `lastActivityTime`, conditions ([Agent](../resources/agent.md)) |
 | Spend against budget | `ModelProvider.status.budgetUsage` rows for the namespace, with ceilings from `spec.budget` ([ModelProvider](../resources/modelprovider.md)) |
+| Spend by workload | The gateway's per-workload ledger, via `GET /v1/spend` (see below) |
 | Task history | `AgentTask.status`: `phase`, `startTime`, `completionTime`, `retries`; artifact **names** from `spec.artifacts`, never values ([AgentTask](../resources/agenttask.md)) |
 | Channel health | `AgentChannel.status`: `phase` and the `Ready` / `PlatformConnected` conditions ([AgentChannel](../resources/agentchannel.md)) |
 
 Artifact values are excluded on purpose: task artifacts are workload output
 and can carry anything; task history is about lifecycle, not content.
 
-**Spend is per namespace in v1 of the console.** Nothing in the system stores
-spend per agent: the gateway meters per provider per namespace, and the metric
-catalog deliberately carries no per-agent identity
-([Cardinality](../operations/observability.md#cardinality)). A per-agent
-breakdown requires a gateway-side spend ledger with its own read endpoint;
-that work is scheduled within the v0.5.0 milestone, and when it lands the read
-API grows the fields additively.
+**The per-workload breakdown reads live from the gateway.** The namespace
+figures come from `ModelProvider.status` as above; the per-workload rows
+(agent/{name}, task/{name}, and the unattributed bucket for gateway-only-tier
+callers) come from the gateway's
+[per-workload spend ledger](../gateways/llm/budgets-and-rate-limits.md#per-workload-spend)
+via [GET /v1/spend](../gateways/api/internal-endpoints.md#get-v1spend), the
+console's second use of its gateway client. The breakdown is current period
+only, sums to the namespace figure (it can lead the status figure by up to
+one reconcile interval), and is best-effort: an unreachable gateway degrades
+the panel to the namespace rows rather than darkening it. The metric catalog
+still carries no per-agent identity
+([Cardinality](../operations/observability.md#cardinality)); per-workload
+resolution lives here, in the read API.
 
 ## The Read API
 
@@ -112,10 +119,10 @@ from.
 |---|---|
 | `GET /api/v1/namespaces` | The namespaces this caller may view (authorization-filtered, see below) |
 | `GET /api/v1/namespaces/{ns}/agents` | Fleet rows for the namespace |
-| `GET /api/v1/namespaces/{ns}/agents/{name}` | One agent in detail: conditions, class, providers, tools, pod and PVC names |
+| `GET /api/v1/namespaces/{ns}/agents/{name}` | One agent in detail: conditions, class, providers, tools, pod and PVC names, and its own current-period spend |
 | `GET /api/v1/namespaces/{ns}/tasks` | Task history rows |
 | `GET /api/v1/namespaces/{ns}/channels` | Channel health rows |
-| `GET /api/v1/namespaces/{ns}/spend` | Per-provider budget usage for the namespace |
+| `GET /api/v1/namespaces/{ns}/spend` | Per-provider budget usage for the namespace, plus the per-workload breakdown (since the spend ledger) |
 | `POST /api/v1/namespaces/{ns}/agents/{name}/chat` | Test-chat: delivers one message, returns the reply |
 
 Responses are console-owned summaries, not raw CRD objects. A fleet row looks

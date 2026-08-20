@@ -126,6 +126,9 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.reconcileBudget(ctx, &mp, liveGateways); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcileAgentSpend(ctx, &mp, liveGateways); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Liveness probe.
 	requeue := ctrl.Result{}

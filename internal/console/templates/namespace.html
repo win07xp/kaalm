@@ -28,6 +28,16 @@
 </table>
 {{else}}<p class="empty">No spend recorded for this namespace yet.</p>{{end}}
 
+{{if .Workloads}}
+<h2>Spend by workload</h2>
+{{range .Workloads}}
+<table>
+  <tr><th>{{.Provider}} ({{.Period}})</th><th>Spent (USD)</th></tr>
+  {{range .Rows}}<tr><td>{{.Workload}}</td><td>{{.SpentUSD}}</td></tr>{{end}}
+</table>
+{{end}}
+{{end}}
+
 <h2>Task history</h2>
 {{if .Tasks}}
 <table>

@@ -67,7 +67,7 @@ func TestProxyHard_ThrottledPrimary(t *testing.T) {
 	h.seedRoute()
 	prov := hardenProv(h)
 	h.server.Budget.FoldPeers(prov, map[string]float64{"team-a": 96})
-	if _, settle := h.server.Budget.Admit(prov, "team-a"); settle == nil {
+	if _, settle := h.server.Budget.Admit(prov, "team-a", "agent/test"); settle == nil {
 		t.Fatal("setup: expected to hold the boundary slot")
 	}
 
@@ -98,7 +98,7 @@ func TestProxyHard_FailClosed(t *testing.T) {
 	prov := hardenProv(h)
 	// In the boundary with spend, but no fold has ever succeeded: the read
 	// path is blind, so the replica must not spend.
-	h.server.Budget.Add(prov, "team-a", 96)
+	h.server.Budget.Add(prov, "team-a", "agent/test", 96)
 
 	cert := agentCert(t, h.ca)
 	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"),
@@ -142,7 +142,7 @@ func TestProxyHard_AdmitAndSettleBuffered(t *testing.T) {
 	}
 
 	// 96 (peers) + 1 (own) = 97: still in boundary, slot must be free.
-	if d, settle := h.server.Budget.Admit(prov, "team-a"); settle == nil || d.Throttled {
+	if d, settle := h.server.Budget.Admit(prov, "team-a", "agent/test"); settle == nil || d.Throttled {
 		t.Fatalf("post-settle admit = %+v, want a fresh slot", d)
 	} else {
 		settle(0)

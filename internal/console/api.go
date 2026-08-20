@@ -142,6 +142,7 @@ func (s *Server) apiAgent(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "invalid_request", "agent not found")
 		return
 	}
+	detail.Spend = agentSpendRows(s.workloadSpend(r.Context(), r.PathValue("ns")), detail.Name)
 	writeJSON(w, detail)
 }
 
@@ -164,12 +165,45 @@ func (s *Server) apiChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiSpend(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Data.Spend(r.Context(), r.PathValue("ns"))
+	ns := r.PathValue("ns")
+	rows, err := s.Data.Spend(r.Context(), ns)
 	if err != nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "reading spend failed")
 		return
 	}
-	writeJSON(w, map[string]any{"spend": rows})
+	// The per-workload breakdown is additive (since v0.5.0) and best-effort:
+	// an unreachable gateway degrades the response to the namespace rows, so
+	// the panel never goes dark over its newest column.
+	writeJSON(w, map[string]any{"spend": rows, "workloads": s.workloadSpend(r.Context(), ns)})
+}
+
+// workloadSpend reads the per-workload breakdown from the gateway,
+// best-effort. Nil means unavailable; empty means no spend this period.
+func (s *Server) workloadSpend(ctx context.Context, namespace string) []WorkloadSpend {
+	status, body, err := s.Gateway.WorkloadSpend(ctx, namespace)
+	if err != nil || status != http.StatusOK {
+		slog.Warn("workload spend read failed", "namespace", namespace, "status", status, "err", err)
+		return nil
+	}
+	rows, err := workloadSpendFromGateway(body)
+	if err != nil {
+		slog.Warn("workload spend body unreadable", "namespace", namespace, "err", err)
+		return nil
+	}
+	return rows
+}
+
+// agentSpendRows filters the breakdown down to one agent's own rows.
+func agentSpendRows(all []WorkloadSpend, agentName string) []AgentSpendRow {
+	var out []AgentSpendRow
+	for _, ws := range all {
+		for _, row := range ws.Rows {
+			if row.Workload == "agent/"+agentName {
+				out = append(out, AgentSpendRow{Provider: ws.Provider, Period: ws.Period, SpentUSD: row.SpentUSD})
+			}
+		}
+	}
+	return out
 }
 
 // apiChat is the console's only write-shaped route. It is gated on CanChat
@@ -199,7 +233,7 @@ func (s *Server) apiChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	status, body, err := s.Chat.Chat(r.Context(), ns, agent, id.Username, req.Content)
+	status, body, err := s.Gateway.Chat(r.Context(), ns, agent, id.Username, req.Content)
 	if err != nil {
 		slog.Error("test-chat gateway call failed",
 			"namespace", ns, "agent", agent, "userId", id.Username, "err", err)

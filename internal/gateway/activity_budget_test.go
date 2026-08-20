@@ -179,15 +179,15 @@ func TestBudgetLedger_EnforceThresholds(t *testing.T) {
 	if d := b.Enforce(p, "team-a"); d.Action != "" {
 		t.Errorf("no spend must be no action, got %q", d.Action)
 	}
-	b.Add(p, "team-a", 60) // 60%
+	b.Add(p, "team-a", "agent/test", 60) // 60%
 	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionWarn {
 		t.Errorf("60%% should warn, got %q", d.Action)
 	}
-	b.Add(p, "team-a", 25) // 85%
+	b.Add(p, "team-a", "agent/test", 25) // 85%
 	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionDegrade || d.DegradeTo != smallModel {
 		t.Errorf("85%% should degrade to small, got %+v", d)
 	}
-	b.Add(p, "team-a", 20) // 105%
+	b.Add(p, "team-a", "agent/test", 20) // 105%
 	d := b.Enforce(p, "team-a")
 	if d.Action != kaalmv1alpha1.BudgetActionBlock || d.RetryAfter <= 0 {
 		t.Errorf("105%% should block with Retry-After, got %+v", d)
@@ -201,7 +201,7 @@ func TestBudgetLedger_EnforceThresholds(t *testing.T) {
 func TestBudgetLedger_PeerFoldAndPartials(t *testing.T) {
 	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	b := NewBudgetLedger()
-	b.Add(p, "team-a", 40)
+	b.Add(p, "team-a", "agent/test", 40)
 	// Peer partials push the enforcement view over the ceiling.
 	b.FoldPeers(p, map[string]float64{"team-a": 70})
 	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
@@ -222,7 +222,7 @@ func TestBudgetLedger_PeriodRollover(t *testing.T) {
 	b := NewBudgetLedger()
 	now := time.Date(2026, 7, 31, 23, 59, 0, 0, time.UTC)
 	b.now = func() time.Time { return now }
-	b.Add(p, "team-a", 150)
+	b.Add(p, "team-a", "agent/test", 150)
 	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
 		t.Fatal("should block at 150%")
 	}
@@ -283,7 +283,7 @@ func TestProxy_BudgetDegradeAndBlock(t *testing.T) {
 	cert := agentCert(t, h.ca)
 
 	// 85% spent: the request goes through with the model rewritten.
-	h.server.Budget.Add(h.store.providers["prov"], "team-a", 85)
+	h.server.Budget.Add(h.store.providers["prov"], "team-a", "agent/test", 85)
 	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
 	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -295,7 +295,7 @@ func TestProxy_BudgetDegradeAndBlock(t *testing.T) {
 	}
 
 	// 105%: blocked with Retry-After.
-	h.server.Budget.Add(h.store.providers["prov"], "team-a", 20)
+	h.server.Budget.Add(h.store.providers["prov"], "team-a", "agent/test", 20)
 	resp = postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("blocked call should be 429, got %d", resp.StatusCode)
