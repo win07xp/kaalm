@@ -29,6 +29,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
@@ -184,6 +185,14 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		s.Activity.RecordTraffic(c.Namespace, c.Workload.Name)
 	}
 
+	// The latency histogram covers forwarded requests only (local denials
+	// above complete in microseconds and would drag the percentiles toward
+	// zero, the same reasoning as the tool broker's), from here to the end
+	// of the response relay, labeled with the provider that answered.
+	start := time.Now()
+	answered := providerName
+	defer func() { s.Metrics.Duration(answered, modelID, time.Since(start).Seconds()) }()
+
 	// Walk the fallback tree. Each attempt forwards to one candidate with its
 	// own credential and endpoint; the first 2xx (or a non-fallbackable 4xx)
 	// wins. observed collects the failure classes for the exhaustion mapping.
@@ -215,6 +224,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = res.resp.Body.Close() }()
+	answered = res.provider
 
 	// A non-fallbackable failure (400/422/other 4xx) is relayed verbatim.
 	if res.resp.StatusCode < 200 || res.resp.StatusCode > 299 {

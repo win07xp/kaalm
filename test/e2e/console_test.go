@@ -53,12 +53,13 @@ var _ = Describe("Operator console (S19)", Ordered, func() {
 	It("provisions the fixture agent and lets it hibernate", func() {
 		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/console.yaml")
 		Expect(err).NotTo(HaveOccurred())
+		// The fixture idles after 2s and hibernates 2s later, so a 5s poll
+		// can miss the Running window entirely; asserting Running first made
+		// this spec flake. Hibernated is reachable only through Running, so
+		// the terminal phase alone proves both provisioning and hibernation.
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agent", "console-e2e", "console-agent", "{.status.phase}")
-		}, "180s", "5s").Should(Equal("Running"))
-		Eventually(func() (string, error) {
-			return utils.ResourceField("agent", "console-e2e", "console-agent", "{.status.phase}")
-		}, "120s", "3s").Should(Equal("Hibernated"))
+		}, "300s", "3s").Should(Equal("Hibernated"))
 
 		token, err := utils.Kubectl("create", "token", "console-viewer", "-n", "console-e2e")
 		Expect(err).NotTo(HaveOccurred())

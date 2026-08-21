@@ -283,6 +283,12 @@ func main() {
 	}
 	publisher.SeedFromCanonical(ctx)
 	go publisher.Run(ctx)
+	if err := metrics.Registry.Register(&gateway.BudgetUtilizationCollector{
+		Ledger: server.Budget, Providers: publisher.Providers,
+	}); err != nil {
+		logger.Error("registering the budget utilization gauge failed", "error", err)
+		os.Exit(1)
+	}
 
 	// The watch-driven half of the budget fold: peer partials land in the
 	// enforcement view one watch propagation after they are published, which

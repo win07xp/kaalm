@@ -72,7 +72,7 @@ Standard controller-runtime metrics (reconcile counts, duration, queue depth) ar
 - `kaalm_channels{namespace,phase,ready,platform_connected}`: gauge of AgentChannel count
 - `kaalm_provider_budget_canonical_usd{provider,namespace,period}`: gauge of the reconciler-summed canonical spend total
 
-The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserves it for counters, and promlint flags non-counter `_total` names.
+The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserves it for counters, and promlint flags non-counter `_total` names. They are computed from the manager cache on every scrape (a resource the reconciler has not stamped yet counts as `Pending`), and every controller replica serves them from its own cache, so dashboards aggregate them with `max`, not `sum`.
 
 `kaalm_channels` is rolled up by `status.phase` (`Active` | `Degraded` | `Failed` | `Terminating`, see [AgentChannelReconciler step 5](reconcilers.md#agentchannelreconciler)), `status.conditions[type=Ready]`, and `status.conditions[type=PlatformConnected]`. The two condition labels keep their `true` | `false` | `unknown` values. This surfaces both the bound-Agent state (via `phase`) and the tri-state `PlatformConnected` condition computed by [AgentChannelReconciler step 4](reconcilers.md#agentchannelreconciler).
 
@@ -82,7 +82,8 @@ The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserv
 
 - `kaalm_hibernations_total{namespace}`: counter of hibernation events
 - `kaalm_wakes_total{namespace,trigger}`: counter of wake events (trigger = `channel` | `annotation`)
-- `kaalm_budget_threshold_events_total{provider,namespace,action}`: counter of budget policy triggers (action = `degrade` | `block` | `warn`)
+
+Budget policy actions are counted where they happen, on the gateway's request path: `kaalm_budget_threshold_events_total` in [LLM Gateway Operations](../gateways/llm/operations.md#observability).
 
 For gateway metrics (LLM and channel), see [LLM Gateway Operations](../gateways/llm/operations.md#observability) and [User Gateway Operations](../gateways/user/operations.md#observability).
 

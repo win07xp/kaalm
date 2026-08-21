@@ -110,7 +110,7 @@ The optional `kaalm-upstream-ca` ConfigMap ([Upstream TLS Configuration](../gate
 
 ### Metrics
 
-Prometheus metrics are served on dedicated ports: controller `:8080/metrics` and gateway `:9090/metrics`, both unauthenticated in-cluster. The chart does **not** ship `ServiceMonitor` or `PodMonitor` manifests; scrape integration (and a NetworkPolicy admitting only the Prometheus ServiceAccount, if desired) is left to the platform team. See [Metrics](observability.md#metrics).
+Prometheus metrics are served on dedicated ports: controller `:8080/metrics` and gateway `:9090/metrics`, both unauthenticated in-cluster. The chart does **not** ship `ServiceMonitor` or `PodMonitor` manifests; scrape integration (and a NetworkPolicy admitting only the Prometheus ServiceAccount, if desired) is left to the platform team. See [Metrics](observability.md#metrics). Three Grafana dashboards ship as JSON in `config/grafana/`; see [Dashboards](observability.md#dashboards).
 
 ### Sample resources
 

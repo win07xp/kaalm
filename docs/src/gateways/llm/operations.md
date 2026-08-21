@@ -47,15 +47,16 @@ Because both listeners and every dependent informer must be green for the probe 
 The gateway exposes Prometheus metrics on `:9090/metrics`:
 
 - `kaalm_llm_requests_total{provider,model,namespace,status}`
-- `kaalm_llm_request_duration_seconds{provider,model}`
+- `kaalm_llm_request_duration_seconds{provider,model}` (forwarded requests only, stream relay included, labeled with the provider that answered; local denials such as rate limiting and budget blocks are not observed)
 - `kaalm_llm_tokens_total{provider,model,namespace,direction}` (direction = input|output)
 - `kaalm_llm_spend_usd_total{provider,namespace}`
 - `kaalm_llm_fallback_total{from_provider,to_provider,reason}`
 - `kaalm_llm_budget_utilization{provider,namespace,period}` (gauge, 0-1)
+- `kaalm_budget_threshold_events_total{provider,namespace,action}` (action = warn|degrade|block; one increment per request the budget ladder acted on)
 - `kaalm_llm_budget_boundary_events_total{provider,namespace,event}` (event = engaged|throttled|fail_closed|margin_raised; emitted only by hard-enforcement providers, see [Hard Enforcement](budgets-and-rate-limits.md#hard-enforcement))
 - `kaalm_llm_server_tool_use_total{provider,namespace,tool}` (provider-side tool calls extracted from response usage, e.g. `web_search`; see [the tool plane](../tool-plane.md#provider-side-tools))
 
-Note the naming: the counters carry the `_total` suffix and `kaalm_llm_budget_utilization` does not, because it is a gauge rather than a monotonic counter.
+Note the naming: the counters carry the `_total` suffix and `kaalm_llm_budget_utilization` does not, because it is a gauge rather than a monotonic counter. The gauge is computed on every scrape from the replica's folded ledger (own live counter plus peer partials), so every replica reports the same ratio to within one publish interval and dashboards aggregate it with `max`; it is the namespace's share of the provider's per-namespace ceiling, uncapped above 1, and a provider without a per-namespace ceiling reports no series.
 
 For User Gateway metrics, see [User Gateway Operations](../user/operations.md#observability).
 

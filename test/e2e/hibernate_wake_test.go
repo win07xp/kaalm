@@ -57,10 +57,12 @@ var _ = Describe("Hibernate and wake", Ordered, func() {
 			return readyTrue("agentclass", "", "s7-hibernating")
 		}, "60s", "3s").Should(BeTrue())
 
-		By("the S7 agent provisions to Running")
+		By("the S7 agent provisions (Running, or already idling toward hibernation)")
+		// Same race as S19: 2s idle + 2s delay against a 5s poll can skip
+		// Running, so accept any phase that only a provisioned agent reaches.
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agent", "e2e", "s7-agent", "{.status.phase}")
-		}, "180s", "5s").Should(Equal("Running"))
+		}, "180s", "5s").Should(BeElementOf("Running", "Idle", "Hibernating", "Hibernated"))
 
 		By("its memory PVC exists")
 		Eventually(func() (string, error) {
