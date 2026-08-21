@@ -30,6 +30,7 @@ const (
 	labelStatus    = "status"
 	labelNamespace = "namespace"
 	labelTool      = "tool"
+	labelPeriod    = "period"
 )
 
 // Metrics is the gateway's Prometheus catalog (docs/src/operations/observability.md).
