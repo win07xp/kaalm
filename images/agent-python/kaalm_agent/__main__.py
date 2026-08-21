@@ -23,7 +23,7 @@ from aiohttp import web
 
 import kaalm
 
-from . import loader
+from . import loader, tracecontext
 from .gateway import GatewayClient
 from .httpclient import make_http_async_client, make_http_client
 from .memory import Store, UserMemory
@@ -76,6 +76,9 @@ class Agent:
         except Exception:  # noqa: BLE001
             return web.Response(status=400, text="invalid message envelope")
 
+        # Each aiohttp request runs in its own task, so the captured trace
+        # context is confined to this message's handling.
+        tracecontext.set_from_headers(request.headers)
         return web.json_response(await self.respond(envelope))
 
     async def heartbeat_loop(self) -> None:
@@ -137,6 +140,7 @@ def build() -> Agent:
         memory=UserMemory(store),
         http_client=functools.partial(make_http_client, reloader),
         http_async_client=functools.partial(make_http_async_client, reloader),
+        trace_context=tracecontext.current,
     )
 
     handler, source = loader.load_or_exit(log)

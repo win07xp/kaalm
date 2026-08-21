@@ -170,7 +170,13 @@ func (a *Agent) messageHandler(h Handler) http.HandlerFunc {
 			}
 		}
 
-		resp, err := h(r.Context(), env)
+		// The gateway's delivery may carry W3C trace context; hand it to the
+		// handler so every gateway call it makes stays on the same trace.
+		ctx := r.Context()
+		if tp := r.Header.Get("Traceparent"); tp != "" {
+			ctx = withTraceContext(ctx, tp, r.Header.Get("Tracestate"))
+		}
+		resp, err := h(ctx, env)
 		if err != nil {
 			log.Printf("handler error for messageId %q: %v", env.MessageID, err)
 			http.Error(w, "handler error", http.StatusInternalServerError)

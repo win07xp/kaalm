@@ -22,6 +22,8 @@ from typing import Any
 
 import httpx
 
+from . import tracecontext
+
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
 # The factories own these: both feed the SSL context, and a caller supplying
@@ -49,6 +51,7 @@ class _RotatingTransport(httpx.BaseTransport):
             return self._inner
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        _apply_trace_context(request)
         # Return the inner response untouched: constructing a new Response
         # would detach its stream and break SSE bodies.
         return self._transport_for_current_certs().handle_request(request)
@@ -83,6 +86,7 @@ class _AsyncRotatingTransport(httpx.AsyncBaseTransport):
         return inner
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        _apply_trace_context(request)
         transport = await self._transport_for_current_certs()
         return await transport.handle_async_request(request)
 
@@ -91,6 +95,16 @@ class _AsyncRotatingTransport(httpx.AsyncBaseTransport):
             inner, self._inner = self._inner, None
         if inner is not None:
             await inner.aclose()
+
+
+def _apply_trace_context(request: httpx.Request) -> None:
+    """Copy the handled message's trace context onto the outbound request.
+
+    Explicit caller headers win; outside message handling this is a no-op.
+    """
+    for name, value in tracecontext.current().items():
+        if name not in request.headers:
+            request.headers[name] = value
 
 
 def _check_kwargs(kwargs: dict[str, Any]) -> None:
