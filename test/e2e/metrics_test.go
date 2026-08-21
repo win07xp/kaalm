@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -69,19 +70,33 @@ var _ = Describe("Metric catalog on the wire (#97)", Ordered, func() {
 	})
 
 	It("the gateway serves budget utilization from its folded ledger", func() {
-		port, stop, err := utils.PortForward("kaalm-system", "kaalm-gateway", "9090")
+		// Gateway metrics are replica-local except where the ledger folds:
+		// every replica serves the folded utilization within one publish
+		// interval, but the latency histogram lives only on the replica
+		// that forwarded a request. Scrape every gateway pod: the 45 USD of
+		// attested spend against the 100 USD ceiling (spend.yaml) must show
+		// as 0.45 on each, and the buckets on at least one.
+		out, err := utils.Kubectl("get", "pods", "-n", "kaalm-system",
+			"-l", "app.kubernetes.io/component=gateway", "-o", "jsonpath={.items[*].metadata.name}")
 		Expect(err).NotTo(HaveOccurred())
-		defer stop()
-		// 45 USD of attested spend against the 100 USD per-namespace ceiling
-		// (spend.yaml). Whichever replica answers holds the folded union
-		// within one publish interval.
-		Eventually(func() (string, error) {
-			return scrape(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
-		}, "90s", "5s").Should(SatisfyAll(
-			MatchRegexp(`kaalm_llm_budget_utilization\{namespace="console-e2e",period="[^"]+",provider="console-spend"\} 0\.45`),
-			// the latency histogram observes every forwarded request
-			ContainSubstring(`kaalm_llm_request_duration_seconds_bucket{`),
-		))
+		pods := strings.Fields(out)
+		Expect(pods).NotTo(BeEmpty())
+
+		var pages []string
+		for _, pod := range pods {
+			port, stop, err := utils.PortForwardTarget("kaalm-system", "pod/"+pod, "9090")
+			Expect(err).NotTo(HaveOccurred())
+			var page string
+			Eventually(func() (string, error) {
+				page, err = scrape(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
+				return page, err
+			}, "90s", "5s").Should(MatchRegexp(
+				`kaalm_llm_budget_utilization\{namespace="console-e2e",period="[^"]+",provider="console-spend"\} 0\.45`), pod)
+			pages = append(pages, page)
+			stop()
+		}
+		Expect(strings.Join(pages, "")).To(ContainSubstring(`kaalm_llm_request_duration_seconds_bucket{`),
+			"no gateway replica observed a forwarded LLM request")
 	})
 })
 

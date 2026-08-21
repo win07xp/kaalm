@@ -62,6 +62,8 @@ Result handling:
 
 Track the result in `status.conditions[type=Healthy]` with exponential backoff on failures.
 
+Probe TLS trust is the system roots plus whatever the chart configures (since v0.5.0): `controller.trustClusterCAForProbes` adds the cluster CA and `controller.probeCA` an operator bundle, mirroring the gateway's upstream pair, so an in-cluster endpoint under a private CA can probe `Healthy` instead of failing every handshake ([Deployment](../operations/deployment.md)). The pool follows rotation without a restart. The same pool serves the ToolProvider probe below.
+
 ### Budget reconciliation
 
 Read per-replica partial spend counters from the gateway's budget ConfigMap in `kaalm-system`; see [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management) for the ConfigMap format.
@@ -91,7 +93,7 @@ Since v0.4.0. Watches: `ToolProvider`; credential Secrets in the operator namesp
 Reconciliation is the ModelProviderReconciler's shape minus budgets, fallback, and the gateway mirror:
 
 1. Resolve `spec.credentialsRef`, only when set, and only from the operator namespace: a same-named Secret in a tenant namespace never satisfies the ref. A missing Secret or missing/empty key sets `Ready=False, reason=CredentialsMissing`. A nil ref is valid (unauthenticated servers exist); the probe then carries no credential, and the Ready message says so.
-2. If health checks are enabled (a nil `healthCheck` block defaults to enabled at reconcile time, exactly as on ModelProvider), run the MCP liveness probe: an `initialize` handshake (including the `notifications/initialized` notification and any `Mcp-Session-Id` the server issues) followed by `tools/list`, bounded by `healthCheck.timeoutSeconds` (default 10s). Result handling mirrors the [ModelProvider probe](#liveness-probe): success sets `Healthy=True, reason=UpstreamReachable`; a 401/403 anywhere in the sequence sets both `Healthy=False` and `Ready=False` with `reason=CredentialsInvalid`; any other failure sets `Healthy=False, reason=ProviderUnhealthy` with a Warning event and does not change `Ready`. The probe requeues at `healthCheck.intervalSeconds` (default 60).
+2. If health checks are enabled (a nil `healthCheck` block defaults to enabled at reconcile time, exactly as on ModelProvider), run the MCP liveness probe: an `initialize` handshake (including the `notifications/initialized` notification and any `Mcp-Session-Id` the server issues) followed by `tools/list`, bounded by `healthCheck.timeoutSeconds` (default 10s). Result handling and TLS trust mirror the [ModelProvider probe](#liveness-probe) (the same probe trust pool applies): success sets `Healthy=True, reason=UpstreamReachable`; a 401/403 anywhere in the sequence sets both `Healthy=False` and `Ready=False` with `reason=CredentialsInvalid`; any other failure sets `Healthy=False, reason=ProviderUnhealthy` with a Warning event and does not change `Ready`. The probe requeues at `healthCheck.intervalSeconds` (default 60).
 3. Set `Ready=True, reason=CredentialsValid` when the credential resolves (or none is configured).
 
 On delete, the reconciler holds the ToolProvider in `Terminating` while any Agent, AgentTask, or AgentClass references it ([Finalizers](finalizers.md#toolprovider)). The grant checks of rules 35 to 38 run on the workload reconcilers, not here, exactly as the provider checks of rules 3 to 5 do. Gateway-facing state (the broker) is the remaining piece of the plane; see [The Tool Plane](../gateways/tool-plane.md#versioning-and-delivery) for the delivery boundary.

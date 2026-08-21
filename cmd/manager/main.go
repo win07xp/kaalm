@@ -20,8 +20,10 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -72,6 +74,7 @@ func main() {
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	var controllerTLSCert, controllerTLSKey, controllerTLSCA string
+	var probeCA string
 	var activatorAddr string
 	var callbackAllowlist string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -96,6 +99,9 @@ func main() {
 			"Enables the activator listener and the gateway activity client when set.")
 	flag.StringVar(&controllerTLSKey, "controller-tls-key", "", "The controller's TLS key.")
 	flag.StringVar(&controllerTLSCA, "controller-tls-ca", "", "The Kaalm CA bundle for mTLS with the gateway.")
+	flag.StringVar(&probeCA, "probe-ca", "",
+		"Comma-separated CA bundle paths trusted for provider health probes, added to the system roots. "+
+			"Empty keeps system roots only.")
 	flag.StringVar(&activatorAddr, "activator-addr", ":9443", "The activator/probe listener address.")
 	flag.StringVar(&callbackAllowlist, "callback-url-allowlist", "",
 		"Comma-separated DNS-name suffixes and CIDR blocks whose AgentChannel.callbackUrl targets are permitted "+
@@ -246,11 +252,17 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentClass")
 		os.Exit(1)
 	}
+	// With no probe CA configured, the nil client keeps the checkers on
+	// system roots only, exactly the pre-knob behavior.
+	var probeClient *http.Client
+	if probeCA != "" {
+		probeClient = controller.NewProbeClient(strings.Split(probeCA, ","))
+	}
 	if err := (&controller.ModelProviderReconciler{
 		Client:            mgr.GetClient(),
 		Recorder:          mgr.GetEventRecorderFor("modelprovider-controller"),
 		OperatorNamespace: operatorNamespace,
-		Health:            &controller.HTTPProviderHealthChecker{},
+		Health:            &controller.HTTPProviderHealthChecker{Client: probeClient},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ModelProvider")
 		os.Exit(1)
@@ -259,7 +271,7 @@ func main() {
 		Client:            mgr.GetClient(),
 		Recorder:          mgr.GetEventRecorderFor("toolprovider-controller"),
 		OperatorNamespace: operatorNamespace,
-		Health:            &controller.MCPToolHealthChecker{},
+		Health:            &controller.MCPToolHealthChecker{Client: probeClient},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ToolProvider")
 		os.Exit(1)

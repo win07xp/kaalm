@@ -62,6 +62,16 @@ spec:
             - --controller-tls-key=/var/run/kaalm/tls.key
             - --controller-tls-ca=/var/run/kaalm/ca.crt
             - --activator-addr=:9443
+            {{- $probeCAs := list }}
+            {{- if .Values.controller.trustClusterCAForProbes }}
+            {{- $probeCAs = append $probeCAs "/var/run/kaalm/ca.crt" }}
+            {{- end }}
+            {{- if .Values.controller.probeCA.configMap }}
+            {{- $probeCAs = append $probeCAs "/var/run/kaalm/probe-ca.crt" }}
+            {{- end }}
+            {{- if $probeCAs }}
+            - --probe-ca={{ join "," $probeCAs }}
+            {{- end }}
             {{- with .Values.gateway.callbackUrl.allowlist }}
             - --callback-url-allowlist={{ join "," . }}
             {{- end }}
@@ -111,6 +121,12 @@ spec:
                   name: kaalm-ca
                   items:
                     - { key: ca.crt, path: ca.crt }
+              {{- with .Values.controller.probeCA.configMap }}
+              - configMap:
+                  name: {{ . }}
+                  items:
+                    - { key: {{ $.Values.controller.probeCA.key }}, path: probe-ca.crt }
+              {{- end }}
 ---
 apiVersion: v1
 kind: Service

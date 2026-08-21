@@ -54,6 +54,9 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.upstreamCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
 | `gateway.callbackUrl.allowlist` | unset | List of DNS-name suffixes or CIDR blocks whose `AgentChannel.spec.webhook.callbackUrl` targets are permitted despite the deny-internal default. Loopback, link-local and the cloud-metadata IPs stay refused even when listed. |
 | `controller.networkPolicy.dnsSelector` | `{ namespaceLabels: { "kubernetes.io/metadata.name": "kube-system" }, podLabels: { "k8s-app": "kube-dns" } }` | Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy. |
+| `controller.trustClusterCAForProbes` | `false` | Also trust the cluster CA (`kaalm-ca`, already mounted) for ModelProvider and ToolProvider health probes, added to the system roots. The probe-side mirror of `gateway.trustClusterCAForUpstream`: enable both so an in-cluster provider under a `kaalm-ca-issuer` certificate is both forwarded to and probed `Healthy`. |
+| `controller.probeCA.configMap` | `""` | Name of an operator-supplied ConfigMap of additional CA certificates to trust for health probes, mirroring `gateway.upstreamCA`. Composes with `trustClusterCAForProbes` into one additive pool; the controller re-reads it when it rotates. |
+| `controller.probeCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
 | `gateway.externalHostnames` | unset | Additional DNS names appended to the `kaalm-gateway-tls` Certificate's SAN list. |
 | `gateway.channelHealthWindow` | `5m` | Rolling window over which the gateway evaluates `AgentChannel.status.conditions[type=PlatformConnected]`. |
 | `gateway.agentDeliveryConnectTimeout` | `1s` | Bounds the TCP connect attempt when delivering `POST /v1/message` to an Agent Service. |

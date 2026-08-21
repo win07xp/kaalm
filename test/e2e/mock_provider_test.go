@@ -20,10 +20,16 @@ var _ = Describe("Mock LLM provider", Ordered, func() {
 		By("the mock provider Deployment rolls out")
 		Expect(utils.WaitRollout("e2e", "mock-provider", "120s")).To(Succeed())
 
-		By("the ModelProvider becomes Ready (probe disabled; credentials resolve)")
+		By("the ModelProvider becomes Ready")
 		Eventually(func() (bool, error) {
 			return readyTrue("modelprovider", "", "e2e-mock")
 		}, "60s", "3s").Should(BeTrue())
+
+		By("the liveness probe reaches the mock's kaalm-ca certificate through the probe trust knob (#86)")
+		Eventually(func() (string, error) {
+			return utils.ResourceField("modelprovider", "", "e2e-mock",
+				`{.status.conditions[?(@.type=="Healthy")].status}`)
+		}, "120s", "5s").Should(Equal("True"))
 	})
 
 	It("forwards a token-authenticated LLM call to the mock and returns usage", func() {
