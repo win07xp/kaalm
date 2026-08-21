@@ -14,7 +14,7 @@ Both the controller and the gateway expose Prometheus metrics on dedicated ports
 
 This page is the aggregator over those three. It rolls the per-component catalogs into one table, specifies log conventions and PII safety, and lists architecturally-significant alerts and dashboards. When you need to know *when* a metric increments or *what* a label value means, follow the link to the owning component; when you need to know *what exists*, read the table here.
 
-Detailed Grafana dashboards, distributed tracing, and an audit-export pipeline are out of scope for v1. See [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1).
+Distributed tracing and an audit-export pipeline are out of scope for v1 (see [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1)); the Grafana dashboards ship since v0.5.0 ([Dashboards](#dashboards)).
 
 ## Scope
 
@@ -24,12 +24,11 @@ Detailed Grafana dashboards, distributed tracing, and an audit-export pipeline a
 - Structured JSON logs from controller and gateway with a hard PII-safety rule
 - Kubernetes Events on all six Kaalm CRDs
 - A small recommended-alerts set tied to architectural failure modes
-- Dashboard topology sketches (per-namespace, per-provider, cluster)
+- Three Grafana dashboards (per-namespace, per-provider, cluster) as importable JSON, since v0.5.0
 
 **Deferred to v1.1+** (per [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1)).
 
 - Distributed tracing (OpenTelemetry instrumentation)
-- Prebuilt Grafana dashboards (v1 ships catalogs only; concrete JSON ships in v1.1)
 - Audit-log export pipeline beyond standard Kubernetes audit logging
 - Cost analytics / chargeback reporting
 
@@ -156,13 +155,24 @@ A v1 alert set tied to architectural failure modes already named in the doc set.
 
 The last alert deserves a note. A nonzero `kaalm_channel_async_patch_failed_total` means a response was dropped after `Patch` retry exhaustion: pollers see `202` followed by `404` with no stored envelope. See [Response-Patch failure semantics](../gateways/api/async-responses.md).
 
-## Recommended dashboards
+## Dashboards
 
-Three top-level panels cover v1 visibility. Concrete Grafana JSON ships in v1.1.
+Three Grafana dashboards ship as JSON in `config/grafana/` (since v0.5.0), one per topology level. Each file is self-contained: import it through the Grafana UI or provision it from the file, with no manual edits. The data source is chosen by a `datasource` template variable, the only import form that works unchanged on both paths (file provisioning never substitutes `__inputs`).
 
-1. **Per-namespace.** Agent and AgentTask phase counts, spend (`kaalm_provider_budget_canonical_usd`), rate-limit utilization, channel message rate, channel condition rollup (`kaalm_channels` by `ready` / `platform_connected`).
-2. **Per-provider.** Request rate, error rate, latency p50/p95, fallback events, budget utilization.
-3. **Cluster.** Controller and gateway replica readiness, reconcile error rate, hibernation and wake counts, wake-duration distribution, async-callback delivery state.
+| File | Scope | Variables | Panels |
+|---|---|---|---|
+| `kaalm-namespace.json` | One tenant namespace | `datasource`, `namespace` | Agent, AgentTask, and AgentChannel counts by phase and condition; canonical spend and budget utilization per provider; budget policy actions; LLM request, rate-limited, and token rates; channel message rate and p95 duration; wake count and p95 duration; tool calls; async callbacks, oversized responses, patch failures |
+| `kaalm-provider.json` | One ModelProvider | `datasource`, `provider` | Request rate, error ratio, latency p50 and p95 by model, token rates, fallback events by target and reason, budget utilization and canonical spend by namespace, spend rate, budget policy and hard-enforcement boundary events, provider-side tool use |
+| `kaalm-cluster.json` | The whole cluster | `datasource`, `job` | Scrape targets up, controller leader, reconcile errors, duration, and queue depth; fleet totals by phase; hibernations and wakes; wake duration; channel messages; LLM and tool-broker traffic and latency; fallbacks; canonical spend by provider; async delivery state |
+
+Conventions the panels follow:
+
+- Every query is over the [aggregated catalog](#aggregated-catalog), and every catalog metric is on at least one panel; the test under `test/dashboards` pins both directions and the import shape. The only non-catalog series are on the cluster dashboard's control-plane row: the scrape `up` series, controller-runtime's reconcile and work-queue families, and its `leader_election_master_status` gauge.
+- The phase-count and budget-utilization gauges are computed on every scrape by every replica, so the panels aggregate them with `max`, never `sum`.
+- The per-namespace rate-limit panel is the `rate_limited` outcome of `kaalm_llm_requests_total`; there is no separate utilization gauge for the per-(namespace, model) ceiling.
+- The cluster dashboard's `job` variable matches scrape jobs whose name contains `kaalm`; a ServiceMonitor on the chart's Services resolves to such names. Every other panel is independent of how the scrape is configured.
+
+`make dashboards-verify` proves the files against a live cluster: it installs a throwaway Prometheus and Grafana, provisions the three files unchanged, and checks that Grafana serves each dashboard, that Grafana can query the data source, that every panel query is valid PromQL against the scraped series, and that the metric families the e2e suite exercises are present.
 
 ## Tracing
 
