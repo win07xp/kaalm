@@ -6,9 +6,9 @@ thinks about it. Which agents exist and in which namespaces, which are running
 and which are hibernated, what each namespace has spent against each
 provider's ceiling, what tasks ran and how they ended, which channels are
 healthy, and a test-chat panel that sends one governed message to one agent
-and shows the reply. This chapter was merged as the design ahead of its
-implementation, which lands later in v0.5.0; where a section states wire
-behavior, it states the intended v0.5.0 contract.
+and shows the reply. This chapter was written as the design ahead of the
+implementation, and the v0.5.0 console implements it; where a section states
+wire behavior, it states the v0.5.0 contract.
 
 The console is explicitly **not a chat product**, and it is not a general
 Kubernetes dashboard. Everything on its screens already exists in the status
@@ -173,7 +173,7 @@ pattern the Kubernetes Dashboard established:
    LoadBalancer, because exposure policy belongs to the platform team. The
    console serves TLS with a certificate issued from the cluster issuer, so a
    port-forwarding operator sees a name mismatch for `localhost`; that is
-   expected, and the guide documents it when the implementation lands.
+   expected, and the guide's Using the Console page says so.
 2. **Logging in.** The login page takes a pasted bearer token (a
    ServiceAccount token or an OIDC user token). The console validates it with
    a `TokenReview`, fixes the authenticated identity for the session, and sets
@@ -261,7 +261,7 @@ Scenario
 [S19](../appendix/scenarios.md#s19-see-the-fleet-without-kubectl) walks this
 chapter end to end: enable, log in, see the fleet, read spend, test-chat a
 hibernated agent, and watch an unauthorized token see nothing. Its e2e spec
-lands with the console implementation
+is `Operator console (S19)`
 ([Scenario Coverage](../appendix/scenario-coverage.md)).
 
 ## See Also

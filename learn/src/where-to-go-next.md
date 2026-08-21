@@ -42,7 +42,7 @@ organized by the symptom you are actually seeing.
 **Understand the machine.** The
 [design book](https://github.com/win07xp/kaalm) is the specification: how the
 controller reconciles, how the gateway routes and bills, how the TLS identity
-fabric is built, and the eighteen acceptance scenarios the whole system is
+fabric is built, and the twenty acceptance scenarios the whole system is
 tested against. Start with its architecture chapter.
 
 **Write a bigger agent.** You already write handlers; that is the whole
@@ -68,7 +68,9 @@ Deliberately, so that one sitting stayed one sitting:
 - **The TLS fabric.** Certificates were issued, rotated, and verified for you
   throughout, and the book never mentioned it beyond installing cert-manager.
 - **Production shape.** One laptop node, no ingress, no monitoring, timers set
-  to seconds instead of half an hour.
+  to seconds instead of half an hour. The guide's Observing the Platform part
+  is where the fleet gets a screen (the optional console), Grafana
+  dashboards, and traces.
 
 Each of those is a chapter in one of the other two books. You now have the
 vocabulary to read either of them.

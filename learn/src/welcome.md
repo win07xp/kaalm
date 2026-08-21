@@ -10,7 +10,7 @@ when nobody needs it and wake up when you say hello again, still remembering
 the conversation you had before it slept.
 
 Every command on these pages was run, in order, on a fresh cluster against
-Kaalm 0.4.0, and the output you see is the output it printed.
+Kaalm 0.5.0, and the output you see is the output it printed.
 
 ## Two honest notes before you start
 

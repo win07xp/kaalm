@@ -13,9 +13,10 @@ The parts build on each other. Reading front to back never requires a concept th
 3. **Agent Runtime** covers the contract a container image must satisfy to run under Kaalm, the starter templates that implement it, and the child resources the operator manages for each agent.
 4. **The Gateways** documents the shared gateway Deployment: the HTTP wire contract, then the LLM Gateway (agent to model provider) and the User Gateway (external caller to agent).
 5. **The Controller** documents the operator: its reconcilers, the Agent and AgentTask state machines, hibernation and wake, change propagation, and finalizers.
-6. **Security** covers the trust model, RBAC, credential handling, TLS and certificates, and the threat model.
-7. **Operations** covers deployment via Helm and observability.
-8. The appendix holds the eighteen acceptance scenarios that double as v1 acceptance criteria.
+6. **The Console** documents the optional operator console: its scope, the read API, authentication, and test-chat.
+7. **Security** covers the trust model, RBAC, credential handling, TLS and certificates, and the threat model.
+8. **Operations** covers deployment via Helm and observability.
+9. The appendix holds the twenty acceptance scenarios that double as v1 acceptance criteria.
 
 ## Where to start
 

@@ -3,23 +3,23 @@
 ## Project Overview
 
 **Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
-type. v0.4.0 released 2026-08-14: the tool plane implemented end to end
-(ToolProvider CRD, grant rules 35 to 38, the gateway MCP broker, per-call
-audit, S18 proven), plus framework agents (LangGraph examples, rotation-aware
-Python ABI clients). Current milestone (v0.5.0, "the console and
-observability", umbrella issue #48): operator console, Grafana dashboards,
-OTel tracing; see `docs/src/ROADMAP.md` and the GitHub milestones.
+type. v0.5.0 released 2026-08-21: the console and observability (the
+optional operator console with test-chat, per-workload spend, Grafana
+dashboards, OTel tracing, controller-side probe CA trust; S19 and S20
+proven). Current milestone (v0.6.0, "API graduation", tracking issue #49):
+v1beta1 with conversion, upgrade e2e, deprecation policy; see
+`docs/src/ROADMAP.md` and the GitHub milestones.
 
 - API group: `kaalm.io` | Version: `v1alpha1`
 - Stack: Go, controller-runtime (kubebuilder), Helm
-- Components: operator controller + gateway, both in `kaalm-system` namespace
+- Components: operator controller + gateway (+ optional console), all in `kaalm-system` namespace
 - 6 CRDs: AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel
 
 ## Documentation
 
 Three mdBooks: `docs/` (the design book, which is the spec), `guide/`
 (task-oriented user guide, complete), and `learn/` (beginner tutorial, written
-and walked against 0.4.0). Build all with `make books`.
+and walked against 0.5.0). Build all with `make books`.
 Each book has its own CLAUDE.md with its authoring rules. Conventions that
 bind all prose in this repo: no em-dashes or en-dashes; the numbered
 validation rules, runtime-contract items, and scenario IDs are cited by

@@ -25,8 +25,9 @@ one is green. S16 was added with the v0.3.0 base-image design and is green
 against the locally built base images; the published images land with the
 v0.3.0 release. S17 was added with the v0.3.0 hard-budget design and is
 green. S18 was added with the v0.3.0 tool-plane design and is green against
-the v0.4.0 implementation. S19 was added with the v0.5.0 console design, S20 with the v0.5.0 tracing design
-and is green against the console implementation.
+the v0.4.0 implementation. S19 was added with the v0.5.0 console design and
+S20 with the v0.5.0 tracing design; both are green against the v0.5.0
+implementation.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|

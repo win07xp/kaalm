@@ -12,8 +12,9 @@ That publishes, for the tag `vX.Y.Z`:
 
 - **Images** (multi-arch `linux/amd64` + `linux/arm64`):
   `ghcr.io/win07xp/kaalm-controller:X.Y.Z`,
-  `ghcr.io/win07xp/kaalm-gateway:X.Y.Z`, and the reference base images
-  `ghcr.io/win07xp/kaalm-agent-python:X.Y.Z` and
+  `ghcr.io/win07xp/kaalm-gateway:X.Y.Z`,
+  `ghcr.io/win07xp/kaalm-console:X.Y.Z` (since v0.5.0), and the reference
+  base images `ghcr.io/win07xp/kaalm-agent-python:X.Y.Z` and
   `ghcr.io/win07xp/kaalm-agent-go:X.Y.Z` (the `latest` tag also moves for
   non-pre-release versions).
 - **Go module tag** `agentruntime/vX.Y.Z`, so
@@ -58,11 +59,14 @@ caveat above).
 ## One-time: make the ghcr packages public
 
 The first push creates the `kaalm-controller`, `kaalm-gateway`,
-`kaalm-agent-python`, `kaalm-agent-go`, and `kaalm` (chart) packages as
-**private**. A workflow cannot change package visibility,
-so do it once by hand after the first release: on GitHub, go to each package
-(Profile -> Packages), then Package settings -> Change visibility -> Public.
-Until then, `helm install` and `docker pull` require authentication.
+`kaalm-console`, `kaalm-agent-python`, `kaalm-agent-go`, and `kaalm` (chart)
+packages as **private**. A workflow cannot change package visibility, so do
+it once by hand after the first release that publishes each package: on
+GitHub, go to the package (Profile -> Packages), then Package settings ->
+Change visibility -> Public. Until then, `helm install` and `docker pull`
+require authentication. A package that first appears in a later release (the
+console image, first published with v0.5.0) starts private the same way and
+needs the same one-time flip.
 
 ## Reproducing the chart package locally
 

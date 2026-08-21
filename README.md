@@ -5,11 +5,13 @@ type. You declare an agent; Kaalm runs it, gives it its own identity and
 storage, routes its model calls through a gateway that holds the credentials,
 and puts it to sleep when nobody is talking to it.
 
-**Status: v0.4.0.** Installs with one Helm command, and your first agent needs
-no image build: mount a handler file into a published base image. Tool access
-is now governed too: the gateway brokers MCP calls, injects tool credentials
-server-side, and audits every call. All eighteen implemented acceptance
-scenarios are proven on a real cluster on every pull request.
+**Status: v0.5.0.** Installs with one Helm command, and your first agent needs
+no image build: mount a handler file into a published base image. The gateway
+holds every credential and brokers, meters, and audits both LLM and MCP tool
+calls. An optional console puts the fleet, its spend, and a test-chat panel
+on one screen; Grafana dashboards and OpenTelemetry tracing cover the rest.
+All twenty implemented acceptance scenarios are proven on a real cluster on
+every pull request.
 
 ## What it looks like
 
@@ -42,7 +44,7 @@ installs neither. With those in place:
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 0.4.0 \
+  --version 0.5.0 \
   --namespace kaalm-system --create-namespace \
   --set certManager.clusterResourceNamespace=cert-manager
 ```
@@ -57,7 +59,7 @@ Three books, each with a different job. Build them with `make books`.
 | Book | Read it if you are |
 |---|---|
 | [`learn/`](learn/src/welcome.md) | New to Kaalm. Empty laptop to a running agent, one sitting, no API key needed. |
-| [`guide/`](guide/src/introduction.md) | Using it. Installing for real, offering classes to teams, providers, budgets, troubleshooting. |
+| [`guide/`](guide/src/introduction.md) | Using it. Installing for real, offering classes to teams, providers, budgets, the console and dashboards, troubleshooting. |
 | [`docs/`](docs/src/introduction.md) | Changing it. The specification: architecture, the six resources, the runtime contract. |
 
 ## Contributing
