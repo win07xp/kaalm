@@ -29,12 +29,13 @@ NAME     PHASE        READY   CLASS      AGE
 helper   Hibernated   False   tutorial   3m18s
 ```
 
-> **What counts as activity?** Kaalm watches the model calls an agent makes
-> through the gateway, because that is the traffic that costs money. The
-> handler you wrote never calls a model, so this agent is idle by that measure
-> from the moment it starts. That is why it hibernates on the timer even
-> though you were chatting with it. An agent that actually calls a model stays
-> awake while it is working.
+> **What counts as activity?** Kaalm watches the traffic an agent sends and
+> receives through the gateway: the messages delivered to it and the model
+> calls it makes. Every message you sent reset the idle clock, and the agent
+> stayed awake while you were talking to it. Stop sending messages and the
+> clock runs out: with the class's 30-second timers, the agent is asleep about
+> a minute after your last message. The message that wakes it counts too, so
+> a woken agent always gets a fresh 30 seconds before it can go idle again.
 
 ## What survived
 

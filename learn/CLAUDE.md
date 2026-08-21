@@ -12,8 +12,15 @@ fresh k3d cluster. Every re-walk runs the same two-pass playbook: a
 pre-release walk against locally built artifacts, then a confirmation walk
 against the published artifacts after the tag. The 0.4.0 walks (issue #77)
 caught one drift pre-release (five CRDs becoming six) and zero in
-confirmation. The 0.5.0 walks (issue #99) are recorded here as they
-complete.
+confirmation. The 0.5.0 pre-release walk (2026-08-21, issue #99) ran twice
+on the day: the first pass matched every page except the Sleep and Wake
+chapter, whose callout explained hibernation by "the handler never calls a
+model" (since v0.5.0 every delivered message resets the idle clock, so the
+callout now says that) and whose post-wake `kubectl get agents` showed the
+agent already hibernating again, a controller regression fixed in the same
+pull request; the second pass, against the fixed controller, matched every
+page, byte-exact where exact values are shown. The confirmation walk is
+recorded here after the tag.
 
 The install is pinned to `--version 0.5.0` on purpose. The pin is not really
 about the install line: it is what makes the later chapters' output true, since
