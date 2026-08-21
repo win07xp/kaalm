@@ -38,15 +38,11 @@ var (
 		Name: "kaalm_wakes_total", Help: "Agent wakes by namespace and trigger.",
 	}, []string{labelNamespace, "trigger"})
 
-	budgetThresholdEvents = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "kaalm_budget_threshold_events_total", Help: "Reconcile-observed budget threshold actions.",
-	}, []string{"provider", labelNamespace, "action"})
-
 	providerBudgetCanonical = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kaalm_provider_budget_canonical_usd", Help: "Canonical per-namespace spend roll-up.",
 	}, []string{"provider", labelNamespace, "period"})
 )
 
 func init() {
-	metrics.Registry.MustRegister(hibernationsTotal, wakesTotal, budgetThresholdEvents, providerBudgetCanonical)
+	metrics.Registry.MustRegister(hibernationsTotal, wakesTotal, providerBudgetCanonical)
 }

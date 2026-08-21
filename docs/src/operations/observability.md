@@ -8,7 +8,7 @@ Kaalm's v1 observability surface has three pillars:
 
 Both the controller and the gateway expose Prometheus metrics on dedicated ports. Each component owns its own metric catalog and documents its own emit-points:
 
-- [Controller metrics](../controller/operations.md#observability): reconcile counts/duration/queue depth, agent/task phase counts, hibernation/wake/budget events.
+- [Controller metrics](../controller/operations.md#observability): reconcile counts/duration/queue depth, agent/task/channel phase counts, hibernation/wake events, canonical spend.
 - [LLM Gateway metrics](../gateways/llm/operations.md#observability): request counts/duration, token usage, spend, fallback events, budget utilization.
 - [User Gateway metrics](../gateways/user/operations.md#observability): channel message counts/duration, hibernation wakes triggered.
 
@@ -60,13 +60,13 @@ The Kaalm-specific metrics across all three components:
 | Controller | `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` |
 | Controller | `kaalm_hibernations_total` | counter | `namespace` |
 | Controller | `kaalm_wakes_total` | counter | `namespace`, `trigger` |
-| Controller | `kaalm_budget_threshold_events_total` | counter | `provider`, `namespace`, `action` |
 | LLM Gateway | `kaalm_llm_requests_total` | counter | `provider`, `model`, `namespace`, `status` |
 | LLM Gateway | `kaalm_llm_request_duration_seconds` | histogram | `provider`, `model` |
 | LLM Gateway | `kaalm_llm_tokens_total` | counter | `provider`, `model`, `namespace`, `direction` |
 | LLM Gateway | `kaalm_llm_spend_usd_total` | counter | `provider`, `namespace` |
 | LLM Gateway | `kaalm_llm_fallback_total` | counter | `from_provider`, `to_provider`, `reason` |
 | LLM Gateway | `kaalm_llm_budget_utilization` | gauge | `provider`, `namespace`, `period` |
+| LLM Gateway | `kaalm_budget_threshold_events_total` | counter | `provider`, `namespace`, `action` |
 | LLM Gateway | `kaalm_llm_budget_boundary_events_total` | counter | `provider`, `namespace`, `event` |
 | LLM Gateway | `kaalm_llm_server_tool_use_total` | counter | `provider`, `namespace`, `tool` |
 | Tool broker | `kaalm_tool_calls_total` | counter | `provider`, `namespace`, `tool`, `status` |

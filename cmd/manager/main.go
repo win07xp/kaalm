@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -218,6 +219,11 @@ func main() {
 
 	if err := controller.SetupIndexers(context.Background(), mgr); err != nil {
 		setupLog.Error(err, "unable to set up field indexers")
+		os.Exit(1)
+	}
+	// The phase-count gauges read the manager cache on every scrape.
+	if err := ctrlmetrics.Registry.Register(&controller.PhaseCollector{Reader: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to register the phase-count gauges")
 		os.Exit(1)
 	}
 
