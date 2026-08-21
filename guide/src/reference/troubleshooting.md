@@ -97,7 +97,11 @@ Read the error type; the two cases behave differently:
 
 `Healthy=False` with Ready=True is different: the spec is fine but the
 periodic upstream probe is failing; check the endpoint and the provider's
-status page.
+status page. If the endpoint serves a certificate from a private CA (an
+in-cluster provider, for example) and the gateway forwards to it fine, the
+probe is missing the trust the gateway has: set
+`controller.trustClusterCAForProbes=true` or `controller.probeCA.configMap`
+on the chart. The same applies to a ToolProvider's `Healthy` column.
 
 ---
 
