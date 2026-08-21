@@ -77,8 +77,11 @@ var _ = Describe("Metric catalog on the wire (#97)", Ordered, func() {
 		// within one publish interval.
 		Eventually(func() (string, error) {
 			return scrape(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
-		}, "90s", "5s").Should(MatchRegexp(
-			`kaalm_llm_budget_utilization\{namespace="console-e2e",period="[^"]+",provider="console-spend"\} 0\.45`))
+		}, "90s", "5s").Should(SatisfyAll(
+			MatchRegexp(`kaalm_llm_budget_utilization\{namespace="console-e2e",period="[^"]+",provider="console-spend"\} 0\.45`),
+			// the latency histogram observes every forwarded request
+			ContainSubstring(`kaalm_llm_request_duration_seconds_bucket{`),
+		))
 	})
 })
 

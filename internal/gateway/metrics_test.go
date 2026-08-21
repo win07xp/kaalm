@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,5 +209,32 @@ func assertRegistered(t *testing.T, reg *prometheus.Registry, name string) {
 	if err := reg.Register(probe); err == nil {
 		reg.Unregister(probe)
 		t.Errorf("catalog metric %s is documented but not registered", name)
+	}
+}
+
+// TestProxy_ObservesRequestDuration pins the latency histogram to the proxy
+// path: it was registered since v0.1 and observed by nothing until the
+// dashboards' live verification found no buckets on the wire.
+func TestProxy_ObservesRequestDuration(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	})
+	h.seedRoute()
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+	h.server.Metrics = m
+
+	agentC := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&agentC), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("LLM call = %d", resp.StatusCode)
+	}
+	if n := testutil.CollectAndCount(m.llmDuration); n != 1 {
+		t.Fatalf("duration histogram has %d label sets after one forwarded call, want 1", n)
+	}
+	if got := testutil.ToFloat64(m.llmRequests.WithLabelValues("prov", "m1", "team-a", "ok")); got != 1 {
+		t.Errorf("requests ok = %v, want 1", got)
 	}
 }

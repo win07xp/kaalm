@@ -47,7 +47,7 @@ Because both listeners and every dependent informer must be green for the probe 
 The gateway exposes Prometheus metrics on `:9090/metrics`:
 
 - `kaalm_llm_requests_total{provider,model,namespace,status}`
-- `kaalm_llm_request_duration_seconds{provider,model}`
+- `kaalm_llm_request_duration_seconds{provider,model}` (forwarded requests only, stream relay included, labeled with the provider that answered; local denials such as rate limiting and budget blocks are not observed)
 - `kaalm_llm_tokens_total{provider,model,namespace,direction}` (direction = input|output)
 - `kaalm_llm_spend_usd_total{provider,namespace}`
 - `kaalm_llm_fallback_total{from_provider,to_provider,reason}`
