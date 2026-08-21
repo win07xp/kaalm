@@ -18,7 +18,7 @@ The chart targets the `kaalm-system` namespace. Install with `--namespace kaalm-
 
 ### CRDs
 
-The six CRDs (AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel) ship in the chart's `crds/` directory. Helm applies that directory on `helm install` and **never touches it on `helm upgrade`**, so CRD schema changes need an explicit step. See [Upgrade and Migration](#upgrade-and-migration).
+The six CRDs (AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel) ship in the chart's `crds/` directory. Helm applies that directory on `helm install` and **never touches it on `helm upgrade`**, so CRD schema changes need an explicit step. See [Upgrade and Migration](#upgrade-and-migration). Since v0.6.0 each CRD serves `v1beta1` (the storage version) and the deprecated `v1alpha1`, and carries the conversion stanza that points the apiserver at the controller; see [API Versioning and Deprecation](api-versioning.md).
 
 ### The two Deployments
 
@@ -106,7 +106,7 @@ The chart installs two ClusterIP `Service`s (three with `console.enabled`). The 
 | Service | Ports |
 |---|---|
 | `kaalm-gateway` | `:8080` user listener, `:8443` LLM/internal mTLS listener, `:9090` metrics |
-| `kaalm-controller` | `:9443` activator, `:8080` metrics |
+| `kaalm-controller` | `:9443` activator, `:9444` conversion webhook (since v0.6.0), `:8080` metrics |
 | `kaalm-console` (optional) | `:8443` pages and read API |
 
 Every certificate SAN, every `$KAALM_GATEWAY_ENDPOINT` value, and every internal RPC in the other docs assumes these names in `kaalm-system`.
@@ -127,7 +127,7 @@ Prometheus metrics are served on dedicated ports: controller `:8080/metrics` and
 
 **cert-manager and trust-manager are required dependencies.** The chart does not install the cert-manager or trust-manager controllers themselves, so teams with an existing cert-manager deployment reuse them. It ships the `ClusterIssuer`, `Certificate`, and `Bundle` resources Kaalm needs. The trust chain those resources form, and the mTLS topology built on it, are described in [In-cluster TLS](../security/tls.md#in-cluster-tls); this page covers only the resource inventory and the operational constraints. The [chart inventory figure](#helm-chart-contents) above shows where each of the resources below lands.
 
-Admission webhooks are not used. The cert-manager dependency is solely for TLS lifecycle management.
+Admission webhooks are not used. The cert-manager dependency covers TLS lifecycle management and, since v0.6.0, the CRD conversion webhook's `caBundle`, which cert-manager's cainjector keeps current from the controller's certificate ([API Versioning and Deprecation](api-versioning.md#where-the-conversion-webhook-runs)).
 
 ### Resource inventory
 
@@ -136,7 +136,7 @@ Admission webhooks are not used. The cert-manager dependency is solely for TLS l
 | `ClusterIssuer` (self-signed) | `kaalm-selfsigned` | Creates the `Certificate` for the Kaalm CA. |
 | `ClusterIssuer` (CA) | `kaalm-ca-issuer` | Sources the `kaalm-ca` Secret and signs all Kaalm-issued leaf certs. |
 | `Certificate` | `kaalm-gateway-tls` | Gateway serving cert, used by both listeners. |
-| `Certificate` | `kaalm-controller-tls` | The controller's activator endpoint. |
+| `Certificate` | `kaalm-controller-tls` | The controller's activator endpoint and, since v0.6.0, its conversion webhook listener; the CRDs' `caBundle` is injected from this certificate's CA. |
 | `Certificate` (optional) | `kaalm-console-tls` | The console's serving cert, and its client cert for the gateway's test-chat endpoint. Created only with `console.enabled`. |
 | `Certificate` (one per Agent) | per-Agent | Created by the [AgentReconciler](../controller/reconcilers.md#agentreconciler) at provisioning time, owned by the Agent via ownerRef. See [Lifecycle of an agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate). |
 | `Certificate` (one per AgentTask) | per-AgentTask | Created by the [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) at provisioning time, owned by the AgentTask via ownerRef. See [Lifecycle of an AgentTask TLS client certificate](../security/tls.md#lifecycle-of-an-agenttask-tls-client-certificate). |
@@ -189,7 +189,7 @@ Kaalm-managed Pods authenticate via mTLS using per-agent certificates issued by 
 
 ## Upgrade and Migration
 
-This section is scoped to what `v1alpha1` promises. Multi-version CRD conversion machinery (conversion webhooks, storage-version migration, deprecation windows) is deliberately deferred until the API graduates past alpha: while `v1alpha1` is the only served and stored version there is nothing for such machinery to convert, and shipping it early would contradict the no-admission-webhook posture in [Operator Structure](../controller/overview.md) for zero benefit.
+Since v0.6.0 the API is graduated: `v1beta1` is served and stored, `v1alpha1` is served, deprecated, and converted by the controller, and the machinery this section once deferred (the conversion webhook, storage-version migration, and the deprecation window) is specified on [API Versioning and Deprecation](api-versioning.md). This section keeps the operational order of an upgrade and the chart-level notes; the version mechanics, what happens in the window between the two steps, and the policy live there.
 
 ### Rolling upgrade order
 
@@ -199,15 +199,15 @@ This section is scoped to what `v1alpha1` promises. Multi-version CRD conversion
 kubectl apply --server-side -f crds/
 ```
 
-That command is the documented first step of every chart upgrade, before `helm upgrade`. Keeping CRDs in `crds/` rather than `templates/` also means `helm uninstall` never deletes them, which matters because deleting a CRD cascade-deletes every CR of that kind cluster-wide.
+That command is the documented first step of every chart upgrade, before `helm upgrade`. Since v0.6.0 it is also the step that adds a new API version and its conversion stanza, and the window between it and the `helm upgrade` has a precise, bounded cost, stated on [API Versioning and Deprecation](api-versioning.md#upgrading-in-place). Keeping CRDs in `crds/` rather than `templates/` also means `helm uninstall` never deletes them, which matters because deleting a CRD cascade-deletes every CR of that kind cluster-wide.
 
 **Apply order is not a rollout barrier.** Helm's kind-sorted apply does not help here: the controller and gateway Deployments are applied together and roll **concurrently**, so there is no ordering guarantee between the controller observing new CRD fields and the gateway consuming what the controller writes (status fields, budget `_canonical`, per-task RBAC). Version-skew tolerance, not apply order, is what makes the rollout safe. Both Deployments roll with `maxUnavailable: 1` under their PDBs, so one replica of each stays serving throughout: wake-on-demand and the LLM proxy remain available across the upgrade.
 
 **Version-skew tolerance is one chart version, and only for the duration of an in-progress rollout.** The internal contracts (activity and channel-health response bodies, the budget ConfigMap shape, the activator wire contract, the per-request async ConfigMap labels) evolve additively within a minor version, so a mixed old/new controller↔gateway pair works mid-rollout. Running mixed versions as a steady state is unsupported.
 
-### CRD schema evolution (within v1alpha1)
+### CRD schema evolution
 
-Changes are additive-only: new optional fields with reconcile-time defaulting (per [Defaulting](../resources/validation-and-defaulting.md#defaulting)), new condition reasons, new enum values. Anything breaking ships as a replacement alpha version in a new chart release, with the migration documented in that release's notes. The alpha contract is `kubectl get -o yaml` → adapt → re-apply, not automated conversion. `v1` API stability is explicitly not a goal for the initial release (see [Resource Overview](../resources/overview.md)).
+Within a served version, changes are additive only: new optional fields with reconcile-time defaulting (per [Defaulting](../resources/validation-and-defaulting.md#defaulting)), new condition reasons, new enum values. Anything breaking ships as a new API version with conversion in both directions, never in place. The full rule set, the `v1alpha1` window, and the conversion mechanics are on [API Versioning and Deprecation](api-versioning.md#deprecation-policy).
 
 ### Helm chart upgrades
 
@@ -233,10 +233,10 @@ No Pod restarts are needed at any step, in either tier.
 3. The next ModelProviderReconciler health probe validates the new key. A bad rotation surfaces as `Ready=False, reason=CredentialsInvalid` within one probe interval (default 60s), plus a `Warning` event from any live traffic that hits upstream `401`/`403` and falls back (see [Fallback triggers](../gateways/llm/fallback.md#fallback-triggers)).
 4. Audit. The Secret update lands in the Kubernetes audit log (enable `RequestResponse` level for `kaalm-system` Secrets per [Recommendations](../security/model.md#recommendations-for-deployment)); confirm cut-over on the provider's own key-usage dashboard.
 
-### Breaking spec changes (within alpha)
+### Breaking spec changes
 
-Breaking Agent, AgentTask, and AgentChannel spec changes are replace-not-migrate: let in-flight AgentTasks run to completion (or delete them), hibernate or delete Agents, apply the new CRDs, then re-apply updated manifests.
+Since v0.6.0 a breaking spec change ships as a new API version with conversion, so an upgrade never replaces existing objects ([API Versioning and Deprecation](api-versioning.md#deprecation-policy)). The replace-not-migrate procedure (let in-flight AgentTasks run to completion or delete them, hibernate or delete Agents, apply the new CRDs, then re-apply updated manifests) remains the path for a fresh install or a rollback across the graduation.
 
-Agent state survives the replace through the PVC path: `pvcRetention: Retain` on delete, or snapshot-and-remount via [`persistence.existingClaim`](../resources/agent.md).
+Agent state survives a replace through the PVC path: `pvcRetention: Retain` on delete, or snapshot-and-remount via [`persistence.existingClaim`](../resources/agent.md).
 
 Channel receivers see a bounded gap. Webhook paths return `401` while the AgentChannel is absent (indistinguishable from an unregistered path, per the [401 contract](../gateways/api/channel-webhook.md)), and stored async responses survive independently in `kaalm-system` until their 1-hour TTL, unless the channel is deleted, in which case the finalizer sweeps them (see [Finalizers](../controller/finalizers.md)).

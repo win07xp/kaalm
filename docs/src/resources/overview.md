@@ -4,10 +4,10 @@ This part of the book covers the custom resources Kaalm provides: their spec and
 
 For the HTTP endpoints that agent containers call (task completion, heartbeat, message delivery, async webhook), see [HTTP API](../gateways/api/overview.md).
 
-All resources live in one API group and version:
+All resources live in one API group, served at two versions since v0.6.0:
 
 - API group: `kaalm.io`
-- API version: `v1alpha1` (v1 API stability is not a goal for the initial release)
+- API versions: `v1beta1`, the storage version and the compatibility contract, and `v1alpha1`, deprecated, still served, and converted by the controller. The two schemas are identical, so the field reference on these pages applies to both. The versioning rules and the deprecation window are on [API Versioning and Deprecation](../operations/api-versioning.md).
 
 ## Resource Summary
 

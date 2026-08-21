@@ -17,6 +17,7 @@ The operator runs under `kaalm-system/kaalm-controller`, with a `ClusterRole` (b
 
 - `update, patch` on their **status subresources** (`agents/status`, `agenttasks/status`, `agentchannels/status`, `modelproviders/status`, `agentclasses/status`). With the status subresource enabled, write access on the main resource does not permit status writes, so these are separate grants.
 - `update` on their **finalizers subresources** (`agents/finalizers`, `agenttasks/finalizers`, and so on). The reconcilers set controller ownerRefs with `blockOwnerDeletion: true`, and clusters running the `OwnerReferencesPermissionEnforcement` admission plugin authorize that against the owner's `finalizers` subresource.
+- Since v0.6.0, `get, list, watch` on `customresourcedefinitions` and `update, patch` on `customresourcedefinitions/status`, both scoped by `resourceNames` to the six Kaalm CRDs, for the storage-version migrator ([API Versioning and Deprecation](../operations/api-versioning.md#storage-version-migration)). The operator never writes a CRD's spec.
 
 **Core workload objects.** `get, list, watch, create, update, patch, delete` on `Pods`, `PersistentVolumeClaims`, `Services`, `ConfigMaps`, `NetworkPolicies`, `ServiceAccounts` cluster-wide.
 

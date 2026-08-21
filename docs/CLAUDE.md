@@ -13,8 +13,8 @@ The design book is the spec: it documents exactly how the system works. Start at
 - `controller/` - operator structure, reconcilers, lifecycles, finalizers
 - `console/` - the optional operator console (read API, authn, test-chat)
 - `security/` - trust model, RBAC, credentials, TLS, threat model
-- `operations/` - deployment (Helm), observability
-- `appendix/` - the acceptance scenarios (S1 to S20), the scenario-coverage map, and the lifecycle index
+- `operations/` - deployment (Helm), API versioning and deprecation, observability
+- `appendix/` - the acceptance scenarios (S1 to S21), the scenario-coverage map, and the lifecycle index
 
 ## Single-sourced facts
 
