@@ -9,6 +9,21 @@ controller:
     tag: ""            # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
   # Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy.
+  # Trust the cluster CA (kaalm-ca, already mounted at /var/run/kaalm/ca.crt)
+  # for provider health probes, in addition to the public system roots. Enable
+  # this so ModelProviders and ToolProviders whose endpoint is an in-cluster
+  # server with a kaalm-ca-issuer certificate can probe Healthy; it mirrors
+  # gateway.trustClusterCAForUpstream, which governs the same trust for the
+  # forwarding path. Off by default; public providers need only system roots.
+  trustClusterCAForProbes: false
+  # An operator-supplied ConfigMap of additional CA certificates to trust for
+  # provider health probes, mirroring gateway.upstreamCA. Set configMap to its
+  # name to have the chart project it into the controller and pass it along;
+  # composes with trustClusterCAForProbes into one additive pool. The
+  # controller re-reads it when it rotates.
+  probeCA:
+    configMap: ""
+    key: ca.crt
   networkPolicy:
     dnsSelector:
       namespaceLabels:
