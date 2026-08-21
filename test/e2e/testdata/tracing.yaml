@@ -1,0 +1,89 @@
+# Fixtures for the tracing e2e (S20): an agent whose starter handler answers
+# "ask ..." messages by calling the model through the gateway with the
+# handler's ctx, so one webhook message exercises all three hops of the
+# trace: channel.receive and agent.deliver on the User Gateway, then
+# llm.request and llm.forward on the LLM proxy, connected through the
+# runtime's trace-context propagation (contract item 8).
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: tracing-provider
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - tracing-e2e
+  models:
+    - id: mock-model
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: tracing-class
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  allowedProviders:
+    - name: tracing-provider
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+---
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: trace-agent
+  namespace: tracing-e2e
+spec:
+  agentClassRef:
+    name: tracing-class
+  image: registry.test/agents/starter-go:e2e
+  env:
+    - name: KAALM_STARTER_MODEL
+      value: tracing-provider/mock-model
+  providers:
+    - providerRef:
+        name: tracing-provider
+---
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: trace-channel
+  namespace: tracing-e2e
+spec:
+  agentRef:
+    name: trace-agent
+  type: webhook
+  webhook:
+    path: /channels/tracing-e2e/trace-agent
+    responseMode: sync
+    # Extract the message text so the starter sees "ask ..." itself, not the
+    # raw JSON body the raw-body fallback would wrap.
+    content:
+      fromBody: content
+    auth:
+      type: bearer
+      secretRef:
+        name: trace-hook
+        key: token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trace-hook
+  namespace: tracing-e2e
+type: Opaque
+stringData:
+  token: trace-webhook-bearer-token
