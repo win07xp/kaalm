@@ -19,8 +19,9 @@ model" (since v0.5.0 every delivered message resets the idle clock, so the
 callout now says that) and whose post-wake `kubectl get agents` showed the
 agent already hibernating again, a controller regression fixed in the same
 pull request; the second pass, against the fixed controller, matched every
-page, byte-exact where exact values are shown. The confirmation walk is
-recorded here after the tag.
+page, byte-exact where exact values are shown. The confirmation walk against
+the published 0.5.0 artifacts (the book's exact install line, images pulled
+from ghcr), also on 2026-08-21, found zero drift.
 
 The install is pinned to `--version 0.5.0` on purpose. The pin is not really
 about the install line: it is what makes the later chapters' output true, since
