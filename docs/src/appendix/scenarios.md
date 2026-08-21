@@ -102,6 +102,12 @@ She port-forwards to the console Service and pastes her token. The fleet page sh
 
 She picks Dev's hibernated support agent and sends "are you alive?" from the test-chat panel. The message rides the gateway like any channel message: the agent wakes, answers, and the reply renders in the panel. The delivery log names her, and whatever the agent spent answering is metered against the namespace budget as usual. When a contractor with no access to that namespace pastes their own token, the namespace never even appears in their list. That is the console's point: the governance surface (who runs what, what it costs, what is healthy, who asked) became something Priya can show, not just query.
 
+## S20: Follow One Message Across the Hops
+
+A user reports that the support assistant "took forever" yesterday. Priya has the metrics (the latency histograms say p95 was fine) and the logs (each hop wrote its own record), but nothing that connects that one message to the LLM and tool calls it caused. She sets `gateway.tracing.otlpEndpoint` to her collector and upgrades the release. Nothing else changes; clusters that leave the value empty keep running exactly as before, with no tracer installed at all.
+
+The next slow message tells its own story as one trace: `channel.receive` on the User Gateway, the delivery to the agent, then the agent's model calls and its tool call, each a child span carrying the provider, model, and outcome, because the base-image runtime forwarded the delivery's trace context on every gateway call the handler made (contract item 8), with no agent code changing. The gap between the delivery span and its first child is the agent thinking; her team's LangGraph agents, which run their own OpenTelemetry SDK, fill that gap with real agent spans by reading `kaalm.trace_context()`. The slow message turns out to be a tool call retrying against a struggling upstream, visible on one screen and attributable to one message ([Tracing](../operations/observability.md#tracing)).
+
 ## Design Implications
 
 These scenarios drive specific design requirements:
