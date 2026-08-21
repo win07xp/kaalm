@@ -126,7 +126,14 @@ func parseForwardPort(line string) (int, bool) {
 // kubectl-chosen local port (avoids collisions), returning the local port and a
 // stop func. Caller must call stop().
 func PortForward(namespace, svc, remotePort string) (int, func(), error) {
-	cmd := exec.Command("kubectl", "port-forward", "-n", namespace, "svc/"+svc, ":"+remotePort)
+	return PortForwardTarget(namespace, "svc/"+svc, remotePort)
+}
+
+// PortForwardTarget is PortForward for an explicit kubectl target
+// ("svc/name", "pod/name"), for specs that must reach one specific replica
+// rather than whichever Pod the Service picks.
+func PortForwardTarget(namespace, target, remotePort string) (int, func(), error) {
+	cmd := exec.Command("kubectl", "port-forward", "-n", namespace, target, ":"+remotePort)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return 0, nil, err
