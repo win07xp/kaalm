@@ -37,6 +37,7 @@ import (
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/gateway"
+	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
 func main() {
@@ -55,6 +56,8 @@ func main() {
 		agentHostOverride    string
 		agentPortOverride    int
 		metricsAddr          string
+		otlpEndpoint         string
+		otlpSampleRatio      float64
 		maxFallbackDepth     int
 		maxMessageBodyBytes  int64
 		maxResponseBodyBytes int64
@@ -85,6 +88,10 @@ func main() {
 	flag.StringVar(&agentHostOverride, "agent-host-override", "", "redirect agent delivery dials to this host (dev only)")
 	flag.IntVar(&agentPortOverride, "agent-port-override", 0, "redirect agent delivery dials to this port (dev only)")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9090", "Prometheus metrics listener address")
+	flag.StringVar(&otlpEndpoint, "otlp-endpoint", "",
+		"OTLP/HTTP trace exporter base URL (for example http://collector:4318); empty disables tracing entirely")
+	flag.Float64Var(&otlpSampleRatio, "otlp-sample-ratio", 1.0,
+		"parent-based head sampling ratio for traces this gateway starts")
 	flag.IntVar(&maxFallbackDepth, "max-fallback-depth", 3, "total providers attempted per request, including the primary")
 	flag.Int64Var(&maxMessageBodyBytes, "max-message-body-bytes", 1<<20, "inbound webhook body cap")
 	flag.Int64Var(&maxResponseBodyBytes, "max-response-body-bytes", 900<<10, "agent reply body cap")
@@ -266,6 +273,7 @@ func main() {
 	if podName == "" {
 		podName, _ = os.Hostname()
 	}
+	defer setupTracing(ctx, server, otlpEndpoint, otlpSampleRatio, upstreamCAFile, podName, logger)()
 	publisher := &gateway.BudgetPublisher{
 		Client: clientset, Ledger: server.Budget,
 		OperatorNamespace: operatorNamespace, PodName: podName,
@@ -389,4 +397,28 @@ func parseBackoff(raw string, logger *slog.Logger) []time.Duration {
 		out = append(out, d)
 	}
 	return out
+}
+
+// setupTracing wires the OTLP exporter when an endpoint is configured and
+// returns the shutdown flush; the empty default leaves Server.Tracing nil
+// (no tracer installed, no trace context created or forwarded).
+func setupTracing(ctx context.Context, server *gateway.Server,
+	endpoint string, sampleRatio float64, upstreamCAFile, podName string, logger *slog.Logger,
+) func() {
+	if endpoint == "" {
+		return func() {}
+	}
+	pool, err := (&tlsutil.CAPoolLoader{Files: splitPaths(upstreamCAFile), Additive: true}).Load()
+	if err != nil {
+		logger.Error("building the tracing trust pool failed", "error", err)
+		os.Exit(1)
+	}
+	tracing, err := gateway.NewTracing(ctx, endpoint, sampleRatio, pool, podName)
+	if err != nil {
+		logger.Error("initializing tracing failed", "error", err)
+		os.Exit(1)
+	}
+	server.Tracing = tracing
+	logger.Info("tracing enabled", "endpoint", endpoint, "sampleRatio", sampleRatio)
+	return func() { _ = tracing.Shutdown(context.Background()) }
 }

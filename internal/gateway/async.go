@@ -196,7 +196,7 @@ func (s *Server) handleAsyncAccept(
 
 	// The caller is now gone; the pipeline continues in the background.
 	// v1 limitation: this state is replica-local (no work claim/takeover).
-	go s.runAsyncPipeline(requestID, channel.DeepCopy(), agent.DeepCopy(), env)
+	go s.runAsyncPipeline(s.Tracing.Detach(r.Context()), requestID, channel.DeepCopy(), agent.DeepCopy(), env)
 }
 
 // Callback delivery outcomes, the status vocabulary of
@@ -211,9 +211,12 @@ const (
 // runAsyncPipeline executes wake, delivery, and response dispatch after the
 // 202. The full retry budget runs without a wall-clock deadline.
 func (s *Server) runAsyncPipeline(
-	requestID string, channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent, env MessageEnvelope,
+	traceCtx context.Context, requestID string,
+	channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent, env MessageEnvelope,
 ) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// traceCtx carries only the accept span's identity (Tracing.Detach), so
+	// the delivery spans stay connected without the caller's cancellation.
+	ctx, cancel := context.WithTimeout(traceCtx, 10*time.Minute)
 	defer cancel()
 
 	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Webhook.Path, agent, env)

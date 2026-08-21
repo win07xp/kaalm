@@ -65,6 +65,7 @@ func (g *Gateway) Post(ctx context.Context, path string, body any) (*http.Respon
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	applyTraceContext(ctx, req)
 	return g.hc.Do(req)
 }
 
@@ -75,6 +76,7 @@ func (g *Gateway) Get(ctx context.Context, path string) (*http.Response, error) 
 	if err != nil {
 		return nil, err
 	}
+	applyTraceContext(ctx, req)
 	return g.hc.Do(req)
 }
 

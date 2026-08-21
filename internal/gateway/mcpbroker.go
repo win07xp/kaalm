@@ -29,6 +29,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	"github.com/win07xp/kaalm/internal/mcp"
 )
@@ -234,7 +237,13 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	var reqBytes int64
 	forwarded := false
 
+	// tctx becomes the tool.call span context once the route is authorized;
+	// the deny closure captures the variable, so late denials carry the
+	// error status onto the span (early ones hit the noop span, harmlessly).
+	tctx := r.Context()
+
 	deny := func(status int, errType, message string, retryAfter int, method, tool string) {
+		spanError(tctx, errType)
 		s.mcpResult(c, tp, providerName, method, tool, status, errType, message, start, reqBytes, 0, forwarded)
 		writeError(w, status, errorBody{Type: errType, Message: message,
 			Provider: providerName, Retryable: retryAfter > 0 || status == http.StatusServiceUnavailable}, retryAfter)
@@ -312,6 +321,18 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// tool.call parents onto whatever context the caller propagated; its
+	// tool.forward child below covers the upstream half.
+	var endSpan func(error)
+	tctx, endSpan = s.Tracing.Start(s.Tracing.Extract(tctx, r.Header), "tool.call",
+		trace.SpanKindServer,
+		attribute.String("kaalm.provider", tp.Name),
+		attribute.String("kaalm.namespace", c.Namespace),
+		attribute.String("kaalm.workload", workloadKey(c)),
+		attribute.String("kaalm.method", msg.Method),
+		attribute.String("kaalm.tool", toolName))
+	defer endSpan(nil)
+
 	// Session ownership: never forward a wrapped id, never accept one bound
 	// to a different caller.
 	identity := callerIdentity(c)
@@ -334,10 +355,13 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.mcpUpstreamTimeout())
+	ctx, cancel := context.WithTimeout(tctx, s.mcpUpstreamTimeout())
 	defer cancel()
-	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tp.Spec.Endpoint, bytes.NewReader(body))
+	fctx, endForward := s.Tracing.Start(ctx, "tool.forward", trace.SpanKindClient,
+		attribute.String("kaalm.provider", tp.Name))
+	upReq, err := http.NewRequestWithContext(fctx, http.MethodPost, tp.Spec.Endpoint, bytes.NewReader(body))
 	if err != nil {
+		endForward(err)
 		deny(http.StatusBadRequest, errInvalidRequest, "building upstream request: "+err.Error(), 0, msg.Method, toolName)
 		return
 	}
@@ -345,6 +369,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 	forwarded = true
 	resp, err := s.mcpHTTPClient().Do(upReq)
+	endForward(err)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):

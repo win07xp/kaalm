@@ -31,6 +31,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 )
 
@@ -135,6 +138,18 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, denial.status, errorBody{Type: denial.errType, Message: denial.message, Provider: providerName}, 0)
 		return
 	}
+
+	// llm.request parents onto whatever context the agent propagated from
+	// its delivery; the llm.forward children below cover each provider
+	// attempt. Denials past this point (budget, rate limit) close the span
+	// with an error status, so a blocked request is visible in its trace.
+	ctx, endSpan := s.Tracing.Start(s.Tracing.Extract(r.Context(), r.Header), "llm.request",
+		trace.SpanKindServer,
+		attribute.String("kaalm.provider", providerName),
+		attribute.String("kaalm.model", modelID),
+		attribute.String("kaalm.namespace", c.Namespace),
+		attribute.String("kaalm.workload", workloadKey(c)))
+	defer endSpan(nil)
 	typeAdapter, ok := adapterForProviderType(provider.Spec.Type)
 	if !ok {
 		writeError(w, http.StatusBadRequest, errorBody{
@@ -156,6 +171,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		defer primarySettle(0)
 	}
 	if !s.applyBudgetDecision(w, decision, primarySettle != nil, providerName, c.Namespace, &modelID) {
+		spanError(ctx, "budget_denied")
 		return
 	}
 
@@ -163,6 +179,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// across live replicas.
 	if !s.RateLimiter.Allow(provider, c.Namespace, modelID) {
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "rate_limited")
+		spanError(ctx, errRateLimited)
 		writeError(w, http.StatusTooManyRequests, errorBody{
 			Type: errRateLimited, Provider: providerName, Retryable: true,
 			Message: fmt.Sprintf("rate limit exceeded for namespace %s on model %s", c.Namespace, modelID)}, 1)
@@ -191,7 +208,12 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// of the response relay, labeled with the provider that answered.
 	start := time.Now()
 	answered := providerName
-	defer func() { s.Metrics.Duration(answered, modelID, time.Since(start).Seconds()) }()
+	defer func() {
+		s.Metrics.Duration(answered, modelID, time.Since(start).Seconds())
+		trace.SpanFromContext(ctx).SetAttributes(
+			attribute.String("kaalm.provider", answered),
+			attribute.String("kaalm.model", modelID))
+	}()
 
 	// Walk the fallback tree. Each attempt forwards to one candidate with its
 	// own credential and endpoint; the first 2xx (or a non-fallbackable 4xx)
@@ -201,8 +223,15 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
 		observed: map[failClass]bool{}, primarySettle: primarySettle,
 	}
-	res, ok := s.tryWithFallbacks(r.Context(), provider, st, func(ctx context.Context, cand *kaalmv1alpha1.ModelProvider) forwardResult {
-		fr := s.forwardOnce(ctx, r, cand, outBody, adapter, typeAdapter, modelID)
+	res, ok := s.tryWithFallbacks(ctx, provider, st, func(ctx context.Context, cand *kaalmv1alpha1.ModelProvider) forwardResult {
+		fctx, endForward := s.Tracing.Start(ctx, "llm.forward", trace.SpanKindClient,
+			attribute.String("kaalm.provider", cand.Name))
+		fr := s.forwardOnce(fctx, r, cand, outBody, adapter, typeAdapter, modelID)
+		if fr.class != classNone {
+			endForward(errors.New(failClassName(fr.class)))
+		} else {
+			endForward(nil)
+		}
 		if fr.class != classNone {
 			st.observed[fr.class] = true
 		}
@@ -220,6 +249,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		status, body, retryAfter := exhaustionError(st.observed, st.maxRetryAfter, providerName)
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "error")
+		spanError(ctx, body.Type)
 		writeError(w, status, body, retryAfter)
 		return
 	}
@@ -232,6 +262,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 			res.settle(0)
 		}
 		s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "error")
+		spanError(ctx, "upstream_error")
 		bodyLog("llm response", res.body)
 		copyDownstreamHeaders(w.Header(), res.resp.Header)
 		w.WriteHeader(res.resp.StatusCode)

@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // testChatRequest is the console's internal request shape
@@ -93,7 +95,15 @@ func (s *Server) handleTestChat(w http.ResponseWriter, r *http.Request) {
 		Metadata:    map[string]any{},
 	}
 
-	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(s.Config.SyncDeliveryDeadline))
+	tctx, endSpan := s.Tracing.Start(s.Tracing.Extract(r.Context(), r.Header), "channel.receive",
+		trace.SpanKindServer,
+		attribute.String("kaalm.channel_type", "console"),
+		attribute.String("kaalm.namespace", req.Namespace),
+		attribute.String("kaalm.agent", req.Agent),
+		attribute.String("kaalm.message_id", env.MessageID))
+	defer endSpan(nil)
+
+	ctx, cancel := context.WithDeadline(tctx, time.Now().Add(s.Config.SyncDeliveryDeadline))
 	defer cancel()
 
 	start := time.Now()
@@ -109,6 +119,7 @@ func (s *Server) handleTestChat(w http.ResponseWriter, r *http.Request) {
 		"namespace", req.Namespace, "agent", req.Agent, "userId", req.UserID,
 		"outcome", outcome, "durationMs", time.Since(start).Milliseconds())
 	if err != nil {
+		spanError(ctx, errType)
 		s.writeSyncError(w, ctx, agent.Namespace, errType, err)
 		return
 	}

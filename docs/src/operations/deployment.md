@@ -67,6 +67,8 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.maxMessageBodyBytes` | `1Mi` | Caps inbound webhook bodies on `:8080`. Over-cap POSTs get `413` at the listener level, before path resolution and auth. See [Request Flow step 2](../gateways/user/overview.md#request-flow). |
 | `gateway.maxLLMRequestBodyBytes` | `4Mi` | Caps inbound LLM-proxy request bodies on `:8443`. Over-cap gives `413 request_too_large` before namespace identification. See [LLM Proxy Endpoints](../gateways/api/overview.md#llm-proxy-endpoints). |
 | `gateway.healthPort` | `8081` | Port for the gateway's internal kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). See [Gateway Readiness](../gateways/llm/operations.md#gateway-readiness). |
+| `gateway.tracing.otlpEndpoint` | `""` | OTLP/HTTP base URL the gateway exports trace spans to (for example `http://collector.monitoring.svc:4318`). Empty means tracing is off entirely: no tracer installed, no trace context created or forwarded. An `https` endpoint is verified against the gateway's upstream trust pool. See [Tracing](observability.md#tracing). |
+| `gateway.tracing.sampleRatio` | `1.0` | Parent-based head sampling ratio for traces the gateway starts; propagated sampling decisions are honored either way. |
 | `console.enabled` | `false` | Installs the optional [operator console](../console/overview.md): the `kaalm-console` Deployment, Service, RBAC, and certificate. Off renders none of them. |
 | `console.image.repository` / `.tag` / `.pullPolicy` | `ghcr.io/win07xp/kaalm-console`, appVersion, `IfNotPresent` | The console image. |
 | `console.healthPort` | `8081` | Port for the console's kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). |

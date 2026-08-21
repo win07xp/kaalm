@@ -57,6 +57,10 @@ spec:
             - --channel-health-window={{ .Values.gateway.channelHealthWindow }}
             - --delivery-backoff={{ .Values.gateway.agentDeliveryRetryBackoff }}
             - --callback-backoff={{ .Values.gateway.callbackRetryBackoff }}
+            {{- if .Values.gateway.tracing.otlpEndpoint }}
+            - --otlp-endpoint={{ .Values.gateway.tracing.otlpEndpoint }}
+            - --otlp-sample-ratio={{ .Values.gateway.tracing.sampleRatio }}
+            {{- end }}
             {{- $upstreamCAs := list }}
             {{- if .Values.gateway.trustClusterCAForUpstream }}
             {{- $upstreamCAs = append $upstreamCAs "/var/run/kaalm/ca.crt" }}

@@ -14,7 +14,7 @@ Both the controller and the gateway expose Prometheus metrics on dedicated ports
 
 This page is the aggregator over those three. It rolls the per-component catalogs into one table, specifies log conventions and PII safety, and lists architecturally-significant alerts and dashboards. When you need to know *when* a metric increments or *what* a label value means, follow the link to the owning component; when you need to know *what exists*, read the table here.
 
-Distributed tracing and an audit-export pipeline are out of scope for v1 (see [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1)); the Grafana dashboards ship since v0.5.0 ([Dashboards](#dashboards)).
+An audit-export pipeline is out of scope for v1 (see [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1)); the Grafana dashboards and OpenTelemetry tracing ship since v0.5.0 ([Dashboards](#dashboards), [Tracing](#tracing)).
 
 ## Scope
 
@@ -25,10 +25,10 @@ Distributed tracing and an audit-export pipeline are out of scope for v1 (see [S
 - Kubernetes Events on all six Kaalm CRDs
 - A small recommended-alerts set tied to architectural failure modes
 - Three Grafana dashboards (per-namespace, per-provider, cluster) as importable JSON, since v0.5.0
+- OpenTelemetry tracing across the gateway to agent to provider hops (default off), since v0.5.0
 
 **Deferred to v1.1+** (per [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1)).
 
-- Distributed tracing (OpenTelemetry instrumentation)
 - Audit-log export pipeline beyond standard Kubernetes audit logging
 - Cost analytics / chargeback reporting
 
@@ -176,7 +176,26 @@ Conventions the panels follow:
 
 ## Tracing
 
-Distributed tracing across gateway to agent to provider hops is out of scope for v1 (per [Scope for v1](../concepts/vision-and-scope.md#scope-for-v1)). When tracing lands in v1.1, OpenTelemetry instrumentation will key spans on the gateway's existing request-correlation field. v1 takes no position on the eventual span-propagation header: that decision sits with the v1.1 work.
+OpenTelemetry tracing ships since v0.5.0, default off. It connects one user message to the LLM and tool calls it caused, across the gateway to agent to provider hops.
+
+**Propagation** is W3C `traceparent` and `tracestate`, and nothing else. Spans key on the correlation the logs already carry, as span attributes rather than metric labels (the [cardinality](#cardinality) doctrine binds metrics; spans are per-request by design): `kaalm.message_id`, `kaalm.namespace`, `kaalm.agent`, `kaalm.workload`, `kaalm.provider`, `kaalm.model`, `kaalm.channel_type`, `kaalm.method`, and `kaalm.tool`, each where it applies.
+
+**Span inventory.** Every span is created by the gateway; the agent hop propagates:
+
+| Span | Kind | Where | Notes |
+|---|---|---|---|
+| `channel.receive` | server | User Gateway | Webhook and test-chat receipt; root unless the caller sent trace context. Covers handling through the sync reply, or through the `202` in async mode; the background delivery stays connected through the span identity without inheriting the caller's cancellation |
+| `agent.deliver` | client | User Gateway | The delivery to the agent, retries included; its context travels to the agent on the delivery request |
+| `llm.request` | server | LLM proxy | Parented by whatever context the agent propagated. A denial past route authorization (budget, rate limit) closes it with an error status, so a blocked request is visible in its trace |
+| `llm.forward` | client | LLM proxy | One per provider attempt, fallback candidates included, named for the candidate it tried |
+| `tool.call` | server | Tool broker | The governed MCP call; broker denials carry an error status |
+| `tool.forward` | client | Tool broker | The upstream half of a forwarded call |
+
+The agent's own processing appears as the gap between `agent.deliver` and its child spans, deliberately: the base images carry no OpenTelemetry SDK, and the platform's promise is the connected trace, which propagation alone delivers. The runtime forwards the delivery's trace context on every gateway call ([contract item 8](../runtime/contract.md#8-trace-context-propagation)); a framework running its own SDK reads the same context (`kaalm.trace_context()` in Python, `agentruntime.TraceContext` in Go) and fills the gap with real agent spans.
+
+**Exporter.** OTLP over HTTP, configured by two Helm values ([Deployment](deployment.md)): `gateway.tracing.otlpEndpoint` (default `""`) and `gateway.tracing.sampleRatio` (default `1.0`, parent-based head sampling for traces the gateway starts). With no endpoint, no tracer is installed: no spans, no propagation, and request handling behaves exactly as it did before tracing existed, which is the default install. An `https` endpoint is verified against the gateway's upstream trust pool.
+
+The controller emits no spans in this version: the traced path is the message path, and reconcile visibility remains metrics, logs, and Events. Scenario [S20](../appendix/scenarios.md#s20-follow-one-message-across-the-hops) proves the connected trace live: one webhook message, one trace, its spans read back out of a Jaeger beside the e2e cluster.
 
 ## See also
 

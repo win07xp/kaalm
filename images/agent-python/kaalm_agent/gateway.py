@@ -15,6 +15,8 @@ from typing import Any, NamedTuple
 
 import aiohttp
 
+from . import tracecontext
+
 
 class GatewayReply(NamedTuple):
     """status plus the parsed JSON body (or raw text when not JSON)."""
@@ -45,7 +47,10 @@ class GatewayClient:
 
     async def request(self, method: str, path: str, **kwargs: Any) -> GatewayReply:
         session = await self._session_for_current_certs()
-        async with session.request(method, self._base_url + path, **kwargs) as resp:
+        # The handled message's trace context rides every gateway call;
+        # caller-supplied headers win on collision.
+        headers = {**tracecontext.current(), **dict(kwargs.pop("headers", None) or {})}
+        async with session.request(method, self._base_url + path, headers=headers, **kwargs) as resp:
             if resp.content_type == "application/json":
                 data: Any = await resp.json()
             else:

@@ -126,6 +126,9 @@ type Server struct {
 	ChannelHealth *ChannelHealthStore
 	RateLimiter   *RateLimiter
 	Metrics       *Metrics
+	// Tracing is the OpenTelemetry wiring; nil (the default install) means
+	// no spans are created and no trace context is forwarded.
+	Tracing *Tracing
 	// Recorder emits Kubernetes Events (runtime FallbackIneligible,
 	// CredentialsInvalid). A nil recorder no-ops.
 	Recorder EventRecorder

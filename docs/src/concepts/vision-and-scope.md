@@ -83,7 +83,7 @@ Kaalm's differentiator is the combination none of its neighbors has: **dollar-de
 **Out of scope for v1** (may land in later versions):
 
 - Agent-to-agent communication and multi-agent orchestration
-- Observability stack (traces, audit export; the Grafana dashboards ship since v0.5.0, see [Dashboards](../operations/observability.md#dashboards))
+- Observability stack (audit export; the Grafana dashboards and OpenTelemetry tracing ship since v0.5.0: [Dashboards](../operations/observability.md#dashboards), [Tracing](../operations/observability.md#tracing))
 - Multi-cluster federation
 - Advanced scheduling (GPU-awareness, priority classes, preemption policies specific to agents)
 - Hard budget enforcement (synchronous per-request aggregation)

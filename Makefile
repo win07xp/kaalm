@@ -231,6 +231,8 @@ E2E_PYTHON_BASE_IMG ?= registry.test/agents/kaalm-agent-python:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
 CURL_IMG ?= curlimages/curl:8.10.1
+# The OTLP sink for the tracing e2e (S20); preloaded for the same hermeticity.
+JAEGER_IMG ?= jaegertracing/all-in-one:1.62.0
 PYTHON_AGENT_IMG ?= ghcr.io/win07xp/kaalm-agent-python:$(CHART_APP_VERSION)
 
 .PHONY: python-test
@@ -278,16 +280,22 @@ e2e-images: ## Build the controller, gateway, console, agent, base, and mock-pro
 	docker tag $(GO_AGENT_IMG) $(E2E_GO_BASE_IMG)
 	docker tag $(PYTHON_AGENT_IMG) $(E2E_PYTHON_BASE_IMG)
 	docker pull $(CURL_IMG)
-	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(CONSOLE_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG)
+	docker pull $(JAEGER_IMG) || docker image inspect $(JAEGER_IMG) >/dev/null
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(CONSOLE_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG) $(JAEGER_IMG)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
+	# Jaeger first: the chart is installed exporting to it (S20), and an
+	# absent sink would make the exporter log retries for the whole suite.
+	kubectl apply -f test/e2e/testdata/tracing-jaeger.yaml
 	helm upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
 		--set certManager.clusterResourceNamespace=cert-manager \
 		--set gateway.trustClusterCAForUpstream=true \
 		--set gateway.trustClusterCAForCallbacks=true \
 		--set 'gateway.callbackUrl.allowlist={mock-provider.e2e.svc}' \
-		--set console.enabled=true --wait --timeout 5m
+		--set console.enabled=true \
+		--set gateway.tracing.otlpEndpoint=http://jaeger.tracing-e2e.svc:4318 \
+		--wait --timeout 5m
 
 .PHONY: dashboards-verify
 dashboards-verify: ## Verify config/grafana against the live e2e cluster (run after make e2e): throwaway Prometheus+Grafana, provisioning, every panel query.

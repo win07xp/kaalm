@@ -2,7 +2,7 @@
 
 Kaalm is BYO-image: any container can run as an Agent or AgentTask, provided it implements a small contract. This page specifies that contract. It is the minimum a container image must satisfy to participate in the lifecycle: HTTPS health endpoints on the injected health port, graceful SIGTERM handling, authenticated TLS calls to the injected gateway endpoint, an optional `POST /v1/message` handler when an AgentChannel is in use, and `messageId` deduplication on that handler.
 
-The contract has seven numbered items. Other pages cite them by number, so the numbering is stable. For the surrounding system, see [System Architecture](../concepts/system-architecture.md). Working implementations of every item ship as Go and Python [starter templates](starter-templates.md), summarized at the end of this page.
+The contract has eight numbered items. Other pages cite them by number, so the numbering is stable. For the surrounding system, see [System Architecture](../concepts/system-architecture.md). Working implementations of every item ship as Go and Python [starter templates](starter-templates.md), summarized at the end of this page.
 
 ## 1. HTTPS health endpoints
 
@@ -107,6 +107,12 @@ The retry pipeline applies to every agent, hibernated or not, so all agents MUST
 The starter templates implement this as an in-memory LRU over the last 1024 `messageId`s; hibernation-enabled adopters layer PVC-backed persistence on top.
 
 `messageId` dedup covers gateway-retry duplicates only. External replay of the inbound webhook (see [Threat Model](../security/threat-model.md)) generates a fresh `messageId` per delivery and is not covered. Agents performing non-idempotent inbound actions must additionally dedup on a caller-supplied idempotency key or content hash.
+
+## 8. Trace-context propagation
+
+This item is required for all agents implementing `POST /v1/message`, and it is a header copy, not an SDK obligation. The gateway's delivery request may carry the W3C `traceparent` and `tracestate` headers. While handling that message, the agent must attach the same header values to every call it makes to the gateway (LLM requests, tool calls, and any other gateway endpoint). A delivery without the headers obligates nothing, and the agent must never invent trace context of its own.
+
+Both reference runtimes implement the item invisibly, so handlers change nowhere: the Go module carries the values on the handler's `ctx` (readable through `agentruntime.TraceContext`) and injects them in its gateway client, and the Python base image captures them in a context variable around the handler call and injects them through `kaalm.gateway` and the `kaalm.http_client()` / `kaalm.http_async_client()` factories, exposing them as `kaalm.trace_context()` for frameworks that run their own OpenTelemetry SDK. See [Tracing](../operations/observability.md#tracing) for the spans this propagation connects.
 
 ## Communication summary
 
