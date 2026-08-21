@@ -1,8 +1,9 @@
 Kaalm {{ .Chart.AppVersion }} installed into namespace {{ .Release.Namespace }}.
 
 The chart installs:
-  - the 5 CustomResourceDefinitions
-  - the controller and gateway Deployments (2 replicas each, PDB minAvailable 1)
+  - the 6 CustomResourceDefinitions
+  - the controller and gateway Deployments (2 replicas each, PDB minAvailable 1),
+    and the console Deployment when console.enabled is set
   - ServiceAccounts, ClusterRoles/Bindings, and the gateway's namespaced Role
   - the cert-manager trust chain (kaalm-selfsigned + kaalm-ca-issuer
     ClusterIssuers, the kaalm-ca root Certificate, the gateway and controller

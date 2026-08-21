@@ -222,6 +222,94 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 	}
 }
 
+// TestAgent_WakeIsActivity pins the wake floor. The gateway records the
+// message that woke an agent only once delivery succeeds, after the Pod is
+// Ready, so the first Running pass after a wake can see only the record that
+// preceded the sleep. Left unfloored, an agent that slept longer than
+// idleTimeout+hibernationDelay went straight back through Idle to Hibernating
+// after answering one message. The wake stamps lastActivityTime, and both
+// windows are measured from no earlier than that stamp.
+func TestAgent_WakeIsActivity(t *testing.T) {
+	mkWorkloadClass(t, "wc-wakeact", func(ac *kaalmv1alpha1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+		ac.Spec.Lifecycle.HibernationAllowed = true
+	})
+	provisionRunningAgentWithLifecycle(t, "wake-act", "wc-wakeact", func(ag *kaalmv1alpha1.Agent) {
+		ag.Spec.Persistence.Enabled = true
+		ag.Spec.Lifecycle.HibernationEnabled = true
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: 5 * time.Second}
+		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Hour}
+	})
+
+	// Activity from two hours ago: both windows have long elapsed, so the
+	// agent hibernates on the immediate requeue chain.
+	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "wake-act", 2*time.Hour)}, 1)
+	touchAgent(t, "wake-act")
+	eventually(t, func() error {
+		var pods corev1.PodList
+		if err := testClient.List(ctxT(), &pods, listAgentPods("wake-act")...); err != nil {
+			return err
+		}
+		for i := range pods.Items {
+			if !pods.Items[i].DeletionTimestamp.IsZero() {
+				forceDeletePod(t, &pods.Items[i])
+			}
+		}
+		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1alpha1.AgentHibernated {
+			return errString(fmt.Sprintf("phase=%s want Hibernated", got.Status.Phase))
+		}
+		return nil
+	})
+
+	// Wake via annotation while the gateway still reports only the stale
+	// record: the waking message is not recorded until after delivery.
+	woke := time.Now()
+	eventually(t, func() error {
+		got := getWorkloadAgent(t, "wake-act")
+		if got.Annotations == nil {
+			got.Annotations = map[string]string{}
+		}
+		got.Annotations[kaalmv1alpha1.AnnotationWake] = kaalmv1alpha1.AnnotationTrue
+		return testClient.Update(ctxT(), got)
+	})
+	eventually(t, func() error {
+		if agentPod(t, "wake-act") == nil {
+			return errString("no recreated pod yet")
+		}
+		return nil
+	})
+	markPodReady(t, agentPod(t, "wake-act"))
+	expectAgentPhase(t, "wake-act", kaalmv1alpha1.AgentRunning)
+
+	got := getWorkloadAgent(t, "wake-act")
+	if got.Status.LastActivityTime == nil || got.Status.LastActivityTime.Time.Before(woke.Add(-time.Second)) {
+		t.Fatalf("the wake must stamp lastActivityTime; got %v", got.Status.LastActivityTime)
+	}
+
+	// Running holds for idleTimeout from the wake, then Idle; the stale
+	// record must not carry it on to Hibernating, because the delay counts
+	// from the wake too.
+	eventually(t, func() error {
+		touchAgent(t, "wake-act")
+		time.Sleep(500 * time.Millisecond)
+		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1alpha1.AgentIdle {
+			return errString(fmt.Sprintf("phase=%s want Idle after idleTimeout from the wake", got.Status.Phase))
+		}
+		return nil
+	})
+	for i := 0; i < 5; i++ {
+		touchAgent(t, "wake-act")
+		time.Sleep(300 * time.Millisecond)
+		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1alpha1.AgentIdle {
+			t.Fatalf("pass %d: phase=%s, the wake floor must hold the agent Idle for hibernationDelay", i, got.Status.Phase)
+		}
+	}
+	if agentPod(t, "wake-act") == nil {
+		t.Error("Idle is a pod-bearing phase; the woken Pod must survive")
+	}
+}
+
 func TestAgent_WakeIgnoredOnRunning(t *testing.T) {
 	mkWorkloadClass(t, "wc-wignore", nil)
 	provisionRunningAgentWithLifecycle(t, "wignore", "wc-wignore", nil)
