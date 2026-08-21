@@ -289,6 +289,10 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 		--set 'gateway.callbackUrl.allowlist={mock-provider.e2e.svc}' \
 		--set console.enabled=true --wait --timeout 5m
 
+.PHONY: dashboards-verify
+dashboards-verify: ## Verify config/grafana against the live e2e cluster (run after make e2e): throwaway Prometheus+Grafana, provisioning, every panel query.
+	hack/dashboards-verify.sh
+
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the chart, run the suite.
 	# Always start from a fresh cluster. A long-lived k3d cluster stops
