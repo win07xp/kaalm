@@ -225,6 +225,14 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1alpha1.A
 	if agent.Status.Phase == kaalmv1alpha1.AgentHibernated {
 		r.setPhase(agent, kaalmv1alpha1.AgentResuming)
 		agent.Status.HibernatedAt = nil
+		// The message that woke the agent is activity. The gateway records it
+		// only once delivery succeeds, which is after the Pod is Ready, and
+		// the controller's activity read is cached per namespace, so the
+		// first Running pass would otherwise see only the pre-sleep record
+		// and send the agent straight back through Idle to Hibernating.
+		// evaluateActivity floors the gateway's record with this stamp.
+		woke := metav1.NewTime(r.now())
+		agent.Status.LastActivityTime = &woke
 		r.setReady(agent, false, kaalmv1alpha1.ReasonWoken, "wake requested; recreating the Pod")
 		if err := r.Status().Update(ctx, agent); err != nil {
 			return ctrl.Result{}, err
@@ -325,9 +333,16 @@ func (r *AgentReconciler) evaluateActivity(
 
 	switch agent.Status.Phase {
 	case kaalmv1alpha1.AgentRunning:
-		if now.Sub(*last) > eff.IdleTimeout {
+		// A wake stamps LastActivityTime (handleWake). Floor the gateway's
+		// record with it, so a woken agent gets a full idleTimeout while the
+		// gateway still reports only the activity that preceded its sleep.
+		marker := *last
+		if agent.Status.LastActivityTime != nil && agent.Status.LastActivityTime.After(marker) {
+			marker = agent.Status.LastActivityTime.Time
+		}
+		if now.Sub(marker) > eff.IdleTimeout {
 			r.setPhase(agent, kaalmv1alpha1.AgentIdle)
-			lt := metav1.NewTime(*last)
+			lt := metav1.NewTime(marker)
 			agent.Status.LastActivityTime = &lt
 			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1alpha1.ReasonPhaseChanged,
 				fmt.Sprintf("idle: no activity for %s", eff.IdleTimeout))
@@ -356,8 +371,12 @@ func (r *AgentReconciler) evaluateActivity(
 		// synthetic path uses LastActivityTime (stamped once at the Idle
 		// transition), not the advancing PhaseTransitionTime, so the delay is
 		// counted from when silence began rather than reset on every pass.
+		// The real path floors the gateway's record with LastActivityTime for
+		// the same reason as the Running case: after a wake the record still
+		// predates the sleep, and the delay must count from the wake.
 		silenceStart := last
-		if synthetic && agent.Status.LastActivityTime != nil {
+		if agent.Status.LastActivityTime != nil &&
+			(synthetic || agent.Status.LastActivityTime.After(*silenceStart)) {
 			silenceStart = &agent.Status.LastActivityTime.Time
 		}
 		if eff.HibernationEnabled && now.Sub(*silenceStart) > eff.IdleTimeout+eff.HibernationDelay {

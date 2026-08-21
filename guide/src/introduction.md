@@ -40,7 +40,9 @@ never appear in an agent's namespace, container, or environment.
 ## Which chapters are for you
 
 - **Platform engineer** (you install Kaalm and offer classes and providers to
-  teams): read Getting Started, then the For Platform Teams part.
+  teams): read Getting Started, then the For Platform Teams part. The
+  Observing the Platform part comes next, when you want the fleet on a
+  screen, dashboards, and traces.
 - **Agent developer** (someone already runs Kaalm for you; you deploy agents):
   skim the mental model above, then start at [Your First Agent](developers/first-agent.md).
 

@@ -65,13 +65,14 @@ What each block buys you:
   declared catalog collapse to one `uncataloged` label value. Declare it
   whenever you know the server's tool set.
 - **`healthCheck`** drives the `Healthy` column with a probe that speaks
-  MCP itself: an `initialize` followed by `tools/list`. One current
-  limitation: the probe trusts system CA roots only, so for a server with a
-  private CA (a cluster-internal certificate, for example) set
-  `enabled: false` for now. The broker is not affected: its upstream trust
-  is configurable (`gateway.trustClusterCAForUpstream` and the
-  operator-supplied CA bundle), so brokered calls to such a server still
-  work; only the probe cannot verify it yet.
+  MCP itself: an `initialize` followed by `tools/list`. The probe trusts
+  system CA roots by default. For a server with a private CA (a
+  cluster-internal certificate, for example), give the controller the same
+  trust you give the gateway: `controller.trustClusterCAForProbes=true`
+  adds the cluster CA, and `controller.probeCA.configMap` names a ConfigMap
+  with any other bundle, the probe-side mirror of
+  `gateway.trustClusterCAForUpstream` and `gateway.upstreamCA`. Enable both
+  sides, so the server is both forwarded to and probed `Healthy`.
 
 ## 3. Open the grant chain
 

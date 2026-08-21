@@ -15,7 +15,7 @@ The zero-build path rests on one narrow API addition. An Agent may reference a C
 
 ```yaml
 spec:
-  image: "ghcr.io/win07xp/kaalm-agent-python:0.4.0"
+  image: "ghcr.io/win07xp/kaalm-agent-python:0.5.0"
   handler:
     configMapRef:
       name: greeter-handler
@@ -54,12 +54,12 @@ The runtime exposes one importable module, `kaalm`, as the handler's window into
 - `kaalm.http_client()` and `kaalm.http_async_client()` (since v0.4.0): factories returning standard `httpx.Client` and `httpx.AsyncClient` objects that carry the same mTLS identity and CA trust and follow certificate rotation internally. They exist for the code the runtime does not own: framework SDKs accept a stock httpx client (the names mirror the `http_client=` / `http_async_client=` keyword arguments the LangChain, OpenAI, and Anthropic SDKs take), but a client hand-built from the certificate files snapshots its SSL context at construction, so an agent that neither hibernates nor restarts through most of the leaf certificate's 90-day duration would keep presenting the stale certificate past its expiry while its health probes stay green. The factories' transports rebuild on the runtime's rotation watch, which closes that edge. Extra keyword arguments pass through to the httpx constructor; `transport`, `verify`, and `cert` are owned by the factory and rejected, and proxy environment variables are ignored unless explicitly re-enabled, because a proxy mount would route around the identity-bearing transport.
 - `kaalm.trace_context()` (since v0.5.0): the W3C trace context of the message being handled, as a `{"traceparent": ..., "tracestate": ...}` dict, empty outside message handling. The runtime already forwards these values on every call the ABI clients make ([contract item 8](contract.md#8-trace-context-propagation)); this member exists for frameworks running their own OpenTelemetry SDK, which continue the trace from it. The Go runtime module's `agentruntime.TraceContext(ctx)` is the same surface for Go handlers.
 
-This surface is append-only within a minor release series: a handler written against `kaalm-agent-python:0.3` runs unchanged on every `0.3.x`. The v0.4.0 factories are a pure append, so a `0.3` handler happens to run unchanged on `0.4` too.
+This surface is append-only within a minor release series: a handler written against `kaalm-agent-python:0.3` runs unchanged on every `0.3.x`. The v0.4.0 factories and the v0.5.0 `trace_context()` member are pure appends, so a `0.3` handler happens to run unchanged on `0.4` and `0.5` too.
 
 The image installs no dependencies at runtime. The class security defaults mount the root filesystem read-only and the synthesized NetworkPolicy has no PyPI egress, and both are features. What the image bundles (the standard library plus its own HTTP stack) is the handler's dependency budget; needing more is the signal to graduate to `FROM`:
 
 ```dockerfile
-FROM ghcr.io/win07xp/kaalm-agent-python:0.4.0
+FROM ghcr.io/win07xp/kaalm-agent-python:0.5.0
 # The image runs as nonroot; installing needs root, serving does not.
 USER 0
 RUN pip install --no-cache-dir beautifulsoup4 lxml
@@ -98,7 +98,7 @@ WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -o /agent .
 
-FROM ghcr.io/win07xp/kaalm-agent-go:0.4.0
+FROM ghcr.io/win07xp/kaalm-agent-go:0.5.0
 COPY --from=build /agent /kaalm-agent
 ```
 

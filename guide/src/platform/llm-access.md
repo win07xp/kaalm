@@ -76,9 +76,14 @@ Secret resolves; `Healthy` reports the periodic upstream probe. A provider can
 be Ready but Unhealthy (endpoint down); it recovers on its own when the probe
 succeeds again.
 
-The probe is configurable via `spec.healthCheck` (`enabled`, default true;
-`intervalSeconds`, default 60; `timeoutSeconds`, default 10). Disabling it is
-useful for offline fixtures or provider types with no probe.
+The probe is configurable through `spec.healthCheck` (`enabled`, default
+true; `intervalSeconds`, default 60; `timeoutSeconds`, default 10). Disabling
+it is useful for offline fixtures or provider types with no probe. The probe
+trusts system CA roots by default; for an in-cluster or private-CA endpoint,
+set `controller.trustClusterCAForProbes=true` (the cluster CA) or
+`controller.probeCA.configMap` (any bundle) on the chart, the probe-side
+mirror of the gateway's upstream trust values, so the provider can be both
+forwarded to and probed `Healthy`.
 
 ---
 

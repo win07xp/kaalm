@@ -15,6 +15,12 @@
 - [Providing Tool Access](platform/tool-access.md)
 - [Managing Team Access](platform/managing-access.md)
 
+# Observing the Platform
+
+- [Using the Console](observing/console.md)
+- [Installing the Grafana Dashboards](observing/dashboards.md)
+- [Enabling Tracing](observing/tracing.md)
+
 # For Agent Developers
 
 - [Your First Agent](developers/first-agent.md)
