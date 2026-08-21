@@ -29,6 +29,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	"github.com/win07xp/kaalm/internal/tlsutil"
 )
@@ -134,11 +137,23 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// channel.receive covers the synchronous half of handling (through the
+	// 202 for async mode; the delivery span it parents stays connected
+	// either way). Root unless the caller sent W3C trace context.
+	ctx, endSpan := s.Tracing.Start(s.Tracing.Extract(r.Context(), r.Header), "channel.receive",
+		trace.SpanKindServer,
+		attribute.String("kaalm.channel_type", env.ChannelType),
+		attribute.String("kaalm.namespace", channel.Namespace),
+		attribute.String("kaalm.agent", channel.Spec.AgentRef.Name),
+		attribute.String("kaalm.message_id", env.MessageID))
+	defer endSpan(nil)
+	r = r.WithContext(ctx)
+
 	if channel.Spec.Webhook.ResponseMode == "async" {
 		s.handleAsyncAccept(w, r, channel, agent, env)
 		return
 	}
-	s.handleSyncDelivery(w, r.Context(), channel, agent, env)
+	s.handleSyncDelivery(w, ctx, channel, agent, env)
 }
 
 // handleSyncDelivery runs the wake-then-deliver pipeline with the caller
@@ -152,6 +167,7 @@ func (s *Server) handleSyncDelivery(
 
 	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Webhook.Path, agent, env)
 	if err != nil {
+		spanError(ctx, errType)
 		s.writeSyncError(w, ctx, agent.Namespace, errType, err)
 		return
 	}
@@ -228,7 +244,12 @@ func (s *Server) wakeAndDeliver(
 		}
 		s.Metrics.ChannelWakeDuration(agent.Namespace, "ready", time.Since(wakeStart).Seconds())
 	}
-	respBody, err = s.deliverToAgent(ctx, agent, env)
+	dctx, endDeliver := s.Tracing.Start(ctx, "agent.deliver", trace.SpanKindClient,
+		attribute.String("kaalm.namespace", agent.Namespace),
+		attribute.String("kaalm.agent", agent.Name),
+		attribute.String("kaalm.message_id", env.MessageID))
+	respBody, err = s.deliverToAgent(dctx, agent, env)
+	endDeliver(err)
 	if err != nil {
 		if strings.Contains(err.Error(), "response body exceeded") {
 			return nil, errResponseTooLarge, err
@@ -349,6 +370,9 @@ func (s *Server) deliverOnce(ctx context.Context, url string, agent *kaalmv1alph
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// The agent hop: the runtime attaches this context to every gateway
+	// call made while handling the message (runtime contract).
+	s.Tracing.Inject(attemptCtx, req.Header)
 	client, err := s.agentHTTPClient(agent)
 	if err != nil {
 		return nil, err

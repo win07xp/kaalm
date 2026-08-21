@@ -55,6 +55,16 @@ gateway:
   # reconcile-time validation (rule 22) and the gateway's pre-dial re-check.
   callbackUrl:
     allowlist: []
+  # OpenTelemetry tracing (docs/src/operations/observability.md#tracing).
+  # Off by default: with no endpoint, no tracer is installed and no trace
+  # context is created or forwarded. Set otlpEndpoint to an OTLP/HTTP base
+  # URL (for example http://collector.monitoring.svc:4318); an https endpoint
+  # is verified against the gateway's upstream trust pool (system roots plus
+  # whatever trustClusterCAForUpstream and upstreamCA configure). sampleRatio
+  # is the parent-based head sampling ratio for traces the gateway starts.
+  tracing:
+    otlpEndpoint: ""
+    sampleRatio: 1.0
   # Rolling window over which PlatformConnected is evaluated.
   channelHealthWindow: 5m
   # Bounds the TCP connect attempt when delivering POST /v1/message.
