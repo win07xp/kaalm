@@ -52,6 +52,12 @@ var _ = Describe("Governed tool access (S18)", Ordered, func() {
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agent", "e2e", "s18-agent", "{.status.phase}")
 		}, "180s", "5s").Should(Equal("Running"))
+
+		By("the controller's own MCP probe (initialize, tools/list) succeeds on-cluster (#86)")
+		Eventually(func() (string, error) {
+			return utils.ResourceField("toolprovider", "", "search-tools",
+				`{.status.conditions[?(@.type=="Healthy")].status}`)
+		}, "120s", "5s").Should(Equal("True"))
 	})
 
 	It("holds no tool credential anywhere in the workload namespace", func() {
@@ -137,9 +143,13 @@ var _ = Describe("Governed tool access (S18)", Ordered, func() {
 		Expect(intro.Tools["web_search"]).To(Equal(1), "exactly the one granted call reached the server")
 		Expect(intro.Tools).NotTo(HaveKey("fetch_page"),
 			"the tool_denied call must never reach the upstream")
-		// One initialize forwarded (the outsider's was refused pre-forward);
-		// the forged-session call was refused pre-forward too.
-		Expect(intro.Methods["initialize"]).To(Equal(1))
+		// The S18 boundary is the tools surface: exactly one granted call
+		// forwarded, the denied and forged-session ones refused pre-forward
+		// (their 403s are asserted in the earlier specs). The initialize
+		// count stopped being exact when the controller's liveness probe
+		// (#86) began running its own initialize plus tools/list against
+		// this mock on a 15s cadence.
+		Expect(intro.Methods["initialize"]).To(BeNumerically(">=", 1))
 		Expect(intro.Methods["tools/call"]).To(Equal(1))
 
 		By("the gateway logs carry the audit record for the brokered calls")

@@ -86,8 +86,12 @@ spec:
   credentialsRef:
     name: e2e-mock-key
     key: token
+  # Probes on (#86): the controller reaches the mock's kaalm-ca certificate
+  # through controller.trustClusterCAForProbes, set by make e2e-deploy. The
+  # short interval keeps the Healthy assertion fast.
   healthCheck:
-    enabled: false
+    enabled: true
+    intervalSeconds: 15
   allowedNamespaces:
     - e2e
   models:

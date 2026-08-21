@@ -98,8 +98,12 @@ spec:
   tools:
     - id: web_search
     - id: fetch_page
+  # Probes on (#86): a real controller-side MCP initialize plus tools/list
+  # against the mock's kaalm-ca certificate, trusted through
+  # controller.trustClusterCAForProbes (set by make e2e-deploy).
   healthCheck:
-    enabled: false
+    enabled: true
+    intervalSeconds: 15
 ---
 apiVersion: kaalm.io/v1alpha1
 kind: AgentClass

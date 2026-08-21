@@ -294,6 +294,7 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 		--set gateway.trustClusterCAForCallbacks=true \
 		--set 'gateway.callbackUrl.allowlist={mock-provider.e2e.svc}' \
 		--set console.enabled=true \
+		--set controller.trustClusterCAForProbes=true \
 		--set gateway.tracing.otlpEndpoint=http://jaeger.tracing-e2e.svc:4318 \
 		--wait --timeout 5m
 
