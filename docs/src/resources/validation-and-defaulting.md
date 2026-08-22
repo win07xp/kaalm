@@ -1,6 +1,6 @@
 # Validation and Defaulting
 
-Kaalm runs no admission webhook server, validating or mutating. Every rule on this page is enforced either by CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema, which the API server evaluates at apply time, or by the relevant reconciler at reconcile time. This keeps the control plane free of a webhook availability dependency, and it lets rules that span resources surface violations on pre-existing objects as recoverable status rather than blocked writes.
+Kaalm runs no admission webhook server, validating or mutating (the conversion webhook the controller serves since v0.6.0 translates between API versions and enforces nothing; see [API Versioning and Deprecation](../operations/api-versioning.md)). Every rule on this page is enforced either by CEL expressions (`x-kubernetes-validations`) embedded in the CRD OpenAPI schema, which the API server evaluates at apply time, or by the relevant reconciler at reconcile time. This keeps the control plane free of a webhook availability dependency, and it lets rules that span resources surface violations on pre-existing objects as recoverable status rather than blocked writes.
 
 ## Cross-Resource Validation
 

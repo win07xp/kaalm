@@ -79,6 +79,7 @@
 # Operations
 
 - [Deployment](operations/deployment.md)
+- [API Versioning and Deprecation](operations/api-versioning.md)
 - [Observability](operations/observability.md)
 
 ---

@@ -15,8 +15,8 @@ The parts build on each other. Reading front to back never requires a concept th
 5. **The Controller** documents the operator: its reconcilers, the Agent and AgentTask state machines, hibernation and wake, change propagation, and finalizers.
 6. **The Console** documents the optional operator console: its scope, the read API, authentication, and test-chat.
 7. **Security** covers the trust model, RBAC, credential handling, TLS and certificates, and the threat model.
-8. **Operations** covers deployment via Helm and observability.
-9. The appendix holds the twenty acceptance scenarios that double as v1 acceptance criteria.
+8. **Operations** covers deployment via Helm, API versioning and the deprecation policy, and observability.
+9. The appendix holds the twenty-one acceptance scenarios that double as v1 acceptance criteria.
 
 ## Where to start
 
