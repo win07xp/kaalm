@@ -7,7 +7,7 @@ example manifest, not a live default, for the same reason. See
 docs/src/operations/deployment.md.
 */}}
 {{- if .Values.standardAgentClass.enabled }}
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: standard
