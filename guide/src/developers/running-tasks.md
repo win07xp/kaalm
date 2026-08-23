@@ -37,7 +37,7 @@ itself.)
 - **`agentReported`**: the task calls the gateway's `POST /v1/task/complete`
   when done, carrying a status and any declared artifacts. This is the mode
   for agents that produce a result (the sample task in
-  `config/samples/kaalm_v1alpha1_agenttask.yaml` declares a `report-url`
+  `config/samples/kaalm_v1beta1_agenttask.yaml` declares a `report-url`
   artifact). The base images and starter templates implement the call for
   you.
 - **`exitCode`**: the container's exit status is the verdict; zero succeeds.
