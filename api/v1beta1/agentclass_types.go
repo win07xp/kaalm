@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v1beta1
 
 import (
 	corev1 "k8s.io/api/core/v1"
@@ -214,7 +214,7 @@ type AgentClassStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:deprecatedversion:warning="kaalm.io/v1alpha1 AgentClass is deprecated; use kaalm.io/v1beta1"
+// +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,shortName=ac
 // +kubebuilder:printcolumn:name="Agents",type=integer,JSONPath=`.status.agentsInUse`
 // +kubebuilder:printcolumn:name="Tasks",type=integer,JSONPath=`.status.tasksInUse`

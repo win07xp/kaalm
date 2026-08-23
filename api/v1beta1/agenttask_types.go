@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v1beta1
 
 import (
 	corev1 "k8s.io/api/core/v1"
@@ -136,7 +136,7 @@ type AgentTaskStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:deprecatedversion:warning="kaalm.io/v1alpha1 AgentTask is deprecated; use kaalm.io/v1beta1"
+// +kubebuilder:storageversion
 // +kubebuilder:resource:shortName=at
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') && size(self.metadata.name) <= 63",message="metadata.name must be a DNS-1123 label: lowercase alphanumerics and hyphens, no dots, at most 63 characters"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
