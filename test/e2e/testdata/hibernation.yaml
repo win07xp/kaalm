@@ -5,7 +5,7 @@
 # only runs idle/hibernation evaluation when the effective idleTimeout is > 0
 # (agent_controller.go). max*=0 means "uncapped" (agent_desired.go pick()), so
 # the small positive defaults below flow through unclamped.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s7-hibernating
@@ -26,7 +26,7 @@ spec:
 ---
 # S7 agent: healthy, hibernation-enabled, generous wake budget (0s -> 120s
 # default) to absorb the freshly-woken-pod kube-router ipset lag (~20s).
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s7-agent
@@ -44,7 +44,7 @@ spec:
 # Async channel so the caller gets a 202 + requestId and retrieves the reply by
 # polling. No callbackUrl: the pipeline stores the result on the poll record,
 # sidestepping the SSRF guard on in-cluster callback IPs (that is issue #11).
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: s7-channel
@@ -75,7 +75,7 @@ stringData:
 # freshly recreated pod cannot become reachable within 1s (schedule + start +
 # the ~20s ipset lag), so the first wake attempt always exceeds wakeTimeout and
 # the async pipeline stores a wake_timeout error payload.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s14-agent
@@ -91,7 +91,7 @@ spec:
     hibernationEnabled: true
     wakeTimeout: 1s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: s14-channel

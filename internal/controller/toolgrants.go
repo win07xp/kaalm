@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // toolGrantViolations evaluates rules 35 to 38 for one workload's tool grants
@@ -35,7 +35,7 @@ import (
 // docs/src/gateways/tool-plane.md (Grants).
 func toolGrantViolations(
 	ctx context.Context, c client.Reader, namespace string,
-	grants []kaalmv1alpha1.AgentToolGrant, class *kaalmv1alpha1.AgentClass,
+	grants []kaalmv1beta1.AgentToolGrant, class *kaalmv1beta1.AgentClass,
 ) []metav1.Condition {
 	var out []metav1.Condition
 	add := func(reason, msg string) {
@@ -53,22 +53,22 @@ func toolGrantViolations(
 			}
 		}
 		if !allowed {
-			add(kaalmv1alpha1.ReasonClassConstraintViolation,
+			add(kaalmv1beta1.ReasonClassConstraintViolation,
 				fmt.Sprintf("tool provider %q is not in AgentClass %q allowedToolProviders", name, class.Name))
 			continue
 		}
 		// Rule 35: the reference must resolve.
-		var tp kaalmv1alpha1.ToolProvider
+		var tp kaalmv1beta1.ToolProvider
 		if err := c.Get(ctx, types.NamespacedName{Name: name}, &tp); err != nil {
 			if apierrors.IsNotFound(err) {
-				add(kaalmv1alpha1.ReasonClassConstraintViolation,
+				add(kaalmv1beta1.ReasonClassConstraintViolation,
 					fmt.Sprintf("tool provider %q does not exist", name))
 			}
 			continue
 		}
 		// Rule 36: the provider must admit the workload's namespace.
 		if !namespaceAllowed(namespace, tp.Spec.AllowedNamespaces) {
-			add(kaalmv1alpha1.ReasonClassConstraintViolation,
+			add(kaalmv1beta1.ReasonClassConstraintViolation,
 				fmt.Sprintf("tool provider %q does not allow namespace %q", name, namespace))
 			continue
 		}
@@ -87,7 +87,7 @@ func toolGrantViolations(
 				}
 			}
 			if len(missing) > 0 {
-				add(kaalmv1alpha1.ReasonToolNotInCatalog,
+				add(kaalmv1beta1.ReasonToolNotInCatalog,
 					fmt.Sprintf("granted tools %v are not in the declared catalog of tool provider %q", missing, name))
 			}
 		}

@@ -8,7 +8,7 @@
 # on a real cluster is the Kaalm-owned primitive: existingClaim adoption (the
 # controller mounts the referenced claim and provisions nothing) plus data
 # read-back.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s9-persistent

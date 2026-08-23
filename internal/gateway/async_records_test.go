@@ -28,7 +28,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // nsTeamA is a sample tenant namespace reused across these records tests.
@@ -45,10 +45,10 @@ func TestKubeAsyncRecords_Lifecycle(t *testing.T) {
 	recs := &KubeAsyncRecords{Client: client, OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
 
-	ch := &kaalmv1alpha1.AgentChannel{
+	ch := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: nsTeamA},
-		Spec: kaalmv1alpha1.AgentChannelSpec{
-			Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			Webhook: kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"},
 		},
 	}
 
@@ -67,11 +67,11 @@ func TestKubeAsyncRecords_Lifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cm: %v", err)
 	}
-	if cm.Labels[kaalmv1alpha1.LabelChannelNamespace] != nsTeamA ||
-		cm.Labels[kaalmv1alpha1.LabelChannelName] != "ch" {
+	if cm.Labels[kaalmv1beta1.LabelChannelNamespace] != nsTeamA ||
+		cm.Labels[kaalmv1beta1.LabelChannelName] != "ch" {
 		t.Errorf("labels wrong: %v", cm.Labels)
 	}
-	if cm.Annotations[kaalmv1alpha1.AnnotationExpiresAt] == "" {
+	if cm.Annotations[kaalmv1beta1.AnnotationExpiresAt] == "" {
 		t.Error("expiry annotation missing")
 	}
 
@@ -99,13 +99,13 @@ func TestKubeAsyncRecords_Lifecycle(t *testing.T) {
 
 func TestKubeAsyncRecords_CountPending(t *testing.T) {
 	ctx := context.Background()
-	ch := &kaalmv1alpha1.AgentChannel{
+	ch := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: nsTeamA},
-		Spec:       kaalmv1alpha1.AgentChannelSpec{Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
+		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
 	}
-	otherCh := &kaalmv1alpha1.AgentChannel{
+	otherCh := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: nsTeamA},
-		Spec:       kaalmv1alpha1.AgentChannelSpec{Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: "/channels/team-a/other"}},
+		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/other"}},
 	}
 
 	client := k8sfake.NewSimpleClientset()

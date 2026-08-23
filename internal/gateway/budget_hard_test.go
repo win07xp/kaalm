@@ -28,25 +28,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // hardProvider is budgetProvider flipped to hard enforcement with the
 // default 5 point margin.
-func hardProvider(policies ...kaalmv1alpha1.ModelProviderBudgetPolicy) *kaalmv1alpha1.ModelProvider {
+func hardProvider(policies ...kaalmv1beta1.ModelProviderBudgetPolicy) *kaalmv1beta1.ModelProvider {
 	mp := budgetProvider(policies...)
-	mp.Spec.Budget.Enforcement = kaalmv1alpha1.BudgetEnforcementHard
-	mp.Spec.Budget.Hard = &kaalmv1alpha1.ModelProviderBudgetHard{BoundaryMarginPercent: 5}
+	mp.Spec.Budget.Enforcement = kaalmv1beta1.BudgetEnforcementHard
+	mp.Spec.Budget.Hard = &kaalmv1beta1.ModelProviderBudgetHard{BoundaryMarginPercent: 5}
 	return mp
 }
 
-func blockAt100() kaalmv1alpha1.ModelProviderBudgetPolicy {
-	return kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: kaalmv1alpha1.BudgetActionBlock}
+func blockAt100() kaalmv1beta1.ModelProviderBudgetPolicy {
+	return kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: kaalmv1beta1.BudgetActionBlock}
 }
 
 // fakeClockLedger builds a ledger on an atomically advanceable clock, with a
 // fresh fold so the read-path staleness signal starts healthy.
-func fakeClockLedger(mp *kaalmv1alpha1.ModelProvider) (*BudgetLedger, *int64) {
+func fakeClockLedger(mp *kaalmv1beta1.ModelProvider) (*BudgetLedger, *int64) {
 	start := time.Date(2099, 6, 15, 12, 0, 0, 0, time.UTC)
 	nanos := start.UnixNano()
 	b := NewBudgetLedger()
@@ -75,7 +75,7 @@ func TestHardAdmit_SerializedAdmission(t *testing.T) {
 	}
 	settle1(5) // 96 + 5 = 101%
 	d3, settle3 := b.Admit(mp, "team-a", "agent/test")
-	if d3.Action != kaalmv1alpha1.BudgetActionBlock || settle3 != nil {
+	if d3.Action != kaalmv1beta1.BudgetActionBlock || settle3 != nil {
 		t.Fatalf("post-settle admit = %+v, want block (settled cost must be visible atomically)", d3)
 	}
 	if d3.Ceiling != "namespace" {
@@ -232,7 +232,7 @@ func TestHardAdmit_FailClosed(t *testing.T) {
 
 // mp2ForProv exists to keep the fail-closed test readable: the same provider
 // object is safe to share across ledgers.
-func mp2ForProv(mp *kaalmv1alpha1.ModelProvider) *kaalmv1alpha1.ModelProvider { return mp }
+func mp2ForProv(mp *kaalmv1beta1.ModelProvider) *kaalmv1beta1.ModelProvider { return mp }
 
 // Test 6: the effective-margin formula and its wire flag. Observed traffic
 // widens the boundary beyond the configured floor; the flag travels as a
@@ -459,11 +459,11 @@ func TestFallback_ThrottledHardCandidateSkipsToChild(t *testing.T) {
 	blocked := h.provider("blocked-hard", "openai", "child")
 	primary := h.provider("primary", "openai", "blocked-hard")
 
-	blocked.Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
+	blocked.Spec.Budget = kaalmv1beta1.ModelProviderBudget{
 		Period: "monthly", PerNamespaceUSD: "100",
-		Enforcement: kaalmv1alpha1.BudgetEnforcementHard,
-		Hard:        &kaalmv1alpha1.ModelProviderBudgetHard{BoundaryMarginPercent: 5},
-		Policies:    []kaalmv1alpha1.ModelProviderBudgetPolicy{blockAt100()},
+		Enforcement: kaalmv1beta1.BudgetEnforcementHard,
+		Hard:        &kaalmv1beta1.ModelProviderBudgetHard{BoundaryMarginPercent: 5},
+		Policies:    []kaalmv1beta1.ModelProviderBudgetPolicy{blockAt100()},
 	}
 	h.server.Budget.FoldPeers(blocked, map[string]float64{"team-a": 96})
 	if _, settle := h.server.Budget.Admit(blocked, "team-a", "agent/test"); settle == nil {

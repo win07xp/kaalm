@@ -25,7 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // MessageEnvelope is the normalized message delivered to agents on
@@ -53,7 +53,7 @@ type ResponseEnvelope struct {
 // UUIDv5(SessionNamespaceUUID, channelId + ":" + userId). The namespace
 // constant is published API and must never change after v1.
 func SessionID(channelID, userID string) string {
-	ns := uuid.MustParse(kaalmv1alpha1.SessionNamespaceUUID)
+	ns := uuid.MustParse(kaalmv1beta1.SessionNamespaceUUID)
 	return uuid.NewSHA1(ns, []byte(channelID+":"+userID)).String()
 }
 
@@ -65,7 +65,7 @@ func (e *normalizeError) Error() string { return e.msg }
 // normalize builds the envelope from the inbound webhook request per the
 // channel's extraction config. body is the raw inbound bytes (already read
 // and size-capped).
-func normalize(channel *kaalmv1alpha1.AgentChannel, r *http.Request, body []byte) (MessageEnvelope, error) {
+func normalize(channel *kaalmv1beta1.AgentChannel, r *http.Request, body []byte) (MessageEnvelope, error) {
 	env := MessageEnvelope{
 		MessageID:   uuid.NewString(),
 		ChannelType: "webhook",
@@ -106,17 +106,17 @@ func normalize(channel *kaalmv1alpha1.AgentChannel, r *http.Request, body []byte
 	return env, nil
 }
 
-func isExtractorConfigured(e kaalmv1alpha1.ChannelExtractor) bool {
+func isExtractorConfigured(e kaalmv1beta1.ChannelExtractor) bool {
 	return e.FromHeader != nil || e.FromBody != nil
 }
 
-func extractorUsesBody(e kaalmv1alpha1.ChannelExtractor) bool {
+func extractorUsesBody(e kaalmv1beta1.ChannelExtractor) bool {
 	return e.FromBody != nil
 }
 
 // extract resolves an extractor against the request, falling back to the
 // configured fallback (empty string if omitted).
-func extract(e kaalmv1alpha1.ChannelExtractor, r *http.Request, body map[string]any) string {
+func extract(e kaalmv1beta1.ChannelExtractor, r *http.Request, body map[string]any) string {
 	var value string
 	switch {
 	case e.FromHeader != nil:

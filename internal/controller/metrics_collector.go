@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // phaseCollectTimeout bounds the three cache reads behind one scrape so a
@@ -72,7 +72,7 @@ func (c *PhaseCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), phaseCollectTimeout)
 	defer cancel()
 
-	var agents kaalmv1alpha1.AgentList
+	var agents kaalmv1beta1.AgentList
 	if err := c.Reader.List(ctx, &agents); err == nil {
 		counts := map[[2]string]float64{}
 		for i := range agents.Items {
@@ -84,7 +84,7 @@ func (c *PhaseCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 
-	var tasks kaalmv1alpha1.AgentTaskList
+	var tasks kaalmv1beta1.AgentTaskList
 	if err := c.Reader.List(ctx, &tasks); err == nil {
 		counts := map[[2]string]float64{}
 		for i := range tasks.Items {
@@ -96,7 +96,7 @@ func (c *PhaseCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 
-	var channels kaalmv1alpha1.AgentChannelList
+	var channels kaalmv1beta1.AgentChannelList
 	if err := c.Reader.List(ctx, &channels); err == nil {
 		counts := map[[4]string]float64{}
 		for i := range channels.Items {

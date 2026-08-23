@@ -11,7 +11,7 @@ type: Opaque
 stringData:
   token: dummy-s5-credential
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: s5-provider
@@ -30,7 +30,7 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s5-class
@@ -50,7 +50,7 @@ spec:
     maxHibernationDelay: 0s
     maxWakeTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s5-agent

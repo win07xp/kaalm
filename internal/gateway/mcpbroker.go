@@ -32,7 +32,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/mcp"
 )
 
@@ -70,7 +70,7 @@ func (f *toolFilter) permits(name string) bool {
 
 // newToolFilter intersects an optional grant narrowing with an optional
 // declared catalog. Either being empty means it does not constrain.
-func newToolFilter(grantTools []string, catalog []kaalmv1alpha1.ToolProviderTool) *toolFilter {
+func newToolFilter(grantTools []string, catalog []kaalmv1beta1.ToolProviderTool) *toolFilter {
 	catalogSet := map[string]bool{}
 	for _, t := range catalog {
 		catalogSet[t.ID] = true
@@ -97,7 +97,7 @@ func newToolFilter(grantTools []string, catalog []kaalmv1alpha1.ToolProviderTool
 // callers that carry a workload identity. Gateway-only callers reduce to
 // allowedNamespaces with the full server set, per the tool plane chapter.
 func (s *Server) authorizeToolRoute(
-	ctx context.Context, c *caller, tp *kaalmv1alpha1.ToolProvider,
+	ctx context.Context, c *caller, tp *kaalmv1beta1.ToolProvider,
 ) (*toolFilter, *routeDenial) {
 	if !namespaceGlobAllowed(c.Namespace, tp.Spec.AllowedNamespaces) {
 		return nil, &routeDenial{http.StatusForbidden, errAccessDenied,
@@ -107,7 +107,7 @@ func (s *Server) authorizeToolRoute(
 		return newToolFilter(nil, tp.Spec.Tools), nil
 	}
 
-	var grants []kaalmv1alpha1.AgentToolGrant
+	var grants []kaalmv1beta1.AgentToolGrant
 	var className string
 	switch c.Workload.Kind {
 	case KindAgent:
@@ -126,7 +126,7 @@ func (s *Server) authorizeToolRoute(
 		return nil, &routeDenial{http.StatusForbidden, errAccessDenied, "unrecognized workload kind"}
 	}
 
-	var grant *kaalmv1alpha1.AgentToolGrant
+	var grant *kaalmv1beta1.AgentToolGrant
 	for i := range grants {
 		if grants[i].ProviderRef.Name == tp.Name {
 			grant = &grants[i]
@@ -173,7 +173,7 @@ type mcpRequest struct {
 // latency rather than microsecond-scale local denials. See
 // docs/src/gateways/tool-plane.md (Audit and Metering).
 func (s *Server) mcpResult(
-	c *caller, tp *kaalmv1alpha1.ToolProvider, provider, method, tool string,
+	c *caller, tp *kaalmv1beta1.ToolProvider, provider, method, tool string,
 	status int, errType, detail string, start time.Time, reqBytes, respBytes int64, forwarded bool,
 ) {
 	seconds := time.Since(start).Seconds()
@@ -210,7 +210,7 @@ func (s *Server) mcpResult(
 // collapses to "uncataloged"; without one, every tool collapses, because
 // wire-supplied names are unbounded and a compromised server could inflate
 // the label set at will. The audit record carries the real name regardless.
-func boundedToolLabel(tp *kaalmv1alpha1.ToolProvider, tool string) string {
+func boundedToolLabel(tp *kaalmv1beta1.ToolProvider, tool string) string {
 	if tool == "" {
 		return ""
 	}
@@ -233,7 +233,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	// until resolved, reqBytes zero until the body is read, and forwarded
 	// flips once the call reaches the upstream.
 	start := time.Now()
-	var tp *kaalmv1alpha1.ToolProvider
+	var tp *kaalmv1beta1.ToolProvider
 	var reqBytes int64
 	forwarded := false
 

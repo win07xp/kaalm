@@ -42,7 +42,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
@@ -114,41 +114,41 @@ func (ca *testCA) issue(t *testing.T, sans ...string) tls.Certificate {
 // ---- fakes ----
 
 type fakeStore struct {
-	agents    map[string]*kaalmv1alpha1.Agent
-	tasks     map[string]*kaalmv1alpha1.AgentTask
-	classes   map[string]*kaalmv1alpha1.AgentClass
-	providers map[string]*kaalmv1alpha1.ModelProvider
+	agents    map[string]*kaalmv1beta1.Agent
+	tasks     map[string]*kaalmv1beta1.AgentTask
+	classes   map[string]*kaalmv1beta1.AgentClass
+	providers map[string]*kaalmv1beta1.ModelProvider
 	creds     map[string]string
 	podsByIP  map[string]*corev1.Pod
-	channels  map[string]*kaalmv1alpha1.AgentChannel // key: webhook path
-	secrets   map[string]string                      // key: ns/name/key
+	channels  map[string]*kaalmv1beta1.AgentChannel // key: webhook path
+	secrets   map[string]string                     // key: ns/name/key
 
-	toolProviders map[string]*kaalmv1alpha1.ToolProvider
+	toolProviders map[string]*kaalmv1beta1.ToolProvider
 	toolCreds     map[string]string
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		agents:    map[string]*kaalmv1alpha1.Agent{},
-		tasks:     map[string]*kaalmv1alpha1.AgentTask{},
-		classes:   map[string]*kaalmv1alpha1.AgentClass{},
-		providers: map[string]*kaalmv1alpha1.ModelProvider{},
+		agents:    map[string]*kaalmv1beta1.Agent{},
+		tasks:     map[string]*kaalmv1beta1.AgentTask{},
+		classes:   map[string]*kaalmv1beta1.AgentClass{},
+		providers: map[string]*kaalmv1beta1.ModelProvider{},
 		creds:     map[string]string{},
 		podsByIP:  map[string]*corev1.Pod{},
-		channels:  map[string]*kaalmv1alpha1.AgentChannel{},
+		channels:  map[string]*kaalmv1beta1.AgentChannel{},
 		secrets:   map[string]string{},
 
-		toolProviders: map[string]*kaalmv1alpha1.ToolProvider{},
+		toolProviders: map[string]*kaalmv1beta1.ToolProvider{},
 		toolCreds:     map[string]string{},
 	}
 }
 
-func (f *fakeStore) ToolProviderByName(_ context.Context, name string) (*kaalmv1alpha1.ToolProvider, bool) {
+func (f *fakeStore) ToolProviderByName(_ context.Context, name string) (*kaalmv1beta1.ToolProvider, bool) {
 	tp, ok := f.toolProviders[name]
 	return tp, ok
 }
 
-func (f *fakeStore) ToolCredential(_ context.Context, tp *kaalmv1alpha1.ToolProvider) (string, error) {
+func (f *fakeStore) ToolCredential(_ context.Context, tp *kaalmv1beta1.ToolProvider) (string, error) {
 	if tp.Spec.CredentialsRef == nil {
 		return "", nil
 	}
@@ -159,23 +159,23 @@ func (f *fakeStore) ToolCredential(_ context.Context, tp *kaalmv1alpha1.ToolProv
 	return cred, nil
 }
 
-func (f *fakeStore) AgentByName(_ context.Context, ns, name string) (*kaalmv1alpha1.Agent, bool) {
+func (f *fakeStore) AgentByName(_ context.Context, ns, name string) (*kaalmv1beta1.Agent, bool) {
 	a, ok := f.agents[ns+"/"+name]
 	return a, ok
 }
-func (f *fakeStore) TaskByName(_ context.Context, ns, name string) (*kaalmv1alpha1.AgentTask, bool) {
+func (f *fakeStore) TaskByName(_ context.Context, ns, name string) (*kaalmv1beta1.AgentTask, bool) {
 	tk, ok := f.tasks[ns+"/"+name]
 	return tk, ok
 }
-func (f *fakeStore) ClassByName(_ context.Context, name string) (*kaalmv1alpha1.AgentClass, bool) {
+func (f *fakeStore) ClassByName(_ context.Context, name string) (*kaalmv1beta1.AgentClass, bool) {
 	c, ok := f.classes[name]
 	return c, ok
 }
-func (f *fakeStore) ProviderByName(_ context.Context, name string) (*kaalmv1alpha1.ModelProvider, bool) {
+func (f *fakeStore) ProviderByName(_ context.Context, name string) (*kaalmv1beta1.ModelProvider, bool) {
 	p, ok := f.providers[name]
 	return p, ok
 }
-func (f *fakeStore) Credential(_ context.Context, p *kaalmv1alpha1.ModelProvider) (string, error) {
+func (f *fakeStore) Credential(_ context.Context, p *kaalmv1beta1.ModelProvider) (string, error) {
 	cred, ok := f.creds[p.Name]
 	if !ok {
 		return "", fmt.Errorf("no credential for %s", p.Name)
@@ -186,7 +186,7 @@ func (f *fakeStore) PodByIP(_ context.Context, ip string) (*corev1.Pod, bool) {
 	p, ok := f.podsByIP[ip]
 	return p, ok
 }
-func (f *fakeStore) ChannelByPath(_ context.Context, path string) (*kaalmv1alpha1.AgentChannel, bool) {
+func (f *fakeStore) ChannelByPath(_ context.Context, path string) (*kaalmv1beta1.AgentChannel, bool) {
 	ch, ok := f.channels[path]
 	return ch, ok
 }
@@ -279,28 +279,28 @@ func (h *harness) client(clientCert *tls.Certificate) *http.Client {
 // seedRoute installs an agent in team-a wired to provider "prov" offering
 // model "m1", with the source IP mapped to a matching Pod.
 func (h *harness) seedRoute() {
-	h.store.agents["team-a/sup"] = &kaalmv1alpha1.Agent{
+	h.store.agents["team-a/sup"] = &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
-		Spec: kaalmv1alpha1.AgentSpec{
-			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "std"},
-			Providers: []kaalmv1alpha1.AgentProviderReference{
-				{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "prov"}},
+		Spec: kaalmv1beta1.AgentSpec{
+			AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "std"},
+			Providers: []kaalmv1beta1.AgentProviderReference{
+				{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "prov"}},
 			},
 		},
 	}
-	h.store.classes["std"] = &kaalmv1alpha1.AgentClass{
+	h.store.classes["std"] = &kaalmv1beta1.AgentClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "std"},
-		Spec: kaalmv1alpha1.AgentClassSpec{
-			AllowedProviders: []kaalmv1alpha1.LocalObjectReference{{Name: "prov"}},
+		Spec: kaalmv1beta1.AgentClassSpec{
+			AllowedProviders: []kaalmv1beta1.LocalObjectReference{{Name: "prov"}},
 		},
 	}
-	h.store.providers["prov"] = &kaalmv1alpha1.ModelProvider{
+	h.store.providers["prov"] = &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
-		Spec: kaalmv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1beta1.ModelProviderSpec{
 			Type:              "openai",
 			Endpoint:          h.upstream.URL,
 			AllowedNamespaces: []string{"team-*"},
-			Models:            []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
+			Models:            []kaalmv1beta1.ModelProviderModel{{ID: "m1"}},
 		},
 	}
 	h.store.creds["prov"] = "sk-test-cred"

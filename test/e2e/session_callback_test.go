@@ -10,7 +10,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/test/utils"
 )
 
@@ -27,7 +27,7 @@ type sessionReply struct {
 // the assertion checks the derivation formula rather than echoing whatever the
 // gateway returned.
 func expectedSessionID(channelPath, userID string) string {
-	ns := uuid.MustParse(kaalmv1alpha1.SessionNamespaceUUID)
+	ns := uuid.MustParse(kaalmv1beta1.SessionNamespaceUUID)
 	return uuid.NewSHA1(ns, []byte(channelPath+":"+userID)).String()
 }
 

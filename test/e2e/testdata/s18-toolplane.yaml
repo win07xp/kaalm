@@ -83,7 +83,7 @@ type: Opaque
 stringData:
   token: e2e-tool-credential
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ToolProvider
 metadata:
   name: search-tools
@@ -105,7 +105,7 @@ spec:
     enabled: true
     intervalSeconds: 15
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s18-class
@@ -125,7 +125,7 @@ spec:
   allowedToolProviders:
     - name: search-tools
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s18-agent

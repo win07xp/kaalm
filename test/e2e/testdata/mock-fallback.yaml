@@ -2,7 +2,7 @@
 # with a fallback pointed at /ok. Both share the mock Service and the e2e-mock-key
 # credential (created by mockprovider.yaml). The gateway should walk primary ->
 # fallback and return the fallback's 200.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: s4-primary
@@ -23,7 +23,7 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: s4-fallback

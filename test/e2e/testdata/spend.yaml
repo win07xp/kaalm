@@ -5,7 +5,7 @@
 # LLM call without teaching the starter handler to speak to providers. The
 # provider points at the shared mock's /bigusage arm (5M+5M tokens per call),
 # so each call costs exactly 15.00 USD at the catalog prices below.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: console-spend
@@ -30,7 +30,7 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: console-spend-class
@@ -50,7 +50,7 @@ spec:
     maxHibernationDelay: 0s
     maxWakeTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: spend-a
@@ -63,7 +63,7 @@ spec:
     - providerRef:
         name: console-spend
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: spend-b

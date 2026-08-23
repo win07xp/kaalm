@@ -35,7 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/console"
 )
 
@@ -70,7 +70,7 @@ func main() {
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(kaalmv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kaalmv1beta1.AddToScheme(scheme))
 
 	restCfg := ctrl.GetConfigOrDie()
 	// The cached client starts informers lazily per type. The console's RBAC

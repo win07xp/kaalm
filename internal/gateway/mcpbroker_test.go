@@ -31,36 +31,36 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // seedToolRoute installs an agent in team-a granting ToolProvider "search"
 // (catalog web_search + fetch_page, narrowed to web_search), the class
 // allowlist, the credential, and the source-IP Pod mapping.
 func (h *harness) seedToolRoute() {
-	h.store.agents["team-a/sup"] = &kaalmv1alpha1.Agent{
+	h.store.agents["team-a/sup"] = &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
-		Spec: kaalmv1alpha1.AgentSpec{
-			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "std"},
-			Tools: []kaalmv1alpha1.AgentToolGrant{
-				{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "search"}, Tools: []string{"web_search"}},
+		Spec: kaalmv1beta1.AgentSpec{
+			AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "std"},
+			Tools: []kaalmv1beta1.AgentToolGrant{
+				{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "search"}, Tools: []string{"web_search"}},
 			},
 		},
 	}
-	h.store.classes["std"] = &kaalmv1alpha1.AgentClass{
+	h.store.classes["std"] = &kaalmv1beta1.AgentClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "std"},
-		Spec: kaalmv1alpha1.AgentClassSpec{
-			AllowedToolProviders: []kaalmv1alpha1.LocalObjectReference{{Name: "search"}},
+		Spec: kaalmv1beta1.AgentClassSpec{
+			AllowedToolProviders: []kaalmv1beta1.LocalObjectReference{{Name: "search"}},
 		},
 	}
-	h.store.toolProviders["search"] = &kaalmv1alpha1.ToolProvider{
+	h.store.toolProviders["search"] = &kaalmv1beta1.ToolProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "search"},
-		Spec: kaalmv1alpha1.ToolProviderSpec{
+		Spec: kaalmv1beta1.ToolProviderSpec{
 			Type:              "mcp",
 			Endpoint:          h.upstream.URL,
-			CredentialsRef:    &kaalmv1alpha1.SecretKeyReference{Name: "search-key", Key: "token"},
+			CredentialsRef:    &kaalmv1beta1.SecretKeyReference{Name: "search-key", Key: "token"},
 			AllowedNamespaces: []string{"team-*"},
-			Tools: []kaalmv1alpha1.ToolProviderTool{
+			Tools: []kaalmv1beta1.ToolProviderTool{
 				{ID: "web_search"}, {ID: "fetch_page"},
 			},
 		},
@@ -200,15 +200,15 @@ func TestMCPBroker_EnforcementMatrix(t *testing.T) {
 	if !strings.Contains(msg, "no tool grant") {
 		t.Errorf("message = %q, want the missing-grant explanation", msg)
 	}
-	h.store.agents["team-a/sup"].Spec.Tools = []kaalmv1alpha1.AgentToolGrant{
-		{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "search"}, Tools: []string{"web_search"}},
+	h.store.agents["team-a/sup"].Spec.Tools = []kaalmv1beta1.AgentToolGrant{
+		{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "search"}, Tools: []string{"web_search"}},
 	}
 
 	// Class allowlist miss.
 	h.store.classes["std"].Spec.AllowedToolProviders = nil
 	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
 	expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
-	h.store.classes["std"].Spec.AllowedToolProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "search"}}
+	h.store.classes["std"].Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "search"}}
 
 	// Narrowing miss: fetch_page is cataloged but not granted.
 	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("fetch_page"), nil)
@@ -477,7 +477,7 @@ func TestMCPBroker_RateLimited(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
 	})
 	h.seedToolRoute()
-	h.store.toolProviders["search"].Spec.RateLimits = kaalmv1alpha1.ToolProviderRateLimits{RequestsPerMinute: 1}
+	h.store.toolProviders["search"].Spec.RateLimits = kaalmv1beta1.ToolProviderRateLimits{RequestsPerMinute: 1}
 	cert := agentCert(t, h.ca)
 
 	first := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
@@ -635,7 +635,7 @@ func TestMCPResult_AuditRecord(t *testing.T) {
 	s := &Server{} // nil Metrics no-ops; only the log line is under test
 	c := &caller{Namespace: "team-a",
 		Workload: &Identity{Namespace: "team-a", Name: "sup", Kind: KindAgent}}
-	tp := &kaalmv1alpha1.ToolProvider{}
+	tp := &kaalmv1beta1.ToolProvider{}
 	tp.Name = "search"
 	s.mcpResult(c, tp, "search", "tools/call", "rm_rf", http.StatusForbidden,
 		errToolDenied, `tool "rm_rf" is not granted to this workload`,

@@ -22,7 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // Field index keys. Cross-resource lookups (usage counts, reference tracking,
@@ -51,28 +51,28 @@ const (
 func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	idx := mgr.GetFieldIndexer()
 
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.Agent{}, IndexAgentClassRef, func(o client.Object) []string {
-		return []string{o.(*kaalmv1alpha1.Agent).Spec.AgentClassRef.Name}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.Agent{}, IndexAgentClassRef, func(o client.Object) []string {
+		return []string{o.(*kaalmv1beta1.Agent).Spec.AgentClassRef.Name}
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentTask{}, IndexAgentClassRef, func(o client.Object) []string {
-		return []string{o.(*kaalmv1alpha1.AgentTask).Spec.AgentClassRef.Name}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentTask{}, IndexAgentClassRef, func(o client.Object) []string {
+		return []string{o.(*kaalmv1beta1.AgentTask).Spec.AgentClassRef.Name}
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.Agent{}, IndexProviderRef, func(o client.Object) []string {
-		return providerRefNames(o.(*kaalmv1alpha1.Agent).Spec.Providers)
+	if err := idx.IndexField(ctx, &kaalmv1beta1.Agent{}, IndexProviderRef, func(o client.Object) []string {
+		return providerRefNames(o.(*kaalmv1beta1.Agent).Spec.Providers)
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentTask{}, IndexProviderRef, func(o client.Object) []string {
-		return providerRefNames(o.(*kaalmv1alpha1.AgentTask).Spec.Providers)
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentTask{}, IndexProviderRef, func(o client.Object) []string {
+		return providerRefNames(o.(*kaalmv1beta1.AgentTask).Spec.Providers)
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentClass{}, IndexAllowedProviders, func(o client.Object) []string {
-		ac := o.(*kaalmv1alpha1.AgentClass)
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentClass{}, IndexAllowedProviders, func(o client.Object) []string {
+		ac := o.(*kaalmv1beta1.AgentClass)
 		names := make([]string, 0, len(ac.Spec.AllowedProviders))
 		for _, p := range ac.Spec.AllowedProviders {
 			names = append(names, p.Name)
@@ -81,18 +81,18 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.Agent{}, IndexToolProviderRef, func(o client.Object) []string {
-		return toolGrantNames(o.(*kaalmv1alpha1.Agent).Spec.Tools)
+	if err := idx.IndexField(ctx, &kaalmv1beta1.Agent{}, IndexToolProviderRef, func(o client.Object) []string {
+		return toolGrantNames(o.(*kaalmv1beta1.Agent).Spec.Tools)
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentTask{}, IndexToolProviderRef, func(o client.Object) []string {
-		return toolGrantNames(o.(*kaalmv1alpha1.AgentTask).Spec.Tools)
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentTask{}, IndexToolProviderRef, func(o client.Object) []string {
+		return toolGrantNames(o.(*kaalmv1beta1.AgentTask).Spec.Tools)
 	}); err != nil {
 		return err
 	}
-	if err := idx.IndexField(ctx, &kaalmv1alpha1.AgentClass{}, IndexAllowedToolProviders, func(o client.Object) []string {
-		ac := o.(*kaalmv1alpha1.AgentClass)
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentClass{}, IndexAllowedToolProviders, func(o client.Object) []string {
+		ac := o.(*kaalmv1beta1.AgentClass)
 		names := make([]string, 0, len(ac.Spec.AllowedToolProviders))
 		for _, p := range ac.Spec.AllowedToolProviders {
 			names = append(names, p.Name)
@@ -104,7 +104,7 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	return nil
 }
 
-func providerRefNames(refs []kaalmv1alpha1.AgentProviderReference) []string {
+func providerRefNames(refs []kaalmv1beta1.AgentProviderReference) []string {
 	names := make([]string, 0, len(refs))
 	for _, r := range refs {
 		names = append(names, r.ProviderRef.Name)
@@ -112,7 +112,7 @@ func providerRefNames(refs []kaalmv1alpha1.AgentProviderReference) []string {
 	return names
 }
 
-func toolGrantNames(grants []kaalmv1alpha1.AgentToolGrant) []string {
+func toolGrantNames(grants []kaalmv1beta1.AgentToolGrant) []string {
 	names := make([]string, 0, len(grants))
 	for _, g := range grants {
 		names = append(names, g.ProviderRef.Name)

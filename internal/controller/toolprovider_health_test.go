@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // mcpTestHandler is a minimal MCP streamable-HTTP server: enough protocol
@@ -57,10 +57,10 @@ func mcpTestHandler(t *testing.T) http.HandlerFunc {
 	}
 }
 
-func tpForEndpoint(endpoint string, hc *kaalmv1alpha1.ToolProviderHealthCheck) *kaalmv1alpha1.ToolProvider {
-	tp := &kaalmv1alpha1.ToolProvider{}
+func tpForEndpoint(endpoint string, hc *kaalmv1beta1.ToolProviderHealthCheck) *kaalmv1beta1.ToolProvider {
+	tp := &kaalmv1beta1.ToolProvider{}
 	tp.Name = "probe-target"
-	tp.Spec = kaalmv1alpha1.ToolProviderSpec{Type: "mcp", Endpoint: endpoint, HealthCheck: hc}
+	tp.Spec = kaalmv1beta1.ToolProviderSpec{Type: "mcp", Endpoint: endpoint, HealthCheck: hc}
 	return tp
 }
 
@@ -111,7 +111,7 @@ func TestMCPToolHealthChecker_TimeoutHonored(t *testing.T) {
 	defer srv.Close()
 	defer close(blocked)
 
-	hc := &kaalmv1alpha1.ToolProviderHealthCheck{Enabled: true, TimeoutSeconds: 1}
+	hc := &kaalmv1beta1.ToolProviderHealthCheck{Enabled: true, TimeoutSeconds: 1}
 	start := time.Now()
 	res := (&MCPToolHealthChecker{}).Probe(context.Background(), tpForEndpoint(srv.URL, hc), "")
 	if res.Err == nil {

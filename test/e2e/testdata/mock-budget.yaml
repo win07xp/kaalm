@@ -3,7 +3,7 @@
 # with a block-at-100% policy blocks the next call. A dedicated AgentClass and
 # Agent reference the provider so the budget Degraded condition (issue #2) is
 # reachable (a hard-degraded Agent would skip the budget check).
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: s10-budget
@@ -28,7 +28,7 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s10-class
@@ -48,7 +48,7 @@ spec:
     maxHibernationDelay: 0s
     maxWakeTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s10-agent

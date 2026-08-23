@@ -23,7 +23,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // utilizationCollectTimeout bounds the provider list behind one scrape.
@@ -40,7 +40,7 @@ var budgetUtilizationDesc = prometheus.NewDesc("kaalm_llm_budget_utilization",
 // namespace's ratio of the provider's per-namespace ceiling, from the
 // enforcement view (own live counter plus folded peer partials). Providers
 // without a per-namespace ceiling report nothing: there is no ratio to take.
-func (b *BudgetLedger) Utilization(provider *kaalmv1alpha1.ModelProvider) (period string, byNamespace map[string]float64) {
+func (b *BudgetLedger) Utilization(provider *kaalmv1beta1.ModelProvider) (period string, byNamespace map[string]float64) {
 	ceiling, err := strconv.ParseFloat(provider.Spec.Budget.PerNamespaceUSD, 64)
 	if err != nil || ceiling <= 0 {
 		return "", nil
@@ -64,7 +64,7 @@ func (b *BudgetLedger) Utilization(provider *kaalmv1alpha1.ModelProvider) (perio
 // aggregate with max, not sum.
 type BudgetUtilizationCollector struct {
 	Ledger    *BudgetLedger
-	Providers func(ctx context.Context) []*kaalmv1alpha1.ModelProvider
+	Providers func(ctx context.Context) []*kaalmv1beta1.ModelProvider
 }
 
 // Describe implements prometheus.Collector.

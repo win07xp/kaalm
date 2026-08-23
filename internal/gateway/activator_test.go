@@ -30,7 +30,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestControllerActivator_Wake(t *testing.T) {
@@ -126,7 +126,7 @@ func TestWakeAndDeliver_Hibernated(t *testing.T) {
 		_, _ = w.Write([]byte(`{"content":"awake"}`))
 	})
 	h.seedChannel("sync")
-	h.store.agents["team-a/sup"].Status.Phase = kaalmv1alpha1.AgentHibernated
+	h.store.agents["team-a/sup"].Status.Phase = kaalmv1beta1.AgentHibernated
 
 	// No activator configured: controller-down error surfaces as 504.
 	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
@@ -161,14 +161,14 @@ func TestWakeAndDeliver_Hibernated(t *testing.T) {
 func TestWakeTimeout(t *testing.T) {
 	s := &Server{}
 	// Default when unset.
-	def := &kaalmv1alpha1.Agent{}
+	def := &kaalmv1beta1.Agent{}
 	if got := s.wakeTimeout(def); got != 120*time.Second {
 		t.Errorf("default wakeTimeout = %v", got)
 	}
 	// Spec override.
-	withTimeout := &kaalmv1alpha1.Agent{
-		Spec: kaalmv1alpha1.AgentSpec{
-			Lifecycle: kaalmv1alpha1.AgentLifecycle{
+	withTimeout := &kaalmv1beta1.Agent{
+		Spec: kaalmv1beta1.AgentSpec{
+			Lifecycle: kaalmv1beta1.AgentLifecycle{
 				WakeTimeout: metav1.Duration{Duration: 42 * time.Second},
 			},
 		},
@@ -181,7 +181,7 @@ func TestWakeTimeout(t *testing.T) {
 func TestAgentServiceHostPort(t *testing.T) {
 	// No overrides: derived Service DNS and default port.
 	s := &Server{}
-	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	if host := s.agentServiceHost(agent); host != "sup.team-a.svc.cluster.local" {
 		t.Errorf("host = %q", host)
 	}
@@ -189,7 +189,7 @@ func TestAgentServiceHostPort(t *testing.T) {
 		t.Errorf("default port = %d", port)
 	}
 	// Spec service port wins over the default.
-	agent.Spec.Service = &kaalmv1alpha1.AgentService{Port: 9000}
+	agent.Spec.Service = &kaalmv1beta1.AgentService{Port: 9000}
 	if port := s.agentServicePort(agent); port != 9000 {
 		t.Errorf("spec port = %d", port)
 	}

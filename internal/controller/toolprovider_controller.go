@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // ToolProviderReconciler validates a ToolProvider's credentials, probes it
@@ -62,14 +62,14 @@ type ToolProviderReconciler struct {
 func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var tp kaalmv1alpha1.ToolProvider
+	var tp kaalmv1beta1.ToolProvider
 	if err := r.Get(ctx, req.NamespacedName, &tp); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !tp.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &tp)
 	}
-	if controllerutil.AddFinalizer(&tp, kaalmv1alpha1.ToolProviderFinalizer) {
+	if controllerutil.AddFinalizer(&tp, kaalmv1beta1.ToolProviderFinalizer) {
 		if err := r.Update(ctx, &tp); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -85,8 +85,8 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if tp.Spec.CredentialsRef != nil {
 		var reason, msg string
 		credential, reason, msg = r.credential(ctx, &tp)
-		if reason != kaalmv1alpha1.ReasonCredentialsValid {
-			r.setCondition(&tp, kaalmv1alpha1.ConditionReady, false, reason, msg)
+		if reason != kaalmv1beta1.ReasonCredentialsValid {
+			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false, reason, msg)
 			return r.finish(ctx, &tp, ctrl.Result{})
 		}
 		readyMsg = "provider is valid"
@@ -98,32 +98,32 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		res := r.Health.Probe(ctx, &tp, credential)
 		switch {
 		case res.AuthFailed:
-			r.setCondition(&tp, kaalmv1alpha1.ConditionHealthy, false,
-				kaalmv1alpha1.ReasonCredentialsInvalid, "server rejected the credential")
-			r.setCondition(&tp, kaalmv1alpha1.ConditionReady, false,
-				kaalmv1alpha1.ReasonCredentialsInvalid, "server rejected the credential")
+			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
+				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
+			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false,
+				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
 			return r.finish(ctx, &tp, ctrl.Result{RequeueAfter: r.interval(&tp)})
 		case res.Err != nil:
-			r.setCondition(&tp, kaalmv1alpha1.ConditionHealthy, false,
-				kaalmv1alpha1.ReasonProviderUnhealthy, res.Err.Error())
-			r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1alpha1.ReasonProviderUnhealthy, res.Err.Error())
+			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
+				kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+			r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			requeue = ctrl.Result{RequeueAfter: r.interval(&tp)}
 		default: // Healthy
-			r.setCondition(&tp, kaalmv1alpha1.ConditionHealthy, true,
-				kaalmv1alpha1.ReasonUpstreamReachable, "server is reachable")
+			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, true,
+				kaalmv1beta1.ReasonUpstreamReachable, "server is reachable")
 			requeue = ctrl.Result{RequeueAfter: r.interval(&tp)}
 		}
 	}
 
-	r.setCondition(&tp, kaalmv1alpha1.ConditionReady, true, kaalmv1alpha1.ReasonCredentialsValid, readyMsg)
+	r.setCondition(&tp, kaalmv1beta1.ConditionReady, true, kaalmv1beta1.ReasonCredentialsValid, readyMsg)
 	logger.V(1).Info("reconciled ToolProvider", "type", tp.Spec.Type)
 	return r.finish(ctx, &tp, requeue)
 }
 
 func (r *ToolProviderReconciler) reconcileDelete(
-	ctx context.Context, tp *kaalmv1alpha1.ToolProvider,
+	ctx context.Context, tp *kaalmv1beta1.ToolProvider,
 ) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(tp, kaalmv1alpha1.ToolProviderFinalizer) {
+	if !controllerutil.ContainsFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer) {
 		return ctrl.Result{}, nil
 	}
 	referenced, err := r.isReferenced(ctx, tp.Name)
@@ -135,26 +135,26 @@ func (r *ToolProviderReconciler) reconcileDelete(
 		// references it. Their watches re-enqueue us when a referrer goes away.
 		return ctrl.Result{}, nil
 	}
-	controllerutil.RemoveFinalizer(tp, kaalmv1alpha1.ToolProviderFinalizer)
+	controllerutil.RemoveFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, tp)
 }
 
 func (r *ToolProviderReconciler) isReferenced(ctx context.Context, name string) (bool, error) {
-	var agents kaalmv1alpha1.AgentList
+	var agents kaalmv1beta1.AgentList
 	if err := r.List(ctx, &agents, client.MatchingFields{IndexToolProviderRef: name}); err != nil {
 		return false, err
 	}
 	if len(agents.Items) > 0 {
 		return true, nil
 	}
-	var tasks kaalmv1alpha1.AgentTaskList
+	var tasks kaalmv1beta1.AgentTaskList
 	if err := r.List(ctx, &tasks, client.MatchingFields{IndexToolProviderRef: name}); err != nil {
 		return false, err
 	}
 	if len(tasks.Items) > 0 {
 		return true, nil
 	}
-	var classes kaalmv1alpha1.AgentClassList
+	var classes kaalmv1beta1.AgentClassList
 	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: name}); err != nil {
 		return false, err
 	}
@@ -165,26 +165,26 @@ func (r *ToolProviderReconciler) isReferenced(ctx context.Context, name string) 
 // only, never from a tenant namespace, and returns the credential value plus
 // the condition reason.
 func (r *ToolProviderReconciler) credential(
-	ctx context.Context, tp *kaalmv1alpha1.ToolProvider,
+	ctx context.Context, tp *kaalmv1beta1.ToolProvider,
 ) (string, string, string) {
 	var sec corev1.Secret
 	key := types.NamespacedName{Namespace: r.OperatorNamespace, Name: tp.Spec.CredentialsRef.Name}
 	if err := r.Get(ctx, key, &sec); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", kaalmv1alpha1.ReasonCredentialsMissing,
+			return "", kaalmv1beta1.ReasonCredentialsMissing,
 				fmt.Sprintf("Secret %s not found", key)
 		}
-		return "", kaalmv1alpha1.ReasonCredentialsMissing, err.Error()
+		return "", kaalmv1beta1.ReasonCredentialsMissing, err.Error()
 	}
 	val, ok := sec.Data[tp.Spec.CredentialsRef.Key]
 	if !ok || len(val) == 0 {
-		return "", kaalmv1alpha1.ReasonCredentialsMissing,
+		return "", kaalmv1beta1.ReasonCredentialsMissing,
 			fmt.Sprintf("key %q missing or empty in Secret %s", tp.Spec.CredentialsRef.Key, key)
 	}
-	return string(val), kaalmv1alpha1.ReasonCredentialsValid, ""
+	return string(val), kaalmv1beta1.ReasonCredentialsValid, ""
 }
 
-func (r *ToolProviderReconciler) interval(tp *kaalmv1alpha1.ToolProvider) time.Duration {
+func (r *ToolProviderReconciler) interval(tp *kaalmv1beta1.ToolProvider) time.Duration {
 	if hc := tp.Spec.HealthCheck; hc != nil && hc.IntervalSeconds > 0 {
 		return time.Duration(hc.IntervalSeconds) * time.Second
 	}
@@ -192,7 +192,7 @@ func (r *ToolProviderReconciler) interval(tp *kaalmv1alpha1.ToolProvider) time.D
 }
 
 func (r *ToolProviderReconciler) setCondition(
-	tp *kaalmv1alpha1.ToolProvider, condType string, ok bool, reason, msg string,
+	tp *kaalmv1beta1.ToolProvider, condType string, ok bool, reason, msg string,
 ) {
 	status := metav1.ConditionFalse
 	if ok {
@@ -204,7 +204,7 @@ func (r *ToolProviderReconciler) setCondition(
 }
 
 func (r *ToolProviderReconciler) finish(
-	ctx context.Context, tp *kaalmv1alpha1.ToolProvider, res ctrl.Result,
+	ctx context.Context, tp *kaalmv1beta1.ToolProvider, res ctrl.Result,
 ) (ctrl.Result, error) {
 	return res, r.Status().Update(ctx, tp)
 }
@@ -213,20 +213,20 @@ func (r *ToolProviderReconciler) finish(
 // reference watches that release the deletion hold when a referrer goes away.
 func (r *ToolProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kaalmv1alpha1.ToolProvider{}).
+		For(&kaalmv1beta1.ToolProvider{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.toolProvidersForSecret)).
-		Watches(&kaalmv1alpha1.Agent{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
-		Watches(&kaalmv1alpha1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
-		Watches(&kaalmv1alpha1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForClass)).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
+		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForClass)).
 		Complete(r)
 }
 
 func toolProvidersForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
-	var grants []kaalmv1alpha1.AgentToolGrant
+	var grants []kaalmv1beta1.AgentToolGrant
 	switch w := obj.(type) {
-	case *kaalmv1alpha1.Agent:
+	case *kaalmv1beta1.Agent:
 		grants = w.Spec.Tools
-	case *kaalmv1alpha1.AgentTask:
+	case *kaalmv1beta1.AgentTask:
 		grants = w.Spec.Tools
 	default:
 		return nil
@@ -239,7 +239,7 @@ func toolProvidersForWorkload(_ context.Context, obj client.Object) []reconcile.
 }
 
 func toolProvidersForClass(_ context.Context, obj client.Object) []reconcile.Request {
-	ac, ok := obj.(*kaalmv1alpha1.AgentClass)
+	ac, ok := obj.(*kaalmv1beta1.AgentClass)
 	if !ok {
 		return nil
 	}
@@ -258,7 +258,7 @@ func (r *ToolProviderReconciler) toolProvidersForSecret(ctx context.Context, obj
 	if obj.GetNamespace() != r.OperatorNamespace {
 		return nil
 	}
-	var tps kaalmv1alpha1.ToolProviderList
+	var tps kaalmv1beta1.ToolProviderList
 	if err := r.List(ctx, &tps); err != nil {
 		return nil
 	}

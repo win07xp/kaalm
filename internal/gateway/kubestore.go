@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // PodIPIndex is the cache index mapping status.podIP to Pods. Registered by
@@ -41,8 +41,8 @@ type KubeStore struct {
 }
 
 // AgentByName looks up an Agent in the cache.
-func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*kaalmv1alpha1.Agent, bool) {
-	var a kaalmv1alpha1.Agent
+func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*kaalmv1beta1.Agent, bool) {
+	var a kaalmv1beta1.Agent
 	if err := k.Reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &a); err != nil {
 		return nil, false
 	}
@@ -50,8 +50,8 @@ func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*kaalmv1a
 }
 
 // TaskByName looks up an AgentTask in the cache.
-func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*kaalmv1alpha1.AgentTask, bool) {
-	var t kaalmv1alpha1.AgentTask
+func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*kaalmv1beta1.AgentTask, bool) {
+	var t kaalmv1beta1.AgentTask
 	if err := k.Reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &t); err != nil {
 		return nil, false
 	}
@@ -59,8 +59,8 @@ func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*kaalmv1al
 }
 
 // ClassByName looks up an AgentClass in the cache.
-func (k *KubeStore) ClassByName(ctx context.Context, name string) (*kaalmv1alpha1.AgentClass, bool) {
-	var c kaalmv1alpha1.AgentClass
+func (k *KubeStore) ClassByName(ctx context.Context, name string) (*kaalmv1beta1.AgentClass, bool) {
+	var c kaalmv1beta1.AgentClass
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &c); err != nil {
 		return nil, false
 	}
@@ -68,8 +68,8 @@ func (k *KubeStore) ClassByName(ctx context.Context, name string) (*kaalmv1alpha
 }
 
 // ProviderByName looks up a ModelProvider in the cache.
-func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ModelProvider, bool) {
-	var p kaalmv1alpha1.ModelProvider
+func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ModelProvider, bool) {
+	var p kaalmv1beta1.ModelProvider
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &p); err != nil {
 		return nil, false
 	}
@@ -77,8 +77,8 @@ func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*kaalmv1al
 }
 
 // ToolProviderByName looks up a ToolProvider in the cache.
-func (k *KubeStore) ToolProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ToolProvider, bool) {
-	var tp kaalmv1alpha1.ToolProvider
+func (k *KubeStore) ToolProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ToolProvider, bool) {
+	var tp kaalmv1beta1.ToolProvider
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &tp); err != nil {
 		return nil, false
 	}
@@ -88,7 +88,7 @@ func (k *KubeStore) ToolProviderByName(ctx context.Context, name string) (*kaalm
 // ToolCredential reads the tool provider's credential Secret key from the
 // operator namespace, exactly as Credential does for ModelProvider. A nil
 // credentialsRef is an unauthenticated server: no credential, no error.
-func (k *KubeStore) ToolCredential(ctx context.Context, provider *kaalmv1alpha1.ToolProvider) (string, error) {
+func (k *KubeStore) ToolCredential(ctx context.Context, provider *kaalmv1beta1.ToolProvider) (string, error) {
 	ref := provider.Spec.CredentialsRef
 	if ref == nil {
 		return "", nil
@@ -108,7 +108,7 @@ func (k *KubeStore) ToolCredential(ctx context.Context, provider *kaalmv1alpha1.
 // Credential reads the provider's credential Secret key from the operator
 // namespace via the cache (which doubles as the rotation watch: an updated
 // Secret is re-read on the next request).
-func (k *KubeStore) Credential(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) (string, error) {
+func (k *KubeStore) Credential(ctx context.Context, provider *kaalmv1beta1.ModelProvider) (string, error) {
 	var sec corev1.Secret
 	key := types.NamespacedName{Namespace: k.OperatorNamespace, Name: provider.Spec.CredentialsRef.Name}
 	if err := k.Reader.Get(ctx, key, &sec); err != nil {
@@ -125,8 +125,8 @@ func (k *KubeStore) Credential(ctx context.Context, provider *kaalmv1alpha1.Mode
 // The prefix defense (the path must begin with the channel's own
 // /channels/{namespace}/ prefix) is enforced here, independent of the
 // reconciler's InvalidPath status.
-func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1alpha1.AgentChannel, bool) {
-	var channels kaalmv1alpha1.AgentChannelList
+func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1beta1.AgentChannel, bool) {
+	var channels kaalmv1beta1.AgentChannelList
 	if err := k.Reader.List(ctx, &channels); err != nil {
 		return nil, false
 	}
@@ -139,7 +139,7 @@ func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1alp
 			continue
 		}
 		for _, c := range ch.Status.Conditions {
-			if c.Type == kaalmv1alpha1.ConditionReady && c.Status == "True" {
+			if c.Type == kaalmv1beta1.ConditionReady && c.Status == "True" {
 				return ch, true
 			}
 		}
@@ -148,7 +148,7 @@ func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1alp
 }
 
 // channelPathAllowed is the gateway-side half of validation rule 15.
-func channelPathAllowed(ch *kaalmv1alpha1.AgentChannel) bool {
+func channelPathAllowed(ch *kaalmv1beta1.AgentChannel) bool {
 	return strings.HasPrefix(ch.Spec.Webhook.Path, "/channels/"+ch.Namespace+"/")
 }
 

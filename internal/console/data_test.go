@@ -28,7 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -37,7 +37,7 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {
+	if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	return scheme
@@ -52,19 +52,19 @@ func seededData(t *testing.T) *Data {
 	objs := []client.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-b"}},
-		&kaalmv1alpha1.Agent{
+		&kaalmv1beta1.Agent{
 			ObjectMeta: metav1.ObjectMeta{Name: "support-assistant", Namespace: "team-a"},
-			Spec: kaalmv1alpha1.AgentSpec{
-				AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "standard"},
-				Providers: []kaalmv1alpha1.AgentProviderReference{
-					{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "anthropic-shared"}},
+			Spec: kaalmv1beta1.AgentSpec{
+				AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "standard"},
+				Providers: []kaalmv1beta1.AgentProviderReference{
+					{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "anthropic-shared"}},
 				},
-				Tools: []kaalmv1alpha1.AgentToolGrant{
-					{ProviderRef: kaalmv1alpha1.LocalObjectReference{Name: "search-tools"}, Tools: []string{"web_search"}},
+				Tools: []kaalmv1beta1.AgentToolGrant{
+					{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "search-tools"}, Tools: []string{"web_search"}},
 				},
 			},
-			Status: kaalmv1alpha1.AgentStatus{
-				Phase:            kaalmv1alpha1.AgentHibernated,
+			Status: kaalmv1beta1.AgentStatus{
+				Phase:            kaalmv1beta1.AgentHibernated,
 				HibernatedAt:     &hibernated,
 				LastActivityTime: &active,
 				PodName:          "support-assistant-0",
@@ -74,52 +74,52 @@ func seededData(t *testing.T) *Data {
 				},
 			},
 		},
-		&kaalmv1alpha1.Agent{
+		&kaalmv1beta1.Agent{
 			ObjectMeta: metav1.ObjectMeta{Name: "coder", Namespace: "team-a"},
-			Spec:       kaalmv1alpha1.AgentSpec{AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "sandboxed"}},
-			Status: kaalmv1alpha1.AgentStatus{
-				Phase: kaalmv1alpha1.AgentRunning,
+			Spec:       kaalmv1beta1.AgentSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "sandboxed"}},
+			Status: kaalmv1beta1.AgentStatus{
+				Phase: kaalmv1beta1.AgentRunning,
 				Conditions: []metav1.Condition{
 					{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Running", LastTransitionTime: active},
 				},
 			},
 		},
-		&kaalmv1alpha1.Agent{
+		&kaalmv1beta1.Agent{
 			ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "team-b"},
-			Spec:       kaalmv1alpha1.AgentSpec{AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "standard"}},
+			Spec:       kaalmv1beta1.AgentSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "standard"}},
 		},
-		&kaalmv1alpha1.AgentTask{
+		&kaalmv1beta1.AgentTask{
 			ObjectMeta: metav1.ObjectMeta{Name: "older-task", Namespace: "team-a"},
-			Spec: kaalmv1alpha1.AgentTaskSpec{
-				Artifacts: []kaalmv1alpha1.AgentTaskArtifact{{Name: "summary"}, {Name: "report"}},
+			Spec: kaalmv1beta1.AgentTaskSpec{
+				Artifacts: []kaalmv1beta1.AgentTaskArtifact{{Name: "summary"}, {Name: "report"}},
 			},
-			Status: kaalmv1alpha1.AgentTaskStatus{
-				Phase: kaalmv1alpha1.AgentTaskPhase("Succeeded"), StartTime: &earlier,
+			Status: kaalmv1beta1.AgentTaskStatus{
+				Phase: kaalmv1beta1.AgentTaskPhase("Succeeded"), StartTime: &earlier,
 				CompletionTime: &active, Retries: 1,
 				ArtifactValues: map[string]string{"summary": "SENSITIVE OUTPUT"},
 			},
 		},
-		&kaalmv1alpha1.AgentTask{
+		&kaalmv1beta1.AgentTask{
 			ObjectMeta: metav1.ObjectMeta{Name: "newer-task", Namespace: "team-a"},
-			Status:     kaalmv1alpha1.AgentTaskStatus{Phase: kaalmv1alpha1.AgentTaskPhase("Running"), StartTime: &active},
+			Status:     kaalmv1beta1.AgentTaskStatus{Phase: kaalmv1beta1.AgentTaskPhase("Running"), StartTime: &active},
 		},
-		&kaalmv1alpha1.AgentChannel{
+		&kaalmv1beta1.AgentChannel{
 			ObjectMeta: metav1.ObjectMeta{Name: "support", Namespace: "team-a"},
-			Spec:       kaalmv1alpha1.AgentChannelSpec{AgentRef: kaalmv1alpha1.LocalObjectReference{Name: "support-assistant"}},
-			Status: kaalmv1alpha1.AgentChannelStatus{
-				Phase: kaalmv1alpha1.AgentChannelPhase("Active"),
+			Spec:       kaalmv1beta1.AgentChannelSpec{AgentRef: kaalmv1beta1.LocalObjectReference{Name: "support-assistant"}},
+			Status: kaalmv1beta1.AgentChannelStatus{
+				Phase: kaalmv1beta1.AgentChannelPhase("Active"),
 				Conditions: []metav1.Condition{
 					{Type: "Ready", Status: metav1.ConditionTrue, Reason: "WebhookReady", LastTransitionTime: active},
 				},
 			},
 		},
-		&kaalmv1alpha1.ModelProvider{
+		&kaalmv1beta1.ModelProvider{
 			ObjectMeta: metav1.ObjectMeta{Name: "anthropic-shared"},
-			Spec: kaalmv1alpha1.ModelProviderSpec{
-				Budget: kaalmv1alpha1.ModelProviderBudget{PerNamespaceUSD: "100.00", Period: "monthly"},
+			Spec: kaalmv1beta1.ModelProviderSpec{
+				Budget: kaalmv1beta1.ModelProviderBudget{PerNamespaceUSD: "100.00", Period: "monthly"},
 			},
-			Status: kaalmv1alpha1.ModelProviderStatus{
-				BudgetUsage: []kaalmv1alpha1.ModelProviderBudgetUsage{
+			Status: kaalmv1beta1.ModelProviderStatus{
+				BudgetUsage: []kaalmv1beta1.ModelProviderBudgetUsage{
 					{Namespace: "team-a", Period: "monthly", SpentUSD: "12.34", PercentUsed: 12, State: "Normal"},
 					{Namespace: "team-b", Period: "monthly", SpentUSD: "99.00", PercentUsed: 99, State: "Throttled"},
 				},

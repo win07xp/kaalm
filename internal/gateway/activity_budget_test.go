@@ -25,7 +25,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestActivityStore_SourcesAndSnapshot(t *testing.T) {
@@ -103,16 +103,16 @@ func TestHeartbeatFeedsActivityEndpoint(t *testing.T) {
 
 const smallModel = "small"
 
-func budgetProvider(policies ...kaalmv1alpha1.ModelProviderBudgetPolicy) *kaalmv1alpha1.ModelProvider {
-	return &kaalmv1alpha1.ModelProvider{
+func budgetProvider(policies ...kaalmv1beta1.ModelProviderBudgetPolicy) *kaalmv1beta1.ModelProvider {
+	return &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
-		Spec: kaalmv1alpha1.ModelProviderSpec{
-			Budget: kaalmv1alpha1.ModelProviderBudget{
+		Spec: kaalmv1beta1.ModelProviderSpec{
+			Budget: kaalmv1beta1.ModelProviderBudget{
 				Period:          "monthly",
 				PerNamespaceUSD: "100",
 				Policies:        policies,
 			},
-			Models: []kaalmv1alpha1.ModelProviderModel{
+			Models: []kaalmv1beta1.ModelProviderModel{
 				{ID: "big", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "30"},
 				{ID: smallModel, CostPer1MInputTokens: "1", CostPer1MOutputTokens: "3"},
 			},
@@ -170,9 +170,9 @@ func TestCostOf(t *testing.T) {
 func TestBudgetLedger_EnforceThresholds(t *testing.T) {
 	degradeTo := smallModel
 	p := budgetProvider(
-		kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 50, Action: "warn"},
-		kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 80, Action: "degrade", DegradeTo: &degradeTo},
-		kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"},
+		kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 50, Action: "warn"},
+		kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 80, Action: "degrade", DegradeTo: &degradeTo},
+		kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"},
 	)
 	b := NewBudgetLedger()
 
@@ -180,16 +180,16 @@ func TestBudgetLedger_EnforceThresholds(t *testing.T) {
 		t.Errorf("no spend must be no action, got %q", d.Action)
 	}
 	b.Add(p, "team-a", "agent/test", 60) // 60%
-	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionWarn {
+	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1beta1.BudgetActionWarn {
 		t.Errorf("60%% should warn, got %q", d.Action)
 	}
 	b.Add(p, "team-a", "agent/test", 25) // 85%
-	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionDegrade || d.DegradeTo != smallModel {
+	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1beta1.BudgetActionDegrade || d.DegradeTo != smallModel {
 		t.Errorf("85%% should degrade to small, got %+v", d)
 	}
 	b.Add(p, "team-a", "agent/test", 20) // 105%
 	d := b.Enforce(p, "team-a")
-	if d.Action != kaalmv1alpha1.BudgetActionBlock || d.RetryAfter <= 0 {
+	if d.Action != kaalmv1beta1.BudgetActionBlock || d.RetryAfter <= 0 {
 		t.Errorf("105%% should block with Retry-After, got %+v", d)
 	}
 	// Another namespace is unaffected by per-namespace ceilings.
@@ -199,12 +199,12 @@ func TestBudgetLedger_EnforceThresholds(t *testing.T) {
 }
 
 func TestBudgetLedger_PeerFoldAndPartials(t *testing.T) {
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	b := NewBudgetLedger()
 	b.Add(p, "team-a", "agent/test", 40)
 	// Peer partials push the enforcement view over the ceiling.
 	b.FoldPeers(p, map[string]float64{"team-a": 70})
-	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
+	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1beta1.BudgetActionBlock {
 		t.Errorf("own 40 + peers 70 = 110%% should block, got %+v", d)
 	}
 
@@ -218,12 +218,12 @@ func TestBudgetLedger_PeerFoldAndPartials(t *testing.T) {
 }
 
 func TestBudgetLedger_PeriodRollover(t *testing.T) {
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	b := NewBudgetLedger()
 	now := time.Date(2026, 7, 31, 23, 59, 0, 0, time.UTC)
 	b.now = func() time.Time { return now }
 	b.Add(p, "team-a", "agent/test", 150)
-	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
+	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1beta1.BudgetActionBlock {
 		t.Fatal("should block at 150%")
 	}
 	// Midnight UTC: the counter resets on the next touch.
@@ -269,14 +269,14 @@ func TestProxy_BudgetDegradeAndBlock(t *testing.T) {
 	})
 	h.seedRoute()
 	degradeTo := smallModel
-	h.store.providers["prov"].Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
+	h.store.providers["prov"].Spec.Budget = kaalmv1beta1.ModelProviderBudget{
 		Period: "monthly", PerNamespaceUSD: "100",
-		Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{
+		Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{
 			{AtPercent: 80, Action: "degrade", DegradeTo: &degradeTo},
 			{AtPercent: 100, Action: "block"},
 		},
 	}
-	h.store.providers["prov"].Spec.Models = []kaalmv1alpha1.ModelProviderModel{
+	h.store.providers["prov"].Spec.Models = []kaalmv1beta1.ModelProviderModel{
 		{ID: "m1", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "30"},
 		{ID: smallModel, CostPer1MInputTokens: "1", CostPer1MOutputTokens: "3"},
 	}

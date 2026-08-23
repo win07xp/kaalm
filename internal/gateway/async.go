@@ -36,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // asyncTTL bounds each polling record's lifetime, fixed in v1.
@@ -56,7 +56,7 @@ type AsyncRecord struct {
 // AsyncRecords persists async webhook response records
 // (kaalm-async-{requestId} ConfigMaps in kaalm-system).
 type AsyncRecords interface {
-	Create(ctx context.Context, requestID string, channel *kaalmv1alpha1.AgentChannel, expires time.Time) error
+	Create(ctx context.Context, requestID string, channel *kaalmv1beta1.AgentChannel, expires time.Time) error
 	Patch(ctx context.Context, requestID string, payload []byte) error
 	Get(ctx context.Context, requestID string) (*AsyncRecord, bool, error)
 	CountPending(ctx context.Context, channelNamespace, channelName string) (int, error)
@@ -73,18 +73,18 @@ func asyncCMName(requestID string) string { return "kaalm-async-" + requestID }
 // Create writes the empty placeholder with channel labels and the expiry
 // annotation, synchronously before the 202 is returned.
 func (k *KubeAsyncRecords) Create(
-	ctx context.Context, requestID string, channel *kaalmv1alpha1.AgentChannel, expires time.Time,
+	ctx context.Context, requestID string, channel *kaalmv1beta1.AgentChannel, expires time.Time,
 ) error {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      asyncCMName(requestID),
 			Namespace: k.OperatorNamespace,
 			Labels: map[string]string{
-				kaalmv1alpha1.LabelChannelNamespace: channel.Namespace,
-				kaalmv1alpha1.LabelChannelName:      channel.Name,
+				kaalmv1beta1.LabelChannelNamespace: channel.Namespace,
+				kaalmv1beta1.LabelChannelName:      channel.Name,
 			},
 			Annotations: map[string]string{
-				kaalmv1alpha1.AnnotationExpiresAt: expires.UTC().Format(time.RFC3339),
+				kaalmv1beta1.AnnotationExpiresAt: expires.UTC().Format(time.RFC3339),
 			},
 		},
 		Data: map[string]string{},
@@ -115,8 +115,8 @@ func (k *KubeAsyncRecords) Get(ctx context.Context, requestID string) (*AsyncRec
 	}
 	rec := &AsyncRecord{
 		CreatedAt:        cm.CreationTimestamp.Time,
-		ChannelNamespace: cm.Labels[kaalmv1alpha1.LabelChannelNamespace],
-		ChannelName:      cm.Labels[kaalmv1alpha1.LabelChannelName],
+		ChannelNamespace: cm.Labels[kaalmv1beta1.LabelChannelNamespace],
+		ChannelName:      cm.Labels[kaalmv1beta1.LabelChannelName],
 	}
 	if payload, ok := cm.Data[payloadKey]; ok && payload != "" {
 		rec.Payload = []byte(payload)
@@ -127,8 +127,8 @@ func (k *KubeAsyncRecords) Get(ctx context.Context, requestID string) (*AsyncRec
 // CountPending counts a channel's live records for maxPendingAsyncResponses.
 func (k *KubeAsyncRecords) CountPending(ctx context.Context, channelNamespace, channelName string) (int, error) {
 	selector := fmt.Sprintf("%s=%s,%s=%s",
-		kaalmv1alpha1.LabelChannelNamespace, channelNamespace,
-		kaalmv1alpha1.LabelChannelName, channelName)
+		kaalmv1beta1.LabelChannelNamespace, channelNamespace,
+		kaalmv1beta1.LabelChannelName, channelName)
 	list, err := k.Client.CoreV1().ConfigMaps(k.OperatorNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return 0, err
@@ -166,7 +166,7 @@ type asyncAcceptResponse struct {
 // queryable polling record), 202, then the background pipeline.
 func (s *Server) handleAsyncAccept(
 	w http.ResponseWriter, r *http.Request,
-	channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent, env MessageEnvelope,
+	channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent, env MessageEnvelope,
 ) {
 	maxPending := channel.Spec.Webhook.MaxPendingAsyncResponses
 	if maxPending == 0 {
@@ -212,7 +212,7 @@ const (
 // 202. The full retry budget runs without a wall-clock deadline.
 func (s *Server) runAsyncPipeline(
 	traceCtx context.Context, requestID string,
-	channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent, env MessageEnvelope,
+	channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent, env MessageEnvelope,
 ) {
 	// traceCtx carries only the accept span's identity (Tracing.Detach), so
 	// the delivery spans stay connected without the caller's cancellation.
@@ -282,7 +282,7 @@ func (s *Server) patchWithRetry(ctx context.Context, requestID, namespace string
 // signing with a fresh timestamp, and the retried/terminal/bypassed buckets.
 // Returns the callback outcome (delivered | rejected | invalid | exhausted).
 func (s *Server) sendCallback(
-	ctx context.Context, channel *kaalmv1alpha1.AgentChannel, requestID string, payload []byte,
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, requestID string, payload []byte,
 ) string {
 	cbURL := *channel.Spec.Webhook.CallbackURL
 	parsed, err := url.Parse(cbURL)
@@ -348,7 +348,7 @@ func (s *Server) sendCallback(
 // IP, preserving the hostname for Host and TLS SNI.
 func (s *Server) dialCallbackOnce(
 	ctx context.Context, parsed *url.URL, ip net.IP,
-	channel *kaalmv1alpha1.AgentChannel, secret, requestID string, payload []byte,
+	channel *kaalmv1beta1.AgentChannel, secret, requestID string, payload []byte,
 ) (int, error) {
 	port := parsed.Port()
 	if port == "" {

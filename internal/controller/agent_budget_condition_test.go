@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/gateway"
 )
 
@@ -38,10 +38,10 @@ func mkBlockingProvider(t *testing.T, name, replicaKey string) {
 	t.Helper()
 	mkGatewayPod(t, replicaKey, true)
 	mkSecret(t, name+"-key")
-	mkProvider(t, name, func(mp *kaalmv1alpha1.ModelProvider) {
-		mp.Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
+	mkProvider(t, name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{
 			Period: "monthly", PerNamespaceUSD: "100",
-			Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{{AtPercent: 80, Action: "block"}},
+			Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{{AtPercent: 80, Action: "block"}},
 		}
 	})
 }
@@ -76,14 +76,14 @@ func setProviderSpend(t *testing.T, providerName, replicaKey, spendUSD string) {
 
 func agentDegraded(t *testing.T, name string) *metav1.Condition {
 	t.Helper()
-	var ag kaalmv1alpha1.Agent
+	var ag kaalmv1beta1.Agent
 	_ = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag)
-	return condition(ag.Status.Conditions, kaalmv1alpha1.ConditionDegraded)
+	return condition(ag.Status.Conditions, kaalmv1beta1.ConditionDegraded)
 }
 
-func agentPhase(t *testing.T, name string) kaalmv1alpha1.AgentPhase {
+func agentPhase(t *testing.T, name string) kaalmv1beta1.AgentPhase {
 	t.Helper()
-	var ag kaalmv1alpha1.Agent
+	var ag kaalmv1beta1.Agent
 	_ = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag)
 	return ag.Status.Phase
 }
@@ -104,7 +104,7 @@ func TestAgent_BudgetExhaustedSetsDegradedConditionPreservingPhase(t *testing.T)
 		if c.Status != metav1.ConditionTrue {
 			return errString("Degraded=" + string(c.Status) + " want True")
 		}
-		if c.Reason != kaalmv1alpha1.ReasonBudgetExhausted {
+		if c.Reason != kaalmv1beta1.ReasonBudgetExhausted {
 			return errString("reason=" + c.Reason + " want BudgetExhausted")
 		}
 		return nil
@@ -112,7 +112,7 @@ func TestAgent_BudgetExhaustedSetsDegradedConditionPreservingPhase(t *testing.T)
 
 	// Phase must be preserved: budget exhaustion is a recoverable runtime
 	// state, not a phase transition. The agent is anything but Degraded.
-	if p := agentPhase(t, "s10-block-agent"); p == kaalmv1alpha1.AgentDegraded {
+	if p := agentPhase(t, "s10-block-agent"); p == kaalmv1beta1.AgentDegraded {
 		t.Fatalf("phase should be preserved, not Degraded")
 	}
 }
@@ -155,10 +155,10 @@ func TestAgent_BudgetConditionNotSetWhenWithinBudget(t *testing.T) {
 	// check. Observing it proves reconcileBudgetCondition ran; a within-budget
 	// namespace must leave no Degraded condition behind.
 	expectReady(t, func() []metav1.Condition {
-		var ag kaalmv1alpha1.Agent
+		var ag kaalmv1beta1.Agent
 		_ = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "s10-ok-agent"}, &ag)
 		return ag.Status.Conditions
-	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonInvalidReference)
+	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidReference)
 
 	if c := agentDegraded(t, "s10-ok-agent"); c != nil {
 		t.Fatalf("unexpected Degraded condition on a within-budget agent: %s", c.Reason)

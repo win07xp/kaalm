@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/gateway"
 )
 
@@ -79,14 +79,14 @@ func TestAgentSpendReducer(t *testing.T) {
 		return nil
 	})
 
-	mp := &kaalmv1alpha1.ModelProvider{
+	mp := &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "spend-prov"},
-		Spec: kaalmv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1beta1.ModelProviderSpec{
 			Type: "openai", Endpoint: "https://api.example.com",
-			CredentialsRef:    kaalmv1alpha1.SecretKeyReference{Name: "k", Key: "key"},
+			CredentialsRef:    kaalmv1beta1.SecretKeyReference{Name: "k", Key: "key"},
 			AllowedNamespaces: []string{"*"},
-			Models:            []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
-			Budget:            kaalmv1alpha1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"},
+			Models:            []kaalmv1beta1.ModelProviderModel{{ID: "m1"}},
+			Budget:            kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"},
 		},
 	}
 

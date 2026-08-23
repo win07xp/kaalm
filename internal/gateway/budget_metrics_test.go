@@ -23,7 +23,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestBudgetLedger_Utilization(t *testing.T) {
@@ -61,7 +61,7 @@ func TestBudgetUtilizationCollector_ServesTheGauge(t *testing.T) {
 	b.Add(mp, "team-a", "agent/x", 45)
 	c := &BudgetUtilizationCollector{
 		Ledger:    b,
-		Providers: func(context.Context) []*kaalmv1alpha1.ModelProvider { return []*kaalmv1alpha1.ModelProvider{mp} },
+		Providers: func(context.Context) []*kaalmv1beta1.ModelProvider { return []*kaalmv1beta1.ModelProvider{mp} },
 	}
 	expected := `
 # HELP kaalm_llm_budget_utilization Per-namespace budget utilization as a 0-1 ratio of the per-namespace ceiling, from the replica's folded ledger.

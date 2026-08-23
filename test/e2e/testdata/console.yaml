@@ -8,7 +8,7 @@ kind: Namespace
 metadata:
   name: console-e2e
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: console-e2e-hibernating
@@ -27,7 +27,7 @@ spec:
     defaultHibernationDelay: 2s
     defaultWakeTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: console-agent

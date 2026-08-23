@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // RateLimiter enforces per-(namespace, model) request ceilings. The configured
@@ -56,14 +56,14 @@ func NewRateLimiter(replicas func() int) *RateLimiter {
 
 // Allow reports whether a request may proceed, consuming one token when it
 // can. A provider with no requestsPerMinute limit always allows.
-func (r *RateLimiter) Allow(provider *kaalmv1alpha1.ModelProvider, namespace, model string) bool {
+func (r *RateLimiter) Allow(provider *kaalmv1beta1.ModelProvider, namespace, model string) bool {
 	return r.allow(provider.Spec.RateLimits.RequestsPerMinute, namespace+"/"+model)
 }
 
 // AllowTool is the brokered-call analog, keyed per (namespace, ToolProvider)
 // under a prefix no namespace name can produce (":" is not a DNS label
 // character), so tool buckets never collide with LLM model buckets.
-func (r *RateLimiter) AllowTool(tp *kaalmv1alpha1.ToolProvider, namespace string) bool {
+func (r *RateLimiter) AllowTool(tp *kaalmv1beta1.ToolProvider, namespace string) bool {
 	return r.allow(tp.Spec.RateLimits.RequestsPerMinute, "mcp:"+namespace+"/"+tp.Name)
 }
 

@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/gateway"
 	"github.com/win07xp/kaalm/internal/tlsutil"
@@ -117,7 +117,7 @@ func main() {
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(kaalmv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kaalmv1beta1.AddToScheme(scheme))
 	utilruntime.Must(cmapi.AddToScheme(scheme))
 
 	restCfg := ctrl.GetConfigOrDie()
@@ -277,12 +277,12 @@ func main() {
 	publisher := &gateway.BudgetPublisher{
 		Client: clientset, Ledger: server.Budget,
 		OperatorNamespace: operatorNamespace, PodName: podName,
-		Providers: func(ctx context.Context) []*kaalmv1alpha1.ModelProvider {
-			var list kaalmv1alpha1.ModelProviderList
+		Providers: func(ctx context.Context) []*kaalmv1beta1.ModelProvider {
+			var list kaalmv1beta1.ModelProviderList
 			if err := cl.GetClient().List(ctx, &list); err != nil {
 				return nil
 			}
-			out := make([]*kaalmv1alpha1.ModelProvider, 0, len(list.Items))
+			out := make([]*kaalmv1beta1.ModelProvider, 0, len(list.Items))
 			for i := range list.Items {
 				out = append(out, &list.Items[i])
 			}
@@ -319,18 +319,18 @@ func main() {
 	// observed Terminating, confirm disconnection with the annotation the
 	// reconciler waits on. The webhook write gate itself lives in the intake
 	// handler.
-	if informer, err := cl.GetCache().GetInformer(ctx, &kaalmv1alpha1.AgentChannel{}); err == nil {
+	if informer, err := cl.GetCache().GetInformer(ctx, &kaalmv1beta1.AgentChannel{}); err == nil {
 		_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(_, newObj any) {
-				ch, ok := newObj.(*kaalmv1alpha1.AgentChannel)
-				if !ok || ch.Status.Phase != kaalmv1alpha1.ChannelTerminating {
+				ch, ok := newObj.(*kaalmv1beta1.AgentChannel)
+				if !ok || ch.Status.Phase != kaalmv1beta1.ChannelTerminating {
 					return
 				}
-				if ch.Annotations[kaalmv1alpha1.AnnotationChannelDisconnected] == kaalmv1alpha1.AnnotationTrue {
+				if ch.Annotations[kaalmv1beta1.AnnotationChannelDisconnected] == kaalmv1beta1.AnnotationTrue {
 					return
 				}
 				patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`,
-					kaalmv1alpha1.AnnotationChannelDisconnected, kaalmv1alpha1.AnnotationTrue))
+					kaalmv1beta1.AnnotationChannelDisconnected, kaalmv1beta1.AnnotationTrue))
 				if err := cl.GetClient().Patch(ctx, ch.DeepCopy(),
 					client.RawPatch(types.MergePatchType, patch)); err != nil {
 					logger.Warn("disconnect annotation patch failed", "channel", ch.Name, "error", err)

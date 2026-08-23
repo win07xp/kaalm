@@ -21,30 +21,32 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // Store is the gateway's read surface over cluster state. The production
 // implementation wraps a controller-runtime informer cache; tests use a
 // map-backed fake.
 type Store interface {
-	AgentByName(ctx context.Context, namespace, name string) (*kaalmv1alpha1.Agent, bool)
-	TaskByName(ctx context.Context, namespace, name string) (*kaalmv1alpha1.AgentTask, bool)
-	ClassByName(ctx context.Context, name string) (*kaalmv1alpha1.AgentClass, bool)
-	ProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ModelProvider, bool)
+	AgentByName(ctx context.Context, namespace, name string) (*kaalmv1beta1.Agent, bool)
+	TaskByName(ctx context.Context, namespace, name string) (*kaalmv1beta1.AgentTask, bool)
+	ClassByName(ctx context.Context, name string) (*kaalmv1beta1.AgentClass, bool)
+	ProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ModelProvider, bool)
 	// Credential resolves the provider's credential Secret key value.
-	Credential(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) (string, error)
+	Credential(ctx context.Context, provider *kaalmv1beta1.ModelProvider) (string, error)
 	// ToolProviderByName looks up a ToolProvider for the MCP broker.
-	ToolProviderByName(ctx context.Context, name string) (*kaalmv1alpha1.ToolProvider, bool)
+	ToolProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ToolProvider, bool)
 	// ToolCredential resolves the tool provider's credential Secret key
 	// value. A nil credentialsRef (an unauthenticated server) yields "".
-	ToolCredential(ctx context.Context, provider *kaalmv1alpha1.ToolProvider) (string, error)
+	ToolCredential(ctx context.Context, provider *kaalmv1beta1.ToolProvider) (string, error)
 	// PodByIP resolves a source IP to a Pod for the cross-check and the
 	// Mode 2 ownership precheck. ok is false when no Pod matches.
 	PodByIP(ctx context.Context, ip string) (*corev1.Pod, bool)
 	// ChannelByPath resolves a webhook path to its AgentChannel. Only
 	// channels with Ready=True are returned: Ready gates routing admission.
-	ChannelByPath(ctx context.Context, path string) (*kaalmv1alpha1.AgentChannel, bool)
+	ChannelByPath(ctx context.Context, path string) (*kaalmv1beta1.AgentChannel, bool)
 	// SecretValue reads one key of a Secret in a user namespace (the
 	// per-channel scoped Role is what grants this in production).
 	SecretValue(ctx context.Context, namespace, name, key string) (string, error)
@@ -52,10 +54,13 @@ type Store interface {
 
 // isKaalmManagedPod reports whether the Pod belongs to an Agent or AgentTask
 // (ownerRef to either kind, or the Kaalm-managed label set). Such Pods must
-// use mTLS; the Mode 2 precheck rejects their bearer tokens.
+// use mTLS; the Mode 2 precheck rejects their bearer tokens. The ownerRef is
+// matched by API group, not group and version: a Pod created before the
+// v0.6.0 graduation names kaalm.io/v1alpha1 and is just as managed.
 func isKaalmManagedPod(pod *corev1.Pod) bool {
 	for _, ref := range pod.OwnerReferences {
-		if ref.APIVersion == kaalmv1alpha1.GroupVersion.String() &&
+		gv, err := schema.ParseGroupVersion(ref.APIVersion)
+		if err == nil && gv.Group == kaalmv1beta1.GroupVersion.Group &&
 			(ref.Kind == "Agent" || ref.Kind == "AgentTask") {
 			return true
 		}

@@ -1,9 +1,9 @@
 ## Append samples of your project ##
 resources:
-- kaalm_v1alpha1_agentclass.yaml
-- kaalm_v1alpha1_modelprovider.yaml
-- kaalm_v1alpha1_toolprovider.yaml
-- kaalm_v1alpha1_agent.yaml
-- kaalm_v1alpha1_agenttask.yaml
-- kaalm_v1alpha1_agentchannel.yaml
+- kaalm_v1beta1_agentclass.yaml
+- kaalm_v1beta1_modelprovider.yaml
+- kaalm_v1beta1_toolprovider.yaml
+- kaalm_v1beta1_agent.yaml
+- kaalm_v1beta1_agenttask.yaml
+- kaalm_v1beta1_agentchannel.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

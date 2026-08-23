@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestWorkloadKey(t *testing.T) {
@@ -46,7 +46,7 @@ func TestWorkloadKey(t *testing.T) {
 }
 
 func TestBudgetLedger_WorkloadAccounting(t *testing.T) {
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	b := NewBudgetLedger()
 
 	b.Add(p, "team-a", "agent/sup", 3)
@@ -84,7 +84,7 @@ func TestBudgetLedger_WorkloadAccounting(t *testing.T) {
 }
 
 func TestBudgetLedger_WorkloadRolloverClears(t *testing.T) {
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	b := NewBudgetLedger()
 	now := time.Date(2026, 8, 31, 23, 0, 0, 0, time.UTC)
 	b.now = func() time.Time { return now }
@@ -124,7 +124,7 @@ func TestBudgetLedger_HardSettleLandsWorkload(t *testing.T) {
 
 func TestBudgetPublisher_WorkloadExchange(t *testing.T) {
 	ctx := context.Background()
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 
 	client := k8sfake.NewSimpleClientset(
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"}},
@@ -184,7 +184,7 @@ func TestBudgetPublisher_WorkloadExchange(t *testing.T) {
 }
 
 func TestFoldAgentSpendConfigMapEvent(t *testing.T) {
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	store := newFakeStore()
 	store.providers["prov"] = p
 	ledger := NewBudgetLedger()
@@ -220,10 +220,10 @@ func TestSpendEndpoint_EndToEnd(t *testing.T) {
 		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":1000000,"completion_tokens":0}}`))
 	})
 	h.seedRoute()
-	h.store.providers["prov"].Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
+	h.store.providers["prov"].Spec.Budget = kaalmv1beta1.ModelProviderBudget{
 		Period: "monthly", PerNamespaceUSD: "100",
 	}
-	h.store.providers["prov"].Spec.Models = []kaalmv1alpha1.ModelProviderModel{
+	h.store.providers["prov"].Spec.Models = []kaalmv1beta1.ModelProviderModel{
 		{ID: "m1", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "30"},
 	}
 	agentC := agentCert(t, h.ca)

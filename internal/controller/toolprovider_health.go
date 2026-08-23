@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"time"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/mcp"
 )
 
@@ -31,7 +31,7 @@ import (
 // server. Results reuse ProviderProbeResult; the classification contract is
 // identical to the ModelProvider probe's.
 type ToolHealthChecker interface {
-	Probe(ctx context.Context, provider *kaalmv1alpha1.ToolProvider, credential string) ProviderProbeResult
+	Probe(ctx context.Context, provider *kaalmv1beta1.ToolProvider, credential string) ProviderProbeResult
 }
 
 // MCPToolHealthChecker is the real checker. The probe speaks the protocol it
@@ -45,7 +45,7 @@ type MCPToolHealthChecker struct {
 
 // Probe implements ToolHealthChecker.
 func (h *MCPToolHealthChecker) Probe(
-	ctx context.Context, provider *kaalmv1alpha1.ToolProvider, credential string,
+	ctx context.Context, provider *kaalmv1beta1.ToolProvider, credential string,
 ) ProviderProbeResult {
 	timeout := defaultHealthTimeout
 	if hc := provider.Spec.HealthCheck; hc != nil && hc.TimeoutSeconds > 0 {

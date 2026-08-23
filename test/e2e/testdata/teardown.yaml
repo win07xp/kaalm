@@ -8,7 +8,7 @@
 # idleTimeout 0s disables idle/hibernation evaluation entirely, so neither agent
 # can drift out of Running mid-test. terminationGracePeriodSeconds is short
 # because starter-go handles SIGTERM, which keeps the teardown deterministic.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s11-retain
@@ -28,7 +28,7 @@ spec:
     defaultHibernationDelay: 0s
     defaultWakeTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s11-delete
@@ -48,7 +48,7 @@ spec:
     defaultHibernationDelay: 0s
     defaultWakeTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s11-retain-agent
@@ -63,7 +63,7 @@ spec:
     activitySource: gatewayTraffic
     idleTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s11-delete-agent

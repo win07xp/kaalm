@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // gatewayScheme builds a scheme carrying the core and kaalm types.
@@ -37,7 +37,7 @@ func gatewayScheme(t *testing.T) *runtime.Scheme {
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	if err := kaalmv1alpha1.AddToScheme(s); err != nil {
+	if err := kaalmv1beta1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -60,10 +60,10 @@ func kubeClientWith(t *testing.T, objs ...client.Object) client.Client {
 }
 
 func TestKubeStore_AgentTaskClassProvider(t *testing.T) {
-	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
-	task := &kaalmv1alpha1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix", Namespace: "team-a"}}
-	class := &kaalmv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "std"}}
-	prov := &kaalmv1alpha1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "prov"}}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix", Namespace: "team-a"}}
+	class := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "std"}}
+	prov := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "prov"}}
 
 	k := &KubeStore{Reader: kubeClientWith(t, agent, task, class, prov), OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
@@ -95,10 +95,10 @@ func TestKubeStore_AgentTaskClassProvider(t *testing.T) {
 }
 
 func TestKubeStore_Credential(t *testing.T) {
-	prov := &kaalmv1alpha1.ModelProvider{
+	prov := &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
-		Spec: kaalmv1alpha1.ModelProviderSpec{
-			CredentialsRef: kaalmv1alpha1.SecretKeyReference{Name: "prov-secret", Key: "api-key"},
+		Spec: kaalmv1beta1.ModelProviderSpec{
+			CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "prov-secret", Key: "api-key"},
 		},
 	}
 	secret := &corev1.Secret{
@@ -160,16 +160,16 @@ func TestKubeStore_SecretValue(t *testing.T) {
 }
 
 // readyChannel builds an AgentChannel at path, optionally Ready.
-func readyChannel(ns, name, path string, ready bool) *kaalmv1alpha1.AgentChannel {
-	ch := &kaalmv1alpha1.AgentChannel{
+func readyChannel(ns, name, path string, ready bool) *kaalmv1beta1.AgentChannel {
+	ch := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: kaalmv1alpha1.AgentChannelSpec{
-			Webhook: kaalmv1alpha1.AgentChannelWebhook{Path: path},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			Webhook: kaalmv1beta1.AgentChannelWebhook{Path: path},
 		},
 	}
 	if ready {
 		ch.Status.Conditions = []metav1.Condition{
-			{Type: kaalmv1alpha1.ConditionReady, Status: "True", Reason: "Ready",
+			{Type: kaalmv1beta1.ConditionReady, Status: "True", Reason: "Ready",
 				LastTransitionTime: metav1.Now()},
 		}
 	}

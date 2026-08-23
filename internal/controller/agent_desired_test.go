@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestPodSpecHash_StableAndSensitive(t *testing.T) {
@@ -125,23 +125,23 @@ func TestNamespaceAllowed(t *testing.T) {
 }
 
 func TestDeriveEffectiveSpec_ClassDefaults(t *testing.T) {
-	class := &kaalmv1alpha1.AgentClass{
+	class := &kaalmv1beta1.AgentClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "standard"},
-		Spec: kaalmv1alpha1.AgentClassSpec{
-			Image: kaalmv1alpha1.AgentClassImage{DefaultImage: "registry/default:v1"},
-			Resources: kaalmv1alpha1.AgentClassResources{
+		Spec: kaalmv1beta1.AgentClassSpec{
+			Image: kaalmv1beta1.AgentClassImage{DefaultImage: "registry/default:v1"},
+			Resources: kaalmv1beta1.AgentClassResources{
 				Defaults: corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m")},
 				},
 			},
-			Persistence: kaalmv1alpha1.AgentClassPersistence{DefaultSizeGi: 5, MaxSizeGi: 10},
+			Persistence: kaalmv1beta1.AgentClassPersistence{DefaultSizeGi: 5, MaxSizeGi: 10},
 		},
 	}
-	agent := &kaalmv1alpha1.Agent{
+	agent := &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
-		Spec: kaalmv1alpha1.AgentSpec{
-			AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "standard"},
-			Persistence:   kaalmv1alpha1.AgentPersistence{Enabled: true},
+		Spec: kaalmv1beta1.AgentSpec{
+			AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "standard"},
+			Persistence:   kaalmv1beta1.AgentPersistence{Enabled: true},
 		},
 	}
 	eff := deriveEffectiveSpec(agent, class)
@@ -172,9 +172,9 @@ func TestDeriveEffectiveSpec_ClassDefaults(t *testing.T) {
 }
 
 func TestDesiredPod_ContractInjection(t *testing.T) {
-	agent := &kaalmv1alpha1.Agent{
+	agent := &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
-		Spec: kaalmv1alpha1.AgentSpec{
+		Spec: kaalmv1beta1.AgentSpec{
 			Env: []corev1.EnvVar{{Name: "LOG_LEVEL", Value: "info"}},
 		},
 	}
@@ -225,7 +225,7 @@ func TestDesiredPod_ContractInjection(t *testing.T) {
 }
 
 func TestDesiredCertificate_Shape(t *testing.T) {
-	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	cert := desiredCertificate(agent)
 	if cert.Name != "sup-tls" || cert.Spec.SecretName != "sup-tls" {
 		t.Errorf("cert naming wrong: %s / %s", cert.Name, cert.Spec.SecretName)
@@ -248,11 +248,11 @@ func TestDesiredCertificate_Shape(t *testing.T) {
 }
 
 func TestDesiredNetworkPolicy_Rules(t *testing.T) {
-	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
-	class := &kaalmv1alpha1.AgentClass{
-		Spec: kaalmv1alpha1.AgentClassSpec{
-			Network: kaalmv1alpha1.AgentClassNetwork{
-				Egress:                    kaalmv1alpha1.AgentClassEgress{AllowedCIDRs: []string{"10.0.0.0/8"}},
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	class := &kaalmv1beta1.AgentClass{
+		Spec: kaalmv1beta1.AgentClassSpec{
+			Network: kaalmv1beta1.AgentClassNetwork{
+				Egress:                    kaalmv1beta1.AgentClassEgress{AllowedCIDRs: []string{"10.0.0.0/8"}},
 				AllowSameNamespaceIngress: true,
 			},
 		},
@@ -275,7 +275,7 @@ func TestDesiredNetworkPolicy_Rules(t *testing.T) {
 }
 
 func TestDesiredPod_MergesClassPodMetadata(t *testing.T) {
-	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	eff := effectiveAgentSpec{
 		Image:          "img:v1",
 		HealthPort:     8080,
@@ -295,8 +295,8 @@ func TestDesiredPod_MergesClassPodMetadata(t *testing.T) {
 }
 
 func TestDesiredPVC_ZeroSizeDefaults(t *testing.T) {
-	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
-	class := &kaalmv1alpha1.AgentClass{}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	class := &kaalmv1beta1.AgentClass{}
 	pvc := desiredPVC(agent, class, effectiveAgentSpec{PVCSizeGi: 0})
 	if pvc.Name != "sup-memory" {
 		t.Errorf("pvc name wrong: %s", pvc.Name)
@@ -308,22 +308,22 @@ func TestDesiredPVC_ZeroSizeDefaults(t *testing.T) {
 }
 
 func TestDeriveEffectiveSpec_Handler(t *testing.T) {
-	class := &kaalmv1alpha1.AgentClass{}
-	agent := &kaalmv1alpha1.Agent{Spec: kaalmv1alpha1.AgentSpec{
-		Handler: &kaalmv1alpha1.AgentHandler{
-			ConfigMapRef: kaalmv1alpha1.LocalObjectReference{Name: "greeter-handler"},
+	class := &kaalmv1beta1.AgentClass{}
+	agent := &kaalmv1beta1.Agent{Spec: kaalmv1beta1.AgentSpec{
+		Handler: &kaalmv1beta1.AgentHandler{
+			ConfigMapRef: kaalmv1beta1.LocalObjectReference{Name: "greeter-handler"},
 		},
 	}}
 	if eff := deriveEffectiveSpec(agent, class); eff.HandlerConfigMap != "greeter-handler" {
 		t.Errorf("HandlerConfigMap = %q, want greeter-handler", eff.HandlerConfigMap)
 	}
-	if eff := deriveEffectiveSpec(&kaalmv1alpha1.Agent{}, class); eff.HandlerConfigMap != "" {
+	if eff := deriveEffectiveSpec(&kaalmv1beta1.Agent{}, class); eff.HandlerConfigMap != "" {
 		t.Errorf("HandlerConfigMap = %q for a handler-less Agent, want empty", eff.HandlerConfigMap)
 	}
 }
 
 func TestDesiredPod_HandlerMount(t *testing.T) {
-	agent := &kaalmv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 
 	// With a handler: the ConfigMap volume, its read-only mount at the
 	// contract path, and KAALM_HANDLER_PATH must all be present.

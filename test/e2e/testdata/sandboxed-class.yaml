@@ -10,7 +10,7 @@ metadata:
   name: gvisor
 handler: runc
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: e2e-sandboxed
@@ -30,7 +30,7 @@ spec:
     maxWakeTimeout: 0s
 ---
 # In-allowlist image: provisions a Pod carrying spec.runtimeClassName: gvisor.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s2-agent
@@ -46,7 +46,7 @@ spec:
     wakeTimeout: 0s
 ---
 # Out-of-allowlist image: rejected at reconcile time, never provisioned.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s2-bad-agent

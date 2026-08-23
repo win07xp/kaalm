@@ -26,7 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/gateway"
 )
 
@@ -39,7 +39,7 @@ import (
 // provider status (the CR would grow with namespaces times workloads), and
 // feeds nothing on the enforcement path.
 func (r *ModelProviderReconciler) reconcileAgentSpend(
-	ctx context.Context, mp *kaalmv1alpha1.ModelProvider, liveGateways map[string]bool,
+	ctx context.Context, mp *kaalmv1beta1.ModelProvider, liveGateways map[string]bool,
 ) error {
 	currentPeriod := gateway.PeriodKey(mp.Spec.Budget.Period, time.Now())
 	if currentPeriod == "" {

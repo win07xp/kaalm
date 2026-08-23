@@ -2,7 +2,7 @@
 # the controller to mount s9-state verbatim (at /var/agent/memory) and provision
 # no s9-agent-memory PVC of its own. sizeGi is omitted (mutually exclusive with
 # existingClaim, rule 27a): the adopted claim brings its own size.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s9-agent
