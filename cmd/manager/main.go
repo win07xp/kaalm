@@ -30,6 +30,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
@@ -50,6 +51,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/controller"
+	"github.com/win07xp/kaalm/internal/storagemigration"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -63,6 +65,8 @@ func init() {
 
 	utilruntime.Must(kaalmv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(kaalmv1beta1.AddToScheme(scheme))
+	// The storage-version migrator reads and patches the Kaalm CRDs.
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	utilruntime.Must(cmapi.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -357,9 +361,25 @@ func main() {
 			}
 		}
 		mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(mgr.GetScheme()))
+		// A replica is Ready only once the conversion listener is up, so the
+		// Service never routes a conversion to a replica that cannot answer.
+		if err := mgr.AddReadyzCheck("conversion-webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+			setupLog.Error(err, "unable to set up the conversion webhook ready check")
+			os.Exit(1)
+		}
 		setupLog.Info("serving the CRD conversion webhook", "path", "/convert", "port", webhookPort)
 	} else {
 		setupLog.Info("webhook cert path not configured; CRD conversion webhook disabled")
+	}
+
+	// The storage-version migrator (design book, API Versioning and
+	// Deprecation, Storage-Version Migration): on the leader, once per start,
+	// rewrite every custom resource at v1beta1 and trim each CRD's
+	// storedVersions, so an upgraded cluster finishes the graduation on its
+	// own. Idempotent, retried with backoff, never fatal to the manager.
+	if err := mgr.Add(&storagemigration.Migrator{Reader: mgr.GetAPIReader(), Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add the storage-version migrator to manager")
+		os.Exit(1)
 	}
 
 	if metricsCertWatcher != nil {
