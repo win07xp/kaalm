@@ -22,13 +22,13 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-func rlProvider(rpm int32) *kaalmv1alpha1.ModelProvider {
-	return &kaalmv1alpha1.ModelProvider{
+func rlProvider(rpm int32) *kaalmv1beta1.ModelProvider {
+	return &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
-		Spec:       kaalmv1alpha1.ModelProviderSpec{RateLimits: kaalmv1alpha1.ModelProviderRateLimits{RequestsPerMinute: rpm}},
+		Spec:       kaalmv1beta1.ModelProviderSpec{RateLimits: kaalmv1beta1.ModelProviderRateLimits{RequestsPerMinute: rpm}},
 	}
 }
 
@@ -117,7 +117,7 @@ func TestNewRateLimiter_DefaultReplicas(t *testing.T) {
 
 func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 	rl := NewRateLimiter(nil)
-	unlimited := &kaalmv1alpha1.ToolProvider{}
+	unlimited := &kaalmv1beta1.ToolProvider{}
 	unlimited.Name = "open"
 	for i := 0; i < 5; i++ {
 		if !rl.AllowTool(unlimited, "team-a") {
@@ -125,7 +125,7 @@ func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 		}
 	}
 
-	tp := &kaalmv1alpha1.ToolProvider{}
+	tp := &kaalmv1beta1.ToolProvider{}
 	tp.Name = "search"
 	tp.Spec.RateLimits.RequestsPerMinute = 2
 	allowed := 0

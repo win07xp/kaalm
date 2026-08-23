@@ -148,9 +148,14 @@ spec:
     - name: activator
       port: 9443
       targetPort: 9443
+    # targetPort by name: during a rolling upgrade from a release without
+    # the conversion listener, the old replicas declare no "conversion" port
+    # and so are never endpoints for it; conversions only ever reach a
+    # replica that can answer (design book, API Versioning, Upgrading in
+    # Place).
     - name: conversion
       port: 9444
-      targetPort: 9444
+      targetPort: conversion
     - name: metrics
       port: 8080
       targetPort: 8080

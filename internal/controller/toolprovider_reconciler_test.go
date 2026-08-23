@@ -25,17 +25,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-func mkToolProvider(t *testing.T, name string, mutate func(*kaalmv1alpha1.ToolProvider)) {
+func mkToolProvider(t *testing.T, name string, mutate func(*kaalmv1beta1.ToolProvider)) {
 	t.Helper()
-	tp := &kaalmv1alpha1.ToolProvider{
+	tp := &kaalmv1beta1.ToolProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: kaalmv1alpha1.ToolProviderSpec{
+		Spec: kaalmv1beta1.ToolProviderSpec{
 			Type:           "mcp",
 			Endpoint:       "https://mcp.example.com",
-			CredentialsRef: &kaalmv1alpha1.SecretKeyReference{Name: name + "-key", Key: "token"},
+			CredentialsRef: &kaalmv1beta1.SecretKeyReference{Name: name + "-key", Key: "token"},
 		},
 	}
 	if mutate != nil {
@@ -48,7 +48,7 @@ func mkToolProvider(t *testing.T, name string, mutate func(*kaalmv1alpha1.ToolPr
 
 func toolProviderConditions(name string) func() []metav1.Condition {
 	return func() []metav1.Condition {
-		var tp kaalmv1alpha1.ToolProvider
+		var tp kaalmv1beta1.ToolProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: name}, &tp)
 		return tp.Status.Conditions
 	}
@@ -58,9 +58,9 @@ func TestToolProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 	mkSecret(t, "tp-ok-key")
 	mkToolProvider(t, "tp-ok", nil)
 	get := toolProviderConditions("tp-ok")
-	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 	eventually(t, func() error {
-		c := condition(get(), kaalmv1alpha1.ConditionHealthy)
+		c := condition(get(), kaalmv1beta1.ConditionHealthy)
 		if c == nil || c.Status != metav1.ConditionTrue {
 			return errString("not yet Healthy")
 		}
@@ -73,12 +73,12 @@ func TestToolProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 }
 
 func TestToolProvider_NoCredentialsRefIsReady(t *testing.T) {
-	mkToolProvider(t, "tp-nocred", func(tp *kaalmv1alpha1.ToolProvider) {
+	mkToolProvider(t, "tp-nocred", func(tp *kaalmv1beta1.ToolProvider) {
 		tp.Spec.CredentialsRef = nil
 	})
 	get := toolProviderConditions("tp-nocred")
-	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
-	c := condition(get(), kaalmv1alpha1.ConditionReady)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
+	c := condition(get(), kaalmv1beta1.ConditionReady)
 	if !strings.Contains(c.Message, "no credential configured") {
 		t.Fatalf("Ready message = %q, want it to note the absent credential", c.Message)
 	}
@@ -90,12 +90,12 @@ func TestToolProvider_NoCredentialsRefIsReady(t *testing.T) {
 func TestToolProvider_MissingSecretRecoversWhenCreated(t *testing.T) {
 	mkToolProvider(t, "tp-late", nil)
 	get := toolProviderConditions("tp-late")
-	expectReady(t, get, metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsMissing)
+	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 
 	// Creating the Secret afterward must recover the provider event-driven,
 	// through the credential-Secret watch: no spec touch re-enqueues it here.
 	mkSecret(t, "tp-late-key")
-	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 }
 
 func TestToolProvider_TenantNamespaceSecretDoesNotResolve(t *testing.T) {
@@ -114,7 +114,7 @@ func TestToolProvider_TenantNamespaceSecretDoesNotResolve(t *testing.T) {
 	}
 	mkToolProvider(t, "tp-sneaky", nil)
 	expectReady(t, toolProviderConditions("tp-sneaky"),
-		metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsMissing)
+		metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 }
 
 func TestToolProvider_EmptySecretKeyIsNotReady(t *testing.T) {
@@ -127,7 +127,7 @@ func TestToolProvider_EmptySecretKeyIsNotReady(t *testing.T) {
 	}
 	mkToolProvider(t, "tp-empty", nil)
 	expectReady(t, toolProviderConditions("tp-empty"),
-		metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsMissing)
+		metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 }
 
 func TestToolProvider_AuthFailedIsNotReady(t *testing.T) {
@@ -135,14 +135,14 @@ func TestToolProvider_AuthFailedIsNotReady(t *testing.T) {
 	fakeToolHealth.set("tp-auth", ProviderProbeResult{AuthFailed: true})
 	// A 1s probe interval so the recovery half of the test happens within the
 	// eventually window (the auth-failed path re-probes on the interval).
-	mkToolProvider(t, "tp-auth", func(tp *kaalmv1alpha1.ToolProvider) {
-		tp.Spec.HealthCheck = &kaalmv1alpha1.ToolProviderHealthCheck{Enabled: true, IntervalSeconds: 1}
+	mkToolProvider(t, "tp-auth", func(tp *kaalmv1beta1.ToolProvider) {
+		tp.Spec.HealthCheck = &kaalmv1beta1.ToolProviderHealthCheck{Enabled: true, IntervalSeconds: 1}
 	})
 	get := toolProviderConditions("tp-auth")
-	expectReady(t, get, metav1.ConditionFalse, kaalmv1alpha1.ReasonCredentialsInvalid)
+	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsInvalid)
 	eventually(t, func() error {
-		c := condition(get(), kaalmv1alpha1.ConditionHealthy)
-		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1alpha1.ReasonCredentialsInvalid {
+		c := condition(get(), kaalmv1beta1.ConditionHealthy)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonCredentialsInvalid {
 			return errString("Healthy not yet False/CredentialsInvalid")
 		}
 		return nil
@@ -151,7 +151,7 @@ func TestToolProvider_AuthFailedIsNotReady(t *testing.T) {
 	// The server accepting the credential again recovers both conditions on
 	// the next probe interval.
 	fakeToolHealth.set("tp-auth", ProviderProbeResult{Healthy: true})
-	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 }
 
 func TestToolProvider_ProbeErrorIsUnhealthyButReady(t *testing.T) {
@@ -159,10 +159,10 @@ func TestToolProvider_ProbeErrorIsUnhealthyButReady(t *testing.T) {
 	fakeToolHealth.set("tp-down", ProviderProbeResult{Err: errString("connect: refused")})
 	mkToolProvider(t, "tp-down", nil)
 	get := toolProviderConditions("tp-down")
-	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 	eventually(t, func() error {
-		c := condition(get(), kaalmv1alpha1.ConditionHealthy)
-		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1alpha1.ReasonProviderUnhealthy {
+		c := condition(get(), kaalmv1beta1.ConditionHealthy)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != kaalmv1beta1.ReasonProviderUnhealthy {
 			return errString("Healthy not yet False/ProviderUnhealthy")
 		}
 		return nil
@@ -174,15 +174,15 @@ func TestToolProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
 	// A probe result that WOULD block Ready if the probe ran, so a passing
 	// test proves the probe was genuinely skipped rather than merely healthy.
 	fakeToolHealth.set("tp-nohc", ProviderProbeResult{AuthFailed: true})
-	mkToolProvider(t, "tp-nohc", func(tp *kaalmv1alpha1.ToolProvider) {
-		tp.Spec.HealthCheck = &kaalmv1alpha1.ToolProviderHealthCheck{Enabled: false}
+	mkToolProvider(t, "tp-nohc", func(tp *kaalmv1beta1.ToolProvider) {
+		tp.Spec.HealthCheck = &kaalmv1beta1.ToolProviderHealthCheck{Enabled: false}
 	})
 	get := toolProviderConditions("tp-nohc")
-	expectReady(t, get, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 	if n := fakeToolHealth.count("tp-nohc"); n != 0 {
 		t.Fatalf("healthCheck.enabled=false: expected probe to be skipped, called %d times", n)
 	}
-	if c := condition(get(), kaalmv1alpha1.ConditionHealthy); c != nil {
+	if c := condition(get(), kaalmv1beta1.ConditionHealthy); c != nil {
 		t.Fatalf("Healthy condition present without a probe: %+v", c)
 	}
 }
@@ -192,7 +192,7 @@ func TestToolProvider_NilHealthCheckRunsProbe(t *testing.T) {
 	// Leave HealthCheck nil: reconcile-time defaulting must still run the probe.
 	mkToolProvider(t, "tp-nilhc", nil)
 	expectReady(t, toolProviderConditions("tp-nilhc"),
-		metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+		metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 	eventually(t, func() error {
 		if fakeToolHealth.count("tp-nilhc") == 0 {
 			return errString("nil healthCheck: expected probe to run, but it was never called")
@@ -207,9 +207,9 @@ func TestToolProvider_DeleteIsUnblocked(t *testing.T) {
 	mkSecret(t, "tp-del-key")
 	mkToolProvider(t, "tp-del", nil)
 	expectReady(t, toolProviderConditions("tp-del"),
-		metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+		metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
-	var tp kaalmv1alpha1.ToolProvider
+	var tp kaalmv1beta1.ToolProvider
 	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-del"}, &tp); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestToolProvider_DeleteIsUnblocked(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	eventually(t, func() error {
-		var got kaalmv1alpha1.ToolProvider
+		var got kaalmv1beta1.ToolProvider
 		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-del"}, &got)) {
 			return nil
 		}
@@ -230,12 +230,12 @@ func TestToolProvider_DeleteIsUnblocked(t *testing.T) {
 func awaitToolProviderFinalizer(t *testing.T, name string) {
 	t.Helper()
 	eventually(t, func() error {
-		var tp kaalmv1alpha1.ToolProvider
+		var tp kaalmv1beta1.ToolProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &tp); err != nil {
 			return err
 		}
 		for _, f := range tp.Finalizers {
-			if f == kaalmv1alpha1.ToolProviderFinalizer {
+			if f == kaalmv1beta1.ToolProviderFinalizer {
 				return nil
 			}
 		}
@@ -250,12 +250,12 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 	// the hold is by reference, not by validity. A class allowlist entry
 	// would be its own independent hold (covered by the class test below).
 	mkWorkloadClass(t, "wc-held", nil)
-	mkWorkloadAgent(t, "held-agent", "wc-held", func(ag *kaalmv1alpha1.Agent) {
-		ag.Spec.Tools = []kaalmv1alpha1.AgentToolGrant{grantOf("tp-held")}
+	mkWorkloadAgent(t, "held-agent", "wc-held", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Tools = []kaalmv1beta1.AgentToolGrant{grantOf("tp-held")}
 	})
 	awaitToolProviderFinalizer(t, "tp-held")
 
-	var tp kaalmv1alpha1.ToolProvider
+	var tp kaalmv1beta1.ToolProvider
 	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &tp); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 	// with a deletion timestamp. Polled, because testClient reads the manager
 	// cache, which lags the delete by a beat.
 	eventually(t, func() error {
-		var got kaalmv1alpha1.ToolProvider
+		var got kaalmv1beta1.ToolProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got); err != nil {
 			return errString("toolprovider was removed while still referenced: " + err.Error())
 		}
@@ -277,7 +277,7 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 	})
 
 	// Removing the referrer releases the hold.
-	var ag kaalmv1alpha1.Agent
+	var ag kaalmv1beta1.Agent
 	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "held-agent", Namespace: "default"}, &ag); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 		t.Fatalf("delete agent: %v", err)
 	}
 	eventually(t, func() error {
-		var got kaalmv1alpha1.ToolProvider
+		var got kaalmv1beta1.ToolProvider
 		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got)) {
 			return nil
 		}
@@ -295,12 +295,12 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 
 func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 	mkOpenTP(t, "tp-clsheld", nil)
-	mkWorkloadClass(t, "wc-clsheld", func(ac *kaalmv1alpha1.AgentClass) {
-		ac.Spec.AllowedToolProviders = []kaalmv1alpha1.LocalObjectReference{{Name: "tp-clsheld"}}
+	mkWorkloadClass(t, "wc-clsheld", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "tp-clsheld"}}
 	})
 	awaitToolProviderFinalizer(t, "tp-clsheld")
 
-	var tp kaalmv1alpha1.ToolProvider
+	var tp kaalmv1beta1.ToolProvider
 	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &tp); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	eventually(t, func() error {
-		var got kaalmv1alpha1.ToolProvider
+		var got kaalmv1beta1.ToolProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got); err != nil {
 			return errString("toolprovider was removed while a class still allowlists it: " + err.Error())
 		}
@@ -321,7 +321,7 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 	// Dropping the class's allowlist entry releases the hold (the update
 	// event maps through the OLD object's references too).
 	eventually(t, func() error {
-		var ac kaalmv1alpha1.AgentClass
+		var ac kaalmv1beta1.AgentClass
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-clsheld"}, &ac); err != nil {
 			return err
 		}
@@ -329,7 +329,7 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 		return testClient.Update(ctxT(), &ac)
 	})
 	eventually(t, func() error {
-		var got kaalmv1alpha1.ToolProvider
+		var got kaalmv1beta1.ToolProvider
 		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got)) {
 			return nil
 		}

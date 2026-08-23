@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"strings"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // WorkloadKind discriminates the two SAN shapes.
@@ -62,14 +62,14 @@ func ParseWorkloadSAN(cert *x509.Certificate) (Identity, error) {
 	for _, san := range cert.DNSNames {
 		labels := strings.Split(san, ".")
 		switch {
-		case strings.HasSuffix(san, "."+kaalmv1alpha1.AgentSANSuffix):
-			if len(labels) != kaalmv1alpha1.AgentSANLabels {
+		case strings.HasSuffix(san, "."+kaalmv1beta1.AgentSANSuffix):
+			if len(labels) != kaalmv1beta1.AgentSANLabels {
 				badCount = true
 				continue
 			}
 			matched = append(matched, Identity{Namespace: labels[1], Name: labels[0], Kind: KindAgent})
-		case strings.HasSuffix(san, "."+kaalmv1alpha1.TaskSANSuffix):
-			if len(labels) != kaalmv1alpha1.TaskSANLabels {
+		case strings.HasSuffix(san, "."+kaalmv1beta1.TaskSANSuffix):
+			if len(labels) != kaalmv1beta1.TaskSANLabels {
 				badCount = true
 				continue
 			}

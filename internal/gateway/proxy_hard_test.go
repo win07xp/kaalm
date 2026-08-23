@@ -24,22 +24,22 @@ import (
 	"testing"
 	"time"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // hardenProv flips the harness's seeded provider to hard enforcement with a
 // priced catalog (rule 33) and a block policy at 100.
-func hardenProv(h *harness) *kaalmv1alpha1.ModelProvider {
+func hardenProv(h *harness) *kaalmv1beta1.ModelProvider {
 	prov := h.store.providers["prov"]
-	prov.Spec.Models = []kaalmv1alpha1.ModelProviderModel{
+	prov.Spec.Models = []kaalmv1beta1.ModelProviderModel{
 		{ID: "m1", CostPer1MInputTokens: "1.00", CostPer1MOutputTokens: "1.00"},
 	}
-	prov.Spec.Budget = kaalmv1alpha1.ModelProviderBudget{
+	prov.Spec.Budget = kaalmv1beta1.ModelProviderBudget{
 		Period: "monthly", PerNamespaceUSD: "100",
-		Enforcement: kaalmv1alpha1.BudgetEnforcementHard,
-		Hard:        &kaalmv1alpha1.ModelProviderBudgetHard{BoundaryMarginPercent: 5},
-		Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{
-			{AtPercent: 100, Action: kaalmv1alpha1.BudgetActionBlock},
+		Enforcement: kaalmv1beta1.BudgetEnforcementHard,
+		Hard:        &kaalmv1beta1.ModelProviderBudgetHard{BoundaryMarginPercent: 5},
+		Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{
+			{AtPercent: 100, Action: kaalmv1beta1.BudgetActionBlock},
 		},
 	}
 	return prov

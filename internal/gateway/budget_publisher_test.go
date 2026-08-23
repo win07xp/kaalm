@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestBudgetConfigMapName(t *testing.T) {
@@ -36,23 +36,23 @@ func TestBudgetConfigMapName(t *testing.T) {
 }
 
 func TestBudgetLedger_InitCanonical(t *testing.T) {
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	b := NewBudgetLedger()
 	// Seed peer view from the reconciler's roll-up; own is still zero.
 	b.InitCanonical(p, map[string]float64{"team-a": 110})
-	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
+	if d := b.Enforce(p, "team-a"); d.Action != kaalmv1beta1.BudgetActionBlock {
 		t.Errorf("canonical seed of 110%% should block, got %+v", d)
 	}
 }
 
 // providersFn returns a static provider set for the publisher.
-func providersFn(ps ...*kaalmv1alpha1.ModelProvider) func(context.Context) []*kaalmv1alpha1.ModelProvider {
-	return func(context.Context) []*kaalmv1alpha1.ModelProvider { return ps }
+func providersFn(ps ...*kaalmv1beta1.ModelProvider) func(context.Context) []*kaalmv1beta1.ModelProvider {
+	return func(context.Context) []*kaalmv1beta1.ModelProvider { return ps }
 }
 
 func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 	ctx := context.Background()
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 
 	// The reconciler owns the ConfigMap; the fake clientset does not support
 	// server-side-apply create, so seed the (empty) object the Apply patches.
@@ -98,14 +98,14 @@ func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 	}
 	pub.fold(ctx, p)
 	// own 42 + peer 70 = 112% -> block (canonical key must be ignored).
-	if d := ledger.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
+	if d := ledger.Enforce(p, "team-a"); d.Action != kaalmv1beta1.BudgetActionBlock {
 		t.Errorf("fold should fold peer 70 in, got %+v", d)
 	}
 }
 
 func TestBudgetPublisher_FoldDropsStalePeriod(t *testing.T) {
 	ctx := context.Background()
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	client := k8sfake.NewSimpleClientset()
 	ledger := NewBudgetLedger()
 	pub := &BudgetPublisher{Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
@@ -148,7 +148,7 @@ func TestBudgetPublisher_PublishNoOwnSpend(t *testing.T) {
 
 func TestBudgetPublisher_SeedFromCanonical(t *testing.T) {
 	ctx := context.Background()
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 
 	canonical, _ := json.Marshal(map[string]string{"team-a": "130"})
 	cm := &corev1.ConfigMap{
@@ -160,7 +160,7 @@ func TestBudgetPublisher_SeedFromCanonical(t *testing.T) {
 	pub := &BudgetPublisher{Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system", PodName: "gw-0", Providers: providersFn(p)}
 
 	pub.SeedFromCanonical(ctx)
-	if d := ledger.Enforce(p, "team-a"); d.Action != kaalmv1alpha1.BudgetActionBlock {
+	if d := ledger.Enforce(p, "team-a"); d.Action != kaalmv1beta1.BudgetActionBlock {
 		t.Errorf("canonical seed of 130%% should block, got %+v", d)
 	}
 
@@ -172,7 +172,7 @@ func TestBudgetPublisher_SeedFromCanonical(t *testing.T) {
 }
 
 func TestBudgetPublisher_TickAndRun(t *testing.T) {
-	p := budgetProvider(kaalmv1alpha1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
 	// A provider with budget disabled (period none) must be skipped by tick.
 	disabled := budgetProvider()
 	disabled.Name = "disabled"

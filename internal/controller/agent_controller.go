@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 const (
@@ -95,7 +95,7 @@ func (r *AgentReconciler) now() time.Time {
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var agent kaalmv1alpha1.Agent
+	var agent kaalmv1beta1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -104,7 +104,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return r.reconcileDelete(ctx, &agent)
 	}
 
-	if controllerutil.AddFinalizer(&agent, kaalmv1alpha1.AgentFinalizer) {
+	if controllerutil.AddFinalizer(&agent, kaalmv1beta1.AgentFinalizer) {
 		if err := r.Update(ctx, &agent); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -113,27 +113,27 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	agent.Status.ObservedGeneration = agent.Generation
 	if agent.Status.Phase == "" {
-		r.setPhase(&agent, kaalmv1alpha1.AgentPending)
+		r.setPhase(&agent, kaalmv1beta1.AgentPending)
 	}
 
 	// Step 9: wake-annotation handling, with phase-dependent removal so a
 	// failed reconcile cannot silently drop the wake.
-	if agent.Annotations[kaalmv1alpha1.AnnotationWake] == kaalmv1alpha1.AnnotationTrue {
+	if agent.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue {
 		return r.handleWake(ctx, &agent)
 	}
 
 	// Step 1: the system namespace is forbidden (SAN-integrity guard).
 	if agent.Namespace == r.OperatorNamespace {
-		r.setReady(&agent, false, kaalmv1alpha1.ReasonSystemNamespaceForbidden,
+		r.setReady(&agent, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("Agents may not run in the operator namespace %q", r.OperatorNamespace))
 		return ctrl.Result{}, r.Status().Update(ctx, &agent)
 	}
 
 	// Step 1 continued: resolve the AgentClass.
-	var class kaalmv1alpha1.AgentClass
+	var class kaalmv1beta1.AgentClass
 	if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.setReady(&agent, false, kaalmv1alpha1.ReasonInvalidReference,
+			r.setReady(&agent, false, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q does not exist", agent.Spec.AgentClassRef.Name))
 			return ctrl.Result{}, r.Status().Update(ctx, &agent)
 		}
@@ -157,9 +157,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Hibernation phases: Hibernating drives the Pod down; Hibernated holds
 	// with no Pod (PVC, Service, Certificate, SA, and NetworkPolicy persist).
 	switch agent.Status.Phase {
-	case kaalmv1alpha1.AgentHibernating:
+	case kaalmv1beta1.AgentHibernating:
 		return r.driveHibernating(ctx, &agent)
-	case kaalmv1alpha1.AgentHibernated:
+	case kaalmv1beta1.AgentHibernated:
 		return ctrl.Result{}, r.Status().Update(ctx, &agent)
 	}
 
@@ -181,8 +181,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 	if !certReady {
-		if agent.Status.Phase == kaalmv1alpha1.AgentPending {
-			r.setPhase(&agent, kaalmv1alpha1.AgentProvisioning)
+		if agent.Status.Phase == kaalmv1beta1.AgentPending {
+			r.setPhase(&agent, kaalmv1beta1.AgentProvisioning)
 		}
 		r.setReady(&agent, false, "CertificateNotReady", "waiting for cert-manager to issue the agent certificate")
 		if err := r.Status().Update(ctx, &agent); err != nil {
@@ -204,7 +204,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Step 8: activity evaluation for Running and Idle agents drives the
 	// idle and hibernation transitions.
 	res := ctrl.Result{}
-	if (agent.Status.Phase == kaalmv1alpha1.AgentRunning || agent.Status.Phase == kaalmv1alpha1.AgentIdle) &&
+	if (agent.Status.Phase == kaalmv1beta1.AgentRunning || agent.Status.Phase == kaalmv1beta1.AgentIdle) &&
 		eff.IdleTimeout > 0 && r.Activity != nil {
 		res = r.evaluateActivity(ctx, &agent, eff)
 	}
@@ -221,9 +221,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 // is removed, so an apiserver failure between the two leaves the wake intent
 // observable; on any other phase the annotation is removed immediately, with
 // a WakeIgnored warning except in Resuming (a benign idempotent re-attempt).
-func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1alpha1.Agent) (ctrl.Result, error) {
-	if agent.Status.Phase == kaalmv1alpha1.AgentHibernated {
-		r.setPhase(agent, kaalmv1alpha1.AgentResuming)
+func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
+	if agent.Status.Phase == kaalmv1beta1.AgentHibernated {
+		r.setPhase(agent, kaalmv1beta1.AgentResuming)
 		agent.Status.HibernatedAt = nil
 		// The message that woke the agent is activity. The gateway records it
 		// only once delivery succeeds, which is after the Pod is Ready, and
@@ -233,13 +233,13 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1alpha1.A
 		// evaluateActivity floors the gateway's record with this stamp.
 		woke := metav1.NewTime(r.now())
 		agent.Status.LastActivityTime = &woke
-		r.setReady(agent, false, kaalmv1alpha1.ReasonWoken, "wake requested; recreating the Pod")
+		r.setReady(agent, false, kaalmv1beta1.ReasonWoken, "wake requested; recreating the Pod")
 		if err := r.Status().Update(ctx, agent); err != nil {
 			return ctrl.Result{}, err
 		}
-		r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1alpha1.ReasonWoken, "waking from hibernation")
+		r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonWoken, "waking from hibernation")
 		wakesTotal.WithLabelValues(agent.Namespace, "activator").Inc()
-		delete(agent.Annotations, kaalmv1alpha1.AnnotationWake)
+		delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
 		if err := r.Update(ctx, agent); err != nil {
 			// The next reconcile observes the annotation on a Resuming agent
 			// and removes it silently.
@@ -249,12 +249,12 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1alpha1.A
 	}
 
 	phase := agent.Status.Phase
-	delete(agent.Annotations, kaalmv1alpha1.AnnotationWake)
+	delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
 	if err := r.Update(ctx, agent); err != nil {
 		return ctrl.Result{}, err
 	}
-	if phase != kaalmv1alpha1.AgentResuming {
-		r.Recorder.Event(agent, corev1.EventTypeWarning, kaalmv1alpha1.ReasonWakeIgnored,
+	if phase != kaalmv1beta1.AgentResuming {
+		r.Recorder.Event(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonWakeIgnored,
 			"wake annotation observed on non-Hibernated agent; ignored")
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -262,7 +262,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1alpha1.A
 
 // driveHibernating deletes the Pod (gracefully) and settles Hibernated once
 // it is gone. Everything else survives for wake-on-demand.
-func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1alpha1.Agent) (ctrl.Result, error) {
+func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -275,12 +275,12 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1al
 		}
 		return ctrl.Result{}, r.Status().Update(ctx, agent)
 	}
-	r.setPhase(agent, kaalmv1alpha1.AgentHibernated)
+	r.setPhase(agent, kaalmv1beta1.AgentHibernated)
 	now := metav1.NewTime(r.now())
 	agent.Status.HibernatedAt = &now
 	agent.Status.PodName = ""
-	r.setReady(agent, false, kaalmv1alpha1.ReasonHibernated, "Pod deleted; PVC retained for wake")
-	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1alpha1.ReasonHibernated,
+	r.setReady(agent, false, kaalmv1beta1.ReasonHibernated, "Pod deleted; PVC retained for wake")
+	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated,
 		"hibernated: Pod deleted, state retained")
 	hibernationsTotal.WithLabelValues(agent.Namespace).Inc()
 	return ctrl.Result{}, r.Status().Update(ctx, agent)
@@ -291,19 +291,19 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1al
 // inactivity: unreachable gateways preserve the phase, and silence counts
 // only once a replica has been up for idleTimeout.
 func (r *AgentReconciler) evaluateActivity(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec,
 ) ctrl.Result {
 	now := r.now()
 	reachable, total, err := r.Activity.NamespaceActivity(ctx, agent.Namespace)
 	if err != nil || total == 0 || len(reachable) == 0 {
 		apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
-			Type: kaalmv1alpha1.ConditionGatewayReachable, Status: metav1.ConditionFalse,
+			Type: kaalmv1beta1.ConditionGatewayReachable, Status: metav1.ConditionFalse,
 			Reason: "GatewayUnavailable", Message: "no gateway activity data; idle transitions deferred",
 		})
 		return ctrl.Result{RequeueAfter: 30 * time.Second}
 	}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
-		Type: kaalmv1alpha1.ConditionGatewayReachable, Status: metav1.ConditionTrue,
+		Type: kaalmv1beta1.ConditionGatewayReachable, Status: metav1.ConditionTrue,
 		Reason: "GatewayReady", Message: "gateway activity data available",
 	})
 
@@ -332,7 +332,7 @@ func (r *AgentReconciler) evaluateActivity(
 	}
 
 	switch agent.Status.Phase {
-	case kaalmv1alpha1.AgentRunning:
+	case kaalmv1beta1.AgentRunning:
 		// A wake stamps LastActivityTime (handleWake). Floor the gateway's
 		// record with it, so a woken agent gets a full idleTimeout while the
 		// gateway still reports only the activity that preceded its sleep.
@@ -341,16 +341,16 @@ func (r *AgentReconciler) evaluateActivity(
 			marker = agent.Status.LastActivityTime.Time
 		}
 		if now.Sub(marker) > eff.IdleTimeout {
-			r.setPhase(agent, kaalmv1alpha1.AgentIdle)
+			r.setPhase(agent, kaalmv1beta1.AgentIdle)
 			lt := metav1.NewTime(marker)
 			agent.Status.LastActivityTime = &lt
-			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1alpha1.ReasonPhaseChanged,
+			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged,
 				fmt.Sprintf("idle: no activity for %s", eff.IdleTimeout))
 			// Re-enter promptly: an already-elapsed hibernationDelay should
 			// carry straight on to Hibernating on the next pass.
 			return ctrl.Result{Requeue: true}
 		}
-	case kaalmv1alpha1.AgentIdle:
+	case kaalmv1beta1.AgentIdle:
 		// Only real recorded activity returns an Idle agent to Running. The
 		// synthetic fallback marker advances on every transition, so treating
 		// it as fresh activity would flip Idle->Running->Idle forever and never
@@ -362,7 +362,7 @@ func (r *AgentReconciler) evaluateActivity(
 		// instant as fresh activity on every pass.
 		if !synthetic && agent.Status.LastActivityTime != nil &&
 			last.Truncate(time.Second).After(agent.Status.LastActivityTime.Time) {
-			r.setPhase(agent, kaalmv1alpha1.AgentRunning)
+			r.setPhase(agent, kaalmv1beta1.AgentRunning)
 			lt := metav1.NewTime(*last)
 			agent.Status.LastActivityTime = &lt
 			return ctrl.Result{Requeue: true}
@@ -380,8 +380,8 @@ func (r *AgentReconciler) evaluateActivity(
 			silenceStart = &agent.Status.LastActivityTime.Time
 		}
 		if eff.HibernationEnabled && now.Sub(*silenceStart) > eff.IdleTimeout+eff.HibernationDelay {
-			r.setPhase(agent, kaalmv1alpha1.AgentHibernating)
-			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1alpha1.ReasonPhaseChanged,
+			r.setPhase(agent, kaalmv1beta1.AgentHibernating)
+			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged,
 				fmt.Sprintf("hibernating: idle for %s past the idle timeout", eff.HibernationDelay))
 			return ctrl.Result{Requeue: true}
 		}
@@ -396,10 +396,10 @@ func (r *AgentReconciler) evaluateActivity(
 // and handler ConfigMaps are unwatched, so gated results carry a requeue
 // interval.
 func (r *AgentReconciler) readyGates(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec,
 ) (bool, ctrl.Result, error) {
 	if eff.Image == "" {
-		r.setReady(agent, false, kaalmv1alpha1.ReasonInvalidReference,
+		r.setReady(agent, false, kaalmv1beta1.ReasonInvalidReference,
 			"no image: Agent.spec.image is empty and the AgentClass sets no defaultImage")
 		return true, ctrl.Result{}, nil
 	}
@@ -407,7 +407,7 @@ func (r *AgentReconciler) readyGates(
 		var pvc corev1.PersistentVolumeClaim
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.ExistingClaim}, &pvc)
 		if apierrors.IsNotFound(err) {
-			r.setReady(agent, false, kaalmv1alpha1.ReasonExistingClaimNotFound,
+			r.setReady(agent, false, kaalmv1beta1.ReasonExistingClaimNotFound,
 				fmt.Sprintf("existingClaim %q not found in namespace %q", eff.ExistingClaim, agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 		} else if err != nil {
@@ -418,7 +418,7 @@ func (r *AgentReconciler) readyGates(
 		var sec corev1.Secret
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}, &sec)
 		if apierrors.IsNotFound(err) {
-			r.setReady(agent, false, kaalmv1alpha1.ReasonImagePullSecretMissing,
+			r.setReady(agent, false, kaalmv1beta1.ReasonImagePullSecretMissing,
 				fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 		} else if err != nil {
@@ -433,7 +433,7 @@ func (r *AgentReconciler) readyGates(
 		var cm corev1.ConfigMap
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.HandlerConfigMap}, &cm)
 		if apierrors.IsNotFound(err) {
-			r.setReady(agent, false, kaalmv1alpha1.ReasonHandlerConfigMapNotFound,
+			r.setReady(agent, false, kaalmv1beta1.ReasonHandlerConfigMapNotFound,
 				fmt.Sprintf("handler ConfigMap %q not found in namespace %q", eff.HandlerConfigMap, agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 		} else if err != nil {
@@ -447,24 +447,24 @@ func (r *AgentReconciler) readyGates(
 // protocol. handled=true means the pass ends here (either the agent is
 // Degraded, or it just recovered and requeues).
 func (r *AgentReconciler) reconcileDegraded(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) (bool, ctrl.Result, error) {
 	reasons := r.degradedReasons(ctx, agent, class, eff)
 	if len(reasons) > 0 {
 		return true, ctrl.Result{}, r.enterOrStayDegraded(ctx, agent, reasons)
 	}
-	if agent.Status.Phase != kaalmv1alpha1.AgentDegraded {
+	if agent.Status.Phase != kaalmv1beta1.AgentDegraded {
 		return false, ctrl.Result{}, nil
 	}
 	// Every Degraded-triggering condition has cleared: restore the prior
 	// phase and null preDegradedPhase atomically in the same write.
 	restored := agent.Status.PreDegradedPhase
 	if restored == "" {
-		restored = kaalmv1alpha1.AgentPending
+		restored = kaalmv1beta1.AgentPending
 	}
 	r.setPhase(agent, restored)
 	agent.Status.PreDegradedPhase = ""
-	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1alpha1.ReasonPhaseChanged,
+	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged,
 		fmt.Sprintf("recovered from Degraded to %s", restored))
 	return true, ctrl.Result{Requeue: true}, r.Status().Update(ctx, agent)
 }
@@ -473,7 +473,7 @@ func (r *AgentReconciler) reconcileDegraded(
 // the outstanding reasons in a stable order (first entry becomes the reported
 // reason).
 func (r *AgentReconciler) degradedReasons(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) []metav1.Condition {
 	var out []metav1.Condition
 	add := func(reason, msg string) {
@@ -482,7 +482,7 @@ func (r *AgentReconciler) degradedReasons(
 
 	// Rule 2: image allowlist.
 	if eff.Image != "" && !imageAllowed(eff.Image, class.Spec.Image.AllowedImages) {
-		add(kaalmv1alpha1.ReasonClassConstraintViolation,
+		add(kaalmv1beta1.ReasonClassConstraintViolation,
 			fmt.Sprintf("image %q does not match AgentClass %q allowedImages", eff.Image, class.Name))
 	}
 	// Rules 4, 5: provider resolution, allowlist, and namespace admission.
@@ -497,20 +497,20 @@ func (r *AgentReconciler) degradedReasons(
 			}
 		}
 		if !allowed {
-			add(kaalmv1alpha1.ReasonClassConstraintViolation,
+			add(kaalmv1beta1.ReasonClassConstraintViolation,
 				fmt.Sprintf("provider %q is not in AgentClass %q allowedProviders", name, class.Name))
 			continue
 		}
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: name}, &mp); err != nil {
 			if apierrors.IsNotFound(err) {
-				add(kaalmv1alpha1.ReasonClassConstraintViolation,
+				add(kaalmv1beta1.ReasonClassConstraintViolation,
 					fmt.Sprintf("provider %q does not exist", name))
 			}
 			continue
 		}
 		if !namespaceAllowed(agent.Namespace, mp.Spec.AllowedNamespaces) {
-			add(kaalmv1alpha1.ReasonClassConstraintViolation,
+			add(kaalmv1beta1.ReasonClassConstraintViolation,
 				fmt.Sprintf("provider %q does not allow namespace %q", name, agent.Namespace))
 		}
 	}
@@ -519,24 +519,24 @@ func (r *AgentReconciler) degradedReasons(
 	out = append(out, toolGrantViolations(ctx, r.Client, agent.Namespace, agent.Spec.Tools, class)...)
 	// Rule 24: persistence must be class-permitted.
 	if agent.Spec.Persistence.Enabled && !class.Spec.Persistence.Enabled {
-		add(kaalmv1alpha1.ReasonPersistenceNotAllowed,
+		add(kaalmv1beta1.ReasonPersistenceNotAllowed,
 			fmt.Sprintf("persistence requested but AgentClass %q has persistence.enabled=false", class.Name))
 	}
 	// Rule 26: hibernation must be class-permitted.
 	if agent.Spec.Lifecycle.HibernationEnabled && !class.Spec.Lifecycle.HibernationAllowed {
-		add(kaalmv1alpha1.ReasonHibernationNotAllowed,
+		add(kaalmv1beta1.ReasonHibernationNotAllowed,
 			fmt.Sprintf("hibernation requested but AgentClass %q has lifecycle.hibernationAllowed=false", class.Name))
 	}
 	// Rule 29: hibernation requires persistence (spec-internal).
 	if agent.Spec.Lifecycle.HibernationEnabled && !agent.Spec.Persistence.Enabled {
-		add(kaalmv1alpha1.ReasonHibernationRequiresPersist,
+		add(kaalmv1beta1.ReasonHibernationRequiresPersist,
 			"lifecycle.hibernationEnabled=true requires spec.persistence.enabled=true")
 	}
 	// Rule 30: a handler mount must be class-permitted. Drift-sensitive like
 	// rules 24 and 26: flipping allowHandlerMounts off on a live class
 	// degrades existing handler-mounting Agents.
 	if agent.Spec.Handler != nil && !class.Spec.Image.AllowHandlerMounts {
-		add(kaalmv1alpha1.ReasonHandlerMountNotAllowed,
+		add(kaalmv1beta1.ReasonHandlerMountNotAllowed,
 			fmt.Sprintf("spec.handler set but AgentClass %q has image.allowHandlerMounts=false", class.Name))
 	}
 	return out
@@ -545,12 +545,12 @@ func (r *AgentReconciler) degradedReasons(
 // enterOrStayDegraded transitions into Degraded (recording preDegradedPhase on
 // first entry only) or refreshes reason/message while already Degraded.
 func (r *AgentReconciler) enterOrStayDegraded(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, reasons []metav1.Condition,
+	ctx context.Context, agent *kaalmv1beta1.Agent, reasons []metav1.Condition,
 ) error {
 	first := reasons[0]
-	if agent.Status.Phase != kaalmv1alpha1.AgentDegraded {
+	if agent.Status.Phase != kaalmv1beta1.AgentDegraded {
 		agent.Status.PreDegradedPhase = agent.Status.Phase
-		r.setPhase(agent, kaalmv1alpha1.AgentDegraded)
+		r.setPhase(agent, kaalmv1beta1.AgentDegraded)
 		r.Recorder.Event(agent, corev1.EventTypeWarning, first.Reason, first.Message)
 	}
 	r.setReady(agent, false, first.Reason, first.Message)
@@ -567,35 +567,35 @@ func (r *AgentReconciler) enterOrStayDegraded(
 // drop), driven by the ModelProvider watch. Provider Get errors are tolerated
 // (a missing or unreadable provider is the degrade path's concern, not this
 // one): the condition reflects what could be read.
-func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *kaalmv1alpha1.Agent) {
+func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *kaalmv1beta1.Agent) {
 	var blocking []string
 	for _, p := range agent.Spec.Providers {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: p.ProviderRef.Name}, &mp); err != nil {
 			continue
 		}
 		for _, u := range mp.Status.BudgetUsage {
-			if u.Namespace == agent.Namespace && u.State == kaalmv1alpha1.BudgetStateBlocked {
+			if u.Namespace == agent.Namespace && u.State == kaalmv1beta1.BudgetStateBlocked {
 				blocking = append(blocking, mp.Name)
 				break
 			}
 		}
 	}
 	if len(blocking) == 0 {
-		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1alpha1.ConditionDegraded)
+		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1beta1.ConditionDegraded)
 		return
 	}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
-		Type:               kaalmv1alpha1.ConditionDegraded,
+		Type:               kaalmv1beta1.ConditionDegraded,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: agent.Generation,
-		Reason:             kaalmv1alpha1.ReasonBudgetExhausted,
+		Reason:             kaalmv1beta1.ReasonBudgetExhausted,
 		Message: fmt.Sprintf("namespace %q budget exhausted on provider %s",
 			agent.Namespace, strings.Join(blocking, ", ")),
 	})
 }
 
-func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1alpha1.Agent) (bool, error) {
+func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1beta1.Agent) (bool, error) {
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: agent.Namespace, Name: agentCertificateName(agent.Name)}
 	if err := r.Get(ctx, key, &cert); err != nil {
@@ -622,7 +622,7 @@ func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1a
 // ensureChildren converges the ServiceAccount, Service, PVC, and
 // NetworkPolicy (everything except the Certificate and the Pod).
 func (r *AgentReconciler) ensureChildren(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) error {
 	if err := r.ensureServiceAccount(ctx, agent); err != nil {
 		return err
@@ -640,7 +640,7 @@ func (r *AgentReconciler) ensureChildren(
 	return r.ensureNetworkPolicy(ctx, agent, class, eff)
 }
 
-func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalmv1alpha1.Agent) error {
+func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	desired := desiredServiceAccount(agent)
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 		return err
@@ -652,7 +652,7 @@ func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalm
 	return err
 }
 
-func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec) error {
+func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec) error {
 	desired := desiredService(agent, eff)
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 		return err
@@ -679,7 +679,7 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1alpha
 }
 
 func (r *AgentReconciler) ensurePVC(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) error {
 	desired := desiredPVC(agent, class, eff)
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
@@ -696,7 +696,7 @@ func (r *AgentReconciler) ensurePVC(
 }
 
 func (r *AgentReconciler) ensureNetworkPolicy(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) error {
 	desired := desiredNetworkPolicy(agent, class, eff, r.OperatorNamespace)
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
@@ -718,7 +718,7 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // terminal (involuntary disruption) or when the spec hash drifts, mark the
 // Agent Failed on a persistent crash loop, and derive Running from readiness.
 func (r *AgentReconciler) convergePod(
-	ctx context.Context, agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec,
 ) error {
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
@@ -733,7 +733,7 @@ func (r *AgentReconciler) convergePod(
 		if err := r.Create(ctx, desired); err != nil {
 			return err
 		}
-		r.setPhase(agent, kaalmv1alpha1.AgentProvisioning)
+		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
 		r.setReady(agent, false, "PodProvisioning", "agent Pod created, waiting for readiness")
 		agent.Status.PodName = desired.Name
 		return nil
@@ -742,7 +742,7 @@ func (r *AgentReconciler) convergePod(
 	// A Pod already being deleted is a replacement in progress: wait for the
 	// owned-Pod watch to fire when it is gone.
 	if !pod.DeletionTimestamp.IsZero() {
-		r.setPhase(agent, kaalmv1alpha1.AgentProvisioning)
+		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
 		r.setReady(agent, false, "PodProvisioning", "previous Pod terminating")
 		return nil
 	}
@@ -752,7 +752,7 @@ func (r *AgentReconciler) convergePod(
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 		r.Recorder.Event(agent, corev1.EventTypeWarning, "PodDisrupted",
 			fmt.Sprintf("Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase))
-		r.setPhase(agent, kaalmv1alpha1.AgentProvisioning)
+		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
 		r.setReady(agent, false, "PodDisrupted", "replacing a terminal Pod")
 		return r.Delete(ctx, pod)
 	}
@@ -762,7 +762,7 @@ func (r *AgentReconciler) convergePod(
 		if cs.State.Waiting != nil &&
 			(cs.State.Waiting.Reason == "CrashLoopBackOff" && cs.RestartCount >= crashLoopThreshold ||
 				cs.State.Waiting.Reason == "ImagePullBackOff") {
-			r.setPhase(agent, kaalmv1alpha1.AgentFailed)
+			r.setPhase(agent, kaalmv1beta1.AgentFailed)
 			r.setReady(agent, false, cs.State.Waiting.Reason,
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Message))
 			return nil
@@ -774,7 +774,7 @@ func (r *AgentReconciler) convergePod(
 	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
 		r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift",
 			"derived Pod spec changed; replacing the Pod")
-		r.setPhase(agent, kaalmv1alpha1.AgentProvisioning)
+		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
 		r.setReady(agent, false, "SpecDrift", "replacing Pod for updated spec")
 		return r.Delete(ctx, pod)
 	}
@@ -783,12 +783,12 @@ func (r *AgentReconciler) convergePod(
 	if podReady(pod) {
 		// Idle is a pod-bearing phase: a ready Pod does not promote an Idle
 		// agent back to Running; only fresh activity does.
-		if agent.Status.Phase != kaalmv1alpha1.AgentIdle {
-			r.setPhase(agent, kaalmv1alpha1.AgentRunning)
+		if agent.Status.Phase != kaalmv1beta1.AgentIdle {
+			r.setPhase(agent, kaalmv1beta1.AgentRunning)
 		}
-		r.setReady(agent, true, kaalmv1alpha1.ReasonPodRunning, "agent Pod is ready")
+		r.setReady(agent, true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")
 	} else {
-		r.setPhase(agent, kaalmv1alpha1.AgentProvisioning)
+		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
 		r.setReady(agent, false, "PodNotReady", "agent Pod is not ready")
 	}
 	return nil
@@ -796,7 +796,7 @@ func (r *AgentReconciler) convergePod(
 
 // ownedPod returns the Agent's live Pod, preferring a non-terminating one when
 // a replacement overlaps a termination.
-func (r *AgentReconciler) ownedPod(ctx context.Context, agent *kaalmv1alpha1.Agent) (*corev1.Pod, error) {
+func (r *AgentReconciler) ownedPod(ctx context.Context, agent *kaalmv1beta1.Agent) (*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(agent.Namespace),
 		client.MatchingLabels(agentPodLabels(agent))); err != nil {
@@ -828,14 +828,14 @@ func podReady(pod *corev1.Pod) bool {
 // reconcileDelete implements the agent finalizer: gracefully terminate the Pod
 // if one exists, apply pvcRetention by rewriting the PVC's ownerRef, then
 // release the finalizer. See docs/src/controller/finalizers.md (Agent).
-func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1alpha1.Agent) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(agent, kaalmv1alpha1.AgentFinalizer) {
+func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(agent, kaalmv1beta1.AgentFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
-	if agent.Status.Phase != kaalmv1alpha1.AgentTerminating {
+	if agent.Status.Phase != kaalmv1beta1.AgentTerminating {
 		agent.Status.PreDegradedPhase = ""
-		r.setPhase(agent, kaalmv1alpha1.AgentTerminating)
+		r.setPhase(agent, kaalmv1beta1.AgentTerminating)
 		if err := r.Status().Update(ctx, agent); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -861,7 +861,7 @@ func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1alp
 	// ownerRef edit must land before the finalizer removal: once the finalizer
 	// entry is gone the Agent can vanish at any moment. existingClaim PVCs
 	// never carried an ownerRef and are untouched.
-	var class kaalmv1alpha1.AgentClass
+	var class kaalmv1beta1.AgentClass
 	retention := "Delete"
 	if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.AgentClassRef.Name}, &class); err == nil {
 		if class.Spec.Persistence.PVCRetention != "" {
@@ -889,11 +889,11 @@ func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1alp
 		}
 	}
 
-	controllerutil.RemoveFinalizer(agent, kaalmv1alpha1.AgentFinalizer)
+	controllerutil.RemoveFinalizer(agent, kaalmv1beta1.AgentFinalizer)
 	return ctrl.Result{}, r.Update(ctx, agent)
 }
 
-func (r *AgentReconciler) setPhase(agent *kaalmv1alpha1.Agent, phase kaalmv1alpha1.AgentPhase) {
+func (r *AgentReconciler) setPhase(agent *kaalmv1beta1.Agent, phase kaalmv1beta1.AgentPhase) {
 	if agent.Status.Phase == phase {
 		return
 	}
@@ -902,13 +902,13 @@ func (r *AgentReconciler) setPhase(agent *kaalmv1alpha1.Agent, phase kaalmv1alph
 	agent.Status.PhaseTransitionTime = &now
 }
 
-func (r *AgentReconciler) setReady(agent *kaalmv1alpha1.Agent, ok bool, reason, msg string) {
+func (r *AgentReconciler) setReady(agent *kaalmv1beta1.Agent, ok bool, reason, msg string) {
 	status := metav1.ConditionFalse
 	if ok {
 		status = metav1.ConditionTrue
 	}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
-		Type: kaalmv1alpha1.ConditionReady, Status: status, Reason: reason, Message: msg,
+		Type: kaalmv1beta1.ConditionReady, Status: status, Reason: reason, Message: msg,
 	})
 }
 
@@ -916,21 +916,21 @@ func (r *AgentReconciler) setReady(agent *kaalmv1alpha1.Agent, ok bool, reason, 
 // platform-level map-func watches.
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kaalmv1alpha1.Agent{}).
+		For(&kaalmv1beta1.Agent{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&cmapi.Certificate{}).
-		Watches(&kaalmv1alpha1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass)).
-		Watches(&kaalmv1alpha1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider)).
-		Watches(&kaalmv1alpha1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider)).
+		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass)).
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider)).
+		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider)).
 		Complete(r)
 }
 
 func (r *AgentReconciler) agentsForClass(ctx context.Context, obj client.Object) []reconcile.Request {
-	var agents kaalmv1alpha1.AgentList
+	var agents kaalmv1beta1.AgentList
 	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: obj.GetName()}); err != nil {
 		return nil
 	}
@@ -942,7 +942,7 @@ func (r *AgentReconciler) agentsForClass(ctx context.Context, obj client.Object)
 }
 
 func (r *AgentReconciler) agentsForProvider(ctx context.Context, obj client.Object) []reconcile.Request {
-	var agents kaalmv1alpha1.AgentList
+	var agents kaalmv1beta1.AgentList
 	if err := r.List(ctx, &agents, client.MatchingFields{IndexProviderRef: obj.GetName()}); err != nil {
 		return nil
 	}
@@ -954,7 +954,7 @@ func (r *AgentReconciler) agentsForProvider(ctx context.Context, obj client.Obje
 }
 
 func (r *AgentReconciler) agentsForToolProvider(ctx context.Context, obj client.Object) []reconcile.Request {
-	var agents kaalmv1alpha1.AgentList
+	var agents kaalmv1beta1.AgentList
 	if err := r.List(ctx, &agents, client.MatchingFields{IndexToolProviderRef: obj.GetName()}); err != nil {
 		return nil
 	}

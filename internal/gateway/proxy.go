@@ -34,7 +34,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // SpendRecorder accumulates token usage per (namespace, provider, model). The
@@ -223,7 +223,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
 		observed: map[failClass]bool{}, primarySettle: primarySettle,
 	}
-	res, ok := s.tryWithFallbacks(ctx, provider, st, func(ctx context.Context, cand *kaalmv1alpha1.ModelProvider) forwardResult {
+	res, ok := s.tryWithFallbacks(ctx, provider, st, func(ctx context.Context, cand *kaalmv1beta1.ModelProvider) forwardResult {
 		fctx, endForward := s.Tracing.Start(ctx, "llm.forward", trace.SpanKindClient,
 			attribute.String("kaalm.provider", cand.Name))
 		fr := s.forwardOnce(fctx, r, cand, outBody, adapter, typeAdapter, modelID)
@@ -289,7 +289,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
 func (s *Server) forwardOnce(
-	ctx context.Context, r *http.Request, provider *kaalmv1alpha1.ModelProvider,
+	ctx context.Context, r *http.Request, provider *kaalmv1beta1.ModelProvider,
 	outBody []byte, adapter, typeAdapter providerAdapter, modelID string,
 ) forwardResult {
 	credential, err := s.Store.Credential(ctx, provider)
@@ -355,8 +355,8 @@ func (s *Server) applyBudgetDecision(
 			Type: errBudgetThrottled, Provider: providerName, Retryable: true,
 			Message: fmt.Sprintf("boundary admission for namespace %s on provider %s is busy; retry shortly", namespace, providerName)}, 1)
 		return false
-	case decision.Action == kaalmv1alpha1.BudgetActionBlock:
-		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1alpha1.BudgetActionBlock)
+	case decision.Action == kaalmv1beta1.BudgetActionBlock:
+		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1beta1.BudgetActionBlock)
 		ceiling := "namespace budget exhausted: " + namespace
 		if decision.Ceiling == "cluster" {
 			ceiling = "cluster budget exhausted"
@@ -366,13 +366,13 @@ func (s *Server) applyBudgetDecision(
 			Message: fmt.Sprintf("%s on provider %s (%d%% used)",
 				ceiling, providerName, decision.Percent)}, decision.RetryAfter)
 		return false
-	case decision.Action == kaalmv1alpha1.BudgetActionDegrade:
-		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1alpha1.BudgetActionDegrade)
+	case decision.Action == kaalmv1beta1.BudgetActionDegrade:
+		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1beta1.BudgetActionDegrade)
 		if decision.DegradeTo != "" && decision.DegradeTo != *modelID {
 			*modelID = decision.DegradeTo
 		}
-	case decision.Action == kaalmv1alpha1.BudgetActionWarn:
-		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1alpha1.BudgetActionWarn)
+	case decision.Action == kaalmv1beta1.BudgetActionWarn:
+		s.Metrics.BudgetThreshold(providerName, namespace, kaalmv1beta1.BudgetActionWarn)
 		slog.Warn("budget threshold crossed", "namespace", namespace,
 			"provider", providerName, "percent", decision.Percent)
 	}
@@ -386,7 +386,7 @@ func (s *Server) applyBudgetDecision(
 // request holds a boundary admission slot (hard enforcement), the cost lands
 // through its settle so the slot frees and the cost records in one atomic
 // step; otherwise it lands through the plain ledger Add.
-func (s *Server) settleUsage(provider *kaalmv1alpha1.ModelProvider, namespace, workload, modelID string, usage Usage, settle func(float64)) {
+func (s *Server) settleUsage(provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string, usage Usage, settle func(float64)) {
 	cost := costOf(provider, modelID, usage)
 	s.Spend.Record(namespace, provider.Name, modelID, usage)
 	if settle != nil {
@@ -444,7 +444,7 @@ func isSSE(resp *http.Response) bool {
 // stream completes; a stream ending without usage counts as zero spend.
 func (s *Server) relayStream(
 	w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
-	namespace, workload string, provider *kaalmv1alpha1.ModelProvider, modelID string,
+	namespace, workload string, provider *kaalmv1beta1.ModelProvider, modelID string,
 	settle func(float64),
 ) {
 	copyDownstreamHeaders(w.Header(), resp.Header)

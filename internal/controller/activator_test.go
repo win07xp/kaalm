@@ -39,7 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // activatorPKI mints a throwaway CA plus leaves for the activator TLS test.
@@ -194,11 +194,11 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 	// and emits WakeIgnored. Seeing either the annotation or that event
 	// proves the activator's write landed.
 	eventually(t, func() error {
-		var ag kaalmv1alpha1.Agent
+		var ag kaalmv1beta1.Agent
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "act-agent"}, &ag); err != nil {
 			return err
 		}
-		if ag.Annotations[kaalmv1alpha1.AnnotationWake] == kaalmv1alpha1.AnnotationTrue {
+		if ag.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue {
 			return nil
 		}
 		var events corev1.EventList
@@ -206,7 +206,7 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 			return err
 		}
 		for _, e := range events.Items {
-			if e.Reason == kaalmv1alpha1.ReasonWakeIgnored && e.InvolvedObject.Name == "act-agent" {
+			if e.Reason == kaalmv1beta1.ReasonWakeIgnored && e.InvolvedObject.Name == "act-agent" {
 				return nil
 			}
 		}

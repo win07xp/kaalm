@@ -27,7 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestMetrics_CountersAndHistogram(t *testing.T) {
@@ -166,7 +166,7 @@ func TestGatewayCatalog_EveryDocumentedMetricIsRegistered(t *testing.T) {
 	NewMetrics(reg)
 	reg.MustRegister(&BudgetUtilizationCollector{
 		Ledger:    NewBudgetLedger(),
-		Providers: func(context.Context) []*kaalmv1alpha1.ModelProvider { return nil },
+		Providers: func(context.Context) []*kaalmv1beta1.ModelProvider { return nil },
 	})
 	for _, source := range []string{"LLM Gateway", "Tool broker", "User Gateway"} {
 		for _, name := range catalogMetrics(t, source) {

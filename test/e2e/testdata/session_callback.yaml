@@ -15,7 +15,7 @@ type: Opaque
 stringData:
   token: s12-webhook-bearer-token
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s12-agent
@@ -28,7 +28,7 @@ spec:
     activitySource: gatewayTraffic
     idleTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: s12-channel
@@ -73,7 +73,7 @@ type: Opaque
 stringData:
   key: s15-callback-hmac-key
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s15-agent
@@ -86,7 +86,7 @@ spec:
     activitySource: gatewayTraffic
     idleTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: s15-channel

@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // AgentClassReconciler validates an AgentClass, counts its users, and holds it in
@@ -65,7 +65,7 @@ type AgentClassReconciler struct {
 func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var ac kaalmv1alpha1.AgentClass
+	var ac kaalmv1beta1.AgentClass
 	if err := r.Get(ctx, req.NamespacedName, &ac); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -74,7 +74,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileDelete(ctx, &ac)
 	}
 
-	if controllerutil.AddFinalizer(&ac, kaalmv1alpha1.ClassFinalizer) {
+	if controllerutil.AddFinalizer(&ac, kaalmv1beta1.ClassFinalizer) {
 		if err := r.Update(ctx, &ac); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -90,7 +90,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// FQDN support only matters when allowedHosts is set. When unsupported, warn
 	// but do not block: allowedHosts is silently ignored during policy synthesis.
-	fqdnCond := metav1.Condition{Type: kaalmv1alpha1.ConditionFQDNPolicySupported}
+	fqdnCond := metav1.Condition{Type: kaalmv1beta1.ConditionFQDNPolicySupported}
 	if len(ac.Spec.Network.Egress.AllowedHosts) > 0 {
 		supported, err := r.fqdnSupport()
 		if err != nil {
@@ -101,9 +101,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			fqdnCond.Reason = "FQDNPolicySupported"
 		} else {
 			fqdnCond.Status = metav1.ConditionFalse
-			fqdnCond.Reason = kaalmv1alpha1.ReasonFQDNPolicyUnsupported
+			fqdnCond.Reason = kaalmv1beta1.ReasonFQDNPolicyUnsupported
 			fqdnCond.Message = "the cluster CNI cannot enforce FQDN egress policies; allowedHosts is ignored"
-			r.Recorder.Event(&ac, corev1.EventTypeWarning, kaalmv1alpha1.ReasonFQDNPolicyUnsupported,
+			r.Recorder.Event(&ac, corev1.EventTypeWarning, kaalmv1beta1.ReasonFQDNPolicyUnsupported,
 				"allowedHosts is set but the CNI does not support FQDN egress policies")
 		}
 	} else {
@@ -124,17 +124,17 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	apimeta.SetStatusCondition(&ac.Status.Conditions, fqdnCond)
 	if len(problems) == 0 {
 		apimeta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
-			Type:    kaalmv1alpha1.ConditionReady,
+			Type:    kaalmv1beta1.ConditionReady,
 			Status:  metav1.ConditionTrue,
-			Reason:  kaalmv1alpha1.ReasonAllReferencesResolved,
+			Reason:  kaalmv1beta1.ReasonAllReferencesResolved,
 			Message: "class is valid",
 		})
 	} else {
 		sort.Strings(problems)
 		apimeta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
-			Type:    kaalmv1alpha1.ConditionReady,
+			Type:    kaalmv1beta1.ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  kaalmv1alpha1.ReasonInvalidReference,
+			Reason:  kaalmv1beta1.ReasonInvalidReference,
 			Message: strings.Join(problems, "; "),
 		})
 	}
@@ -145,8 +145,8 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
-func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1alpha1.AgentClass) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(ac, kaalmv1alpha1.ClassFinalizer) {
+func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1beta1.AgentClass) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(ac, kaalmv1beta1.ClassFinalizer) {
 		return ctrl.Result{}, nil
 	}
 	agents, tasks, err := r.countUsers(ctx, ac.Name)
@@ -158,14 +158,14 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1a
 		// Agent/AgentTask re-enqueue us when a referrer goes away.
 		return ctrl.Result{}, nil
 	}
-	controllerutil.RemoveFinalizer(ac, kaalmv1alpha1.ClassFinalizer)
+	controllerutil.RemoveFinalizer(ac, kaalmv1beta1.ClassFinalizer)
 	return ctrl.Result{}, r.Update(ctx, ac)
 }
 
-func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1alpha1.AgentClass) []string {
+func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) []string {
 	var missing []string
 	for _, ref := range ac.Spec.AllowedProviders {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &mp); err != nil {
 			if apierrors.IsNotFound(err) {
 				missing = append(missing, fmt.Sprintf("allowedProvider %q does not exist", ref.Name))
@@ -178,10 +178,10 @@ func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1
 	return missing
 }
 
-func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaalmv1alpha1.AgentClass) []string {
+func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) []string {
 	var missing []string
 	for _, ref := range ac.Spec.AllowedToolProviders {
-		var tp kaalmv1alpha1.ToolProvider
+		var tp kaalmv1beta1.ToolProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &tp); err != nil {
 			if apierrors.IsNotFound(err) {
 				missing = append(missing, fmt.Sprintf("allowedToolProvider %q does not exist", ref.Name))
@@ -194,7 +194,7 @@ func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaa
 	return missing
 }
 
-func invalidCIDRs(ac *kaalmv1alpha1.AgentClass) []string {
+func invalidCIDRs(ac *kaalmv1beta1.AgentClass) []string {
 	var bad []string
 	for _, c := range ac.Spec.Network.Egress.AllowedCIDRs {
 		if _, _, err := net.ParseCIDR(c); err != nil {
@@ -204,7 +204,7 @@ func invalidCIDRs(ac *kaalmv1alpha1.AgentClass) []string {
 	return bad
 }
 
-func invalidHosts(ac *kaalmv1alpha1.AgentClass) []string {
+func invalidHosts(ac *kaalmv1beta1.AgentClass) []string {
 	var bad []string
 	for _, h := range ac.Spec.Network.Egress.AllowedHosts {
 		if errs := validation.IsDNS1123Subdomain(h); len(errs) > 0 {
@@ -215,11 +215,11 @@ func invalidHosts(ac *kaalmv1alpha1.AgentClass) []string {
 }
 
 func (r *AgentClassReconciler) countUsers(ctx context.Context, className string) (int32, int32, error) {
-	var agents kaalmv1alpha1.AgentList
+	var agents kaalmv1beta1.AgentList
 	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
 		return 0, 0, err
 	}
-	var tasks kaalmv1alpha1.AgentTaskList
+	var tasks kaalmv1beta1.AgentTaskList
 	if err := r.List(ctx, &tasks, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
 		return 0, 0, err
 	}
@@ -242,18 +242,18 @@ func (r *AgentClassReconciler) fqdnSupport() (bool, error) {
 // SetupWithManager wires the reconciler and its cross-resource watches.
 func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kaalmv1alpha1.AgentClass{}).
-		Watches(&kaalmv1alpha1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider)).
-		Watches(&kaalmv1alpha1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider)).
-		Watches(&kaalmv1alpha1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
-		Watches(&kaalmv1alpha1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
+		For(&kaalmv1beta1.AgentClass{}).
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider)).
+		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider)).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
 		Complete(r)
 }
 
 // classesForToolProvider re-enqueues every AgentClass whose
 // allowedToolProviders lists the changed ToolProvider.
 func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj client.Object) []reconcile.Request {
-	var classes kaalmv1alpha1.AgentClassList
+	var classes kaalmv1beta1.AgentClassList
 	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: obj.GetName()}); err != nil {
 		return nil
 	}
@@ -267,7 +267,7 @@ func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj c
 // classesForProvider re-enqueues every AgentClass whose allowedProviders lists the
 // changed ModelProvider.
 func (r *AgentClassReconciler) classesForProvider(ctx context.Context, obj client.Object) []reconcile.Request {
-	var classes kaalmv1alpha1.AgentClassList
+	var classes kaalmv1beta1.AgentClassList
 	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: obj.GetName()}); err != nil {
 		return nil
 	}
@@ -283,9 +283,9 @@ func (r *AgentClassReconciler) classesForProvider(ctx context.Context, obj clien
 func classForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
 	var className string
 	switch w := obj.(type) {
-	case *kaalmv1alpha1.Agent:
+	case *kaalmv1beta1.Agent:
 		className = w.Spec.AgentClassRef.Name
-	case *kaalmv1alpha1.AgentTask:
+	case *kaalmv1beta1.AgentTask:
 		className = w.Spec.AgentClassRef.Name
 	default:
 		return nil

@@ -20,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // Shared Prometheus label names.
@@ -272,4 +272,4 @@ func (m *Metrics) AsyncPatchFailed(namespace string) {
 	m.patchFailed.WithLabelValues(namespace).Inc()
 }
 
-var _ = kaalmv1alpha1.GroupVersion
+var _ = kaalmv1beta1.GroupVersion

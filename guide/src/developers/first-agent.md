@@ -19,10 +19,10 @@ for when you outgrow it. Whatever you pick must match the class's
 
 ## 2. Declare the Agent
 
-From `config/samples/kaalm_v1alpha1_agent.yaml`:
+From `config/samples/kaalm_v1beta1_agent.yaml`:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: support-assistant
@@ -47,7 +47,7 @@ let it call the `anthropic-shared` provider, give it a 10 Gi volume that
 survives restarts, and hibernate it when gateway traffic goes quiet.
 
 ```bash
-kubectl apply -f config/samples/kaalm_v1alpha1_agent.yaml
+kubectl apply -f config/samples/kaalm_v1beta1_agent.yaml
 ```
 
 ## 3. Watch it come up

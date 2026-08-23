@@ -24,7 +24,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // Data is the console's single data layer: every read the JSON API serves
@@ -51,7 +51,7 @@ func (d *Data) Namespaces(ctx context.Context) ([]string, error) {
 
 // Fleet returns the namespace's agents as fleet rows, sorted by name.
 func (d *Data) Fleet(ctx context.Context, namespace string) ([]FleetRow, error) {
-	var list kaalmv1alpha1.AgentList
+	var list kaalmv1beta1.AgentList
 	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (d *Data) Fleet(ctx context.Context, namespace string) ([]FleetRow, error) 
 
 // Agent returns one agent in detail; found is false when it does not exist.
 func (d *Data) Agent(ctx context.Context, namespace, name string) (AgentDetail, bool, error) {
-	var a kaalmv1alpha1.Agent
+	var a kaalmv1beta1.Agent
 	if err := d.Reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &a); err != nil {
 		if apierrors.IsNotFound(err) {
 			return AgentDetail{}, false, nil
@@ -78,7 +78,7 @@ func (d *Data) Agent(ctx context.Context, namespace, name string) (AgentDetail, 
 // Tasks returns the namespace's task history, most recently started first
 // (tasks with no start time sort last, by name).
 func (d *Data) Tasks(ctx context.Context, namespace string) ([]TaskRow, error) {
-	var list kaalmv1alpha1.AgentTaskList
+	var list kaalmv1beta1.AgentTaskList
 	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (d *Data) Tasks(ctx context.Context, namespace string) ([]TaskRow, error) {
 
 // Channels returns the namespace's channel health rows, sorted by name.
 func (d *Data) Channels(ctx context.Context, namespace string) ([]ChannelRow, error) {
-	var list kaalmv1alpha1.AgentChannelList
+	var list kaalmv1beta1.AgentChannelList
 	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (d *Data) Channels(ctx context.Context, namespace string) ([]ChannelRow, er
 // provider name. ModelProvider is cluster-scoped; only the rows belonging to
 // the namespace being viewed are extracted.
 func (d *Data) Spend(ctx context.Context, namespace string) ([]SpendRow, error) {
-	var list kaalmv1alpha1.ModelProviderList
+	var list kaalmv1beta1.ModelProviderList
 	if err := d.Reader.List(ctx, &list); err != nil {
 		return nil, err
 	}

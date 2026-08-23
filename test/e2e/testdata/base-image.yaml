@@ -9,7 +9,7 @@
 # the spec asserts the rule 31 gate (Ready=False, HandlerConfigMapNotFound,
 # no Pod) and then creates s16-missing-handler imperatively to watch the gate
 # recover.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: s16-starter
@@ -69,7 +69,7 @@ data:
             "metadata": {},
         }
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s16-go
@@ -82,7 +82,7 @@ spec:
     activitySource: gatewayTraffic
     idleTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: s16-go-channel
@@ -105,7 +105,7 @@ spec:
         name: s16-hook
         key: token
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s16-py
@@ -121,7 +121,7 @@ spec:
     activitySource: gatewayTraffic
     idleTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: s16-py-channel
@@ -141,7 +141,7 @@ spec:
         name: s16-hook
         key: token
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: s16-missing

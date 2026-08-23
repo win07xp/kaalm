@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // replicaWith builds one gateway replica's activity view for a single agent.
@@ -40,14 +40,14 @@ func replicaWith(startedAgo time.Duration, agentName string, trafficAgo time.Dur
 
 func TestAgent_IdleTransitionAndReturn(t *testing.T) {
 	mkWorkloadClass(t, "wc-idle", nil)
-	provisionRunningAgentWithLifecycle(t, "idle-agent", "wc-idle", func(ag *kaalmv1alpha1.Agent) {
+	provisionRunningAgentWithLifecycle(t, "idle-agent", "wc-idle", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
 	})
 
 	// Stale activity: last traffic an hour ago, replica up for two.
 	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, "idle-agent", time.Hour)}, 1)
 	touchAgent(t, "idle-agent") // trigger a reconcile pass
-	expectAgentPhase(t, "idle-agent", kaalmv1alpha1.AgentIdle)
+	expectAgentPhase(t, "idle-agent", kaalmv1beta1.AgentIdle)
 	ag := getWorkloadAgent(t, "idle-agent")
 	if ag.Status.LastActivityTime == nil {
 		t.Error("lastActivityTime must be written on the Idle transition")
@@ -59,7 +59,7 @@ func TestAgent_IdleTransitionAndReturn(t *testing.T) {
 	// Fresh activity: back to Running.
 	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, "idle-agent", 0)}, 1)
 	touchAgent(t, "idle-agent")
-	expectAgentPhase(t, "idle-agent", kaalmv1alpha1.AgentRunning)
+	expectAgentPhase(t, "idle-agent", kaalmv1beta1.AgentRunning)
 }
 
 // replicaNoTraffic builds a replica view that has been up for startedAgo but
@@ -79,12 +79,12 @@ func replicaNoTraffic(startedAgo time.Duration) ReplicaActivity {
 // naive reading flips Idle<->Running forever; this asserts the agent instead
 // settles into Hibernated.
 func TestAgent_HibernatesWithoutRecordedTraffic(t *testing.T) {
-	mkWorkloadClass(t, "wc-notraffic", func(ac *kaalmv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-notraffic", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 		ac.Spec.Persistence.DefaultSizeGi = 1
 		ac.Spec.Lifecycle.HibernationAllowed = true
 	})
-	provisionRunningAgentWithLifecycle(t, "notraffic", "wc-notraffic", func(ag *kaalmv1alpha1.Agent) {
+	provisionRunningAgentWithLifecycle(t, "notraffic", "wc-notraffic", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 		ag.Spec.Lifecycle.HibernationEnabled = true
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
@@ -119,7 +119,7 @@ func TestAgent_HibernatesWithoutRecordedTraffic(t *testing.T) {
 			}
 		}
 		ag := getWorkloadAgent(t, "notraffic")
-		if ag.Status.Phase != kaalmv1alpha1.AgentHibernated {
+		if ag.Status.Phase != kaalmv1beta1.AgentHibernated {
 			return errString(fmt.Sprintf("phase=%s want Hibernated (no-traffic fallback)", ag.Status.Phase))
 		}
 		return nil
@@ -135,12 +135,12 @@ func TestAgent_HibernatesWithoutRecordedTraffic(t *testing.T) {
 }
 
 func TestAgent_HibernateAndWake(t *testing.T) {
-	mkWorkloadClass(t, "wc-hibwake", func(ac *kaalmv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-hibwake", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 		ac.Spec.Persistence.DefaultSizeGi = 1
 		ac.Spec.Lifecycle.HibernationAllowed = true
 	})
-	provisionRunningAgentWithLifecycle(t, "hib-wake", "wc-hibwake", func(ag *kaalmv1alpha1.Agent) {
+	provisionRunningAgentWithLifecycle(t, "hib-wake", "wc-hibwake", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 		ag.Spec.Lifecycle.HibernationEnabled = true
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
@@ -162,15 +162,15 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 				forceDeletePod(t, &pods.Items[i])
 			}
 		}
-		var ag kaalmv1alpha1.Agent
+		var ag kaalmv1beta1.Agent
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hib-wake"}, &ag); err != nil {
 			return err
 		}
-		if ag.Status.Phase != kaalmv1alpha1.AgentHibernated {
+		if ag.Status.Phase != kaalmv1beta1.AgentHibernated {
 			return errString(fmt.Sprintf("phase=%s want Hibernated (hibEnabled=%v idle=%s delay=%s lastAct=%v ready=%+v)",
 				ag.Status.Phase, ag.Spec.Lifecycle.HibernationEnabled,
 				ag.Spec.Lifecycle.IdleTimeout.Duration, ag.Spec.Lifecycle.HibernationDelay.Duration,
-				ag.Status.LastActivityTime, condition(ag.Status.Conditions, kaalmv1alpha1.ConditionReady)))
+				ag.Status.LastActivityTime, condition(ag.Status.Conditions, kaalmv1beta1.ConditionReady)))
 		}
 		return nil
 	})
@@ -198,7 +198,7 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 		if got.Annotations == nil {
 			got.Annotations = map[string]string{}
 		}
-		got.Annotations[kaalmv1alpha1.AnnotationWake] = kaalmv1alpha1.AnnotationTrue
+		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationTrue
 		return testClient.Update(ctxT(), got)
 	})
 	// Fresh activity so the woken agent does not immediately re-idle.
@@ -211,10 +211,10 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 		return nil
 	})
 	markPodReady(t, agentPod(t, "hib-wake"))
-	expectAgentPhase(t, "hib-wake", kaalmv1alpha1.AgentRunning)
+	expectAgentPhase(t, "hib-wake", kaalmv1beta1.AgentRunning)
 
 	got := getWorkloadAgent(t, "hib-wake")
-	if _, still := got.Annotations[kaalmv1alpha1.AnnotationWake]; still {
+	if _, still := got.Annotations[kaalmv1beta1.AnnotationWake]; still {
 		t.Error("wake annotation must be removed after the wake commits")
 	}
 	if got.Status.HibernatedAt != nil {
@@ -230,12 +230,12 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 // after answering one message. The wake stamps lastActivityTime, and both
 // windows are measured from no earlier than that stamp.
 func TestAgent_WakeIsActivity(t *testing.T) {
-	mkWorkloadClass(t, "wc-wakeact", func(ac *kaalmv1alpha1.AgentClass) {
+	mkWorkloadClass(t, "wc-wakeact", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
 		ac.Spec.Persistence.DefaultSizeGi = 1
 		ac.Spec.Lifecycle.HibernationAllowed = true
 	})
-	provisionRunningAgentWithLifecycle(t, "wake-act", "wc-wakeact", func(ag *kaalmv1alpha1.Agent) {
+	provisionRunningAgentWithLifecycle(t, "wake-act", "wc-wakeact", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Persistence.Enabled = true
 		ag.Spec.Lifecycle.HibernationEnabled = true
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: 5 * time.Second}
@@ -256,7 +256,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 				forceDeletePod(t, &pods.Items[i])
 			}
 		}
-		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1alpha1.AgentHibernated {
+		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1beta1.AgentHibernated {
 			return errString(fmt.Sprintf("phase=%s want Hibernated", got.Status.Phase))
 		}
 		return nil
@@ -270,7 +270,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 		if got.Annotations == nil {
 			got.Annotations = map[string]string{}
 		}
-		got.Annotations[kaalmv1alpha1.AnnotationWake] = kaalmv1alpha1.AnnotationTrue
+		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationTrue
 		return testClient.Update(ctxT(), got)
 	})
 	eventually(t, func() error {
@@ -280,7 +280,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 		return nil
 	})
 	markPodReady(t, agentPod(t, "wake-act"))
-	expectAgentPhase(t, "wake-act", kaalmv1alpha1.AgentRunning)
+	expectAgentPhase(t, "wake-act", kaalmv1beta1.AgentRunning)
 
 	got := getWorkloadAgent(t, "wake-act")
 	if got.Status.LastActivityTime == nil || got.Status.LastActivityTime.Time.Before(woke.Add(-time.Second)) {
@@ -293,7 +293,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 	eventually(t, func() error {
 		touchAgent(t, "wake-act")
 		time.Sleep(500 * time.Millisecond)
-		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1alpha1.AgentIdle {
+		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1beta1.AgentIdle {
 			return errString(fmt.Sprintf("phase=%s want Idle after idleTimeout from the wake", got.Status.Phase))
 		}
 		return nil
@@ -301,7 +301,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		touchAgent(t, "wake-act")
 		time.Sleep(300 * time.Millisecond)
-		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1alpha1.AgentIdle {
+		if got := getWorkloadAgent(t, "wake-act"); got.Status.Phase != kaalmv1beta1.AgentIdle {
 			t.Fatalf("pass %d: phase=%s, the wake floor must hold the agent Idle for hibernationDelay", i, got.Status.Phase)
 		}
 	}
@@ -319,15 +319,15 @@ func TestAgent_WakeIgnoredOnRunning(t *testing.T) {
 		if ag.Annotations == nil {
 			ag.Annotations = map[string]string{}
 		}
-		ag.Annotations[kaalmv1alpha1.AnnotationWake] = kaalmv1alpha1.AnnotationTrue
+		ag.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationTrue
 		return testClient.Update(ctxT(), ag)
 	})
 	eventually(t, func() error {
 		ag := getWorkloadAgent(t, "wignore")
-		if _, still := ag.Annotations[kaalmv1alpha1.AnnotationWake]; still {
+		if _, still := ag.Annotations[kaalmv1beta1.AnnotationWake]; still {
 			return errString("annotation not yet removed")
 		}
-		if ag.Status.Phase != kaalmv1alpha1.AgentRunning {
+		if ag.Status.Phase != kaalmv1beta1.AgentRunning {
 			return errString("phase changed on an ignored wake")
 		}
 		return nil
@@ -336,7 +336,7 @@ func TestAgent_WakeIgnoredOnRunning(t *testing.T) {
 
 func TestAgent_GatewayUnreachableDefersIdle(t *testing.T) {
 	mkWorkloadClass(t, "wc-unreach", nil)
-	provisionRunningAgentWithLifecycle(t, "unreach", "wc-unreach", func(ag *kaalmv1alpha1.Agent) {
+	provisionRunningAgentWithLifecycle(t, "unreach", "wc-unreach", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
 	})
 
@@ -345,11 +345,11 @@ func TestAgent_GatewayUnreachableDefersIdle(t *testing.T) {
 	touchAgent(t, "unreach")
 	eventually(t, func() error {
 		ag := getWorkloadAgent(t, "unreach")
-		c := condition(ag.Status.Conditions, kaalmv1alpha1.ConditionGatewayReachable)
+		c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable)
 		if c == nil || c.Status != metav1.ConditionFalse {
 			return errString("GatewayReachable should be False")
 		}
-		if ag.Status.Phase != kaalmv1alpha1.AgentRunning {
+		if ag.Status.Phase != kaalmv1beta1.AgentRunning {
 			return errString("phase must be preserved without activity data")
 		}
 		return nil
@@ -358,7 +358,7 @@ func TestAgent_GatewayUnreachableDefersIdle(t *testing.T) {
 
 func TestAgent_GatewayRestartDefersIdle(t *testing.T) {
 	mkWorkloadClass(t, "wc-restart", nil)
-	provisionRunningAgentWithLifecycle(t, "restarted", "wc-restart", func(ag *kaalmv1alpha1.Agent) {
+	provisionRunningAgentWithLifecycle(t, "restarted", "wc-restart", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Hour}
 	})
 
@@ -368,7 +368,7 @@ func TestAgent_GatewayRestartDefersIdle(t *testing.T) {
 	touchAgent(t, "restarted")
 	// The agent must stay Running despite zero recorded activity.
 	time.Sleep(time.Second)
-	if got := getWorkloadAgent(t, "restarted"); got.Status.Phase != kaalmv1alpha1.AgentRunning {
+	if got := getWorkloadAgent(t, "restarted"); got.Status.Phase != kaalmv1beta1.AgentRunning {
 		t.Errorf("restart-unknown data must defer idle transitions, phase=%s", got.Status.Phase)
 	}
 }
@@ -377,7 +377,7 @@ func TestAgent_GatewayRestartDefersIdle(t *testing.T) {
 
 // provisionRunningAgentWithLifecycle mirrors provisionRunningAgent but takes
 // a mutator, so lifecycle fields land before creation.
-func provisionRunningAgentWithLifecycle(t *testing.T, name, className string, mutate func(*kaalmv1alpha1.Agent)) {
+func provisionRunningAgentWithLifecycle(t *testing.T, name, className string, mutate func(*kaalmv1beta1.Agent)) {
 	t.Helper()
 	// Fresh activity by default so provisioning is not raced by idle logic.
 	fakeActivity.set([]ReplicaActivity{replicaWith(2*time.Hour, name, 0)}, 1)
@@ -390,7 +390,7 @@ func provisionRunningAgentWithLifecycle(t *testing.T, name, className string, mu
 		return nil
 	})
 	markPodReady(t, agentPod(t, name))
-	expectAgentPhase(t, name, kaalmv1alpha1.AgentRunning)
+	expectAgentPhase(t, name, kaalmv1beta1.AgentRunning)
 }
 
 // touchAgent bumps an annotation to force a reconcile pass.

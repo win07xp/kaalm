@@ -14,7 +14,7 @@ stated guarantee; that task is [below](#turning-on-hard-enforcement).
 
 ## Budget policies: warn, degrade, block
 
-The budget block from `config/samples/kaalm_v1alpha1_modelprovider.yaml`:
+The budget block from `config/samples/kaalm_v1beta1_modelprovider.yaml`:
 
 ```yaml
 budget:

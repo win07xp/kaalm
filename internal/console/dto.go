@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // The DTOs below are the read API's wire shapes and the exact objects the
@@ -131,7 +131,7 @@ type SpendRow struct {
 	State       string `json:"state"`
 }
 
-func fleetRow(a *kaalmv1alpha1.Agent) FleetRow {
+func fleetRow(a *kaalmv1beta1.Agent) FleetRow {
 	return FleetRow{
 		Name:             a.Name,
 		Phase:            string(a.Status.Phase),
@@ -142,7 +142,7 @@ func fleetRow(a *kaalmv1alpha1.Agent) FleetRow {
 	}
 }
 
-func agentDetail(a *kaalmv1alpha1.Agent) AgentDetail {
+func agentDetail(a *kaalmv1beta1.Agent) AgentDetail {
 	d := AgentDetail{
 		FleetRow:   fleetRow(a),
 		Conditions: conditionRows(a.Status.Conditions),
@@ -161,7 +161,7 @@ func agentDetail(a *kaalmv1alpha1.Agent) AgentDetail {
 	return d
 }
 
-func taskRow(t *kaalmv1alpha1.AgentTask) TaskRow {
+func taskRow(t *kaalmv1beta1.AgentTask) TaskRow {
 	row := TaskRow{
 		Name:           t.Name,
 		Phase:          string(t.Status.Phase),
@@ -175,7 +175,7 @@ func taskRow(t *kaalmv1alpha1.AgentTask) TaskRow {
 	return row
 }
 
-func channelRow(c *kaalmv1alpha1.AgentChannel) ChannelRow {
+func channelRow(c *kaalmv1beta1.AgentChannel) ChannelRow {
 	row := ChannelRow{
 		Name:              c.Name,
 		Agent:             c.Spec.AgentRef.Name,
@@ -192,7 +192,7 @@ func channelRow(c *kaalmv1alpha1.AgentChannel) ChannelRow {
 // spendRows extracts the budget rows belonging to one namespace from a
 // cluster-scoped provider. A provider with no usage row for the namespace
 // contributes nothing: spend is shown where it exists.
-func spendRows(p *kaalmv1alpha1.ModelProvider, namespace string) []SpendRow {
+func spendRows(p *kaalmv1beta1.ModelProvider, namespace string) []SpendRow {
 	var rows []SpendRow
 	for _, u := range p.Status.BudgetUsage {
 		if u.Namespace != namespace {

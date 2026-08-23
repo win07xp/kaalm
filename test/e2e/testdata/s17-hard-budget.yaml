@@ -7,7 +7,7 @@
 # The callers are gateway-only-tier (projected ServiceAccount tokens); no
 # Agent is needed because S17 asserts provider-side enforcement, and the
 # Agent-side Degraded mirror is S10's covered ground.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: s17-hard
@@ -35,7 +35,7 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: s17-soft

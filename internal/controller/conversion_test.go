@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -83,9 +84,17 @@ func TestConversion_ServedThroughTheAPIServer(t *testing.T) {
 		t.Fatalf("spec differs across versions\nv1alpha1: %s\nv1beta1:  %s", alphaSpec, betaSpec)
 	}
 
-	// A write at the hub version is visible at the spoke version.
-	beta.Spec.Image = "example/agent:two"
-	if err := testClient.Update(ctx, beta); err != nil {
+	// A write at the hub version is visible at the spoke version. The
+	// reconciler works on the same object (finalizer, status), so the update
+	// re-reads on conflict instead of racing it.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := testClient.Get(ctx, key, beta); err != nil {
+			return err
+		}
+		beta.Spec.Image = "example/agent:two"
+		return testClient.Update(ctx, beta)
+	})
+	if err != nil {
 		t.Fatalf("update v1beta1 agent: %v", err)
 	}
 	eventually(t, func() error {

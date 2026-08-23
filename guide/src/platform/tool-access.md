@@ -28,10 +28,10 @@ If the server needs no authentication, skip this step and omit
 
 ## 2. Create the ToolProvider
 
-From `config/samples/kaalm_v1alpha1_toolprovider.yaml`:
+From `config/samples/kaalm_v1beta1_toolprovider.yaml`:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ToolProvider
 metadata:
   name: search-tools

@@ -26,17 +26,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/gateway"
 )
 
-func hardBudgetSpec() kaalmv1alpha1.ModelProviderBudget {
-	return kaalmv1alpha1.ModelProviderBudget{
+func hardBudgetSpec() kaalmv1beta1.ModelProviderBudget {
+	return kaalmv1beta1.ModelProviderBudget{
 		Period: "monthly", PerNamespaceUSD: "100",
-		Enforcement: kaalmv1alpha1.BudgetEnforcementHard,
-		Hard:        &kaalmv1alpha1.ModelProviderBudgetHard{BoundaryMarginPercent: 5},
-		Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{
-			{AtPercent: 100, Action: kaalmv1alpha1.BudgetActionBlock},
+		Enforcement: kaalmv1beta1.BudgetEnforcementHard,
+		Hard:        &kaalmv1beta1.ModelProviderBudgetHard{BoundaryMarginPercent: 5},
+		Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{
+			{AtPercent: 100, Action: kaalmv1beta1.BudgetActionBlock},
 		},
 	}
 }
@@ -45,46 +45,46 @@ func hardBudgetSpec() kaalmv1alpha1.ModelProviderBudget {
 // HardBudgetUnpriced, and pricing the catalog recovers it.
 func TestModelProvider_HardBudgetUnpricedGatesAndRecovers(t *testing.T) {
 	mkSecret(t, "mp-hard-key")
-	mkProvider(t, "mp-hard", func(mp *kaalmv1alpha1.ModelProvider) {
+	mkProvider(t, "mp-hard", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Budget = hardBudgetSpec()
-		mp.Spec.Models = []kaalmv1alpha1.ModelProviderModel{{ID: "free-model"}}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "free-model"}}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionFalse, kaalmv1alpha1.ReasonHardBudgetUnpriced)
+	}, metav1.ConditionFalse, kaalmv1beta1.ReasonHardBudgetUnpriced)
 
 	eventually(t, func() error {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp); err != nil {
 			return err
 		}
-		mp.Spec.Models = []kaalmv1alpha1.ModelProviderModel{
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{
 			{ID: "free-model", CostPer1MInputTokens: "1.00", CostPer1MOutputTokens: "2.00"},
 		}
 		return testClient.Update(ctxT(), &mp)
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 }
 
 // Rules 32 and 34 are apply-time CEL: the apiserver rejects a hard budget
 // with no block policy, and a boundary margin at or above a block threshold.
 func TestModelProvider_HardBudgetCELRules(t *testing.T) {
-	noBlock := &kaalmv1alpha1.ModelProvider{
+	noBlock := &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "mp-cel-32"},
-		Spec: kaalmv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1beta1.ModelProviderSpec{
 			Type: "openai", Endpoint: "https://api.example.com",
-			CredentialsRef: kaalmv1alpha1.SecretKeyReference{Name: "k", Key: "token"},
-			Budget: kaalmv1alpha1.ModelProviderBudget{
+			CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "k", Key: "token"},
+			Budget: kaalmv1beta1.ModelProviderBudget{
 				Period: "monthly", PerNamespaceUSD: "100",
-				Enforcement: kaalmv1alpha1.BudgetEnforcementHard,
-				Policies: []kaalmv1alpha1.ModelProviderBudgetPolicy{
-					{AtPercent: 50, Action: kaalmv1alpha1.BudgetActionWarn},
+				Enforcement: kaalmv1beta1.BudgetEnforcementHard,
+				Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{
+					{AtPercent: 50, Action: kaalmv1beta1.BudgetActionWarn},
 				},
 			},
 		},
@@ -95,17 +95,17 @@ func TestModelProvider_HardBudgetCELRules(t *testing.T) {
 
 	wideMargin := noBlock.DeepCopy()
 	wideMargin.Name = "mp-cel-34"
-	wideMargin.Spec.Budget.Policies = []kaalmv1alpha1.ModelProviderBudgetPolicy{
-		{AtPercent: 80, Action: kaalmv1alpha1.BudgetActionBlock},
+	wideMargin.Spec.Budget.Policies = []kaalmv1beta1.ModelProviderBudgetPolicy{
+		{AtPercent: 80, Action: kaalmv1beta1.BudgetActionBlock},
 	}
-	wideMargin.Spec.Budget.Hard = &kaalmv1alpha1.ModelProviderBudgetHard{BoundaryMarginPercent: 80}
+	wideMargin.Spec.Budget.Hard = &kaalmv1beta1.ModelProviderBudgetHard{BoundaryMarginPercent: 80}
 	if err := testClient.Create(ctxT(), wideMargin); err == nil || !strings.Contains(err.Error(), "rule 34") {
 		t.Fatalf("margin at the block threshold: err = %v, want rule 34 CEL rejection", err)
 	}
 
 	valid := wideMargin.DeepCopy()
 	valid.Name = "mp-cel-ok"
-	valid.Spec.Budget.Hard = &kaalmv1alpha1.ModelProviderBudgetHard{BoundaryMarginPercent: 5}
+	valid.Spec.Budget.Hard = &kaalmv1beta1.ModelProviderBudgetHard{BoundaryMarginPercent: 5}
 	if err := testClient.Create(ctxT(), valid); err != nil {
 		t.Fatalf("valid hard budget rejected: %v", err)
 	}
@@ -117,17 +117,17 @@ func TestModelProvider_HardBudgetCELRules(t *testing.T) {
 func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 	mkGatewayPod(t, "margin-gw-0", true)
 	mkSecret(t, "mp-margin-key")
-	mkProvider(t, "mp-margin", func(mp *kaalmv1alpha1.ModelProvider) {
+	mkProvider(t, "mp-margin", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Budget = hardBudgetSpec()
-		mp.Spec.Models = []kaalmv1alpha1.ModelProviderModel{
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{
 			{ID: "m", CostPer1MInputTokens: "1.00", CostPer1MOutputTokens: "1.00"},
 		}
 	})
 	expectReady(t, func() []metav1.Condition {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp)
 		return mp.Status.Conditions
-	}, metav1.ConditionTrue, kaalmv1alpha1.ReasonCredentialsValid)
+	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
 	period := gateway.PeriodKey("monthly", time.Now())
 	cm := &corev1.ConfigMap{
@@ -143,11 +143,11 @@ func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 	}
 
 	eventually(t, func() error {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp); err != nil {
 			return err
 		}
-		c := condition(mp.Status.Conditions, kaalmv1alpha1.ConditionBoundaryMarginRaised)
+		c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)
 		if c == nil || c.Status != metav1.ConditionTrue {
 			return errString("BoundaryMarginRaised not True yet")
 		}
@@ -166,11 +166,11 @@ func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 		return testClient.Update(ctxT(), &got)
 	})
 	eventually(t, func() error {
-		var mp kaalmv1alpha1.ModelProvider
+		var mp kaalmv1beta1.ModelProvider
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp); err != nil {
 			return err
 		}
-		c := condition(mp.Status.Conditions, kaalmv1alpha1.ConditionBoundaryMarginRaised)
+		c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)
 		if c == nil || c.Status != metav1.ConditionFalse {
 			return errString("BoundaryMarginRaised did not clear")
 		}

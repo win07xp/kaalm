@@ -82,6 +82,7 @@ The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserv
 
 - `kaalm_hibernations_total{namespace}`: counter of hibernation events
 - `kaalm_wakes_total{namespace,trigger}`: counter of wake events (trigger = `channel` | `annotation`)
+- `kaalm_storage_migrated_objects_total{kind}`: counter of custom resources the storage-version migrator rewrote at the `v1beta1` storage version, by kind; zero on a fresh install, the number of pre-upgrade objects on the first leader start after an upgrade, and zero on every start after that ([API Versioning and Deprecation](../operations/api-versioning.md#storage-version-migration))
 
 Budget policy actions are counted where they happen, on the gateway's request path: `kaalm_budget_threshold_events_total` in [LLM Gateway Operations](../gateways/llm/operations.md#observability).
 

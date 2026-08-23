@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // envClient is a real-apiserver client, nil when envtest is unavailable
@@ -55,7 +55,7 @@ func TestMain(m *testing.M) {
 		if err := clientgoscheme.AddToScheme(scheme); err != nil {
 			panic(err)
 		}
-		if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {
+		if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
 			panic(err)
 		}
 		envClient, err = client.New(cfg, client.Options{Scheme: scheme})
@@ -82,16 +82,16 @@ func TestData_AgainstRealAPIServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	agent := &kaalmv1alpha1.Agent{
+	agent := &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "walker", Namespace: "console-e2e"},
-		Spec:       kaalmv1alpha1.AgentSpec{AgentClassRef: kaalmv1alpha1.LocalObjectReference{Name: "standard"}},
+		Spec:       kaalmv1beta1.AgentSpec{AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "standard"}},
 	}
 	if err := envClient.Create(ctx, agent); err != nil {
 		t.Fatal(err)
 	}
 	now := metav1.Now()
-	agent.Status = kaalmv1alpha1.AgentStatus{
-		Phase:        kaalmv1alpha1.AgentHibernated,
+	agent.Status = kaalmv1beta1.AgentStatus{
+		Phase:        kaalmv1beta1.AgentHibernated,
 		HibernatedAt: &now,
 		Conditions: []metav1.Condition{{
 			Type: "Ready", Status: metav1.ConditionFalse, Reason: "Hibernated",
@@ -102,21 +102,21 @@ func TestData_AgainstRealAPIServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider := &kaalmv1alpha1.ModelProvider{
+	provider := &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "console-e2e-prov"},
-		Spec: kaalmv1alpha1.ModelProviderSpec{
+		Spec: kaalmv1beta1.ModelProviderSpec{
 			Type:              "openai",
 			Endpoint:          "https://api.example.com",
-			CredentialsRef:    kaalmv1alpha1.SecretKeyReference{Name: "k", Key: "key"},
+			CredentialsRef:    kaalmv1beta1.SecretKeyReference{Name: "k", Key: "key"},
 			AllowedNamespaces: []string{"*"},
-			Budget:            kaalmv1alpha1.ModelProviderBudget{PerNamespaceUSD: "50.00", Period: "monthly"},
-			Models:            []kaalmv1alpha1.ModelProviderModel{{ID: "m1"}},
+			Budget:            kaalmv1beta1.ModelProviderBudget{PerNamespaceUSD: "50.00", Period: "monthly"},
+			Models:            []kaalmv1beta1.ModelProviderModel{{ID: "m1"}},
 		},
 	}
 	if err := envClient.Create(ctx, provider); err != nil {
 		t.Fatal(err)
 	}
-	provider.Status.BudgetUsage = []kaalmv1alpha1.ModelProviderBudgetUsage{
+	provider.Status.BudgetUsage = []kaalmv1beta1.ModelProviderBudgetUsage{
 		{Namespace: "console-e2e", Period: "monthly", SpentUSD: "1.25", PercentUsed: 2, State: "Normal"},
 	}
 	if err := envClient.Status().Update(ctx, provider); err != nil {

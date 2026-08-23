@@ -33,7 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // Well-known names and defaults shared by the desired-state builders. The
@@ -116,7 +116,7 @@ type effectiveAgentSpec struct {
 
 // deriveEffectiveSpec merges class defaults into the Agent's spec and clamps
 // resources to the class maximum.
-func deriveEffectiveSpec(agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass) effectiveAgentSpec {
+func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass) effectiveAgentSpec {
 	eff := effectiveAgentSpec{
 		Image:            agent.Spec.Image,
 		Command:          agent.Spec.Command,
@@ -291,7 +291,7 @@ func gatewayEndpoint(operatorNamespace string) string {
 // desiredCertificate builds the per-Agent cert-manager Certificate: Service DNS
 // SANs, server+client auth, issued from the kaalm-ca-issuer ClusterIssuer.
 // See docs/src/security/tls.md.
-func desiredCertificate(agent *kaalmv1alpha1.Agent) *cmapi.Certificate {
+func desiredCertificate(agent *kaalmv1beta1.Agent) *cmapi.Certificate {
 	name, ns := agent.Name, agent.Namespace
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: agentCertificateName(name), Namespace: ns},
@@ -312,7 +312,7 @@ func desiredCertificate(agent *kaalmv1alpha1.Agent) *cmapi.Certificate {
 
 // desiredServiceAccount is the per-Agent identity with no RoleBindings: the
 // agent has no Kubernetes API access unless explicitly granted.
-func desiredServiceAccount(agent *kaalmv1alpha1.Agent) *corev1.ServiceAccount {
+func desiredServiceAccount(agent *kaalmv1beta1.Agent) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: agentServiceAccountName(agent.Name), Namespace: agent.Namespace},
 	}
@@ -320,7 +320,7 @@ func desiredServiceAccount(agent *kaalmv1alpha1.Agent) *corev1.ServiceAccount {
 
 // desiredService is the ClusterIP Service fronting the agent's HTTPS listener.
 // targetPort is the literal health port, decoupled from the Service-facing port.
-func desiredService(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec) *corev1.Service {
+func desiredService(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: agent.Name, Namespace: agent.Namespace},
 		Spec: corev1.ServiceSpec{
@@ -338,7 +338,7 @@ func desiredService(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec) *corev1.
 
 // desiredPVC provisions the agent's durable volume. Callers must not invoke it
 // when persistence is disabled or an existingClaim is referenced.
-func desiredPVC(agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec) *corev1.PersistentVolumeClaim {
+func desiredPVC(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec) *corev1.PersistentVolumeClaim {
 	size := eff.PVCSizeGi
 	if size <= 0 {
 		size = 1
@@ -357,7 +357,7 @@ func desiredPVC(agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff
 	}
 }
 
-func agentPodLabels(agent *kaalmv1alpha1.Agent) map[string]string {
+func agentPodLabels(agent *kaalmv1beta1.Agent) map[string]string {
 	return map[string]string{
 		"kaalm.io/agent":    agent.Name,
 		"kaalm.io/workload": "agent",
@@ -367,7 +367,7 @@ func agentPodLabels(agent *kaalmv1alpha1.Agent) map[string]string {
 // desiredPod derives the agent Pod: injected env and probes per the runtime
 // contract, the single projected TLS volume at /var/run/kaalm, and the
 // drift-detection hash annotation.
-func desiredPod(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec, operatorNamespace string) *corev1.Pod {
+func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNamespace string) *corev1.Pod {
 	labels := map[string]string{}
 	for k, v := range eff.PodLabels {
 		labels[k] = v
@@ -501,7 +501,7 @@ func desiredPod(agent *kaalmv1alpha1.Agent, eff effectiveAgentSpec, operatorName
 // policy kind and land in the hardening phase; when unsupported they are
 // ignored and the AgentClassReconciler emits the Warning.
 func desiredNetworkPolicy(
-	agent *kaalmv1alpha1.Agent, class *kaalmv1alpha1.AgentClass, eff effectiveAgentSpec, operatorNamespace string,
+	agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec, operatorNamespace string,
 ) *networkingv1.NetworkPolicy {
 	protoTCP := corev1.ProtocolTCP
 	protoUDP := corev1.ProtocolUDP

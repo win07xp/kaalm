@@ -27,38 +27,38 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestPhaseCollector_CountsByPhaseAndConditions(t *testing.T) {
-	agent := func(ns, name string, phase kaalmv1alpha1.AgentPhase) *kaalmv1alpha1.Agent {
-		return &kaalmv1alpha1.Agent{
+	agent := func(ns, name string, phase kaalmv1beta1.AgentPhase) *kaalmv1beta1.Agent {
+		return &kaalmv1beta1.Agent{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Status:     kaalmv1alpha1.AgentStatus{Phase: phase},
+			Status:     kaalmv1beta1.AgentStatus{Phase: phase},
 		}
 	}
 	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(
-		agent("team-a", "a1", kaalmv1alpha1.AgentRunning),
-		agent("team-a", "a2", kaalmv1alpha1.AgentRunning),
-		agent("team-a", "a3", kaalmv1alpha1.AgentHibernated),
+		agent("team-a", "a1", kaalmv1beta1.AgentRunning),
+		agent("team-a", "a2", kaalmv1beta1.AgentRunning),
+		agent("team-a", "a3", kaalmv1beta1.AgentHibernated),
 		agent("team-b", "fresh", ""), // not yet reconciled: counted as Pending
-		&kaalmv1alpha1.AgentTask{
+		&kaalmv1beta1.AgentTask{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "t1"},
-			Status:     kaalmv1alpha1.AgentTaskStatus{Phase: kaalmv1alpha1.TaskSucceeded},
+			Status:     kaalmv1beta1.AgentTaskStatus{Phase: kaalmv1beta1.TaskSucceeded},
 		},
-		&kaalmv1alpha1.AgentChannel{
+		&kaalmv1beta1.AgentChannel{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "c1"},
-			Status: kaalmv1alpha1.AgentChannelStatus{
-				Phase: kaalmv1alpha1.ChannelActive,
+			Status: kaalmv1beta1.AgentChannelStatus{
+				Phase: kaalmv1beta1.ChannelActive,
 				Conditions: []metav1.Condition{
 					{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Bound"},
 					{Type: "PlatformConnected", Status: metav1.ConditionFalse, Reason: "WebhookAuthFailed"},
 				},
 			},
 		},
-		&kaalmv1alpha1.AgentChannel{
+		&kaalmv1beta1.AgentChannel{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "c2"},
-			Status:     kaalmv1alpha1.AgentChannelStatus{Phase: kaalmv1alpha1.ChannelDegraded},
+			Status:     kaalmv1beta1.AgentChannelStatus{Phase: kaalmv1beta1.ChannelDegraded},
 		},
 	).Build()
 

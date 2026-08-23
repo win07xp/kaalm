@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // TestHTTPProbe_HonorsHealthCheckTimeout proves the probe applies
@@ -20,11 +20,11 @@ func TestHTTPProbe_HonorsHealthCheckTimeout(t *testing.T) {
 	defer srv.Close()
 
 	checker := &HTTPProviderHealthChecker{}
-	provider := &kaalmv1alpha1.ModelProvider{
-		Spec: kaalmv1alpha1.ModelProviderSpec{
+	provider := &kaalmv1beta1.ModelProvider{
+		Spec: kaalmv1beta1.ModelProviderSpec{
 			Type:     "openai",
 			Endpoint: srv.URL,
-			HealthCheck: &kaalmv1alpha1.ModelProviderHealthCheck{
+			HealthCheck: &kaalmv1beta1.ModelProviderHealthCheck{
 				Enabled:        true,
 				TimeoutSeconds: 1,
 			},
@@ -52,8 +52,8 @@ func TestHTTPProbe_HealthyWithinTimeout(t *testing.T) {
 	defer srv.Close()
 
 	checker := &HTTPProviderHealthChecker{}
-	provider := &kaalmv1alpha1.ModelProvider{
-		Spec: kaalmv1alpha1.ModelProviderSpec{
+	provider := &kaalmv1beta1.ModelProvider{
+		Spec: kaalmv1beta1.ModelProviderSpec{
 			Type:     "openai",
 			Endpoint: srv.URL,
 		},
@@ -89,8 +89,8 @@ func TestHTTPProbe_Classification(t *testing.T) {
 
 	checker := &HTTPProviderHealthChecker{}
 	probe := func(typ, endpoint string) ProviderProbeResult {
-		return checker.Probe(context.Background(), &kaalmv1alpha1.ModelProvider{
-			Spec: kaalmv1alpha1.ModelProviderSpec{Type: typ, Endpoint: endpoint},
+		return checker.Probe(context.Background(), &kaalmv1beta1.ModelProvider{
+			Spec: kaalmv1beta1.ModelProviderSpec{Type: typ, Endpoint: endpoint},
 		}, "sk-test")
 	}
 

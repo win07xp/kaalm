@@ -31,7 +31,7 @@ import (
 	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // BudgetConfigMapName returns the per-provider budget ConfigMap name.
@@ -163,7 +163,7 @@ func nextPeriodStart(scheme string, t time.Time) time.Time {
 
 // costOf prices a call from the provider's model catalog. Unpriced models
 // cost zero (spend visibility is a soft guardrail).
-func costOf(provider *kaalmv1alpha1.ModelProvider, modelID string, usage Usage) float64 {
+func costOf(provider *kaalmv1beta1.ModelProvider, modelID string, usage Usage) float64 {
 	for _, m := range provider.Spec.Models {
 		if m.ID != modelID {
 			continue
@@ -284,7 +284,7 @@ func (b *BudgetLedger) ledgerFor(providerName, scheme string) *providerLedger {
 
 // Add records spend for a namespace and its attested workload after a call
 // completes.
-func (b *BudgetLedger) Add(provider *kaalmv1alpha1.ModelProvider, namespace, workload string, costUSD float64) {
+func (b *BudgetLedger) Add(provider *kaalmv1beta1.ModelProvider, namespace, workload string, costUSD float64) {
 	scheme := provider.Spec.Budget.Period
 	if PeriodKey(scheme, b.now()) == "" || costUSD == 0 {
 		return
@@ -302,7 +302,7 @@ func (b *BudgetLedger) Add(provider *kaalmv1alpha1.ModelProvider, namespace, wor
 
 // FoldPeers replaces the peer view for a provider from freshly read
 // current-period partials (own key excluded by the caller).
-func (b *BudgetLedger) FoldPeers(provider *kaalmv1alpha1.ModelProvider, peers map[string]float64) {
+func (b *BudgetLedger) FoldPeers(provider *kaalmv1beta1.ModelProvider, peers map[string]float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
@@ -312,7 +312,7 @@ func (b *BudgetLedger) FoldPeers(provider *kaalmv1alpha1.ModelProvider, peers ma
 
 // InitCanonical seeds the peer view from the reconciler's _canonical roll-up
 // at startup (read exactly once per provider per replica lifetime).
-func (b *BudgetLedger) InitCanonical(provider *kaalmv1alpha1.ModelProvider, canonical map[string]float64) {
+func (b *BudgetLedger) InitCanonical(provider *kaalmv1beta1.ModelProvider, canonical map[string]float64) {
 	b.FoldPeers(provider, canonical)
 }
 
@@ -320,7 +320,7 @@ func (b *BudgetLedger) InitCanonical(provider *kaalmv1alpha1.ModelProvider, cano
 // freshly read current-period workload partials (own key excluded by the
 // caller). It deliberately does not touch lastFoldOK: workload spend is a
 // visibility surface, never an enforcement input.
-func (b *BudgetLedger) FoldWorkloadPeers(provider *kaalmv1alpha1.ModelProvider, peers map[string]float64) {
+func (b *BudgetLedger) FoldWorkloadPeers(provider *kaalmv1beta1.ModelProvider, peers map[string]float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
@@ -460,7 +460,7 @@ type utilization struct {
 }
 
 // utilizationLocked computes both ceiling ratios from own + peers spend.
-func utilizationLocked(budget kaalmv1alpha1.ModelProviderBudget, l *providerLedger, namespace string) utilization {
+func utilizationLocked(budget kaalmv1beta1.ModelProviderBudget, l *providerLedger, namespace string) utilization {
 	var u utilization
 	if ceiling, err := strconv.ParseFloat(budget.PerNamespaceUSD, 64); err == nil && ceiling > 0 {
 		u.nsUSD = ceiling
@@ -482,12 +482,12 @@ func utilizationLocked(budget kaalmv1alpha1.ModelProviderBudget, l *providerLedg
 
 // decide applies the policy ladder to a utilization: the highest-threshold
 // policy at or below the worst ratio wins.
-func (b *BudgetLedger) decide(budget kaalmv1alpha1.ModelProviderBudget, u utilization) budgetDecision {
+func (b *BudgetLedger) decide(budget kaalmv1beta1.ModelProviderBudget, u utilization) budgetDecision {
 	d := budgetDecision{Percent: int(u.worst), Ceiling: "namespace"}
 	if u.worstIsCluster {
 		d.Ceiling = "cluster"
 	}
-	var winner *kaalmv1alpha1.ModelProviderBudgetPolicy
+	var winner *kaalmv1beta1.ModelProviderBudgetPolicy
 	for i := range budget.Policies {
 		p := &budget.Policies[i]
 		if u.worst >= float64(p.AtPercent) && (winner == nil || p.AtPercent > winner.AtPercent) {
@@ -498,10 +498,10 @@ func (b *BudgetLedger) decide(budget kaalmv1alpha1.ModelProviderBudget, u utiliz
 		return d
 	}
 	d.Action = winner.Action
-	if winner.Action == kaalmv1alpha1.BudgetActionDegrade && winner.DegradeTo != nil {
+	if winner.Action == kaalmv1beta1.BudgetActionDegrade && winner.DegradeTo != nil {
 		d.DegradeTo = *winner.DegradeTo
 	}
-	if winner.Action == kaalmv1alpha1.BudgetActionBlock {
+	if winner.Action == kaalmv1beta1.BudgetActionBlock {
 		d.RetryAfter = int(time.Until(nextPeriodStart(budget.Period, b.now())).Seconds()) + 1
 	}
 	return d
@@ -512,7 +512,7 @@ func (b *BudgetLedger) decide(budget kaalmv1alpha1.ModelProviderBudget, u utiliz
 // policy at or below the current utilization wins. Utilization is the worse
 // of the per-namespace and cluster-wide ratios. Soft-mode semantics only;
 // hard-mode callers go through Admit.
-func (b *BudgetLedger) Enforce(provider *kaalmv1alpha1.ModelProvider, namespace string) budgetDecision {
+func (b *BudgetLedger) Enforce(provider *kaalmv1beta1.ModelProvider, namespace string) budgetDecision {
 	budget := provider.Spec.Budget
 	if PeriodKey(budget.Period, b.now()) == "" || len(budget.Policies) == 0 {
 		return budgetDecision{}
@@ -535,7 +535,7 @@ type BudgetPublisher struct {
 	PodName           string
 	Interval          time.Duration
 	// Providers enumerates the ModelProviders to exchange for.
-	Providers func(ctx context.Context) []*kaalmv1alpha1.ModelProvider
+	Providers func(ctx context.Context) []*kaalmv1beta1.ModelProvider
 	// now is the clock, overridable in tests; nil means time.Now.
 	now func() time.Time
 }
@@ -594,7 +594,7 @@ func (p *BudgetPublisher) tick(ctx context.Context) {
 	}
 }
 
-func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
+func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
 	snapshot := p.clock()
 	period, spend, marginRaised, ok := p.Ledger.OwnPartial(provider.Name)
 	if !ok {
@@ -621,7 +621,7 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1alpha1.M
 // deliberately outside the budget ConfigMap so the enforcement fold never
 // sees workload keys. Best-effort: workload spend is visibility, not
 // enforcement, so a failed publish only logs.
-func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
+func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
 	period, spend, ok := p.Ledger.OwnWorkloadPartial(provider.Name)
 	if !ok {
 		return
@@ -638,7 +638,7 @@ func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv
 	}
 }
 
-func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
+func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
 	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, BudgetConfigMapName(provider.Name), metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -658,7 +658,7 @@ func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1alpha1.Mode
 
 // foldWorkloads refreshes the per-workload peer view from the agent-spend
 // ConfigMap, so any single replica serves the folded union on GET /v1/spend.
-func (p *BudgetPublisher) foldWorkloads(ctx context.Context, provider *kaalmv1alpha1.ModelProvider) {
+func (p *BudgetPublisher) foldWorkloads(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
 	cm, err := p.Client.CoreV1().ConfigMaps(p.OperatorNamespace).Get(ctx, AgentSpendConfigMapName(provider.Name), metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {

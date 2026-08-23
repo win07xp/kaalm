@@ -19,7 +19,7 @@ package gateway
 import (
 	"sync"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // This file is the hard-enforcement half of the budget ledger:
@@ -32,12 +32,12 @@ import (
 // hardActive reports whether hard enforcement governs this provider's block
 // policies. Rule 32 guarantees a block policy exists when enforcement is
 // hard; the check here is defense in depth.
-func hardActive(provider *kaalmv1alpha1.ModelProvider) bool {
-	if provider.Spec.Budget.Enforcement != kaalmv1alpha1.BudgetEnforcementHard {
+func hardActive(provider *kaalmv1beta1.ModelProvider) bool {
+	if provider.Spec.Budget.Enforcement != kaalmv1beta1.BudgetEnforcementHard {
 		return false
 	}
 	for _, p := range provider.Spec.Budget.Policies {
-		if p.Action == kaalmv1alpha1.BudgetActionBlock {
+		if p.Action == kaalmv1beta1.BudgetActionBlock {
 			return true
 		}
 	}
@@ -46,10 +46,10 @@ func hardActive(provider *kaalmv1alpha1.ModelProvider) bool {
 
 // minBlockAt returns the lowest block policy threshold: the ceiling whose
 // boundary region hard mode defends first.
-func minBlockAt(budget kaalmv1alpha1.ModelProviderBudget) float64 {
+func minBlockAt(budget kaalmv1beta1.ModelProviderBudget) float64 {
 	at := float64(101) // no block policy: unreachable boundary
 	for _, p := range budget.Policies {
-		if p.Action == kaalmv1alpha1.BudgetActionBlock && float64(p.AtPercent) < at {
+		if p.Action == kaalmv1beta1.BudgetActionBlock && float64(p.AtPercent) < at {
 			at = float64(p.AtPercent)
 		}
 	}
@@ -58,7 +58,7 @@ func minBlockAt(budget kaalmv1alpha1.ModelProviderBudget) float64 {
 
 // configuredMarginPercent is the rule 34 floor: hard.boundaryMarginPercent,
 // defaulting to 5 when the hard block is absent.
-func configuredMarginPercent(budget kaalmv1alpha1.ModelProviderBudget) float64 {
+func configuredMarginPercent(budget kaalmv1beta1.ModelProviderBudget) float64 {
 	if budget.Hard != nil {
 		return float64(budget.Hard.BoundaryMarginPercent)
 	}
@@ -121,7 +121,7 @@ func (b *BudgetLedger) effectiveMarginPctLocked(l *providerLedger, ceilingUSD, c
 // boundary region it try-acquires the governed admission slots and returns
 // a settle the caller MUST invoke exactly once with the request's actual
 // cost (zero if nothing was spent); settle is idempotent and rollover-safe.
-func (b *BudgetLedger) Admit(provider *kaalmv1alpha1.ModelProvider, namespace, workload string) (budgetDecision, func(costUSD float64)) {
+func (b *BudgetLedger) Admit(provider *kaalmv1beta1.ModelProvider, namespace, workload string) (budgetDecision, func(costUSD float64)) {
 	budget := provider.Spec.Budget
 	scheme := budget.Period
 	if PeriodKey(scheme, b.now()) == "" || len(budget.Policies) == 0 {
@@ -133,7 +133,7 @@ func (b *BudgetLedger) Admit(provider *kaalmv1alpha1.ModelProvider, namespace, w
 	l := b.ledgerFor(provider.Name, scheme)
 	u := utilizationLocked(budget, l, namespace)
 	d := b.decide(budget, u)
-	if !hardActive(provider) || d.Action == kaalmv1alpha1.BudgetActionBlock {
+	if !hardActive(provider) || d.Action == kaalmv1beta1.BudgetActionBlock {
 		return d, nil
 	}
 

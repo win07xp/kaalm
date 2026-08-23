@@ -31,7 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // ActivatorServer serves the controller's :9443 endpoints: kubelet probes
@@ -127,7 +127,7 @@ func (s *ActivatorServer) handleActivate(w http.ResponseWriter, r *http.Request)
 	}
 	namespace, name := parts[0], parts[1]
 
-	var agent kaalmv1alpha1.Agent
+	var agent kaalmv1beta1.Agent
 	if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: namespace, Name: name}, &agent); err != nil {
 		if apierrors.IsNotFound(err) {
 			http.Error(w, "agent not found", http.StatusNotFound)
@@ -136,7 +136,7 @@ func (s *ActivatorServer) handleActivate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, kaalmv1alpha1.AnnotationWake, kaalmv1alpha1.AnnotationTrue)
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, kaalmv1beta1.AnnotationWake, kaalmv1beta1.AnnotationTrue)
 	if err := s.Client.Patch(r.Context(), &agent, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

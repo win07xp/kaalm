@@ -39,7 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 )
 
@@ -100,14 +100,14 @@ type AgentChannelReconciler struct {
 func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var channel kaalmv1alpha1.AgentChannel
+	var channel kaalmv1beta1.AgentChannel
 	if err := r.Get(ctx, req.NamespacedName, &channel); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !channel.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &channel)
 	}
-	if controllerutil.AddFinalizer(&channel, kaalmv1alpha1.ChannelFinalizer) {
+	if controllerutil.AddFinalizer(&channel, kaalmv1beta1.ChannelFinalizer) {
 		if err := r.Update(ctx, &channel); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -118,20 +118,20 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// The system-namespace guard runs first, as on the workload reconcilers.
 	if channel.Namespace == r.OperatorNamespace {
-		r.setChannelReady(&channel, false, kaalmv1alpha1.ReasonSystemNamespaceForbidden,
+		r.setChannelReady(&channel, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("AgentChannels may not live in the operator namespace %q", r.OperatorNamespace))
 		return ctrl.Result{}, r.Status().Update(ctx, &channel)
 	}
 
 	// Step 1: resolve agentRef (an Agent, never an AgentTask).
-	var agent kaalmv1alpha1.Agent
+	var agent kaalmv1beta1.Agent
 	agentErr := r.Get(ctx, types.NamespacedName{Namespace: channel.Namespace, Name: channel.Spec.AgentRef.Name}, &agent)
 	if agentErr != nil {
 		if !apierrors.IsNotFound(agentErr) {
 			return ctrl.Result{}, agentErr
 		}
-		channel.Status.Phase = kaalmv1alpha1.ChannelFailed
-		r.setChannelReady(&channel, false, kaalmv1alpha1.ReasonAgentNotFound,
+		channel.Status.Phase = kaalmv1beta1.ChannelFailed
+		r.setChannelReady(&channel, false, kaalmv1beta1.ReasonAgentNotFound,
 			fmt.Sprintf("Agent %q not found in namespace %q", channel.Spec.AgentRef.Name, channel.Namespace))
 		return ctrl.Result{}, r.Status().Update(ctx, &channel)
 	}
@@ -142,7 +142,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		r.reducePhase(&channel, &agent)
 		return ctrl.Result{}, r.Status().Update(ctx, &channel)
 	}
-	r.setChannelReady(&channel, true, kaalmv1alpha1.ReasonAgentReachable, "channel is valid")
+	r.setChannelReady(&channel, true, kaalmv1beta1.ReasonAgentReachable, "channel is valid")
 
 	// Step 4: channel health poll and the tri-state reduction.
 	if r.Health != nil {
@@ -168,22 +168,22 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // conflict, the per-channel credential Role, and Secret validation. Returns a
 // non-empty reason on the first failure.
 func (r *AgentChannelReconciler) validateChannel(
-	ctx context.Context, channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent,
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent,
 ) (string, string) {
 	// Step 2: the Agent must expose a Service (delivery target).
 	if agent.Spec.Service != nil && !agent.Spec.Service.Enabled {
-		return kaalmv1alpha1.ReasonAgentServiceDisabled,
+		return kaalmv1beta1.ReasonAgentServiceDisabled,
 			fmt.Sprintf("Agent %q has service.enabled=false; channels need a delivery target", agent.Name)
 	}
 	// Rule 15: the path must begin with /channels/{namespace}/. CRD CEL
 	// cannot read metadata.namespace, so this lives here.
 	prefix := "/channels/" + channel.Namespace + "/"
 	if !strings.HasPrefix(channel.Spec.Webhook.Path, prefix) {
-		return kaalmv1alpha1.ReasonInvalidPath,
+		return kaalmv1beta1.ReasonInvalidPath,
 			fmt.Sprintf("webhook.path must begin with %q", prefix)
 	}
 	// Path conflict: the earliest creationTimestamp wins.
-	var channels kaalmv1alpha1.AgentChannelList
+	var channels kaalmv1beta1.AgentChannelList
 	if err := r.List(ctx, &channels, client.InNamespace(channel.Namespace)); err == nil {
 		for i := range channels.Items {
 			other := &channels.Items[i]
@@ -192,7 +192,7 @@ func (r *AgentChannelReconciler) validateChannel(
 			}
 			if other.CreationTimestamp.Before(&channel.CreationTimestamp) ||
 				(other.CreationTimestamp.Equal(&channel.CreationTimestamp) && other.Name < channel.Name) {
-				return kaalmv1alpha1.ReasonPathConflict,
+				return kaalmv1beta1.ReasonPathConflict,
 					fmt.Sprintf("path %q is already registered by the older channel %q",
 						channel.Spec.Webhook.Path, other.Name)
 			}
@@ -201,7 +201,7 @@ func (r *AgentChannelReconciler) validateChannel(
 	// Step 3: the scoped Role must exist BEFORE any Secret read: it is what
 	// grants the reconciler (and the gateway) access to exactly these Secrets.
 	if err := r.ensureCredentialRole(ctx, channel); err != nil {
-		return kaalmv1alpha1.ReasonInvalidReference, "ensuring the credential Role failed: " + err.Error()
+		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential Role failed: " + err.Error()
 	}
 	if reason, msg := r.validateSecrets(ctx, channel); reason != "" {
 		return reason, msg
@@ -218,9 +218,9 @@ func (r *AgentChannelReconciler) validateChannel(
 
 // authSecretNames collects the Secret names the channel's auth config
 // references (inbound always; callbackAuth when callbackUrl is set).
-func authSecretNames(channel *kaalmv1alpha1.AgentChannel) []string {
+func authSecretNames(channel *kaalmv1beta1.AgentChannel) []string {
 	set := map[string]bool{}
-	collect := func(auth *kaalmv1alpha1.ChannelAuth) {
+	collect := func(auth *kaalmv1beta1.ChannelAuth) {
 		if auth == nil {
 			return
 		}
@@ -248,7 +248,7 @@ func channelRoleName(channelName string) string { return "kaalm-channel-" + chan
 // ensureCredentialRole creates or updates the per-channel Role (get, watch,
 // resourceNames-scoped; list deliberately omitted since resourceNames cannot
 // constrain it) and its two RoleBindings (gateway and controller SAs).
-func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, channel *kaalmv1alpha1.AgentChannel) error {
+func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, channel *kaalmv1beta1.AgentChannel) error {
 	names := authSecretNames(channel)
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: channelRoleName(channel.Name), Namespace: channel.Namespace},
@@ -315,20 +315,20 @@ func equalStrings(a, b []string) bool {
 // validateSecrets confirms every referenced Secret and key exists. The shared
 // CredentialsMissing reason is the one stable "channel auth Secret unusable"
 // signal for both directions.
-func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *kaalmv1alpha1.AgentChannel) (string, string) {
-	check := func(ref *kaalmv1alpha1.SecretKeyReference) (string, string) {
+func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *kaalmv1beta1.AgentChannel) (string, string) {
+	check := func(ref *kaalmv1beta1.SecretKeyReference) (string, string) {
 		var sec corev1.Secret
 		if err := r.Get(ctx, types.NamespacedName{Namespace: channel.Namespace, Name: ref.Name}, &sec); err != nil {
-			return kaalmv1alpha1.ReasonCredentialsMissing,
+			return kaalmv1beta1.ReasonCredentialsMissing,
 				fmt.Sprintf("Secret %q not found in namespace %q", ref.Name, channel.Namespace)
 		}
 		if v, ok := sec.Data[ref.Key]; !ok || len(v) == 0 {
-			return kaalmv1alpha1.ReasonCredentialsMissing,
+			return kaalmv1beta1.ReasonCredentialsMissing,
 				fmt.Sprintf("key %q missing in Secret %q", ref.Key, ref.Name)
 		}
 		return "", ""
 	}
-	auths := []*kaalmv1alpha1.ChannelAuth{&channel.Spec.Webhook.Auth}
+	auths := []*kaalmv1beta1.ChannelAuth{&channel.Spec.Webhook.Auth}
 	if channel.Spec.Webhook.CallbackURL != nil && channel.Spec.Webhook.CallbackAuth != nil {
 		auths = append(auths, channel.Spec.Webhook.CallbackAuth)
 	}
@@ -353,7 +353,7 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 func validateCallbackURL(raw string, policy callbackpolicy.Policy) (string, string) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != schemeHTTPS || parsed.Hostname() == "" {
-		return kaalmv1alpha1.ReasonInvalidCallbackURL, "callbackUrl must be a valid https URL"
+		return kaalmv1beta1.ReasonInvalidCallbackURL, "callbackUrl must be a valid https URL"
 	}
 	host := parsed.Hostname()
 	ips, err := net.LookupIP(host)
@@ -364,7 +364,7 @@ func validateCallbackURL(raw string, policy callbackpolicy.Policy) (string, stri
 	}
 	for _, ip := range ips {
 		if !policy.Allowed(host, ip) {
-			return kaalmv1alpha1.ReasonInvalidCallbackURL,
+			return kaalmv1beta1.ReasonInvalidCallbackURL,
 				fmt.Sprintf("callbackUrl host resolves to blocked address %s", ip)
 		}
 	}
@@ -372,7 +372,7 @@ func validateCallbackURL(raw string, policy callbackpolicy.Policy) (string, stri
 }
 
 // reduceChannelHealth applies the 4-rule reduction into PlatformConnected.
-func (r *AgentChannelReconciler) reduceChannelHealth(ctx context.Context, channel *kaalmv1alpha1.AgentChannel) {
+func (r *AgentChannelReconciler) reduceChannelHealth(ctx context.Context, channel *kaalmv1beta1.AgentChannel) {
 	reachable, total, err := r.Health.NamespaceChannelHealth(ctx, channel.Namespace)
 	if err != nil || total == 0 || len(reachable) == 0 {
 		return // rule 4: preserve the existing condition
@@ -406,11 +406,11 @@ func (r *AgentChannelReconciler) reduceChannelHealth(ctx context.Context, channe
 		}
 	}
 
-	cond := metav1.Condition{Type: kaalmv1alpha1.ConditionPlatformConnected}
+	cond := metav1.Condition{Type: kaalmv1beta1.ConditionPlatformConnected}
 	switch {
 	case lastSuccess != nil: // rule 1
 		cond.Status = metav1.ConditionTrue
-		cond.Reason = kaalmv1alpha1.ReasonWebhookReady
+		cond.Reason = kaalmv1beta1.ReasonWebhookReady
 		cond.Message = "webhook delivery succeeded within the health window"
 	case lastFailure != nil: // rule 2
 		cond.Status = metav1.ConditionFalse
@@ -418,7 +418,7 @@ func (r *AgentChannelReconciler) reduceChannelHealth(ctx context.Context, channe
 		cond.Message = deref(lastFailure.LastError, "delivery failed")
 	case fullWindow && allEmpty: // rule 3
 		cond.Status = metav1.ConditionUnknown
-		cond.Reason = kaalmv1alpha1.ReasonNoRecentTraffic
+		cond.Reason = kaalmv1beta1.ReasonNoRecentTraffic
 		cond.Message = "no webhook traffic observed within the health window"
 	default: // rule 4
 		return
@@ -442,24 +442,24 @@ func deref(s *string, fallback string) string {
 
 // reducePhase maps the referenced Agent's phase onto the Channel phase.
 // status.phase and Ready are deliberately separate axes.
-func (r *AgentChannelReconciler) reducePhase(channel *kaalmv1alpha1.AgentChannel, agent *kaalmv1alpha1.Agent) {
+func (r *AgentChannelReconciler) reducePhase(channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent) {
 	switch agent.Status.Phase {
-	case kaalmv1alpha1.AgentFailed, kaalmv1alpha1.AgentDegraded:
-		channel.Status.Phase = kaalmv1alpha1.ChannelDegraded
+	case kaalmv1beta1.AgentFailed, kaalmv1beta1.AgentDegraded:
+		channel.Status.Phase = kaalmv1beta1.ChannelDegraded
 	default:
-		channel.Status.Phase = kaalmv1alpha1.ChannelActive
+		channel.Status.Phase = kaalmv1beta1.ChannelActive
 	}
 }
 
 // pruneAsyncConfigMaps deletes this channel's async response records: only
 // expired ones on normal passes, all of them on the finalizer sweep.
 func (r *AgentChannelReconciler) pruneAsyncConfigMaps(
-	ctx context.Context, channel *kaalmv1alpha1.AgentChannel, sweepAll bool,
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, sweepAll bool,
 ) error {
 	var cms corev1.ConfigMapList
 	if err := r.List(ctx, &cms, client.InNamespace(r.OperatorNamespace), client.MatchingLabels(map[string]string{
-		kaalmv1alpha1.LabelChannelNamespace: channel.Namespace,
-		kaalmv1alpha1.LabelChannelName:      channel.Name,
+		kaalmv1beta1.LabelChannelNamespace: channel.Namespace,
+		kaalmv1beta1.LabelChannelName:      channel.Name,
 	})); err != nil {
 		return err
 	}
@@ -470,7 +470,7 @@ func (r *AgentChannelReconciler) pruneAsyncConfigMaps(
 			continue
 		}
 		if !sweepAll {
-			expiresAt, err := time.Parse(time.RFC3339, cm.Annotations[kaalmv1alpha1.AnnotationExpiresAt])
+			expiresAt, err := time.Parse(time.RFC3339, cm.Annotations[kaalmv1beta1.AnnotationExpiresAt])
 			if err != nil || expiresAt.After(now) {
 				continue
 			}
@@ -485,15 +485,15 @@ func (r *AgentChannelReconciler) pruneAsyncConfigMaps(
 // reconcileDelete drives the six-step delete handshake: announce Terminating,
 // wait for the gateway's disconnect confirmation (bounded), sweep the async
 // records once, release the finalizer.
-func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *kaalmv1alpha1.AgentChannel) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(channel, kaalmv1alpha1.ChannelFinalizer) {
+func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *kaalmv1beta1.AgentChannel) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(channel, kaalmv1beta1.ChannelFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
 	// Step 1: announce. Gateway replicas observe this through their watch
 	// and stop creating async records (the write gate).
-	if channel.Status.Phase != kaalmv1alpha1.ChannelTerminating {
-		channel.Status.Phase = kaalmv1alpha1.ChannelTerminating
+	if channel.Status.Phase != kaalmv1beta1.ChannelTerminating {
+		channel.Status.Phase = kaalmv1beta1.ChannelTerminating
 		if err := r.Status().Update(ctx, channel); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -501,7 +501,7 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 
 	// Step 4: wait for the disconnect annotation, bounded so a dead gateway
 	// cannot wedge deletion forever.
-	disconnected := channel.Annotations[kaalmv1alpha1.AnnotationChannelDisconnected] == kaalmv1alpha1.AnnotationTrue
+	disconnected := channel.Annotations[kaalmv1beta1.AnnotationChannelDisconnected] == kaalmv1beta1.AnnotationTrue
 	if !disconnected && time.Since(channel.DeletionTimestamp.Time) < disconnectTimeout {
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
@@ -513,17 +513,17 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 	}
 
 	// Step 6: release.
-	controllerutil.RemoveFinalizer(channel, kaalmv1alpha1.ChannelFinalizer)
+	controllerutil.RemoveFinalizer(channel, kaalmv1beta1.ChannelFinalizer)
 	return ctrl.Result{}, r.Update(ctx, channel)
 }
 
-func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1alpha1.AgentChannel, ok bool, reason, msg string) {
+func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1beta1.AgentChannel, ok bool, reason, msg string) {
 	status := metav1.ConditionFalse
 	if ok {
 		status = metav1.ConditionTrue
 	}
 	apimeta.SetStatusCondition(&channel.Status.Conditions, metav1.Condition{
-		Type: kaalmv1alpha1.ConditionReady, Status: status, Reason: reason, Message: msg,
+		Type: kaalmv1beta1.ConditionReady, Status: status, Reason: reason, Message: msg,
 	})
 }
 
@@ -531,16 +531,16 @@ func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1alpha1.AgentCha
 // watch (phase reduction must track Agent phase changes).
 func (r *AgentChannelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kaalmv1alpha1.AgentChannel{}).
+		For(&kaalmv1beta1.AgentChannel{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
-		Watches(&kaalmv1alpha1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.channelsForAgent)).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.channelsForAgent)).
 		Complete(r)
 }
 
 // channelsForAgent re-enqueues every channel referencing a changed Agent.
 func (r *AgentChannelReconciler) channelsForAgent(ctx context.Context, obj client.Object) []reconcile.Request {
-	var channels kaalmv1alpha1.AgentChannelList
+	var channels kaalmv1beta1.AgentChannelList
 	if err := r.List(ctx, &channels, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}

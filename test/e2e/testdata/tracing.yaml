@@ -4,7 +4,7 @@
 # trace: channel.receive and agent.deliver on the User Gateway, then
 # llm.request and llm.forward on the LLM proxy, connected through the
 # runtime's trace-context propagation (contract item 8).
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: tracing-provider
@@ -21,7 +21,7 @@ spec:
   models:
     - id: mock-model
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: tracing-class
@@ -41,7 +41,7 @@ spec:
     maxHibernationDelay: 0s
     maxWakeTimeout: 0s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: trace-agent
@@ -57,7 +57,7 @@ spec:
     - providerRef:
         name: tracing-provider
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: trace-channel

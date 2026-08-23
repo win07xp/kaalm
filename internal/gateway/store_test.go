@@ -22,23 +22,31 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestIsKaalmManagedPod(t *testing.T) {
 	// OwnerRef to an Agent.
 	agentPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: kaalmv1alpha1.GroupVersion.String(), Kind: "Agent"}},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: kaalmv1beta1.GroupVersion.String(), Kind: "Agent"}},
 	}}
 	if !isKaalmManagedPod(agentPod) {
 		t.Error("Agent-owned pod must be managed")
 	}
 	// OwnerRef to an AgentTask.
 	taskPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: kaalmv1alpha1.GroupVersion.String(), Kind: "AgentTask"}},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: kaalmv1beta1.GroupVersion.String(), Kind: "AgentTask"}},
 	}}
 	if !isKaalmManagedPod(taskPod) {
 		t.Error("AgentTask-owned pod must be managed")
+	}
+	// OwnerRef written before the v0.6.0 graduation names v1alpha1; the
+	// match is by group, so the Pod is still managed.
+	oldPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "kaalm.io/v1alpha1", Kind: "Agent"}},
+	}}
+	if !isKaalmManagedPod(oldPod) {
+		t.Error("pod owned through kaalm.io/v1alpha1 must be managed")
 	}
 	// Label-based.
 	labeledPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"kaalm.io/workload": "agent"}}}

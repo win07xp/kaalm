@@ -23,7 +23,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // EventRecorder is the subset of record.EventRecorder the gateway uses for
@@ -43,13 +43,13 @@ func (s *Server) recordEvent(object runtime.Object, reason, messageFmt string, a
 // forwardResult is one upstream attempt's classified outcome. Exactly one of
 // resp or the failure fields is meaningful.
 type forwardResult struct {
-	resp       *http.Response               // set on a completed HTTP round trip (any status)
-	body       []byte                       // buffered non-stream body, if read
-	fallilable bool                         // whether this outcome should trigger fallback
-	class      failClass                    // the failure class, for the exhaustion mapping
-	err        error                        // transport error, if any
-	provider   string                       // the candidate that produced this result
-	chosen     *kaalmv1alpha1.ModelProvider // the candidate resource, for usage accounting
+	resp       *http.Response              // set on a completed HTTP round trip (any status)
+	body       []byte                      // buffered non-stream body, if read
+	fallilable bool                        // whether this outcome should trigger fallback
+	class      failClass                   // the failure class, for the exhaustion mapping
+	err        error                       // transport error, if any
+	provider   string                      // the candidate that produced this result
+	chosen     *kaalmv1beta1.ModelProvider // the candidate resource, for usage accounting
 	// settle frees the winning candidate's boundary admission slot with the
 	// request's actual cost (hard enforcement). Nil outside the boundary
 	// region; idempotent; the caller MUST invoke it on every outcome path.
@@ -111,7 +111,7 @@ func isFallbackable(status int) (bool, failClass) {
 
 // walkState threads the traversal budget and dedup set through the recursion.
 type walkState struct {
-	primary      *kaalmv1alpha1.ModelProvider
+	primary      *kaalmv1beta1.ModelProvider
 	namespace    string
 	workload     string
 	modelID      string
@@ -131,8 +131,8 @@ type walkState struct {
 // returning the first successful attempt or a classified exhaustion. attempt
 // runs one candidate; it returns the classified result.
 func (s *Server) tryWithFallbacks(
-	ctx context.Context, provider *kaalmv1alpha1.ModelProvider, st *walkState,
-	attempt func(context.Context, *kaalmv1alpha1.ModelProvider) forwardResult,
+	ctx context.Context, provider *kaalmv1beta1.ModelProvider, st *walkState,
+	attempt func(context.Context, *kaalmv1beta1.ModelProvider) forwardResult,
 ) (forwardResult, bool) {
 	if st.visited[provider.Name] {
 		return forwardResult{}, false // cycle: defense in depth
@@ -142,7 +142,7 @@ func (s *Server) tryWithFallbacks(
 	if reason := s.staticallyIneligible(provider, st); reason != "" {
 		// Misconfiguration: skip WITHOUT consuming a slot, warn on the
 		// primary, and do not walk this provider's children.
-		s.recordEvent(st.primary, kaalmv1alpha1.ReasonFallbackIneligible,
+		s.recordEvent(st.primary, kaalmv1beta1.ReasonFallbackIneligible,
 			"fallback %q skipped: %s", provider.Name, reason)
 		return forwardResult{}, false
 	}
@@ -183,7 +183,7 @@ func (s *Server) tryWithFallbacks(
 					return res, true
 				}
 				return forwardResult{class: classBudget}, false
-			case d.Action == kaalmv1alpha1.BudgetActionBlock:
+			case d.Action == kaalmv1beta1.BudgetActionBlock:
 				st.observed[classBudget] = true
 				if d.RetryAfter > st.maxRetryAfter {
 					st.maxRetryAfter = d.RetryAfter
@@ -220,7 +220,7 @@ func (s *Server) tryWithFallbacks(
 	}
 	if res.class == classUpstream && res.resp != nil &&
 		(res.resp.StatusCode == 401 || res.resp.StatusCode == 403) {
-		s.recordEvent(provider, kaalmv1alpha1.ReasonCredentialsInvalid,
+		s.recordEvent(provider, kaalmv1beta1.ReasonCredentialsInvalid,
 			"upstream returned %d; credential rotation may be needed", res.resp.StatusCode)
 	}
 	if child, ok := s.walkChildren(ctx, provider, st, attempt); ok {
@@ -230,13 +230,13 @@ func (s *Server) tryWithFallbacks(
 }
 
 func (s *Server) walkChildren(
-	ctx context.Context, provider *kaalmv1alpha1.ModelProvider, st *walkState,
-	attempt func(context.Context, *kaalmv1alpha1.ModelProvider) forwardResult,
+	ctx context.Context, provider *kaalmv1beta1.ModelProvider, st *walkState,
+	attempt func(context.Context, *kaalmv1beta1.ModelProvider) forwardResult,
 ) (forwardResult, bool) {
 	for _, ref := range provider.Spec.Fallback {
 		next, ok := s.Store.ProviderByName(ctx, ref.Name)
 		if !ok {
-			s.recordEvent(st.primary, kaalmv1alpha1.ReasonFallbackIneligible,
+			s.recordEvent(st.primary, kaalmv1beta1.ReasonFallbackIneligible,
 				"fallback %q skipped: provider does not exist", ref.Name)
 			continue
 		}
@@ -250,7 +250,7 @@ func (s *Server) walkChildren(
 // staticallyIneligible returns a non-empty reason when a candidate fails a
 // config-derived check (same type, namespace, model). These never consume a
 // slot.
-func (s *Server) staticallyIneligible(provider *kaalmv1alpha1.ModelProvider, st *walkState) string {
+func (s *Server) staticallyIneligible(provider *kaalmv1beta1.ModelProvider, st *walkState) string {
 	if provider.Name != st.primary.Name && provider.Spec.Type != st.primary.Spec.Type {
 		return fmt.Sprintf("type %q does not match primary type %q", provider.Spec.Type, st.primary.Spec.Type)
 	}

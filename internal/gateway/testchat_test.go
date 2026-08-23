@@ -27,7 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 // postTestChat calls the handler directly (the ConsolePaths SAN gate is
@@ -178,7 +178,7 @@ func TestTestChat_SyncErrorMapping(t *testing.T) {
 	}
 
 	// Hibernated agent with no activator: 504 controller_unavailable.
-	h.store.agents["team-a/sup"].Status.Phase = kaalmv1alpha1.AgentHibernated
+	h.store.agents["team-a/sup"].Status.Phase = kaalmv1beta1.AgentHibernated
 	rec = postTestChat(h, `{"namespace":"team-a","agent":"sup","userId":"u","content":"c"}`)
 	if rec.Code != 504 {
 		t.Errorf("hibernated with no activator: status = %d, want 504", rec.Code)
@@ -190,7 +190,7 @@ func TestTestChat_WakesHibernatedAgent(t *testing.T) {
 		_, _ = w.Write([]byte(`{"content":"awake"}`))
 	})
 	h.seedChannel("sync")
-	h.store.agents["team-a/sup"].Status.Phase = kaalmv1alpha1.AgentHibernated
+	h.store.agents["team-a/sup"].Status.Phase = kaalmv1beta1.AgentHibernated
 	act := &fakeActivator{}
 	h.server.Activator = act
 	reg := prometheus.NewRegistry()

@@ -111,7 +111,7 @@ func (f *fakeHealthChecker) count(name string) int {
 }
 
 func (f *fakeHealthChecker) Probe(
-	_ context.Context, provider *kaalmv1alpha1.ModelProvider, _ string,
+	_ context.Context, provider *kaalmv1beta1.ModelProvider, _ string,
 ) ProviderProbeResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -161,7 +161,7 @@ func (f *fakeToolHealthChecker) credential(name string) string {
 }
 
 func (f *fakeToolHealthChecker) Probe(
-	_ context.Context, provider *kaalmv1alpha1.ToolProvider, credential string,
+	_ context.Context, provider *kaalmv1beta1.ToolProvider, credential string,
 ) ProviderProbeResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -176,9 +176,10 @@ func (f *fakeToolHealthChecker) Probe(
 func TestMain(m *testing.M) {
 	// The scheme holds both API versions so envtest sees every kind as
 	// convertible and installs the conversion webhook into the CRDs, pointed
-	// at the local webhook server below. Every write this suite makes at
-	// v1alpha1 is then converted to the v1beta1 storage version for real,
-	// through the same handler the controller serves in a cluster.
+	// at the local webhook server below. The reconcilers under test work at
+	// v1beta1, the hub and storage version, exactly as the controller does in
+	// a cluster; conversion_test.go is the one place that writes at v1alpha1
+	// and proves the webhook through the apiserver.
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		panic(err)
@@ -281,8 +282,8 @@ func TestMain(m *testing.M) {
 	if !mgr.GetCache().WaitForCacheSync(ctx) {
 		panic("cache sync failed")
 	}
-	// The first v1alpha1 write converts through the webhook, so it must be
-	// listening before any test runs.
+	// conversion_test.go writes at v1alpha1, which converts through the
+	// webhook, so it must be listening before any test runs.
 	started := mgr.GetWebhookServer().StartedChecker()
 	for deadline := time.Now().Add(timeout); started(nil) != nil; {
 		if time.Now().After(deadline) {
