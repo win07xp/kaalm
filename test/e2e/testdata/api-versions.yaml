@@ -1,0 +1,15 @@
+# A v1alpha1 manifest applied by the API versions spec: the deprecated
+# version must still apply (with a warning), be stored at v1beta1, and read
+# back at both versions.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: api-versions-class
+spec:
+  runtime:
+    backend: pod
+  image:
+    defaultImage: example/agent:api-versions
+    allowedImages: ["example/*"]
+  lifecycle:
+    defaultIdleTimeout: 45s

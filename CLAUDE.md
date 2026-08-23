@@ -10,7 +10,7 @@ proven). Current milestone (v0.6.0, "API graduation", tracking issue #49):
 v1beta1 with conversion, upgrade e2e, deprecation policy; see
 `docs/src/ROADMAP.md` and the GitHub milestones.
 
-- API group: `kaalm.io` | Version: `v1alpha1`
+- API group: `kaalm.io` | Versions: `v1beta1` (the storage version and the contract) and `v1alpha1` (deprecated, served, converted by the controller)
 - Stack: Go, controller-runtime (kubebuilder), Helm
 - Components: operator controller + gateway (+ optional console), all in `kaalm-system` namespace
 - 6 CRDs: AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel
