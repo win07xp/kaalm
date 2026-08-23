@@ -142,9 +142,16 @@ var _ = Describe("Operator console (S19)", Ordered, func() {
 		Expect(reply.Content).To(ContainSubstring("ping from the console"))
 
 		By("the wake is visible on the resource")
+		// The fixture idles 2s after its last activity and the controller reads
+		// gateway activity through a 15s cache, so after the reply the phase is
+		// Running only briefly and not at a predictable instant (a 3s poll has
+		// missed it). The Woken event is the deterministic record that the
+		// test-chat woke the agent; the reply above already proves delivery.
 		Eventually(func() (string, error) {
-			return utils.ResourceField("agent", "console-e2e", "console-agent", "{.status.phase}")
-		}, "60s", "3s").Should(Equal("Running"))
+			return utils.Kubectl("get", "events", "-n", "console-e2e",
+				"--field-selector", "involvedObject.name=console-agent,reason=Woken",
+				"-o", "jsonpath={.items[*].reason}")
+		}, "60s", "3s").Should(ContainSubstring("Woken"))
 	})
 
 	It("shows nothing to an unauthorized token", func() {
