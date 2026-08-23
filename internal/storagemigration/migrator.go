@@ -56,8 +56,7 @@ type entry struct {
 	kind string
 }
 
-// kinds lists the six Kaalm CRDs. The order is the dependency order the
-// chart installs them in; nothing depends on it here.
+// kinds lists the six Kaalm CRDs.
 var kinds = []entry{
 	{crdName: "agentclasses.kaalm.io", kind: "AgentClass"},
 	{crdName: "modelproviders.kaalm.io", kind: "ModelProvider"},
@@ -151,43 +150,50 @@ func (m *Migrator) Start(ctx context.Context) error {
 // pass is idempotent, so the caller may simply run it again.
 func (m *Migrator) Migrate(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("storage-migrator")
+	migratedKinds := 0
 	for _, k := range kinds {
-		if err := m.migrateKind(ctx, log, k); err != nil {
+		did, err := m.migrateKind(ctx, log, k)
+		if err != nil {
 			return fmt.Errorf("%s: %w", k.crdName, err)
 		}
+		if did {
+			migratedKinds++
+		}
 	}
+	log.Info("storage-version migration pass complete", "kindsMigrated", migratedKinds,
+		"kindsAlreadyCurrent", len(kinds)-migratedKinds)
 	return nil
 }
 
 // migrateKind moves one CRD: skip when storedVersions is already
 // ["v1beta1"], refuse when v1beta1 is not the CRD's storage version (the
 // chart's CRDs were not applied, and trimming storedVersions would lie),
-// otherwise rewrite every object and trim.
-func (m *Migrator) migrateKind(ctx context.Context, log logr.Logger, k entry) error {
+// otherwise rewrite every object and trim. It reports whether it migrated.
+func (m *Migrator) migrateKind(ctx context.Context, log logr.Logger, k entry) (bool, error) {
 	var crd apiextensionsv1.CustomResourceDefinition
 	if err := m.Reader.Get(ctx, client.ObjectKey{Name: k.crdName}, &crd); err != nil {
-		return fmt.Errorf("get CRD: %w", err)
+		return false, fmt.Errorf("get CRD: %w", err)
 	}
 	if migrated(crd.Status.StoredVersions) {
-		return nil
+		return false, nil
 	}
 	if !storesAt(crd, StorageVersion) {
-		return fmt.Errorf("storage version is not %s (storedVersions %v); apply the chart's CRDs first",
+		return false, fmt.Errorf("storage version is not %s (storedVersions %v); apply the chart's CRDs first",
 			StorageVersion, crd.Status.StoredVersions)
 	}
 	before := append([]string(nil), crd.Status.StoredVersions...)
 	seen, moved, err := m.rewriteAll(ctx, crd.Spec.Group, k.kind)
 	if err != nil {
-		return err
+		return false, err
 	}
 	patch := fmt.Sprintf(`{"status":{"storedVersions":[%q]}}`, StorageVersion)
 	if err := m.Client.Status().Patch(ctx, &crd, client.RawPatch(types.MergePatchType, []byte(patch))); err != nil {
-		return fmt.Errorf("trim storedVersions: %w", err)
+		return false, fmt.Errorf("trim storedVersions: %w", err)
 	}
 	migratedObjects.WithLabelValues(k.kind).Add(float64(moved))
 	log.Info("storage version migrated", "crd", k.crdName, "objects", seen, "rewritten", moved,
 		"storedVersionsBefore", before)
-	return nil
+	return true, nil
 }
 
 // rewriteAll lists every object of the kind at the storage version, page by
