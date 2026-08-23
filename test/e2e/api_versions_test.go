@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -43,6 +44,23 @@ var _ = Describe("API versions (v1beta1 stored, v1alpha1 converted)", Ordered, f
 				return utils.Kubectl("get", "crd", crd, "-o", "jsonpath={.spec.conversion.webhook.clientConfig.caBundle}")
 			}, "60s", "2s").ShouldNot(BeEmpty(), crd)
 		}
+	})
+
+	It("ran the storage-version migrator on the leader, with the RBAC the chart grants", func() {
+		// A fresh install has nothing to move, so the migrator's in-cluster
+		// proof here is that the pass ran and completed under the chart's
+		// ClusterRole (the get on CRDs by name is the grant that would fail
+		// first if it were missing). S21 proves the moving itself against a
+		// real upgrade.
+		var logs string
+		Eventually(func() string {
+			out, _ := utils.Kubectl("logs", "-n", "kaalm-system", "-l", "app.kubernetes.io/component=controller",
+				"--tail=-1", "--prefix")
+			logs = out
+			return out
+		}, 2*time.Minute, 5*time.Second).Should(ContainSubstring("storage-version migration pass complete"))
+		Expect(logs).NotTo(ContainSubstring("storage-version migration failed"))
+		Expect(logs).To(MatchRegexp(`"kindsAlreadyCurrent":\s*6`))
 	})
 
 	It("applies a v1alpha1 manifest with the deprecation warning and reads it back at both versions", func() {
