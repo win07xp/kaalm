@@ -51,13 +51,21 @@ var _ = Describe("API versions (v1beta1 stored, v1alpha1 converted)", Ordered, f
 		Expect(out).To(ContainSubstring("kaalm.io/v1alpha1 AgentClass is deprecated; use kaalm.io/v1beta1"))
 
 		// Each read at an explicit version converts from the stored v1beta1
-		// object (or serves it directly); both must show the applied spec.
+		// object (or serves it directly); both must show the applied spec. A
+		// read at v1alpha1 carries the deprecation warning (kubectl prints it
+		// on stderr, which the helper folds into the output); a read at
+		// v1beta1 must not.
 		for _, resource := range []string{"agentclasses.v1alpha1.kaalm.io", "agentclasses.v1beta1.kaalm.io"} {
 			out, err := utils.Kubectl("get", resource, "api-versions-class", "-o",
 				"jsonpath={.apiVersion} {.spec.image.defaultImage} {.spec.lifecycle.defaultIdleTimeout}")
 			Expect(err).NotTo(HaveOccurred(), resource)
 			version := strings.TrimPrefix(strings.TrimSuffix(resource, ".kaalm.io"), "agentclasses.")
-			Expect(out).To(Equal("kaalm.io/" + version + " example/agent:api-versions 45s"))
+			Expect(lastLine(out)).To(Equal("kaalm.io/" + version + " example/agent:api-versions 45s"))
+			if version == "v1alpha1" {
+				Expect(out).To(ContainSubstring("is deprecated; use kaalm.io/v1beta1"), resource)
+			} else {
+				Expect(out).NotTo(ContainSubstring("deprecated"), resource)
+			}
 		}
 
 		// The bare kind resolves to the preferred version, v1beta1.
@@ -73,6 +81,16 @@ var _ = Describe("API versions (v1beta1 stored, v1alpha1 converted)", Ordered, f
 		out, err = utils.Kubectl("get", "agentclasses.v1alpha1.kaalm.io", "api-versions-class", "-o",
 			"jsonpath={.spec.lifecycle.defaultIdleTimeout}")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(Equal("50s"))
+		Expect(lastLine(out)).To(Equal("50s"))
 	})
 })
+
+// lastLine returns the final non-empty line of a kubectl output, which is the
+// jsonpath result once any apiserver warnings printed before it are skipped.
+func lastLine(out string) string {
+	lines := utils.GetNonEmptyLines(strings.TrimSpace(out))
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(lines[len(lines)-1])
+}
