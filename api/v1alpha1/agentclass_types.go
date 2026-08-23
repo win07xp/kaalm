@@ -214,6 +214,7 @@ type AgentClassStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:deprecatedversion:warning="kaalm.io/v1alpha1 AgentClass is deprecated; use kaalm.io/v1beta1"
 // +kubebuilder:resource:scope=Cluster,shortName=ac
 // +kubebuilder:printcolumn:name="Agents",type=integer,JSONPath=`.status.agentsInUse`
 // +kubebuilder:printcolumn:name="Tasks",type=integer,JSONPath=`.status.tasksInUse`

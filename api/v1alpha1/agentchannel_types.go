@@ -157,6 +157,7 @@ type AgentChannelStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:deprecatedversion:warning="kaalm.io/v1alpha1 AgentChannel is deprecated; use kaalm.io/v1beta1"
 // +kubebuilder:resource:shortName=ach
 // +kubebuilder:printcolumn:name="Agent",type=string,JSONPath=`.spec.agentRef.name`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

@@ -35,7 +35,10 @@ linters:
   exclusions:
     generated: lax
     rules:
+      # api/v1beta1 is the v1alpha1 schema field for field by design (the
+      # design book's API Versioning chapter), so dupl would flag every type.
       - linters:
+          - dupl
           - lll
         path: api/*
       - linters:

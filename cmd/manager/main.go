@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,10 +42,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	webhookconversion "sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/controller"
 	// +kubebuilder:scaffold:imports
@@ -59,6 +62,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(kaalmv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kaalmv1beta1.AddToScheme(scheme))
 	utilruntime.Must(cmapi.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -68,6 +72,7 @@ func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
+	var webhookPort int
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
@@ -85,7 +90,10 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
-	flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
+	flag.StringVar(&webhookCertPath, "webhook-cert-path", "",
+		"The directory that contains the webhook certificate. Enables the CRD conversion webhook when set.")
+	flag.IntVar(&webhookPort, "webhook-port", 9444,
+		"The port the CRD conversion webhook listens on (the conversion port of the kaalm-controller Service).")
 	flag.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
 	flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
 	flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
@@ -156,6 +164,7 @@ func main() {
 	}
 
 	webhookServer := webhook.NewServer(webhook.Options{
+		Port:    webhookPort,
 		TLSOpts: webhookTLSOpts,
 	})
 
@@ -330,6 +339,28 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	// The CRD conversion webhook (design book, API Versioning and Deprecation):
+	// v1beta1 is the hub and storage version, v1alpha1 the deprecated spoke,
+	// and every replica serves the conversion on its own listener. It is
+	// enabled by the cert path, the way the activator is enabled by the
+	// controller TLS identity, so a certless local run still starts.
+	if webhookCertPath != "" {
+		for _, hub := range []runtime.Object{
+			&kaalmv1beta1.Agent{}, &kaalmv1beta1.AgentChannel{}, &kaalmv1beta1.AgentClass{},
+			&kaalmv1beta1.AgentTask{}, &kaalmv1beta1.ModelProvider{}, &kaalmv1beta1.ToolProvider{},
+		} {
+			if ok, err := webhookconversion.IsConvertible(mgr.GetScheme(), hub); err != nil || !ok {
+				setupLog.Error(err, "kind is not convertible; refusing to serve a partial conversion webhook",
+					"type", fmt.Sprintf("%T", hub), "convertible", ok)
+				os.Exit(1)
+			}
+		}
+		mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(mgr.GetScheme()))
+		setupLog.Info("serving the CRD conversion webhook", "path", "/convert", "port", webhookPort)
+	} else {
+		setupLog.Info("webhook cert path not configured; CRD conversion webhook disabled")
+	}
 
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")

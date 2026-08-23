@@ -35,8 +35,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	webhookconversion "sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 const (
@@ -171,7 +174,27 @@ func (f *fakeToolHealthChecker) Probe(
 }
 
 func TestMain(m *testing.M) {
+	// The scheme holds both API versions so envtest sees every kind as
+	// convertible and installs the conversion webhook into the CRDs, pointed
+	// at the local webhook server below. Every write this suite makes at
+	// v1alpha1 is then converted to the v1beta1 storage version for real,
+	// through the same handler the controller serves in a cluster.
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		panic(err)
+	}
+	if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {
+		panic(err)
+	}
+	if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
+		panic(err)
+	}
+	if err := cmapi.AddToScheme(scheme); err != nil {
+		panic(err)
+	}
+
 	testEnv = &envtest.Environment{
+		Scheme: scheme,
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd", "bases"),
 			filepath.Join("..", "..", "test", "crds"),
@@ -183,24 +206,20 @@ func TestMain(m *testing.M) {
 		panic("start envtest: " + err.Error())
 	}
 
-	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
-	if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
-	if err := cmapi.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
-
+	whOpts := testEnv.WebhookInstallOptions
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Host:    whOpts.LocalServingHost,
+			Port:    whOpts.LocalServingPort,
+			CertDir: whOpts.LocalServingCertDir,
+		}),
 	})
 	if err != nil {
 		panic("manager: " + err.Error())
 	}
+	mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(scheme))
 
 	// Recoverable gates poll fast in tests (production default is 30s).
 	gateRequeue = 500 * time.Millisecond
@@ -261,6 +280,15 @@ func TestMain(m *testing.M) {
 	}()
 	if !mgr.GetCache().WaitForCacheSync(ctx) {
 		panic("cache sync failed")
+	}
+	// The first v1alpha1 write converts through the webhook, so it must be
+	// listening before any test runs.
+	started := mgr.GetWebhookServer().StartedChecker()
+	for deadline := time.Now().Add(timeout); started(nil) != nil; {
+		if time.Now().After(deadline) {
+			panic("conversion webhook server did not start: " + started(nil).Error())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	testClient = mgr.GetClient()
 

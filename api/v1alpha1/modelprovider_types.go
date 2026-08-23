@@ -199,6 +199,7 @@ type ModelProviderBudgetUsage struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:deprecatedversion:warning="kaalm.io/v1alpha1 ModelProvider is deprecated; use kaalm.io/v1beta1"
 // +kubebuilder:resource:scope=Cluster,shortName=mp
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`

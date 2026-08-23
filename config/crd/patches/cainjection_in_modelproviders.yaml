@@ -1,0 +1,9 @@
+# cert-manager's cainjector copies the Kaalm CA (the ca.crt of the
+# kaalm-controller-tls leaf Secret, written by the CA issuer) into this CRD's
+# spec.conversion.webhook.clientConfig.caBundle and keeps it current.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modelproviders.kaalm.io
+  annotations:
+    cert-manager.io/inject-ca-from: kaalm-system/kaalm-controller-tls

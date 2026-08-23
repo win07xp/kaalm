@@ -46,4 +46,56 @@ resources:
   kind: AgentChannel
   path: github.com/win07xp/kaalm/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+  domain: io
+  group: kaalm
+  kind: ToolProvider
+  path: github.com/win07xp/kaalm/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+  domain: io
+  group: kaalm
+  kind: AgentClass
+  path: github.com/win07xp/kaalm/api/v1beta1
+  version: v1beta1
+- api:
+    crdVersion: v1
+  domain: io
+  group: kaalm
+  kind: ModelProvider
+  path: github.com/win07xp/kaalm/api/v1beta1
+  version: v1beta1
+- api:
+    crdVersion: v1
+  domain: io
+  group: kaalm
+  kind: ToolProvider
+  path: github.com/win07xp/kaalm/api/v1beta1
+  version: v1beta1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: io
+  group: kaalm
+  kind: Agent
+  path: github.com/win07xp/kaalm/api/v1beta1
+  version: v1beta1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: io
+  group: kaalm
+  kind: AgentTask
+  path: github.com/win07xp/kaalm/api/v1beta1
+  version: v1beta1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: io
+  group: kaalm
+  kind: AgentChannel
+  path: github.com/win07xp/kaalm/api/v1beta1
+  version: v1beta1
 version: "3"
