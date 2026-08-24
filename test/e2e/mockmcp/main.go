@@ -24,6 +24,12 @@ limitations under the License.
 // which also exercises the broker's relayed-4xx path if a spec wants it).
 // The declared catalog is web_search and fetch_page.
 //
+// With --modern set, it is instead a 2026-07-28-only server: server/discover
+// answered, initialize rejected the way the revision tells modern-only
+// servers to, no sessions minted or read, and the mirrored Mcp-Method and
+// Mcp-Name headers validated against the body with 400 + HeaderMismatch,
+// which makes the broker's header forwarding an intrinsic e2e proof.
+//
 // With --require-bearer set, any request without that exact bearer token is
 // rejected 401. The S18 spec runs it this way, which makes credential
 // injection an intrinsic proof: brokered calls succeed only because the
@@ -57,6 +63,14 @@ var catalog = []tool{
 	{Name: "fetch_page", Description: "mock page fetch"},
 }
 
+// JSON field names and values goconst wants named once.
+const (
+	toolsKey     = "tools"
+	resultKey    = "resultType"
+	textType     = "text"
+	completeType = "complete"
+)
+
 // rpcRequest is the slice of a JSON-RPC request the mock reads.
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -67,6 +81,7 @@ type rpcRequest struct {
 
 type mock struct {
 	requireBearer string
+	modern        bool
 
 	mu       sync.Mutex
 	nextSess int
@@ -75,9 +90,10 @@ type mock struct {
 	tools    map[string]int
 }
 
-func newMock(requireBearer string) *mock {
+func newMock(requireBearer string, modern bool) *mock {
 	return &mock{
 		requireBearer: requireBearer,
+		modern:        modern,
 		sessions:      map[string]bool{},
 		methods:       map[string]int{},
 		tools:         map[string]int{},
@@ -92,7 +108,17 @@ func result(w http.ResponseWriter, id json.RawMessage, payload any) {
 
 // rpcError writes a JSON-RPC error envelope (HTTP 200, per JSON-RPC).
 func rpcError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
+	rpcErrorStatus(w, http.StatusOK, id, code, message)
+}
+
+// rpcErrorStatus writes a JSON-RPC error envelope with the HTTP status the
+// modern revision pairs with it (400 for HeaderMismatch and version errors,
+// 404 for an unknown method).
+func rpcErrorStatus(w http.ResponseWriter, status int, id json.RawMessage, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	if status != http.StatusOK {
+		w.WriteHeader(status)
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id,
 		"error": map[string]any{"code": code, "message": message}})
 }
@@ -120,6 +146,11 @@ func (m *mock) rpc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if m.modern {
+		m.rpcModern(w, r, msg)
+		return
+	}
+
 	if msg.Method == "initialize" {
 		m.mu.Lock()
 		m.nextSess++
@@ -129,7 +160,7 @@ func (m *mock) rpc(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Mcp-Session-Id", sess)
 		result(w, msg.ID, map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"capabilities":    map[string]any{toolsKey: map[string]any{}},
 			"serverInfo":      map[string]any{"name": "mockmcp", "version": "e2e"},
 		})
 		return
@@ -149,7 +180,7 @@ func (m *mock) rpc(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		result(w, msg.ID, map[string]any{})
 	case "tools/list":
-		result(w, msg.ID, map[string]any{"tools": catalog})
+		result(w, msg.ID, map[string]any{toolsKey: catalog})
 	case "tools/call":
 		var params struct {
 			Name string `json:"name"`
@@ -161,7 +192,7 @@ func (m *mock) rpc(w http.ResponseWriter, r *http.Request) {
 				m.tools[params.Name]++
 				m.mu.Unlock()
 				result(w, msg.ID, map[string]any{
-					"content": []map[string]any{{"type": "text", "text": "called " + params.Name}},
+					"content": []map[string]any{{"type": textType, textType: "called " + params.Name}},
 				})
 				return
 			}
@@ -169,6 +200,61 @@ func (m *mock) rpc(w http.ResponseWriter, r *http.Request) {
 		rpcError(w, msg.ID, -32602, "unknown tool "+params.Name)
 	default:
 		rpcError(w, msg.ID, -32601, "method not supported by mockmcp: "+msg.Method)
+	}
+}
+
+// rpcModern is the 2026-07-28-only surface: stateless, self-describing
+// requests, mirrored headers validated against the body.
+func (m *mock) rpcModern(w http.ResponseWriter, r *http.Request, msg rpcRequest) {
+	if got := r.Header.Get("Mcp-Method"); got != msg.Method {
+		rpcErrorStatus(w, http.StatusBadRequest, msg.ID, -32020,
+			fmt.Sprintf("Header mismatch: Mcp-Method %q vs body method %q", got, msg.Method))
+		return
+	}
+	switch msg.Method {
+	case "server/discover":
+		result(w, msg.ID, map[string]any{
+			"resultType":        "complete",
+			"supportedVersions": []string{"2026-07-28"},
+			"capabilities":      map[string]any{toolsKey: map[string]any{}},
+		})
+	case "tools/list":
+		result(w, msg.ID, map[string]any{
+			resultKey: completeType, toolsKey: catalog,
+			"ttlMs": 60000, "cacheScope": "public",
+		})
+	case "tools/call":
+		var params struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(msg.Params, &params)
+		if got := r.Header.Get("Mcp-Name"); got != params.Name {
+			rpcErrorStatus(w, http.StatusBadRequest, msg.ID, -32020,
+				fmt.Sprintf("Header mismatch: Mcp-Name %q vs body tool %q", got, params.Name))
+			return
+		}
+		for _, t := range catalog {
+			if t.Name == params.Name {
+				m.mu.Lock()
+				m.tools[params.Name]++
+				m.mu.Unlock()
+				result(w, msg.ID, map[string]any{
+					resultKey: completeType,
+					"content": []map[string]any{{"type": textType, textType: "called " + params.Name}},
+				})
+				return
+			}
+		}
+		rpcError(w, msg.ID, -32602, "unknown tool "+params.Name)
+	case "initialize":
+		// The revision tells a modern-only server to name its versions in
+		// any error answering initialize: legacy clients have no
+		// fall-forward, and this may be their only diagnostic.
+		rpcErrorStatus(w, http.StatusNotFound, msg.ID, -32601,
+			"initialize is not part of this server's protocol; supported versions: [2026-07-28]")
+	default:
+		rpcErrorStatus(w, http.StatusNotFound, msg.ID, -32601,
+			"method not supported by mockmcp (modern): "+msg.Method)
 	}
 }
 
@@ -202,13 +288,14 @@ func main() {
 		certFile      = flag.String("tls-cert", "/var/run/tls/tls.crt", "server certificate")
 		keyFile       = flag.String("tls-key", "/var/run/tls/tls.key", "server key")
 		requireBearer = flag.String("require-bearer", "", "reject requests without this exact bearer token")
+		modern        = flag.Bool("modern", false, "speak only the stateless 2026-07-28 revision")
 	)
 	flag.Parse()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	m := newMock(*requireBearer)
+	m := newMock(*requireBearer, *modern)
 	srv := &http.Server{Addr: *addr, Handler: m.handler(), ReadHeaderTimeout: 10 * time.Second}
-	logger.Info("mock MCP server listening", "addr", *addr, "bearer_required", *requireBearer != "")
+	logger.Info("mock MCP server listening", "addr", *addr, "bearer_required", *requireBearer != "", "modern", *modern)
 	if err := srv.ListenAndServeTLS(*certFile, *keyFile); err != nil {
 		logger.Error("server exited", "error", err)
 		os.Exit(1)

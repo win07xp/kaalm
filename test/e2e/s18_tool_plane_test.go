@@ -58,6 +58,11 @@ var _ = Describe("Governed tool access (S18)", Ordered, func() {
 			return utils.ResourceField("toolprovider", "", "search-tools",
 				`{.status.conditions[?(@.type=="Healthy")].status}`)
 		}, "120s", "5s").Should(Equal("True"))
+
+		By("the dual-era probe fell back to the handshake and recorded the legacy revision")
+		Eventually(func() (string, error) {
+			return utils.ResourceField("toolprovider", "", "search-tools", "{.status.mcpRevision}")
+		}, "60s", "3s").Should(Equal("2025-03-26"))
 	})
 
 	It("holds no tool credential anywhere in the workload namespace", func() {

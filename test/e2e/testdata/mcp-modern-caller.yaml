@@ -1,0 +1,70 @@
+# The modern-era caller: mcp-modern-agent's identity walking the 2026-07-28
+# beats against the broker. Every request carries the revision's mandatory
+# headers; one deliberately mismatches Mcp-Name to prove the broker's
+# HeaderMismatch rejection. Sibling of s18-caller, same MARKER pattern.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mcp-modern-caller
+  namespace: e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          gw=https://kaalm-gateway.kaalm-system.svc:8443/v1/mcp/search-tools-modern
+          post() { # $1 body, $2 out-file, $3 Mcp-Method, $4 optional Mcp-Name
+            curl -sS -o "$2" -w '%{http_code}' \
+              --cacert /var/run/ca/ca.crt \
+              --cert /var/run/agent-tls/tls.crt --key /var/run/agent-tls/tls.key \
+              -H "Content-Type: application/json" \
+              -H "MCP-Protocol-Version: 2026-07-28" \
+              -H "Mcp-Method: $3" \
+              ${4:+-H "Mcp-Name: $4"} \
+              -d "$1" "$gw" || true
+          }
+
+          discover='{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"mcp-modern-caller","version":"e2e"},"io.modelcontextprotocol/clientCapabilities":{}}}}'
+          code=000
+          for i in $(seq 1 20); do
+            code=$(post "$discover" /tmp/discover server/discover)
+            echo "attempt $i: HTTP $code"
+            case "$code" in 000|401|502|503|504) sleep 3 ;; *) break ;; esac
+          done
+          if [ "$code" != "200" ]; then echo "MARKER discover FAILED HTTP $code"; cat /tmp/discover; exit 1; fi
+          echo "MARKER discover HTTP $code body: $(cat /tmp/discover)"
+
+          code=$(post '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' /tmp/list tools/list)
+          echo "MARKER tools-list HTTP $code body: $(cat /tmp/list)"
+
+          code=$(post '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"web_search","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' /tmp/granted tools/call web_search)
+          echo "MARKER call-granted HTTP $code body: $(cat /tmp/granted)"
+
+          code=$(post '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"web_search","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' /tmp/mismatch tools/call fetch_page)
+          echo "MARKER header-mismatch HTTP $code body: $(cat /tmp/mismatch)"
+
+          code=$(post '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fetch_page","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' /tmp/ungranted tools/call fetch_page)
+          echo "MARKER call-ungranted HTTP $code body: $(cat /tmp/ungranted)"
+
+          echo "MARKER done"
+      volumeMounts:
+        - name: agent-tls
+          mountPath: /var/run/agent-tls
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: agent-tls
+      secret:
+        secretName: mcp-modern-agent-tls
+    - name: ca
+      configMap:
+        name: kaalm-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
