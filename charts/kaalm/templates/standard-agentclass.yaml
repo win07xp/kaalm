@@ -6,7 +6,20 @@ everywhere it is not installed. A sandboxed (gVisor) class is shipped as an
 example manifest, not a live default, for the same reason. See
 docs/src/operations/deployment.md.
 */}}
-{{- if .Values.standardAgentClass.enabled }}
+{{/*
+The graduation gate: while the AgentClass CRD still lists v1alpha1 in
+status.storedVersions (the window between "kubectl apply -f crds/" and the
+first post-upgrade start of the controller's storage migrator), helm could
+neither read nor write this object: every such request converts through a
+webhook that no replica serves yet. So the chart omits it for exactly that
+upgrade; the keep policy below leaves the live object untouched, and the
+next helm upgrade re-adopts it at v1beta1. Offline rendering (helm
+template, lint) has no cluster to look up and includes it. See the design
+book, API Versioning and Deprecation, Upgrading in Place.
+*/}}
+{{- $crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "agentclasses.kaalm.io" }}
+{{- $migrating := and $crd (has "v1alpha1" (($crd.status).storedVersions | default list)) }}
+{{- if and .Values.standardAgentClass.enabled (not $migrating) }}
 apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
