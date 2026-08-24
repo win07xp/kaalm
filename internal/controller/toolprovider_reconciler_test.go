@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/mcp"
 )
 
 func mkToolProvider(t *testing.T, name string, mutate func(*kaalmv1beta1.ToolProvider)) {
@@ -70,6 +71,18 @@ func TestToolProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 	if got := fakeToolHealth.credential("tp-ok"); got != "sk-test" {
 		t.Fatalf("probe saw credential %q, want the resolved Secret value", got)
 	}
+	// The negotiated MCP revision the probe reported is recorded on status
+	// (the fake answers as a 2026-07-28 server by default).
+	eventually(t, func() error {
+		var tp kaalmv1beta1.ToolProvider
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-ok"}, &tp); err != nil {
+			return err
+		}
+		if tp.Status.MCPRevision != mcp.ModernRevision {
+			return errString("status.mcpRevision = " + tp.Status.MCPRevision)
+		}
+		return nil
+	})
 }
 
 func TestToolProvider_NoCredentialsRefIsReady(t *testing.T) {
@@ -132,7 +145,7 @@ func TestToolProvider_EmptySecretKeyIsNotReady(t *testing.T) {
 
 func TestToolProvider_AuthFailedIsNotReady(t *testing.T) {
 	mkSecret(t, "tp-auth-key")
-	fakeToolHealth.set("tp-auth", ProviderProbeResult{AuthFailed: true})
+	fakeToolHealth.set("tp-auth", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{AuthFailed: true}})
 	// A 1s probe interval so the recovery half of the test happens within the
 	// eventually window (the auth-failed path re-probes on the interval).
 	mkToolProvider(t, "tp-auth", func(tp *kaalmv1beta1.ToolProvider) {
@@ -150,13 +163,13 @@ func TestToolProvider_AuthFailedIsNotReady(t *testing.T) {
 
 	// The server accepting the credential again recovers both conditions on
 	// the next probe interval.
-	fakeToolHealth.set("tp-auth", ProviderProbeResult{Healthy: true})
+	fakeToolHealth.set("tp-auth", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true}})
 	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 }
 
 func TestToolProvider_ProbeErrorIsUnhealthyButReady(t *testing.T) {
 	mkSecret(t, "tp-down-key")
-	fakeToolHealth.set("tp-down", ProviderProbeResult{Err: errString("connect: refused")})
+	fakeToolHealth.set("tp-down", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Err: errString("connect: refused")}})
 	mkToolProvider(t, "tp-down", nil)
 	get := toolProviderConditions("tp-down")
 	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
@@ -173,7 +186,7 @@ func TestToolProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
 	mkSecret(t, "tp-nohc-key")
 	// A probe result that WOULD block Ready if the probe ran, so a passing
 	// test proves the probe was genuinely skipped rather than merely healthy.
-	fakeToolHealth.set("tp-nohc", ProviderProbeResult{AuthFailed: true})
+	fakeToolHealth.set("tp-nohc", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{AuthFailed: true}})
 	mkToolProvider(t, "tp-nohc", func(tp *kaalmv1beta1.ToolProvider) {
 		tp.Spec.HealthCheck = &kaalmv1beta1.ToolProviderHealthCheck{Enabled: false}
 	})

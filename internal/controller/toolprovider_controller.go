@@ -111,6 +111,10 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		default: // Healthy
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, true,
 				kaalmv1beta1.ReasonUpstreamReachable, "server is reachable")
+			// The era is a property of the server, cached on status so the
+			// operator sees which revision each server speaks. A failed
+			// probe keeps the last negotiated value.
+			tp.Status.MCPRevision = res.MCPRevision
 			requeue = ctrl.Result{RequeueAfter: r.interval(&tp)}
 		}
 	}

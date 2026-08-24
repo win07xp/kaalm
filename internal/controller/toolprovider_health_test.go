@@ -72,6 +72,47 @@ func TestMCPToolHealthChecker_Healthy(t *testing.T) {
 	if !res.Healthy || res.AuthFailed || res.Err != nil {
 		t.Fatalf("probe = %+v, want Healthy", res)
 	}
+	if res.MCPRevision != "2025-03-26" {
+		t.Fatalf("MCPRevision = %q, want the handshake-negotiated 2025-03-26", res.MCPRevision)
+	}
+}
+
+// TestMCPToolHealthChecker_HealthyModern proves the dual-era probe against
+// a 2026-07-28 server: server/discover succeeds, the probe completes with a
+// stateless tools/list, no initialize is ever sent, and the negotiated
+// revision comes back for status.mcpRevision.
+func TestMCPToolHealthChecker_HealthyModern(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     *int64 `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("modern handler: undecodable body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "server/discover":
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}}}}`, *req.ID)
+		case "tools/list":
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"resultType":"complete","tools":[{"name":"web_search"}],"ttlMs":60000,"cacheScope":"public"}}`, *req.ID)
+		default:
+			t.Errorf("modern handler: unexpected method %q (the stateless probe must not send it)", req.Method)
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"error":{"code":-32601,"message":"method not found"}}`, *req.ID)
+		}
+	}))
+	defer srv.Close()
+
+	res := (&MCPToolHealthChecker{}).Probe(context.Background(), tpForEndpoint(srv.URL, nil), "tok")
+	if !res.Healthy || res.Err != nil {
+		t.Fatalf("probe = %+v, want Healthy against a modern server", res)
+	}
+	if res.MCPRevision != "2026-07-28" {
+		t.Fatalf("MCPRevision = %q, want 2026-07-28", res.MCPRevision)
+	}
 }
 
 func TestMCPToolHealthChecker_AuthFailed(t *testing.T) {
