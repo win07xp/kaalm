@@ -6,6 +6,7 @@
 
 - [Installation](getting-started/installation.md)
 - [Verifying the Install](getting-started/verifying.md)
+- [Upgrading Kaalm](getting-started/upgrading.md)
 
 # For Platform Teams
 
