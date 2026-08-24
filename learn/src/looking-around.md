@@ -83,7 +83,7 @@ You have only read so far. To create something you write it down in a file and
 `apply` it. Those files are called **manifests**, and they are YAML:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: helper

@@ -5,18 +5,22 @@ type. You declare an agent; Kaalm runs it, gives it its own identity and
 storage, routes its model calls through a gateway that holds the credentials,
 and puts it to sleep when nobody is talking to it.
 
-**Status: v0.5.0.** Installs with one Helm command, and your first agent needs
-no image build: mount a handler file into a published base image. The gateway
+**Status: v0.6.0.** Installs with one Helm command, upgrades in place with
+two, and your first agent needs no image build: mount a handler file into a
+published base image. The API is graduated: `kaalm.io/v1beta1` is the stored
+version, `v1alpha1` manifests keep working with a deprecation warning, and
+the controller migrates storage on its own after an upgrade. The gateway
 holds every credential and brokers, meters, and audits both LLM and MCP tool
-calls. An optional console puts the fleet, its spend, and a test-chat panel
-on one screen; Grafana dashboards and OpenTelemetry tracing cover the rest.
-All twenty implemented acceptance scenarios are proven on a real cluster on
-every pull request.
+calls (speaking both the stateless MCP 2026-07-28 revision and the earlier
+handshake era). An optional console puts the fleet, its spend, and a
+test-chat panel on one screen; Grafana dashboards and OpenTelemetry tracing
+cover the rest. All twenty-one acceptance scenarios are proven on a real
+cluster.
 
 ## What it looks like
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: helper
@@ -44,7 +48,7 @@ installs neither. With those in place:
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 0.5.0 \
+  --version 0.6.0 \
   --namespace kaalm-system --create-namespace \
   --set certManager.clusterResourceNamespace=cert-manager
 ```

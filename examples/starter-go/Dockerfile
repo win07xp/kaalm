@@ -7,7 +7,7 @@
 # and e2e builds compile the working tree via test/e2e/starter-go/Dockerfile
 # instead. Those are different builds on purpose: e2e must test the tree,
 # your copy must build against a published release.
-ARG BASE=ghcr.io/win07xp/kaalm-agent-go:0.3.0
+ARG BASE=ghcr.io/win07xp/kaalm-agent-go:0.6.0
 
 FROM docker.io/golang:1.24 AS build
 WORKDIR /src

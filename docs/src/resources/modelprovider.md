@@ -11,7 +11,7 @@ Because it is cluster-scoped, a ModelProvider is a platform-team resource: appli
 The annotated example below shows every spec field.
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: anthropic-shared

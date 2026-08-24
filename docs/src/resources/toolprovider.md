@@ -9,7 +9,7 @@ Because it is cluster-scoped, a ToolProvider is a platform-team resource: the pl
 The annotated example below shows every spec field.
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ToolProvider
 metadata:
   name: search-tools

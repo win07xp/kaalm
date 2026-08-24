@@ -26,7 +26,7 @@ the base image. Both are the platform team's call; see
 Point an Agent at the image with no handler at all:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: greeter
@@ -34,7 +34,7 @@ metadata:
 spec:
   agentClassRef:
     name: starter
-  image: ghcr.io/win07xp/kaalm-agent-python:0.5.0
+  image: ghcr.io/win07xp/kaalm-agent-python:0.6.0
 ```
 
 It reaches `Running` and answers every message with `echo: ` plus the

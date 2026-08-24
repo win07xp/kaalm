@@ -7,7 +7,7 @@ Where an [Agent](agent.md) is a long-running service, an AgentTask has a beginni
 ## Spec
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentTask
 metadata:
   name: fix-issue-342

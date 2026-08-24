@@ -14,7 +14,7 @@ Two objects: a class that sets the rules, and an agent that follows them. Put
 both in a file called `agent.yaml`.
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: tutorial
@@ -31,7 +31,7 @@ spec:
     defaultIdleTimeout: 30s
     defaultHibernationDelay: 30s
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: helper
@@ -39,7 +39,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: ghcr.io/win07xp/kaalm-agent-python:0.5.0
+  image: ghcr.io/win07xp/kaalm-agent-python:0.6.0
   persistence:
     enabled: true
   lifecycle:

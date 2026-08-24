@@ -9,7 +9,7 @@ comes back synchronously or through a callback, your choice per channel.
 The e2e suite's own fixture, from `test/e2e/testdata/agentchannel.yaml`:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: e2e-channel

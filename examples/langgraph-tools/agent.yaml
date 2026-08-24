@@ -1,7 +1,7 @@
 # The langgraph-tools example as an Agent. Requires an MCP ToolProvider the
 # class allows and the namespace is admitted to (guide: Providing Tool
 # Access), plus an OpenAI-format ModelProvider for the model side.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: langgraph-tools

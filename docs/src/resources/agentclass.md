@@ -9,7 +9,7 @@ This split is the core of Kaalm's governance model. Developers pick a class; the
 The full spec, annotated:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: standard

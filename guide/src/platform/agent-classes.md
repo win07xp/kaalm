@@ -10,7 +10,7 @@ exceed what it grants.
 From `config/samples/kaalm_v1alpha1_agentclass.yaml`:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: standard
@@ -70,7 +70,7 @@ authorship is acceptable code provenance.
 Offer it as its own class rather than loosening a production one:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: starter
@@ -79,8 +79,8 @@ spec:
     backend: pod
   image:
     allowedImages:
-      - ghcr.io/win07xp/kaalm-agent-go:0.5.0
-      - ghcr.io/win07xp/kaalm-agent-python:0.5.0
+      - ghcr.io/win07xp/kaalm-agent-go:0.6.0
+      - ghcr.io/win07xp/kaalm-agent-python:0.6.0
     allowHandlerMounts: true
   persistence:
     enabled: true

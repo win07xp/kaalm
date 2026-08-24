@@ -7,7 +7,7 @@ Agent is a namespace-scoped, developer-facing resource representing a persistent
 The annotated example below shows every spec field. Only `agentClassRef` is required.
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: support-assistant

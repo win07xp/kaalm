@@ -5,10 +5,11 @@ against it, and what comes next.
 
 ## Where the project stands
 
-**v0.5.0 shipped on 2026-08-21**
-([release](https://github.com/win07xp/kaalm/releases/tag/v0.5.0)). It installs
-with a single `helm install` from the published OCI chart, and every
-implemented acceptance scenario (S1 to S20) is proven on a real cluster.
+**v0.6.0 shipped on 2026-08-24**
+([release](https://github.com/win07xp/kaalm/releases/tag/v0.6.0)). It installs
+with a single `helm install` from the published OCI chart, upgrades in place
+from the previous release with two documented commands, and every acceptance
+scenario (S1 to S21) is proven on a real cluster.
 
 The operator is feature-complete against the v1 design: all six CRDs, the
 reconciling controller (lifecycle, hibernation and wake, budgets, health probes,
@@ -18,75 +19,66 @@ with sync and async webhooks), the optional operator console, the Helm chart
 with cert-manager TLS wiring, the runtime contract with published base images
 and starter templates, and this book.
 
-What v0.5.0 added on top of v0.4.0 (the "console and observability"
-milestone):
+What v0.6.0 added on top of v0.5.0 (the "API graduation" milestone):
 
-- **The operator console**, designed in
-  [Console Overview](console/overview.md) and shipped as an optional third
-  component (`console.enabled`, default off): a read-only web view of the
-  fleet (phase and hibernation state, spend against budget per namespace and
-  per workload, task history, channel health) with one governed write-shaped
-  action, test-chat, which rides the gateway like any channel message.
-  Authentication is the cluster's own (`TokenReview` and
-  `SubjectAccessReview`), the JSON read API under `/api/v1` is additive
-  within the minor series, and scenario S19 is proven on a real cluster.
-- **Per-workload spend**: the gateway's ledger attributes every metered call
-  to `agent/{name}`, `task/{name}`, or an unattributed bucket, publishes the
-  breakdown through the same replicated ConfigMap exchange as budgets, and
-  serves it on `GET /v1/spend` for the console; the metric catalog still
-  carries no per-agent identity, by design.
-- **Grafana dashboards**: three importable JSON files (per namespace, per
-  provider, cluster) in `config/grafana/`, pinned to the metric catalog in
-  both directions by a test and verified against a live cluster by
-  `make dashboards-verify`. Getting there implemented four catalog gauges
-  documented since v0.1 without an implementation (`kaalm_agents`,
-  `kaalm_tasks`, `kaalm_channels`, `kaalm_llm_budget_utilization`), wired
-  the `kaalm_channel_*` metrics, and made
-  `kaalm_llm_request_duration_seconds` observe forwarded requests; a test
-  now pins the catalog table to the registries, so a documented metric can
-  no longer go unimplemented.
-- **OpenTelemetry tracing** (default off): six gateway spans across the
-  message, LLM, and tool paths, exported over OTLP/HTTP when
-  `gateway.tracing.otlpEndpoint` is set. The agent hop is propagation only
-  (runtime contract item 8), implemented invisibly by both reference
-  runtimes and exposed as `kaalm.trace_context()` and
-  `agentruntime.TraceContext` for frameworks that run their own SDK.
-  Scenario S20 proves one webhook message as one connected trace.
-- **Controller-side CA trust for health probes**
-  (`controller.trustClusterCAForProbes`, `controller.probeCA`), the
-  rotation-aware probe-side mirror of the gateway's upstream trust, so an
-  in-cluster provider under a private CA is both forwarded to and probed
-  `Healthy`; the e2e suite now runs its mock provider and tool server with
-  probes on.
-- **The guide's Observing the Platform part**: Using the Console,
-  Installing the Grafana Dashboards, and Enabling Tracing, every command
-  traced to the e2e suite or the verification stack.
+- **The graduated API.** `v1beta1` is the hub and storage version for all six
+  CRDs, with a schema deliberately identical to `v1alpha1` (the field-change
+  audit deferred every lossy candidate to v1). `v1alpha1` stays served,
+  deprecated with a per-kind warning, and converted in both directions by a
+  conversion webhook every controller replica serves; round-trip fuzz tests
+  enforce wire-form identity for every kind in both directions, so a field
+  added to one version and not the other fails the suite. The design is
+  [API Versioning and Deprecation](operations/api-versioning.md), which also
+  carries the written deprecation policy: `v1alpha1` is served at least
+  through v1.0.0, and its removal is announced a release ahead.
+- **Storage-version migration.** On its first start after an upgrade, the
+  leader rewrites every stored object at `v1beta1` and trims each CRD's
+  `storedVersions`, so the graduation finishes without manual steps; the
+  counter `kaalm_storage_migrated_objects_total` and one log line per kind
+  record it.
+- **The upgrade e2e (S21).** A suite that installs the previous *released*
+  chart, loads it with `v1alpha1` workloads, runs the two documented upgrade
+  steps to the current build, and proves nothing was recreated and nothing
+  lost: same Pod, state intact on the volume, a hibernated agent that wakes
+  on its next message, finished task status preserved, `storedVersions`
+  migrated. It runs on release tags and on PRs that touch the API surface,
+  and it is the release-readiness gate before every tag. The user-facing
+  procedure is the guide's
+  [Upgrading Kaalm](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/upgrading.md) page.
+- **MCP 2026-07-28, dual-era.** The tool plane speaks both the stateless
+  2026-07-28 revision and the 2025 handshake era for the length of the
+  upstream deprecation window: the ToolProvider probe negotiates per server
+  (`server/discover`, with `initialize` fallback) and records
+  `status.mcpRevision`; the broker enforces per request (mirrored-header
+  validation with the revision's own `HeaderMismatch` rejection, the
+  `cacheScope: private` rewrite on grant-filtered lists, session ownership
+  scoped to the legacy era). The design is the tool-plane chapter's
+  [Protocol Revisions](gateways/tool-plane.md#protocol-revisions) section.
 
-Quality bar at release: 86% project test coverage enforced by an 85% CI gate,
-envtest suites against a real apiserver, and a k3d end-to-end suite (59
-specs) that is green both locally and in GitHub Actions.
+Quality bar at release: 87% project test coverage enforced by an 85% CI gate,
+envtest suites against a real apiserver, a k3d end-to-end suite (64 specs)
+that is green both locally and in GitHub Actions, and the 6-spec upgrade
+suite that gates every release tag.
 
 Two honest caveats:
 
-- The API is `v1alpha1` and may change in breaking ways between minor
-  releases, as both the v0.2.0 `agentry.io` to `kaalm.io` move and the
-  v0.4.0 breaking notes show. Graduation is the next milestone.
+- `v1alpha1` is deprecated. Everything that says it keeps working, with a
+  warning per request, at least through v1.0.0; the
+  [deprecation policy](operations/api-versioning.md#deprecation-policy) is
+  the contract, and moving a manifest is one `apiVersion` line because the
+  schema is identical.
 - The `v0.1.0` tag predates the release machinery and installs only from
   source.
 
 ## Next
 
-The current milestone is **v0.6.0, "API graduation"**, tracked in the
-[v0.6.0 GitHub milestone](https://github.com/win07xp/kaalm/milestone/5)
-(tracking issue [#49](https://github.com/win07xp/kaalm/issues/49)):
-`v1beta1` served and stored for every CRD with conversion from `v1alpha1`,
-round-trip fuzz tests on the conversion, an upgrade e2e (install the previous
-release, upgrade in place, and prove that existing agents and tasks survive
-with state intact), and a written deprecation policy page in this book. From
-that point, a breaking change requires conversion rather than a
-rename-and-reinstall. The MCP 2026-07-28 revision
-([#82](https://github.com/win07xp/kaalm/issues/82): stateless protocol,
-routable headers) rides the same milestone.
+The current milestone is **v0.7.0, "Reach"** (tracking issue
+[#50](https://github.com/win07xp/kaalm/issues/50)): Discord and WhatsApp
+channel adapters for the user gateway, and cross-format provider fallback so
+fallback chains can cross `spec.type`. Behind it stands **v1.0.0, "The
+complete release"** ([#51](https://github.com/win07xp/kaalm/issues/51)): the
+security pass, the scale proof, the Agent Sandbox decision, and the docs
+audit.
 
 Beyond v0.6.0, the milestone runway to v1.0.0 is laid out in the
 [GitHub milestones](https://github.com/win07xp/kaalm/milestones); items below
