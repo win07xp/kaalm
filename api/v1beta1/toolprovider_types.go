@@ -101,6 +101,13 @@ type ToolProviderHealthCheck struct {
 type ToolProviderStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// MCPRevision is the MCP protocol revision the health probe last
+	// negotiated with the server: a modern revision (2026-07-28 or later)
+	// when server/discover succeeded, the version the initialize handshake
+	// returned otherwise. Empty until the first successful probe and when
+	// health checks are disabled.
+	// +optional
+	MCPRevision string `json:"mcpRevision,omitempty"`
 	// Conditions report Ready and Healthy.
 	// +listType=map
 	// +listMapKey=type

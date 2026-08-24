@@ -55,8 +55,10 @@ spec:
   rateLimits:
     requestsPerMinute: 120
 
-  # Health check configuration. The probe speaks the protocol it governs:
-  # an MCP initialize handshake followed by tools/list.
+  # Health check configuration. The probe speaks the protocol it governs,
+  # in whichever revision the server does: server/discover then a stateless
+  # tools/list against 2026-07-28 servers, the initialize handshake then
+  # tools/list against earlier ones.
   healthCheck:
     enabled: true
     intervalSeconds: 60
@@ -68,6 +70,7 @@ spec:
 ```yaml
 status:
   observedGeneration: 2
+  mcpRevision: "2026-07-28"
   conditions:
     - type: Ready
       status: "True"
@@ -78,7 +81,7 @@ status:
       reason: UpstreamReachable
 ```
 
-Two conditions summarize provider health, exactly as on ModelProvider. `Ready` reports whether the credential resolves: `False` with reason `CredentialsMissing` when the referenced Secret or key is absent or empty, and `False` with reason `CredentialsInvalid` when the server rejects the credential with a 401 or 403. A ToolProvider with no `credentialsRef` is `Ready` with a message noting that no credential is configured. `Healthy` reports the periodic MCP probe: `UpstreamReachable` on success, `ProviderUnhealthy` (with a Warning event) on network errors or protocol failures, which do not flip `Ready`.
+`mcpRevision` records the MCP protocol revision the probe last negotiated with the server (for example `2026-07-28`, or `2025-03-26` for a server still on the handshake era); it is empty until the first successful probe and when health checks are disabled. Two conditions summarize provider health, exactly as on ModelProvider. `Ready` reports whether the credential resolves: `False` with reason `CredentialsMissing` when the referenced Secret or key is absent or empty, and `False` with reason `CredentialsInvalid` when the server rejects the credential with a 401 or 403. A ToolProvider with no `credentialsRef` is `Ready` with a message noting that no credential is configured. `Healthy` reports the periodic MCP probe: `UpstreamReachable` on success, `ProviderUnhealthy` (with a Warning event) on network errors or protocol failures, which do not flip `Ready`.
 
 The probe runs by default; set `healthCheck.enabled: false` to disable it (for example for an offline test fixture). `healthCheck.intervalSeconds` sets the probe cadence (default 60) and `healthCheck.timeoutSeconds` bounds each probe sequence (default 10).
 

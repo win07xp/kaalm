@@ -26,17 +26,31 @@ import (
 	"github.com/win07xp/kaalm/internal/mcp"
 )
 
-// ToolHealthChecker probes an upstream tool server for liveness. It is an
-// interface so reconcilers can be tested with a fake and never reach a real
-// server. Results reuse ProviderProbeResult; the classification contract is
-// identical to the ModelProvider probe's.
-type ToolHealthChecker interface {
-	Probe(ctx context.Context, provider *kaalmv1beta1.ToolProvider, credential string) ProviderProbeResult
+// ToolProbeResult is a liveness probe outcome plus the MCP revision the
+// probe negotiated, recorded on the ToolProvider's status when healthy.
+type ToolProbeResult struct {
+	ProviderProbeResult
+	// MCPRevision is the negotiated protocol revision: mcp.ModernRevision
+	// when server/discover succeeded, the version the initialize handshake
+	// returned otherwise. Empty unless the probe was healthy.
+	MCPRevision string
 }
 
-// MCPToolHealthChecker is the real checker. The probe speaks the protocol it
-// governs: an MCP initialize handshake followed by tools/list
-// (docs/src/gateways/tool-plane.md, The ToolProvider Resource).
+// ToolHealthChecker probes an upstream tool server for liveness. It is an
+// interface so reconcilers can be tested with a fake and never reach a real
+// server. The embedded classification contract is identical to the
+// ModelProvider probe's.
+type ToolHealthChecker interface {
+	Probe(ctx context.Context, provider *kaalmv1beta1.ToolProvider, credential string) ToolProbeResult
+}
+
+// MCPToolHealthChecker is the real checker. The probe speaks the protocol
+// it governs, in whichever revision the server does: server/discover
+// selects the stateless 2026-07-28 form and the probe completes with a
+// _meta-versioned tools/list; any answer that is not a recognized modern
+// JSON-RPC error selects the legacy form, the initialize handshake
+// followed by tools/list (docs/src/gateways/tool-plane.md, Protocol
+// Revisions).
 type MCPToolHealthChecker struct {
 	// Client is the HTTP client. If nil, a client bounded by the provider's
 	// healthCheck.timeoutSeconds (default 10s) is used per probe.
@@ -46,7 +60,7 @@ type MCPToolHealthChecker struct {
 // Probe implements ToolHealthChecker.
 func (h *MCPToolHealthChecker) Probe(
 	ctx context.Context, provider *kaalmv1beta1.ToolProvider, credential string,
-) ProviderProbeResult {
+) ToolProbeResult {
 	timeout := defaultHealthTimeout
 	if hc := provider.Spec.HealthCheck; hc != nil && hc.TimeoutSeconds > 0 {
 		timeout = time.Duration(hc.TimeoutSeconds) * time.Second
@@ -59,17 +73,21 @@ func (h *MCPToolHealthChecker) Probe(
 	defer cancel()
 
 	client := &mcp.Client{Endpoint: provider.Spec.Endpoint, Credential: credential, HTTPClient: cl}
-	session, err := client.Initialize(ctx)
+	session, err := client.Discover(ctx)
+	if errors.Is(err, mcp.ErrLegacyServer) {
+		session, err = client.Initialize(ctx)
+	}
 	if err == nil {
 		_, err = client.ListTools(ctx, session)
 	}
 	switch {
 	case err == nil:
-		return ProviderProbeResult{Healthy: true}
+		return ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true},
+			MCPRevision: session.ProtocolVersion}
 	case isAuthError(err):
-		return ProviderProbeResult{AuthFailed: true}
+		return ToolProbeResult{ProviderProbeResult: ProviderProbeResult{AuthFailed: true}}
 	default:
-		return ProviderProbeResult{Err: err}
+		return ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Err: err}}
 	}
 }
 

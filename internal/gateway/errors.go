@@ -52,6 +52,7 @@ const (
 	errBudgetThrottled     = "budget_throttled"
 	errBudgetUnavailable   = "budget_state_unavailable"
 	errToolDenied          = "tool_denied"
+	errHeaderMismatch      = "header_mismatch"
 	errToolUnavailable     = "tool_unavailable"
 	errToolTimeout         = "tool_timeout"
 )

@@ -676,3 +676,195 @@ func TestMCPResult_AuditRecord(t *testing.T) {
 		t.Errorf("bearer namespace = %v", bearer["namespace"])
 	}
 }
+
+// modernHeaders is the header set the 2026-07-28 revision requires on a
+// brokered tools/call.
+func modernHeaders(tool string) map[string]string {
+	h := map[string]string{
+		"MCP-Protocol-Version": "2026-07-28",
+		"Mcp-Method":           "tools/call",
+	}
+	if tool != "" {
+		h["Mcp-Name"] = tool
+	}
+	return h
+}
+
+func TestMCPBroker_ModernHappyPathForwardsValidatedHeaders(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"resultType":"complete","content":[]}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	headers := modernHeaders("web_search")
+	headers["Mcp-Param-Region"] = "us-west1"
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), headers)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	up := <-h.upreqs
+	if got := up.header.Get("Mcp-Method"); got != "tools/call" {
+		t.Errorf("Mcp-Method not forwarded upstream: %q", got)
+	}
+	if got := up.header.Get("Mcp-Name"); got != "web_search" {
+		t.Errorf("Mcp-Name not forwarded upstream: %q", got)
+	}
+	if got := up.header.Get("Mcp-Param-Region"); got != "us-west1" {
+		t.Errorf("Mcp-Param-* not forwarded upstream: %q", got)
+	}
+}
+
+func TestMCPBroker_ModernHeaderValidation(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(map[string]string)
+	}{
+		"missing Mcp-Method":    {func(h map[string]string) { delete(h, "Mcp-Method") }},
+		"mismatched Mcp-Method": {func(h map[string]string) { h["Mcp-Method"] = "tools/list" }},
+		"missing Mcp-Name":      {func(h map[string]string) { delete(h, "Mcp-Name") }},
+		"mismatched Mcp-Name":   {func(h map[string]string) { h["Mcp-Name"] = "fetch_page" }},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				t.Error("a header-invalid request must never reach the upstream")
+			})
+			h.seedToolRoute()
+			cert := agentCert(t, h.ca)
+
+			headers := modernHeaders("web_search")
+			tc.mutate(headers)
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), headers)
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", resp.StatusCode)
+			}
+			var rpc struct {
+				Error struct {
+					Code int `json:"code"`
+				} `json:"error"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&rpc)
+			if rpc.Error.Code != -32020 {
+				t.Fatalf("error code = %d, want -32020 HeaderMismatch", rpc.Error.Code)
+			}
+		})
+	}
+}
+
+func TestMCPBroker_ModernMcpNameBase64SentinelDecodes(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"resultType":"complete","content":[]}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	headers := modernHeaders("")
+	headers["Mcp-Name"] = "=?base64?d2ViX3NlYXJjaA==?=" // "web_search"
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), headers)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d, want the encoded name to decode and match: %s", resp.StatusCode, body)
+	}
+	<-h.upreqs
+}
+
+func TestMCPBroker_ModernIgnoresSessionHeader(t *testing.T) {
+	// The revision removed sessions; its rule for a stray Mcp-Session-Id is
+	// to ignore it. In particular an unverifiable wrapped id must not be a
+	// denial on a modern request, and nothing session-shaped goes upstream.
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"resultType":"complete","content":[]}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	headers := modernHeaders("web_search")
+	headers["Mcp-Session-Id"] = "not-a-wrapped-id"
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), headers)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d, want the stray session header ignored: %s", resp.StatusCode, body)
+	}
+	up := <-h.upreqs
+	if got := up.header.Get("Mcp-Session-Id"); got != "" {
+		t.Errorf("session header forwarded on a modern request: %q", got)
+	}
+}
+
+func TestMCPBroker_ModernServerDiscoverBrokered(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"resultType":"complete","supportedVersions":["2026-07-28"]}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	body := map[string]any{"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": map[string]any{}}
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), body,
+		map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover"})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	<-h.upreqs
+}
+
+func TestMCPBroker_SubscriptionsListenDenied(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a denied method must never reach the upstream")
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	body := map[string]any{"jsonrpc": "2.0", "id": 7, "method": "subscriptions/listen", "params": map[string]any{}}
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), body,
+		map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "subscriptions/listen"})
+	expectMCPError(t, resp, http.StatusForbidden, errToolDenied)
+}
+
+func TestMCPBroker_ModernToolsListRewritesCacheScope(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"resultType":"complete","tools":[{"name":"web_search"},{"name":"fetch_page"},{"name":"admin_reset"}],"ttlMs":60000,"cacheScope":"public"}}`)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+
+	body := map[string]any{"jsonrpc": "2.0", "id": 7, "method": "tools/list", "params": map[string]any{}}
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), body,
+		map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list"})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	<-h.upreqs
+	var parsed struct {
+		Result struct {
+			Tools      []struct{ Name string }
+			TTLMs      int    `json:"ttlMs"`
+			CacheScope string `json:"cacheScope"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(parsed.Result.Tools) != 1 || parsed.Result.Tools[0].Name != "web_search" {
+		t.Fatalf("filtered tools = %+v, want the granted web_search only", parsed.Result.Tools)
+	}
+	if parsed.Result.CacheScope != "private" {
+		t.Fatalf("cacheScope = %q, want private: a per-caller-filtered list must never be shared-cached", parsed.Result.CacheScope)
+	}
+	if parsed.Result.TTLMs != 60000 {
+		t.Fatalf("ttlMs = %d, want the upstream hint preserved", parsed.Result.TTLMs)
+	}
+}

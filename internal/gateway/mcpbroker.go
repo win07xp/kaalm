@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,16 +47,102 @@ import (
 // them, closing the confused-deputy path a compromised server could open.
 var errNoRedirects = errors.New("mcp broker does not follow redirects")
 
+// methodToolsCall is the one method whose params carry a governed tool name.
+const methodToolsCall = "tools/call"
+
+// isJSONBatch reports whether the body is a JSON-RPC batch array.
+func isJSONBatch(body []byte) bool {
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	return len(trimmed) > 0 && trimmed[0] == '['
+}
+
+// governedToolName extracts the tool a tools/call names; "" otherwise.
+func governedToolName(msg mcpRequest) string {
+	if msg.Method != methodToolsCall {
+		return ""
+	}
+	var params struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(msg.Params, &params)
+	return params.Name
+}
+
 // mcpAllowedMethod is the v0.4.0 method allowlist. The broker governs the
 // tool surface; JSON-RPC surfaces the grant chain has no vocabulary for
 // (resources, prompts, sampling) are denied rather than silently proxied.
 // Widening is additive and tracked for a future milestone.
 func mcpAllowedMethod(method string) bool {
 	switch method {
-	case "initialize", "ping", "tools/list", "tools/call":
+	case "server/discover", "tools/list", methodToolsCall,
+		// The legacy handshake surface the 2026-07-28 revision retires.
+		"initialize", "ping":
 		return true
 	}
 	return strings.HasPrefix(method, "notifications/")
+}
+
+// modernHeaderRejection checks the mirrored headers the 2026-07-28 revision
+// requires on every streamable-HTTP POST against the body, which stays the
+// source of truth for policy. It returns "" for a legacy-era request or a
+// consistent modern one, else the rejection message.
+func modernHeaderRejection(modern bool, r *http.Request, msg mcpRequest, toolName string) string {
+	if !modern {
+		return ""
+	}
+	m := r.Header.Get("Mcp-Method")
+	if m == "" {
+		return "Mcp-Method header is required on this protocol revision"
+	}
+	if m != msg.Method {
+		return fmt.Sprintf("Mcp-Method header %q does not match body method %q", m, msg.Method)
+	}
+	if msg.Method == methodToolsCall {
+		n := decodeMCPHeaderValue(r.Header.Get("Mcp-Name"))
+		if n == "" {
+			return "Mcp-Name header is required on tools/call"
+		}
+		if n != toolName {
+			return fmt.Sprintf("Mcp-Name header %q does not match body tool %q", n, toolName)
+		}
+	}
+	return ""
+}
+
+// decodeMCPHeaderValue decodes the Base64 sentinel form (=?base64?v?=) the
+// revision defines for values unsafe as plain ASCII header values; servers
+// must decode before comparing to the body. An undecodable sentinel is
+// returned verbatim and fails the comparison on its own.
+func decodeMCPHeaderValue(v string) string {
+	const pre, suf = "=?base64?", "?="
+	if strings.HasPrefix(v, pre) && strings.HasSuffix(v, suf) && len(v) > len(pre)+len(suf) {
+		if raw, err := base64.StdEncoding.DecodeString(v[len(pre) : len(v)-len(suf)]); err == nil {
+			return string(raw)
+		}
+	}
+	return v
+}
+
+// writeJSONRPCError answers in the protocol's own vocabulary: the modern
+// revision prescribes 400 plus a JSON-RPC error for header validation, so
+// the caller's MCP client sees the error shape its SDK understands.
+func writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	_ = json.NewEncoder(w).Encode(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{JSONRPC: "2.0", ID: id, Error: struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}{Code: code, Message: message}})
 }
 
 // toolFilter is a caller's effective tool set: grant narrowing intersected
@@ -290,7 +377,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	reqBytes = int64(len(body))
 	bodyLog("mcp request", body)
-	if trimmed := bytes.TrimLeft(body, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
+	if isJSONBatch(body) {
 		deny(http.StatusBadRequest, errInvalidRequest, "JSON-RPC batch requests are not supported", 0, "", "")
 		return
 	}
@@ -307,18 +394,27 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toolName := ""
-	if msg.Method == "tools/call" {
-		var params struct {
-			Name string `json:"name"`
-		}
-		_ = json.Unmarshal(msg.Params, &params)
-		toolName = params.Name
-		if !filter.permits(toolName) {
-			deny(http.StatusForbidden, errToolDenied,
-				fmt.Sprintf("tool %q is not granted to this workload", toolName), 0, msg.Method, toolName)
-			return
-		}
+	toolName := governedToolName(msg)
+
+	// The request's own era selects the enforcement posture (tool-plane
+	// chapter, Protocol Revisions). On a modern request the mirrored
+	// headers are mandatory and must agree with the body before anything
+	// else trusts either; the rejection is the revision's own 400 plus
+	// JSON-RPC HeaderMismatch, not the gateway envelope, because it is the
+	// shape the caller's MCP client understands.
+	modernEra := mcp.IsModern(r.Header.Get("MCP-Protocol-Version"))
+	if reject := modernHeaderRejection(modernEra, r, msg, toolName); reject != "" {
+		spanError(tctx, errHeaderMismatch)
+		s.mcpResult(c, tp, providerName, msg.Method, toolName,
+			http.StatusBadRequest, errHeaderMismatch, reject, start, reqBytes, 0, forwarded)
+		writeJSONRPCError(w, msg.ID, mcp.CodeHeaderMismatch, reject)
+		return
+	}
+
+	if msg.Method == methodToolsCall && !filter.permits(toolName) {
+		deny(http.StatusForbidden, errToolDenied,
+			fmt.Sprintf("tool %q is not granted to this workload", toolName), 0, msg.Method, toolName)
+		return
 	}
 
 	// tool.call parents onto whatever context the caller propagated; its
@@ -334,10 +430,12 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	defer endSpan(nil)
 
 	// Session ownership: never forward a wrapped id, never accept one bound
-	// to a different caller.
+	// to a different caller. Legacy era only: the 2026-07-28 revision
+	// removed protocol-level sessions, and its rule for a stray session
+	// header is to ignore it, never to mint or echo one.
 	identity := callerIdentity(c)
 	upstreamSession := ""
-	if wrapped := r.Header.Get("Mcp-Session-Id"); wrapped != "" {
+	if wrapped := r.Header.Get("Mcp-Session-Id"); wrapped != "" && !modernEra {
 		raw, ok := unwrapSessionID(s.Config.SessionKey, wrapped, identity)
 		if !ok {
 			deny(http.StatusForbidden, errAccessDenied,
@@ -365,7 +463,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusBadRequest, errInvalidRequest, "building upstream request: "+err.Error(), 0, msg.Method, toolName)
 		return
 	}
-	copyMCPHeaders(upReq, r, upstreamSession, credential)
+	copyMCPHeaders(upReq, r, upstreamSession, credential, modernEra)
 
 	forwarded = true
 	resp, err := s.mcpHTTPClient().Do(upReq)
@@ -450,6 +548,11 @@ func (s *Server) relayFilteredToolsList(
 			}
 			keptRaw, _ := json.Marshal(kept)
 			result["tools"] = keptRaw
+			if _, ok := result["cacheScope"]; ok {
+				// The filter narrowed the catalog per caller: a shared
+				// cache must never serve this answer as the server's list.
+				result["cacheScope"] = json.RawMessage(`"private"`)
+			}
 			newResult, _ := json.Marshal(result)
 			parsed.Result = newResult
 		}
@@ -523,7 +626,7 @@ func relayMCPStream(w http.ResponseWriter, r *http.Request, resp *http.Response,
 // copyMCPHeaders applies the forwarded-header contract: hop-by-hop and
 // inbound auth material stripped, the tool credential injected, the raw
 // upstream session id restored.
-func copyMCPHeaders(upReq *http.Request, r *http.Request, upstreamSession, credential string) {
+func copyMCPHeaders(upReq *http.Request, r *http.Request, upstreamSession, credential string, modern bool) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		upReq.Header.Set("Content-Type", ct)
 	} else {
@@ -542,6 +645,23 @@ func copyMCPHeaders(upReq *http.Request, r *http.Request, upstreamSession, crede
 	}
 	if credential != "" {
 		upReq.Header.Set("Authorization", "Bearer "+credential)
+	}
+	if modern {
+		// The mirrored headers, already validated against the body, and any
+		// Mcp-Param-* headers a tool schema mirrors from call arguments:
+		// intermediaries forward them, and the upstream runs the same
+		// header-body validation the broker just did.
+		if m := r.Header.Get("Mcp-Method"); m != "" {
+			upReq.Header.Set("Mcp-Method", m)
+		}
+		if n := r.Header.Get("Mcp-Name"); n != "" {
+			upReq.Header.Set("Mcp-Name", n)
+		}
+		for name, vals := range r.Header {
+			if strings.HasPrefix(name, "Mcp-Param-") {
+				upReq.Header[name] = vals
+			}
+		}
 	}
 }
 

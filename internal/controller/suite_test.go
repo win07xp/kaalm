@@ -40,6 +40,7 @@ import (
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/mcp"
 )
 
 const (
@@ -127,20 +128,20 @@ func (f *fakeHealthChecker) Probe(
 // credential each probe carried.
 type fakeToolHealthChecker struct {
 	mu          sync.Mutex
-	results     map[string]ProviderProbeResult
+	results     map[string]ToolProbeResult
 	calls       map[string]int
 	credentials map[string]string
 }
 
 func newFakeToolHealth() *fakeToolHealthChecker {
 	return &fakeToolHealthChecker{
-		results:     map[string]ProviderProbeResult{},
+		results:     map[string]ToolProbeResult{},
 		calls:       map[string]int{},
 		credentials: map[string]string{},
 	}
 }
 
-func (f *fakeToolHealthChecker) set(name string, res ProviderProbeResult) {
+func (f *fakeToolHealthChecker) set(name string, res ToolProbeResult) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.results[name] = res
@@ -162,7 +163,7 @@ func (f *fakeToolHealthChecker) credential(name string) string {
 
 func (f *fakeToolHealthChecker) Probe(
 	_ context.Context, provider *kaalmv1beta1.ToolProvider, credential string,
-) ProviderProbeResult {
+) ToolProbeResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[provider.Name]++
@@ -170,7 +171,8 @@ func (f *fakeToolHealthChecker) Probe(
 	if res, ok := f.results[provider.Name]; ok {
 		return res
 	}
-	return ProviderProbeResult{Healthy: true}
+	return ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true},
+		MCPRevision: mcp.ModernRevision}
 }
 
 func TestMain(m *testing.M) {

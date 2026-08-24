@@ -1,0 +1,138 @@
+# The MCP 2026-07-28 fixtures: a modern-only mock server (--modern: no
+# initialize, no sessions, mirrored headers validated), a ToolProvider whose
+# probe must negotiate the stateless revision, and a dedicated grant chain.
+# Self-contained sibling of the S18 fixtures; nothing here is shared with
+# them, so the two eras are proven side by side on one cluster.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mock-mcp-modern-tls
+  namespace: e2e
+spec:
+  secretName: mock-mcp-modern-tls
+  issuerRef:
+    name: kaalm-ca-issuer
+    kind: ClusterIssuer
+  usages:
+    - server auth
+  dnsNames:
+    - mock-mcp-modern.e2e.svc
+    - mock-mcp-modern.e2e.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-mcp-modern
+  namespace: e2e
+  labels:
+    app: mock-mcp-modern
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-mcp-modern
+  template:
+    metadata:
+      labels:
+        app: mock-mcp-modern
+    spec:
+      containers:
+        - name: mock-mcp
+          image: registry.test/mock/mcp-server:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr=:8443
+            - --tls-cert=/var/run/tls/tls.crt
+            - --tls-key=/var/run/tls/tls.key
+            - --modern
+            # Must match the mcp-modern-key Secret below: brokered calls
+            # succeed only because the gateway injected that value.
+            - --require-bearer=modern-tool-credential
+          ports:
+            - containerPort: 8443
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: mock-mcp-modern-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-mcp-modern
+  namespace: e2e
+spec:
+  selector:
+    app: mock-mcp-modern
+  ports:
+    - port: 8443
+      targetPort: 8443
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-modern-key
+  namespace: kaalm-system
+type: Opaque
+stringData:
+  token: modern-tool-credential
+---
+apiVersion: kaalm.io/v1beta1
+kind: ToolProvider
+metadata:
+  name: search-tools-modern
+spec:
+  type: mcp
+  endpoint: https://mock-mcp-modern.e2e.svc:8443
+  credentialsRef:
+    name: mcp-modern-key
+    key: token
+  allowedNamespaces: ["e2e"]
+  tools:
+    - id: web_search
+    - id: fetch_page
+  healthCheck:
+    enabled: true
+    intervalSeconds: 15
+---
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: mcp-modern-class
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["registry.test/agents/*"]
+    pullPolicy: IfNotPresent
+  lifecycle:
+    defaultIdleTimeout: 0s
+    defaultHibernationDelay: 0s
+    defaultWakeTimeout: 0s
+    maxIdleTimeout: 0s
+    maxHibernationDelay: 0s
+    maxWakeTimeout: 0s
+  allowedToolProviders:
+    - name: search-tools-modern
+---
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: mcp-modern-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: mcp-modern-class
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationDelay: 0s
+    idleTimeout: 0s
+    wakeTimeout: 0s
+  tools:
+    - providerRef:
+        name: search-tools-modern
+      tools: ["web_search"]

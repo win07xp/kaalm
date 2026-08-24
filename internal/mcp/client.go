@@ -56,7 +56,7 @@ func (c *Client) Initialize(ctx context.Context) (Session, error) {
 		Params: initializeParams{
 			ProtocolVersion: protocolVersion,
 			Capabilities:    map[string]any{},
-			ClientInfo:      clientInfo{Name: "kaalm", Version: "v1alpha1"},
+			ClientInfo:      clientInfo{Name: "kaalm", Version: "v1beta1"},
 		},
 	})
 	if err != nil {
@@ -76,11 +76,17 @@ func (c *Client) Initialize(ctx context.Context) (Session, error) {
 	return session, nil
 }
 
-// ListTools calls tools/list within an initialized session.
+// ListTools calls tools/list: within an initialized session against a
+// legacy server, or as a self-describing stateless request (per-request
+// _meta) when the session carries a modern revision.
 func (c *Client) ListTools(ctx context.Context, session Session) ([]Tool, error) {
+	params := map[string]any{}
+	if IsModern(session.ProtocolVersion) {
+		params["_meta"] = meta()
+	}
 	id := c.nextID.Add(1)
 	resp, _, err := c.post(ctx, session, request{
-		JSONRPC: jsonrpcVersion, ID: &id, Method: "tools/list", Params: map[string]any{},
+		JSONRPC: jsonrpcVersion, ID: &id, Method: "tools/list", Params: params,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tools/list: %w", err)
@@ -116,6 +122,11 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 	if session.ProtocolVersion != "" {
 		req.Header.Set("MCP-Protocol-Version", session.ProtocolVersion)
 	}
+	if IsModern(session.ProtocolVersion) {
+		// The 2026-07-28 revision requires the method mirrored into a
+		// header on every streamable-HTTP POST.
+		req.Header.Set("Mcp-Method", msg.Method)
+	}
 
 	cl := c.HTTPClient
 	if cl == nil {
@@ -128,6 +139,18 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		// Modern servers carry a JSON-RPC error in 4xx bodies (400 for an
+		// unsupported version or a header mismatch, 404 for an unknown
+		// method), and that error is the era proof Discover classifies on.
+		// Auth statuses stay HTTPError: the credential verdict outranks
+		// whatever body came with it.
+		if httpResp.StatusCode != http.StatusUnauthorized && httpResp.StatusCode != http.StatusForbidden {
+			raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBytes))
+			var errResp Response
+			if json.Unmarshal(raw, &errResp) == nil && errResp.Error != nil {
+				return Response{}, nil, errResp.Error
+			}
+		}
 		return Response{}, nil, &HTTPError{StatusCode: httpResp.StatusCode}
 	}
 	if msg.ID == nil {
