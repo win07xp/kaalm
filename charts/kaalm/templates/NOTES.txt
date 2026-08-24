@@ -27,4 +27,4 @@ Ready and that certManager.clusterResourceNamespace matches your cert-manager
 and trust-manager configuration.
 
 CRD upgrades are never applied by `helm upgrade`. Before upgrading, run:
-  kubectl apply --server-side -f charts/kaalm/crds/
+  kubectl apply --server-side --force-conflicts -f charts/kaalm/crds/

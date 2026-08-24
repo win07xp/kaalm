@@ -1,0 +1,62 @@
+# The S21 upgrade e2e: install the previous released chart, load it with
+# v1alpha1 workloads, upgrade to this build, assert nothing was recreated
+# and nothing was lost.
+#
+# Deliberately not part of ci.yml (decided 2026-08-22 on #114): most PRs
+# cannot affect the upgrade path, so this runs only when a PR touches the
+# API, the shipped CRDs, the storage migrator, the spec itself, or this
+# file, plus on every release tag. Release readiness (#115) also runs
+# make e2e-upgrade locally before tagging.
+name: upgrade
+
+on:
+  pull_request:
+    paths:
+      - "api/**"
+      - "charts/kaalm/crds/**"
+      - "internal/storagemigration/**"
+      - "test/upgrade/**"
+      - ".github/workflows/upgrade.yml"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pinned release binary, not the install script from main: retries
+      # ride out transient CDN errors and CI never executes unpinned
+      # script content (same reasoning as ci.yml's e2e job).
+      - name: Install k3d
+        run: |
+          sudo curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /usr/local/bin/k3d \
+            https://github.com/k3d-io/k3d/releases/download/v5.7.4/k3d-linux-amd64
+          sudo chmod +x /usr/local/bin/k3d
+          k3d version
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+
+      - name: Run the upgrade e2e
+        run: make e2e-upgrade
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl get crd -o custom-columns='NAME:.metadata.name,STORED:.status.storedVersions' || true
+          kubectl describe pods -n kaalm-system || true
+          kubectl describe pods -n up-e2e || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=200 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=200 || true

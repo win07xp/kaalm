@@ -28,8 +28,9 @@ green. S18 was added with the v0.3.0 tool-plane design and is green against
 the v0.4.0 implementation. S19 was added with the v0.5.0 console design and
 S20 with the v0.5.0 tracing design; both are green against the v0.5.0
 implementation. S21 was added with the v0.6.0 API versioning design and is
-not yet proven: its spec is the upgrade e2e that design specifies, and the
-row below names it.
+green against the upgrade e2e (`test/upgrade/`, run by `make e2e-upgrade`
+and the `upgrade` CI workflow), which starts from the previous released
+chart rather than the local build; the row below names it.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -53,7 +54,7 @@ row below names it.
 | S18 Governed tool access (tool plane) | `Governed tool access (S18)` (ToolProvider Ready with its credential in `kaalm-system` and absent from the workload namespace by inspection; an agent-identity caller gets a filtered `tools/list`, a granted call through, `tool_denied` on an ungranted tool, and `access_denied` on a foreign session id; an outside namespace gets `access_denied`; the mock MCP server's request counters prove denied calls never reached the upstream, and the gateway logs carry the audit record) | Unit `TestMCPBroker_*`, `TestSession*` (broker enforcement, session ownership, metrics); envtest `TestToolProvider_*`, `TestAgentToolGrant_*`, `TestTaskToolGrant_*` (rules 35 to 38) |
 | S19 Operator console (fleet, spend, test-chat) | `Operator console (S19)` (a default install renders no console objects; the enabled install serves an authorization-filtered namespace list and live fleet rows to a namespaced token; a paste-token login renders the dashboard; test-chat wakes a hibernated agent and returns its reply; an unauthorized token sees an empty list, 403 on direct access, and 401 when invalid) | Unit: the `internal/console` suite (data layer, gate, sessions, pages); `TestTestChat_*`, `TestAuthMatrix` (gateway endpoint, console SAN) |
 | S20 Tracing across the hops (one message, one trace) | `Tracing across the hops (S20)` (a default install renders no tracing flags; with the exporter enabled, one webhook message to an agent that asks its model yields one Jaeger trace whose `channel.receive`, `agent.deliver`, `llm.request`, and `llm.forward` spans connect) | Unit: `TestTracing_OneMessageOneConnectedTrace` and `TestTracing_ToolCallSpansParentOntoCallerContext` (gateway), `TestServe_TraceContextReachesHandlerAndGatewayCalls` (agentruntime), `tests/test_tracecontext.py` (Python ABI) |
-| S21 Upgrade in place (API graduation) | `Upgrade in place (S21)` (specified, not yet landed: install the previous released chart, apply `v1alpha1` workloads, run the two documented upgrade steps to the current build, then assert the agent keeps its Pod and its state, the finished task keeps its status, both API versions read back every object, and `storedVersions` is migrated) | Planned: round-trip fuzz tests for every kind; envtest conversion coverage |
+| S21 Upgrade in place (API graduation) | `Upgrade in place (S21)` in `test/upgrade/` (install the previous released chart, apply `v1alpha1` workloads, run the two documented upgrade steps to the current build, then assert the running agent keeps its Pod and its volume, the hibernated agent stays hibernated and wakes on its next message, the finished task keeps its status, both API versions read back every object with the deprecation warning at `v1alpha1` only, `storedVersions` is migrated, and the window between the steps closes on its own) | Round-trip fuzz tests for every kind (`api/v1alpha1`); envtest conversion and migrator coverage (`internal/controller`, `internal/storagemigration`) |
 
 The LLM-proxy scenarios (S4, S10, S15, S17) are exercised against an
 in-cluster mock upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy
