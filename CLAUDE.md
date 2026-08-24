@@ -20,7 +20,7 @@ WhatsApp channel adapters, cross-format provider fallback; see
 
 Three mdBooks: `docs/` (the design book, which is the spec), `guide/`
 (task-oriented user guide, complete), and `learn/` (beginner tutorial, written
-and walked against 0.5.0). Build all with `make books`.
+and walked against 0.6.0). Build all with `make books`.
 Each book has its own CLAUDE.md with its authoring rules. Conventions that
 bind all prose in this repo: no em-dashes or en-dashes; the numbered
 validation rules, runtime-contract items, and scenario IDs are cited by

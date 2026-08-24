@@ -86,23 +86,28 @@ alongside it, which is how you get a pull request URL back out.
 
 ## It cleans up after itself
 
-Wait a minute, then look for the pod that ran the work:
+Wait a minute, then look for the pod that ran the work, and for the task:
 
 ```bash
 kubectl get pods -l kaalm.io/task=one-off-job
+kubectl get agenttasks
 ```
 
 ```
 No resources found in default namespace.
+No resources found in default namespace.
 ```
 
-Gone, because `ttlSecondsAfterFinished: 60` said so. The task object itself
-remains, so the record of what happened survives, but the container that did
-the work is not sitting around consuming memory.
+Both gone, because `ttlSecondsAfterFinished: 60` said so. The field works
+the way it does on a Kubernetes Job: once a finished task has outlived its
+TTL, the whole record is collected, the task, its pod, everything it made.
+Sixty seconds is tutorial-sized; a real pipeline keeps the record for an
+hour or a day, and a task with no TTL at all stays until someone deletes
+it. Read the result before the TTL you chose, or set none.
 
 This is the difference between the two shapes. Your agent is a pet: it has a
-name, storage, and an address, and it stays. A task is cattle: it appears, does
-one job, reports, and is collected. Kaalm runs both because agent work comes in
+name, storage, and an address, and it stays. A task is cattle: it appears,
+does one job, reports, and is collected on the schedule you set. Kaalm runs both because agent work comes in
 both shapes.
 
 Next: [Sleep and Wake](sleep-and-wake.md).

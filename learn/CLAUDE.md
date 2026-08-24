@@ -6,7 +6,7 @@ details. Build with `mdbook build learn` (or `make books` for all books).
 
 ## Status
 
-Written against Kaalm 0.3.0 and re-walked for 0.4.0 and 0.5.0. Every command
+Written against Kaalm 0.3.0 and re-walked for 0.4.0, 0.5.0, and 0.6.0. Every command
 and every block of output on these pages came from one run, in order, on a
 fresh k3d cluster. Every re-walk runs the same two-pass playbook: a
 pre-release walk against locally built artifacts, then a confirmation walk
@@ -21,9 +21,17 @@ agent already hibernating again, a controller regression fixed in the same
 pull request; the second pass, against the fixed controller, matched every
 page, byte-exact where exact values are shown. The confirmation walk against
 the published 0.5.0 artifacts (the book's exact install line, images pulled
-from ghcr), also on 2026-08-21, found zero drift.
+from ghcr), also on 2026-08-21, found zero drift. The 0.6.0 pre-release walk
+(2026-08-24, issue #115) matched every walked page byte-exact where exact
+values are shown, wake-and-memory outputs included, and caught one factual
+error no command block had ever tested: Giving It a Job claimed the task
+object outlives its TTL, but ttlSecondsAfterFinished collects the whole
+record, task and pod both, mirroring Job semantics as the design book
+always said; the page now shows both No-resources outputs from the walk.
+The confirmation walk against the published 0.6.0 artifacts is recorded
+here when it runs.
 
-The install is pinned to `--version 0.5.0` on purpose. The pin is not really
+The install is pinned to `--version 0.6.0` on purpose. The pin is not really
 about the install line: it is what makes the later chapters' output true, since
 a reader on a different version may see different columns or phrasing. When the
 pin moves, re-walk the whole book rather than editing the version string.
