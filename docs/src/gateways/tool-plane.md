@@ -40,7 +40,7 @@ Three consequences, in delivery order. In **v0.4.0**, the provider adapters (whi
 External tool servers get a cluster-scoped CRD that deliberately rhymes with ModelProvider, because the entire tenancy and credential model transfers:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ToolProvider
 metadata:
   name: search-tools

@@ -5,7 +5,7 @@ AgentChannel is a namespace-scoped resource that connects a running Agent to a u
 ## Spec
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: support-discord

@@ -9,7 +9,7 @@ hibernation; just a Pod with an identity and gateway access.
 The e2e suite's own fixture, from `test/e2e/testdata/agenttask.yaml`:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentTask
 metadata:
   name: e2e-task

@@ -41,14 +41,14 @@ Extra dependencies go into the Dockerfile as a
 docker build -t registry.example/agents/starter-python:v1 .
 # push, or import into your local cluster
 kubectl apply -f - <<'EOF'
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata: { name: starter-py }
 spec:
   image:
     allowedImages: ["registry.example/agents/*"]
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: starter-python

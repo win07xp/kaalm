@@ -1,7 +1,7 @@
 # The langgraph-task example as an AgentTask. The goal arrives through
 # spec.env (nothing is injected for it), and the declared artifact must be
 # reported on success.
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentTask
 metadata:
   name: summarize-once

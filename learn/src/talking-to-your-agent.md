@@ -24,7 +24,7 @@ type: Opaque
 stringData:
   token: tutorial-secret-token
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:
   name: helper-webhook

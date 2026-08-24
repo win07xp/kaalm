@@ -34,7 +34,7 @@ type: Opaque
 stringData:
   token: sk-ant-your-key-here
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
   name: anthropic-shared

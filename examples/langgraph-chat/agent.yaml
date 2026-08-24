@@ -1,7 +1,7 @@
 # The langgraph-chat example as an Agent. Adjust the class, provider, and
 # image references to your cluster; KAALM_MODEL must name a model on an
 # OpenAI-format provider (spec.type openai or openai-compatible).
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: langgraph-chat

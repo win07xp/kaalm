@@ -68,7 +68,7 @@ never hibernate. Either leave `activitySource` at the default, or set
 
 ```bash
 kubectl apply -f - <<'EOF'
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata:
   name: starter
@@ -76,7 +76,7 @@ spec:
   image:
     allowedImages: ["registry.example/agents/*"]
 ---
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: Agent
 metadata:
   name: my-agent

@@ -14,7 +14,7 @@ built in that you will use in a moment.
 Put this in `task.yaml`:
 
 ```yaml
-apiVersion: kaalm.io/v1alpha1
+apiVersion: kaalm.io/v1beta1
 kind: AgentTask
 metadata:
   name: one-off-job
@@ -22,7 +22,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: ghcr.io/win07xp/kaalm-agent-go:0.5.0
+  image: ghcr.io/win07xp/kaalm-agent-go:0.6.0
   env:
     - name: KAALM_TASK_AUTOCOMPLETE
       value: success
