@@ -1,0 +1,156 @@
+# The pre-upgrade world for the S21 upgrade e2e: everything a v0.5.0 cluster
+# holds before the graduation, written the way its users wrote it. Every
+# apiVersion here says kaalm.io/v1alpha1 on purpose (this file is applied to
+# a cluster whose CRDs predate v1beta1) and every image is a published
+# 0.5.0 artifact, because the scenario upgrades what users actually run.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: up-e2e
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: up-hook
+  namespace: up-e2e
+type: Opaque
+stringData:
+  token: up-webhook-bearer-token
+---
+# The class for the agent that keeps running and for the finished task. No
+# hibernation: the keeper must sit in Running across the whole upgrade.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: up-service
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["ghcr.io/win07xp/*"]
+    allowHandlerMounts: true
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+---
+# The class for the agent that hibernates before the upgrade. Same positive
+# timers as the s7 fixtures: idle evaluation only runs when the effective
+# idleTimeout is > 0.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentClass
+metadata:
+  name: up-hibernating
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages: ["ghcr.io/win07xp/*"]
+    allowHandlerMounts: true
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+  lifecycle:
+    hibernationAllowed: true
+    defaultIdleTimeout: 2s
+    defaultHibernationDelay: 2s
+    defaultWakeTimeout: 0s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: up-handler
+  namespace: up-e2e
+immutable: true
+data:
+  handler.py: |
+    def handle_message(envelope):
+        return {
+            "content": "upgraded greeter: " + str(envelope.get("content", "")),
+            "attachments": [],
+            "metadata": {},
+        }
+---
+# The keeper: Running before the upgrade, must still be Running in the same
+# Pod with the same volume after it.
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: up-keeper
+  namespace: up-e2e
+spec:
+  agentClassRef:
+    name: up-service
+  image: ghcr.io/win07xp/kaalm-agent-python:0.5.0
+  handler:
+    configMapRef:
+      name: up-handler
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+    hibernationEnabled: false
+---
+# The sleeper: Hibernated before the upgrade, must still be Hibernated after
+# it, and must wake on its next message as before.
+apiVersion: kaalm.io/v1alpha1
+kind: Agent
+metadata:
+  name: up-sleeper
+  namespace: up-e2e
+spec:
+  agentClassRef:
+    name: up-hibernating
+  image: ghcr.io/win07xp/kaalm-agent-python:0.5.0
+  handler:
+    configMapRef:
+      name: up-handler
+  persistence:
+    enabled: true
+  lifecycle:
+    activitySource: gatewayTraffic
+    hibernationEnabled: true
+---
+# Async channel on the sleeper: the post-upgrade wake message goes through
+# it, which is also the proof that the channel still answers.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentChannel
+metadata:
+  name: up-channel
+  namespace: up-e2e
+spec:
+  agentRef:
+    name: up-sleeper
+  type: webhook
+  webhook:
+    path: /channels/up-e2e/up-channel
+    responseMode: async
+    content:
+      fromBody: content.text
+    auth:
+      type: bearer
+      secretRef:
+        name: up-hook
+        key: token
+---
+# Yesterday's finished task: agentReported through the published base
+# image's autocomplete hook, completed long before the upgrade, no TTL so
+# it survives to be asserted on. Its status must come through untouched.
+apiVersion: kaalm.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: up-task
+  namespace: up-e2e
+spec:
+  agentClassRef:
+    name: up-service
+  image: ghcr.io/win07xp/kaalm-agent-go:0.5.0
+  env:
+    - name: KAALM_TASK_AUTOCOMPLETE
+      value: success
+  completion:
+    condition: agentReported
+    timeout: 5m
+    onTimeout: Fail

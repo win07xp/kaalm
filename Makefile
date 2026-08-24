@@ -302,6 +302,23 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 dashboards-verify: ## Verify config/grafana against the live e2e cluster (run after make e2e): throwaway Prometheus+Grafana, provisioning, every panel query.
 	hack/dashboards-verify.sh
 
+# The released chart the upgrade e2e starts from. Release readiness (#115)
+# bumps this to the newly released version after each release.
+PREV_CHART_VERSION ?= 0.5.0
+
+.PHONY: upgrade-images
+upgrade-images: ## Build and import only what the upgrade e2e needs locally: the controller and gateway. The pre-upgrade world runs published $(PREV_CHART_VERSION) artifacts, and the upgrade recreates no workload Pods.
+	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
+	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG)
+
+.PHONY: e2e-upgrade
+e2e-upgrade: chart-sync ## One-shot S21 upgrade e2e: fresh cluster, install the released $(PREV_CHART_VERSION) chart, upgrade to the local build, assert nothing lost.
+	-k3d cluster delete $(CLUSTER)
+	hack/k3d-up.sh
+	$(MAKE) upgrade-images
+	UPGRADE_PREV_VERSION=$(PREV_CHART_VERSION) go test ./test/upgrade/... -tags upgrade -v -timeout 30m
+
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the chart, run the suite.
 	# Always start from a fresh cluster. A long-lived k3d cluster stops
