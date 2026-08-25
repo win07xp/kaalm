@@ -28,8 +28,9 @@ error no command block had ever tested: Giving It a Job claimed the task
 object outlives its TTL, but ttlSecondsAfterFinished collects the whole
 record, task and pod both, mirroring Job semantics as the design book
 always said; the page now shows both No-resources outputs from the walk.
-The confirmation walk against the published 0.6.0 artifacts is recorded
-here when it runs.
+The confirmation walk against the published 0.6.0 artifacts (the book's
+exact install line, images pulled from ghcr), on 2026-08-25, found zero
+drift, the corrected TTL section included.
 
 The install is pinned to `--version 0.6.0` on purpose. The pin is not really
 about the install line: it is what makes the later chapters' output true, since
