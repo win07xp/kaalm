@@ -37,11 +37,16 @@ spec:
     defaults:
       requests: { cpu: "500m", memory: "1Gi" }
       limits: { cpu: "1", memory: "2Gi" }
+  # Durations in Go's canonical form (30m0s, not 30m): the controller's
+  # reconcile-time defaulting re-serializes what it reads, and a value that
+  # round-trips byte-identical never changes field ownership, so a
+  # server-side-apply helm (v4) upgrades without conflicting with the
+  # controller's manager over these fields.
   lifecycle:
-    defaultIdleTimeout: 30m
-    maxIdleTimeout: 24h
-    defaultHibernationDelay: 30m
-    maxHibernationDelay: 2h
-    defaultWakeTimeout: 2m
-    maxWakeTimeout: 5m
+    defaultIdleTimeout: 30m0s
+    maxIdleTimeout: 24h0m0s
+    defaultHibernationDelay: 30m0s
+    maxHibernationDelay: 2h0m0s
+    defaultWakeTimeout: 2m0s
+    maxWakeTimeout: 5m0s
 {{- end }}
