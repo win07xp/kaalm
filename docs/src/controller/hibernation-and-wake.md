@@ -75,7 +75,7 @@ When an Agent is `Hibernated`, its ClusterIP Service has no endpoints, so traffi
 
 The full sequence, including the two counterintuitive orderings (the `202` precedes the wake, and the replica that receives the activator call is not the one that performs the reconcile), is drawn in [The wake sequence](../gateways/user/activation-and-activity.md#the-wake-sequence).
 
-While waiting, the gateway holds the message. The v1 generic webhook adapter has no side channel to signal progress on: sync callers simply block, and async callers already hold their `202`. v1.1 platform adapters (Discord, WhatsApp) may surface a "typing" indicator here.
+While waiting, the gateway holds the message. The generic webhook adapter has no side channel to signal progress on: sync callers simply block, and async callers already hold their `202`. The Discord adapter's deferred acknowledgement is the platform's own progress signal (the bot shows as thinking until the reply lands); the WhatsApp adapter has none.
 
 ### From activator call to Resuming
 

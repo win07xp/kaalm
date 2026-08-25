@@ -1,6 +1,6 @@
 # AgentChannel
 
-AgentChannel is a namespace-scoped resource that connects a running Agent to a user-facing communication channel. In v1, the only supported channel type is **webhook** (generic inbound HTTP POST with configurable auth). Discord, WhatsApp, and other platform-specific adapters are deferred to v1.1: they require persistent connections and platform-specific reconnection logic that adds significant implementation surface.
+AgentChannel is a namespace-scoped resource that connects a running Agent to a user-facing communication channel. Three channel types exist: **webhook** (generic inbound HTTP POST with configurable auth, the type v1 shipped with) and, since v0.7.0, the platform adapters **discord** (the Discord Interactions endpoint) and **whatsapp** (the WhatsApp Cloud API webhook). All three are inbound HTTP; the gateway holds no persistent connection to any platform. The webhook spec is below; the two platform blocks are under [Platform types](#platform-types).
 
 ## Spec
 
@@ -15,8 +15,9 @@ spec:
   agentRef:
     name: support-assistant
 
-  # Channel platform type. v1 supports: "webhook"
-  # Discord and WhatsApp adapters are planned for v1.1.
+  # Channel platform type: "webhook" | "discord" | "whatsapp".
+  # Exactly the block matching the type must be set (rule 39, CRD CEL).
+  # The discord and whatsapp blocks are shown under Platform types below.
   type: webhook
 
   # Webhook-specific configuration.
@@ -136,23 +137,98 @@ spec:
     enabled: true
 ```
 
-## Future platform types (v1.1+)
+## Platform types
 
-When Discord and WhatsApp adapters are added in v1.1, the spec will support platform-specific configuration blocks:
+*(Since v0.7.0.)* Two platform adapters exist beside the generic webhook: `discord` and `whatsapp`. Both are inbound HTTP. Discord delivers slash-command interactions to a registered URL and the gateway answers through the interaction's follow-up webhook; WhatsApp delivers Cloud API events to a registered URL and the gateway answers through the Graph API. Neither needs a persistent connection, which is what lets a stateless, multi-replica gateway serve them. The free-text message bots that need the Discord Gateway WebSocket are not designed; see [the roadmap](../ROADMAP.md#beyond).
+
+What the two types share:
+
+- **One inbound route.** A platform channel has a `path` under the same `/channels/{namespace}/` scheme as a webhook channel, and rules 15 and 16 apply to it unchanged. The gateway serves every channel type on the same route and picks the adapter by `spec.type`; the routing gate (`Ready=True` only) is the same.
+- **One credential Secret.** `credentialsRef: {name}` names a Secret in the channel's namespace whose keys are fixed by the type (rule 40). The [AgentChannelReconciler](../controller/reconcilers.md#agentchannelreconciler) scopes the per-channel credential Role to it exactly as it does for webhook auth Secrets, and the gateway holds the material in-process.
+- **Async only, with no record.** The platform is the caller, and neither platform keeps an inbound request open for the agent's answer, so every reply goes back out through the platform's API (`SendReply`, see [Platform Adapters](../gateways/user/platform-adapters.md#the-platform-adapters)). There is no `responseMode`, no `callbackUrl`, no polling endpoint, and no `kaalm-async-*` record: the response persistence machinery exists to serve pollers, and platform users do not poll. `maxPendingAsyncResponses` does not apply.
+- **The platform API base URL is a gateway-level value**, not a channel field: `gateway.platforms.discord.apiBaseUrl` and `gateway.platforms.whatsapp.apiBaseUrl` in the chart ([Helm Chart Contents](../operations/deployment.md#helm-chart-contents)). A tenant cannot aim the gateway, and a bearer token, at a host of their choosing, and an e2e suite can stand a mock in at install time.
+- **The envelope.** `channelType` is the type (`discord` or `whatsapp`); `channelId` is the channel's `path`, as for webhook channels, so the [session derivation](../gateways/user/overview.md#session-id-derivation) is the same function of the same inputs and the platform's own room identifiers ride in `metadata`; `userId` is the platform user (Discord `user.id`, WhatsApp `wa_id`); `attachments` carries platform media as references (an ID and a MIME type), never bytes, because the gateway does not download media; `metadata` carries what the adapter needs to reply and what an agent may want to branch on. The exact shapes are on the wire-contract pages, [Discord Channel](../gateways/api/channel-discord.md) and [WhatsApp Channel](../gateways/api/channel-whatsapp.md).
+- **Text replies.** The adapter sends the agent's `content` as plain text, split at the platform's message length limit. Discord components and WhatsApp interactive messages are out of scope; an agent that returns them in `metadata` gets a text reply.
+- **Errors reach the human.** When the async pipeline ends in an error payload (`delivery_failed`, `wake_timeout`, `controller_unavailable`, `response_too_large`), the adapter sends `"{error.type}: {error.message}"` as the reply text, so the person who asked sees a failure rather than silence.
+
+### Discord
 
 ```yaml
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: support-discord
+  namespace: team-support
 spec:
+  agentRef:
+    name: support-assistant
   type: discord
-  credentialsRef:
-    name: discord-bot-credentials
-    key: bot-token
   discord:
+    # Same scheme and rules as spec.webhook.path (rules 15 and 16).
+    # Register https://<ingress-host>/channels/team-support/support-discord
+    # as the application's Interactions Endpoint URL.
+    path: /channels/team-support/support-discord
+    # Secret in this namespace. Keys:
+    #   publicKey   required; the application's Ed25519 public key, hex
+    #   botToken    optional; lets replies outlive the 15-minute interaction token
+    credentialsRef:
+      name: discord-app-credentials
+    # Optional scoping. Interactions from any other guild or channel are
+    # answered with a fixed ephemeral refusal and never reach the agent.
+    # Snowflakes: CRD CEL enforces ^[0-9]{17,20}$ on both fields.
     guildId: "123456789012345678"
     allowedChannelIds:
       - "987654321098765432"
+    # The slash-command option whose string value becomes the envelope's
+    # content. Default "message".
+    contentOption: message
+  session:
+    enabled: true
 ```
 
-These types require persistent connections (Discord WebSocket, WhatsApp Cloud API registration) and platform-specific reconnection logic, which is why they are deferred.
+- **Identity.** `userId` is the invoking user's `id` (`member.user.id` in a guild, `user.id` in a DM). With `session.enabled: true`, one person talking to the same channel from two Discord channels shares one session; the Discord channel is in `metadata.channelId` for agents that want to key on it.
+- **Content.** The string value of the option named by `contentOption`. A command without that option yields an empty `content` and the whole `data` object in `metadata`, so a multi-option command is still usable by an agent that reads `metadata.options`.
+- **Scoping.** With `guildId` set, interactions from other guilds and from DMs are refused; with `allowedChannelIds` set, interactions from other channels are refused. A refusal is an immediate ephemeral message (the platform requires an answer), no envelope, no health observation, and `status="rejected"` on `kaalm_channel_messages_total`.
+- **Replies** go through the interaction's follow-up webhook, which needs no bot token. The token is valid for 15 minutes from the interaction. Without `botToken`, a reply after that window is a terminal failure (`CallbackRejected`). With `botToken`, the adapter falls back to posting a channel message that mentions the user, so a slow agent still answers. Channels backing agents that take longer than 15 minutes should set it.
+- **Attachments.** Options of the attachment type arrive resolved; each becomes an attachment reference with the CDN URL Discord supplies. The gateway does not fetch it.
+
+### WhatsApp
+
+```yaml
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: support-whatsapp
+  namespace: team-support
+spec:
+  agentRef:
+    name: support-assistant
+  type: whatsapp
+  whatsapp:
+    # Same scheme and rules as spec.webhook.path (rules 15 and 16).
+    # Register https://<ingress-host>/channels/team-support/support-whatsapp
+    # as the app's webhook callback URL, subscribed to the messages field.
+    path: /channels/team-support/support-whatsapp
+    # Secret in this namespace. Keys, all required:
+    #   verifyToken   the value Meta echoes in the verification GET
+    #   appSecret     signs every event (X-Hub-Signature-256)
+    #   accessToken   bearer for the Graph API reply
+    credentialsRef:
+      name: whatsapp-app-credentials
+    # The business phone number this channel answers as. Events for other
+    # numbers under the same app are acknowledged and dropped. Digits only
+    # (CRD CEL ^[0-9]+$).
+    phoneNumberId: "106540352242922"
+  session:
+    enabled: true
+```
+
+- **Identity.** `userId` is the sender's `wa_id` (the `from` field). The sender's profile name is in `metadata.profileName`.
+- **Content by message type.** `text` gives `text.body`; an `interactive` reply gives the chosen button or list row title; a media message (`image`, `document`, `audio`, `video`, `sticker`) gives its caption, or the empty string, plus one attachment reference carrying the media ID, MIME type, and SHA-256; every other type (`location`, `contacts`, `reaction`, `unsupported`) gives the empty string. The raw message object is always in `metadata.message`, so nothing is lost to the agent.
+- **Batches.** One inbound POST can carry several messages across `entry[].changes[]`; the adapter emits one envelope per message, in order. `statuses` entries (sent, delivered, read, failed) are acknowledged and dropped. Events whose `metadata.phone_number_id` is not this channel's `phoneNumberId` are acknowledged and dropped.
+- **Replies** are Graph API text messages to the sender's `wa_id`. Meta accepts a free-form reply only within 24 hours of the user's last message; a reply outside the window is refused by the platform and is a terminal failure (`CallbackRejected`). There is no fallback, because the alternative (a pre-approved template message) is not text the agent wrote.
+
+The wire contracts, including the verification handshakes, the signature checks, and the exact reply requests, are on [Discord Channel](../gateways/api/channel-discord.md) and [WhatsApp Channel](../gateways/api/channel-whatsapp.md). The adapter mechanics and the reply delivery buckets are on [Platform Adapters](../gateways/user/platform-adapters.md#the-platform-adapters).
 
 ## Status
 
@@ -178,7 +254,7 @@ status:
 - `status: "False"` with `reason` one of `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, `CallbackRejected`: the in-window observations are all failures, and the reason reflects the most recent failure. The two `Callback*` reasons come from outbound callback dispatch on async channels: `CallbackInvalid` when the `callbackUrl` fails the pre-dial deny-range / allowlist re-check, `CallbackRejected` when the receiver terminally rejects the POST. See [Async Webhook Response](../gateways/api/async-responses.md).
 - `status: "Unknown"`, `reason: NoRecentTraffic`: no in-window observations exist on any replica that has been up the full window. This distinguishes a truly idle channel from one that was last known healthy hours ago.
 
-The reduction across gateway replicas is performed by the `AgentChannelReconciler`. v1.1+ persistent-connection channels will reuse the same tri-state contract, with reasons sourced from gateway-side connection events. See [Channel Health Tracking](../gateways/user/platform-adapters.md#channel-health-tracking) for the per-replica state model and cross-replica reduction.
+The reduction across gateway replicas is performed by the `AgentChannelReconciler`. The platform adapters feed the same condition from the same kinds of observations (inbound requests and reply outcomes), and the reason names are shared across types: `WebhookReady` means the inbound path works whatever the platform. See [Channel Health Tracking](../gateways/user/platform-adapters.md#channel-health-tracking) for the per-replica state model and cross-replica reduction.
 
 ### phase vs PlatformConnected
 
@@ -193,7 +269,7 @@ The two can disagree without contradiction: a channel can be `phase: Degraded` (
 
 ### Scope and ownership
 
-- **v1 supports webhook only.** Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. The webhook type is stateless and covers the core channel integration pattern without requiring persistent platform connections.
+- **Three types, all inbound HTTP.** The webhook type is the generic receiver; `discord` and `whatsapp` (since v0.7.0) are adapters for one platform each, built on those platforms' HTTP delivery (interactions, Cloud API events) rather than on persistent connections. What a type adds is knowledge of the platform's signature scheme, payload shape, and reply API; what stays the same is the path scheme, the routing gate, the envelope, the session rule, and the health condition. See [Platform types](#platform-types).
 - **AgentChannel owns no Pod resources.** The gateway watches AgentChannel resources directly and manages webhook endpoints based on their specs. The reconciler's role is validation and status reporting.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have multiple AgentChannels (e.g., both a Discord channel and a webhook). Each is a separate resource.
 - **AgentChannel references Agent only, not AgentTask.** Tasks are ephemeral and lack a stable Service endpoint. The `agentRef` field must point to an `Agent` resource.
@@ -214,7 +290,7 @@ The two can disagree without contradiction: a channel can be `phase: Degraded` (
 
 - **userId extraction**: the webhook adapter resolves `userId` using `webhook.userId` config (`fromHeader` or `fromBody`). At most one may be set; the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), rejecting invalid combinations at apply time. If both are absent, the adapter uses the empty string. When `session.enabled: true`, this means all requests that cannot be attributed to a user share a single session, so set `fallback` explicitly to control this behavior. See the `webhook.userId` spec block above.
 - **`fromBody` syntax, a dotted JSON path**: `webhook.userId.fromBody` and `webhook.content.fromBody` accept a **strict subset** of jq-style paths, not the full jq language. Supported: object property access (`.foo.bar.baz`, leading dot required, property names match `[a-zA-Z_][a-zA-Z0-9_]*`) and numeric array indexing (`.foo[0]`). **Not supported**: filters, slicing, `[]` flatten, recursive descent (`..`), pipes, comparisons, or any jq expression. Invalid paths are rejected at apply time via CRD CEL on both fields (`x-kubernetes-validations` with `rule: "self.matches('^(\\.[a-zA-Z_][a-zA-Z0-9_]*(\\[[0-9]+\\])?)+$')"`, message `"fromBody must be a dotted JSON path: .foo.bar or .foo[0]"`). The narrow grammar keeps the extraction implementation small and unambiguous across language ports; senders whose payloads require richer extraction should pre-process upstream or configure `fromHeader` instead.
-- **content extraction**: the webhook adapter resolves `content` using `webhook.content` config (`fromHeader` or `fromBody`). At most one may be set; the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), mirroring the `userId` rule, rejecting invalid combinations at apply time. **If neither is configured**, the gateway uses the raw inbound body, JSON-encoded as a string, as `content`, preserving the generic-webhook story for callers whose body shape Kaalm has no a-priori knowledge of (this is the structural reason the design supports any third-party webhook sender out of the box). The raw-body path requires valid UTF-8: bodies containing invalid UTF-8 bytes are rejected with `400 Bad Request` and `error.type: invalid_request` (`error.message` names the invalid byte offset). Operators with binary senders (e.g., protobuf-payload webhooks) must configure `webhook.content` explicitly, typically `fromHeader`, so the gateway never tries to UTF-8-decode the body. **If `fromBody` is configured but the inbound body cannot be parsed as JSON**, the gateway rejects the request with `400 Bad Request` and `error.type: invalid_request`; this applies symmetrically to `userId.fromBody`, since both extractions share the parse step. **If `fromBody` is configured and the body parses but the path does not resolve, or `fromHeader` is configured and the header is absent**, the configured `fallback` is used (empty string if omitted). Per-channel `attachments` and `metadata` extraction are out of scope in v1: the generic webhook adapter populates them as `[]` and `{}` respectively; v1.1 platform-specific adapters (Discord, WhatsApp) populate them via adapter code, not per-channel CRD config. See [POST /channels/{namespace}/{channel-path}](../gateways/api/channel-webhook.md) for the wire contract.
+- **content extraction**: the webhook adapter resolves `content` using `webhook.content` config (`fromHeader` or `fromBody`). At most one may be set; the CRD schema enforces this via CEL (`!has(self.fromHeader) || !has(self.fromBody)`), mirroring the `userId` rule, rejecting invalid combinations at apply time. **If neither is configured**, the gateway uses the raw inbound body, JSON-encoded as a string, as `content`, preserving the generic-webhook story for callers whose body shape Kaalm has no a-priori knowledge of (this is the structural reason the design supports any third-party webhook sender out of the box). The raw-body path requires valid UTF-8: bodies containing invalid UTF-8 bytes are rejected with `400 Bad Request` and `error.type: invalid_request` (`error.message` names the invalid byte offset). Operators with binary senders (e.g., protobuf-payload webhooks) must configure `webhook.content` explicitly, typically `fromHeader`, so the gateway never tries to UTF-8-decode the body. **If `fromBody` is configured but the inbound body cannot be parsed as JSON**, the gateway rejects the request with `400 Bad Request` and `error.type: invalid_request`; this applies symmetrically to `userId.fromBody`, since both extractions share the parse step. **If `fromBody` is configured and the body parses but the path does not resolve, or `fromHeader` is configured and the header is absent**, the configured `fallback` is used (empty string if omitted). Per-channel `attachments` and `metadata` extraction is not configurable: the generic webhook adapter populates them as `[]` and `{}` respectively, and the platform adapters populate them per platform in adapter code (see [Platform types](#platform-types)), never through per-channel CRD config. See [POST /channels/{namespace}/{channel-path}](../gateways/api/channel-webhook.md) for the wire contract.
 
 ### Sessions
 

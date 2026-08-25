@@ -24,9 +24,9 @@ The gateway rejects webhook payloads exceeding `maxMessageBodyBytes` (default: 1
 
 The check runs at the listener level on the raw request frame, **before path resolution, before auth, and before the path-not-registered → `401` branch**. So `413` fires uniformly for any oversized POST to `:8080`, regardless of whether the path is a registered AgentChannel. This ordering does two things: it prevents oversized payloads from consuming gateway resources or being forwarded to agent containers, and it preserves the path-existence threat model documented in [Polling Fallback](../api/async-responses.md#polling-fallback) (the `413`-vs-`401` distinction must not leak which paths are hosted).
 
-### 2a. Webhook adapter authenticates
+### 2a. The adapter authenticates
 
-The gateway verifies the request using the configured auth method, either bearer token validation or HMAC signature verification, from the AgentChannel's webhook auth config. See [AgentChannel webhook auth types](../../resources/agentchannel.md) for configuration.
+The gateway verifies the request using the channel type's scheme: for a webhook channel, bearer token validation or HMAC signature verification per the AgentChannel's webhook auth config (see [AgentChannel webhook auth types](../../resources/agentchannel.md)); for a Discord or WhatsApp channel, the platform's fixed signature scheme with the channel's credential Secret (see [The platform adapters](platform-adapters.md#inbound)).
 
 ### 3. Normalization
 
@@ -48,7 +48,7 @@ Field resolution:
 
 - **`userId`** is resolved using `AgentChannel.spec.webhook.userId` config (`fromHeader` or `fromBody`). If neither is configured, or the value is absent, the configured `fallback` is used (empty string if omitted).
 - **`content`** is resolved using `AgentChannel.spec.webhook.content` config (same shape as `userId`). When neither `fromHeader` nor `fromBody` is set, the gateway uses the raw inbound body, JSON-encoded as a string, as `content`. This preserves the generic-webhook story for senders whose body shape Kaalm has no a-priori knowledge of.
-- **`attachments`** and **`metadata`** are populated by adapter-specific code: empty `[]` and `{}` for the v1 generic webhook adapter; the v1.1 Discord and WhatsApp adapters fill them per platform.
+- **`attachments`** and **`metadata`** are populated by adapter-specific code: empty `[]` and `{}` for the generic webhook adapter; the Discord and WhatsApp adapters fill them per platform ([Discord Channel](../api/channel-discord.md#normalization), [WhatsApp Channel](../api/channel-whatsapp.md#normalization)).
 
 If `fromBody` is configured for either field and the body cannot be parsed as JSON, the gateway rejects the request with `400 Bad Request` (`error.type: invalid_request`) before delivering to the agent. See [AgentChannel](../../resources/agentchannel.md) for extraction configuration.
 

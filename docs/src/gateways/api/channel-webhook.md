@@ -9,7 +9,7 @@ The path shape is fixed:
 - `spec.webhook.path` must begin with `/channels/{namespace}/`, where `{namespace}` is the AgentChannel's own namespace. This is reconcile-time rule 15: violations are `Ready=False, reason=InvalidPath` and the path is never registered by the gateway.
 - The path must not begin with `/v1/` (apply-time CRD CEL, rule 16).
 
-See [Cross-Resource Validation rules 15-16](../../resources/validation-and-defaulting.md#cross-resource-validation) and [Reserved Gateway Paths](overview.md#reserved-gateway-paths).
+See [Cross-Resource Validation rules 15-16](../../resources/validation-and-defaulting.md#cross-resource-validation) and [Reserved Gateway Paths](overview.md#reserved-gateway-paths). The Discord and WhatsApp channel types (since v0.7.0) share this route and these path rules; their contracts are [Discord Channel](channel-discord.md) and [WhatsApp Channel](channel-whatsapp.md).
 
 The endpoint is served on the User Gateway listener (`:8080`) with TLS using `kaalm-gateway-tls`. External callers reach it through the cluster Ingress that fronts `:8080` (see [TLS and Ingress](../user/overview.md#tls-and-ingress)).
 

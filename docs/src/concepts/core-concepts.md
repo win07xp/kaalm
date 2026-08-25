@@ -36,7 +36,7 @@ Both gateways are call surfaces of a single replicated Deployment in `kaalm-syst
 
 The **LLM Gateway** is the model-proxy subsystem, served on the cluster listener. It mediates all agent-to-provider traffic in the outbound direction, agent to LLM provider, and provides spend visibility, budget guardrails (soft by default, hard opt-in), rate limiting, fallback routing, and credential isolation. Using it is optional per agent.
 
-The **User Gateway** listens on `:8080` (TLS) and handles the inbound direction plus its return path: it receives webhook messages from outside, normalizes them into a standard envelope, delivers them to the agent's HTTP endpoint, and hosts the async response polling endpoint. In v1 it supports webhook channels only; Discord and WhatsApp adapters are planned for v1.1.
+The **User Gateway** listens on `:8080` (TLS) and handles the inbound direction plus its return path: it receives webhook messages from outside, normalizes them into a standard envelope, delivers them to the agent's HTTP endpoint, and hosts the async response polling endpoint. It supports three channel types: the generic webhook, and since v0.7.0 the Discord and WhatsApp adapters, all inbound HTTP.
 
 Which endpoints live on which listener, and what authentication each path requires, is consolidated in [the gateway overview](../gateways/overview.md).
 

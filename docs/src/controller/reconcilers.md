@@ -301,7 +301,7 @@ Watches: `AgentChannel`, plus owned `Role` and `RoleBinding` (created in step 3,
 Reconciliation steps:
 
 1. Resolve `agentRef`: if the referenced Agent does not exist, set `Ready=False, reason=AgentNotFound`. Note: `agentRef` must reference an `Agent`, not an `AgentTask`. Tasks are ephemeral and lack a stable Service endpoint.
-2. Verify the Agent has `spec.service.enabled: true`. If not, set `Ready=False, reason=AgentServiceDisabled`. In the same step, validate that `spec.webhook.path` begins with `/channels/{namespace}/` where `{namespace}` is the AgentChannel's own namespace: violations set `Ready=False, reason=InvalidPath`. This single-resource rule lives at reconcile time because CRD CEL cannot read `metadata.namespace` (see [rule 15](../resources/validation-and-defaulting.md#cross-resource-validation)); the gateway independently refuses to register non-conforming paths, so a violating channel receives no traffic even before this status lands.
+2. Verify the Agent has `spec.service.enabled: true`. If not, set `Ready=False, reason=AgentServiceDisabled`. In the same step, validate that the channel's path (`spec.webhook.path`, `spec.discord.path`, or `spec.whatsapp.path`, per `spec.type`) begins with `/channels/{namespace}/` where `{namespace}` is the AgentChannel's own namespace: violations set `Ready=False, reason=InvalidPath`. This single-resource rule lives at reconcile time because CRD CEL cannot read `metadata.namespace` (see [rule 15](../resources/validation-and-defaulting.md#cross-resource-validation)); the gateway independently refuses to register non-conforming paths, so a violating channel receives no traffic even before this status lands.
 3. Ensure the per-channel credential `Role` exists **before** validating Secret contents. See [Per-channel credential Role](#per-channel-credential-role) below.
 4. Poll channel health status from the gateway. See [Channel health poll](#channel-health-poll) below.
 5. **Maintain `status.phase`** by reducing the referenced Agent's phase to a Channel phase. See [Channel phase reduction](#channel-phase-reduction) below.
@@ -319,6 +319,7 @@ The scoped Secrets are:
 
 - The inbound `spec.webhook.auth` Secret, always present (`secretRef.name` for `bearer`, `hmac.secretRef.name` for `hmac`).
 - When `spec.webhook.callbackUrl` is set, the outbound `spec.webhook.callbackAuth` Secret (same shape: `callbackAuth.secretRef.name` or `callbackAuth.hmac.secretRef.name`).
+- For a platform channel (since v0.7.0), the single `spec.discord.credentialsRef` or `spec.whatsapp.credentialsRef` Secret, which carries every key the type needs.
 
 When both references point to the same Secret, `resourceNames` lists it once; when they differ, the list contains both.
 
@@ -327,7 +328,8 @@ The Role is bound by two RoleBindings: one to the gateway ServiceAccount (`kaalm
 After the Role exists, the reconciler reads each referenced Secret via this scoped path and validates:
 
 - (a) Every referenced Secret exists. If any is missing, set `Ready=False, reason=CredentialsMissing` with a message naming which Secret.
-- (b) The referenced key is present in each Secret's `data`. If absent, set the same `Ready=False, reason=CredentialsMissing` with a message naming both the Secret and the missing key.
+- (b) The referenced key is present in each Secret's `data`. If absent, set the same `Ready=False, reason=CredentialsMissing` with a message naming both the Secret and the missing key. For a platform channel the keys are the type's required set ([rule 40](../resources/validation-and-defaulting.md#cross-resource-validation)).
+- (c) For a Discord channel, `publicKey` decodes to 32 bytes of hex. If not, set `Ready=False, reason=CredentialsInvalid`, because no verifier can be built from it.
 
 The reason code is shared across inbound and outbound to give consumers one stable "channel auth Secret unusable" signal. Per [cross-resource validation rule 25](../resources/validation-and-defaulting.md#cross-resource-validation), `callbackAuth` is required whenever `callbackUrl` is set (CRD CEL rejects the bypass case); the Secret/key check here is the parallel runtime validation, mirroring the inbound `auth` check.
 

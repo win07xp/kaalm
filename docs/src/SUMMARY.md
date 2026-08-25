@@ -35,6 +35,8 @@
   - [Cluster Listener TLS](gateways/listener-tls.md)
 - [HTTP API](gateways/api/overview.md)
   - [Channel Webhook](gateways/api/channel-webhook.md)
+  - [Discord Channel](gateways/api/channel-discord.md)
+  - [WhatsApp Channel](gateways/api/channel-whatsapp.md)
   - [Task Completion](gateways/api/task-complete.md)
   - [Agent Endpoints](gateways/api/agent-endpoints.md)
   - [Async Webhook Responses](gateways/api/async-responses.md)
