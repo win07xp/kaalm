@@ -1,8 +1,10 @@
-# The pre-upgrade world for the S21 upgrade e2e: everything a v0.5.0 cluster
-# holds before the graduation, written the way its users wrote it. Every
-# apiVersion here says kaalm.io/v1alpha1 on purpose (this file is applied to
-# a cluster whose CRDs predate v1beta1) and every image is a published
-# 0.5.0 artifact, because the scenario upgrades what users actually run.
+# The pre-upgrade world for the S21 upgrade e2e: everything a cluster on the
+# previous release holds before the upgrade, written the way its users wrote
+# it. Every apiVersion says kaalm.io/v1alpha1 on purpose (served on every
+# previous release, and the deliberate old-manifest shape), and __PREV__ is
+# substituted with PREV_CHART_VERSION at apply time so the workloads run the
+# previous release's published base images, because the scenario upgrades
+# what users actually run.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -82,7 +84,7 @@ metadata:
 spec:
   agentClassRef:
     name: up-service
-  image: ghcr.io/win07xp/kaalm-agent-python:0.5.0
+  image: ghcr.io/win07xp/kaalm-agent-python:__PREV__
   handler:
     configMapRef:
       name: up-handler
@@ -103,7 +105,7 @@ metadata:
 spec:
   agentClassRef:
     name: up-hibernating
-  image: ghcr.io/win07xp/kaalm-agent-python:0.5.0
+  image: ghcr.io/win07xp/kaalm-agent-python:__PREV__
   handler:
     configMapRef:
       name: up-handler
@@ -146,7 +148,7 @@ metadata:
 spec:
   agentClassRef:
     name: up-service
-  image: ghcr.io/win07xp/kaalm-agent-go:0.5.0
+  image: ghcr.io/win07xp/kaalm-agent-go:__PREV__
   env:
     - name: KAALM_TASK_AUTOCOMPLETE
       value: success

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -32,13 +33,22 @@ import (
 )
 
 // prevVersion is the released chart the cluster starts from; the Makefile
-// pins it and release readiness (#115) bumps it each release.
+// pins it and release readiness bumps it each release.
 func prevVersion() string {
 	if v := os.Getenv("UPGRADE_PREV_VERSION"); v != "" {
 		return v
 	}
-	return "0.5.0"
+	return "0.6.0"
 }
+
+// prevPredatesGraduation reports whether the previous release predates the
+// v0.6.0 API graduation. Only such upgrades have the conversion window (the
+// old controller serves no webhook yet) and storage to migrate; a
+// post-graduation previous release already serves conversion and already
+// stores at v1beta1, and the spec asserts that instead. Versions are
+// dotted numbers, so the string comparison works within one digit series;
+// revisit at 0.10.0.
+func prevPredatesGraduation() bool { return prevVersion() < "0.6.0" }
 
 const (
 	ns          = "up-e2e"
@@ -89,8 +99,13 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 			"--wait", "--timeout", "5m")
 		Expect(err).NotTo(HaveOccurred())
 
-		By("applying the v1alpha1 workloads")
-		_, err = utils.Kubectl("apply", "-f", "test/upgrade/testdata/pre-upgrade.yaml")
+		By("applying the v1alpha1 workloads at the previous release's image versions")
+		raw, err := os.ReadFile("test/upgrade/testdata/pre-upgrade.yaml")
+		Expect(err).NotTo(HaveOccurred())
+		rendered := filepath.Join(GinkgoT().TempDir(), "pre-upgrade.yaml")
+		Expect(os.WriteFile(rendered,
+			[]byte(strings.ReplaceAll(string(raw), "__PREV__", prevVersion())), 0o600)).To(Succeed())
+		_, err = utils.Kubectl("apply", "-f", rendered)
 		Expect(err).NotTo(HaveOccurred())
 
 		By("the keeper reaches Running (published base image pull included)")
@@ -112,7 +127,7 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(keeperPodUID).NotTo(BeEmpty())
 	})
 
-	It("opens the window: new CRDs make v1alpha1 reads work and v1alpha1 writes fail", func() {
+	It("opens the window: new CRDs make v1alpha1 reads work; writes match the old release's era", func() {
 		By("step 1 of the documented upgrade: apply the new chart's CRDs")
 		// --force-conflicts is part of the documented command: helm owns
 		// every CRD field from the install, and the first server-side apply
@@ -120,17 +135,25 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		_, err := utils.Kubectl("apply", "--server-side", "--force-conflicts", "-f", "charts/kaalm/crds/")
 		Expect(err).NotTo(HaveOccurred())
 
-		By("reads at v1alpha1 still work: stored v1alpha1 bytes need no conversion")
+		By("reads at v1alpha1 still work")
 		out, err := utils.Kubectl("get", "agents.v1alpha1.kaalm.io", "up-keeper", "-n", ns,
 			"-o", "jsonpath={.metadata.name}")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(lastLine(out)).To(Equal("up-keeper"))
 
-		By("a write at v1alpha1 fails: storage is v1beta1 and nothing serves the webhook yet")
-		out, err = utils.Kubectl("annotate", "agentclasses.v1alpha1.kaalm.io", "up-service",
-			"upgrade-e2e/window-probe=first")
-		Expect(err).To(HaveOccurred(), "the window write should fail, got: %s", out)
-		Expect(out).To(ContainSubstring("conversion webhook"))
+		if prevPredatesGraduation() {
+			By("a write at v1alpha1 fails: storage is v1beta1 and nothing serves the webhook yet")
+			out, err = utils.Kubectl("annotate", "agentclasses.v1alpha1.kaalm.io", "up-service",
+				"upgrade-e2e/window-probe=first")
+			Expect(err).To(HaveOccurred(), "the window write should fail, got: %s", out)
+			Expect(out).To(ContainSubstring("conversion webhook"))
+		} else {
+			By("there is no window: the old release already serves the conversion webhook")
+			_, err = utils.Kubectl("annotate", "--overwrite", "agentclasses.v1alpha1.kaalm.io",
+				"up-service", "upgrade-e2e/window-probe=first")
+			Expect(err).NotTo(HaveOccurred(),
+				"a post-graduation release must convert v1alpha1 writes throughout the upgrade")
+		}
 	})
 
 	It("upgrades the release and the window closes on its own", func() {
@@ -178,7 +201,7 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(lastLine(out)).To(Equal("standard"))
 	})
 
-	It("migrated storage: every CRD reports storedVersions [v1beta1], objects rewritten", func() {
+	It("migrated storage: every CRD reports storedVersions [v1beta1]", func() {
 		for _, crd := range []string{
 			"agentclasses.kaalm.io", "modelproviders.kaalm.io", "toolproviders.kaalm.io",
 			"agents.kaalm.io", "agenttasks.kaalm.io", "agentchannels.kaalm.io",
@@ -189,12 +212,22 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 			}, "120s", "5s").Should(Equal(`["v1beta1"]`), crd)
 		}
 
-		By("the migrator's log names the kinds it moved")
-		logs, err := utils.Kubectl("logs", "-n", "kaalm-system",
-			"-l", "app.kubernetes.io/component=controller", "--tail=-1", "--prefix")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(logs).To(ContainSubstring("storage version migrated"))
-		Expect(logs).To(MatchRegexp(`"crd": "agents.kaalm.io", "objects": [1-9]`))
+		// The pass runs on the new leader a beat after the rollout; with a
+		// post-graduation previous release nothing above waited on it, so
+		// poll the log for the era-appropriate marker.
+		marker := `"kindsAlreadyCurrent":\s*6`
+		if prevPredatesGraduation() {
+			By("the migrator's log names the kinds it moved")
+			marker = `"crd": "agents.kaalm.io", "objects": [1-9]`
+		} else {
+			By("the migrator found everything already current")
+		}
+		var logs string
+		Eventually(func() string {
+			logs, _ = utils.Kubectl("logs", "-n", "kaalm-system",
+				"-l", "app.kubernetes.io/component=controller", "--tail=-1", "--prefix")
+			return logs
+		}, "120s", "5s").Should(MatchRegexp(marker))
 		Expect(logs).NotTo(ContainSubstring("storage-version migration failed"))
 	})
 
