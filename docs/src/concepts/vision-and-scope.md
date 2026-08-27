@@ -4,7 +4,7 @@
 
 ## What is Kaalm?
 
-Kaalm is a Kubernetes-native platform that makes AI agents a first-class workload type. It provides a set of custom resources and a controller that manage the full lifecycle of agents, from deployment and hibernation through resumption and teardown, alongside two managed gateway types: an **LLM Gateway** (TLS-secured) for controlled access to AI model providers, and a **User Gateway** for connecting agents to user-facing channels via webhooks (Discord, WhatsApp, and other platform-specific adapters are planned for v1.1).
+Kaalm is a Kubernetes-native platform that makes AI agents a first-class workload type. It provides a set of custom resources and a controller that manage the full lifecycle of agents, from deployment and hibernation through resumption and teardown, alongside two managed gateway types: an **LLM Gateway** (TLS-secured) for controlled access to AI model providers, and a **User Gateway** for connecting agents to user-facing channels: a generic webhook, and since v0.7.0 Discord and WhatsApp adapters.
 
 Kaalm is **not** an agent framework, an agent marketplace, or an IDE. It does not define how an agent thinks, which tools it uses, or how users talk to it at the application layer; since the v0.3.0 design it does govern how tool access is granted, brokered, and audited (the [tool plane](../gateways/tool-plane.md), implemented in v0.4.0), without ever shipping a tool itself. It defines how an agent is **run**: what image, under what isolation policy, against which LLM providers, with what lifecycle, within what cost guardrails, and over what user-facing channels.
 
@@ -30,7 +30,7 @@ Kaalm introduces six custom resources:
 The controller reconciles these resources into standard Kubernetes primitives (Pods, PVCs, Services, ConfigMaps) while layering in agent-aware lifecycle logic (idle detection, hibernation, wake-on-demand, task completion semantics) and managing two shared gateway components:
 
 - The **LLM Gateway**: a replicated proxy Deployment in `kaalm-system` that mediates all agent-to-provider traffic. It provides spend visibility, budget guardrails (soft by default, with an opt-in hard cap), rate limiting, fallback routing, and credential isolation. Using it is optional per agent. It serves two tiers of caller: Kaalm-managed Pods, and existing workloads that have no Agent resource at all (the gateway-only tier). How each tier authenticates, and which access-control policies apply to it, is detailed in [Namespace Identification](../gateways/llm/workload-identity.md). One caveat worth knowing at this altitude: the default-deny NetworkPolicy that forces traffic through the gateway covers Kaalm-managed Pods only, so gateway-only workloads route through it voluntarily unless the platform team adds its own egress policy; see [Network Policy](../security/model.md#network-policy).
-- The **User Gateway**: a listener on the same gateway Deployment that receives inbound webhook messages, normalizes them into a standard envelope, and delivers them to the agent's HTTP endpoint. Discord, WhatsApp, and other platform-specific adapters are planned for v1.1. See [User Gateway request flow](../gateways/user/overview.md#request-flow).
+- The **User Gateway**: a listener on the same gateway Deployment that receives inbound webhook messages, normalizes them into a standard envelope, and delivers them to the agent's HTTP endpoint; the Discord and WhatsApp adapters (since v0.7.0) do the same for their platforms' HTTP delivery. See [User Gateway request flow](../gateways/user/overview.md#request-flow).
 
 ## Budget Visibility and Guardrails
 
@@ -73,7 +73,7 @@ Kaalm's differentiator is the combination none of its neighbors has: **dollar-de
 - All six CRDs and the reconciling controller (ToolProvider since v0.4.0)
 - Persistent and task-mode agent lifecycle (including idle detection, hibernation, wake-on-demand, timeout, artifact collection); see [Controller Lifecycle](../controller/agent-lifecycle.md)
 - LLM Gateway: TLS-secured cluster-level proxy with spend tracking, budget guardrails (soft by default, hard opt-in since v0.3.0), rate limiting, same-type fallback chains (no cross-format translation), and provider credential isolation. Two authentication modes: mTLS for Kaalm-managed Pods and `TokenReview`-validated ServiceAccount tokens for existing workloads. See [Namespace Identification](../gateways/llm/workload-identity.md).
-- User Gateway: channel integration via AgentChannel (generic webhook in v1 with sync and async response modes; Discord and WhatsApp adapters in v1.1)
+- User Gateway: channel integration via AgentChannel (generic webhook with sync and async response modes; Discord and WhatsApp adapters since v0.7.0)
 - RBAC, namespace scoping, and a documented [security model](../security/model.md)
 - cert-manager-based TLS certificate lifecycle for the gateway and per-agent serving certs; see [Certificate Lifecycle](../operations/deployment.md#certificate-lifecycle)
 - Starter templates (one Go, one Python) under `examples/` that implement the runtime contract; see [Starter Templates](../runtime/starter-templates.md)
@@ -89,7 +89,7 @@ Kaalm's differentiator is the combination none of its neighbors has: **dollar-de
 - Hard budget enforcement (synchronous per-request aggregation)
 - Cross-format provider fallback (e.g., Anthropic → OpenAI translation)
 - Agent Sandbox integration (`agentSandbox` runtime backend): v1.1
-- Platform-specific channel adapters (Discord, WhatsApp): v1.1
+- The Discord Gateway WebSocket adapter for free-text message bots (a persistent connection per bot); the HTTP adapters ship since v0.7.0
 - Full-featured reference base images (published container images wrapping the runtime contract): v1.1 (v1 ships starter templates instead)
 
 The v1 scope is deliberately narrow: get the workload abstraction, provider management, and channel integration right first. Everything else is an additive layer.

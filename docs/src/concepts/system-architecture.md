@@ -145,4 +145,4 @@ Kaalm supports any HTTP-based LLM provider. Out of the box, the gateway understa
 
 ### Channel Platforms
 
-The User Gateway ships with a **generic webhook adapter** in v1: inbound HTTP POST with configurable auth. Discord and WhatsApp adapters are planned for v1.1, deferred because they require persistent connections and platform-specific reconnection logic rather than a simple request/response intake. Additional platform adapters follow the same plugin pattern as LLM provider adapters.
+The User Gateway ships with three adapters: the **generic webhook adapter** (inbound HTTP POST with configurable auth) and, since v0.7.0, the **Discord** and **WhatsApp** adapters, which verify their platform's signature and reply through its API. All three are inbound HTTP; nothing holds a persistent connection. Additional platform adapters follow the same plugin pattern as LLM provider adapters; see [Platform Adapters](../gateways/user/platform-adapters.md).

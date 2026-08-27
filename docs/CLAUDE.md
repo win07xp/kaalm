@@ -14,7 +14,7 @@ The design book is the spec: it documents exactly how the system works. Start at
 - `console/` - the optional operator console (read API, authn, test-chat)
 - `security/` - trust model, RBAC, credentials, TLS, threat model
 - `operations/` - deployment (Helm), API versioning and deprecation, observability
-- `appendix/` - the acceptance scenarios (S1 to S21), the scenario-coverage map, and the lifecycle index
+- `appendix/` - the acceptance scenarios (S1 to S23), the scenario-coverage map, and the lifecycle index
 
 ## Single-sourced facts
 
@@ -31,7 +31,7 @@ Do not restate them:
 
 ## Diagrams
 
-48 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
+50 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
 Regenerate with:
 
 ```bash

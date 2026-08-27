@@ -1,0 +1,67 @@
+@startuml platform-channel-flow
+' A platform channel message (Discord interaction or WhatsApp event) through the User Gateway and back out through the platform API.
+' Source of truth: docs/src/gateways/user/platform-adapters.md
+!include _style.puml
+
+actor "Person on\nDiscord or WhatsApp" as user
+participant "Platform\n(Discord, Meta)" as plat #FFE4B5
+participant "User Gateway\n:8080" as gw #90EE90
+participant "Agent Service\n/v1/message" as agent
+participant "Platform API\n(gateway-level base URL)" as api #FFE4B5
+
+user -> plat : slash command, or a message
+plat -> gw : POST /channels/{ns}/{path}\nsigned by the platform
+
+group #F5F5F5 1. Size check, routing gate, verify
+  alt body over maxMessageBodyBytes
+    gw --> plat : **413**
+  else path not Ready, or signature invalid
+    gw --> plat : **401**
+  end
+end
+note over gw
+  Discord: Ed25519 over timestamp
+  and body, timestamp within 300s.
+  WhatsApp: HMAC-SHA256 over the
+  body with the app secret.
+  A Discord PING and a WhatsApp
+  verification GET are answered
+  here and go no further.
+end note
+
+group #F5F5F5 2. Scope and filter
+  alt Discord: outside guildId or allowedChannelIds
+    gw --> plat : ephemeral refusal, no envelope
+  else WhatsApp: statuses, or another phone number
+    gw --> plat : **200**, dropped
+  end
+end
+
+gw --> plat : **acknowledge**\nDiscord: deferred response (type 5)\nWhatsApp: 200, empty body
+note over plat, gw #FFF8DC
+  The platform is now gone.
+  Everything below runs in the
+  async pipeline, with **no**
+  kaalm-async record: nobody
+  will poll for it.
+end note
+
+group #F5F5F5 3. Normalize, wake if needed, deliver
+  gw -> gw : one envelope per message
+  gw -> agent : POST /v1/message (mTLS)\n4 attempts: 1s, 5s, 25s
+  agent --> gw : reply envelope, or an error payload
+end
+
+group #F5F5F5 4. SendReply through the platform API
+  gw -> api : Discord: follow-up webhook\nWhatsApp: POST /{phoneNumberId}/messages
+  alt 2xx
+    api --> gw : delivered
+    api -> user : the reply shows up in the chat
+  else terminal (400, 401, 403, 404, 405, 410, 415)
+    api --> gw : refused
+    gw -> gw : CallbackRejected on channel health,\nWarning event, payload dropped
+  else retried (connect, timeout, 408, 429, 5xx)
+    api --> gw : retry on the callback schedule
+  end
+end
+@enduml

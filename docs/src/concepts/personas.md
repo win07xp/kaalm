@@ -6,7 +6,7 @@ Every design decision in Kaalm traces back to two people and one deployment. Thi
 
 The motivating deployment for Kaalm is a **shared Kubernetes cluster running hundreds of personal long-lived agents**, each owned by a different user.
 
-Consider an engineering organization where every developer has their own persistent AI assistant. The platform team configures one [`AgentClass`](../resources/agentclass.md) (`personal-standard`), one [`ModelProvider`](../resources/modelprovider.md) with a per-namespace monthly budget, and provisions namespaces for each user. Developers deploy their [`Agent`](../resources/agent.md) and optionally connect it to their preferred channels via webhooks (with platform-specific adapters like Discord planned for v1.1). They write one manifest; they never touch RuntimeClasses, PodSecurityContexts, or API keys.
+Consider an engineering organization where every developer has their own persistent AI assistant. The platform team configures one [`AgentClass`](../resources/agentclass.md) (`personal-standard`), one [`ModelProvider`](../resources/modelprovider.md) with a per-namespace monthly budget, and provisions namespaces for each user. Developers deploy their [`Agent`](../resources/agent.md) and optionally connect it to their preferred channels via webhooks, Discord, or WhatsApp. They write one manifest; they never touch RuntimeClasses, PodSecurityContexts, or API keys.
 
 The platform team has full visibility into LLM spend per namespace. Idle agents hibernate automatically overnight and wake when the first message arrives. The platform can serve hundreds of these agents on a reasonably sized cluster because hibernated agents consume no compute.
 

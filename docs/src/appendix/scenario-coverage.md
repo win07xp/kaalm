@@ -1,6 +1,6 @@
 # Scenario Coverage
 
-The [acceptance scenarios](scenarios.md) S1 to S21 are the north-star
+The [acceptance scenarios](scenarios.md) S1 to S23 are the north-star
 definition of "done". This page maps each scenario to the implemented behavior
 that exercises it and the automated tests that verify it, so the acceptance
 surface is auditable rather than aspirational.
@@ -30,7 +30,10 @@ S20 with the v0.5.0 tracing design; both are green against the v0.5.0
 implementation. S21 was added with the v0.6.0 API versioning design and is
 green against the upgrade e2e (`test/upgrade/`, run by `make e2e-upgrade`
 and the `upgrade` CI workflow), which starts from the previous released
-chart rather than the local build; the row below names it.
+chart rather than the local build; the row below names it. S22 and S23
+were added with the v0.7.0 platform-adapter design; their specs land with
+the Discord and WhatsApp adapters, and each row names the mock the spec
+runs against.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -55,6 +58,8 @@ chart rather than the local build; the row below names it.
 | S19 Operator console (fleet, spend, test-chat) | `Operator console (S19)` (a default install renders no console objects; the enabled install serves an authorization-filtered namespace list and live fleet rows to a namespaced token; a paste-token login renders the dashboard; test-chat wakes a hibernated agent and returns its reply; an unauthorized token sees an empty list, 403 on direct access, and 401 when invalid) | Unit: the `internal/console` suite (data layer, gate, sessions, pages); `TestTestChat_*`, `TestAuthMatrix` (gateway endpoint, console SAN) |
 | S20 Tracing across the hops (one message, one trace) | `Tracing across the hops (S20)` (a default install renders no tracing flags; with the exporter enabled, one webhook message to an agent that asks its model yields one Jaeger trace whose `channel.receive`, `agent.deliver`, `llm.request`, and `llm.forward` spans connect) | Unit: `TestTracing_OneMessageOneConnectedTrace` and `TestTracing_ToolCallSpansParentOntoCallerContext` (gateway), `TestServe_TraceContextReachesHandlerAndGatewayCalls` (agentruntime), `tests/test_tracecontext.py` (Python ABI) |
 | S21 Upgrade in place (API graduation) | `Upgrade in place (S21)` in `test/upgrade/` (install the previous released chart, apply `v1alpha1` workloads, run the two documented upgrade steps to the current build, then assert the running agent keeps its Pod and its volume, the hibernated agent stays hibernated and wakes on its next message, the finished task keeps its status, both API versions read back every object with the deprecation warning at `v1alpha1` only, `storedVersions` is migrated, and the window between the steps closes on its own) | Round-trip fuzz tests for every kind (`api/v1alpha1`); envtest conversion and migrator coverage (`internal/controller`, `internal/storagemigration`) |
+| S22 Discord slash command (interactions endpoint) | designed with v0.7.0; the spec lands with the Discord adapter, against `test/e2e/mockdiscord` (a `PING` and a signed command in, a badly signed request rejected, the reply observed at the mock's follow-up endpoint) | |
+| S23 WhatsApp customer message (Cloud API webhook) | designed with v0.7.0; the spec lands with the WhatsApp adapter, against `test/e2e/mockwhatsapp` (the verification `GET`, a signed text event in, a `statuses` event dropped, a bad signature rejected, the reply observed at the mock's messages endpoint) | |
 
 The LLM-proxy scenarios (S4, S10, S15, S17) are exercised against an
 in-cluster mock upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy

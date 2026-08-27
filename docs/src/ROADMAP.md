@@ -90,9 +90,11 @@ These are the deferrals the design itself names (see
 [Scope for v1](concepts/vision-and-scope.md#scope-for-v1)), roughly in the order
 they are likely to matter:
 
-- **Platform channel adapters.** Discord and WhatsApp adapters for the user
-  gateway (the v1 channel type is the generic webhook only); see
-  [Future platform types](resources/agentchannel.md#future-platform-types-v11).
+- **The Discord Gateway WebSocket adapter.** Free-text message bots need a
+  persistent connection per bot (identify, heartbeat, resume, sharding) and
+  one replica to own it; the v0.7.0 Discord adapter covers slash commands
+  over HTTP instead. Tracked as
+  [#124](https://github.com/win07xp/kaalm/issues/124).
 - **Agent Sandbox integration.** The `agentSandbox` runtime backend for
   code-executing agents.
 - **Cross-format provider fallback.** Translation between provider API formats
