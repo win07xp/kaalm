@@ -57,6 +57,8 @@ spec:
             - --channel-health-window={{ .Values.gateway.channelHealthWindow }}
             - --delivery-backoff={{ .Values.gateway.agentDeliveryRetryBackoff }}
             - --callback-backoff={{ .Values.gateway.callbackRetryBackoff }}
+            - --platform-discord-api-base-url={{ .Values.gateway.platforms.discord.apiBaseUrl }}
+            - --platform-whatsapp-api-base-url={{ .Values.gateway.platforms.whatsapp.apiBaseUrl }}
             {{- if .Values.gateway.tracing.otlpEndpoint }}
             - --otlp-endpoint={{ .Values.gateway.tracing.otlpEndpoint }}
             - --otlp-sample-ratio={{ .Values.gateway.tracing.sampleRatio }}

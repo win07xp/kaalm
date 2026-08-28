@@ -86,21 +86,25 @@ func (s *Server) UserHandler() http.Handler {
 // before path resolution, so 413 never leaks which paths exist), then channel
 // lookup, auth, normalization, and mode dispatch.
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		unauthorized(w, "unknown path")
-		return
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.Config.MaxMessageBodyBytes))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, errorBody{
-				Type:    errRequestTooLarge,
-				Message: fmt.Sprintf("request body exceeds %d bytes", s.Config.MaxMessageBodyBytes)}, 0)
+	// The size check runs on the raw frame before path resolution, so an
+	// oversized POST answers 413 whether or not the path exists. A GET has no
+	// body; only the WhatsApp verification handshake uses one, and whether a
+	// GET is meaningful is the adapter's call after the route is known.
+	var body []byte
+	if r.Method == http.MethodPost {
+		var err error
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, s.Config.MaxMessageBodyBytes))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				writeError(w, http.StatusRequestEntityTooLarge, errorBody{
+					Type:    errRequestTooLarge,
+					Message: fmt.Sprintf("request body exceeds %d bytes", s.Config.MaxMessageBodyBytes)}, 0)
+				return
+			}
+			badRequest(w, "reading request body: "+err.Error())
 			return
 		}
-		badRequest(w, "reading request body: "+err.Error())
-		return
 	}
 
 	channel, ok := s.Store.ChannelByPath(r.Context(), r.URL.Path)
@@ -112,6 +116,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// makes the delete-time finalizer sweep race-free.
 	if channel.Status.Phase == kaalmv1beta1.ChannelTerminating {
 		unauthorized(w, "auth failed or path not registered")
+		return
+	}
+
+	// Platform channels (since v0.7.0) hand the whole inbound half to their
+	// adapter; the webhook path below is the generic receiver.
+	if adapter, ok := s.platformAdapterFor(channel); ok {
+		s.handlePlatform(w, r, channel, body, adapter)
+		return
+	}
+	if r.Method != http.MethodPost || channel.Spec.Webhook == nil {
+		unauthorized(w, "unknown path")
 		return
 	}
 

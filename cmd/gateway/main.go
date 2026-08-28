@@ -67,6 +67,8 @@ func main() {
 		channelHealthWindow  time.Duration
 		deliveryBackoff      string
 		callbackBackoff      string
+		discordAPIBaseURL    string
+		whatsAppAPIBaseURL   string
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "cluster listener (:8443) address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
@@ -101,6 +103,10 @@ func main() {
 	flag.DurationVar(&channelHealthWindow, "channel-health-window", 5*time.Minute, "rolling window for PlatformConnected")
 	flag.StringVar(&deliveryBackoff, "delivery-backoff", "1s,5s,25s", "agent-delivery retry backoff (comma-separated)")
 	flag.StringVar(&callbackBackoff, "callback-backoff", "1s,5s,25s", "callback retry backoff schedule (comma-separated)")
+	flag.StringVar(&discordAPIBaseURL, "platform-discord-api-base-url", gateway.DefaultDiscordAPIBaseURL,
+		"base URL the Discord adapter replies through (gateway.platforms.discord.apiBaseUrl)")
+	flag.StringVar(&whatsAppAPIBaseURL, "platform-whatsapp-api-base-url", "https://graph.facebook.com/v23.0",
+		"base URL the WhatsApp adapter replies through, including the Graph API version (gateway.platforms.whatsapp.apiBaseUrl)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -222,6 +228,8 @@ func main() {
 		ChannelHealthWindow:      channelHealthWindow,
 		DeliveryBackoff:          parseBackoff(deliveryBackoff, logger),
 		CallbackBackoff:          parseBackoff(callbackBackoff, logger),
+		DiscordAPIBaseURL:        discordAPIBaseURL,
+		WhatsAppAPIBaseURL:       whatsAppAPIBaseURL,
 		Replicas: func() int {
 			var pods corev1.PodList
 			if err := cl.GetClient().List(context.Background(), &pods,

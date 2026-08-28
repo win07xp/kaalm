@@ -113,6 +113,11 @@ type Config struct {
 	// responses. The zero value denies internal address space; entries come
 	// from gateway.callbackUrl.allowlist. See internal/callbackpolicy.
 	CallbackPolicy callbackpolicy.Policy
+	// DiscordAPIBaseURL and WhatsAppAPIBaseURL are where the platform
+	// adapters reply (gateway.platforms.<type>.apiBaseUrl). Operator-set and
+	// trusted like a provider endpoint; empty means the platform's default.
+	DiscordAPIBaseURL  string
+	WhatsAppAPIBaseURL string
 }
 
 // Server is the Kaalm Gateway's :8443 surface.

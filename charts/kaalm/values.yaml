@@ -70,6 +70,16 @@ gateway:
   # reconcile-time validation (rule 22) and the gateway's pre-dial re-check.
   callbackUrl:
     allowlist: []
+  # Where the platform channel adapters (AgentChannel spec.type discord and
+  # whatsapp, since v0.7.0) send replies. Operator-set and trusted like a
+  # ModelProvider endpoint: not subject to the callbackUrl deny ranges, and
+  # http:// is accepted, so an e2e mock can stand in. The WhatsApp value
+  # carries the Graph API version segment; change it to move versions.
+  platforms:
+    discord:
+      apiBaseUrl: https://discord.com/api/v10
+    whatsapp:
+      apiBaseUrl: https://graph.facebook.com/v23.0
   # OpenTelemetry tracing (docs/src/operations/observability.md#tracing).
   # Off by default: with no endpoint, no tracer is installed and no trace
   # context is created or forwarded. Set otlpEndpoint to an OTLP/HTTP base
