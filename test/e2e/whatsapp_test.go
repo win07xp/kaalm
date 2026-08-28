@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -147,7 +148,9 @@ var _ = Describe("WhatsApp channel (S23)", Ordered, func() {
 	It("echoes the verification challenge for the right token and refuses the wrong one", func() {
 		ok := verify("e2e-verify-token", "1158201444")
 		Expect(ok.Status).To(Equal(200))
-		Expect(string(ok.Body)).To(Equal(`"1158201444"`))
+		// The mock relays the gateway's body as JSON; a digits-only challenge
+		// is a JSON number, so the echo arrives unquoted.
+		Expect(strings.Trim(string(ok.Body), `"`)).To(Equal("1158201444"))
 
 		bad := verify("guess", "1158201444")
 		Expect(bad.Status).To(Equal(403))
