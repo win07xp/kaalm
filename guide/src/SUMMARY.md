@@ -27,6 +27,7 @@
 - [Your First Agent](developers/first-agent.md)
 - [Connecting a Channel](developers/connecting-a-channel.md)
 - [Connecting Discord](developers/connecting-discord.md)
+- [Connecting WhatsApp](developers/connecting-whatsapp.md)
 - [Running Tasks](developers/running-tasks.md)
 - [Calling Tools Through the Gateway](developers/calling-tools.md)
 - [Agent Lifecycle Day-to-Day](developers/lifecycle.md)
