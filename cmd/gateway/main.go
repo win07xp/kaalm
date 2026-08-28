@@ -105,7 +105,7 @@ func main() {
 	flag.StringVar(&callbackBackoff, "callback-backoff", "1s,5s,25s", "callback retry backoff schedule (comma-separated)")
 	flag.StringVar(&discordAPIBaseURL, "platform-discord-api-base-url", gateway.DefaultDiscordAPIBaseURL,
 		"base URL the Discord adapter replies through (gateway.platforms.discord.apiBaseUrl)")
-	flag.StringVar(&whatsAppAPIBaseURL, "platform-whatsapp-api-base-url", "https://graph.facebook.com/v23.0",
+	flag.StringVar(&whatsAppAPIBaseURL, "platform-whatsapp-api-base-url", gateway.DefaultWhatsAppAPIBaseURL,
 		"base URL the WhatsApp adapter replies through, including the Graph API version "+
 			"(gateway.platforms.whatsapp.apiBaseUrl)")
 	flag.Parse()

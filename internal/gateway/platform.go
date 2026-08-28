@@ -88,6 +88,11 @@ func (s *Server) platformAdapterFor(channel *kaalmv1beta1.AgentChannel) (platfor
 			return nil, false
 		}
 		return &discordAdapter{s: s}, true
+	case kaalmv1beta1.ChannelTypeWhatsApp:
+		if channel.Spec.WhatsApp == nil {
+			return nil, false
+		}
+		return &whatsAppAdapter{s: s}, true
 	}
 	return nil, false
 }

@@ -67,6 +67,8 @@ const (
 	discordRefusalText = "This bot is not available here."
 	discordModalText   = "Modals are not supported."
 	discordEmptyReply  = "(empty reply)"
+	// discordDefaultContentOption is the option read when contentOption is unset.
+	discordDefaultContentOption = "message"
 
 	// DefaultDiscordAPIBaseURL is where replies go unless
 	// gateway.platforms.discord.apiBaseUrl says otherwise.
@@ -302,7 +304,7 @@ func (d *discordAdapter) buildMessage(channel *kaalmv1beta1.AgentChannel, in *di
 	}
 	contentOption := cfg.ContentOption
 	if contentOption == "" {
-		contentOption = "message"
+		contentOption = discordDefaultContentOption
 	}
 	command := ""
 	options := map[string]any{}
