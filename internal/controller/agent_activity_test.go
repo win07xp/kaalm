@@ -336,3 +336,93 @@ func TestGatewayHTTPClient(t *testing.T) {
 		t.Error("a non-PEM CA must fail httpClient")
 	}
 }
+
+// TestGatewayChannelHealthClient_FanOutAndCache covers the production channel
+// health poller: a replica's 200 decodes into a ReplicaChannelHealth, and the
+// second call within the cache window does not dial again.
+func TestGatewayChannelHealthClient_FanOutAndCache(t *testing.T) {
+	ns := "gw-health-ns"
+	if err := testClient.Create(ctxT(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: ns},
+	}); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create namespace: %v", err)
+	}
+	pki := newActivatorPKI(t)
+	serving := pki.issue(t, gatewayServiceName+"."+ns+".svc.cluster.local")
+	clientCert := pki.issue(t, "kaalm-controller."+ns+".svc.cluster.local")
+	certFile, keyFile, caFile := pki.writeFiles(t, clientCert)
+
+	var hits int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		if r.URL.Path != "/v1/channels/health" || r.URL.Query().Get("namespace") != "team-a" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"windowSeconds":300,"replicaStartedAt":"2026-08-28T00:00:00Z",` +
+			`"channels":{"/channels/team-a/disc":{"state":"failure","reason":"WebhookAuthFailed",` +
+			`"lastError":"discord signature or timestamp rejected: 401 Unauthorized","timestamp":"2026-08-28T00:01:00Z"}}}`))
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{serving}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portStr, _ := net.SplitHostPort(u.Host)
+	port, _ := strconv.Atoi(portStr)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-health-0", Namespace: ns, Labels: gatewayPodLabels},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "gw", Image: "gw:v1"}}},
+	}
+	if err := testClient.Create(ctxT(), pod); err != nil {
+		t.Fatalf("create gateway pod: %v", err)
+	}
+	pod.Status.PodIP = host
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("set pod IP: %v", err)
+	}
+	eventually(t, func() error {
+		var pods corev1.PodList
+		if err := testClient.List(ctxT(), &pods,
+			client.InNamespace(ns), client.MatchingLabels(gatewayPodLabels)); err != nil {
+			return err
+		}
+		for i := range pods.Items {
+			if pods.Items[i].Status.PodIP == host {
+				return nil
+			}
+		}
+		return errString("gateway pod IP not yet in cache")
+	})
+
+	g := &GatewayChannelHealthClient{
+		Reader: testClient, OperatorNamespace: ns,
+		CertFile: certFile, KeyFile: keyFile, CAFile: caFile, Port: port,
+	}
+	reachable, total, err := g.NamespaceChannelHealth(context.Background(), "team-a")
+	if err != nil {
+		t.Fatalf("health error: %v", err)
+	}
+	if total != 1 || len(reachable) != 1 {
+		t.Fatalf("total=%d reachable=%d, want 1/1", total, len(reachable))
+	}
+	state, ok := reachable[0].Channels["/channels/team-a/disc"]
+	if !ok || state.State != healthStateFailure || state.Reason == nil || *state.Reason != "WebhookAuthFailed" {
+		t.Fatalf("decoded state wrong: %+v", reachable[0])
+	}
+	if reachable[0].WindowSeconds != 300 || reachable[0].StartedAt.IsZero() {
+		t.Errorf("window/startedAt not decoded: %+v", reachable[0])
+	}
+	// Cached: no second dial inside the window.
+	if _, _, err := g.NamespaceChannelHealth(context.Background(), "team-a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Errorf("expected one dial (cached second call), got %d", n)
+	}
+}
