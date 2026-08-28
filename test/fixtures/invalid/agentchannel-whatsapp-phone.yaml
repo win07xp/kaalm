@@ -1,0 +1,11 @@
+# whatsapp.phoneNumberId must be digits only
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata: {name: wa-phone, namespace: default}
+spec:
+  agentRef: {name: support-assistant}
+  type: whatsapp
+  whatsapp:
+    path: /channels/default/wa-phone
+    credentialsRef: {name: wa}
+    phoneNumberId: "+1 555 0100"

@@ -1,0 +1,14 @@
+# rule 39: exactly one block; here whatsapp is the type but discord is set too
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata: {name: two-blocks, namespace: default}
+spec:
+  agentRef: {name: support-assistant}
+  type: whatsapp
+  whatsapp:
+    path: /channels/default/two-blocks
+    credentialsRef: {name: wa}
+    phoneNumberId: "106540352242922"
+  discord:
+    path: /channels/default/two-blocks
+    credentialsRef: {name: dc}

@@ -1,0 +1,10 @@
+# rule 16 on the discord block: the reserved /v1/ prefix
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata: {name: discord-v1, namespace: default}
+spec:
+  agentRef: {name: support-assistant}
+  type: discord
+  discord:
+    path: /v1/discord
+    credentialsRef: {name: dc}
