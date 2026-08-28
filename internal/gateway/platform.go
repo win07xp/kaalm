@@ -141,8 +141,8 @@ func (s *Server) runPlatformPipeline(
 	defer cancel()
 
 	var text string
-	switch {
-	case agent == nil:
+	switch agent {
+	case nil:
 		text = errDeliveryFailed + ": referenced Agent not found"
 	default:
 		respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Path(), agent, m.env)

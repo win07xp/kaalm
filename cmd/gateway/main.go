@@ -106,7 +106,8 @@ func main() {
 	flag.StringVar(&discordAPIBaseURL, "platform-discord-api-base-url", gateway.DefaultDiscordAPIBaseURL,
 		"base URL the Discord adapter replies through (gateway.platforms.discord.apiBaseUrl)")
 	flag.StringVar(&whatsAppAPIBaseURL, "platform-whatsapp-api-base-url", "https://graph.facebook.com/v23.0",
-		"base URL the WhatsApp adapter replies through, including the Graph API version (gateway.platforms.whatsapp.apiBaseUrl)")
+		"base URL the WhatsApp adapter replies through, including the Graph API version "+
+			"(gateway.platforms.whatsapp.apiBaseUrl)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))

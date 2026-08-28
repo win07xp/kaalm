@@ -123,6 +123,48 @@ type discordAttachment struct {
 	Size        int64  `json:"size"`
 }
 
+// discordResponse is an interaction response; data is present only on the
+// message-carrying types.
+type discordResponse struct {
+	Type int                  `json:"type"`
+	Data *discordResponseData `json:"data,omitempty"`
+}
+
+type discordResponseData struct {
+	Content string `json:"content,omitempty"`
+	Flags   int    `json:"flags,omitempty"`
+}
+
+// discordAutocompleteResponse answers an autocomplete interaction with no
+// choices; its data block must be present and its list non-null.
+type discordAutocompleteResponse struct {
+	Type int `json:"type"`
+	Data struct {
+		Choices []any `json:"choices"`
+	} `json:"data"`
+}
+
+// discordMessageBody is a follow-up or channel message.
+type discordMessageBody struct {
+	Content         string                  `json:"content"`
+	AllowedMentions *discordAllowedMentions `json:"allowed_mentions,omitempty"`
+}
+
+type discordAllowedMentions struct {
+	Users []string `json:"users"`
+}
+
+// discordAttachmentRef is the envelope's attachment reference: a pointer to
+// the file on Discord's CDN, never the bytes.
+type discordAttachmentRef struct {
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	URL         string `json:"url"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
+}
+
 // discordReply is the adapter-private reply context: what the follow-up
 // webhook and the bot-token fallback need. It stays in memory.
 type discordReply struct {
@@ -160,20 +202,22 @@ func (d *discordAdapter) Handle(
 	}
 	switch in.Type {
 	case discordInteractionPing:
-		writeDiscordResponse(w, map[string]any{"type": discordResponsePong})
+		writeDiscordResponse(w, discordResponse{Type: discordResponsePong})
 	case discordInteractionCommand:
 		if !d.inScope(channel, &in) {
 			writeDiscordEphemeral(w, discordRefusalText)
 			return inboundResult{rejected: 1}
 		}
 		msg := d.buildMessage(channel, &in)
-		writeDiscordResponse(w, map[string]any{"type": discordResponseDeferredMessage})
+		writeDiscordResponse(w, discordResponse{Type: discordResponseDeferredMessage})
 		return inboundResult{messages: []platformMessage{msg}}
 	case discordInteractionComponent:
-		writeDiscordResponse(w, map[string]any{"type": discordResponseDeferredUpdate})
+		writeDiscordResponse(w, discordResponse{Type: discordResponseDeferredUpdate})
 	case discordInteractionAutocomplete:
-		writeDiscordResponse(w, map[string]any{
-			"type": discordResponseAutocomplete, "data": map[string]any{"choices": []any{}}})
+		var ac discordAutocompleteResponse
+		ac.Type = discordResponseAutocomplete
+		ac.Data.Choices = []any{}
+		writeDiscordResponse(w, ac)
 	case discordInteractionModal:
 		writeDiscordEphemeral(w, discordModalText)
 	default:
@@ -276,9 +320,9 @@ func (d *discordAdapter) buildMessage(channel *kaalmv1beta1.AgentChannel, in *di
 			if opt.Type == discordOptionAttachment && in.Data.Resolved != nil {
 				id, _ := opt.Value.(string)
 				if att, ok := in.Data.Resolved.Attachments[id]; ok {
-					raw, _ := json.Marshal(map[string]any{
-						"type": "discord.attachment", "id": att.ID, "url": att.URL,
-						"filename": att.Filename, "contentType": att.ContentType, "size": att.Size,
+					raw, _ := json.Marshal(discordAttachmentRef{
+						Type: "discord.attachment", ID: att.ID, URL: att.URL,
+						Filename: att.Filename, ContentType: att.ContentType, Size: att.Size,
 					})
 					attachments = append(attachments, raw)
 				}
@@ -307,16 +351,16 @@ func (d *discordAdapter) buildMessage(channel *kaalmv1beta1.AgentChannel, in *di
 	}}
 }
 
-func writeDiscordResponse(w http.ResponseWriter, body map[string]any) {
+func writeDiscordResponse(w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(body)
 }
 
 func writeDiscordEphemeral(w http.ResponseWriter, text string) {
-	writeDiscordResponse(w, map[string]any{
-		"type": discordResponseMessage,
-		"data": map[string]any{"content": text, "flags": discordFlagEphemeral},
+	writeDiscordResponse(w, discordResponse{
+		Type: discordResponseMessage,
+		Data: &discordResponseData{Content: text, Flags: discordFlagEphemeral},
 	})
 }
 
@@ -353,7 +397,7 @@ func (d *discordAdapter) SendReply(
 			method, url = http.MethodPatch, webhook+"/messages/@original"
 		}
 		res := d.s.sendPlatformRequest(ctx, func(ctx context.Context) (*http.Request, error) {
-			return discordJSONRequest(ctx, method, url, "", map[string]any{"content": chunk})
+			return discordJSONRequest(ctx, method, url, "", discordMessageBody{Content: chunk})
 		}, func(status int, _ []byte) replyBucket { return classifyReplyStatus(status) })
 		if res.bucket == bucketDelivered {
 			continue
@@ -379,9 +423,9 @@ func (d *discordAdapter) sendViaBot(
 	}
 	url := fmt.Sprintf("%s/channels/%s/messages", d.apiBaseURL(), rc.channelID)
 	for _, chunk := range chunks {
-		body := map[string]any{
-			"content":          "<@" + rc.userID + "> " + chunk,
-			"allowed_mentions": map[string]any{"users": []string{rc.userID}},
+		body := discordMessageBody{
+			Content:         "<@" + rc.userID + "> " + chunk,
+			AllowedMentions: &discordAllowedMentions{Users: []string{rc.userID}},
 		}
 		res := d.s.sendPlatformRequest(ctx, func(ctx context.Context) (*http.Request, error) {
 			return discordJSONRequest(ctx, http.MethodPost, url, "Bot "+token, body)
@@ -393,7 +437,7 @@ func (d *discordAdapter) sendViaBot(
 	return callbackDelivered
 }
 
-func discordJSONRequest(ctx context.Context, method, url, authorization string, body map[string]any) (*http.Request, error) {
+func discordJSONRequest(ctx context.Context, method, url, authorization string, body any) (*http.Request, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
