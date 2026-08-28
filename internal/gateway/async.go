@@ -190,7 +190,7 @@ func (s *Server) handleAsyncAccept(
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(asyncAcceptResponse{
-		RequestID: requestID, ChannelPath: channel.Spec.Webhook.Path,
+		RequestID: requestID, ChannelPath: channel.Spec.Path(),
 		Status: "accepted", Message: "Message accepted for processing",
 	})
 
@@ -219,7 +219,7 @@ func (s *Server) runAsyncPipeline(
 	ctx, cancel := context.WithTimeout(traceCtx, 10*time.Minute)
 	defer cancel()
 
-	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Webhook.Path, agent, env)
+	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Path(), agent, env)
 	var payload []byte
 	if err != nil {
 		if errType == errResponseTooLarge {
@@ -228,14 +228,14 @@ func (s *Server) runAsyncPipeline(
 		message := err.Error()
 		retryable := errType == errControllerDown
 		payload, _ = json.Marshal(map[string]any{
-			"requestId": requestID, "channelPath": channel.Spec.Webhook.Path,
+			"requestId": requestID, "channelPath": channel.Spec.Path(),
 			"error":    map[string]any{"type": errType, "message": message, "retryable": retryable},
 			"failedAt": time.Now().UTC().Format(time.RFC3339),
 		})
 	} else {
 		var response json.RawMessage = respBody
 		payload, _ = json.Marshal(map[string]any{
-			"requestId": requestID, "channelPath": channel.Spec.Webhook.Path,
+			"requestId": requestID, "channelPath": channel.Spec.Path(),
 			"response": response, "completedAt": time.Now().UTC().Format(time.RFC3339),
 		})
 	}
@@ -287,14 +287,14 @@ func (s *Server) sendCallback(
 	cbURL := *channel.Spec.Webhook.CallbackURL
 	parsed, err := url.Parse(cbURL)
 	if err != nil || parsed.Scheme != "https" {
-		s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid, "callbackUrl is not https")
+		s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackInvalid, "callbackUrl is not https")
 		return callbackInvalid
 	}
 	secret := ""
 	if channel.Spec.Webhook.CallbackAuth != nil {
 		secret, err = s.channelSecret(ctx, channel.Namespace, channel.Spec.Webhook.CallbackAuth)
 		if err != nil {
-			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid,
+			s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackInvalid,
 				"callbackAuth secret unavailable: "+err.Error())
 			return callbackInvalid
 		}
@@ -322,7 +322,7 @@ func (s *Server) sendCallback(
 		if !s.Config.CallbackPolicy.Allowed(host, ip) {
 			// Bypassed: no dial, no retry, no callback_invalid envelope; the
 			// payload still reaches polling via the caller.
-			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackInvalid,
+			s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackInvalid,
 				fmt.Sprintf("callbackUrl host resolves to blocked address %s", ip))
 			return callbackInvalid
 		}
@@ -334,7 +334,7 @@ func (s *Server) sendCallback(
 		switch status {
 		case 401, 403, 404, 405, 410, 415:
 			// Terminal: the receiver permanently rejects this POST.
-			s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonCallbackRejected,
+			s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackRejected,
 				fmt.Sprintf("callback receiver returned %d", status))
 			return callbackRejected
 		}

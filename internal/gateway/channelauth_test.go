@@ -86,7 +86,7 @@ func TestAuthenticatePoll_HMAC(t *testing.T) {
 
 	channel := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "team-a"},
-		Spec: kaalmv1beta1.AgentChannelSpec{Webhook: kaalmv1beta1.AgentChannelWebhook{
+		Spec: kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{
 			Auth: kaalmv1beta1.ChannelAuth{Type: authTypeHMAC, HMAC: &kaalmv1beta1.ChannelHMAC{
 				Header: "X-Sig", Algorithm: "sha256",
 				SecretRef: kaalmv1beta1.SecretKeyReference{Name: "hmac-secret", Key: "key"}}},

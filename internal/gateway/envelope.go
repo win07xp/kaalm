@@ -69,7 +69,7 @@ func normalize(channel *kaalmv1beta1.AgentChannel, r *http.Request, body []byte)
 	env := MessageEnvelope{
 		MessageID:   uuid.NewString(),
 		ChannelType: "webhook",
-		ChannelID:   channel.Spec.Webhook.Path,
+		ChannelID:   channel.Spec.Path(),
 		Attachments: []json.RawMessage{},
 		Metadata:    map[string]any{},
 	}

@@ -116,7 +116,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.authenticateWebhook(r.Context(), channel, r, body) {
-		s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonAuthFailed,
+		s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonAuthFailed,
 			"webhook auth validation failed: 401 Unauthorized")
 		unauthorized(w, "auth failed or path not registered")
 		return
@@ -130,7 +130,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	agent, ok := s.Store.AgentByName(r.Context(), channel.Namespace, channel.Spec.AgentRef.Name)
 	if !ok {
-		s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonAgentNotReady,
+		s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonAgentNotReady,
 			"referenced Agent not found")
 		writeError(w, http.StatusBadGateway, errorBody{
 			Type: errDeliveryFailed, Message: "referenced Agent not found"}, 0)
@@ -165,7 +165,7 @@ func (s *Server) handleSyncDelivery(
 	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(s.Config.SyncDeliveryDeadline))
 	defer cancel()
 
-	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Webhook.Path, agent, env)
+	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Path(), agent, env)
 	if err != nil {
 		spanError(ctx, errType)
 		s.writeSyncError(w, ctx, agent.Namespace, errType, err)

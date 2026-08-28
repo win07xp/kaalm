@@ -73,7 +73,7 @@ func TestDialCallbackOnce_SuccessAndSigning(t *testing.T) {
 	parsed, _ := url.Parse("https://callback.test:" + port + "/cb")
 	ch := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "team-a"},
-		Spec: kaalmv1beta1.AgentChannelSpec{Webhook: kaalmv1beta1.AgentChannelWebhook{
+		Spec: kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{
 			CallbackAuth: &kaalmv1beta1.ChannelAuth{
 				Type: authTypeHMAC,
 				HMAC: &kaalmv1beta1.ChannelHMAC{Header: "X-Sig", Algorithm: "sha256"},
@@ -116,7 +116,7 @@ func TestSendCallback_Rejections(t *testing.T) {
 	s := &Server{ChannelHealth: NewChannelHealthStore(0)}
 	base := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "team-a"},
-		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
+		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
 	}
 
 	// Non-HTTPS callback URL is invalid.
