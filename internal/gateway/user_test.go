@@ -134,7 +134,7 @@ func (h *userHarness) seedChannel(mode string) *kaalmv1beta1.AgentChannel {
 		ObjectMeta: metav1.ObjectMeta{Name: "support", Namespace: "team-a"},
 		Spec: kaalmv1beta1.AgentChannelSpec{
 			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "sup"},
-			Webhook: kaalmv1beta1.AgentChannelWebhook{
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
 				Path: "/channels/team-a/support",
 				Auth: kaalmv1beta1.ChannelAuth{
 					Type:      authTypeBearer,
@@ -415,7 +415,7 @@ func TestWebhook_AsyncAcceptAndPoll(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "team-b"},
 		Spec: kaalmv1beta1.AgentChannelSpec{
 			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "x"},
-			Webhook: kaalmv1beta1.AgentChannelWebhook{
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
 				Path: "/channels/team-b/other",
 				Auth: kaalmv1beta1.ChannelAuth{
 					Type:      authTypeBearer,

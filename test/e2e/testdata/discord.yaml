@@ -1,0 +1,84 @@
+# S22 fixtures: the mock Discord platform, the channel's credential Secret
+# (the public key derived from the mock's fixed seed), a starter-go agent,
+# and a Discord AgentChannel scoped to one guild. The gateway is installed
+# with gateway.platforms.discord.apiBaseUrl pointing at the mock, so replies
+# land at its recorded /api/v10 surface.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-discord
+  namespace: e2e
+  labels:
+    app: mock-discord
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-discord
+  template:
+    metadata:
+      labels:
+        app: mock-discord
+    spec:
+      containers:
+        - name: mock-discord
+          image: registry.test/mock/discord:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr=:8080
+            - --seed-hex=6b61616c6d2d6532652d6d6f636b2d646973636f72642d736565642d30303031
+            - --gateway-base=https://kaalm-gateway.kaalm-system.svc:8080
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-discord
+  namespace: e2e
+spec:
+  selector:
+    app: mock-discord
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s22-discord-creds
+  namespace: e2e
+type: Opaque
+stringData:
+  # ed25519.NewKeyFromSeed("kaalm-e2e-mock-discord-seed-0001").Public()
+  publicKey: f60454bc9fd52679f0c579364e04b66a55451d2c89c4921b7504f5037831700f
+---
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: s22-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: s22-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s22-agent
+  type: discord
+  session:
+    enabled: true
+  discord:
+    path: /channels/e2e/s22-channel
+    credentialsRef:
+      name: s22-discord-creds
+    guildId: "123456789012345678"

@@ -1,0 +1,20 @@
+# A Discord platform channel (since v0.7.0): type and block paired (rule 39),
+# snowflake-shaped scoping ids, the /channels/ path.
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: support-discord
+  namespace: default
+spec:
+  agentRef:
+    name: support-assistant
+  type: discord
+  discord:
+    path: /channels/default/support-discord
+    credentialsRef:
+      name: discord-app-credentials
+    guildId: "123456789012345678"
+    allowedChannelIds:
+      - "987654321098765432"
+  session:
+    enabled: true

@@ -87,29 +87,98 @@ func (g *GatewayActivityClient) httpClient() (*http.Client, error) {
 	if g.client != nil {
 		return g.client, nil
 	}
-	cert, err := tls.LoadX509KeyPair(g.CertFile, g.KeyFile)
+	c, err := newGatewayMTLSClient(g.CertFile, g.KeyFile, g.CAFile, g.OperatorNamespace)
 	if err != nil {
 		return nil, err
 	}
-	caPEM, err := os.ReadFile(g.CAFile)
+	g.client = c
+	return g.client, nil
+}
+
+// newGatewayMTLSClient builds the controller's client for gateway Pod-IP
+// dials: its own certificate as the client identity, the Kaalm CA as trust,
+// and SAN verification pinned to the gateway Service DNS.
+func newGatewayMTLSClient(certFile, keyFile, caFile, operatorNamespace string) (*http.Client, error) {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	caPEM, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, err
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("no certificates parsed from %s", g.CAFile)
+		return nil, fmt.Errorf("no certificates parsed from %s", caFile)
 	}
-	g.client = &http.Client{
+	return &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{cert},
 			RootCAs:      pool,
 			// Pod-IP dials: SAN verification runs against the Service DNS.
-			ServerName: fmt.Sprintf("%s.%s.svc.cluster.local", gatewayServiceName, g.OperatorNamespace),
+			ServerName: fmt.Sprintf("%s.%s.svc.cluster.local", gatewayServiceName, operatorNamespace),
 		}},
+	}, nil
+}
+
+// gatewayFanOut dials every gateway Pod IP in parallel at path (with the
+// namespace query attached) and decodes each 200 as a T. total is how many
+// replicas were enumerated; reachable holds the ones that answered.
+// Unreachable replicas are skipped, never failed on.
+func gatewayFanOut[T any](
+	ctx context.Context, reader client.Reader, operatorNamespace string,
+	httpClient *http.Client, port int, path, namespace string,
+) (reachable []T, total int, err error) {
+	var pods corev1.PodList
+	if err := reader.List(ctx, &pods, client.InNamespace(operatorNamespace),
+		client.MatchingLabels(gatewayPodLabels)); err != nil {
+		return nil, 0, err
 	}
-	return g.client, nil
+	if port == 0 {
+		port = gatewayPort
+	}
+	type result struct {
+		replica T
+		ok      bool
+	}
+	var targets []string
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.PodIP != "" && p.DeletionTimestamp.IsZero() {
+			targets = append(targets, p.Status.PodIP)
+		}
+	}
+	results := make(chan result, len(targets))
+	for _, ip := range targets {
+		go func(ip string) {
+			url := fmt.Sprintf("https://%s:%d%s?namespace=%s", ip, port, path, namespace)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				results <- result{}
+				return
+			}
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				results <- result{}
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			var replica T
+			if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&replica) != nil {
+				results <- result{}
+				return
+			}
+			results <- result{replica: replica, ok: true}
+		}(ip)
+	}
+	for range targets {
+		if r := <-results; r.ok {
+			reachable = append(reachable, r.replica)
+		}
+	}
+	return reachable, len(targets), nil
 }
 
 // NamespaceActivity fans out to every gateway Pod IP, skipping unreachable
@@ -125,65 +194,20 @@ func (g *GatewayActivityClient) NamespaceActivity(ctx context.Context, namespace
 	}
 	g.mu.Unlock()
 
-	var pods corev1.PodList
-	if err := g.Reader.List(ctx, &pods, client.InNamespace(g.OperatorNamespace),
-		client.MatchingLabels(gatewayPodLabels)); err != nil {
-		return nil, 0, err
-	}
 	httpClient, err := g.httpClient()
 	if err != nil {
 		return nil, 0, err
 	}
-	port := g.Port
-	if port == 0 {
-		port = gatewayPort
-	}
-
-	type result struct {
-		replica ReplicaActivity
-		ok      bool
-	}
-	var targets []string
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.Status.PodIP != "" && p.DeletionTimestamp.IsZero() {
-			targets = append(targets, p.Status.PodIP)
-		}
-	}
-	results := make(chan result, len(targets))
-	for _, ip := range targets {
-		go func(ip string) {
-			url := fmt.Sprintf("https://%s:%d/v1/activity?namespace=%s", ip, port, namespace)
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				results <- result{}
-				return
-			}
-			resp, err := httpClient.Do(req)
-			if err != nil {
-				results <- result{}
-				return
-			}
-			defer func() { _ = resp.Body.Close() }()
-			var replica ReplicaActivity
-			if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&replica) != nil {
-				results <- result{}
-				return
-			}
-			results <- result{replica: replica, ok: true}
-		}(ip)
-	}
-	var reachable []ReplicaActivity
-	for range targets {
-		if r := <-results; r.ok {
-			reachable = append(reachable, r.replica)
-		}
+	reachable, total, err := gatewayFanOut[ReplicaActivity](ctx, g.Reader, g.OperatorNamespace, httpClient, g.Port,
+		"/v1/activity", namespace)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	g.mu.Lock()
-	g.cache[namespace] = activityCacheEntry{fetched: time.Now(), reachable: reachable, total: len(targets)}
+	g.cache[namespace] = activityCacheEntry{fetched: time.Now(), reachable: reachable, total: total}
 	g.mu.Unlock()
-	return reachable, len(targets), nil
+	return reachable, total, nil
 }
 
 // mergedActivity merges one agent's timestamps across replicas (most recent

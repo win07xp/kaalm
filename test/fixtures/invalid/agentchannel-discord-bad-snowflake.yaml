@@ -1,0 +1,11 @@
+# discord.guildId must be a snowflake (17 to 20 digits)
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata: {name: discord-guild, namespace: default}
+spec:
+  agentRef: {name: support-assistant}
+  type: discord
+  discord:
+    path: /channels/default/discord-guild
+    credentialsRef: {name: dc}
+    guildId: my-guild

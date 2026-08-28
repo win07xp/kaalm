@@ -55,8 +55,10 @@ spec:
             type: object
           spec:
             description: |-
-              AgentChannelSpec binds an inbound webhook channel to an Agent. See
-              docs/src/resources/agentchannel.md.
+              AgentChannelSpec binds an inbound channel (a generic webhook, or since
+              v0.7.0 a Discord or WhatsApp platform adapter) to an Agent. See
+              docs/src/resources/agentchannel.md. Rule 39: the type selects exactly one
+              configuration block, and that block must be the one set.
             properties:
               agentRef:
                 description: |-
@@ -70,6 +72,60 @@ spec:
                 required:
                 - name
                 type: object
+              discord:
+                description: |-
+                  Discord configures a Discord Interactions endpoint channel. Required
+                  when type is discord.
+                properties:
+                  allowedChannelIds:
+                    description: |-
+                      AllowedChannelIDs, when set, restricts the channel to interactions from
+                      these Discord channels.
+                    items:
+                      pattern: ^[0-9]{17,20}$
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  contentOption:
+                    default: message
+                    description: |-
+                      ContentOption names the slash-command option whose string value becomes
+                      the envelope's content.
+                    pattern: ^[-_a-z0-9]{1,32}$
+                    type: string
+                  credentialsRef:
+                    description: |-
+                      CredentialsRef names a Secret in the channel's namespace carrying
+                      publicKey (required; the application's Ed25519 public key, hex) and
+                      botToken (optional; lets replies outlive the 15-minute interaction
+                      token). Rule 40.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  guildId:
+                    description: |-
+                      GuildID, when set, restricts the channel to interactions from one guild;
+                      interactions from elsewhere (other guilds, DMs) get an ephemeral refusal.
+                    pattern: ^[0-9]{17,20}$
+                    type: string
+                  path:
+                    description: |-
+                      Path is the inbound path Discord posts interactions to. Same rules as
+                      webhook.path: /channels/{namespace}/ prefix (rule 15, reconcile time) and
+                      never the reserved /v1/ prefix (rule 16).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: discord.path must not use the reserved /v1/ prefix
+                      rule: '!self.startsWith(''/v1/'')'
+                required:
+                - credentialsRef
+                - path
+                type: object
               session:
                 description: Session configures deterministic session identity.
                 properties:
@@ -80,13 +136,17 @@ spec:
                 type: object
               type:
                 default: webhook
-                description: Type selects the channel platform. Only webhook is supported
-                  in v1.
+                description: |-
+                  Type selects the channel platform: the generic webhook, or one of the
+                  platform adapters (since v0.7.0).
                 enum:
                 - webhook
+                - discord
+                - whatsapp
                 type: string
               webhook:
-                description: Webhook configures the webhook channel.
+                description: Webhook configures the webhook channel. Required when
+                  type is webhook.
                 properties:
                   auth:
                     description: Auth authenticates inbound webhook calls.
@@ -317,10 +377,52 @@ spec:
                 x-kubernetes-validations:
                 - message: callbackAuth is required when callbackUrl is set
                   rule: '!has(self.callbackUrl) || has(self.callbackAuth)'
+              whatsapp:
+                description: |-
+                  WhatsApp configures a WhatsApp Cloud API webhook channel. Required when
+                  type is whatsapp.
+                properties:
+                  credentialsRef:
+                    description: |-
+                      CredentialsRef names a Secret in the channel's namespace carrying
+                      verifyToken, appSecret, and accessToken, all required. Rule 40.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  path:
+                    description: |-
+                      Path is the inbound path Meta posts events to. Same rules as
+                      webhook.path (rules 15 and 16).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: whatsapp.path must not use the reserved /v1/ prefix
+                      rule: '!self.startsWith(''/v1/'')'
+                  phoneNumberId:
+                    description: |-
+                      PhoneNumberID is the business phone number this channel answers as.
+                      Events for other numbers under the same app are acknowledged and dropped.
+                    pattern: ^[0-9]+$
+                    type: string
+                required:
+                - credentialsRef
+                - path
+                - phoneNumberId
+                type: object
             required:
             - agentRef
-            - webhook
             type: object
+            x-kubernetes-validations:
+            - message: exactly the block matching spec.type must be set (webhook,
+                discord, or whatsapp)
+              rule: '((has(self.type) ? self.type : ''webhook'') == ''webhook'') ==
+                has(self.webhook) && ((has(self.type) ? self.type : ''webhook'') ==
+                ''discord'') == has(self.discord) && ((has(self.type) ? self.type
+                : ''webhook'') == ''whatsapp'') == has(self.whatsapp)'
           status:
             description: AgentChannelStatus is the observed state of an AgentChannel.
             properties:
@@ -434,8 +536,10 @@ spec:
             type: object
           spec:
             description: |-
-              AgentChannelSpec binds an inbound webhook channel to an Agent. See
-              docs/src/resources/agentchannel.md.
+              AgentChannelSpec binds an inbound channel (a generic webhook, or since
+              v0.7.0 a Discord or WhatsApp platform adapter) to an Agent. See
+              docs/src/resources/agentchannel.md. Rule 39: the type selects exactly one
+              configuration block, and that block must be the one set.
             properties:
               agentRef:
                 description: |-
@@ -449,6 +553,60 @@ spec:
                 required:
                 - name
                 type: object
+              discord:
+                description: |-
+                  Discord configures a Discord Interactions endpoint channel. Required
+                  when type is discord.
+                properties:
+                  allowedChannelIds:
+                    description: |-
+                      AllowedChannelIDs, when set, restricts the channel to interactions from
+                      these Discord channels.
+                    items:
+                      pattern: ^[0-9]{17,20}$
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  contentOption:
+                    default: message
+                    description: |-
+                      ContentOption names the slash-command option whose string value becomes
+                      the envelope's content.
+                    pattern: ^[-_a-z0-9]{1,32}$
+                    type: string
+                  credentialsRef:
+                    description: |-
+                      CredentialsRef names a Secret in the channel's namespace carrying
+                      publicKey (required; the application's Ed25519 public key, hex) and
+                      botToken (optional; lets replies outlive the 15-minute interaction
+                      token). Rule 40.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  guildId:
+                    description: |-
+                      GuildID, when set, restricts the channel to interactions from one guild;
+                      interactions from elsewhere (other guilds, DMs) get an ephemeral refusal.
+                    pattern: ^[0-9]{17,20}$
+                    type: string
+                  path:
+                    description: |-
+                      Path is the inbound path Discord posts interactions to. Same rules as
+                      webhook.path: /channels/{namespace}/ prefix (rule 15, reconcile time) and
+                      never the reserved /v1/ prefix (rule 16).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: discord.path must not use the reserved /v1/ prefix
+                      rule: '!self.startsWith(''/v1/'')'
+                required:
+                - credentialsRef
+                - path
+                type: object
               session:
                 description: Session configures deterministic session identity.
                 properties:
@@ -459,13 +617,17 @@ spec:
                 type: object
               type:
                 default: webhook
-                description: Type selects the channel platform. Only webhook is supported
-                  in v1.
+                description: |-
+                  Type selects the channel platform: the generic webhook, or one of the
+                  platform adapters (since v0.7.0).
                 enum:
                 - webhook
+                - discord
+                - whatsapp
                 type: string
               webhook:
-                description: Webhook configures the webhook channel.
+                description: Webhook configures the webhook channel. Required when
+                  type is webhook.
                 properties:
                   auth:
                     description: Auth authenticates inbound webhook calls.
@@ -696,10 +858,52 @@ spec:
                 x-kubernetes-validations:
                 - message: callbackAuth is required when callbackUrl is set
                   rule: '!has(self.callbackUrl) || has(self.callbackAuth)'
+              whatsapp:
+                description: |-
+                  WhatsApp configures a WhatsApp Cloud API webhook channel. Required when
+                  type is whatsapp.
+                properties:
+                  credentialsRef:
+                    description: |-
+                      CredentialsRef names a Secret in the channel's namespace carrying
+                      verifyToken, appSecret, and accessToken, all required. Rule 40.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  path:
+                    description: |-
+                      Path is the inbound path Meta posts events to. Same rules as
+                      webhook.path (rules 15 and 16).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: whatsapp.path must not use the reserved /v1/ prefix
+                      rule: '!self.startsWith(''/v1/'')'
+                  phoneNumberId:
+                    description: |-
+                      PhoneNumberID is the business phone number this channel answers as.
+                      Events for other numbers under the same app are acknowledged and dropped.
+                    pattern: ^[0-9]+$
+                    type: string
+                required:
+                - credentialsRef
+                - path
+                - phoneNumberId
+                type: object
             required:
             - agentRef
-            - webhook
             type: object
+            x-kubernetes-validations:
+            - message: exactly the block matching spec.type must be set (webhook,
+                discord, or whatsapp)
+              rule: '((has(self.type) ? self.type : ''webhook'') == ''webhook'') ==
+                has(self.webhook) && ((has(self.type) ? self.type : ''webhook'') ==
+                ''discord'') == has(self.discord) && ((has(self.type) ? self.type
+                : ''webhook'') == ''whatsapp'') == has(self.whatsapp)'
           status:
             description: AgentChannelStatus is the observed state of an AgentChannel.
             properties:

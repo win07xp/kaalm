@@ -20,24 +20,108 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// AgentChannelSpec binds an inbound webhook channel to an Agent. See
-// docs/src/resources/agentchannel.md.
+// AgentChannelSpec binds an inbound channel (a generic webhook, or since
+// v0.7.0 a Discord or WhatsApp platform adapter) to an Agent. See
+// docs/src/resources/agentchannel.md. Rule 39: the type selects exactly one
+// configuration block, and that block must be the one set.
+// +kubebuilder:validation:XValidation:rule="((has(self.type) ? self.type : 'webhook') == 'webhook') == has(self.webhook) && ((has(self.type) ? self.type : 'webhook') == 'discord') == has(self.discord) && ((has(self.type) ? self.type : 'webhook') == 'whatsapp') == has(self.whatsapp)",message="exactly the block matching spec.type must be set (webhook, discord, or whatsapp)"
 type AgentChannelSpec struct {
 	// AgentRef names the target Agent. It must be an Agent, never an AgentTask,
 	// in the same namespace.
 	// +kubebuilder:validation:Required
 	AgentRef LocalObjectReference `json:"agentRef"`
-	// Type selects the channel platform. Only webhook is supported in v1.
-	// +kubebuilder:validation:Enum=webhook
+	// Type selects the channel platform: the generic webhook, or one of the
+	// platform adapters (since v0.7.0).
+	// +kubebuilder:validation:Enum=webhook;discord;whatsapp
 	// +kubebuilder:default=webhook
 	// +optional
 	Type string `json:"type,omitempty"`
-	// Webhook configures the webhook channel.
-	// +kubebuilder:validation:Required
-	Webhook AgentChannelWebhook `json:"webhook"`
+	// Webhook configures the webhook channel. Required when type is webhook.
+	// +optional
+	Webhook *AgentChannelWebhook `json:"webhook,omitempty"`
+	// Discord configures a Discord Interactions endpoint channel. Required
+	// when type is discord.
+	// +optional
+	Discord *AgentChannelDiscord `json:"discord,omitempty"`
+	// WhatsApp configures a WhatsApp Cloud API webhook channel. Required when
+	// type is whatsapp.
+	// +optional
+	WhatsApp *AgentChannelWhatsApp `json:"whatsapp,omitempty"`
 	// Session configures deterministic session identity.
 	// +optional
 	Session AgentChannelSession `json:"session,omitempty"`
+}
+
+// Path returns the inbound path of whichever block the type selects, or the
+// empty string when the spec is malformed. Every consumer that keys on the
+// channel's path (routing, health, conflicts) goes through this.
+func (s *AgentChannelSpec) Path() string {
+	switch {
+	case s.Discord != nil && s.Type == ChannelTypeDiscord:
+		return s.Discord.Path
+	case s.WhatsApp != nil && s.Type == ChannelTypeWhatsApp:
+		return s.WhatsApp.Path
+	case s.Webhook != nil:
+		return s.Webhook.Path
+	}
+	return ""
+}
+
+// AgentChannelDiscord configures the Discord Interactions endpoint adapter
+// (docs/src/resources/agentchannel.md, Platform types). Discord POSTs signed
+// interactions to path; the gateway answers through the interaction's
+// follow-up webhook.
+type AgentChannelDiscord struct {
+	// Path is the inbound path Discord posts interactions to. Same rules as
+	// webhook.path: /channels/{namespace}/ prefix (rule 15, reconcile time) and
+	// never the reserved /v1/ prefix (rule 16).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/v1/')",message="discord.path must not use the reserved /v1/ prefix"
+	Path string `json:"path"`
+	// CredentialsRef names a Secret in the channel's namespace carrying
+	// publicKey (required; the application's Ed25519 public key, hex) and
+	// botToken (optional; lets replies outlive the 15-minute interaction
+	// token). Rule 40.
+	// +kubebuilder:validation:Required
+	CredentialsRef LocalObjectReference `json:"credentialsRef"`
+	// GuildID, when set, restricts the channel to interactions from one guild;
+	// interactions from elsewhere (other guilds, DMs) get an ephemeral refusal.
+	// +kubebuilder:validation:Pattern=`^[0-9]{17,20}$`
+	// +optional
+	GuildID *string `json:"guildId,omitempty"`
+	// AllowedChannelIDs, when set, restricts the channel to interactions from
+	// these Discord channels.
+	// +kubebuilder:validation:items:Pattern=`^[0-9]{17,20}$`
+	// +listType=set
+	// +optional
+	AllowedChannelIDs []string `json:"allowedChannelIds,omitempty"`
+	// ContentOption names the slash-command option whose string value becomes
+	// the envelope's content.
+	// +kubebuilder:default=message
+	// +kubebuilder:validation:Pattern=`^[-_a-z0-9]{1,32}$`
+	// +optional
+	ContentOption string `json:"contentOption,omitempty"`
+}
+
+// AgentChannelWhatsApp configures the WhatsApp Cloud API webhook adapter
+// (docs/src/resources/agentchannel.md, Platform types). Meta verifies path
+// with a GET and POSTs signed events to it; the gateway replies through the
+// Graph API as the configured business number.
+type AgentChannelWhatsApp struct {
+	// Path is the inbound path Meta posts events to. Same rules as
+	// webhook.path (rules 15 and 16).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/v1/')",message="whatsapp.path must not use the reserved /v1/ prefix"
+	Path string `json:"path"`
+	// CredentialsRef names a Secret in the channel's namespace carrying
+	// verifyToken, appSecret, and accessToken, all required. Rule 40.
+	// +kubebuilder:validation:Required
+	CredentialsRef LocalObjectReference `json:"credentialsRef"`
+	// PhoneNumberID is the business phone number this channel answers as.
+	// Events for other numbers under the same app are acknowledged and dropped.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[0-9]+$`
+	PhoneNumberID string `json:"phoneNumberId"`
 }
 
 // AgentChannelWebhook configures inbound and outbound webhook behavior.

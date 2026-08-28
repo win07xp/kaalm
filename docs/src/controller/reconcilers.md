@@ -307,6 +307,8 @@ Reconciliation steps:
 5. **Maintain `status.phase`** by reducing the referenced Agent's phase to a Channel phase. See [Channel phase reduction](#channel-phase-reduction) below.
 6. **Prune expired async response ConfigMaps.** See [Async ConfigMap pruning](#async-configmap-pruning) below.
 
+A validation failure requeues after a minute, the same cadence as a healthy channel: the reconciler watches no Secrets (its Secret access is scoped per channel), so a credential fixed in place is only ever noticed by a later pass.
+
 The AgentChannelReconciler does not own Pod resources. The gateway watches `AgentChannel` resources directly, reads the referenced credentials from user namespaces, and manages the live platform connections; see [User Gateway Request Flow](../gateways/user/overview.md#request-flow). The reconciler's role is validation and status reporting.
 
 ### Per-channel credential Role

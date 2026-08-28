@@ -48,7 +48,7 @@ func TestKubeAsyncRecords_Lifecycle(t *testing.T) {
 	ch := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: nsTeamA},
 		Spec: kaalmv1beta1.AgentChannelSpec{
-			Webhook: kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"},
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"},
 		},
 	}
 
@@ -101,11 +101,11 @@ func TestKubeAsyncRecords_CountPending(t *testing.T) {
 	ctx := context.Background()
 	ch := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: nsTeamA},
-		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
+		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/hook"}},
 	}
 	otherCh := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: nsTeamA},
-		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/other"}},
+		Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: "/channels/team-a/other"}},
 	}
 
 	client := k8sfake.NewSimpleClientset()

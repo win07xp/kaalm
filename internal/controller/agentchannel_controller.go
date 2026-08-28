@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/url"
@@ -140,7 +142,10 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if reason, msg := r.validateChannel(ctx, &channel, &agent); reason != "" {
 		r.setChannelReady(&channel, false, reason, msg)
 		r.reducePhase(&channel, &agent)
-		return ctrl.Result{}, r.Status().Update(ctx, &channel)
+		// Re-check on the same cadence as a healthy channel: the reconciler
+		// watches no Secrets (its Secret access is scoped per channel), so a
+		// credential fixed in place is only ever noticed by a later pass.
+		return ctrl.Result{RequeueAfter: time.Minute}, r.Status().Update(ctx, &channel)
 	}
 	r.setChannelReady(&channel, true, kaalmv1beta1.ReasonAgentReachable, "channel is valid")
 
@@ -176,25 +181,31 @@ func (r *AgentChannelReconciler) validateChannel(
 			fmt.Sprintf("Agent %q has service.enabled=false; channels need a delivery target", agent.Name)
 	}
 	// Rule 15: the path must begin with /channels/{namespace}/. CRD CEL
-	// cannot read metadata.namespace, so this lives here.
+	// cannot read metadata.namespace, so this lives here. The path comes from
+	// whichever block the type selects (webhook, discord, whatsapp); rule 39
+	// (CRD CEL) guarantees exactly one is set.
+	path := channel.Spec.Path()
 	prefix := "/channels/" + channel.Namespace + "/"
-	if !strings.HasPrefix(channel.Spec.Webhook.Path, prefix) {
+	if path == "" {
 		return kaalmv1beta1.ReasonInvalidPath,
-			fmt.Sprintf("webhook.path must begin with %q", prefix)
+			fmt.Sprintf("spec.%s is not set for type %q", channelType(channel), channelType(channel))
 	}
-	// Path conflict: the earliest creationTimestamp wins.
+	if !strings.HasPrefix(path, prefix) {
+		return kaalmv1beta1.ReasonInvalidPath,
+			fmt.Sprintf("%s.path must begin with %q", channelType(channel), prefix)
+	}
+	// Path conflict: the earliest creationTimestamp wins, across every type.
 	var channels kaalmv1beta1.AgentChannelList
 	if err := r.List(ctx, &channels, client.InNamespace(channel.Namespace)); err == nil {
 		for i := range channels.Items {
 			other := &channels.Items[i]
-			if other.Name == channel.Name || other.Spec.Webhook.Path != channel.Spec.Webhook.Path {
+			if other.Name == channel.Name || other.Spec.Path() != path {
 				continue
 			}
 			if other.CreationTimestamp.Before(&channel.CreationTimestamp) ||
 				(other.CreationTimestamp.Equal(&channel.CreationTimestamp) && other.Name < channel.Name) {
 				return kaalmv1beta1.ReasonPathConflict,
-					fmt.Sprintf("path %q is already registered by the older channel %q",
-						channel.Spec.Webhook.Path, other.Name)
+					fmt.Sprintf("path %q is already registered by the older channel %q", path, other.Name)
 			}
 		}
 	}
@@ -208,7 +219,9 @@ func (r *AgentChannelReconciler) validateChannel(
 	}
 	// Rule 22: callbackUrl must be HTTPS and must not point into internal
 	// address space (reconcile-time half; the gateway re-checks pre-dial).
-	if channel.Spec.Webhook.CallbackURL != nil {
+	// Webhook channels only: a platform channel replies through the
+	// operator-set platform API base URL and has no callbackUrl.
+	if channel.Spec.Webhook != nil && channel.Spec.Webhook.CallbackURL != nil {
 		if reason, msg := validateCallbackURL(*channel.Spec.Webhook.CallbackURL, r.CallbackPolicy); reason != "" {
 			return reason, msg
 		}
@@ -216,8 +229,18 @@ func (r *AgentChannelReconciler) validateChannel(
 	return "", ""
 }
 
-// authSecretNames collects the Secret names the channel's auth config
-// references (inbound always; callbackAuth when callbackUrl is set).
+// channelType names the block the spec's type selects, for messages.
+func channelType(channel *kaalmv1beta1.AgentChannel) string {
+	if channel.Spec.Type == "" {
+		return kaalmv1beta1.ChannelTypeWebhook
+	}
+	return channel.Spec.Type
+}
+
+// authSecretNames collects the Secret names the channel's credentials
+// reference: for a webhook channel the inbound auth Secret always and the
+// callbackAuth Secret when callbackUrl is set; for a platform channel the
+// single credentialsRef Secret (rule 40).
 func authSecretNames(channel *kaalmv1beta1.AgentChannel) []string {
 	set := map[string]bool{}
 	collect := func(auth *kaalmv1beta1.ChannelAuth) {
@@ -231,9 +254,16 @@ func authSecretNames(channel *kaalmv1beta1.AgentChannel) []string {
 			set[auth.HMAC.SecretRef.Name] = true
 		}
 	}
-	collect(&channel.Spec.Webhook.Auth)
-	if channel.Spec.Webhook.CallbackURL != nil {
-		collect(channel.Spec.Webhook.CallbackAuth)
+	switch {
+	case channel.Spec.Discord != nil && channelType(channel) == kaalmv1beta1.ChannelTypeDiscord:
+		set[channel.Spec.Discord.CredentialsRef.Name] = true
+	case channel.Spec.WhatsApp != nil && channelType(channel) == kaalmv1beta1.ChannelTypeWhatsApp:
+		set[channel.Spec.WhatsApp.CredentialsRef.Name] = true
+	case channel.Spec.Webhook != nil:
+		collect(&channel.Spec.Webhook.Auth)
+		if channel.Spec.Webhook.CallbackURL != nil {
+			collect(channel.Spec.Webhook.CallbackAuth)
+		}
 	}
 	names := make([]string, 0, len(set))
 	for n := range set {
@@ -328,6 +358,16 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 		}
 		return "", ""
 	}
+	switch {
+	case channel.Spec.Discord != nil && channelType(channel) == kaalmv1beta1.ChannelTypeDiscord:
+		return r.validatePlatformSecret(ctx, channel, channel.Spec.Discord.CredentialsRef.Name,
+			[]string{discordKeyPublicKey}, validateDiscordPublicKey)
+	case channel.Spec.WhatsApp != nil && channelType(channel) == kaalmv1beta1.ChannelTypeWhatsApp:
+		return r.validatePlatformSecret(ctx, channel, channel.Spec.WhatsApp.CredentialsRef.Name,
+			[]string{whatsAppKeyVerifyToken, whatsAppKeyAppSecret, whatsAppKeyAccessToken}, nil)
+	case channel.Spec.Webhook == nil:
+		return "", ""
+	}
 	auths := []*kaalmv1beta1.ChannelAuth{&channel.Spec.Webhook.Auth}
 	if channel.Spec.Webhook.CallbackURL != nil && channel.Spec.Webhook.CallbackAuth != nil {
 		auths = append(auths, channel.Spec.Webhook.CallbackAuth)
@@ -345,6 +385,59 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 		}
 	}
 	return "", ""
+}
+
+// The credential Secret keys the platform adapters read (rule 40). The
+// gateway reads the same keys; the names are the contract in
+// docs/src/resources/agentchannel.md, Platform types.
+const (
+	discordKeyPublicKey    = "publicKey"
+	discordKeyBotToken     = "botToken"
+	whatsAppKeyVerifyToken = "verifyToken"
+	whatsAppKeyAppSecret   = "appSecret"
+	whatsAppKeyAccessToken = "accessToken"
+)
+
+// validatePlatformSecret is rule 40 for one platform channel: the Secret
+// exists, carries every required key, and (when a shape check is given) the
+// key the adapter builds its verifier from is well-formed. A malformed key is
+// CredentialsInvalid rather than CredentialsMissing, because the operator's
+// fix is different: the value is there, it is wrong.
+func (r *AgentChannelReconciler) validatePlatformSecret(
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, name string, required []string,
+	shape func(data map[string][]byte) string,
+) (string, string) {
+	var sec corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: channel.Namespace, Name: name}, &sec); err != nil {
+		return kaalmv1beta1.ReasonCredentialsMissing,
+			fmt.Sprintf("Secret %q not found in namespace %q", name, channel.Namespace)
+	}
+	for _, key := range required {
+		if v, ok := sec.Data[key]; !ok || len(v) == 0 {
+			return kaalmv1beta1.ReasonCredentialsMissing,
+				fmt.Sprintf("key %q missing in Secret %q", key, name)
+		}
+	}
+	if shape != nil {
+		if msg := shape(sec.Data); msg != "" {
+			return kaalmv1beta1.ReasonCredentialsInvalid, fmt.Sprintf("Secret %q: %s", name, msg)
+		}
+	}
+	return "", ""
+}
+
+// validateDiscordPublicKey checks that publicKey is an Ed25519 public key in
+// hex (32 bytes), the only shape the adapter's verifier accepts.
+func validateDiscordPublicKey(data map[string][]byte) string {
+	raw := strings.TrimSpace(string(data[discordKeyPublicKey]))
+	key, err := hex.DecodeString(raw)
+	if err != nil {
+		return "publicKey is not hex: " + err.Error()
+	}
+	if len(key) != ed25519.PublicKeySize {
+		return fmt.Sprintf("publicKey decodes to %d bytes, want %d (an Ed25519 public key)", len(key), ed25519.PublicKeySize)
+	}
+	return ""
 }
 
 // validateCallbackURL is the reconcile-time half of rule 22. The target policy
@@ -377,7 +470,7 @@ func (r *AgentChannelReconciler) reduceChannelHealth(ctx context.Context, channe
 	if err != nil || total == 0 || len(reachable) == 0 {
 		return // rule 4: preserve the existing condition
 	}
-	path := channel.Spec.Webhook.Path
+	path := channel.Spec.Path()
 	var lastSuccess, lastFailure *ChannelHealthState
 	fullWindow := false
 	allEmpty := true

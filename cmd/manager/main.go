@@ -293,8 +293,16 @@ func main() {
 	// activity fan-out client and the activator listener. Without it, idle
 	// and hibernation transitions are deferred (no activity data).
 	var activityClient controller.ActivityClient
+	var channelHealthClient controller.ChannelHealthClient
 	if controllerTLSCert != "" {
 		activityClient = &controller.GatewayActivityClient{
+			Reader:            mgr.GetClient(),
+			OperatorNamespace: operatorNamespace,
+			CertFile:          controllerTLSCert,
+			KeyFile:           controllerTLSKey,
+			CAFile:            controllerTLSCA,
+		}
+		channelHealthClient = &controller.GatewayChannelHealthClient{
 			Reader:            mgr.GetClient(),
 			OperatorNamespace: operatorNamespace,
 			CertFile:          controllerTLSCert,
@@ -313,7 +321,7 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		setupLog.Info("controller TLS identity not configured; activator and activity client disabled")
+		setupLog.Info("controller TLS identity not configured; activator, activity, and channel health clients disabled")
 	}
 
 	if err := (&controller.AgentReconciler{
@@ -337,6 +345,7 @@ func main() {
 		Client:            mgr.GetClient(),
 		Recorder:          mgr.GetEventRecorderFor("agentchannel-controller"),
 		OperatorNamespace: operatorNamespace,
+		Health:            channelHealthClient,
 		CallbackPolicy:    callbackpolicy.NewFromCSV(callbackAllowlist),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentChannel")

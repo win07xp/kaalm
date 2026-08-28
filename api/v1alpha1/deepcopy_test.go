@@ -207,7 +207,7 @@ func newFullAgentChannel() *AgentChannel {
 		Spec: AgentChannelSpec{
 			AgentRef: LocalObjectReference{Name: "agent-1"},
 			Type:     "webhook",
-			Webhook: AgentChannelWebhook{
+			Webhook: &AgentChannelWebhook{
 				Path: "/channels/default/hook",
 				Auth: ChannelAuth{
 					Type:      "bearer",
@@ -692,7 +692,7 @@ func TestNestedTypesDirectDeepCopy(t *testing.T) {
 	})
 
 	webhook := newFullAgentChannel().Spec.Webhook
-	checkDeepCopy(t, "AgentChannelWebhook/direct", &webhook, (*AgentChannelWebhook).DeepCopy, func(w *AgentChannelWebhook) {
+	checkDeepCopy(t, "AgentChannelWebhook/direct", webhook, (*AgentChannelWebhook).DeepCopy, func(w *AgentChannelWebhook) {
 		*w.CallbackURL = mutatedStr
 		w.CallbackAuth.Type = mutatedStr
 		*w.UserID.FromHeader = mutatedStr

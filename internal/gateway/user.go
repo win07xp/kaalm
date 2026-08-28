@@ -86,21 +86,25 @@ func (s *Server) UserHandler() http.Handler {
 // before path resolution, so 413 never leaks which paths exist), then channel
 // lookup, auth, normalization, and mode dispatch.
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		unauthorized(w, "unknown path")
-		return
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.Config.MaxMessageBodyBytes))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, errorBody{
-				Type:    errRequestTooLarge,
-				Message: fmt.Sprintf("request body exceeds %d bytes", s.Config.MaxMessageBodyBytes)}, 0)
+	// The size check runs on the raw frame before path resolution, so an
+	// oversized POST answers 413 whether or not the path exists. A GET has no
+	// body; only the WhatsApp verification handshake uses one, and whether a
+	// GET is meaningful is the adapter's call after the route is known.
+	var body []byte
+	if r.Method == http.MethodPost {
+		var err error
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, s.Config.MaxMessageBodyBytes))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				writeError(w, http.StatusRequestEntityTooLarge, errorBody{
+					Type:    errRequestTooLarge,
+					Message: fmt.Sprintf("request body exceeds %d bytes", s.Config.MaxMessageBodyBytes)}, 0)
+				return
+			}
+			badRequest(w, "reading request body: "+err.Error())
 			return
 		}
-		badRequest(w, "reading request body: "+err.Error())
-		return
 	}
 
 	channel, ok := s.Store.ChannelByPath(r.Context(), r.URL.Path)
@@ -115,8 +119,19 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Platform channels (since v0.7.0) hand the whole inbound half to their
+	// adapter; the webhook path below is the generic receiver.
+	if adapter, ok := s.platformAdapterFor(channel); ok {
+		s.handlePlatform(w, r, channel, body, adapter)
+		return
+	}
+	if r.Method != http.MethodPost || channel.Spec.Webhook == nil {
+		unauthorized(w, "unknown path")
+		return
+	}
+
 	if !s.authenticateWebhook(r.Context(), channel, r, body) {
-		s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonAuthFailed,
+		s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonAuthFailed,
 			"webhook auth validation failed: 401 Unauthorized")
 		unauthorized(w, "auth failed or path not registered")
 		return
@@ -130,7 +145,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	agent, ok := s.Store.AgentByName(r.Context(), channel.Namespace, channel.Spec.AgentRef.Name)
 	if !ok {
-		s.ChannelHealth.RecordFailure(channel.Spec.Webhook.Path, healthReasonAgentNotReady,
+		s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonAgentNotReady,
 			"referenced Agent not found")
 		writeError(w, http.StatusBadGateway, errorBody{
 			Type: errDeliveryFailed, Message: "referenced Agent not found"}, 0)
@@ -165,7 +180,7 @@ func (s *Server) handleSyncDelivery(
 	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(s.Config.SyncDeliveryDeadline))
 	defer cancel()
 
-	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Webhook.Path, agent, env)
+	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Path(), agent, env)
 	if err != nil {
 		spanError(ctx, errType)
 		s.writeSyncError(w, ctx, agent.Namespace, errType, err)

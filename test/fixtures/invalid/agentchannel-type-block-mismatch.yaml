@@ -1,0 +1,10 @@
+# rule 39: the type names discord but the block set is webhook
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata: {name: mismatch, namespace: default}
+spec:
+  agentRef: {name: support-assistant}
+  type: discord
+  webhook:
+    path: /channels/default/mismatch
+    auth: {type: bearer, secretRef: {name: s, key: token}}

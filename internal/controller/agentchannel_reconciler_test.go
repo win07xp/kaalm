@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func mkChannel(t *testing.T, name, agentName, path string, mutate func(*kaalmv1b
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: kaalmv1beta1.AgentChannelSpec{
 			AgentRef: kaalmv1beta1.LocalObjectReference{Name: agentName},
-			Webhook: kaalmv1beta1.AgentChannelWebhook{
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
 				Path: path,
 				Auth: kaalmv1beta1.ChannelAuth{
 					Type:      "bearer",
@@ -416,7 +417,7 @@ func TestChannel_SystemNamespaceForbidden(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ch-sys", Namespace: testSystemNamespace},
 		Spec: kaalmv1beta1.AgentChannelSpec{
 			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "whatever"},
-			Webhook: kaalmv1beta1.AgentChannelWebhook{
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
 				Path: "/channels/" + testSystemNamespace + "/ch-sys",
 				Auth: kaalmv1beta1.ChannelAuth{
 					Type:      "bearer",
@@ -550,7 +551,7 @@ func newChannelAt() *kaalmv1beta1.AgentChannel {
 	return &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "default"},
 		Spec: kaalmv1beta1.AgentChannelSpec{
-			Webhook: kaalmv1beta1.AgentChannelWebhook{Path: chTestPath},
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: chTestPath},
 		},
 	}
 }
@@ -679,7 +680,7 @@ func TestAuthSecretNames_DedupAndHMAC(t *testing.T) {
 	cb := "https://example.com/hook"
 	ch := &kaalmv1beta1.AgentChannel{
 		Spec: kaalmv1beta1.AgentChannelSpec{
-			Webhook: kaalmv1beta1.AgentChannelWebhook{
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
 				Auth: kaalmv1beta1.ChannelAuth{
 					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "inbound", Key: "t"},
 					HMAC:      &kaalmv1beta1.ChannelHMAC{SecretRef: kaalmv1beta1.SecretKeyReference{Name: "hmac-sec", Key: "s"}},
@@ -696,4 +697,201 @@ func TestAuthSecretNames_DedupAndHMAC(t *testing.T) {
 	if len(names) != 2 || names[0] != "hmac-sec" || names[1] != "inbound" {
 		t.Errorf("authSecretNames = %v, want [hmac-sec inbound]", names)
 	}
+}
+
+// ---- Platform channels (since v0.7.0): rules 39 and 40 ----
+
+// A valid Ed25519 public key in hex: 32 bytes.
+const testDiscordPublicKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func mkPlatformSecret(t *testing.T, name string, data map[string][]byte) {
+	t.Helper()
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Data:       data,
+	}
+	if err := testClient.Create(ctxT(), sec); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create platform secret: %v", err)
+	}
+}
+
+func mkDiscordChannel(t *testing.T, name, agentName, path, secretName string) {
+	t.Helper()
+	ch := &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: agentName},
+			Type:     kaalmv1beta1.ChannelTypeDiscord,
+			Discord: &kaalmv1beta1.AgentChannelDiscord{
+				Path:           path,
+				CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: secretName},
+			},
+		},
+	}
+	if err := testClient.Create(ctxT(), ch); err != nil {
+		t.Fatalf("create discord channel %s: %v", name, err)
+	}
+}
+
+func TestChannel_DiscordValidBecomesReady(t *testing.T) {
+	mkWorkloadClass(t, "chc-dc", nil)
+	mkWorkloadAgent(t, "ch-agent-dc", "chc-dc", nil)
+	mkPlatformSecret(t, "ch-dc-creds", map[string][]byte{"publicKey": []byte(testDiscordPublicKey)})
+	mkDiscordChannel(t, "ch-dc", "ch-agent-dc", "/channels/default/ch-dc", "ch-dc-creds")
+
+	expectChannelReady(t, "ch-dc", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	// The credential Role is scoped to the one credentialsRef Secret.
+	var role rbacv1.Role
+	if err := testClient.Get(ctxT(),
+		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-dc-creds"}, &role); err != nil {
+		t.Fatalf("credential Role missing: %v", err)
+	}
+	if names := role.Rules[0].ResourceNames; len(names) != 1 || names[0] != "ch-dc-creds" {
+		t.Errorf("Role not scoped to the credentials Secret: %v", names)
+	}
+	// The default contentOption lands from the CRD.
+	var ch kaalmv1beta1.AgentChannel
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-dc"}, &ch); err != nil {
+		t.Fatal(err)
+	}
+	if ch.Spec.Discord.ContentOption != "message" {
+		t.Errorf("contentOption default = %q, want message", ch.Spec.Discord.ContentOption)
+	}
+}
+
+func TestChannel_DiscordPublicKeyMissing(t *testing.T) {
+	mkWorkloadClass(t, "chc-dcm", nil)
+	mkWorkloadAgent(t, "ch-agent-dcm", "chc-dcm", nil)
+	mkPlatformSecret(t, "ch-dcm-creds", map[string][]byte{"botToken": []byte("x")})
+	mkDiscordChannel(t, "ch-dcm", "ch-agent-dcm", "/channels/default/ch-dcm", "ch-dcm-creds")
+	expectChannelReady(t, "ch-dcm", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
+}
+
+func TestChannel_DiscordPublicKeyMalformed(t *testing.T) {
+	mkWorkloadClass(t, "chc-dci", nil)
+	mkWorkloadAgent(t, "ch-agent-dci", "chc-dci", nil)
+	mkPlatformSecret(t, "ch-dci-creds", map[string][]byte{"publicKey": []byte("not-hex")})
+	mkDiscordChannel(t, "ch-dci", "ch-agent-dci", "/channels/default/ch-dci", "ch-dci-creds")
+	expectChannelReady(t, "ch-dci", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsInvalid)
+
+	// Right length of hex but the wrong size is still invalid.
+	mkPlatformSecret(t, "ch-dci-short", map[string][]byte{"publicKey": []byte("abcd")})
+	mkDiscordChannel(t, "ch-dci2", "ch-agent-dci", "/channels/default/ch-dci2", "ch-dci-short")
+	expectChannelReady(t, "ch-dci2", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsInvalid)
+}
+
+func TestChannel_WhatsAppRequiresEveryKey(t *testing.T) {
+	mkWorkloadClass(t, "chc-wa", nil)
+	mkWorkloadAgent(t, "ch-agent-wa", "chc-wa", nil)
+	mkPlatformSecret(t, "ch-wa-creds", map[string][]byte{
+		"verifyToken": []byte("v"), "appSecret": []byte("s"),
+	})
+	ch := &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch-wa", Namespace: "default"},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-agent-wa"},
+			Type:     kaalmv1beta1.ChannelTypeWhatsApp,
+			WhatsApp: &kaalmv1beta1.AgentChannelWhatsApp{
+				Path:           "/channels/default/ch-wa",
+				CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: "ch-wa-creds"},
+				PhoneNumberID:  "106540352242922",
+			},
+		},
+	}
+	if err := testClient.Create(ctxT(), ch); err != nil {
+		t.Fatalf("create whatsapp channel: %v", err)
+	}
+	expectChannelReady(t, "ch-wa", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
+
+	// Adding the missing key makes it Ready on the next pass.
+	eventually(t, func() error {
+		var sec corev1.Secret
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-wa-creds"}, &sec); err != nil {
+			return err
+		}
+		sec.Data["accessToken"] = []byte("t")
+		return testClient.Update(ctxT(), &sec)
+	})
+	// The reconciler watches no Secrets; it re-checks on its requeue cadence
+	// (a minute). Touch the channel so the test observes the recovery now.
+	eventually(t, func() error {
+		var ch kaalmv1beta1.AgentChannel
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-wa"}, &ch); err != nil {
+			return err
+		}
+		ch.Annotations = map[string]string{"test/touch": "1"}
+		return testClient.Update(ctxT(), &ch)
+	})
+	expectChannelReady(t, "ch-wa", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+}
+
+func TestChannel_TypeBlockMismatchRejectedByCEL(t *testing.T) {
+	mkWorkloadClass(t, "chc-cel", nil)
+	mkWorkloadAgent(t, "ch-agent-cel", "chc-cel", nil)
+	cases := map[string]kaalmv1beta1.AgentChannelSpec{
+		"discord type with a webhook block": {
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-agent-cel"},
+			Type:     kaalmv1beta1.ChannelTypeDiscord,
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
+				Path: "/channels/default/cel-a",
+				Auth: kaalmv1beta1.ChannelAuth{Type: "bearer", SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "s", Key: "k"}},
+			},
+		},
+		"default type with a discord block": {
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-agent-cel"},
+			Discord: &kaalmv1beta1.AgentChannelDiscord{
+				Path: "/channels/default/cel-b", CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: "s"},
+			},
+		},
+		"two blocks": {
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-agent-cel"},
+			Type:     kaalmv1beta1.ChannelTypeWhatsApp,
+			WhatsApp: &kaalmv1beta1.AgentChannelWhatsApp{
+				Path: "/channels/default/cel-c", CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: "s"}, PhoneNumberID: "1",
+			},
+			Discord: &kaalmv1beta1.AgentChannelDiscord{
+				Path: "/channels/default/cel-c", CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: "s"},
+			},
+		},
+		"discord path under /v1/": {
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-agent-cel"},
+			Type:     kaalmv1beta1.ChannelTypeDiscord,
+			Discord: &kaalmv1beta1.AgentChannelDiscord{
+				Path: "/v1/cel-d", CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: "s"},
+			},
+		},
+		"guild id is not a snowflake": {
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-agent-cel"},
+			Type:     kaalmv1beta1.ChannelTypeDiscord,
+			Discord: &kaalmv1beta1.AgentChannelDiscord{
+				Path: "/channels/default/cel-e", CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: "s"},
+				GuildID: func() *string { s := "guild"; return &s }(),
+			},
+		},
+	}
+	i := 0
+	for name, spec := range cases {
+		i++
+		ch := &kaalmv1beta1.AgentChannel{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("ch-cel-%d", i), Namespace: "default"},
+			Spec:       spec,
+		}
+		err := testClient.Create(ctxT(), ch)
+		if err == nil || !apierrors.IsInvalid(err) {
+			t.Errorf("%s: want an Invalid rejection from the apiserver, got %v", name, err)
+		}
+	}
+}
+
+func TestChannel_PathConflictAcrossTypes(t *testing.T) {
+	mkWorkloadClass(t, "chc-xt", nil)
+	mkWorkloadAgent(t, "ch-agent-xt", "chc-xt", nil)
+	mkChannelSecret(t, "ch-xt-a-secret")
+	mkChannel(t, "ch-xt-a", "ch-agent-xt", "/channels/default/ch-xt", nil)
+	expectChannelReady(t, "ch-xt-a", metav1.ConditionTrue, "")
+
+	mkPlatformSecret(t, "ch-xt-creds", map[string][]byte{"publicKey": []byte(testDiscordPublicKey)})
+	mkDiscordChannel(t, "ch-xt-b", "ch-agent-xt", "/channels/default/ch-xt", "ch-xt-creds")
+	expectChannelReady(t, "ch-xt-b", metav1.ConditionFalse, kaalmv1beta1.ReasonPathConflict)
 }

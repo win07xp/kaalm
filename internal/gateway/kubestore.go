@@ -132,7 +132,7 @@ func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1bet
 	}
 	for i := range channels.Items {
 		ch := &channels.Items[i]
-		if ch.Spec.Webhook.Path != path {
+		if ch.Spec.Path() != path {
 			continue
 		}
 		if !channelPathAllowed(ch) {
@@ -149,7 +149,7 @@ func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1bet
 
 // channelPathAllowed is the gateway-side half of validation rule 15.
 func channelPathAllowed(ch *kaalmv1beta1.AgentChannel) bool {
-	return strings.HasPrefix(ch.Spec.Webhook.Path, "/channels/"+ch.Namespace+"/")
+	return strings.HasPrefix(ch.Spec.Path(), "/channels/"+ch.Namespace+"/")
 }
 
 // SecretValue reads one Secret key from a user namespace.

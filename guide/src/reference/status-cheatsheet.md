@@ -61,7 +61,13 @@ reach the agent (reasons like `AgentReachable`, `WebhookReady`,
 
 Spec problems show as Ready-condition reasons: `InvalidPath`,
 `PathConflict`, `InvalidCallbackURL`, `CallbackAuthMissing`,
-`SystemNamespaceForbidden`.
+`SystemNamespaceForbidden`, and for a platform channel (`type: discord`)
+`CredentialsMissing` (a required key is absent from the credential Secret)
+or `CredentialsInvalid` (the Discord public key is not a valid Ed25519 key).
+`PlatformConnected=False` reasons name what failed most recently:
+`WebhookAuthFailed` (signature or token), `AgentNotReady`, `DispatchFailed`,
+`CallbackInvalid`, `CallbackRejected` (a callback receiver or a platform
+refused the reply).
 
 ## ModelProvider
 

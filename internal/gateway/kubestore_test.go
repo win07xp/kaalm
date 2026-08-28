@@ -164,7 +164,7 @@ func readyChannel(ns, name, path string, ready bool) *kaalmv1beta1.AgentChannel 
 	ch := &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: kaalmv1beta1.AgentChannelSpec{
-			Webhook: kaalmv1beta1.AgentChannelWebhook{Path: path},
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: path},
 		},
 	}
 	if ready {
