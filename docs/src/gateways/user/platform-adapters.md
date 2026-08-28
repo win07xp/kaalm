@@ -12,17 +12,22 @@ All three are inbound HTTP, which is the pattern the User Gateway is built aroun
 
 ## The ChannelAdapter interface
 
-Platform adapters follow a plugin pattern so a type can be added without reshaping the gateway:
+Platform adapters follow a plugin pattern so a type can be added without reshaping the gateway. The route resolves the channel and applies the size check and the `Ready` gate, then hands a platform channel to its adapter:
 
 ```go
-type ChannelAdapter interface {
+type platformAdapter interface {
+    // The spec.type value and the envelope's channelType.
     Type() string
-    Authenticate(req *http.Request, credentials Credentials) error
-    ParseInbound(req *http.Request) (MessageEnvelope, error)
-    FormatOutbound(envelope MessageEnvelope) ([]byte, error)
-    SendReply(ctx context.Context, envelope MessageEnvelope, credentials Credentials) error
+    // The inbound half: handshake, signature check, scope, acknowledgement.
+    // Writes the platform's response and returns the messages to dispatch.
+    Handle(ctx, w, r, channel, body) inboundResult
+    // The reply half: text (the agent's content, or an error rendered as
+    // text) out through the platform API. Returns the callback outcome.
+    SendReply(ctx, channel, message, text) string
 }
 ```
+
+Each message the adapter returns runs its own pipeline (wake, deliver, reply) in the background. The generic webhook adapter predates the interface and stays inlined in the route; the Discord and WhatsApp adapters implement it.
 
 ### SendReply and the two response modes
 

@@ -3,6 +3,8 @@
 An AgentChannel gives your running Agent an inbound address: an authenticated
 webhook path on the user gateway. Callers POST a message; your agent's reply
 comes back synchronously or through a callback, your choice per channel.
+This page covers the generic webhook. For a Discord slash command, see
+[Connecting Discord](connecting-discord.md).
 
 ## A synchronous channel
 
