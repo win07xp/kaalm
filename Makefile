@@ -223,6 +223,7 @@ AGENT_IMG ?= registry.test/agents/starter-go:e2e
 MOCKPROVIDER_IMG ?= registry.test/mock/llm-provider:e2e
 MOCKMCP_IMG ?= registry.test/mock/mcp-server:e2e
 MOCKDISCORD_IMG ?= registry.test/mock/discord:e2e
+MOCKWHATSAPP_IMG ?= registry.test/mock/whatsapp:e2e
 # In-cluster names for the base images. The S16 spec references these, so the
 # suite exercises the locally built images and nothing at test time can
 # silently pull a published tag. The testdata YAML hardcodes them; change both
@@ -276,6 +277,7 @@ e2e-images: ## Build the controller, gateway, console, agent, base, and mock-pro
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
 	docker build -t $(MOCKMCP_IMG) -f test/e2e/mockmcp/Dockerfile .
 	docker build -t $(MOCKDISCORD_IMG) -f test/e2e/mockdiscord/Dockerfile .
+	docker build -t $(MOCKWHATSAPP_IMG) -f test/e2e/mockwhatsapp/Dockerfile .
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
 	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
 	docker build -t $(PYTHON_AGENT_IMG) images/agent-python
@@ -283,7 +285,7 @@ e2e-images: ## Build the controller, gateway, console, agent, base, and mock-pro
 	docker tag $(PYTHON_AGENT_IMG) $(E2E_PYTHON_BASE_IMG)
 	docker pull $(CURL_IMG)
 	docker pull $(JAEGER_IMG) || docker image inspect $(JAEGER_IMG) >/dev/null
-	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(CONSOLE_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(MOCKDISCORD_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG) $(JAEGER_IMG)
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(CONSOLE_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(MOCKDISCORD_IMG) $(MOCKWHATSAPP_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG) $(JAEGER_IMG)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
@@ -299,6 +301,7 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 		--set controller.trustClusterCAForProbes=true \
 		--set gateway.tracing.otlpEndpoint=http://jaeger.tracing-e2e.svc:4318 \
 		--set gateway.platforms.discord.apiBaseUrl=http://mock-discord.e2e.svc:8080/api/v10 \
+		--set gateway.platforms.whatsapp.apiBaseUrl=http://mock-whatsapp.e2e.svc:8080 \
 		--wait --timeout 5m
 
 .PHONY: dashboards-verify
