@@ -1,0 +1,85 @@
+# S23 fixtures: the mock WhatsApp Cloud API, the channel's credential Secret
+# (the same app secret the mock signs with), a starter-go agent, and a
+# WhatsApp AgentChannel for one business number. The gateway is installed
+# with gateway.platforms.whatsapp.apiBaseUrl pointing at the mock, so replies
+# land at its recorded /{phone-number-id}/messages surface.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-whatsapp
+  namespace: e2e
+  labels:
+    app: mock-whatsapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-whatsapp
+  template:
+    metadata:
+      labels:
+        app: mock-whatsapp
+    spec:
+      containers:
+        - name: mock-whatsapp
+          image: registry.test/mock/whatsapp:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr=:8080
+            - --app-secret=e2e-whatsapp-app-secret-0001
+            - --gateway-base=https://kaalm-gateway.kaalm-system.svc:8080
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-whatsapp
+  namespace: e2e
+spec:
+  selector:
+    app: mock-whatsapp
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s23-whatsapp-creds
+  namespace: e2e
+type: Opaque
+stringData:
+  verifyToken: e2e-verify-token
+  appSecret: e2e-whatsapp-app-secret-0001
+  accessToken: e2e-graph-access-token
+---
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: s23-agent
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/starter-go:e2e
+  lifecycle:
+    activitySource: gatewayTraffic
+    idleTimeout: 0s
+---
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: s23-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s23-agent
+  type: whatsapp
+  session:
+    enabled: true
+  whatsapp:
+    path: /channels/e2e/s23-channel
+    credentialsRef:
+      name: s23-whatsapp-creds
+    phoneNumberId: "106540352242922"
