@@ -124,10 +124,19 @@ spec:
   # gateway walks each fallback provider's own fallback chain, up to the
   # gateway-level maxFallbackDepth setting (default 3). Referenced providers
   # must also allow the namespace, and must carry the same spec.type as this
-  # provider: there is no cross-format fallback (see Fallback trees below).
+  # provider or, since v0.7.0, a type the gateway translates to: anthropic
+  # and openai / openai-compatible cross in either direction, google-vertex
+  # stays same-type (rule 12; see Fallback trees below).
   # See Fallback Logic for the traversal algorithm.
   fallback:
     - name: anthropic-backup
+    # An edge that crosses formats names, per model of this provider, the
+    # model the fallback serves in its place (rule 41). A model with no
+    # entry is looked up under its own id.
+    - name: openai-backup
+      modelMap:
+        claude-opus-4-6: gpt-5
+        claude-sonnet-4-6: gpt-5-mini
 
   # Health check configuration.
   healthCheck:
@@ -206,7 +215,7 @@ Fallback chains form a tree (each provider may have its own `spec.fallback` list
 
 **Reading the diagram.** Follow the visit numbers, not the levels. `anthropic-overflow` is a direct child of the primary, one level up from `anthropic-eu`, and it is still cut, because the depth-first walk reaches it fifth and the three attempt slots are already gone. That is what "bounds the providers attempted, not the nesting depth" means in practice. The two notes cover the asymmetry that catches people out: a budget-blocked *primary* ends the request at `429 budget_exhausted` before the tree is walked at all, while a budget-blocked *fallback* silently costs an attempt slot and still has its children visited.
 
-Circular references are rejected by validation. All providers in the chain must have the **same `spec.type`** as the primary provider (e.g., all `anthropic` or all `openai-compatible`). Cross-format fallback is not supported in v1: the gateway does not translate between API formats.
+Circular references are rejected by validation. Each `spec.fallback[]` entry is a `FallbackReference`: a `name`, and since v0.7.0 an optional `modelMap` (rule 41) for an edge that crosses formats. Rule 12 governs which types may reference which: `anthropic` and `openai` or `openai-compatible` may cross in either direction, and the gateway translates the request and the response at the crossing; `google-vertex` chains stay same-type. The mapping lives on the edge rather than on the provider because the same fallback can serve different primaries under different names, and because the primary is the resource the platform team edits when they add a backup. See [Crossing formats](../gateways/llm/fallback.md#crossing-formats) for the matrix and what cannot cross.
 
 The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster. See [Fallback Logic](../gateways/llm/fallback.md) for the traversal pseudocode and [Depth cap semantics](../gateways/llm/fallback.md#depth-cap-semantics) for how exhaustion maps to error codes.
 

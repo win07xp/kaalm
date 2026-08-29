@@ -72,7 +72,7 @@ Kaalm's differentiator is the combination none of its neighbors has: **dollar-de
 
 - All six CRDs and the reconciling controller (ToolProvider since v0.4.0)
 - Persistent and task-mode agent lifecycle (including idle detection, hibernation, wake-on-demand, timeout, artifact collection); see [Controller Lifecycle](../controller/agent-lifecycle.md)
-- LLM Gateway: TLS-secured cluster-level proxy with spend tracking, budget guardrails (soft by default, hard opt-in since v0.3.0), rate limiting, same-type fallback chains (no cross-format translation), and provider credential isolation. Two authentication modes: mTLS for Kaalm-managed Pods and `TokenReview`-validated ServiceAccount tokens for existing workloads. See [Namespace Identification](../gateways/llm/workload-identity.md).
+- LLM Gateway: TLS-secured cluster-level proxy with spend tracking, budget guardrails (soft by default, hard opt-in since v0.3.0), rate limiting, fallback chains (crossing Anthropic and OpenAI formats since v0.7.0), and provider credential isolation. Two authentication modes: mTLS for Kaalm-managed Pods and `TokenReview`-validated ServiceAccount tokens for existing workloads. See [Namespace Identification](../gateways/llm/workload-identity.md).
 - User Gateway: channel integration via AgentChannel (generic webhook with sync and async response modes; Discord and WhatsApp adapters since v0.7.0)
 - RBAC, namespace scoping, and a documented [security model](../security/model.md)
 - cert-manager-based TLS certificate lifecycle for the gateway and per-agent serving certs; see [Certificate Lifecycle](../operations/deployment.md#certificate-lifecycle)
@@ -87,7 +87,7 @@ Kaalm's differentiator is the combination none of its neighbors has: **dollar-de
 - Multi-cluster federation
 - Advanced scheduling (GPU-awareness, priority classes, preemption policies specific to agents)
 - Hard budget enforcement (synchronous per-request aggregation)
-- Cross-format provider fallback (e.g., Anthropic → OpenAI translation)
+- Cross-format fallback involving Google Vertex (Anthropic and OpenAI cross since v0.7.0)
 - Agent Sandbox integration (`agentSandbox` runtime backend): v1.1
 - The Discord Gateway WebSocket adapter for free-text message bots (a persistent connection per bot); the HTTP adapters ship since v0.7.0
 - Full-featured reference base images (published container images wrapping the runtime contract): v1.1 (v1 ships starter templates instead)

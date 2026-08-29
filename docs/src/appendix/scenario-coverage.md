@@ -1,6 +1,6 @@
 # Scenario Coverage
 
-The [acceptance scenarios](scenarios.md) S1 to S23 are the north-star
+The [acceptance scenarios](scenarios.md) S1 to S24 are the north-star
 definition of "done". This page maps each scenario to the implemented behavior
 that exercises it and the automated tests that verify it, so the acceptance
 surface is auditable rather than aspirational.
@@ -32,7 +32,9 @@ green against the upgrade e2e (`test/upgrade/`, run by `make e2e-upgrade`
 and the `upgrade` CI workflow), which starts from the previous released
 chart rather than the local build; the row below names it. S22 and S23
 were added with the v0.7.0 platform-adapter design. Both are green against
-their adapters and mock platforms.
+their adapters and mock platforms. S24 was added with the v0.7.0
+cross-format fallback design; its spec lands with the implementation,
+against the mock provider once it speaks both formats.
 
 | Scenario | e2e spec (`test/e2e/`) | Also covered by |
 |---|---|---|
@@ -59,6 +61,7 @@ their adapters and mock platforms.
 | S21 Upgrade in place (API graduation) | `Upgrade in place (S21)` in `test/upgrade/` (install the previous released chart, apply `v1alpha1` workloads, run the two documented upgrade steps to the current build, then assert the running agent keeps its Pod and its volume, the hibernated agent stays hibernated and wakes on its next message, the finished task keeps its status, both API versions read back every object with the deprecation warning at `v1alpha1` only, `storedVersions` is migrated, and the window between the steps closes on its own) | Round-trip fuzz tests for every kind (`api/v1alpha1`); envtest conversion and migrator coverage (`internal/controller`, `internal/storagemigration`) |
 | S22 Discord slash command (interactions endpoint) | `Discord channel (S22)` (the mock Discord platform signs and delivers interactions: a badly signed request and a stale timestamp get `401` and surface as `WebhookAuthFailed` on `PlatformConnected`; a `PING` gets `PONG`; an in-scope command is acknowledged with the deferred response and the agent's reply is observed at the mock's follow-up webhook, flipping `PlatformConnected` to `True`; a command from another guild gets the ephemeral refusal and never reaches the agent) | Unit `TestDiscord_*`, `TestSplitChunks`, `TestClassifyReplyStatus` (signature posture, the response table, chunking, the bot-token fallback, the reply buckets); envtest `TestChannel_Discord*`, `TestChannel_WhatsAppRequiresEveryKey`, `TestChannel_TypeBlockMismatchRejectedByCEL`, `TestChannel_PathConflictAcrossTypes` (rules 39 and 40) |
 | S23 WhatsApp customer message (Cloud API webhook) | `WhatsApp channel (S23)` (the mock Cloud API performs the verification `GET` and signs and delivers events: the right verify token gets its challenge echoed and the wrong one `403`; a badly signed event gets `401` and surfaces as `WebhookAuthFailed` on `PlatformConnected`; a signed text event is acknowledged `200` and the reply is observed at the mock as a text message to the sender with the access token, flipping `PlatformConnected` to `True`; status events and another number's messages are acknowledged without a delivery) | Unit `TestWhatsApp_*`, `TestClassifyWhatsAppReply` (the handshake, signature posture, batches, content by type, chunking, the `130429` retry against the `131047` terminal path); envtest `TestChannel_WhatsAppRequiresEveryKey` (rule 40) |
+| S24 Cross-format fallback (Anthropic and OpenAI) | designed with v0.7.0; the spec lands with the implementation, against `test/e2e/mockprovider` speaking both `/v1/messages` and `/v1/chat/completions` (a dead `anthropic` primary falling back to the OpenAI-format mock with a model map, streaming and not; the reverse direction; spend on the provider that served; an untranslatable request skipping the candidate with the event) | |
 
 The LLM-proxy scenarios (S4, S10, S15, S17) are exercised against an
 in-cluster mock upstream deployed by the `Mock LLM provider` spec; the S2 and S6 NetworkPolicy
