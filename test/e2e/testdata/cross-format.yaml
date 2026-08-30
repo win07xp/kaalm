@@ -1,0 +1,264 @@
+# S24: fallback edges that cross formats, both directions, against the one
+# mock (it speaks /v1/chat/completions and /v1/messages). Each primary points
+# at the mock's /fail prefix (503, fallbackable) and its fallback at /ok, with
+# a modelMap on the edge. The openai backup carries a budget so spend shows
+# in its status; the anthropic backup declares maxOutputTokens so an OpenAI
+# request without max_tokens can cross to it.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: s24-anthropic-primary
+spec:
+  type: anthropic
+  endpoint: https://mock-provider.e2e.svc:8443/fail
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  fallback:
+    - name: s24-openai-backup
+      modelMap:
+        claude-sonnet-4-6: mock-gpt
+  models:
+    - id: claude-sonnet-4-6
+      costPer1MInputTokens: "3.00"
+      costPer1MOutputTokens: "15.00"
+---
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: s24-openai-backup
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/ok
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  budget:
+    period: daily
+    perNamespaceUSD: "100"
+    policies:
+      - atPercent: 100
+        action: block
+  models:
+    - id: mock-gpt
+      costPer1MInputTokens: "1000.00"
+      costPer1MOutputTokens: "2000.00"
+---
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: s24-openai-primary
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/fail
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  fallback:
+    - name: s24-anthropic-backup
+      modelMap:
+        mock-gpt: claude-sonnet-4-6
+  models:
+    - id: mock-gpt
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: s24-anthropic-backup
+spec:
+  type: anthropic
+  endpoint: https://mock-provider.e2e.svc:8443/ok
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  models:
+    - id: claude-sonnet-4-6
+      costPer1MInputTokens: "3.00"
+      costPer1MOutputTokens: "15.00"
+      maxOutputTokens: 1024
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s24-caller
+  namespace: e2e
+---
+# One curl script for every caller: POST the body from $BODY to $PATH_ and
+# retry the source-IP startup race (transient 401) until the code is $WANT.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: s24-caller-script
+  namespace: e2e
+data:
+  call.sh: |
+    token=$(cat /var/run/token/token)
+    for i in $(seq 1 20); do
+      code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+        --cacert /var/run/ca/ca.crt \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d "$BODY" \
+        "https://kaalm-gateway.kaalm-system.svc:8443$PATH_") || true
+      echo "attempt $i: HTTP $code"
+      if [ "$code" = "$WANT" ]; then echo "HTTP $code"; cat /tmp/resp; echo; exit 0; fi
+      cat /tmp/resp; echo
+      sleep 3
+    done
+    echo "gave up after retries"; exit 1
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s24-anthropic-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s24-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "/script/call.sh"]
+      env:
+        - name: PATH_
+          value: /v1/messages
+        - name: WANT
+          value: "200"
+        - name: BODY
+          value: '{"model":"s24-anthropic-primary/claude-sonnet-4-6","max_tokens":64,"system":"Be brief.","messages":[{"role":"user","content":"hi"}]}'
+      volumeMounts:
+        - {name: token, mountPath: /var/run/token, readOnly: true}
+        - {name: ca, mountPath: /var/run/ca, readOnly: true}
+        - {name: script, mountPath: /script, readOnly: true}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken: {audience: kaalm-gateway, expirationSeconds: 3600, path: token}
+    - name: ca
+      configMap: {name: kaalm-ca, items: [{key: ca.crt, path: ca.crt}]}
+    - name: script
+      configMap: {name: s24-caller-script}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s24-stream-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s24-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "/script/call.sh"]
+      env:
+        - name: PATH_
+          value: /v1/messages
+        - name: WANT
+          value: "200"
+        - name: BODY
+          value: '{"model":"s24-anthropic-primary/claude-sonnet-4-6","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}'
+      volumeMounts:
+        - {name: token, mountPath: /var/run/token, readOnly: true}
+        - {name: ca, mountPath: /var/run/ca, readOnly: true}
+        - {name: script, mountPath: /script, readOnly: true}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken: {audience: kaalm-gateway, expirationSeconds: 3600, path: token}
+    - name: ca
+      configMap: {name: kaalm-ca, items: [{key: ca.crt, path: ca.crt}]}
+    - name: script
+      configMap: {name: s24-caller-script}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s24-openai-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s24-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "/script/call.sh"]
+      env:
+        - name: PATH_
+          value: /v1/chat/completions
+        - name: WANT
+          value: "200"
+        # No max_tokens: the anthropic backup's maxOutputTokens supplies it.
+        - name: BODY
+          value: '{"model":"s24-openai-primary/mock-gpt","messages":[{"role":"user","content":"hi"}]}'
+      volumeMounts:
+        - {name: token, mountPath: /var/run/token, readOnly: true}
+        - {name: ca, mountPath: /var/run/ca, readOnly: true}
+        - {name: script, mountPath: /script, readOnly: true}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken: {audience: kaalm-gateway, expirationSeconds: 3600, path: token}
+    - name: ca
+      configMap: {name: kaalm-ca, items: [{key: ca.crt, path: ca.crt}]}
+    - name: script
+      configMap: {name: s24-caller-script}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s24-thinking-caller
+  namespace: e2e
+spec:
+  serviceAccountName: s24-caller
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "/script/call.sh"]
+      env:
+        - name: PATH_
+          value: /v1/messages
+        # Extended thinking cannot cross: the walk exhausts on the primary's 503.
+        - name: WANT
+          value: "502"
+        - name: BODY
+          value: '{"model":"s24-anthropic-primary/claude-sonnet-4-6","max_tokens":2048,"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":"hi"}]}'
+      volumeMounts:
+        - {name: token, mountPath: /var/run/token, readOnly: true}
+        - {name: ca, mountPath: /var/run/ca, readOnly: true}
+        - {name: script, mountPath: /script, readOnly: true}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken: {audience: kaalm-gateway, expirationSeconds: 3600, path: token}
+    - name: ca
+      configMap: {name: kaalm-ca, items: [{key: ca.crt, path: ca.crt}]}
+    - name: script
+      configMap: {name: s24-caller-script}
