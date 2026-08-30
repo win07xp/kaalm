@@ -53,15 +53,31 @@ type ModelProviderSpec struct {
 	// +optional
 	RateLimits ModelProviderRateLimits `json:"rateLimits,omitempty"`
 	// Fallback names providers tried when this one fails. Each may declare its
-	// own fallback, forming a tree walked depth-first. Must be acyclic and share
-	// this provider's type.
+	// own fallback, forming a tree walked depth-first. Must be acyclic (rule
+	// 11) and stay within formats the gateway can translate (rule 12): the
+	// same type, or since v0.7.0 anthropic against openai / openai-compatible.
 	// +optional
-	Fallback []LocalObjectReference `json:"fallback,omitempty"`
+	Fallback []FallbackReference `json:"fallback,omitempty"`
 	// HealthCheck configures the periodic upstream liveness probe. A nil block
 	// defaults to an enabled probe at reconcile time (the CRD default on enabled
 	// only fires when the block is present).
 	// +optional
 	HealthCheck *ModelProviderHealthCheck `json:"healthCheck,omitempty"`
+}
+
+// FallbackReference is one edge of the fallback tree: the provider tried
+// next, and since v0.7.0 the model map an edge that crosses formats needs.
+// Wire-compatible with the {name} reference it replaces.
+type FallbackReference struct {
+	// Name of the fallback ModelProvider.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// ModelMap names, per model id of the provider carrying this edge, the
+	// model the fallback serves in its place (rule 41). A model with no entry
+	// is looked up under its own id. Allowed on a same-type edge too.
+	// +optional
+	ModelMap map[string]string `json:"modelMap,omitempty"`
 }
 
 // ModelProviderModel is one entry in the catalog. Costs are decimal USD strings
@@ -80,6 +96,13 @@ type ModelProviderModel struct {
 	// CostPer1MOutputTokens is USD per million output tokens, as a decimal string.
 	// +optional
 	CostPer1MOutputTokens string `json:"costPer1MOutputTokens,omitempty"`
+	// MaxOutputTokens is the model's declared output ceiling. Since v0.7.0 the
+	// gateway supplies it as max_tokens when a request crossing into an
+	// anthropic provider omits one (Anthropic requires the field); a request
+	// carrying more is capped to it.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxOutputTokens *int64 `json:"maxOutputTokens,omitempty"`
 }
 
 // ModelProviderBudget sets spend guardrails: soft by default, hard by opt-in.

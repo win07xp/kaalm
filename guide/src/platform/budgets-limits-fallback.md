@@ -154,7 +154,10 @@ chain depth-first. The rules that surprise people:
   `openai-compatible`) in either direction. Put a `modelMap` on that edge
   naming the fallback's model for each of yours; the gateway rewrites the
   request and the response at the crossing. `google-vertex` chains stay
-  same-type. A request using a feature the other format lacks (extended
+  same-type. When the fallback is `anthropic`, give its models a
+  `maxOutputTokens`: Anthropic's API requires `max_tokens`, OpenAI clients
+  often omit it, and the gateway fills it from the catalog (the reconciler
+  warns with `MaxOutputTokensUnset` when it cannot). A request using a feature the other format lacks (extended
   thinking, `response_format`) skips that fallback with a
   `FallbackIneligible` event on your provider.
 - The gateway-level depth cap (`gateway.maxFallbackDepth`, default 3) bounds

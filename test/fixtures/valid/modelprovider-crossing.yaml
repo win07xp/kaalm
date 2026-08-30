@@ -1,0 +1,19 @@
+# A fallback edge that crosses formats (since v0.7.0): the model map on the
+# edge and a declared output ceiling on the catalog.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: openai-with-anthropic-backup
+spec:
+  type: openai
+  endpoint: https://api.openai.com
+  credentialsRef:
+    name: openai-key
+    key: token
+  models:
+    - id: gpt-5-mini
+      maxOutputTokens: 16384
+  fallback:
+    - name: anthropic-backup
+      modelMap:
+        gpt-5-mini: claude-sonnet-4-6

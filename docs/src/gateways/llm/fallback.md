@@ -147,7 +147,7 @@ Both directions, Anthropic messages and OpenAI chat completions:
 | user `tool_result` blocks | `role: tool` messages with `tool_call_id` | Result text blocks are joined; `is_error` becomes a prefixed line. |
 | `tools[].input_schema` | `tools[].function.parameters` | `description` carries over. |
 | `tool_choice` `auto` / `any` / `tool` | `auto` / `required` / a named function | `disable_parallel_tool_use` against `parallel_tool_calls: false`. |
-| `max_tokens`, `temperature`, `top_p`, `stop_sequences`, `stream`, `metadata.user_id` | `max_tokens` (or `max_completion_tokens`), `temperature`, `top_p`, `stop`, `stream`, `user` | `max_tokens` is required on the Anthropic side; the translator supplies the candidate model's declared maximum when the OpenAI request omits it. |
+| `max_tokens`, `temperature`, `top_p`, `stop_sequences`, `stream`, `metadata.user_id` | `max_tokens` (or `max_completion_tokens`), `temperature`, `top_p`, `stop`, `stream`, `user` | `max_tokens` is required on the Anthropic side. When an OpenAI request omits it, the translator supplies the mapped model's `maxOutputTokens` from the fallback's catalog ([ModelProvider](../../resources/modelprovider.md#spec)); a model that declares none makes the candidate ineligible for that request, with the event naming the field to set. A request carrying more than a declared ceiling is capped to it. `top_k`, `seed`, the penalties, and `logit_bias` have no counterpart and drop. |
 | response `content` blocks and `stop_reason` | `choices[0].message` and `finish_reason` | `end_turn`/`stop`, `max_tokens`/`length`, `tool_use`/`tool_calls`, `stop_sequence`/`stop`, `refusal`/`content_filter`. |
 | `usage.input_tokens`, `usage.output_tokens` | `usage.prompt_tokens`, `usage.completion_tokens`, `total_tokens` | Cache-read counts fold into input on the way to OpenAI. |
 
@@ -158,7 +158,9 @@ Two fields are dropped without penalty: Anthropic `cache_control` markers (an op
 A request that carries a feature the other format cannot express is not forwarded lossily. The candidate is ineligible **for this request**: no attempt slot is consumed, a `FallbackIneligible` event on the primary names the feature (`"fallback 'openai-backup' skipped: request uses extended thinking, which openai cannot express"`), and the walk continues with the next sibling. The features:
 
 - Anthropic to OpenAI: extended `thinking`, server tools (`web_search` and its kin), `mcp_servers`, `document` and audio content blocks, `output_format` structured outputs.
-- OpenAI to Anthropic: `n` greater than 1, `logprobs`, `response_format`, the legacy `functions` and `function_call` fields, audio content parts.
+- OpenAI to Anthropic: `n` greater than 1, `logprobs`, `response_format`, the legacy `functions` and `function_call` fields, audio content parts, and a request without `max_tokens` when the mapped model declares no `maxOutputTokens`.
+
+The reconciler warns about the last one ahead of traffic: a crossing edge into an `anthropic` provider whose mapped models declare no `maxOutputTokens` gets a `Warning` event (`reason=MaxOutputTokensUnset`) on the primary at reconcile time. The edge stays valid, because same-format traffic and requests that carry their own `max_tokens` cross it fine.
 
 This is the one eligibility check the reconciler cannot run ahead of time, because it depends on the request body; the event is the operator's signal that a chain was configured to cross and the traffic cannot.
 

@@ -111,6 +111,10 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				reason = kaalmv1beta1.ReasonHardBudgetUnpriced
 				break
 			}
+			if strings.Contains(p, "modelMap") {
+				reason = kaalmv1beta1.ReasonInvalidModelMap
+				break
+			}
 		}
 		r.setReady(&mp, false, reason, strings.Join(problems, "; "))
 		return r.finish(ctx, &mp, ctrl.Result{})
@@ -205,37 +209,97 @@ func (r *ModelProviderReconciler) credential(
 	return string(val), kaalmv1beta1.ReasonCredentialsValid, ""
 }
 
-// validateFallback walks the fallback tree detecting cycles (rule 11) and type
-// mismatches (rule 12).
+// validateFallback walks the fallback tree detecting cycles (rule 11),
+// format incompatibility (rule 12), and model maps naming models that do not
+// exist on either end (rule 41). A crossing into anthropic whose mapped
+// models declare no maxOutputTokens gets a Warning event on the primary: it
+// stays valid, but a request without max_tokens cannot cross it.
 func (r *ModelProviderReconciler) validateFallback(
 	ctx context.Context, primary *kaalmv1beta1.ModelProvider,
 ) []string {
+	type edge struct {
+		parent *kaalmv1beta1.ModelProvider
+		ref    kaalmv1beta1.FallbackReference
+	}
 	var problems []string
+	var unsetMax []string
 	visited := map[string]bool{primary.Name: true}
-	queue := append([]kaalmv1beta1.LocalObjectReference(nil), primary.Spec.Fallback...)
+	var queue []edge
+	for _, ref := range primary.Spec.Fallback {
+		queue = append(queue, edge{parent: primary, ref: ref})
+	}
 	for len(queue) > 0 {
-		ref := queue[0]
+		e := queue[0]
 		queue = queue[1:]
-		if visited[ref.Name] {
-			problems = append(problems, fmt.Sprintf("fallback chain is circular at %q", ref.Name))
+		if visited[e.ref.Name] {
+			problems = append(problems, fmt.Sprintf("fallback chain is circular at %q", e.ref.Name))
 			continue
 		}
-		visited[ref.Name] = true
+		visited[e.ref.Name] = true
 		var child kaalmv1beta1.ModelProvider
-		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &child); err != nil {
+		if err := r.Get(ctx, types.NamespacedName{Name: e.ref.Name}, &child); err != nil {
 			if apierrors.IsNotFound(err) {
-				problems = append(problems, fmt.Sprintf("fallback provider %q does not exist", ref.Name))
+				problems = append(problems, fmt.Sprintf("fallback provider %q does not exist", e.ref.Name))
 			}
 			continue
 		}
-		if child.Spec.Type != primary.Spec.Type {
+		if !kaalmv1beta1.FallbackFormatCompatible(e.parent.Spec.Type, child.Spec.Type) {
 			problems = append(problems, fmt.Sprintf(
-				"fallback provider %q has type %q, must match primary type %q",
-				ref.Name, child.Spec.Type, primary.Spec.Type))
+				"fallback provider %q has type %q, which cannot follow type %q (rule 12)",
+				e.ref.Name, child.Spec.Type, e.parent.Spec.Type))
 		}
-		queue = append(queue, child.Spec.Fallback...)
+		parentModels := modelSet(e.parent)
+		childModels := modelSet(&child)
+		for key, value := range e.ref.ModelMap {
+			if !parentModels[key] {
+				problems = append(problems, fmt.Sprintf(
+					"modelMap on fallback %q: key %q is not a model of %q", e.ref.Name, key, e.parent.Name))
+			}
+			if !childModels[value] {
+				problems = append(problems, fmt.Sprintf(
+					"modelMap on fallback %q: value %q is not a model of %q", e.ref.Name, value, e.ref.Name))
+			}
+		}
+		if kaalmv1beta1.FallbackCrossesFormat(e.parent.Spec.Type, child.Spec.Type) &&
+			child.Spec.Type == kaalmv1beta1.ProviderTypeAnthropic {
+			for _, m := range e.parent.Spec.Models {
+				target := m.ID
+				if mapped, ok := e.ref.ModelMap[m.ID]; ok {
+					target = mapped
+				}
+				if cm := findModel(&child, target); cm != nil && cm.MaxOutputTokens == nil {
+					unsetMax = append(unsetMax, fmt.Sprintf("%s/%s", child.Name, target))
+				}
+			}
+		}
+		for _, ref := range child.Spec.Fallback {
+			queue = append(queue, edge{parent: child.DeepCopy(), ref: ref})
+		}
+	}
+	if len(unsetMax) > 0 && r.Recorder != nil {
+		sort.Strings(unsetMax)
+		r.Recorder.Event(primary, corev1.EventTypeWarning, kaalmv1beta1.ReasonMaxOutputTokensUnset,
+			"a request without max_tokens cannot cross into these anthropic models until they declare "+
+				"maxOutputTokens: "+strings.Join(unsetMax, ", "))
 	}
 	return problems
+}
+
+func modelSet(mp *kaalmv1beta1.ModelProvider) map[string]bool {
+	set := map[string]bool{}
+	for _, m := range mp.Spec.Models {
+		set[m.ID] = true
+	}
+	return set
+}
+
+func findModel(mp *kaalmv1beta1.ModelProvider, id string) *kaalmv1beta1.ModelProviderModel {
+	for i := range mp.Spec.Models {
+		if mp.Spec.Models[i].ID == id {
+			return &mp.Spec.Models[i]
+		}
+	}
+	return nil
 }
 
 // validateDegradeTargets checks that every degrade policy names a real model in

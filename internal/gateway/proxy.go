@@ -35,6 +35,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/llmtranslate"
 )
 
 // SpendRecorder accumulates token usage per (namespace, provider, model). The
@@ -218,15 +219,25 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	// Walk the fallback tree. Each attempt forwards to one candidate with its
 	// own credential and endpoint; the first 2xx (or a non-fallbackable 4xx)
 	// wins. observed collects the failure classes for the exhaustion mapping.
+	// A candidate that crosses formats (since v0.7.0) gets the body
+	// translated by the eligibility check, its own adapter, and its format's
+	// canonical path; the response is translated back below.
+	inboundFormat := formatForType(adapter.formatName())
+	if r.URL.Path == "/v1/completions" {
+		inboundFormat = "" // the legacy completions shape never crosses
+	}
 	st := &walkState{
 		primary: provider, namespace: c.Namespace, workload: workload, modelID: modelID,
 		maxDepth: s.Config.MaxFallbackDepth, visited: map[string]bool{},
 		observed: map[failClass]bool{}, primarySettle: primarySettle,
+		parsed: parsed, inboundFormat: inboundFormat, modelFor: map[string]string{provider.Name: modelID},
 	}
 	res, ok := s.tryWithFallbacks(ctx, provider, st, func(ctx context.Context, cand *kaalmv1beta1.ModelProvider) forwardResult {
 		fctx, endForward := s.Tracing.Start(ctx, "llm.forward", trace.SpanKindClient,
 			attribute.String("kaalm.provider", cand.Name))
-		fr := s.forwardOnce(fctx, r, cand, outBody, adapter, typeAdapter, modelID)
+		body, inboundPath, pathAdapter, candAdapter, model := s.candidateRequest(st, cand, outBody, r.URL.Path, adapter, typeAdapter)
+		fr := s.forwardOnce(fctx, r, cand, body, inboundPath, pathAdapter, candAdapter, model)
+		fr.model, fr.format = model, formatForType(cand.Spec.Type)
 		if fr.class != classNone {
 			endForward(errors.New(failClassName(fr.class)))
 		} else {
@@ -253,50 +264,136 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, body, retryAfter)
 		return
 	}
-	defer func() { _ = res.resp.Body.Close() }()
-	answered = res.provider
+	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered)
+}
 
-	// A non-fallbackable failure (400/422/other 4xx) is relayed verbatim.
+// writeWalkResult relays the winning attempt: a non-fallbackable failure
+// verbatim (in the caller's envelope shape when the candidate crossed
+// formats), a stream through the relay (translated event by event when it
+// crossed), or a buffered body with usage read by the serving candidate's
+// adapter and, when it crossed, the body translated back.
+func (s *Server) writeWalkResult(
+	ctx context.Context, w http.ResponseWriter, res forwardResult, adapter providerAdapter,
+	inboundFormat llmtranslate.Format, namespace, workload string, modelID, answered *string,
+) {
+	defer func() { _ = res.resp.Body.Close() }()
+	*answered = res.provider
+	if res.model != "" {
+		*modelID = res.model
+	}
+	// Usage is read with the SERVING candidate's adapter from the
+	// untranslated upstream response; spend lands on that provider.
+	servingAdapter := adapter
+	if res.chosen != nil {
+		if a, ok := adapterForProviderType(res.chosen.Spec.Type); ok {
+			servingAdapter = a
+		}
+	}
+	crossing := res.format != "" && inboundFormat != "" && res.format != inboundFormat
+
+	// A non-fallbackable failure (400/422/other 4xx) is relayed verbatim, in
+	// the caller's envelope shape when the candidate crossed formats.
 	if res.resp.StatusCode < 200 || res.resp.StatusCode > 299 {
 		if res.settle != nil {
 			res.settle(0)
 		}
-		s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "error")
+		s.Metrics.LLMRequest(res.provider, *modelID, namespace, "error")
 		spanError(ctx, "upstream_error")
 		bodyLog("llm response", res.body)
 		copyDownstreamHeaders(w.Header(), res.resp.Header)
+		respBody := res.body
+		if crossing {
+			respBody = llmtranslate.Error(res.format, inboundFormat, res.body)
+			w.Header().Del("Content-Length")
+		}
 		w.WriteHeader(res.resp.StatusCode)
-		_, _ = w.Write(res.body)
+		_, _ = w.Write(respBody)
 		return
 	}
 
-	s.Metrics.LLMRequest(res.provider, modelID, c.Namespace, "ok")
+	s.Metrics.LLMRequest(res.provider, *modelID, namespace, "ok")
 	if isSSE(res.resp) {
-		s.relayStream(w, res.resp, adapter, c.Namespace, workload, res.chosen, modelID, res.settle)
+		var translator llmtranslate.Stream
+		if crossing {
+			translator = llmtranslate.NewStream(res.format, inboundFormat, *modelID)
+		}
+		s.relayStream(w, res.resp, servingAdapter, translator, namespace, workload, res.chosen, *modelID, res.settle)
 		return
 	}
-	if usage, ok := adapter.extractUsage(res.body); ok {
-		s.settleUsage(res.chosen, c.Namespace, workload, modelID, usage, res.settle)
+	if usage, ok := servingAdapter.extractUsage(res.body); ok {
+		s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle)
 	} else if res.settle != nil {
 		res.settle(0)
 	}
 	bodyLog("llm response", res.body)
 	copyDownstreamHeaders(w.Header(), res.resp.Header)
+	respBody := res.body
+	if crossing {
+		translated, err := llmtranslate.Response(res.format, inboundFormat, res.body)
+		if err != nil {
+			spanError(ctx, errProviderError)
+			writeError(w, http.StatusBadGateway, errorBody{
+				Type: errProviderError, Provider: res.provider,
+				Message: "the fallback provider's response could not be translated: " + err.Error()}, 0)
+			return
+		}
+		respBody = translated
+		w.Header().Del("Content-Length")
+	}
 	w.WriteHeader(res.resp.StatusCode)
-	_, _ = w.Write(res.body)
+	_, _ = w.Write(respBody)
+}
+
+// candidateRequest builds what one candidate is forwarded: the caller's
+// bytes for a same-format candidate with the same model; a re-encoded body
+// when only the model differs (a same-type edge with a modelMap); and, for a
+// crossing, the body the eligibility check translated, with the candidate's
+// adapter fixups, on the candidate format's canonical path.
+func (s *Server) candidateRequest(
+	st *walkState, cand *kaalmv1beta1.ModelProvider, outBody []byte, inboundPath string,
+	adapter, typeAdapter providerAdapter,
+) (body []byte, path string, pathAdapter, candAdapter providerAdapter, model string) {
+	model = st.candidateModel(cand)
+	candAdapter = typeAdapter
+	if a, ok := adapterForProviderType(cand.Spec.Type); ok {
+		candAdapter = a
+	}
+	if st.crosses(cand) {
+		if translated, ok := st.translated[cand.Name]; ok {
+			clone := make(map[string]any, len(translated))
+			for k, v := range translated {
+				clone[k] = v
+			}
+			candAdapter.fixupRequestBody(clone)
+			if encoded, err := json.Marshal(clone); err == nil {
+				return encoded, canonicalPath(formatForType(cand.Spec.Type)), candAdapter, candAdapter, model
+			}
+		}
+	}
+	if model != st.modelID && st.parsed != nil {
+		clone := make(map[string]any, len(st.parsed))
+		for k, v := range st.parsed {
+			clone[k] = v
+		}
+		clone["model"] = model
+		if encoded, err := json.Marshal(clone); err == nil {
+			return encoded, inboundPath, adapter, candAdapter, model
+		}
+	}
+	return outBody, inboundPath, adapter, candAdapter, model
 }
 
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
 func (s *Server) forwardOnce(
 	ctx context.Context, r *http.Request, provider *kaalmv1beta1.ModelProvider,
-	outBody []byte, adapter, typeAdapter providerAdapter, modelID string,
+	outBody []byte, inboundPath string, adapter, typeAdapter providerAdapter, modelID string,
 ) forwardResult {
 	credential, err := s.Store.Credential(ctx, provider)
 	if err != nil {
 		return forwardResult{fallilable: true, class: classConnect, err: err}
 	}
-	upstreamURL := strings.TrimSuffix(provider.Spec.Endpoint, "/") + adapter.upstreamPath(r.URL.Path, modelID)
+	upstreamURL := strings.TrimSuffix(provider.Spec.Endpoint, "/") + adapter.upstreamPath(inboundPath, modelID)
 	upReq, err := http.NewRequestWithContext(ctx, r.Method, upstreamURL, bytes.NewReader(outBody))
 	if err != nil {
 		return forwardResult{fallilable: true, class: classConnect, err: err}
@@ -443,7 +540,7 @@ func isSSE(resp *http.Response) bool {
 // usage out of the events the adapter recognizes. Spend is recorded after the
 // stream completes; a stream ending without usage counts as zero spend.
 func (s *Server) relayStream(
-	w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
+	w http.ResponseWriter, resp *http.Response, adapter providerAdapter, translator llmtranslate.Stream,
 	namespace, workload string, provider *kaalmv1beta1.ModelProvider, modelID string,
 	settle func(float64),
 ) {
@@ -466,17 +563,39 @@ func (s *Server) relayStream(
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
-			adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage)
-			bodyLog("llm stream", data)
-		}
+	writeLine := func(line []byte) bool {
 		if _, err := w.Write(append(line, '\n')); err != nil {
-			return
+			return false
 		}
 		if flusher != nil {
 			flusher.Flush()
+		}
+		return true
+	}
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+			// Usage comes from the upstream's own events, before translation.
+			adapter.accumulateStreamUsage(bytes.TrimSpace(data), &usage)
+			bodyLog("llm stream", data)
+		}
+		if translator == nil {
+			if !writeLine(line) {
+				return
+			}
+			continue
+		}
+		for _, out := range translator.Feed(line) {
+			if !writeLine(out) {
+				return
+			}
+		}
+	}
+	if translator != nil {
+		for _, out := range translator.Finish() {
+			if !writeLine(out) {
+				return
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {

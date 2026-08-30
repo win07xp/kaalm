@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,10 +300,10 @@ func TestModelProvider_FallbackCycleIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-cyc-a-key")
 	mkSecret(t, "mp-cyc-b-key")
 	mkProvider(t, "mp-cyc-b", func(mp *kaalmv1beta1.ModelProvider) {
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "mp-cyc-a"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-cyc-a"}}
 	})
 	mkProvider(t, "mp-cyc-a", func(mp *kaalmv1beta1.ModelProvider) {
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "mp-cyc-b"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-cyc-b"}}
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
@@ -498,7 +499,7 @@ func TestModelProvider_FallbackMissingIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-fbmiss-key")
 	mkProvider(t, "mp-fbmiss", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-fbmiss-key", Key: "token"}
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "no-such-provider"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "no-such-provider"}}
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
@@ -510,20 +511,118 @@ func TestModelProvider_FallbackMissingIsNotReady(t *testing.T) {
 func TestModelProvider_FallbackTypeMismatchIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-fbtype-a-key")
 	mkSecret(t, "mp-fbtype-b-key")
+	// google-vertex stays same-type in both directions (rule 12).
 	mkProvider(t, "mp-fbtype-b", func(mp *kaalmv1beta1.ModelProvider) {
-		mp.Spec.Type = "anthropic"
+		mp.Spec.Type = "google-vertex"
 		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-fbtype-b-key", Key: "token"}
 	})
 	mkProvider(t, "mp-fbtype-a", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Type = "openai"
 		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-fbtype-a-key", Key: "token"}
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "mp-fbtype-b"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-fbtype-b"}}
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-fbtype-a"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonFallbackIneligible)
+}
+
+func TestModelProvider_CrossFormatFallbackIsReady(t *testing.T) {
+	mkSecret(t, "mp-xf-a-key")
+	mkSecret(t, "mp-xf-b-key")
+	max := int64(8192)
+	mkProvider(t, "mp-xf-b", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Type = "anthropic"
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-xf-b-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "claude-sonnet-4-6", MaxOutputTokens: &max}}
+	})
+	mkProvider(t, "mp-xf-a", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Type = "openai"
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-xf-a-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{
+			Name: "mp-xf-b", ModelMap: map[string]string{"gpt-5-mini": "claude-sonnet-4-6"}}}
+	})
+	expectReady(t, func() []metav1.Condition {
+		var mp kaalmv1beta1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-xf-a"}, &mp)
+		return mp.Status.Conditions
+	}, metav1.ConditionTrue, "")
+}
+
+func TestModelProvider_CrossingWithoutMaxOutputTokensWarns(t *testing.T) {
+	mkSecret(t, "mp-nomax-a-key")
+	mkSecret(t, "mp-nomax-b-key")
+	mkProvider(t, "mp-nomax-b", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Type = "anthropic"
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-nomax-b-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "claude-sonnet-4-6"}}
+	})
+	mkProvider(t, "mp-nomax-a", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-nomax-a-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{
+			Name: "mp-nomax-b", ModelMap: map[string]string{"gpt-5-mini": "claude-sonnet-4-6"}}}
+	})
+	// Still Ready: same-format traffic through the edge is fine.
+	expectReady(t, func() []metav1.Condition {
+		var mp kaalmv1beta1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nomax-a"}, &mp)
+		return mp.Status.Conditions
+	}, metav1.ConditionTrue, "")
+	// But the operator hears about it before traffic does.
+	eventually(t, func() error {
+		var events corev1.EventList
+		if err := testClient.List(ctxT(), &events, client.MatchingFields{"reason": kaalmv1beta1.ReasonMaxOutputTokensUnset}); err != nil {
+			// Field selectors on events may be unsupported in the cache; fall back to a scan.
+			if err := testClient.List(ctxT(), &events); err != nil {
+				return err
+			}
+		}
+		for _, ev := range events.Items {
+			if ev.Reason == kaalmv1beta1.ReasonMaxOutputTokensUnset && ev.InvolvedObject.Name == "mp-nomax-a" &&
+				strings.Contains(ev.Message, "mp-nomax-b/claude-sonnet-4-6") {
+				return nil
+			}
+		}
+		return errString("no MaxOutputTokensUnset event on mp-nomax-a yet")
+	})
+}
+
+func TestModelProvider_ModelMapMustNameRealModels(t *testing.T) {
+	mkSecret(t, "mp-map-a-key")
+	mkSecret(t, "mp-map-b-key")
+	mkProvider(t, "mp-map-b", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Type = "anthropic"
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-map-b-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "claude-sonnet-4-6"}}
+	})
+	// A value the fallback does not offer.
+	mkProvider(t, "mp-map-a", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-map-a-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{
+			Name: "mp-map-b", ModelMap: map[string]string{"gpt-5-mini": "claude-nope"}}}
+	})
+	expectReady(t, func() []metav1.Condition {
+		var mp kaalmv1beta1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-map-a"}, &mp)
+		return mp.Status.Conditions
+	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidModelMap)
+	// A key this provider does not offer.
+	mkSecret(t, "mp-map-c-key")
+	mkProvider(t, "mp-map-c", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-map-c-key", Key: "token"}
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{
+			Name: "mp-map-b", ModelMap: map[string]string{"gpt-4o": "claude-sonnet-4-6"}}}
+	})
+	expectReady(t, func() []metav1.Condition {
+		var mp kaalmv1beta1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-map-c"}, &mp)
+		return mp.Status.Conditions
+	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidModelMap)
 }
 
 // ---- AgentClass FQDN + host validation ----

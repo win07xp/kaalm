@@ -94,6 +94,8 @@ const (
 	ReasonCredentialsInvalid         = "CredentialsInvalid"
 	ReasonUpstreamReachable          = "UpstreamReachable"
 	ReasonInvalidDegradeTarget       = "InvalidDegradeTarget"
+	ReasonInvalidModelMap            = "InvalidModelMap"
+	ReasonMaxOutputTokensUnset       = "MaxOutputTokensUnset"
 	ReasonDegradeTargetNotCheapest   = "DegradeTargetNotCheapest"
 	ReasonFallbackIneligible         = "FallbackIneligible"
 	ReasonSystemNamespaceForbidden   = "SystemNamespaceForbidden"

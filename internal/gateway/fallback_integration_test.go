@@ -17,11 +17,16 @@ limitations under the License.
 package gateway
 
 import (
+	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,10 +44,12 @@ type recordingRecorder struct{}
 
 func (*recordingRecorder) Eventf(runtime.Object, string, string, string, ...any) {}
 
-// addBackupProvider adds a same-type fallback provider backed by its own
-// upstream and wires it onto the primary, extending the newHarness setup.
-func (h *harness) addBackupProvider(t *testing.T, name string, upstreamFn http.HandlerFunc) *httptest.Server {
+// addBackupProvider adds a fallback provider named "backup" (openai by
+// default) backed by its own upstream, extending the newHarness setup;
+// callers wire it onto the primary.
+func (h *harness) addBackupProvider(t *testing.T, upstreamFn http.HandlerFunc) {
 	t.Helper()
+	const name = "backup"
 	backendSrv := httptest.NewTLSServer(upstreamFn)
 	t.Cleanup(backendSrv.Close)
 
@@ -66,7 +73,6 @@ func (h *harness) addBackupProvider(t *testing.T, name string, upstreamFn http.H
 		},
 	}
 	h.store.creds[name] = "sk-" + name
-	return backendSrv
 }
 
 func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
@@ -77,13 +83,12 @@ func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
 	})
 	h.seedRoute()
 	h.server.Recorder = &recordingRecorder{}
-	backup := h.addBackupProvider(t, "backup", func(w http.ResponseWriter, _ *http.Request) {
+	h.addBackupProvider(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"from-backup","usage":{"prompt_tokens":3,"completion_tokens":1}}`))
 	})
-	_ = backup
 	// Wire the fallback and allow the backup in the workload + class.
-	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "backup"}}
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
 	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
 		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "backup"}})
 	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
@@ -108,7 +113,7 @@ func TestIntegration_FallbackExhaustionMaps503(t *testing.T) {
 	h.seedRoute()
 	// Point both providers at a dead endpoint.
 	h.store.providers["prov"].Spec.Endpoint = "https://127.0.0.1:1"
-	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "backup"}}
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
 	h.store.providers["backup"] = &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1ObjectMeta("backup"),
 		Spec: kaalmv1beta1.ModelProviderSpec{
@@ -160,5 +165,263 @@ func TestIntegration_RateLimit429(t *testing.T) {
 	}
 	if got := errType(t, resp); got != "rate_limited" {
 		t.Errorf("error type %q", got)
+	}
+}
+
+// ---- crossing formats (since v0.7.0) ----
+
+// crossingHarness: an anthropic primary at the dead default upstream and an
+// openai backup at its own upstream, joined by an edge with a model map.
+// The caller speaks Anthropic; the backup speaks chat completions.
+func crossingHarness(t *testing.T, backupFn http.HandlerFunc) (*harness, *tls.Certificate) {
+	t.Helper()
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	h.seedRoute()
+	h.server.Recorder = &recordingRecorder{}
+	h.store.providers["prov"].Spec.Type = "anthropic"
+	h.addBackupProvider(t, backupFn)
+	h.store.providers["backup"].Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}}
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{
+		Name: "backup", ModelMap: map[string]string{"m1": "gpt-5-mini"}}}
+	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
+		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "backup"}})
+	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
+		kaalmv1beta1.LocalObjectReference{Name: "backup"})
+	cert := agentCert(t, h.ca)
+	return h, &cert
+}
+
+func TestIntegration_CrossFormatFallback_AnthropicCallerOpenAIBackup(t *testing.T) {
+	var got struct {
+		path string
+		body map[string]any
+	}
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		got.path = r.URL.Path
+		_ = json.Unmarshal(raw, &got.body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-9","object":"chat.completion","model":"gpt-5-mini",
+		  "choices":[{"index":0,"message":{"role":"assistant","content":"Cold."},"finish_reason":"stop"}],
+		  "usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`))
+	})
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64,
+		"system":   "Be brief.",
+		"messages": []any{map[string]any{"role": "user", "content": "Is it cold?"}},
+	}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("crossing fallback should yield 200, got %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	// The caller sees an Anthropic message naming the model that served.
+	if out["type"] != "message" || out["model"] != "gpt-5-mini" || out["stop_reason"] != "end_turn" {
+		t.Errorf("response not Anthropic-shaped: %v", out)
+	}
+	if content, _ := out["content"].([]any); len(content) != 1 || content[0].(map[string]any)["text"] != "Cold." {
+		t.Errorf("content wrong: %v", out["content"])
+	}
+	// The backup received a chat completion on its own path, for the mapped
+	// model, with the system prompt lifted and the stream_options fixup.
+	if got.path != "/v1/chat/completions" || got.body["model"] != "gpt-5-mini" {
+		t.Errorf("backup got %s %v", got.path, got.body["model"])
+	}
+	msgs, _ := got.body["messages"].([]any)
+	if len(msgs) != 2 || msgs[0].(map[string]any)["role"] != "system" || msgs[1].(map[string]any)["content"] != "Is it cold?" {
+		t.Errorf("backup messages wrong: %v", msgs)
+	}
+	// Spend landed on the backup for the mapped model, read with its adapter.
+	if u := h.spend.Total("team-a", "backup", "gpt-5-mini"); u.InputTokens != 7 || u.OutputTokens != 2 {
+		t.Errorf("backup usage not recorded for the mapped model: %+v", u)
+	}
+	if u := h.spend.Total("team-a", "prov", "m1"); !u.isZero() {
+		t.Errorf("primary must record nothing: %+v", u)
+	}
+}
+
+func TestIntegration_CrossFormatFallback_Streaming(t *testing.T) {
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		if body["stream"] != true {
+			t.Errorf("backup did not receive stream: true: %v", body)
+		}
+		if so, _ := body["stream_options"].(map[string]any); so["include_usage"] != true {
+			t.Errorf("the openai fixup must apply to the translated body: %v", body["stream_options"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, _ := w.(http.Flusher)
+		for _, line := range []string{
+			`data: {"id":"c","object":"chat.completion.chunk","model":"gpt-5-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"Co"},"finish_reason":null}]}`,
+			`data: {"choices":[{"index":0,"delta":{"content":"ld."},"finish_reason":null}]}`,
+			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3}}`,
+			`data: [DONE]`,
+		} {
+			_, _ = w.Write([]byte(line + "\n\n"))
+			if f != nil {
+				f.Flush()
+			}
+		}
+	})
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64, "stream": true,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("status %d content-type %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	text := string(raw)
+	for _, want := range []string{"event: message_start", `"text":"Co"`, `"text":"ld."`,
+		"event: message_delta", `"stop_reason":"end_turn"`, `"output_tokens":3`, "event: message_stop"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("translated stream lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "[DONE]") || strings.Contains(text, "chat.completion.chunk") {
+		t.Errorf("OpenAI chunk shapes leaked to an Anthropic caller:\n%s", text)
+	}
+	// Usage was read from the upstream's own final chunk.
+	waitForSpend(t, h, "backup", "gpt-5-mini", 5)
+}
+
+func waitForSpend(t *testing.T, h *harness, provider, model string, input int64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if u := h.spend.Total("team-a", provider, model); u.InputTokens == input {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("spend for %s/%s never reached %d input tokens: %+v", provider, model, input, h.spend.Total("team-a", provider, model))
+}
+
+func TestIntegration_CrossFormatFallback_OpenAICallerAnthropicBackup(t *testing.T) {
+	var gotBody map[string]any
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	h.seedRoute() // prov is openai; the caller speaks chat completions
+	h.server.Recorder = &recordingRecorder{}
+	h.addBackupProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("anthropic backup got path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_9","type":"message","role":"assistant","model":"claude-sonnet-4-6",
+		  "content":[{"type":"text","text":"Warm."}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":1}}`))
+	})
+	max := int64(4096)
+	h.store.providers["backup"].Spec.Type = "anthropic"
+	h.store.providers["backup"].Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "claude-sonnet-4-6", MaxOutputTokens: &max}}
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{
+		Name: "backup", ModelMap: map[string]string{"m1": "claude-sonnet-4-6"}}}
+	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
+		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "backup"}})
+	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
+		kaalmv1beta1.LocalObjectReference{Name: "backup"})
+	cert := agentCert(t, h.ca)
+
+	// No max_tokens in the request: the catalog's ceiling is supplied.
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{
+		"model": "prov/m1", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out["object"] != "chat.completion" || out["model"] != "claude-sonnet-4-6" {
+		t.Errorf("response not a chat completion: %v", out)
+	}
+	choice := out["choices"].([]any)[0].(map[string]any)
+	if choice["message"].(map[string]any)["content"] != "Warm." || choice["finish_reason"] != "stop" {
+		t.Errorf("choice wrong: %v", choice)
+	}
+	if gotBody["max_tokens"] != float64(4096) || gotBody["model"] != "claude-sonnet-4-6" {
+		t.Errorf("backup request wrong: %v", gotBody)
+	}
+	if u := h.spend.Total("team-a", "backup", "claude-sonnet-4-6"); u.InputTokens != 4 {
+		t.Errorf("spend wrong: %+v", u)
+	}
+}
+
+func TestIntegration_CrossFormatFallback_UntranslatableSkipsTheCandidate(t *testing.T) {
+	backupHit := false
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		backupHit = true
+		w.WriteHeader(200)
+	})
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64,
+		"thinking": map[string]any{"type": "enabled", "budget_tokens": 1024},
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	// The primary's 503 was the only attempt: the crossing candidate was
+	// ineligible for this request, so the walk exhausted.
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status %d, want 502 provider_error", resp.StatusCode)
+	}
+	if backupHit {
+		t.Error("an untranslatable request must never reach the crossing candidate")
+	}
+}
+
+func TestIntegration_CrossFormatFallback_ErrorEnvelopeIsTheCallers(t *testing.T) {
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"context too long","type":"invalid_request_error","code":null}}`))
+	})
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64, "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 400 {
+		t.Fatalf("status %d, want the backup's 400 relayed", resp.StatusCode)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out["type"] != "error" || out["error"].(map[string]any)["message"] != "context too long" {
+		t.Errorf("error not in the Anthropic envelope: %v", out)
+	}
+}
+
+func TestIntegration_LegacyCompletionsNeverCross(t *testing.T) {
+	backupHit := false
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	h.seedRoute()
+	h.server.Recorder = &recordingRecorder{}
+	h.addBackupProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		backupHit = true
+		w.WriteHeader(200)
+	})
+	h.store.providers["backup"].Spec.Type = "anthropic"
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
+	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
+		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "backup"}})
+	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
+		kaalmv1beta1.LocalObjectReference{Name: "backup"})
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/completions"), map[string]any{"model": "prov/m1", "prompt": "hi"}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadGateway || backupHit {
+		t.Errorf("legacy completions must not cross: status %d backupHit %v", resp.StatusCode, backupHit)
 	}
 }

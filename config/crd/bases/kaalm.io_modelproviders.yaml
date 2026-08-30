@@ -182,17 +182,25 @@ spec:
               fallback:
                 description: |-
                   Fallback names providers tried when this one fails. Each may declare its
-                  own fallback, forming a tree walked depth-first. Must be acyclic and share
-                  this provider's type.
+                  own fallback, forming a tree walked depth-first. Must be acyclic (rule
+                  11) and stay within formats the gateway can translate (rule 12): the
+                  same type, or since v0.7.0 anthropic against openai / openai-compatible.
                 items:
                   description: |-
-                    LocalObjectReference names another Kaalm resource by name, in the same scope
-                    as the referrer (same namespace for namespaced kinds, cluster-wide for
-                    cluster-scoped kinds). Used for agentClassRef, providerRef, allowedProviders
-                    entries, fallback entries, and agentRef.
+                    FallbackReference is one edge of the fallback tree: the provider tried
+                    next, and since v0.7.0 the model map an edge that crosses formats needs.
+                    Wire-compatible with the {name} reference it replaces.
                   properties:
+                    modelMap:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        ModelMap names, per model id of the provider carrying this edge, the
+                        model the fallback serves in its place (rule 41). A model with no entry
+                        is looked up under its own id. Allowed on a same-type edge too.
+                      type: object
                     name:
-                      description: Name of the referenced object.
+                      description: Name of the fallback ModelProvider.
                       minLength: 1
                       type: string
                   required:
@@ -242,6 +250,15 @@ spec:
                       description: ID is the model identifier as sent to the provider.
                       minLength: 1
                       type: string
+                    maxOutputTokens:
+                      description: |-
+                        MaxOutputTokens is the model's declared output ceiling. Since v0.7.0 the
+                        gateway supplies it as max_tokens when a request crossing into an
+                        anthropic provider omits one (Anthropic requires the field); a request
+                        carrying more is capped to it.
+                      format: int64
+                      minimum: 1
+                      type: integer
                   required:
                   - id
                   type: object
@@ -545,17 +562,25 @@ spec:
               fallback:
                 description: |-
                   Fallback names providers tried when this one fails. Each may declare its
-                  own fallback, forming a tree walked depth-first. Must be acyclic and share
-                  this provider's type.
+                  own fallback, forming a tree walked depth-first. Must be acyclic (rule
+                  11) and stay within formats the gateway can translate (rule 12): the
+                  same type, or since v0.7.0 anthropic against openai / openai-compatible.
                 items:
                   description: |-
-                    LocalObjectReference names another Kaalm resource by name, in the same scope
-                    as the referrer (same namespace for namespaced kinds, cluster-wide for
-                    cluster-scoped kinds). Used for agentClassRef, providerRef, allowedProviders
-                    entries, fallback entries, and agentRef.
+                    FallbackReference is one edge of the fallback tree: the provider tried
+                    next, and since v0.7.0 the model map an edge that crosses formats needs.
+                    Wire-compatible with the {name} reference it replaces.
                   properties:
+                    modelMap:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        ModelMap names, per model id of the provider carrying this edge, the
+                        model the fallback serves in its place (rule 41). A model with no entry
+                        is looked up under its own id. Allowed on a same-type edge too.
+                      type: object
                     name:
-                      description: Name of the referenced object.
+                      description: Name of the fallback ModelProvider.
                       minLength: 1
                       type: string
                   required:
@@ -605,6 +630,15 @@ spec:
                       description: ID is the model identifier as sent to the provider.
                       minLength: 1
                       type: string
+                    maxOutputTokens:
+                      description: |-
+                        MaxOutputTokens is the model's declared output ceiling. Since v0.7.0 the
+                        gateway supplies it as max_tokens when a request crossing into an
+                        anthropic provider omits one (Anthropic requires the field); a request
+                        carrying more is capped to it.
+                      format: int64
+                      minimum: 1
+                      type: integer
                   required:
                   - id
                   type: object
