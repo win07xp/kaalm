@@ -45,12 +45,15 @@ linters:
           - dupl
           - lll
         path: internal/*
-      # The translator is wire keys and values by nature ("type", "content",
-      # "text", ...); hoisting each into a constant would hide the shapes it
-      # exists to spell out.
+      # The translator and the mock provider are wire keys and values by
+      # nature ("type", "content", "text", ...); hoisting each into a constant
+      # would hide the shapes they exist to spell out.
       - linters:
           - goconst
         path: internal/llmtranslate/*
+      - linters:
+          - goconst
+        path: test/e2e/mockprovider/*
     paths:
       - third_party$
       - builtin$

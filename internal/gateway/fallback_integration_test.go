@@ -44,10 +44,12 @@ type recordingRecorder struct{}
 
 func (*recordingRecorder) Eventf(runtime.Object, string, string, string, ...any) {}
 
-// addBackupProvider adds a same-type fallback provider backed by its own
-// upstream and wires it onto the primary, extending the newHarness setup.
-func (h *harness) addBackupProvider(t *testing.T, name string, upstreamFn http.HandlerFunc) *httptest.Server {
+// addBackupProvider adds a fallback provider named "backup" (openai by
+// default) backed by its own upstream, extending the newHarness setup;
+// callers wire it onto the primary.
+func (h *harness) addBackupProvider(t *testing.T, upstreamFn http.HandlerFunc) {
 	t.Helper()
+	const name = "backup"
 	backendSrv := httptest.NewTLSServer(upstreamFn)
 	t.Cleanup(backendSrv.Close)
 
@@ -71,7 +73,6 @@ func (h *harness) addBackupProvider(t *testing.T, name string, upstreamFn http.H
 		},
 	}
 	h.store.creds[name] = "sk-" + name
-	return backendSrv
 }
 
 func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
@@ -82,11 +83,10 @@ func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
 	})
 	h.seedRoute()
 	h.server.Recorder = &recordingRecorder{}
-	backup := h.addBackupProvider(t, "backup", func(w http.ResponseWriter, _ *http.Request) {
+	h.addBackupProvider(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"from-backup","usage":{"prompt_tokens":3,"completion_tokens":1}}`))
 	})
-	_ = backup
 	// Wire the fallback and allow the backup in the workload + class.
 	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
 	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
@@ -181,7 +181,7 @@ func crossingHarness(t *testing.T, backupFn http.HandlerFunc) (*harness, *tls.Ce
 	h.seedRoute()
 	h.server.Recorder = &recordingRecorder{}
 	h.store.providers["prov"].Spec.Type = "anthropic"
-	h.addBackupProvider(t, "backup", backupFn)
+	h.addBackupProvider(t, backupFn)
 	h.store.providers["backup"].Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "gpt-5-mini"}}
 	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{
 		Name: "backup", ModelMap: map[string]string{"m1": "gpt-5-mini"}}}
@@ -313,7 +313,7 @@ func TestIntegration_CrossFormatFallback_OpenAICallerAnthropicBackup(t *testing.
 	})
 	h.seedRoute() // prov is openai; the caller speaks chat completions
 	h.server.Recorder = &recordingRecorder{}
-	h.addBackupProvider(t, "backup", func(w http.ResponseWriter, r *http.Request) {
+	h.addBackupProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &gotBody)
 		if r.URL.Path != "/v1/messages" {
@@ -408,7 +408,7 @@ func TestIntegration_LegacyCompletionsNeverCross(t *testing.T) {
 	})
 	h.seedRoute()
 	h.server.Recorder = &recordingRecorder{}
-	h.addBackupProvider(t, "backup", func(w http.ResponseWriter, _ *http.Request) {
+	h.addBackupProvider(t, func(w http.ResponseWriter, _ *http.Request) {
 		backupHit = true
 		w.WriteHeader(200)
 	})

@@ -63,11 +63,82 @@ type mock struct {
 
 // chatPrefix reduces a chat path to its counting key.
 func chatPrefix(path string) string {
-	prefix := strings.TrimSuffix(path, "/v1/chat/completions")
+	prefix := strings.TrimSuffix(strings.TrimSuffix(path, "/v1/chat/completions"), "/v1/messages")
 	if prefix == "" {
 		return "/"
 	}
 	return prefix
+}
+
+const mockReplyText = "ok from mock"
+
+// anthropicMessage is the /v1/messages answer: the Anthropic shape with the
+// same usage the chat completion carries (S24 proves the crossing both
+// ways against one mock).
+func anthropicMessage(model string, in, out int64) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"id": "msg_mock", "type": "message", "role": "assistant", "model": model,
+		"content":     []any{map[string]any{"type": "text", "text": mockReplyText}},
+		"stop_reason": "end_turn", "stop_sequence": nil,
+		"usage": map[string]any{"input_tokens": in, "output_tokens": out},
+	})
+	return body
+}
+
+// streamChat writes a chat-completions SSE stream: two content chunks, the
+// finish chunk, a usage chunk when stream_options asked for one, [DONE].
+func streamChat(w http.ResponseWriter, model string, in, out int64, includeUsage bool) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	f, _ := w.(http.Flusher)
+	chunk := func(v map[string]any) {
+		raw, _ := json.Marshal(v)
+		_, _ = w.Write(append(append([]byte("data: "), raw...), '\n', '\n'))
+		if f != nil {
+			f.Flush()
+		}
+	}
+	base := func(delta map[string]any, finish any) map[string]any {
+		return map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "model": model,
+			"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
+	}
+	chunk(base(map[string]any{"role": "assistant", "content": "ok from"}, nil))
+	chunk(base(map[string]any{"content": " mock"}, nil))
+	chunk(base(map[string]any{}, "stop"))
+	if includeUsage {
+		chunk(map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "model": model, "choices": []any{},
+			"usage": map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out}})
+	}
+	_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	if f != nil {
+		f.Flush()
+	}
+}
+
+// streamMessages writes an Anthropic messages SSE stream.
+func streamMessages(w http.ResponseWriter, model string, in, out int64) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	f, _ := w.(http.Flusher)
+	event := func(name string, v map[string]any) {
+		raw, _ := json.Marshal(v)
+		_, _ = w.Write([]byte("event: " + name + "\ndata: " + string(raw) + "\n\n"))
+		if f != nil {
+			f.Flush()
+		}
+	}
+	event("message_start", map[string]any{"type": "message_start", "message": map[string]any{
+		"id": "msg_mock", "type": "message", "role": "assistant", "model": model, "content": []any{},
+		"stop_reason": nil, "usage": map[string]any{"input_tokens": in, "output_tokens": 0}}})
+	event("content_block_start", map[string]any{"type": "content_block_start", "index": 0,
+		"content_block": map[string]any{"type": "text", "text": ""}})
+	event("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
+		"delta": map[string]any{"type": "text_delta", "text": mockReplyText}})
+	event("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+	event("message_delta", map[string]any{"type": "message_delta",
+		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+		"usage": map[string]any{"output_tokens": out}})
+	event("message_stop", map[string]any{"type": "message_stop"})
 }
 
 // chatCompletion is the minimal OpenAI-shaped success body. The gateway reads
@@ -103,6 +174,8 @@ func behaviorFor(path string) (status int, in, out int64) {
 	}
 }
 
+// chat serves both LLM paths: /v1/chat/completions in the OpenAI shape and
+// /v1/messages in the Anthropic shape, streaming when the request asks.
 func (m *mock) chat(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	if m.requests == nil {
@@ -118,15 +191,34 @@ func (m *mock) chat(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		model = "mock-model"
 	}
+	stream, _ := parsed["stream"].(bool)
+	anthropic := strings.HasSuffix(r.URL.Path, "/v1/messages")
 
 	status, in, out := behaviorFor(r.URL.Path)
 	if status != http.StatusOK {
+		if anthropic {
+			http.Error(w, `{"type":"error","error":{"type":"api_error","message":"mock failure"}}`, status)
+			return
+		}
 		http.Error(w, `{"error":{"message":"mock failure"}}`, status)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(chatCompletion(model, in, out))
+	switch {
+	case anthropic && stream:
+		streamMessages(w, model, in, out)
+	case anthropic:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(anthropicMessage(model, in, out))
+	case stream:
+		so, _ := parsed["stream_options"].(map[string]any)
+		include, _ := so["include_usage"].(bool)
+		streamChat(w, model, in, out, include)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(chatCompletion(model, in, out))
+	}
 }
 
 // models answers the health probe (GET .../v1/models).
@@ -170,7 +262,8 @@ func (m *mock) handler() http.Handler {
 	// prefix precedes the inbound path).
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/v1/chat/completions") && r.Method == http.MethodPost:
+		case (strings.HasSuffix(r.URL.Path, "/v1/chat/completions") || strings.HasSuffix(r.URL.Path, "/v1/messages")) &&
+			r.Method == http.MethodPost:
 			m.chat(w, r)
 		case strings.HasSuffix(r.URL.Path, "/v1/models") && r.Method == http.MethodGet:
 			m.models(w, r)

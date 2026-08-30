@@ -54,6 +54,13 @@ spec:
       costPer1MInputTokens:  "15.00"
       costPer1MOutputTokens: "75.00"
     - id: "claude-sonnet-4-6"
+      # Declared output ceiling (since v0.7.0). Consumed at a fallback edge
+      # crossing INTO this provider from an OpenAI-format caller: an OpenAI
+      # request may omit max_tokens, Anthropic's API may not, and the
+      # gateway supplies this value (and caps a larger request to it). A
+      # model without one cannot serve such a request; the reconciler warns
+      # (MaxOutputTokensUnset) on the primary that maps to it.
+      maxOutputTokens: 64000
       displayName: "Claude Sonnet 4.6"
       costPer1MInputTokens:  "3.00"
       costPer1MOutputTokens: "15.00"
