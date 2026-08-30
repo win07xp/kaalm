@@ -68,8 +68,9 @@ var _ = Describe("Cross-format fallback (S24)", Ordered, func() {
 	It("translates the stream event by event", func() {
 		logs := callerLogs("s24-stream-caller")
 		Expect(logs).To(ContainSubstring("HTTP 200"))
-		for _, want := range []string{"event: message_start", "event: content_block_delta", "ok from mock",
-			"event: message_delta", `"stop_reason":"end_turn"`, "event: message_stop"} {
+		// The mock streams the reply as two deltas; each becomes its own event.
+		for _, want := range []string{"event: message_start", "event: content_block_delta", `"text":"ok from"`,
+			`"text":" mock"`, "event: message_delta", `"stop_reason":"end_turn"`, `"output_tokens":22`, "event: message_stop"} {
 			Expect(logs).To(ContainSubstring(want), want)
 		}
 		Expect(logs).NotTo(ContainSubstring("[DONE]"))
