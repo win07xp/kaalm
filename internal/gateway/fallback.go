@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/llmtranslate"
 )
 
 // EventRecorder is the subset of record.EventRecorder the gateway uses for
@@ -50,6 +51,8 @@ type forwardResult struct {
 	err        error                       // transport error, if any
 	provider   string                      // the candidate that produced this result
 	chosen     *kaalmv1beta1.ModelProvider // the candidate resource, for usage accounting
+	model      string                      // the model the candidate served (the edge's map applied)
+	format     llmtranslate.Format         // the candidate's wire format ("" when it cannot cross)
 	// settle frees the winning candidate's boundary admission slot with the
 	// request's actual cost (hard enforcement). Nil outside the boundary
 	// region; idempotent; the caller MUST invoke it on every outcome path.
@@ -125,6 +128,63 @@ type walkState struct {
 	// primarySettle is the pre-flight boundary settle for the primary
 	// candidate (hard enforcement); the walk never re-admits the primary.
 	primarySettle func(costUSD float64)
+
+	// Crossing formats (since v0.7.0). parsed is the request as the caller
+	// sent it; inboundFormat is its format, or "" when it cannot cross (the
+	// legacy completions shape, Vertex). modelFor carries each candidate's
+	// model with the edge's modelMap applied; translated caches the body
+	// translated for each crossing candidate, built by the eligibility check
+	// and consumed by the attempt.
+	parsed        map[string]any
+	inboundFormat llmtranslate.Format
+	modelFor      map[string]string
+	translated    map[string]map[string]any
+}
+
+// candidateModel is the model a candidate serves: the edge's mapping when
+// one was recorded on the way down, else the model the walk started with.
+func (st *walkState) candidateModel(provider *kaalmv1beta1.ModelProvider) string {
+	if m, ok := st.modelFor[provider.Name]; ok && m != "" {
+		return m
+	}
+	return st.modelID
+}
+
+// crosses reports whether reaching provider from the request's format needs
+// translation.
+func (st *walkState) crosses(provider *kaalmv1beta1.ModelProvider) bool {
+	target := formatForType(provider.Spec.Type)
+	return st.inboundFormat != "" && target != "" && target != st.inboundFormat
+}
+
+// formatForType maps a provider type to the translator's format, or "" for
+// a type the translator does not speak.
+func formatForType(providerType string) llmtranslate.Format {
+	switch kaalmv1beta1.ProviderFormat(providerType) {
+	case kaalmv1beta1.ProviderTypeAnthropic:
+		return llmtranslate.FormatAnthropic
+	case kaalmv1beta1.ProviderTypeOpenAI:
+		return llmtranslate.FormatOpenAI
+	}
+	return ""
+}
+
+// canonicalPath is the inbound path a format's requests use, the path a
+// crossing candidate is forwarded on.
+func canonicalPath(format llmtranslate.Format) string {
+	if format == llmtranslate.FormatAnthropic {
+		return "/v1/messages"
+	}
+	return "/v1/chat/completions"
+}
+
+func maxOutputTokensOf(provider *kaalmv1beta1.ModelProvider, model string) int64 {
+	for _, m := range provider.Spec.Models {
+		if m.ID == model && m.MaxOutputTokens != nil {
+			return *m.MaxOutputTokens
+		}
+	}
+	return 0
 }
 
 // tryWithFallbacks walks the fallback tree depth-first in declared order,
@@ -233,12 +293,22 @@ func (s *Server) walkChildren(
 	ctx context.Context, provider *kaalmv1beta1.ModelProvider, st *walkState,
 	attempt func(context.Context, *kaalmv1beta1.ModelProvider) forwardResult,
 ) (forwardResult, bool) {
+	parentModel := st.candidateModel(provider)
 	for _, ref := range provider.Spec.Fallback {
 		next, ok := s.Store.ProviderByName(ctx, ref.Name)
 		if !ok {
 			s.recordEvent(st.primary, kaalmv1beta1.ReasonFallbackIneligible,
 				"fallback %q skipped: provider does not exist", ref.Name)
 			continue
+		}
+		// The edge's model map, applied on the way down (rule 41 validated it).
+		if st.modelFor == nil {
+			st.modelFor = map[string]string{}
+		}
+		if mapped, ok := ref.ModelMap[parentModel]; ok && mapped != "" {
+			st.modelFor[next.Name] = mapped
+		} else {
+			st.modelFor[next.Name] = parentModel
 		}
 		if res, ok := s.tryWithFallbacks(ctx, next, st, attempt); ok {
 			return res, true
@@ -248,24 +318,44 @@ func (s *Server) walkChildren(
 }
 
 // staticallyIneligible returns a non-empty reason when a candidate fails a
-// config-derived check (same type, namespace, model). These never consume a
-// slot.
+// check that never consumes a slot: format compatibility (rule 12),
+// namespace, the mapped model, and, for a crossing, translatability of this
+// request (the one check derived from the body rather than configuration).
 func (s *Server) staticallyIneligible(provider *kaalmv1beta1.ModelProvider, st *walkState) string {
-	if provider.Name != st.primary.Name && provider.Spec.Type != st.primary.Spec.Type {
-		return fmt.Sprintf("type %q does not match primary type %q", provider.Spec.Type, st.primary.Spec.Type)
+	if provider.Name != st.primary.Name {
+		if !kaalmv1beta1.FallbackFormatCompatible(st.primary.Spec.Type, provider.Spec.Type) {
+			return fmt.Sprintf("type %q cannot follow primary type %q (rule 12)", provider.Spec.Type, st.primary.Spec.Type)
+		}
+		if kaalmv1beta1.FallbackCrossesFormat(st.primary.Spec.Type, provider.Spec.Type) && st.inboundFormat == "" {
+			return fmt.Sprintf("the request's format cannot cross into type %q", provider.Spec.Type)
+		}
 	}
 	if !namespaceGlobAllowed(st.namespace, provider.Spec.AllowedNamespaces) {
 		return fmt.Sprintf("namespace %q not in allowedNamespaces", st.namespace)
 	}
+	model := st.candidateModel(provider)
 	found := false
 	for _, m := range provider.Spec.Models {
-		if m.ID == st.modelID {
+		if m.ID == model {
 			found = true
 			break
 		}
 	}
 	if !found {
-		return fmt.Sprintf("model %q not offered", st.modelID)
+		return fmt.Sprintf("model %q not offered", model)
+	}
+	if st.crosses(provider) && st.parsed != nil {
+		if _, done := st.translated[provider.Name]; !done {
+			body, err := llmtranslate.Request(st.inboundFormat, formatForType(provider.Spec.Type), st.parsed, model,
+				maxOutputTokensOf(provider, model))
+			if err != nil {
+				return err.Error()
+			}
+			if st.translated == nil {
+				st.translated = map[string]map[string]any{}
+			}
+			st.translated[provider.Name] = body
+		}
 	}
 	return ""
 }
