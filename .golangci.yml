@@ -45,6 +45,12 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # The translator is wire keys and values by nature ("type", "content",
+      # "text", ...); hoisting each into a constant would hide the shapes it
+      # exists to spell out.
+      - linters:
+          - goconst
+        path: internal/llmtranslate/*
     paths:
       - third_party$
       - builtin$
