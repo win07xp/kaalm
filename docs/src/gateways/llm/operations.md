@@ -69,7 +69,7 @@ For User Gateway metrics, see [User Gateway Operations](../user/operations.md#ob
 | Gateway replica crashes | Other replicas continue; Kubernetes restarts the crashed replica |
 | All gateway replicas down | LLM calls from agents fail; up to 10s of spend data may be lost (see [Budget State Management](budgets-and-rate-limits.md#budget-state-management)) |
 | Gateway replica not ready (listener dial fails, any of the dependent informers not synced, or cert not yet issued) | Readiness probe returns 503; replica excluded from Service endpoints until all checks pass. See [Gateway Readiness](#gateway-readiness) |
-| Provider API down | Fallback chain walked (same-type providers only, up to `maxFallbackDepth` depth); if all providers in the chain fail, the request fails with a fallback-exhausted error |
+| Provider API down | Fallback chain walked (same-type or, since v0.7.0, translatable-format providers, up to `maxFallbackDepth` attempts); if all providers in the chain fail, the request fails with a fallback-exhausted error |
 | Budget exhausted | Request blocked (`429 budget_exhausted` with `Retry-After` header) or degraded per policy; Warning event emitted on ModelProvider |
 | `TokenReview` apiserver unreachable (mode 2 only) | Gateway returns `503 Service Unavailable` to the caller for requests that miss the token cache; mTLS requests and cached-token requests are unaffected |
 | CNI does not support FQDN egress policy but AgentClass sets `allowedHosts` | AgentClassReconciler emits a `Warning` event and ignores `allowedHosts`; `allowedCIDRs` alone governs egress. See [AgentClassReconciler](../../controller/reconcilers.md#agentclassreconciler) |

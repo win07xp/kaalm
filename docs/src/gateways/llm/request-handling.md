@@ -69,7 +69,7 @@ The Vertex adapter matches on the `:generateContent` / `:streamGenerateContent` 
 
 Each provider adapter registers the path patterns it recognizes; requests to unrecognized paths on the cluster listener are rejected with `400 invalid_request`. The gateway uses the detected format to parse the request (extracting the model name and other fields), then forwards to the upstream provider.
 
-The gateway is **protocol-aware** in that it understands request/response shapes for supported provider types, which it needs for token extraction, model name parsing, and similar work. It does **not** translate between formats. Cross-format fallback, for example an Anthropic-format request falling back to an OpenAI-compatible endpoint, is not supported in v1. Fallback is restricted to providers of the same `spec.type`; see [Fallback Logic](fallback.md). This keeps the gateway's request path simple and avoids the large, error-prone surface area of bidirectional API translation (streaming, tool use, multimodal content, and so on).
+The gateway is **protocol-aware** in that it understands request/response shapes for supported provider types, which it needs for token extraction, model name parsing, and similar work. It translates between formats in one situation only: a fallback candidate of a different `spec.type` (since v0.7.0), where the request is rewritten into the candidate's format before the first byte and the response, streaming or not, is rewritten back; see [Crossing formats](fallback.md#crossing-formats) for the pairs, the matrix, and what cannot cross. Everywhere else the request path is passthrough: the primary is always spoken to in the caller's format, and same-type fallbacks are too.
 
 ## Streaming Responses
 

@@ -97,8 +97,6 @@ they are likely to matter:
   [#124](https://github.com/win07xp/kaalm/issues/124).
 - **Agent Sandbox integration.** The `agentSandbox` runtime backend for
   code-executing agents.
-- **Cross-format provider fallback.** Translation between provider API formats
-  (for example Anthropic to OpenAI) so fallback chains can cross `spec.type`.
 - **Larger horizons.** Agent-to-agent orchestration, multi-cluster
   federation, and agent-aware scheduling (GPU awareness, priority, preemption).
 

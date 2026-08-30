@@ -139,14 +139,24 @@ in seconds, not at a period boundary.
 ```yaml
 fallback:
   - name: anthropic-backup
+  - name: openai-backup
+    modelMap:
+      claude-opus-4-6: gpt-5
+      claude-sonnet-4-6: gpt-5-mini
 ```
 
 If the provider is unreachable, times out, or returns a 5xx, the gateway
 tries the fallback chain in declared order, walking each fallback's own
 chain depth-first. The rules that surprise people:
 
-- Every provider in a chain must have the **same `spec.type`** as the
-  primary; there is no cross-format translation.
+- A fallback may have a different `spec.type` when the gateway can
+  translate between the two: `anthropic` and `openai` (or
+  `openai-compatible`) in either direction. Put a `modelMap` on that edge
+  naming the fallback's model for each of yours; the gateway rewrites the
+  request and the response at the crossing. `google-vertex` chains stay
+  same-type. A request using a feature the other format lacks (extended
+  thinking, `response_format`) skips that fallback with a
+  `FallbackIneligible` event on your provider.
 - The gateway-level depth cap (`gateway.maxFallbackDepth`, default 3) bounds
   the **total providers attempted per request, including the primary**, not
   the nesting depth.

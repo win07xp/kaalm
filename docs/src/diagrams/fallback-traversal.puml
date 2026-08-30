@@ -14,14 +14,14 @@ endif
 
 :visited.add(provider.name);
 
-if (**staticallyEligible**? (checks 1-3)\nsame spec.type / namespace in\nallowedNamespaces / model in models) then (no)
+if (**staticallyEligible**? (checks 1-3)\ncompatible format / namespace in\nallowedNamespaces / mapped model\nin models / translatable) then (no)
   :**emitFallbackIneligible**\n**(PRIMARY, provider, reason)**\nWarning event on the **primary**\nModelProvider, **not** on the\nprovider that failed the check;
   :return **statically_ineligible**\n**NO attempt slot consumed**;
   note right
-    Children of a type-mismatched provider are
-    **not** walked either: validation guarantees
-    same-type chains, so they stay reachable
-    through an eligible ancestor.
+    Children of a format-incompatible provider
+    are **not** walked either: validation
+    guarantees compatible chains, so they stay
+    reachable through an eligible ancestor.
   end note
   stop
 else (yes)
@@ -45,7 +45,7 @@ if (**budgetBlocked**(provider,\nnamespace)? (check 4)) then (yes)
     from a fallback provider.
   end note
 else (no)
-  :**forward**(provider, request);
+  :**forward**(provider, **translate**(request, provider))\nidentity unless the edge crosses formats;
   if (response.ok?) then (yes)
     :**return** response, attemptCount;
     stop
