@@ -78,7 +78,7 @@ func (h *fallbackHarness) provider(name, ptype string, fallbacks ...string) *kaa
 		},
 	}
 	for _, f := range fallbacks {
-		p.Spec.Fallback = append(p.Spec.Fallback, kaalmv1beta1.LocalObjectReference{Name: f})
+		p.Spec.Fallback = append(p.Spec.Fallback, kaalmv1beta1.FallbackReference{Name: f})
 	}
 	h.store.providers[name] = p
 	return p
@@ -135,7 +135,7 @@ func TestFallback_DepthCap(t *testing.T) {
 	h := newFallbackHarness()
 	// A deep chain; the cap of 3 stops after primary + 2.
 	p := h.provider("p0", "anthropic", "p1")
-	h.provider("p1", "anthropic", "p2").Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "p2"}}
+	h.provider("p1", "anthropic", "p2").Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "p2"}}
 	h.provider("p2", "anthropic", "p3")
 	h.provider("p3", "anthropic")
 	for _, n := range []string{"p0", "p1", "p2", "p3"} {

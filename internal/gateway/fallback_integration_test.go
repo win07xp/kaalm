@@ -83,7 +83,7 @@ func TestIntegration_FallbackChainWalksToBackup(t *testing.T) {
 	})
 	_ = backup
 	// Wire the fallback and allow the backup in the workload + class.
-	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "backup"}}
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
 	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
 		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "backup"}})
 	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
@@ -108,7 +108,7 @@ func TestIntegration_FallbackExhaustionMaps503(t *testing.T) {
 	h.seedRoute()
 	// Point both providers at a dead endpoint.
 	h.store.providers["prov"].Spec.Endpoint = "https://127.0.0.1:1"
-	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "backup"}}
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
 	h.store.providers["backup"] = &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1ObjectMeta("backup"),
 		Spec: kaalmv1beta1.ModelProviderSpec{

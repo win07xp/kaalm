@@ -516,7 +516,7 @@ func newFullModelProvider() *ModelProvider {
 				ClusterUSD: ptr("1000.00"),
 			},
 			RateLimits: ModelProviderRateLimits{RequestsPerMinute: 100, TokensPerMinute: 10000},
-			Fallback:   []LocalObjectReference{{Name: "fallback-provider"}},
+			Fallback:   []FallbackReference{{Name: "fallback-provider"}},
 			HealthCheck: &ModelProviderHealthCheck{
 				Enabled:         true,
 				IntervalSeconds: 30,

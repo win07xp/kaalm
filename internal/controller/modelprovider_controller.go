@@ -212,7 +212,7 @@ func (r *ModelProviderReconciler) validateFallback(
 ) []string {
 	var problems []string
 	visited := map[string]bool{primary.Name: true}
-	queue := append([]kaalmv1beta1.LocalObjectReference(nil), primary.Spec.Fallback...)
+	queue := append([]kaalmv1beta1.FallbackReference(nil), primary.Spec.Fallback...)
 	for len(queue) > 0 {
 		ref := queue[0]
 		queue = queue[1:]

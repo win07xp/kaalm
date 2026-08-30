@@ -299,10 +299,10 @@ func TestModelProvider_FallbackCycleIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-cyc-a-key")
 	mkSecret(t, "mp-cyc-b-key")
 	mkProvider(t, "mp-cyc-b", func(mp *kaalmv1beta1.ModelProvider) {
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "mp-cyc-a"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-cyc-a"}}
 	})
 	mkProvider(t, "mp-cyc-a", func(mp *kaalmv1beta1.ModelProvider) {
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "mp-cyc-b"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-cyc-b"}}
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
@@ -498,7 +498,7 @@ func TestModelProvider_FallbackMissingIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-fbmiss-key")
 	mkProvider(t, "mp-fbmiss", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-fbmiss-key", Key: "token"}
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "no-such-provider"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "no-such-provider"}}
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
@@ -517,7 +517,7 @@ func TestModelProvider_FallbackTypeMismatchIsNotReady(t *testing.T) {
 	mkProvider(t, "mp-fbtype-a", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Type = "openai"
 		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-fbtype-a-key", Key: "token"}
-		mp.Spec.Fallback = []kaalmv1beta1.LocalObjectReference{{Name: "mp-fbtype-b"}}
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-fbtype-b"}}
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
