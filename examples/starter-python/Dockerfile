@@ -8,7 +8,7 @@
 # BASE must name a published release. On an unreleased tree, build the base
 # image locally first (make python-image PYTHON_AGENT_IMG=kaalm-agent-python:dev)
 # and pass:  docker build --build-arg BASE=kaalm-agent-python:dev .
-ARG BASE=ghcr.io/win07xp/kaalm-agent-python:0.6.0
+ARG BASE=ghcr.io/win07xp/kaalm-agent-python:0.7.0
 FROM ${BASE}
 
 COPY handler.py /opt/kaalm/handler/handler.py

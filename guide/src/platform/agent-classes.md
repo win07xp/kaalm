@@ -79,8 +79,8 @@ spec:
     backend: pod
   image:
     allowedImages:
-      - ghcr.io/win07xp/kaalm-agent-go:0.6.0
-      - ghcr.io/win07xp/kaalm-agent-python:0.6.0
+      - ghcr.io/win07xp/kaalm-agent-go:0.7.0
+      - ghcr.io/win07xp/kaalm-agent-python:0.7.0
     allowHandlerMounts: true
   persistence:
     enabled: true

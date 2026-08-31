@@ -5,58 +5,53 @@ against it, and what comes next.
 
 ## Where the project stands
 
-**v0.6.0 shipped on 2026-08-24**
-([release](https://github.com/win07xp/kaalm/releases/tag/v0.6.0)). It installs
+**v0.7.0 shipped on 2026-08-30**
+([release](https://github.com/win07xp/kaalm/releases/tag/v0.7.0)). It installs
 with a single `helm install` from the published OCI chart, upgrades in place
 from the previous release with two documented commands, and every acceptance
-scenario (S1 to S21) is proven on a real cluster.
+scenario (S1 to S24) is proven on a real cluster.
 
 The operator is feature-complete against the v1 design: all six CRDs, the
 reconciling controller (lifecycle, hibernation and wake, budgets, health probes,
 finalizers), the two-listener gateway (LLM proxy with credential isolation,
-budgets, rate limits, and fallback trees; the MCP tool broker; user gateway
-with sync and async webhooks), the optional operator console, the Helm chart
-with cert-manager TLS wiring, the runtime contract with published base images
-and starter templates, and this book.
+budgets, rate limits, and fallback trees that cross API formats; the MCP tool
+broker; user gateway with webhook, Discord, and WhatsApp channels), the
+optional operator console, the Helm chart with cert-manager TLS wiring, the
+runtime contract with published base images and starter templates, and this
+book.
 
-What v0.6.0 added on top of v0.5.0 (the "API graduation" milestone):
+What v0.7.0 added on top of v0.6.0 (the "Reach" milestone):
 
-- **The graduated API.** `v1beta1` is the hub and storage version for all six
-  CRDs, with a schema deliberately identical to `v1alpha1` (the field-change
-  audit deferred every lossy candidate to v1). `v1alpha1` stays served,
-  deprecated with a per-kind warning, and converted in both directions by a
-  conversion webhook every controller replica serves; round-trip fuzz tests
-  enforce wire-form identity for every kind in both directions, so a field
-  added to one version and not the other fails the suite. The design is
-  [API Versioning and Deprecation](operations/api-versioning.md), which also
-  carries the written deprecation policy: `v1alpha1` is served at least
-  through v1.0.0, and its removal is announced a release ahead.
-- **Storage-version migration.** On its first start after an upgrade, the
-  leader rewrites every stored object at `v1beta1` and trims each CRD's
-  `storedVersions`, so the graduation finishes without manual steps; the
-  counter `kaalm_storage_migrated_objects_total` and one log line per kind
-  record it.
-- **The upgrade e2e (S21).** A suite that installs the previous *released*
-  chart, loads it with `v1alpha1` workloads, runs the two documented upgrade
-  steps to the current build, and proves nothing was recreated and nothing
-  lost: same Pod, state intact on the volume, a hibernated agent that wakes
-  on its next message, finished task status preserved, `storedVersions`
-  migrated. It runs on release tags and on PRs that touch the API surface,
-  and it is the release-readiness gate before every tag. The user-facing
-  procedure is the guide's
-  [Upgrading Kaalm](https://github.com/win07xp/kaalm/blob/main/guide/src/getting-started/upgrading.md) page.
-- **MCP 2026-07-28, dual-era.** The tool plane speaks both the stateless
-  2026-07-28 revision and the 2025 handshake era for the length of the
-  upstream deprecation window: the ToolProvider probe negotiates per server
-  (`server/discover`, with `initialize` fallback) and records
-  `status.mcpRevision`; the broker enforces per request (mirrored-header
-  validation with the revision's own `HeaderMismatch` rejection, the
-  `cacheScope: private` rewrite on grant-filtered lists, session ownership
-  scoped to the legacy era). The design is the tool-plane chapter's
-  [Protocol Revisions](gateways/tool-plane.md#protocol-revisions) section.
+- **Platform channel adapters.** AgentChannel grows two types beside the
+  generic webhook: `discord` (the Interactions endpoint: Ed25519-signed
+  slash commands in, replies through the interaction's follow-up webhook,
+  with an optional bot-token fallback past the token window) and `whatsapp`
+  (the Cloud API webhook: the verification handshake, HMAC-signed events in,
+  replies through the Graph API as the business number). Both are inbound
+  HTTP; nothing holds a persistent connection, which is what lets any
+  gateway replica take any event. The design is the AgentChannel chapter's
+  [Platform types](resources/agentchannel.md#platform-types) and
+  [Platform Adapters](gateways/user/platform-adapters.md); S22 and S23
+  prove them against mock platforms.
+- **Cross-format fallback.** A fallback edge may cross API formats:
+  `anthropic` against `openai` or `openai-compatible`, in either direction,
+  with a `modelMap` on the edge naming the model the fallback serves. The
+  gateway rewrites the request before the first byte and the response,
+  streaming or not, back into the caller's format; a request carrying a
+  feature the other format cannot express skips that candidate with an
+  event naming the feature. The design is
+  [Crossing formats](gateways/llm/fallback.md#crossing-formats); S24 proves
+  both directions against the mock provider.
+- **Two gaps the new scenarios exposed, fixed.** The channel health poller
+  existed in the design and the reducer but was never wired into the
+  manager, so `PlatformConnected` had never been written on a real cluster;
+  and the gateway's ClusterRole never granted `events`, so its runtime
+  warnings (`FallbackIneligible`, `CredentialsInvalid`, `CallbackRejected`)
+  were silently rejected. Both work now, and both are the kind of finding
+  the acceptance scenarios exist to force.
 
 Quality bar at release: 87% project test coverage enforced by an 85% CI gate,
-envtest suites against a real apiserver, a k3d end-to-end suite (64 specs)
+envtest suites against a real apiserver, a k3d end-to-end suite (76 specs)
 that is green both locally and in GitHub Actions, and the 6-spec upgrade
 suite that gates every release tag.
 
@@ -72,17 +67,11 @@ Two honest caveats:
 
 ## Next
 
-The current milestone is **v0.7.0, "Reach"** (tracking issue
-[#50](https://github.com/win07xp/kaalm/issues/50)): Discord and WhatsApp
-channel adapters for the user gateway, and cross-format provider fallback so
-fallback chains can cross `spec.type`. Behind it stands **v1.0.0, "The
-complete release"** ([#51](https://github.com/win07xp/kaalm/issues/51)): the
-security pass, the scale proof, the Agent Sandbox decision, and the docs
-audit.
+The next milestone is **v1.0.0, "The complete release"** (tracking issue
+[#51](https://github.com/win07xp/kaalm/issues/51)): the security pass, the
+scale proof, the Agent Sandbox decision, and the docs audit.
 
-Beyond v0.6.0, the milestone runway to v1.0.0 is laid out in the
-[GitHub milestones](https://github.com/win07xp/kaalm/milestones); items below
-remain the unscheduled backlog.
+Beyond v0.7.0, items below remain the unscheduled backlog.
 
 ## Beyond
 

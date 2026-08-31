@@ -30,9 +30,15 @@ record, task and pod both, mirroring Job semantics as the design book
 always said; the page now shows both No-resources outputs from the walk.
 The confirmation walk against the published 0.6.0 artifacts (the book's
 exact install line, images pulled from ghcr), on 2026-08-25, found zero
-drift, the corrected TTL section included.
+drift, the corrected TTL section included. The 0.7.0 pre-release walk
+(2026-08-30, issue #130) ran against locally built 0.7.0-tagged images and
+the local chart standing in for the published one: every walked page
+matched, byte-exact where exact values are shown, the TTL cleanup and the
+wake-with-memory finale included, and nothing the v0.7.0 features changed
+(platform channels, cross-format fallback, the newly wired
+PlatformConnected condition) touches any output this book shows.
 
-The install is pinned to `--version 0.6.0` on purpose. The pin is not really
+The install is pinned to `--version 0.7.0` on purpose. The pin is not really
 about the install line: it is what makes the later chapters' output true, since
 a reader on a different version may see different columns or phrasing. When the
 pin moves, re-walk the whole book rather than editing the version string.
