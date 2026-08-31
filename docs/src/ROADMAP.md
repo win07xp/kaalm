@@ -5,7 +5,7 @@ against it, and what comes next.
 
 ## Where the project stands
 
-**v0.7.0 shipped on 2026-08-30**
+**v0.7.0 shipped on 2026-08-31**
 ([release](https://github.com/win07xp/kaalm/releases/tag/v0.7.0)). It installs
 with a single `helm install` from the published OCI chart, upgrades in place
 from the previous release with two documented commands, and every acceptance
