@@ -310,7 +310,7 @@ dashboards-verify: ## Verify config/grafana against the live e2e cluster (run af
 
 # The released chart the upgrade e2e starts from. Release readiness (#115)
 # bumps this to the newly released version after each release.
-PREV_CHART_VERSION ?= 0.6.0
+PREV_CHART_VERSION ?= 0.7.0
 
 .PHONY: upgrade-images
 upgrade-images: ## Build and import only what the upgrade e2e needs locally: the controller and gateway. The pre-upgrade world runs published $(PREV_CHART_VERSION) artifacts, and the upgrade recreates no workload Pods.

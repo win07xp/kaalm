@@ -36,7 +36,10 @@ the local chart standing in for the published one: every walked page
 matched, byte-exact where exact values are shown, the TTL cleanup and the
 wake-with-memory finale included, and nothing the v0.7.0 features changed
 (platform channels, cross-format fallback, the newly wired
-PlatformConnected condition) touches any output this book shows.
+PlatformConnected condition) touches any output this book shows. The
+confirmation walk against the published 0.7.0 artifacts (the book's exact
+install line, chart and images pulled from ghcr), on 2026-08-31, found
+zero drift, the wake-with-memory finale included.
 
 The install is pinned to `--version 0.7.0` on purpose. The pin is not really
 about the install line: it is what makes the later chapters' output true, since
