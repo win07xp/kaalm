@@ -1,5 +1,5 @@
 @startuml trust-chain
-' The Kaalm trust chain: one CA, the namespace its Secret must live in, and the four leaf families it signs.
+' The Kaalm trust chain: one CA, the namespace its Secret must live in, and the leaf families it signs.
 ' Source of truth: docs/src/security/tls.md
 !include _style.puml
 
@@ -26,6 +26,7 @@ rectangle "namespace: **cert-manager**\n(certManager.clusterResourceNamespace)" 
 rectangle "namespace: **kaalm-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
   rectangle "**Certificate** kaalm-gateway-tls //chart//\nSAN: kaalm-gateway.kaalm-system\n.svc.cluster.local, .svc, localhost\n(+ gateway.externalHostnames)\nusages: server auth, client auth" as gwtls #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
   rectangle "**Certificate** kaalm-controller-tls //chart//\nSAN: kaalm-controller.kaalm-system\n.svc.cluster.local, .svc\nusages: server auth, client auth" as ctrltls #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  rectangle "**Certificate** kaalm-console-tls\n//chart, console enabled only//\nSAN: kaalm-console.kaalm-system\n.svc.cluster.local, .svc, localhost\nusages: server auth, client auth" as consoletls #back:F5F5F5;line:9E9E9E;line.dashed;text:555555
 }
 
 ' ---------- a user namespace ----------
@@ -40,9 +41,10 @@ selfsigned -[#9E9E9E,bold]-> cacert : issuerRef
 cacert -[#7a3f00,bold]-> casecret : cert-manager writes
 casecret -[#B71C1C,bold]-> caissuer : resolved **only** in the\n--cluster-resource-namespace
 
-' All four set issuerRef: { name: kaalm-ca-issuer, kind: ClusterIssuer } (see legend).
+' All the leaves set issuerRef: { name: kaalm-ca-issuer, kind: ClusterIssuer } (see legend).
 caissuer -[#1B5E20,bold]-> gwtls : signs
 caissuer -[#0D47A1,bold]-> ctrltls
+caissuer -[#9E9E9E,dashed]-> consoletls
 caissuer -[#4A148C,bold]-> agenttls
 caissuer -[#4A148C,bold]-> tasktls
 
@@ -51,7 +53,8 @@ casecret -[#7a3f00]-> bundle : source, read only from\n--trust-namespace
 bundle -[#7a3f00,bold]-> cacm : projects into every\nnon-system namespace
 
 legend bottom
-  All four leaf families set issuerRef: { name: kaalm-ca-issuer, kind: ClusterIssuer }. Neither the
+  Every leaf family sets issuerRef: { name: kaalm-ca-issuer, kind: ClusterIssuer }. The console leaf is
+  dashed because only a console-enabled install creates it (the console is off by default). Neither the
   gateway nor the controller ever reads the CA Secret: trust arrives only as the projected ConfigMap.
   ====
   **Namespace placement is the point.** One Secret, one namespace, two readers: the CA ClusterIssuer
@@ -69,6 +72,7 @@ endlegend
 band -[hidden]down- nscm
 selfsigned -[hidden]right- caissuer
 gwtls -[hidden]right- ctrltls
+gwtls -[hidden]down- consoletls
 agenttls -[hidden]right- cacm
 cacm -[hidden]right- tasktls
 @enduml

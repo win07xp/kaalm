@@ -1,5 +1,6 @@
 @startuml trust-boundaries
-' The eight traffic classes, and which of them cross Kaalm's trust boundary.
+' The traffic classes, and which of them cross Kaalm's trust boundary.
+' Classes 10 (console) and 11 (OTLP) are optional and named in the legend, not drawn.
 ' Source of truth: docs/src/security/model.md
 !include _style.puml
 
@@ -50,12 +51,16 @@ GW -[#B71C1C,bold]-> LLM : **2. LLM Gateway to LLM Provider**\nprompts and compl
 
 GW -[#B71C1C,bold]-> CB : **5. User Gateway to callbackUrl**\nasync response and error payloads\nHTTPS, every POST signed (rule 25)\n**LEAVES THE BOUNDARY, and ends at**\n**a receiver Kaalm does not trust**
 
+GW -[#B71C1C,bold]-> PLAT : **9. User Gateway to**\n**platform reply API**\nagent replies, the channel's\nplatform credential,\noperator-set apiBaseUrl\n**LEAVES THE BOUNDARY**
+
 PLAT -[hidden]down- CB
 
 legend bottom
-  **Exactly two of the eight classes leave Kaalm's trust boundary: 2 (provider egress) and 5 (callbackUrl).**
-  Both are outbound from the gateway, both are always HTTPS, and both carry prompt or reply content. Class 3
-  crosses the boundary inbound. The other five never leave the cluster at all.
+  **Exactly three classes leave Kaalm's trust boundary: 2 (provider egress), 5 (callbackUrl), and 9 (platform replies).**
+  All three are outbound from the gateway and carry prompt or reply content. Class 3 crosses the boundary
+  inbound. Classes 1, 4, 6, 7 and 8 never leave the cluster at all. Two optional classes are not drawn:
+  10, the console (fleet reads and test-chat, mTLS inside kaalm-system), and 11, the OTLP trace exporter
+  (span metadata only, never prompt content, endpoint operator-set).
   ====
   **Class 5 is the one to reason about hardest.** Its payloads carry agent replies, which may contain PII, and its
   receiver is chosen by the channel owner rather than by Kaalm, so it terminates outside the trust boundary by
