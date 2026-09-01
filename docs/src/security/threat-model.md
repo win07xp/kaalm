@@ -1,6 +1,6 @@
 # Threat Model
 
-This page enumerates the threats Kaalm defends against, the threats it deliberately does **not** defend against, and the reasoning behind each boundary. It is organised into nine themes. Every threat has exactly one row; where a mitigation needs more than a sentence, the row states the decision and a note below the table carries the full argument.
+This page enumerates the threats Kaalm defends against, the threats it deliberately does **not** defend against, and the reasoning behind each boundary. It is organised into ten themes. Every threat has exactly one row; where a mitigation needs more than a sentence, the row states the decision and a note below the table carries the full argument.
 
 Read [Trust Model](model.md#trust-model) first: several rows below resolve to "out of scope" purely because of where the trust boundary sits. A threat being out of scope is a design decision, not an oversight.
 
@@ -52,6 +52,7 @@ These rows ask what an attacker gains by taking over Kaalm's own control-plane c
 | Compromised operator reads credential Secrets | No cluster-wide Secret access; standing read scoped to `kaalm-system`, which does contain every provider key. See note below. |
 | Compromised gateway reads all LLM credentials | Gateway Secret access scoped to `kaalm-system`; gateway image should be signed and verified; restrict who can update gateway Deployment |
 | Compromised gateway writes malicious ConfigMaps to user namespaces | Gateway has **no `create` verb** on user-namespace ConfigMaps. See note below. |
+| Untrusted workload sends a hostile or oversized request body to exploit the gateway's parsers (JSON decoding; since v0.7.0 the cross-format translator) | Every listener bounds its reads before parsing: the LLM proxy rejects oversized bodies with `413` at its configured cap, and the message, MCP, and platform paths carry their own caps. Bodies decode with the standard library into typed structures; an unparseable body fails closed with `400` before any provider or agent is contacted. The translator adds no parsing trust: it rewrites between two shapes the proxy has already decoded, and a request it cannot express in the target format makes that candidate ineligible rather than producing a partial translation. Prompt bodies are never logged in the default build ([PII safety](../operations/observability.md#pii-safety)). |
 
 ### Notes
 
@@ -68,7 +69,7 @@ Budgets are guardrails by default, not hard caps; providers that need a cap opt 
 | Threat | Mitigation |
 |---|---|
 | One tenant exhausts another tenant's budget via shared provider | Per-namespace spend accounting; `allowedNamespaces` restricts access; budgets are soft limits with bounded overspend, or hard-capped when the provider opts in |
-| Agent makes requests to unauthorized provider | Gateway validates model against ModelProvider.models and namespace against allowedNamespaces |
+| Agent makes requests to unauthorized provider | Gateway validates model against ModelProvider.models and namespace against allowedNamespaces. Every fallback candidate is re-validated the same way during the walk, including a cross-format candidate's mapped model against that candidate's own catalog ([rules 12 and 41](../resources/validation-and-defaulting.md#cross-resource-validation)) |
 | Budget guardrails exceeded under high concurrency | Soft mode documents its bounded overspend; hard enforcement bounds the crossing to the stated in-flight guarantee; provider account limits remain defense in depth |
 | Gateway-only tenant uses a provider their AgentClass would have denied in the mTLS tier | **Expected behavior, not a vulnerability.** See note below. |
 
@@ -85,7 +86,7 @@ Inbound webhooks come from third parties that follow their own signing conventio
 | Malicious message from channel platform | Webhook adapter authenticates inbound events (bearer token, HMAC signature) before processing |
 | Captured inbound webhook is replayed against the gateway | Not preventable at the gateway: inbound HMAC is body-only with no timestamp. Cost bounded by budgets; side-effect dedup is the agent's job. See note below. |
 | Forged Discord interaction or WhatsApp event | The platform adapters verify the platform's own signature before anything else: Ed25519 over timestamp and body for Discord (a timestamp more than 300s off is rejected, which bounds replay on that surface), HMAC-SHA256 over the body with the app secret for WhatsApp (body-only, the same replay posture as the generic webhook). A verification handshake is authenticated too. See [The platform adapters](../gateways/user/platform-adapters.md#inbound). |
-| Tenant points a platform channel's reply at a host of their choosing, carrying the channel's bearer token | Not expressible: the platform API base URLs are gateway-level Helm values (`gateway.platforms.<type>.apiBaseUrl`), not channel fields. A tenant's Secret holds only that tenant's platform credentials, and the gateway only ever presents them to the operator-configured host. |
+| Tenant points a platform channel's reply at a host of their choosing, carrying the channel's bearer token | Not expressible: the platform API base URLs are gateway-level Helm values (`gateway.platforms.<type>.apiBaseUrl`), not channel fields. A tenant's Secret holds only that tenant's platform credentials, and the gateway only ever presents them to the operator-configured host. See note below. |
 | Caller with channel A's credentials fetches channel B's async response by supplying channel B's `requestId` to the poll endpoint | Poll endpoint asserts the stored response's channel labels match the authenticated AgentChannel; mismatch returns `404 Not Found`. See note below. |
 | Developer uses `AgentChannel.spec.webhook.callbackUrl` as SSRF against internal cluster services (e.g., `kubernetes-dashboard.kube-system`, cloud metadata at 169.254.169.254) | `https://` plus internal-IP-range denial enforced at admission, re-checked and IP-pinned on every delivery. See note below. |
 | Third party forges a callback POST to a developer's `callbackUrl` | The gateway signs every callback POST using `AgentChannel.spec.webhook.callbackAuth`, which CRD CEL makes mandatory whenever `callbackUrl` is set. See note below. |
@@ -95,6 +96,8 @@ Inbound webhooks come from third parties that follow their own signing conventio
 **Captured inbound webhook is replayed.** Inbound HMAC is body-only with no timestamp (see [Inbound webhook auth](../gateways/api/channel-webhook.md)): the deliberate cost of supporting arbitrary third-party senders that follow their own signing conventions (GitHub-style body-only HMAC, etc.). The gateway therefore cannot reject replays of a captured `(body, HMAC)` pair until the secret is rotated.
 
 Cost replay is bounded by per-namespace LLM budgets (see [Multi-tenancy](../concepts/tenancy-and-tiers.md#multi-tenancy)). Side-effect replay is the agent's responsibility: agents performing non-idempotent inbound actions must dedup on a caller-supplied idempotency key or content hash. The gateway-side `messageId` dedup ([The Runtime Contract item 7](../runtime/contract.md)) addresses gateway-retry duplicates only, not external replay.
+
+**Why the platform reply path has no deny-range machinery.** The SSRF defenses on `callbackUrl` (deny ranges, pre-dial re-resolution, IP pinning) exist because the URL is developer-supplied. A platform base URL is operator-supplied, set at install time in the same trust tier as a ModelProvider `baseUrl` or an MCP upstream endpoint; defending the gateway against its own operator is out of scope by [the trust model](model.md#trust-model). The value also accepts `http://` for the same reason: the e2e mock platforms stand in at install time, and the operator owns the consequence.
 
 **Cross-channel async response fetch.** The poll endpoint authenticates the caller against the AgentChannel named by the `channelPath` query parameter, then asserts that the stored response's `kaalm.io/channel-namespace` / `kaalm.io/channel-name` labels match that same AgentChannel before returning the payload. `requestId` values are UUIDs but not secrets; the label check prevents cross-channel data leakage. Mismatches return `404 Not Found`, indistinguishable on the wire from "unknown `requestId`", to avoid confirming the existence of a cross-channel response (the gateway logs the mismatch with `reason=ChannelMismatch` for operator debugging). See [Async Webhook Response poll semantics](../gateways/api/async-responses.md).
 
@@ -146,6 +149,16 @@ Certificates signed by `kaalm-ca` are not interchangeable. Authorization on inte
 ### Notes
 
 **Forged channel messages from a compromised Pod.** The agent's `POST /v1/message` listener requires a client certificate whose SAN matches the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` / `.svc`). A compromised non-gateway Pod cannot present such a cert (the `kaalm-ca` private key is not reachable from any non-gateway Pod), so even if it bypasses or piggybacks on a misconfigured per-Agent NetworkPolicy, the request is rejected at the handler: the agent's listener accepts the handshake without a client cert (`VerifyClientCertIfGiven`, so kubelet probes on the shared port keep working) and the `/v1/message` handler then returns `401` for a missing cert or `403` for a non-gateway SAN. NetworkPolicy is the first layer; the agent-side per-path mTLS check is the second. See [The Runtime Contract](../runtime/contract.md) bullet 4 and [§ In-cluster TLS](tls.md#in-cluster-tls).
+
+## The Console
+
+The [console](../console/overview.md) is optional and off by default. When enabled it is a listener with human callers, so its threats are session-shaped rather than workload-shaped.
+
+| Threat | Mitigation |
+|---|---|
+| Stolen or replayed console session cookie | The cookie is `Secure`, `HttpOnly`, `SameSite=Strict`; sessions live in console memory and expire with the pasted token or after 24 hours, whichever comes first. A console restart invalidates every session. |
+| Caller uses the console to view namespaces their token does not grant | The console fixes the caller's identity at login with `TokenReview` and gates every namespace-scoped read with a `SubjectAccessReview` for that identity. An unauthorized token sees an empty namespace list, `403` on direct access, and `401` when invalid ([S19](../appendix/scenarios.md#s19-see-the-fleet-without-kubectl)). |
+| Compromised console | The console's ServiceAccount reads CRD status and creates `TokenReview`/`SubjectAccessReview`, and holds nothing else: no Secret access anywhere, so no credential can leak through it. The real capability gained is the console SAN: the gateway authorizes it on `POST /v1/test-chat` and `GET /v1/spend`, so a compromised console can wake agents, deliver messages to them (spending their namespaces' budgets), and read spend figures. Test-chat deliveries carry a `/console/{namespace}/{agentName}` channel origin, so they are distinguishable in the gateway's delivery log and in session identity. The component is stateless; the mitigation posture is the same as for the other `kaalm-system` components: restrict and audit access to the namespace, and leave the console disabled where it is not used. |
 
 ## Transport and PKI Dependencies
 
