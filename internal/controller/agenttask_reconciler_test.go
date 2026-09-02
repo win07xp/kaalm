@@ -112,7 +112,20 @@ func provisionRunningTask(t *testing.T, name, className string, mutate func(*kaa
 	})
 	pod := taskPod(t, name)
 	markPodReady(t, pod)
-	expectTaskPhase(t, name, kaalmv1beta1.TaskRunning)
+	// StartTime is written in the same status update that stamps Running and
+	// is never set anywhere else, so it is the durable witness of the
+	// transition: a task with a short completion timeout can settle before a
+	// poll samples the Running phase on a loaded machine (#145).
+	eventually(t, func() error {
+		var got kaalmv1beta1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
+			return err
+		}
+		if got.Status.Phase == kaalmv1beta1.TaskRunning || got.Status.StartTime != nil {
+			return nil
+		}
+		return errString("phase=" + string(got.Status.Phase) + ", startTime unset: not yet Running")
+	})
 	return taskPod(t, name)
 }
 
