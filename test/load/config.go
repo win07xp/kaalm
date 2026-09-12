@@ -109,7 +109,7 @@ const (
 	providerHard = "load-hard"
 )
 
-var allPhases = []string{phaseGateway, phaseRamp, phaseHold, phaseTeardown, phaseChurn, phaseTasks, phaseRestart}
+var allPhases = []string{phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks}
 
 func parseRunFlags(args []string) (config, error) {
 	var c config

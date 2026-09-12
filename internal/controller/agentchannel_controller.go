@@ -29,6 +29,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -120,13 +121,14 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	statusBefore := channel.Status.DeepCopy()
 	channel.Status.ObservedGeneration = channel.Generation
 
 	// The system-namespace guard runs first, as on the workload reconcilers.
 	if channel.Namespace == r.OperatorNamespace {
 		r.setChannelReady(&channel, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("AgentChannels may not live in the operator namespace %q", r.OperatorNamespace))
-		return ctrl.Result{}, r.Status().Update(ctx, &channel)
+		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
 	}
 
 	// Step 1: resolve agentRef (an Agent, never an AgentTask).
@@ -139,7 +141,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
 		r.setChannelReady(&channel, false, kaalmv1beta1.ReasonAgentNotFound,
 			fmt.Sprintf("Agent %q not found in namespace %q", channel.Spec.AgentRef.Name, channel.Namespace))
-		return ctrl.Result{}, r.Status().Update(ctx, &channel)
+		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
 	}
 
 	// Steps 2 and 3 validation chain; the first failure reports and stops.
@@ -149,7 +151,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// Re-check on the same cadence as a healthy channel: the reconciler
 		// watches no Secrets (its Secret access is scoped per channel), so a
 		// credential fixed in place is only ever noticed by a later pass.
-		return ctrl.Result{RequeueAfter: time.Minute}, r.Status().Update(ctx, &channel)
+		return ctrl.Result{RequeueAfter: time.Minute}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
 	}
 	r.setChannelReady(&channel, true, kaalmv1beta1.ReasonAgentReachable, "channel is valid")
 
@@ -166,7 +168,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	if err := r.Status().Update(ctx, &channel); err != nil {
+	if err := r.updateStatusIfChanged(ctx, &channel, statusBefore); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("reconciled AgentChannel", "phase", channel.Status.Phase)
@@ -327,11 +329,40 @@ func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, chann
 		if err := controllerutil.SetControllerReference(channel, rb, r.Scheme()); err != nil {
 			return err
 		}
-		if err := r.Create(ctx, rb); err != nil && !apierrors.IsAlreadyExists(err) {
+		// Read from the informer before writing: a create that is expected
+		// to fail AlreadyExists is still a POST the apiserver has to reject,
+		// and the reconciler runs every minute for every channel (#174).
+		var currentRB rbacv1.RoleBinding
+		err := r.Get(ctx, types.NamespacedName{Namespace: rb.Namespace, Name: rb.Name}, &currentRB)
+		switch {
+		case apierrors.IsNotFound(err):
+			if err := r.Create(ctx, rb); err != nil && !apierrors.IsAlreadyExists(err) {
+				return err
+			}
+		case err != nil:
 			return err
+		case currentRB.RoleRef != rb.RoleRef || !equality.Semantic.DeepEqual(currentRB.Subjects, rb.Subjects):
+			currentRB.RoleRef = rb.RoleRef
+			currentRB.Subjects = rb.Subjects
+			if err := r.Update(ctx, &currentRB); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// updateStatusIfChanged writes the channel's status only when a pass changed
+// it. The reconciler requeues every channel every minute, and a status write
+// per pass was the largest single write the controller made under load,
+// with nothing in it new (#174).
+func (r *AgentChannelReconciler) updateStatusIfChanged(
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, before *kaalmv1beta1.AgentChannelStatus,
+) error {
+	if equality.Semantic.DeepEqual(before, &channel.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, channel)
 }
 
 func equalStrings(a, b []string) bool {

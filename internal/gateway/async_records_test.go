@@ -195,3 +195,25 @@ func TestKubeAsyncRecords_ErrorPaths(t *testing.T) {
 		t.Error("PatchMailbox must surface errors")
 	}
 }
+
+func TestKubeAsyncRecords_CountPendingFromTheInformer(t *testing.T) {
+	labeled := func(name, channel string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "kaalm-system",
+			Labels: map[string]string{
+				kaalmv1beta1.LabelChannelNamespace: nsTeamA, kaalmv1beta1.LabelChannelName: channel,
+			},
+		}}
+	}
+	reader := kubeClientWith(t, labeled("kaalm-async-a", "ch"), labeled("kaalm-async-b", "ch"), labeled("kaalm-async-c", "other"))
+	// A clientset with nothing in it: the count must come from the reader.
+	recs := &KubeAsyncRecords{Client: k8sfake.NewSimpleClientset(), OperatorNamespace: "kaalm-system", Reader: reader}
+	n, err := recs.CountPending(context.Background(), nsTeamA, "ch")
+	if err != nil || n != 2 {
+		t.Fatalf("CountPending from the informer = %d err=%v, want 2", n, err)
+	}
+	recs.Reader = nil
+	if n, err := recs.CountPending(context.Background(), nsTeamA, "ch"); err != nil || n != 0 {
+		t.Fatalf("CountPending without a reader = %d err=%v, want the clientset's 0", n, err)
+	}
+}

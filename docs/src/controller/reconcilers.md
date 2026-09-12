@@ -307,7 +307,7 @@ Reconciliation steps:
 5. **Maintain `status.phase`** by reducing the referenced Agent's phase to a Channel phase. See [Channel phase reduction](#channel-phase-reduction) below.
 6. **Prune expired async response ConfigMaps.** See [Async ConfigMap pruning](#async-configmap-pruning) below.
 
-A validation failure requeues after a minute, the same cadence as a healthy channel: the reconciler watches no Secrets (its Secret access is scoped per channel), so a credential fixed in place is only ever noticed by a later pass.
+A validation failure requeues after a minute, the same cadence as a healthy channel: the reconciler watches no Secrets (its Secret access is scoped per channel), so a credential fixed in place is only ever noticed by a later pass. A pass writes status only when it changed something: every channel reconciles at least once a minute and on every change to its Agent, and a write per pass would be the controller's largest write with nothing new in it.
 
 The AgentChannelReconciler does not own Pod resources. The gateway watches `AgentChannel` resources directly, reads the referenced credentials from user namespaces, and manages the live platform connections; see [User Gateway Request Flow](../gateways/user/overview.md#request-flow). The reconciler's role is validation and status reporting.
 
@@ -325,7 +325,7 @@ The scoped Secrets are:
 
 When both references point to the same Secret, `resourceNames` lists it once; when they differ, the list contains both.
 
-The Role is bound by two RoleBindings: one to the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) and one to the operator ServiceAccount (`kaalm-system/kaalm-controller`). If the inbound auth type, the outbound auth type, or any Secret reference has changed since the last reconcile (detectable by comparing the current Role's `resourceNames` against the desired set), the reconciler updates the Role to the new `resourceNames` so neither the gateway nor the operator retains read access to a Secret either no longer needs. The Role name is deterministic so successive reconciles are idempotent.
+The Role is bound by two RoleBindings: one to the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) and one to the operator ServiceAccount (`kaalm-system/kaalm-controller`). If the inbound auth type, the outbound auth type, or any Secret reference has changed since the last reconcile (detectable by comparing the current Role's `resourceNames` against the desired set), the reconciler updates the Role to the new `resourceNames` so neither the gateway nor the operator retains read access to a Secret either no longer needs. The Role name is deterministic so successive reconciles are idempotent. Both bindings, like the Role, are read from the informer before any write, so a settled channel costs the apiserver nothing per pass.
 
 After the Role exists, the reconciler reads each referenced Secret via this scoped path and validates:
 

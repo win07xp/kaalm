@@ -226,7 +226,7 @@ func main() {
 		Reader: cl.GetClient(), APIReader: cl.GetAPIReader(), OperatorNamespace: operatorNamespace,
 	}
 	tokens := gateway.NewTokenAuthenticator(&gateway.KubeTokenReviewer{Client: clientset})
-	async := &gateway.KubeAsyncRecords{Client: clientset, OperatorNamespace: operatorNamespace}
+	async := &gateway.KubeAsyncRecords{Client: clientset, OperatorNamespace: operatorNamespace, Reader: cl.GetClient()}
 	server := gateway.NewServer(gateway.Config{
 		OperatorNamespace:        operatorNamespace,
 		ListenAddr:               listenAddr,

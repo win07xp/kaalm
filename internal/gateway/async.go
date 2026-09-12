@@ -37,6 +37,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
@@ -67,6 +69,11 @@ type AsyncRecords interface {
 type KubeAsyncRecords struct {
 	Client            kubernetes.Interface
 	OperatorNamespace string
+	// Reader counts pending records from the gateway's ConfigMap informer,
+	// as the AgentChannel resource page specifies; nil (tests) falls back
+	// to a live List through Client. Under the load baseline the live List
+	// was one apiserver LIST per async message (#174).
+	Reader client.Reader
 }
 
 func asyncCMName(requestID string) string { return "kaalm-async-" + requestID }
@@ -125,8 +132,23 @@ func (k *KubeAsyncRecords) Get(ctx context.Context, requestID string) (*AsyncRec
 	return rec, true, nil
 }
 
-// CountPending counts a channel's live records for maxPendingAsyncResponses.
+// CountPending counts a channel's live records for maxPendingAsyncResponses,
+// from the informer when a Reader is wired. The count is approximate under a
+// concurrent burst either way: a live List and a create are not atomic any
+// more than an informer read and a create are.
 func (k *KubeAsyncRecords) CountPending(ctx context.Context, channelNamespace, channelName string) (int, error) {
+	labels := map[string]string{
+		kaalmv1beta1.LabelChannelNamespace: channelNamespace,
+		kaalmv1beta1.LabelChannelName:      channelName,
+	}
+	if k.Reader != nil {
+		var cms corev1.ConfigMapList
+		if err := k.Reader.List(ctx, &cms, client.InNamespace(k.OperatorNamespace),
+			client.MatchingLabels(labels), client.UnsafeDisableDeepCopy); err != nil {
+			return 0, err
+		}
+		return len(cms.Items), nil
+	}
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		kaalmv1beta1.LabelChannelNamespace, channelNamespace,
 		kaalmv1beta1.LabelChannelName, channelName)
