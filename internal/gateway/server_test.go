@@ -54,7 +54,7 @@ type testCA struct {
 	pool *x509.CertPool
 }
 
-func newTestCA(t *testing.T) *testCA {
+func newTestCA(t testing.TB) *testCA {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -80,7 +80,7 @@ func newTestCA(t *testing.T) *testCA {
 }
 
 // issue signs a leaf with the given DNS SANs and returns a tls.Certificate.
-func (ca *testCA) issue(t *testing.T, sans ...string) tls.Certificate {
+func (ca *testCA) issue(t testing.TB, sans ...string) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -232,7 +232,7 @@ type capturedRequest struct {
 
 // newHarness starts a real TLS gateway listener and a TLS upstream. upstreamFn
 // handles provider requests after capture.
-func newHarness(t *testing.T, upstreamFn http.HandlerFunc) *harness {
+func newHarness(t testing.TB, upstreamFn http.HandlerFunc) *harness {
 	t.Helper()
 	h := &harness{ca: newTestCA(t), store: newFakeStore(), spend: NewMemorySpend(), upreqs: make(chan *capturedRequest, 8)}
 
@@ -322,7 +322,7 @@ func (h *harness) seedRoute() {
 	}
 }
 
-func postJSON(t *testing.T, c *http.Client, url string, body map[string]any, headers map[string]string) *http.Response {
+func postJSON(t testing.TB, c *http.Client, url string, body map[string]any, headers map[string]string) *http.Response {
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
@@ -352,7 +352,7 @@ func errType(t *testing.T, resp *http.Response) string {
 	return envelope.Error.Type
 }
 
-func agentCert(t *testing.T, ca *testCA) tls.Certificate {
+func agentCert(t testing.TB, ca *testCA) tls.Certificate {
 	return ca.issue(t, "sup.team-a.svc.cluster.local", "sup.team-a.svc", "sup.team-a")
 }
 

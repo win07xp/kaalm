@@ -354,6 +354,8 @@ LOAD_CLUSTER ?= kaalm-load
 # The load deploy opens the pprof listeners so a profile can be taken during
 # any phase; 0 turns them off.
 LOAD_PPROF_PORT ?= 6060
+# Benchmark repetitions; benchstat wants several to report a confidence interval.
+BENCH_COUNT ?= 6
 LOAD_AGENT_NODES ?= 2
 LOAD_MAX_PODS ?= 250
 LOADGEN_IMG ?= registry.test/load/loadgen:load
@@ -378,6 +380,10 @@ load-images: ## Build and import what the load run needs: controller, gateway, m
 	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
 	docker build -t $(LOADGEN_IMG) -f test/load/Dockerfile .
 	CLUSTER=$(LOAD_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(LOADGEN_IMG)
+
+.PHONY: bench
+bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into benchstat to compare.
+	go test ./internal/gateway/ -run '^$$' -bench . -benchmem -count $(BENCH_COUNT)
 
 .PHONY: load-deploy
 load-deploy: chart-sync ## Install the chart onto the load cluster with the mock provider trusted for upstream and callbacks.
