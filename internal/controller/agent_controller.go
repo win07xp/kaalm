@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,11 +34,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -949,10 +953,54 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&cmapi.Certificate{}).
-		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass)).
-		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider)).
-		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider)).
+		// The platform-level watches fan out to every Agent that references
+		// the changed object, so they must fire only for changes an Agent
+		// consumes: the spec of a class or tool provider (their status is
+		// bookkeeping the Agent never reads), and for a model provider the
+		// spec or the set of namespaces its budget blocks. Without the
+		// predicates every in-use count the class reconciler wrote and every
+		// ten-second budget publish re-enqueued the whole fleet (#174).
+		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider),
+			builder.WithPredicates(providerChangeMatters())).
+		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
+}
+
+// providerChangeMatters admits a ModelProvider update to the Agent fan-out
+// when its spec changed or when the set of namespaces in the Blocked budget
+// state changed, which is all an Agent reads from a provider's status.
+// Spend counters and health conditions change on their own cadence and
+// affect no Agent.
+func providerChangeMatters() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldMP, ok1 := e.ObjectOld.(*kaalmv1beta1.ModelProvider)
+			newMP, ok2 := e.ObjectNew.(*kaalmv1beta1.ModelProvider)
+			if !ok1 || !ok2 {
+				return true
+			}
+			if oldMP.Generation != newMP.Generation {
+				return true
+			}
+			return !equality.Semantic.DeepEqual(blockedNamespaces(oldMP), blockedNamespaces(newMP))
+		},
+	}
+}
+
+// blockedNamespaces returns the namespaces a provider's status reports as
+// budget-blocked, sorted, so two statuses compare by content.
+func blockedNamespaces(mp *kaalmv1beta1.ModelProvider) []string {
+	var out []string
+	for _, u := range mp.Status.BudgetUsage {
+		if u.State == kaalmv1beta1.BudgetStateBlocked {
+			out = append(out, u.Namespace)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (r *AgentReconciler) agentsForClass(ctx context.Context, obj client.Object) []reconcile.Request {

@@ -102,7 +102,7 @@ On delete, the reconciler holds the ToolProvider in `Terminating` while any Agen
 
 Watches: `Agent`, plus owned `Pod`, `PVC`, `Service`, `ConfigMap`, `NetworkPolicy`, `ServiceAccount`, `cert-manager.io/v1/Certificate`. The cert-manager-managed `Secret` (`spec.secretName` output) is **not** owned by the reconciler: cert-manager owns it and populates it from the `Certificate`.
 
-Two map-func watches make the reconciler react to platform-level changes without waiting for the periodic requeue:
+Two map-func watches make the reconciler react to platform-level changes without waiting for the periodic requeue. They fire only for changes an Agent consumes: a class's or tool provider's spec (their status is bookkeeping the Agent never reads), and a model provider's spec or the set of namespaces its budget blocks, so the spend counters the gateway publishes every ten seconds and the in-use counts the class reconciler writes on every Agent create do not re-enqueue the fleet:
 
 - `AgentClass` via `handler.EnqueueRequestsFromMapFunc`: when an AgentClass changes (e.g., `allowedProviders` updated, `maxLimits` lowered), re-queue all Agents referencing that class (via indexed lookup on `agentClassRef.name`).
 - `ModelProvider` via `handler.EnqueueRequestsFromMapFunc`: when a ModelProvider's `allowedNamespaces`, `Healthy` condition, or other spec fields change, re-queue all Agents whose `spec.providers[*].providerRef` references that ModelProvider (via an indexed lookup on `providerRef.name`).
