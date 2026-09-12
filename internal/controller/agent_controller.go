@@ -26,6 +26,7 @@ import (
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,6 +104,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	statusBefore := agent.Status.DeepCopy()
 
 	if !agent.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &agent)
@@ -130,7 +132,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if agent.Namespace == r.OperatorNamespace {
 		r.setReady(&agent, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("Agents may not run in the operator namespace %q", r.OperatorNamespace))
-		return ctrl.Result{}, r.Status().Update(ctx, &agent)
+		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
 	// Step 1 continued: resolve the AgentClass.
@@ -139,7 +141,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if apierrors.IsNotFound(err) {
 			r.setReady(&agent, false, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q does not exist", agent.Spec.AgentClassRef.Name))
-			return ctrl.Result{}, r.Status().Update(ctx, &agent)
+			return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 		}
 		return ctrl.Result{}, err
 	}
@@ -164,7 +166,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	case kaalmv1beta1.AgentHibernating:
 		return r.driveHibernating(ctx, &agent)
 	case kaalmv1beta1.AgentHibernated:
-		return ctrl.Result{}, r.Status().Update(ctx, &agent)
+		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
 	// Step 5: Ready=False gates that block Pod creation without degrading.
@@ -173,7 +175,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 	if gated {
-		if err := r.Status().Update(ctx, &agent); err != nil {
+		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 			return ctrl.Result{}, err
 		}
 		return gateResult, nil
@@ -189,7 +191,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			r.setPhase(&agent, kaalmv1beta1.AgentProvisioning)
 		}
 		r.setReady(&agent, false, "CertificateNotReady", "waiting for cert-manager to issue the agent certificate")
-		if err := r.Status().Update(ctx, &agent); err != nil {
+		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
@@ -213,7 +215,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		res = r.evaluateActivity(ctx, &agent, eff)
 	}
 
-	if err := r.Status().Update(ctx, &agent); err != nil {
+	if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("reconciled Agent", "phase", agent.Status.Phase)
@@ -649,11 +651,21 @@ func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalm
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 		return err
 	}
-	err := r.Create(ctx, desired)
-	if apierrors.IsAlreadyExists(err) {
+	// Read from the informer before writing: a create that is expected to
+	// fail AlreadyExists is still a POST the apiserver has to reject, once
+	// per agent per pass (#174).
+	var current corev1.ServiceAccount
+	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current)
+	if err == nil {
 		return nil
 	}
-	return err
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
 }
 
 func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec) error {
@@ -689,6 +701,12 @@ func (r *AgentReconciler) ensurePVC(
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 		return err
 	}
+	var current corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
 	err := r.Create(ctx, desired)
 	if apierrors.IsAlreadyExists(err) {
 		err = nil
@@ -713,6 +731,9 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 			return err
 		}
 		return r.Create(ctx, desired)
+	}
+	if equality.Semantic.DeepEqual(current.Spec, desired.Spec) {
+		return nil
 	}
 	current.Spec = desired.Spec
 	return r.Update(ctx, &current)
@@ -968,4 +989,17 @@ func (r *AgentReconciler) agentsForToolProvider(ctx context.Context, obj client.
 		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
 	}
 	return reqs
+}
+
+// updateStatusIfChanged writes the Agent's status only when a pass changed
+// it: every Agent reconciles on its periodic requeue and on every event
+// from its children, and a status write per pass was one of the three
+// per-agent writes a settled fleet paid for every pass (#174).
+func (r *AgentReconciler) updateStatusIfChanged(
+	ctx context.Context, agent *kaalmv1beta1.Agent, before *kaalmv1beta1.AgentStatus,
+) error {
+	if equality.Semantic.DeepEqual(before, &agent.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, agent)
 }

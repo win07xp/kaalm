@@ -4,14 +4,15 @@ This page is the scale proof for the v1.0.0 design: a repeatable load harness, t
 
 ## What the harness measures
 
-The harness (`test/load`, driven by `make load`) creates a dedicated k3d cluster, installs the chart the way the e2e suite does, and runs six phases in order. Each phase writes its own block of the summary JSON and cleans up its own objects.
+The harness (`test/load`, driven by `make load`) creates a dedicated k3d cluster, installs the chart the way the e2e suite does, and runs seven phases in order. Each phase writes its own block of the summary JSON and cleans up its own objects.
 
 1. **Gateway steady state.** An in-cluster load generator calls the LLM proxy at fixed concurrency in four legs: the ServiceAccount-token tier against a mock provider that answers immediately, then the mTLS path (the load generator presents the certificate of a real Agent, so the gateway sees a Kaalm-managed workload calling from its own namespace) against an immediate provider, a 50 ms provider, and an immediate provider under hard budget enforcement. Each leg records client-observed latency, the gateway's own request histogram, and the gateway's peak CPU and memory. The immediate legs isolate the gateway's per-request cost; the hard leg isolates what synchronous ledger admission adds.
 2. **Max-active ramp.** Agents are created in waves of 50, with persistence and hibernation off, and none are retired. The ramp stops at the target or at the environment's first limit: agent Pods crash-looping on probe timeouts, host memory below a floor, a node reporting memory pressure, or the scheduler refusing a Pod. The wave that hits the limit is trimmed, so the later phases run on the largest fleet that came up clean. Each wave records time-to-Ready (creation to the Ready condition) and its breakdown (certificate issuance, Pod start, start to Ready), the controller's reconcile histogram and queue depth, the operator components' memory, and the host's available memory, which yields the memory cost per running agent.
-3. **Hold and serve.** At the peak fleet, every active agent receives one message per interval through its own async webhook channel, with replies pushed to the mock's callback receiver. The phase records accepted messages, delivery outcomes, callback counts, message latency, and whether any agent lost readiness or restarted.
-4. **Fleet teardown.** Deleting the whole ramp fleet and timing until its Pods are gone.
-5. **Hibernation churn.** A persistence-enabled subset with short idle timers. The harness waits for every agent's first hibernation, then sends each agent one message per cycle, with the cycle longer than a hibernation cycle so every message is a cold wake. It records the wake latency distribution from the gateway's wake histogram, wakes and hibernations from the controller's counters, and delivery outcomes.
-6. **Concurrent tasks.** Submitting the task batch at once (the runtime's autocomplete flag makes each task report success on startup) and recording provisioning latency, run time, makespan, throughput, and retries.
+3. **Hold and serve.** At the peak fleet, every active agent receives one message per interval through its own async webhook channel, with replies pushed to the mock's callback receiver. The phase records accepted messages, every delivery attempt by the layer that failed, callback counts, message latency, and whether any agent lost readiness or restarted. Around the hold it reads what the operator asked of the control plane: both components' client-side request counters by method, the apiserver's own request counters by verb and resource, and from those the writes per agent per minute. During the hold it samples goroutines, heap, and RSS from both components once a minute, so a long hold (`-hold-duration 60m`) is the soak.
+4. **Restart under load.** With the fleet up, a rolling restart of the controller (rollout wall time, then time to the first reconcile of the new leader, leader handoff included), then a rolling restart of the gateway under a 60 s token-tier LLM leg, counting the requests that fail while it rolls.
+5. **Fleet teardown.** Deleting the whole ramp fleet and timing until its Pods are gone.
+6. **Hibernation churn.** A persistence-enabled subset with short idle timers. The harness waits for every agent's first hibernation, reads the same control-plane counters over an idle window with the whole subset hibernated, then sends each agent one message per cycle, with the cycle longer than a hibernation cycle so every message is a cold wake. It records the wake latency distribution from the gateway's wake histogram, wakes and hibernations from the controller's counters, and delivery outcomes.
+7. **Concurrent tasks.** Submitting the task batch at once (the runtime's autocomplete flag makes each task report success on startup) and recording provisioning latency, run time, makespan, throughput, and retries.
 
 Timings that come from API objects (time-to-Ready, task completion) have one-second granularity, so distribution shape comes from the Prometheus histograms and the objects supply the coarse per-agent numbers.
 
@@ -20,6 +21,7 @@ Timings that come from API objects (time-to-Ready, task completion) have one-sec
 ```bash
 make load                       # fresh cluster, images, chart, the full run
 make load-run LOAD_FLAGS='-phases gateway -gateway-duration 30s'   # inner loop on the existing cluster
+make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'   # the soak
 make load-down                  # delete the cluster
 ```
 
@@ -136,6 +138,22 @@ A cold wake is activation, a new Pod against the existing certificate and PVC, c
 | Teardown | 200 tasks gone in 19 s |
 
 Task throughput on this environment is certificate issuance throughput: the run itself is 5 s, and the queue in front of it is two minutes at p50.
+
+### Soak
+
+A 60-minute hold at the peak fleet, the same shape as the hold above (`make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'`, September 12, 2026, product code `a828022`), sampled once a minute:
+
+| Measure | Value |
+|---|---|
+| Messages | 24001 accepted at 6.7 per second; 23302 delivered, 700 failed after four attempts (2.9%); 24002 callbacks |
+| Delivery attempts by outcome | ok 23302, connect 3769, timeout 1357 |
+| Goroutines | gateway 1114 to 1185, controller 279 to 309, no trend over the hour |
+| Heap in use | gateway 42 to 105 MiB, controller 52 to 114 MiB, rising through the hour |
+| RSS | gateway 94 to 159 MiB, controller 108 to 169 MiB |
+| Control plane over the hour | controller 2.7 req/s, 0.35 writes per agent per minute; gateway 7.9 req/s, 0.99 writes per agent per minute; largest apiserver rows POST configmaps 24002, PUT leases 5538, PUT agentchannels/status 5360 |
+| Fleet | 400 Ready before and after, 0 container restarts, 0 readiness flaps |
+
+The heap curves are the async records, not a leak. Every async message leaves a `kaalm-async-{requestId}` ConfigMap in `kaalm-system` for its one-hour TTL, both components hold every live record in their ConfigMap informer, and 24000 records over the hour is about 50 MiB in each cache. The curve flattens one TTL after the load starts, at the message rate times the TTL, and nothing else in either process grew: goroutine counts are flat, and the connection pools stay at the fleet's size. The controller's remaining status writes are `PlatformConnected` flips: a delivery failure sets the condition false and the next success sets it true again, so they track the delivery failures this environment produces.
 
 ## What a real cluster changes
 
