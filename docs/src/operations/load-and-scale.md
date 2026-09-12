@@ -42,100 +42,114 @@ The harness is a release-time local gate, listed in the release checklist, not a
 | Cluster | k3d v5.8.3, one server and two agents, kubelet `max-pods` 250 per node, Kubernetes v1.31.5+k3s1 (flannel, kube-router NetworkPolicy, local-path storage, one CoreDNS) |
 | Chart | 2 gateway replicas, 2 controller replicas, no resource limits, the mock provider trusted for upstream and callbacks |
 | Agent image | the e2e starter-go agent (the Go base image plus the starter handler), BestEffort |
-| Product code | `51ce26a`, main at the #171 merge |
-| Run | September 11, 2026, `make load` with every default |
-| Baseline file | `test/load/baseline/2026-09-11.json`; its `notes` field records how the file was assembled |
+| Product code | `74e4c93`, the #174 pass complete (the #177, #178, and #179 fixes) |
+| Run | September 12, 2026, `make load` with every default |
+| Baseline file | `test/load/baseline/2026-09-12.json`, one run; `2026-09-11.json` is the pre-pass baseline the deltas below refer to |
 
 ## Baseline numbers
 
+Every table is from the one `make load` run of September 12, 2026. Where a number moved by a multiple since the September 11 baseline, the sentence after the table says why; the run-to-run spread on this machine is stated where it matters.
+
 ### Gateway
 
-32 concurrent callers for 60 seconds per leg, against the in-cluster mock provider. Client latency is what the load generator observed; gateway-side is the gateway's own `kaalm_llm_request_duration_seconds` for the leg (its buckets are coarse, which is why the 50 ms leg reads 75 ms there and 51 ms at the client). Gateway peak is the metrics-API maximum summed over both replicas.
+Four legs of 60 s at 32 concurrent callers in an in-cluster load generator:
 
 | Leg | rps | Client p50 / p95 / p99 (ms) | Gateway-side p50 / p95 / p99 (ms) | Gateway peak |
 |---|---|---|---|---|
-| Token tier, soft budget, immediate upstream | 4238 | 2.8 / 36.0 / 97.4 | 3.0 / 36.2 / 98.2 | 4.9 cores, 74 MiB |
-| mTLS, soft budget, immediate upstream | 4626 | 2.6 / 31.9 / 88.2 | 3.0 / 32.1 / 93.3 | 5.9 cores, 90 MiB |
-| mTLS, soft budget, 50 ms upstream | 621 | 51.3 / 53.7 / 54.9 | 75.0 / 97.5 / 99.5 | 5.3 cores, 65 MiB |
-| mTLS, hard budget, immediate upstream | 4295 | 3.2 / 34.9 / 81.6 | 3.1 / 34.9 / 89.2 | 5.5 cores, 74 MiB |
+| Token tier, soft budget, immediate upstream | 13482 | 1.9 / 5.2 / 7.3 | 2.5 / 4.8 / 7.4 | 5.9 cores, 52 MiB |
+| mTLS, soft budget, immediate upstream | 14684 | 1.8 / 4.8 / 6.7 | 2.5 / 4.8 / 6.3 | 6.2 cores, 54 MiB |
+| mTLS, soft budget, 50 ms upstream | 615 | 51.9 / 53.2 / 54.0 | 75.0 / 97.5 / 99.5 | 6.0 cores, 56 MiB |
+| mTLS, hard budget, immediate upstream | 15176 | 1.7 / 4.6 / 6.4 | 2.5 / 4.8 / 5.1 | 5.8 cores, 55 MiB |
 
-Every request succeeded (about a quarter million per immediate leg).
-
-- The gateway's own cost per request is about 3 ms at p50 on both tiers. The token tier is not slower than mTLS: a ServiceAccount token is validated once and cached.
-- Against a 50 ms provider the gateway adds about 1.3 ms at p50. 621 rps is the arithmetic limit of 32 callers over a 51 ms round trip, not a gateway limit.
-- Hard budget enforcement adds about 0.6 ms at p50 over soft on an immediate upstream.
-- The p95 and p99 tails on the immediate legs (30 to 100 ms) are two replicas saturating a 16-core host that also runs the load generator and the mock. The gateway is CPU-bound there, not waiting on anything.
+Against the September 11 baseline the immediate legs run at about 3.5x the requests per second (4238, 4626, and 4295 then) with p99 down from about 90 ms to under 8 ms, and the gateway's CPU per request fell from about 1.1 ms to about 0.4 ms. The provider-facing transport kept the default two idle connections per host, so at 32 callers nearly every request dialed and ran a full TLS handshake; the pool is now sized for hundreds of in-flight requests per host. The 50 ms leg is bound by the 32 callers times the upstream delay and does not move. The immediate legs vary between runs on this machine: 13.5k to 17.5k rps across the three `make load` runs of September 12.
 
 ### Max-active ramp
 
-Waves of 50 agents, persistence and hibernation off, none retired. Time-to-Ready is creation to the Ready condition; certificate is creation to cert-manager marking the Certificate Ready; Pod start is creation to the kubelet's start time; reconcile is the controller's `controller_runtime_reconcile_time_seconds` for the Agent reconciler over the wave.
+Waves of 50 agents, persistence and hibernation off, until the environment's first limit:
 
-| Wave | Fleet Ready | Wall (s) | Time-to-Ready p50 / p95 / max (s) | Certificate p50 / p95 (s) | Pod start p50 (s) | Start-to-Ready p50 / p95 (s) | Reconcile p50 / p99 (ms) | Controller / gateway RSS (MiB) | Host available (MiB) |
+| Wave | Fleet Ready | Wall (s) | Time-to-Ready p50 / p95 / max (s) | Certificate p50 / p95 (s) | Pod start p50 (s) | Start-to-Ready p50 / p95 (s) | Reconcile p50 / p99 (ms) | Controller / gateway MiB | Host available MiB |
 |---|---|---|---|---|---|---|---|---|---|
-| 0 | 50 | 64 | 36 / 50 / 60 | 32 / 48 | 34 | 1 / 10 | 8.8 / 96.2 | 51 / 49 | 11417 |
-| 1 | 100 | 70 | 42 / 59 / 66 | 36 / 55 | 37 | 1 / 10 | 10.8 / 95.7 | 54 / 54 | 10895 |
-| 2 | 150 | 65 | 36 / 57 / 63 | 31 / 51 | 33 | 2 / 10 | 20.3 / 97.0 | 58 / 59 | 10227 |
-| 3 | 200 | 72 | 39 / 60 / 66 | 35 / 54 | 36 | 1 / 11 | 23.3 / 97.3 | 63 / 64 | 9472 |
-| 4 | 250 | 73 | 40 / 61 / 68 | 35 / 58 | 36 | 1 / 10 | 23.4 / 97.5 | 69 / 68 | 8697 |
-| 5 | 300 | 73 | 41 / 60 / 68 | 38 / 57 | 39 | 1 / 11 | 26.5 / 97.6 | 73 / 75 | 7922 |
-| 6 | 350 | 77 | 46 / 67 / 74 | 40 / 62 | 42 | 2 / 11 | 28.7 / 97.7 | 78 / 78 | 7058 |
-| 7 | 400 | 81 | 51 / 70 / 80 | 45 / 67 | 47 | 2 / 11 | 30.5 / 98.3 | 81 / 85 | 6161 |
-| 8 | stopped | 177 | 43 / 174 / 174 | 48 / 69 | 50 | 11 / 110 | 26.3 / 98.6 | 84 / 95 | 5193 |
+| 0 | 50 | 65 | 35 / 59 / 61 | 31 / 48 | 33 | 1 / 11 | 3.3 / 232.8 | 48 / 44 | 11610 |
+| 1 | 100 | 56 | 36 / 53 / 53 | 30 / 51 | 31 | 1 / 11 | 3.5 / 233.9 | 54 / 47 | 11005 |
+| 2 | 150 | 69 | 43 / 63 / 66 | 35 / 53 | 36 | 1 / 10 | 3.4 / 230.1 | 61 / 49 | 10283 |
+| 3 | 200 | 63 | 34 / 54 / 60 | 30 / 50 | 31 | 1 / 10 | 3.4 / 231.2 | 66 / 53 | 9612 |
+| 4 | 250 | 61 | 33 / 52 / 58 | 27 / 47 | 29 | 1 / 11 | 3.5 / 230.9 | 67 / 59 | 8838 |
+| 5 | 300 | 65 | 30 / 52 / 60 | 26 / 50 | 28 | 2 / 10 | 3.5 / 231.3 | 78 / 64 | 8045 |
+| 6 | 350 | 57 | 31 / 51 / 54 | 27 / 48 | 29 | 2 / 10 | 3.6 / 233.0 | 79 / 69 | 7208 |
+| 7 | 400 | 71 | 38 / 59 / 65 | 32 / 52 | 33 | 2 / 11 | 3.5 / 234.1 | 85 / 71 | 6563 |
+| 8 | stopped | 170 | 40 / 150 / 155 | 27 / 45 | 29 | 11 / 106 | 3.4 / 234.6 | 110 / 93 | 5472 |
 
-**400 agents came up Running and Ready in eight waves, 13 minutes end to end.** The ninth wave hit the machine's limit: with about 5.2 GiB of host memory reported available, agent Pods began failing their probes and two entered CrashLoopBackOff, so the wave was trimmed and the later phases ran on the 400. The limit is the machine, not the operator: the controller's reconcile p99 stayed under 100 ms, its queue never backed up, and its RSS grew from 51 to 84 MiB across 400 agents.
-
-Two numbers transfer beyond this machine:
-
-- **Memory per running agent: 16.0 MiB of host memory**, all in (the starter-go container, its pause container, the containerd shim, and the kubelet's accounting), measured as the drop in host available memory over the fleet.
-- **Starting a fleet is paced by certificate issuance.** Every agent gates on a cert-manager Certificate before its Pod exists, and issuance is 32 to 48 s of the 36 to 51 s p50 time-to-Ready, rising slowly with the fleet; the Pod starts within 2 s of the certificate and is Ready 1 to 2 s after that. A wave of 50 takes 64 to 81 s end to end, about 40 agents a minute against the default single-replica cert-manager.
+The ramp stopped in wave 8 at agent Pods crash-looping on probe timeouts, and the fleet the later phases ran on is the 400 agents of waves 0 to 7. Memory per running agent is 16.6 MiB of host memory (the starter agent, BestEffort). Time-to-Ready is certificate issuance: the certificate column is the bulk of every wave's p50, and Pod start to Ready is about a second. Reconcile p50 is now 3.5 ms (9 to 30 ms on September 11): a pass that changes nothing writes nothing, and the reconcile count per wave is flat at about 1100 where it climbed from 1000 to 2000 as the fleet grew, because a class's in-use count and a provider's spend counters no longer re-enqueue every agent that references them.
 
 ### Hold and serve
 
-The 400-agent fleet, each agent on its own async webhook channel, one message per agent per minute for three minutes (6.7 messages per second in aggregate), replies pushed to the callback receiver. The load generator saw every message accepted (1201 of 1201 answered `202`, acceptance p50 8.9 ms, p99 14.7 ms). On the gateway side:
+One message per agent per minute for three minutes, through each agent's async webhook channel, replies pushed to the mock's callback receiver:
 
 | Measure | Value |
 |---|---|
-| Delivered / failed | 1181 / 19 (98.4% delivered, 1.6% failed after four attempts) |
-| Callbacks delivered | 1200 of 1200 attempted, 1186 under 5 ms |
-| Delivery time | p50 6.7 ms; 946 of 1202 under 25 ms; 90 between 1 s and 10 s; 157 over 10 s |
-| Fleet during the hold | 400 Ready before and after, 0 container restarts, 0 readiness flaps |
-| Gateway peak | 100 mCPU, 232 MiB |
-| Controller peak | 15 mCPU, 93 MiB |
+| Delivered / failed | 1171 / 30 (97.5% delivered, 2.5% failed after four attempts) |
+| Delivery attempts by outcome | connect 300, ok 1171, timeout 69 |
+| Callbacks delivered | 1201 |
+| Delivery time | p50 3.5 ms, p95 10000 ms |
+| Channels active | all 400 in 11 s |
+| Fleet during the hold | 400 Ready before, 400 after, 0 container restarts, 0 readiness flaps |
+| Gateway peak | 102 mCPU, 152 MiB |
+| Controller peak | 253 mCPU, 126 MiB |
 
-The delivery tail follows the delivery retry ladder (1 s, 5 s, 25 s, each attempt bounded by a 10 s read timeout): about 13% of first attempts fail and succeed on a retry, and the 157 over 10 s are first attempts that ran into the full timeout. The agent Pods were healthy throughout and the callback leg was uniformly fast, so the hop that stalls is gateway to agent. The gateway records no reason for a failed attempt, so the cause is open: [#172](https://github.com/win07xp/kaalm/issues/172) tracks the instrumentation and the first suspect (a 4-label Service name resolved under `ndots:5`, eight DNS queries per delivery). This is the baseline's first number to re-measure.
+The delivery tail is the environment. Every failed attempt is counted by the layer that failed, and the retried attempts are TCP connects that go unanswered for 10 s or more on fresh flows to the same destination, alongside about 1250 retransmit timeouts on established connections per three-minute hold on the busy gateway Pod, while conntrack and bridge counters on the nodes stay clean: this is the 16-core WSL2 box delaying packets under 400 agent Pods. The failure count swings between runs on identical code (5 to 163 of 1200 across the five holds of September 12), so read it as a range. The gateway's own cost on this path is fixed: a dropped packet costs one connect bound rather than a whole attempt, connections are pooled per agent, the agent is resolved once per attempt, and nothing leaks. Channel activation for 400 channels is seconds (372 s on September 11): the channel reconciler wrote status and posted its RoleBindings on every pass, and no longer does.
 
-Channel activation runs at about one channel per second at this scale: the AgentChannel reconciler, like every Kaalm reconciler, reconciles one object at a time. The harness creates each agent's channel together with the agent so that work overlaps the ramp's waves.
+### Control-plane traffic
+
+What the operator asked of the apiserver, read from both components' client-side request counters and the apiserver's own counters, over the hold and over an idle window with the churn fleet fully hibernated:
+
+| Window | Controller | Gateway | Largest apiserver rows |
+|---|---|---|---|
+| Hold, 400 active agents, 225 s | 2.6 req/s, 0.34 writes per agent per minute | 8.0 req/s, 0.99 writes per agent per minute | POST configmaps 1202, PUT agentchannels/status 399, PUT leases 342, APPLY configmaps 276, GET configmaps 276, GET leases 71 |
+| Idle, 100 hibernated agents, 181 s | 1.1 req/s, 0.46 writes per agent per minute | 1.7 req/s, 0.24 writes per agent per minute | PUT leases 276, GET configmaps 219, APPLY configmaps 72, GET leases 57, PUT agentchannels/status 48, GET endpoints 18 |
+
+The per-agent rates divide every write the component made by the fleet size, including writes that do not scale with agents (leader-election leases are the largest controller row in both windows, and the gateway's budget exchange is per provider per replica), so a small fleet shows a higher per-agent figure than a large one. Per agent, the gateway's hold traffic is one ConfigMap create per async message, which the design specifies; the controller's is one channel status write per delivery failure, from the `PlatformConnected` condition flipping. On September 11's code the same windows read 1.35 and 4.49 controller writes per agent per minute: the channel reconciler posted both RoleBindings and wrote status on every pass, and the Agent reconciler created its ServiceAccount, updated its NetworkPolicy, and wrote status on every pass, all with nothing changing.
+
+### Restart under load
+
+A rolling restart of each component with the ramp fleet up:
+
+| Measure | Value |
+|---|---|
+| Controller rollout with 400 agents up | 20 s to both replicas Ready; first reconcile of the new leader at 21 s |
+| Gateway rollout under a 60 s token-tier leg | 11 s; 1 of 626838 requests failed |
+
+The controller's number is the leader handoff as well as the rollout, since the first reconcile of the new leader is what the fleet waits for. The gateway's rollout drops the requests that were in flight on the replica being replaced; with two replicas and the default `maxUnavailable` that is a handful per roll.
 
 ### Fleet teardown
 
-Deleting all 400 agents and their channels: every Pod gone in 58 s.
+Deleting all 400 agents and their channels: 400 agents gone in 63 s.
 
 ### Hibernation churn
 
-100 persistence-enabled agents (a 1 GiB local-path PVC each) with a 10 s idle timeout and a 5 s hibernation delay. The harness waits for every agent to come up and then hibernate, then sends each agent one message per 90 s for 10 minutes, so every message finds its agent hibernated.
+A persistence-enabled fleet of 100 with a 10 s idle timer, one message per agent per 90 s for ten minutes, so every message is a cold wake:
 
 | Measure | Value |
 |---|---|
-| Fleet up | all 100 in 151 s; time-to-Ready p50 24 s, p95 127 s (certificate issuance for 100 at once queues) |
-| First hibernation | Ready to Hibernated p50 18 s, p95 29 s; all 100 hibernated 15 s after the last came up |
-| Messages | 667 sent at 1.11 per second, 667 accepted, 668 delivered, 0 failed, 668 callbacks |
-| Wakes | 667 (every message was a cold wake), all with result `ready`; 667 hibernations followed |
-| Wake latency | p50 4.7 s; 85 wakes in 1 to 2.5 s, 285 in 2.5 to 5 s, 137 in 5 to 10 s, 160 beyond 10 s (the histogram's last bucket) |
+| Fleet up | all 100 in 197 s; time-to-Ready p50 107 s, p95 179 s |
+| First hibernation | Ready to Hibernated p50 16 s, p95 30 s; all hibernated 30 s after the last came up |
+| Messages | 667 sent at 1.11 per second, delivered 668, 668 callbacks |
+| Wakes | 667 (by result ready 667); 667 hibernations followed |
+| Wake latency | p50 4.0 s, p95 10.0 s |
 | Teardown | 100 agents and their PVCs gone in 13 s |
 
-A cold wake is activation, a new Pod against the existing certificate and PVC, container start, readiness, and the gateway's delivery, which polls the agent Service every 2 s until it answers. The controller's idle evaluation runs on a 15 s activity cache, which is why Ready-to-Hibernated sits at 18 s with 10 s timers. The wake histogram tops out at 10 s, so the 24% beyond it have no upper bound here; the hold phase's delivery tail ([#172](https://github.com/win07xp/kaalm/issues/172)) is the same hop and the same instrumentation gap.
+Wake latency is the Pod's start on this machine plus the NetworkPolicy programming lag the CNI bullet below describes; the shape is the number that transfers, not the value.
 
 ### Concurrent tasks
 
-200 AgentTasks submitted at once (in 0.6 s), each reporting success on startup.
+200 AgentTasks submitted at once, each reporting success on startup:
 
 | Measure | Value |
 |---|---|
 | Outcome | 200 Succeeded, 0 retries |
-| Makespan | 194 s for the batch, 62 tasks per minute |
-| Creation to start | p50 117 s, p95 182 s (certificate issuance for 200 at once, then Pod start) |
-| Start to completion | p50 5 s, p95 7 s |
-| Teardown | 200 tasks gone in 19 s |
+| Makespan | 161 s for the batch, 75 tasks per minute |
+| Creation to start | p50 110 s, p95 150 s |
+| Start to completion | p50 5 s, p95 6 s |
+| Teardown | 200 tasks gone in 18 s |
 
 Task throughput on this environment is certificate issuance throughput: the run itself is 5 s, and the queue in front of it is two minutes at p50.
 
