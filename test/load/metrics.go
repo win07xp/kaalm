@@ -24,6 +24,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -383,4 +384,69 @@ func (s *snapshot) gauge(name string, want map[string]string) float64 {
 		}
 	}
 	return best
+}
+
+// scrapeAPIServer snapshots the apiserver's own /metrics through the API, so
+// a window of apiserver_request_total can be read by verb and resource for
+// every client of the control plane, kubelets and cert-manager included.
+func (k *cluster) scrapeAPIServer(ctx context.Context) (*snapshot, error) {
+	raw, err := k.rawGet(ctx, "/metrics")
+	if err != nil {
+		return nil, err
+	}
+	var parser expfmt.TextParser
+	fams, err := parser.TextToMetricFamilies(strings.NewReader(string(raw)))
+	if err != nil {
+		return nil, err
+	}
+	s := &snapshot{at: time.Now(), metrics: map[string][]sample{}}
+	s.merge(fams)
+	return s, nil
+}
+
+// apiRequestsByVerbResource returns after-minus-before apiserver_request_total
+// per "VERB resource" (a subresource appends as resource/sub), every code.
+func apiRequestsByVerbResource(before, after *snapshot) map[string]float64 {
+	out := map[string]float64{}
+	if after == nil {
+		return out
+	}
+	for _, smp := range after.metrics["apiserver_request_total"] {
+		if smp.hist != nil {
+			continue
+		}
+		v := smp.value
+		if before != nil {
+			if b := before.find("apiserver_request_total", smp.labels); b != nil {
+				v -= b.value
+			}
+		}
+		if v <= 0 {
+			continue
+		}
+		key := smp.labels["verb"] + " " + smp.labels["resource"]
+		if sub := smp.labels["subresource"]; sub != "" {
+			key += "/" + sub
+		}
+		out[key] += v
+	}
+	return out
+}
+
+// topEntries returns the n largest entries of m as "key=value" strings.
+func topEntries(m map[string]float64, n int) []string {
+	type kv struct {
+		k string
+		v float64
+	}
+	var all []kv
+	for k, v := range m {
+		all = append(all, kv{k, v})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].v > all[j].v })
+	var out []string
+	for i := 0; i < len(all) && i < n; i++ {
+		out = append(out, fmt.Sprintf("%s=%.0f", all[i].k, all[i].v))
+	}
+	return out
 }
