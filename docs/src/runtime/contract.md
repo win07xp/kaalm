@@ -89,7 +89,7 @@ This is the same per-path pattern the controller's `:9443` and the gateway's `:8
 
 This item is optional. For idle detection, the agent may emit activity heartbeats by calling `POST /v1/agent/heartbeat` on the gateway. The gateway tracks these timestamps in-memory, with no etcd writes. Alternatively, the gateway infers activity from observed LLM and channel traffic.
 
-Heartbeats are meaningful only for Agents: idle detection and hibernation do not apply to one-shot tasks. The endpoint enforces this. AgentTask callers are rejected with `403` at the handler (see the `:8443` auth profile in [Gateway overview](../gateways/overview.md)). Task images must not run a heartbeat loop. The controller reads the timestamps through the [activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api) rather than from Pod annotations, so no request causes an etcd write.
+Heartbeats are meaningful only for Agents: idle detection and hibernation do not apply to one-shot tasks. The endpoint enforces this. AgentTask callers are rejected with `403` at the handler (see [the :8443 listener profile](../gateways/overview.md#the-8443-listener-profile)). Task images must not run a heartbeat loop. The controller reads the timestamps through the [activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api) rather than from Pod annotations, so no request causes an etcd write.
 
 ## 6. Completion signal (AgentTask only)
 

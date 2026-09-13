@@ -65,21 +65,18 @@ The request carries no auth header; authentication is the mTLS client cert prese
   "replicaStartedAt": "2026-04-29T12:00:00Z",
   "channels": {
     "/channels/team-support/support-assistant": {
-      "phase": "Active",
       "state": "success",
       "reason": "WebhookReady",
       "timestamp": "2026-04-29T12:48:11Z",
       "lastError": null
     },
     "/channels/team-support/personal-assistant": {
-      "phase": "Degraded",
       "state": "failure",
       "reason": "WebhookAuthFailed",
       "timestamp": "2026-04-29T12:46:02Z",
       "lastError": "webhook auth validation failed: 401 Unauthorized"
     },
     "/channels/team-support/new-channel": {
-      "phase": "Active",
       "state": "empty",
       "reason": null,
       "timestamp": null,
@@ -94,7 +91,6 @@ The request carries no auth header; authentication is the mTLS client cert prese
 | `windowSeconds` | int | Length of the rolling health window observed by this replica, sourced from the Helm value `gateway.channelHealthWindow` (default `300`). Echoed in every response so the controller does not need a separate channel for the value |
 | `replicaStartedAt` | timestamp | When this gateway replica started. Used by the controller to determine whether `state: "empty"` means "no in-window traffic" (replica has been up the full window) or "insufficient observation time" (replica started less than `windowSeconds` ago) |
 | `channels` | map | Keys are webhook paths as registered in the gateway; values are per-channel health records as observed by this replica |
-| `phase` | string | `"Active"` \| `"Degraded"` \| `"Failed"`: mirrors `AgentChannel.status.phase` as seen from the gateway |
 | `state` | string | `"success"` \| `"failure"` \| `"empty"`. Computed from the replica's in-window observation list: `success` if any in-window observation succeeded; `failure` if the in-window list is non-empty and contains only failures; `empty` if no in-window observations exist on this replica |
 | `reason` | string or null | For `success`, the most recent success's reason (typically `WebhookReady`). For `failure`, the most recent failure's reason: one of `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, `CallbackRejected`. `null` when `state: "empty"` |
 | `timestamp` | timestamp or null | Time of the most recent in-window observation contributing to `state` (most recent success for `success`; most recent failure for `failure`). `null` when `state: "empty"` |
@@ -102,7 +98,7 @@ The request carries no auth header; authentication is the mTLS client cert prese
 
 The third channel in the example (`new-channel`) shows `state: "empty"`: this replica has no in-window observations for that path. The controller decides whether this means the channel is genuinely silent (`Unknown` with `reason=NoRecentTraffic`) or whether observation is incomplete (preserve existing condition) by comparing `replicaStartedAt` to the window length and checking other replicas. See [Channel Health Tracking](../user/platform-adapters.md#channel-health-tracking) and [AgentChannelReconciler](../../controller/reconcilers.md#agentchannelreconciler) step 4.
 
-**Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only channels whose target Agent is in the requested namespace are returned.
+**Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only channels whose path lies under the requested namespace's `/channels/{namespace}/` prefix are returned.
 
 ## POST /v1/test-chat
 

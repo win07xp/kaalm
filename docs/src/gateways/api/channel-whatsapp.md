@@ -1,6 +1,6 @@
-# WhatsApp Channel
+# WhatsApp channel
 
-*(Since v0.7.0.)* `/channels/{namespace}/{channel-path}` for an AgentChannel of `spec.type: whatsapp` is the Meta app's **webhook callback URL** for the WhatsApp Cloud API. `GET` is the verification handshake Meta performs when the operator saves the URL; `POST` carries the events. The gateway answers each `POST` with `200` at once and delivers the agent's reply later as a new message through the Graph API.
+`/channels/{namespace}/{channel-path}` for an AgentChannel of `spec.type: whatsapp` is the Meta app's **webhook callback URL** for the WhatsApp Cloud API. `GET` is the verification handshake Meta performs when the operator saves the URL; `POST` carries the events. The gateway answers each `POST` with `200` at once and delivers the agent's reply later as a new message through the Graph API.
 
 The channel fields are in [Platform types](../../resources/agentchannel.md#whatsapp); the adapter mechanics and the reply delivery buckets are in [The platform adapters](../user/platform-adapters.md#the-platform-adapters). This page is the wire contract on both sides.
 
@@ -8,7 +8,7 @@ The channel fields are in [Platform types](../../resources/agentchannel.md#whats
 
 `spec.whatsapp.path` follows the webhook path rules unchanged: it must begin with `/channels/{namespace}/` (rule 15) and must not begin with `/v1/` (rule 16). The endpoint is served on the User Gateway listener (`:8080`) behind the cluster Ingress, exactly as the [channel webhook](channel-webhook.md#path-shape-and-exposure) is; Meta requires HTTPS with a certificate it can verify.
 
-Routing is gated on `AgentChannel.status.conditions[type=Ready].status == True`, so apply the channel and wait for `Ready` before saving the URL in the app dashboard; the verification `GET` against a path that is not yet routed answers `401`.
+Routing is gated on `AgentChannel.status.conditions[type=Ready].status == True`, so apply the channel and wait for `Ready` before saving the URL in the app dashboard; the verification `GET` against a path that is not routed answers `401`.
 
 ## Verification handshake
 
@@ -32,7 +32,7 @@ Content-Type: application/json
 X-Hub-Signature-256: sha256=<hex HMAC-SHA256 over the raw body>
 ```
 
-**Verification.** The gateway strips `sha256=`, decodes hex, and constant-time-compares against HMAC-SHA256 of the raw body bytes keyed with the channel's `appSecret`. It is the webhook adapter's `hmac` verifier with the header, prefix, and encoding fixed. Failure is `401` with the generic [User Gateway error envelope](errors.md#user-gateway-error-responses). The signature covers no timestamp, so this surface has the same replay posture as the [generic webhook](channel-webhook.md#auth): bounded by budgets, deduplicated by the agent if it cares, with `metadata.messageId` carrying Meta's message ID for that purpose.
+**Verification.** The gateway strips `sha256=`, decodes hex, and constant-time-compares against HMAC-SHA256 of the raw body bytes keyed with the channel's `appSecret`. It is the webhook adapter's `hmac` verifier with the header, prefix, and encoding fixed. Failure is `401` with the generic [User Gateway error envelope](errors.md#user-gateway-error-responses). The signature covers no timestamp, so this surface has the same replay protection as the [generic webhook](channel-webhook.md#auth): bounded by budgets, deduplicated by the agent if it cares, with `metadata.messageId` carrying Meta's message ID for that purpose.
 
 **Body.** The fields the adapter reads:
 

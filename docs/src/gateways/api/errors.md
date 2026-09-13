@@ -1,8 +1,8 @@
-# Error Reference
+# Error reference
 
 Both gateways report failures with the same structured error envelope, so agents and webhook callers can handle failures programmatically instead of parsing free-form text. This page defines that envelope, then gives the complete HTTP status code mapping for each gateway.
 
-## The Error Envelope
+## The error envelope
 
 Every gateway error response carries a single top-level `error` object:
 
@@ -24,9 +24,9 @@ The LLM Gateway envelope additionally carries an `error.provider` field on error
 
 Where a `Retry-After` header accompanies an error, it is always emitted as integer `delta-seconds` (RFC 7231 § 7.1.3), never as an HTTP-date. Clients should parse it as integer seconds.
 
-## LLM Gateway Error Responses
+## LLM Gateway error responses
 
-When the LLM Gateway cannot fulfill a request, it returns the structured envelope above so agents can handle failures programmatically. For the full LLM Gateway request flow, including the budget checks and fallback logic that produce these errors, see [Request Flow](../llm/request-handling.md#request-flow); the underlying enforcement points live at [Rate Limiting](../llm/budgets-and-rate-limits.md#rate-limiting), [Budget State Management](../llm/budgets-and-rate-limits.md#budget-state-management), and [Fallback Logic](../llm/fallback.md).
+When the LLM Gateway cannot fulfill a request, it returns the structured envelope above so agents can handle failures programmatically. For the full LLM Gateway request flow, including the budget checks and fallback logic that produce these errors, see [Request flow](../llm/request-handling.md#request-flow); the underlying enforcement points live at [Rate limiting](../llm/budgets-and-rate-limits.md#rate-limiting), [Budget state management](../llm/budgets-and-rate-limits.md#budget-state-management), and [Fallback logic](../llm/fallback.md).
 
 **Error response body:**
 
@@ -52,40 +52,40 @@ When the LLM Gateway cannot fulfill a request, it returns the structured envelop
 | 429 | `rate_limited` | yes | Per-namespace rate limit exceeded; includes `Retry-After` header (short backoff, typically seconds) |
 | 429 | `budget_exhausted` | yes | Budget blocked per policy; `Retry-After` header set to the start of the next budget period |
 | 429 | `budget_throttled` | yes | Hard enforcement only: the boundary region's admission slot is busy; `Retry-After: 1` (see row notes) |
-| 403 | `tool_denied` | no | Tool plane, since v0.4.0: the named tool is outside the workload's grant, or the JSON-RPC method is outside the broker's allowlist (see row notes) |
+| 403 | `tool_denied` | no | Tool plane: the named tool is outside the workload's grant, or the JSON-RPC method is outside the broker's allowlist (see row notes) |
 | 502 | `provider_error` | no | Upstream provider returned an error after the fallback chain was exhausted |
 | 503 | `internal_unavailable` | yes | Gateway's `TokenReview` call to the apiserver failed (see row notes); `Retry-After: 1` |
 | 503 | `provider_unavailable` | no | All providers (primary + fallback) unreachable |
 | 503 | `budget_state_unavailable` | yes | Hard enforcement only: the replica cannot verify budget state inside the boundary region and fails closed (see row notes) |
-| 503 | `tool_unavailable` | yes | Tool plane, since v0.4.0: the tool server is unreachable, refusing, or rejected the injected credential |
-| 504 | `tool_timeout` | no | Tool plane, since v0.4.0: the brokered tool call exceeded its upstream timeout |
+| 503 | `tool_unavailable` | yes | Tool plane: the tool server is unreachable, refusing, or rejected the injected credential |
+| 504 | `tool_timeout` | no | Tool plane: the brokered tool call exceeded its upstream timeout |
 | 504 | `provider_timeout` | no | Upstream provider timed out after the fallback chain was exhausted |
 
 Row notes:
 
-- **401 `unauthorized`.** Covers two causes: bearer-token `TokenReview` rejection (gateway-only tier), or source-IP → Pod cross-check failure (both auth modes; this is a defense-in-depth check that runs after auth succeeds, see [Namespace Identification](../llm/workload-identity.md)). mTLS handshake failures terminate at the TLS layer with no HTTP response, so they do not appear in this table.
+- **401 `unauthorized`.** Covers two causes: bearer-token `TokenReview` rejection (gateway-only tier), or source-IP to Pod cross-check failure (both auth modes; this is a defense-in-depth check that runs after auth succeeds, see [Workload identity](../llm/workload-identity.md)). mTLS handshake failures terminate at the TLS layer with no HTTP response, so they do not appear in this table.
 - **403 `access_denied`.** For full-lifecycle workloads (Agent / AgentTask), the request was rejected by any of `spec.providers` (workload), `AgentClass.allowedProviders`, or `ModelProvider.allowedNamespaces`. Gateway-only-tier callers are rejected by `ModelProvider.allowedNamespaces` alone, since there is no Agent, AgentTask, or AgentClass to consult. See [Multi-tenancy](../../concepts/tenancy-and-tiers.md#multi-tenancy) for the canonical tenancy chain.
 - **413 `request_too_large`.** Reduce prompt size, paginate batch calls, or externalize large attachments and reference them by URL. A fresh attempt with the same body hits the same condition. The limit is applied before provider routing, so `error.provider` is absent.
-- **429 `budget_exhausted`.** Retryable only at or after the `Retry-After` moment, which is typically hours to days away. Since v0.3.0 the message names which ceiling fired: `namespace budget exhausted: <ns>` or `cluster budget exhausted`.
+- **429 `budget_exhausted`.** Retryable only at or after the `Retry-After` moment, which is typically hours to days away. The message names which ceiling fired: `namespace budget exhausted: <ns>` or `cluster budget exhausted`.
 - **429 `budget_throttled`.** [Hard enforcement](../llm/budgets-and-rate-limits.md#hard-enforcement) serializes admission near a block ceiling; this is the response to a request that found the admission slot held. A short-backoff retry is correct here, the opposite of `budget_exhausted`'s guidance: the slot frees as soon as the in-flight request settles.
-- **Tool plane types (since v0.4.0).** `tool_denied` is deliberately distinct from `access_denied`: the namespace and class gates reuse `access_denied` exactly as the LLM tenancy chain does, while `tool_denied` names a per-tool narrowing miss (or a JSON-RPC method outside the broker's tool-surface allowlist, naming the method) so tool-level policy is auditable on its own. See [The Tool Plane](../tool-plane.md).
+- **Tool plane types.** `tool_denied` is deliberately distinct from `access_denied`: the namespace and class gates reuse `access_denied` exactly as the LLM tenancy chain does, while `tool_denied` names a per-tool narrowing miss (or a JSON-RPC method outside the broker's tool-surface allowlist, naming the method) so tool-level policy is auditable on its own. See [The tool plane](../tool-plane.md).
 - **503 `budget_state_unavailable`.** A hard-enforcement replica inside the boundary region could not publish its spend or refresh its peer view within the staleness window, and refuses to spend blind. Retryable: the condition clears on the first successful exchange. Requests outside the boundary region are unaffected.
 - **502 `provider_error`, 503 `provider_unavailable`, 504 `provider_timeout`.** The gateway has already retried through the entire fallback chain on the agent's behalf, so these are not retryable: escalate to a different model/budget or operator intervention rather than retry. For `provider_timeout`, the per-attempt bound is `gateway.providerFirstByteTimeout` (default `120s`).
-- **503 `internal_unavailable`.** The gateway's `TokenReview` call to the apiserver failed for a bearer-token request that missed the token cache. This affects the gateway-only tier only; mTLS callers and cached-token requests are unaffected (see [Failure Modes](../llm/operations.md#failure-modes)). Emitted with `Retry-After: 1` and clears when the apiserver recovers. The type name is deliberately reused from [`/v1/task/complete`](task-complete.md) and the [User Gateway table](errors.md#user-gateway-error-responses) below.
+- **503 `internal_unavailable`.** The gateway's `TokenReview` call to the apiserver failed for a bearer-token request that missed the token cache. This affects the gateway-only tier only; mTLS callers and cached-token requests are unaffected (see [Failure modes](../llm/operations.md#failure-modes)). Emitted with `Retry-After: 1` and clears when the apiserver recovers. The type name is deliberately reused from [`/v1/task/complete`](task-complete.md) and the [User Gateway table](#user-gateway-error-responses) below.
 
 **Retry semantics.** The `error.retryable` field indicates whether the agent should retry the request, but with two important qualifications:
 
 - Budget-exhausted requests are retryable but **only** at or after the `Retry-After` moment. Agents SHOULD honor `Retry-After` strictly and SHOULD NOT autopilot-retry on a short backoff schedule: a generic 429 retry loop that ignores `Retry-After` would burn against a still-exhausted budget and hit the same response.
-- `budget_throttled` is the one 429 where a short-backoff retry is the intended client behavior; `budget_state_unavailable` clears on the gateway's next successful budget exchange, so a modest backoff is appropriate there too.
+- `budget_throttled` is the only 429 where a short-backoff retry is the intended client behavior; `budget_state_unavailable` clears on the gateway's next successful budget exchange, so a modest backoff is appropriate there too.
 - Fallback-exhausted errors (`provider_error`, `provider_unavailable`, `provider_timeout`) are not retryable. The gateway has already retried through the entire fallback chain on the agent's behalf, so a fresh agent-side retry within the same time horizon is unlikely to find a healthy provider. Agents should escalate to a different model/budget or operator intervention instead.
 
 **`Retry-After` format.** Emitted as integer `delta-seconds` (RFC 7231 § 7.1.3) on every error that includes one. For `budget_exhausted` this can be a large value (for example, ~2,592,000 for a 30-day budget boundary). Clients should parse it as integer seconds, not as an HTTP-date.
 
-**The `error.provider` field.** Present only on errors scoped to a single named provider: `access_denied` (403), `rate_limited` (429), `budget_exhausted` (429), `budget_throttled` (429), `budget_state_unavailable` (503), and, since v0.4.0, `tool_denied` (403), `tool_unavailable` (503), and `tool_timeout` (504). It is absent on pre-routing errors (`invalid_request`, `unauthorized`, `request_too_large`, `internal_unavailable`), where no provider has yet been resolved. On fallback-exhausted errors (`provider_error`, `provider_unavailable`, `provider_timeout`), `provider` carries the **originally-requested** provider, not the last fallback attempted, so callers see a stable identifier they can correlate to the qualified `provider/model` they sent.
+**The `error.provider` field.** Present only on errors scoped to a single named provider: `access_denied` (403), `rate_limited` (429), `budget_exhausted` (429), `budget_throttled` (429), `budget_state_unavailable` (503), and `tool_denied` (403), `tool_unavailable` (503), and `tool_timeout` (504). It is absent on pre-routing errors (`invalid_request`, `unauthorized`, `request_too_large`, `internal_unavailable`), where no provider has yet been resolved. On fallback-exhausted errors (`provider_error`, `provider_unavailable`, `provider_timeout`), `provider` carries the **originally-requested** provider, not the last fallback attempted, so callers see a stable identifier they can correlate to the qualified `provider/model` they sent.
 
-## User Gateway Error Responses
+## User Gateway error responses
 
-When the User Gateway cannot deliver a webhook in **sync mode**, it returns the structured envelope to the webhook caller. The same error shapes are used in async mode but are delivered to `callbackUrl` or stored at the polling endpoint: see [Async Webhook Response](async-responses.md) for the async wire format and [Failure Modes](../user/operations.md#failure-modes) for the operational behavior behind each error type. One exception: `sync_deadline_exceeded` is **sync-only** by construction (async mode does not block on a wall-clock budget), mirroring the async-only carve-out for `callback_invalid` documented after the table.
+When the User Gateway cannot deliver a webhook in **sync mode**, it returns the structured envelope to the webhook caller. The same error shapes are used in async mode but are delivered to `callbackUrl` or stored at the polling endpoint: see [Async webhook responses](async-responses.md) for the async wire format and [Failure modes](../user/operations.md#failure-modes) for the operational behavior behind each error type. One exception: `sync_deadline_exceeded` is **sync-only** by construction (async mode does not block on a wall-clock budget), mirroring the async-only carve-out for `callback_invalid` documented after the table.
 
 **Error response body** (sync mode):
 
@@ -115,8 +115,8 @@ When the User Gateway cannot deliver a webhook in **sync mode**, it returns the 
 
 Row notes:
 
-- **400 `invalid_request`.** Fires in one of two cases: (a) `webhook.userId.fromBody` or `webhook.content.fromBody` is configured on the AgentChannel but the inbound body is not parseable as JSON; (b) `webhook.content` is unconfigured and the raw inbound body contains invalid UTF-8 bytes (the raw-body path requires valid UTF-8; binary senders must configure `webhook.content` explicitly). The body is structurally malformed in either case, so retrying without changing it hits the same condition. The type name is reused from the [LLM Gateway error table](errors.md#llm-gateway-error-responses) above and matches the `400` envelope on [`/v1/task/complete`](task-complete.md).
-- **401 `unauthorized`.** Covers missing or malformed credentials, signature mismatch, **or** a path that is not registered to a `Ready=True` AgentChannel. The cause is deliberately not disambiguated: see [Polling Fallback § 401](async-responses.md#polling-fallback) for the threat-model rationale and for the polling endpoint's looser ("any registered AgentChannel") registration check. The gateway MUST emit a generic `message` (for example `"authentication failed"`) and MUST NOT differentiate causes via `error.type`, `message`, response headers, or response timing.
+- **400 `invalid_request`.** Fires in one of two cases: (a) `webhook.userId.fromBody` or `webhook.content.fromBody` is configured on the AgentChannel but the inbound body is not parseable as JSON; (b) `webhook.content` is unconfigured and the raw inbound body contains invalid UTF-8 bytes (the raw-body path requires valid UTF-8; binary senders must configure `webhook.content` explicitly). The body is structurally malformed in either case, so retrying without changing it hits the same condition. The type name is reused from the [LLM Gateway error table](#llm-gateway-error-responses) above and matches the `400` envelope on [`/v1/task/complete`](task-complete.md).
+- **401 `unauthorized`.** Covers missing or malformed credentials, signature mismatch, **or** a path that is not registered to a `Ready=True` AgentChannel. The cause is deliberately not disambiguated: see [Polling fallback](async-responses.md#polling-fallback), 401, for the threat-model rationale and for the polling endpoint's looser ("any registered AgentChannel") registration check. The gateway MUST emit a generic `message` (for example `"authentication failed"`) and MUST NOT differentiate causes through `error.type`, `message`, response headers, or response timing.
 - **413 `request_too_large`.** Reduce body size or split the message.
 - **413 `response_too_large`.** Externalize large outputs and reference them by URL.
 - **502 `delivery_failed`.** Every attempt failed with a connection error, a non-2xx response, or a 200 with a malformed envelope. See [`delivery_failed`](async-responses.md) for the canonical failure-mode breakdown.
@@ -125,4 +125,4 @@ Row notes:
 
 `Retry-After` is emitted as integer `delta-seconds`, the same convention as the LLM Gateway error table above.
 
-**Why `callback_invalid` is not in the table.** It is **async-only** by construction: the failure mode is "the configured `callbackUrl` is rejected before dial", which has no sync analogue (sync responses do not use `callbackUrl`). When `callback_invalid` fires in async mode, the underlying agent response (or other error envelope) is stored at the polling endpoint, and `callback_invalid` itself is signaled only via a `Warning` event on the AgentChannel: it is not an `error.type` exposed to polling callers. See [Async Webhook Response § callback_invalid](async-responses.md).
+**Why `callback_invalid` is not in the table.** It is **async-only** by construction: the failure mode is "the configured `callbackUrl` is rejected before dial", which has no sync analogue (sync responses do not use `callbackUrl`). When `callback_invalid` fires in async mode, the underlying agent response (or other error envelope) is stored at the polling endpoint, and `callback_invalid` itself is signaled only by a `Warning` event on the AgentChannel: it is not an `error.type` exposed to polling callers. See [Async webhook responses](async-responses.md), `callback_invalid`.
