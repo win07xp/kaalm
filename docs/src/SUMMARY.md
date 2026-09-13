@@ -72,11 +72,11 @@
 
 # Security
 
-- [Security Model and Isolation](security/model.md)
-- [RBAC and Authentication](security/rbac.md)
-- [Credential Handling](security/credentials.md)
-- [TLS and Certificates](security/tls.md)
-- [Threat Model](security/threat-model.md)
+- [Security model and isolation](security/model.md)
+- [RBAC and authentication](security/rbac.md)
+- [Credential handling](security/credentials.md)
+- [TLS and certificates](security/tls.md)
+- [Threat model](security/threat-model.md)
 
 # Operations
 

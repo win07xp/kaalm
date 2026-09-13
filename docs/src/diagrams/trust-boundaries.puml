@@ -62,7 +62,7 @@ legend bottom
   10, the console (fleet reads and test-chat, mTLS inside kaalm-system), and 11, the OTLP trace exporter
   (span metadata only, never prompt content, endpoint operator-set).
   ====
-  **Class 5 is the one to reason about hardest.** Its payloads carry agent replies, which may contain PII, and its
+  **Class 5 needs the most scrutiny.** Its payloads carry agent replies, which may contain PII, and its
   receiver is chosen by the channel owner rather than by Kaalm, so it terminates outside the trust boundary by
   construction. That is why it is signed, allowlist-constrained, and re-resolved before dial with the checked IP
   pinned into the connection: see the SSRF row of the threat model.

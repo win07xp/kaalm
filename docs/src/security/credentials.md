@@ -1,20 +1,20 @@
-# Credential Handling
+# Credential handling
 
-Kaalm handles three kinds of long-lived secret material: **LLM API keys**, which authenticate Kaalm to model providers, **tool server credentials** (since v0.4.0), which authenticate Kaalm's broker to MCP tool servers, and **channel credentials**, which authenticate inbound webhook callers to Kaalm and sign Kaalm's outbound callbacks. Their homes are deliberate. LLM keys and tool credentials live in one cluster-wide location and are never copied; channel credentials live in each agent's own namespace.
+Kaalm handles three kinds of long-lived secret material: **LLM API keys**, which authenticate Kaalm to model providers, **tool server credentials**, which authenticate Kaalm's broker to MCP tool servers, and **channel credentials**, which authenticate inbound webhook callers to Kaalm and sign Kaalm's outbound callbacks. Their homes are deliberate. LLM keys and tool credentials live in one cluster-wide location and are never copied; channel credentials live in each agent's own namespace.
 
-One rule spans all three: **agent containers never hold credential material.** The gateway is the only component that uses credentials on the data path, and it is a separate Pod in `kaalm-system`. That separation is what makes the isolation enforceable with nothing more exotic than a Kubernetes NetworkPolicy, covered in [Protecting Agent Containers from LLM Provider Access](#protecting-agent-containers-from-llm-provider-access).
+One rule spans all three: **agent containers never hold credential material.** The gateway is the only component that uses credentials on the data path, and it is a separate Pod in `kaalm-system`. That separation is what makes the isolation enforceable with nothing more exotic than a Kubernetes NetworkPolicy, covered in [Protecting agent containers from LLM provider access](#protecting-agent-containers-from-llm-provider-access).
 
-TLS certificate material (agent serving certs, AgentTask client certs, and the CA trust chain) follows a separate lifecycle managed by cert-manager. See [In-cluster TLS (Bidirectional)](tls.md#in-cluster-tls).
+TLS certificate material (agent serving certs, AgentTask client certs, and the CA trust chain) follows a separate lifecycle managed by cert-manager. See [In-cluster TLS](tls.md#in-cluster-tls).
 
-## The Credential Map
+## The credential map
 
-One figure for the whole economy: every credential class, who mints it, who holds it, who verifies it, and what it unlocks. The lifecycle sections that follow and the figures on [TLS](tls.md) and [Workload Identity](../gateways/llm/workload-identity.md) are the deep dives.
+One figure for the whole economy: every credential class, who mints it, who holds it, who verifies it, and what it unlocks. The lifecycle sections that follow and the figures on [TLS and certificates](tls.md) and [Workload identity](../gateways/llm/workload-identity.md) are the deep dives.
 
 ![A component diagram mapping every credential class across four frames. A minters frame holds the platform engineer, cert-manager with trust-manager, and the kubelet. The platform engineer creates two Secrets in kaalm-system, the provider API key and the tool credential, and both flow to the gateway watch-based and never copied. cert-manager mints the per-workload leaf certificate inside the Agent or AgentTask Pod, 90 days renewed 30 early, loaded and reloaded on rotation by kaalm.gateway and the kaalm.http_client factories, which present it to the gateway over mTLS where the SAN names the workload; a note records that this verified identity unlocks provider and tool grants, the budget, and the audit name. trust-manager projects the public kaalm-ca ConfigMap into the namespace, which is how every caller knows it reached the real gateway. The kubelet projects a kaalm-gateway-audience ServiceAccount token into a tier-1 workload, whose bearer path through TokenReview yields namespace identity only. A framework SDK's placeholder api_key is drawn dashed and dies at the gateway, stripped. The gateway node verifies SAN plus source IP, TokenReview, and session ownership, strips inbound auth headers, mints workload-bound MCP session ids, and holds keys in process memory only. The only red edges leave the gateway for the LLM provider and the MCP tool server, injecting the API key and the tool credential, the only hop either ever travels.](../diagrams/credential-map.svg)
 
 **Reading the diagram.** The frames are the argument. The only credential material inside a team namespace is identity: the workload's own leaf certificate and the public CA bundle it verifies the gateway with. Everything with spending power sits in `kaalm-system` and crosses exactly one hop, in red, on the gateway's upstream leg. And identity is what policy keys off: the verified SAN (or, for the gateway-only tier, the TokenReview namespace) selects the grants, the budget, and the audit name, which is why the base images' `kaalm.gateway` client and the `kaalm.http_client()` factories exist to present it, and follow its rotation, without handler code.
 
-## Lifecycle of an LLM API Key
+## Lifecycle of an LLM API key
 
 1. **Stored**: in a Secret in `kaalm-system` (for example `kaalm-system/anthropic-api-key`), created and managed by platform engineers.
 2. **Referenced**: by `ModelProvider.spec.credentialsRef`. Read access is limited to two ServiceAccounts: the **gateway** (which uses the key on every proxied request) and the **operator** (which validates that the Secret exists and is well-formed, and uses the key for the ModelProviderReconciler's provider health probes, since `GET /v1/models` requires authentication; see [ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler) step 2).
@@ -29,7 +29,7 @@ Step 6 is the reason rotation is a single Secret update: with no fan-out copies,
 
 **Reading the diagram.** The namespace frames are the argument. No credential-bearing arrow ever crosses out of `kaalm-system`: the key reaches the provider on the gateway's upstream leg and nowhere else. Read the three holders by retention, too, since they differ: the gateway keeps the key in memory for the life of the process, the operator only for the length of one probe, and the agent never at all.
 
-## Lifecycle of a Tool Server Credential (since v0.4.0)
+## Lifecycle of a tool server credential
 
 The tool credential is the LLM key's shape applied to the [tool plane](../gateways/tool-plane.md), and every property of that lifecycle transfers:
 
@@ -42,20 +42,20 @@ The tool credential is the LLM key's shape applied to the [tool plane](../gatewa
 
 Step 4 is the property the agent-visible half of the plane rests on: an agent's `spec.tools` grant names the ToolProvider, but the credential behind it has no path into the agent's namespace at all.
 
-## Lifecycle of a Channel Credential (AgentChannel)
+## Lifecycle of a channel credential (AgentChannel)
 
 1. **Stored**: in a Secret in the agent's namespace (for example `team-support/discord-bot-credentials`), created by the platform team or a provisioning service.
-2. **Referenced**: by the AgentChannel's webhook auth config: `spec.webhook.auth.secretRef` (inbound, bearer), `spec.webhook.auth.hmac.secretRef` (inbound, HMAC), and/or `spec.webhook.callbackAuth.secretRef` / `.hmac.secretRef` (outbound callback signing, required when `spec.webhook.callbackUrl` is set; see [rule 25](../resources/validation-and-defaulting.md#cross-resource-validation)). A platform channel (since v0.7.0) references one Secret through `spec.discord.credentialsRef` or `spec.whatsapp.credentialsRef`, whose keys are fixed by the type ([rule 40](../resources/validation-and-defaulting.md#cross-resource-validation)).
-3. **Loaded**: the gateway watches `AgentChannel` resources directly. When it sees a new or updated AgentChannel, it reads the referenced Secret(s) from the agent's namespace using its scoped RBAC and holds them in-process: inbound `auth` material for the webhook adapter's verifier, outbound `callbackAuth` material for the adapter's `SendReply` signer. A platform channel's one `credentialsRef` Secret splits the same way: the Discord public key or the WhatsApp app secret and verify token back the inbound verifier, and the WhatsApp access token or the Discord bot token back `SendReply`. The operator ServiceAccount also has a parallel scoped read path on the same Secret(s) through a dynamic per-channel Role (see [Operator ServiceAccount](rbac.md#operator-serviceaccount)), used solely by the AgentChannelReconciler to validate that the configured `data` key exists; the operator does not retain credential material in memory.
+2. **Referenced**: by the AgentChannel's webhook auth config: `spec.webhook.auth.secretRef` (inbound, bearer), `spec.webhook.auth.hmac.secretRef` (inbound, HMAC), and/or `spec.webhook.callbackAuth.secretRef` / `.hmac.secretRef` (outbound callback signing, required when `spec.webhook.callbackUrl` is set; see [rule 25](../resources/validation-and-defaulting.md#cross-resource-validation)). A platform channel references one Secret through `spec.discord.credentialsRef` or `spec.whatsapp.credentialsRef`, whose keys are fixed by the type ([rule 40](../resources/validation-and-defaulting.md#cross-resource-validation)).
+3. **Loaded**: the gateway watches `AgentChannel` resources directly. When it sees a new or updated AgentChannel, it reads the referenced Secret(s) from the agent's namespace using its scoped RBAC and holds them in-process: inbound `auth` material for the webhook adapter's verifier, outbound `callbackAuth` material for the adapter's `SendReply` signer. A platform channel's one `credentialsRef` Secret splits the same way: the Discord public key or the WhatsApp app secret and verify token back the inbound verifier, and the WhatsApp access token or the Discord bot token back `SendReply`. The operator ServiceAccount also has a parallel scoped read path on the same Secret(s) through a dynamic per-channel Role (see [Operator ServiceAccount](rbac.md#operator-serviceaccount)), used by the AgentChannelReconciler to validate that the configured `data` key exists; the operator does not retain credential material in memory.
 4. **Rotated**: same watch-based mechanism as LLM credentials. The gateway watches the referenced Secret for changes and refreshes in-memory credentials without a restart.
 
 Channel credentials are namespace-scoped for organizational isolation: each namespace contains only the credentials for its own agents' channels. They are created by the platform team or a provisioning service; developers do not need Secret access in their namespace.
 
-![A sequence diagram of the channel credential lifecycle, drawn in the same grammar as the LLM API key figure but with the Secret sitting inside the agent's own namespace rather than kaalm-system, and a second namespace holding its own separate Secret. The AgentChannel's webhook auth config names the Secrets, and the AgentChannelReconciler mints two resourceNames-scoped Roles in the agent's namespace, one granting the gateway get and watch and one granting the operator get and watch, both owned by the AgentChannel and torn down with it. The gateway holds the material in process, split by direction: the inbound auth material feeds the webhook adapter's verifier and the outbound callbackAuth material feeds its SendReply signer. The operator reads the same Secret only to validate that the configured data key exists and retains nothing.](../diagrams/channel-credential-lifecycle.svg)
+![A sequence diagram of the channel credential lifecycle, drawn in the same grammar as the LLM API key figure but with the Secret sitting inside the agent's own namespace rather than kaalm-system, and a second namespace holding its own separate Secret. The AgentChannel's webhook auth config names the Secrets, and the AgentChannelReconciler mints two resourceNames-scoped Roles in the agent's namespace, one granting the gateway get and watch and one granting the operator get and watch, both carrying an ownerRef to the AgentChannel and torn down with it. The gateway holds the material in process, split by direction: the inbound auth material feeds the webhook adapter's verifier and the outbound callbackAuth material feeds its SendReply signer. The operator reads the same Secret only to validate that the configured data key exists and retains nothing.](../diagrams/channel-credential-lifecycle.svg)
 
 **Reading the diagram.** It is deliberately the mirror of [the LLM API key figure](#lifecycle-of-an-llm-api-key): same participants, same layout, one structural difference. The Secret has moved out of `kaalm-system` and into the agent's namespace, and it fans out one per namespace. Every other contrast follows from that move, including why the grant has to be minted per channel and garbage-collected with the AgentChannel instead of shipping as a plain namespaced Role. One Secret feeds both directions: the same object backs the inbound verifier and the outbound `SendReply` signer.
 
-## Protecting Agent Containers from LLM Provider Access
+## Protecting agent containers from LLM provider access
 
 Because the gateway is a separate Pod in `kaalm-system`, NetworkPolicy can cleanly enforce agent isolation without any per-container workarounds:
 
@@ -73,7 +73,7 @@ ingress:
         matchLabels:
           app.kubernetes.io/name: kaalm-gateway
     ports:
-      - port: 8080      # Agent HTTPS health/message port ($KAALM_HEALTH_PORT): gateway→agent channel message delivery
+      - port: 8080      # Agent HTTPS health/message port ($KAALM_HEALTH_PORT): gateway to agent message delivery
         protocol: TCP
 egress:
   - to:
@@ -84,7 +84,7 @@ egress:
         matchLabels:
           app.kubernetes.io/name: kaalm-gateway
     ports:
-      - port: 8443      # All agent→gateway TLS traffic (LLM calls, heartbeats, task completion)
+      - port: 8443      # All agent to gateway TLS traffic (LLM calls, heartbeats, task completion)
         protocol: TCP
   - to:                    # DNS, scoped to kube-dns in kube-system
     - namespaceSelector:
@@ -106,4 +106,4 @@ Agent containers that attempt to call LLM providers directly are blocked at the 
 
 The DNS egress rule in the preceding NetworkPolicy is scoped to `kubernetes.io/metadata.name: kube-system` + `k8s-app: kube-dns`, which matches the upstream kube-dns/CoreDNS labelling used by kubeadm, EKS, GKE, AKS, and the standard CoreDNS chart. Clusters whose DNS Pod uses a different namespace or label set (custom CoreDNS chart, NodeLocal DNSCache only) must override the selector. The reconciler exposes this as the Helm value [`controller.networkPolicy.dnsSelector`](../operations/deployment.md#helm-chart-contents) (an object with `namespaceLabels` and `podLabels` keys) on the synthesized per-agent NetworkPolicy.
 
-The narrow scoping is deliberate: an untrusted agent must not be able to reach arbitrary Pods on port 53. The previous `namespaceSelector: {}` rule allowed exactly that and is no longer acceptable.
+The narrow scoping is deliberate: an untrusted agent must not be able to reach arbitrary Pods on port 53, which a bare `namespaceSelector: {}` rule would allow.

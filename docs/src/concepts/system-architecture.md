@@ -135,7 +135,7 @@ An `AgentClass` selects the workload backend with [`spec.runtime.backend`](../re
 Kaalm does not mandate MCP, but MCP is the tool protocol it brokers. The gateway's [tool plane](../gateways/tool-plane.md) carries tool traffic with credential injection, tenancy gates, and per-call audit. Direct egress is the documented escape hatch: an agent container may connect to an MCP server itself, and what Kaalm governs then is egress, through the AgentClass:
 
 - [`network.egress.allowedCIDRs`](../resources/agentclass.md#spec) is portable and works on every NP-capable CNI.
-- `network.egress.allowedHosts` is FQDN-based and works only on FQDN-policy CNIs, for example Cilium or Calico Enterprise.
+- `network.egress.allowedHosts` is FQDN-based; the controller validates it and reports whether the CNI has an FQDN policy type, but synthesizes no policy from it.
 
 MCP server provisioning stays out of scope on both paths: Kaalm brokers access to tool servers, it does not run them. See [AgentClass design notes](../resources/agentclass.md#design-notes).
 
