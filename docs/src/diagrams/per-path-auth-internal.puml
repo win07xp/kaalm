@@ -1,0 +1,20 @@
+@startuml per-path-auth-internal
+' The controller-only and console-only regimes on :8443. Each branch is
+' ControllerPaths or ConsolePaths in internal/gateway/auth.go; the prose
+' is docs/src/gateways/listener-tls.md.
+!include _style.puml
+
+start
+:TLS handshake on :8443\nClientAuth = VerifyClientCertIfGiven;
+:/v1/activity, /v1/channels/health (controller),\n/v1/test-chat, /v1/spend (console);
+if (client certificate?) then (no)
+  :**401 unauthorized**;
+  kill
+endif
+if (SAN is the path's component identity?) then (no)
+  :**403 access_denied**;
+  kill
+endif
+:Handler, no source-IP cross-check;
+stop
+@enduml
