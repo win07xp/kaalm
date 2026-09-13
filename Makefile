@@ -354,6 +354,8 @@ LOAD_CLUSTER ?= kaalm-load
 # The load deploy opens the pprof listeners so a profile can be taken during
 # any phase; 0 turns them off.
 LOAD_PPROF_PORT ?= 6060
+# Benchmark repetitions; benchstat wants several to report a confidence interval.
+BENCH_COUNT ?= 6
 LOAD_AGENT_NODES ?= 2
 LOAD_MAX_PODS ?= 250
 LOADGEN_IMG ?= registry.test/load/loadgen:load
@@ -379,6 +381,10 @@ load-images: ## Build and import what the load run needs: controller, gateway, m
 	docker build -t $(LOADGEN_IMG) -f test/load/Dockerfile .
 	CLUSTER=$(LOAD_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(LOADGEN_IMG)
 
+.PHONY: bench
+bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into benchstat to compare.
+	go test ./internal/gateway/ -run '^$$' -bench . -benchmem -count $(BENCH_COUNT)
+
 .PHONY: load-deploy
 load-deploy: chart-sync ## Install the chart onto the load cluster with the mock provider trusted for upstream and callbacks.
 	helm --kube-context k3d-$(LOAD_CLUSTER) upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
@@ -390,6 +396,12 @@ load-deploy: chart-sync ## Install the chart onto the load cluster with the mock
 		--set controller.pprofPort=$(LOAD_PPROF_PORT) \
 		--set gateway.pprofPort=$(LOAD_PPROF_PORT) \
 		--wait --timeout 5m
+	# The image tags are fixed, so an upgrade with no template change would
+	# leave the Pods on whatever image they started with. Restart both so a
+	# run always measures the images just imported.
+	kubectl --context k3d-$(LOAD_CLUSTER) -n kaalm-system rollout restart deploy/kaalm-controller deploy/kaalm-gateway
+	kubectl --context k3d-$(LOAD_CLUSTER) -n kaalm-system rollout status deploy/kaalm-controller --timeout=3m
+	kubectl --context k3d-$(LOAD_CLUSTER) -n kaalm-system rollout status deploy/kaalm-gateway --timeout=3m
 
 .PHONY: load-run
 load-run: ## Run the harness against an existing load cluster (the inner loop); results land in test/load/results/.

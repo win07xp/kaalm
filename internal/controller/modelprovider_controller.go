@@ -25,6 +25,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -465,9 +466,18 @@ func (r *ModelProviderReconciler) setHealthy(mp *kaalmv1beta1.ModelProvider, ok 
 	})
 }
 
+// finish writes the provider's status only when the pass changed it against
+// what the informer holds: the reconciler runs on every budget ConfigMap
+// event, and a status write per pass is an update event for every watcher
+// whether or not anything in it moved (#174).
 func (r *ModelProviderReconciler) finish(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider, res ctrl.Result,
 ) (ctrl.Result, error) {
+	var current kaalmv1beta1.ModelProvider
+	if err := r.Get(ctx, client.ObjectKeyFromObject(mp), &current); err == nil &&
+		equality.Semantic.DeepEqual(current.Status, mp.Status) {
+		return res, nil
+	}
 	return res, r.Status().Update(ctx, mp)
 }
 

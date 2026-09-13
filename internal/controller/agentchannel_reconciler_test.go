@@ -895,3 +895,52 @@ func TestChannel_PathConflictAcrossTypes(t *testing.T) {
 	mkDiscordChannel(t, "ch-xt-b", "ch-agent-xt", "/channels/default/ch-xt", "ch-xt-creds")
 	expectChannelReady(t, "ch-xt-b", metav1.ConditionFalse, kaalmv1beta1.ReasonPathConflict)
 }
+
+// TestChannel_UnchangedPassWritesNoStatus: a pass that changes nothing in the
+// status writes nothing. The reconciler runs every channel every minute and
+// on every Agent change, so an unconditional status write was the largest
+// single write the controller made under load (#174).
+func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
+	mkWorkloadClass(t, "chc-quiet", nil)
+	mkWorkloadAgent(t, "ch-agent-quiet", "chc-quiet", nil)
+	mkChannelSecret(t, "ch-quiet-secret")
+	mkChannel(t, "ch-quiet", "ch-agent-quiet", "/channels/default/ch-quiet", nil)
+	expectChannelReady(t, "ch-quiet", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+	key := types.NamespacedName{Namespace: "default", Name: "ch-quiet"}
+	eventually(t, func() error {
+		var ch kaalmv1beta1.AgentChannel
+		if err := testClient.Get(ctxT(), key, &ch); err != nil {
+			return err
+		}
+		if ch.Status.Phase != kaalmv1beta1.ChannelActive {
+			return errString("phase=" + string(ch.Status.Phase))
+		}
+		return nil
+	})
+	var settled kaalmv1beta1.AgentChannel
+	if err := testClient.Get(ctxT(), key, &settled); err != nil {
+		t.Fatal(err)
+	}
+
+	// Touching the Agent re-enqueues the channel through the Agent watch;
+	// the pass finds nothing to change.
+	var agent kaalmv1beta1.Agent
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-quiet"}, &agent); err != nil {
+		t.Fatal(err)
+	}
+	if agent.Labels == nil {
+		agent.Labels = map[string]string{}
+	}
+	agent.Labels["touch"] = "1"
+	if err := testClient.Update(ctxT(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * time.Second)
+	var after kaalmv1beta1.AgentChannel
+	if err := testClient.Get(ctxT(), key, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.ResourceVersion != settled.ResourceVersion {
+		t.Errorf("an unchanged pass rewrote the channel: resourceVersion %s -> %s", settled.ResourceVersion, after.ResourceVersion)
+	}
+}

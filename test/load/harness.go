@@ -54,6 +54,7 @@ type summary struct {
 	Teardown    *teardownResult `json:"teardown,omitempty"`
 	Churn       *churnResult    `json:"churn,omitempty"`
 	Tasks       *tasksResult    `json:"tasks,omitempty"`
+	Restart     *restartResult  `json:"restart,omitempty"`
 	Notes       []string        `json:"notes,omitempty"`
 }
 
@@ -152,6 +153,8 @@ func (h *harness) runPhases(ctx context.Context) error {
 			err = h.runChurn(ctx)
 		case phaseTasks:
 			err = h.runTasks(ctx)
+		case phaseRestart:
+			err = h.runRestart(ctx)
 		}
 		if err != nil {
 			h.note("phase %s failed after %s: %v", p, time.Since(start).Round(time.Second), err)
@@ -324,8 +327,35 @@ func (h *harness) printTable() {
 			hd.MessageDurationMs.P50, hd.MessageDurationMs.P95,
 			hd.ReadyBefore, hd.ReadyAfter, hd.RestartsBefore, hd.RestartsAfter, hd.Flaps)
 	}
+	if hd := s.Hold; hd != nil && hd.Audit != nil {
+		a := hd.Audit
+		fmt.Printf("hold audit (%.0fs): controller %.1f req/s, %.2f writes/agent/min; "+
+			"gateway %.1f req/s, %.2f writes/agent/min; apiserver %v\n",
+			a.Seconds, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
+			a.GatewayRequestsPerSec, a.GatewayWritesPerAgentMinute, topEntries(a.APIServer, 6))
+	}
+	if hd := s.Hold; hd != nil && len(hd.Series) > 1 {
+		first, last := hd.Series[0], hd.Series[len(hd.Series)-1]
+		fmt.Printf("hold runtime series: %d samples over %.0fs; "+
+			"first %s %.0f goroutines %.1f MiB heap, last %s %.0f goroutines %.1f MiB heap\n",
+			len(hd.Series), last.AtSec, first.Component, first.Goroutines, first.HeapMiB,
+			last.Component, last.Goroutines, last.HeapMiB)
+	}
 	if t := s.Teardown; t != nil {
 		fmt.Printf("\nteardown: %d agents gone in %.0fs\n", t.Agents, t.Seconds)
+	}
+	if r := s.Restart; r != nil {
+		fmt.Printf("\nrestart: %d agents up; controller rolled in %.0fs, first reconcile at %.0fs; "+
+			"gateway rolled in %.0fs with %d of %d requests failed\n",
+			r.Agents, r.ControllerRolloutSec, r.ControllerFirstReconcileSec,
+			r.GatewayRolloutSec, r.GatewayFailed, r.GatewayClient.Requests)
+	}
+	if c := s.Churn; c != nil && c.Idle != nil {
+		a := c.Idle
+		fmt.Printf("\nidle audit (%.0fs, %d hibernated agents): controller %.1f req/s, %.2f writes/agent/min; "+
+			"gateway %.1f req/s; apiserver %v\n",
+			a.Seconds, a.Agents, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
+			a.GatewayRequestsPerSec, topEntries(a.APIServer, 6))
 	}
 	if c := s.Churn; c != nil {
 		fmt.Printf("\nchurn: %d agents; all Ready %.0fs; first hibernation p50 %.0fs p95 %.0fs (all %.0fs); %d messages",

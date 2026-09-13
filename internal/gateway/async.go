@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -35,6 +36,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -66,6 +69,11 @@ type AsyncRecords interface {
 type KubeAsyncRecords struct {
 	Client            kubernetes.Interface
 	OperatorNamespace string
+	// Reader counts pending records from the gateway's ConfigMap informer,
+	// as the AgentChannel resource page specifies; nil (tests) falls back
+	// to a live List through Client. Under the load baseline the live List
+	// was one apiserver LIST per async message (#174).
+	Reader client.Reader
 }
 
 func asyncCMName(requestID string) string { return "kaalm-async-" + requestID }
@@ -124,8 +132,23 @@ func (k *KubeAsyncRecords) Get(ctx context.Context, requestID string) (*AsyncRec
 	return rec, true, nil
 }
 
-// CountPending counts a channel's live records for maxPendingAsyncResponses.
+// CountPending counts a channel's live records for maxPendingAsyncResponses,
+// from the informer when a Reader is wired. The count is approximate under a
+// concurrent burst either way: a live List and a create are not atomic any
+// more than an informer read and a create are.
 func (k *KubeAsyncRecords) CountPending(ctx context.Context, channelNamespace, channelName string) (int, error) {
+	labels := map[string]string{
+		kaalmv1beta1.LabelChannelNamespace: channelNamespace,
+		kaalmv1beta1.LabelChannelName:      channelName,
+	}
+	if k.Reader != nil {
+		var cms corev1.ConfigMapList
+		if err := k.Reader.List(ctx, &cms, client.InNamespace(k.OperatorNamespace),
+			client.MatchingLabels(labels), client.UnsafeDisableDeepCopy); err != nil {
+			return 0, err
+		}
+		return len(cms.Items), nil
+	}
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		kaalmv1beta1.LabelChannelNamespace, channelNamespace,
 		kaalmv1beta1.LabelChannelName, channelName)
@@ -349,6 +372,77 @@ func (s *Server) sendCallback(
 	return callbackExhausted
 }
 
+// pinnedAddrKey carries the range-checked IP:port a callback attempt must
+// dial, from sendCallback through the pooled transport to its dialer.
+type pinnedAddrKey struct{}
+
+// callbackConnectTimeout bounds one TCP connect to a callback receiver.
+const callbackConnectTimeout = 5 * time.Second
+
+// callbackHTTPClient returns the one pooled client for callback delivery.
+// Every attempt used to build its own transport and never close it, so a
+// gateway's open connections grew with every callback it had ever sent
+// (#172). The pool is keyed by the URL's host; a pooled connection was
+// dialed to the IP that passed the range check at its dial time, and every
+// attempt still re-resolves and re-checks before it may reuse one.
+func (s *Server) callbackHTTPClient() *http.Client {
+	s.callbackClientOnce.Do(func() {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.MaxIdleConns = agentMaxIdleConns
+		transport.TLSClientConfig = nil
+		transport.DialTLSContext = s.dialCallbackTLS
+		s.callbackClient = &http.Client{
+			Transport: transport,
+			// The pinned dial already keeps a redirect from leaving the
+			// checked host; refusing them outright removes the ambiguity (#153).
+			CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
+		}
+	})
+	return s.callbackClient
+}
+
+// dialCallbackTLS dials the pinned address carried by the attempt's context
+// and verifies the receiver against the URL's hostname, so DNS cannot be
+// rebound between the range check and the connect. The trust bundle is
+// re-read per dial so a rotated CA applies without a gateway restart.
+func (s *Server) dialCallbackTLS(ctx context.Context, network, addr string) (net.Conn, error) {
+	pinned, ok := ctx.Value(pinnedAddrKey{}).(string)
+	if !ok {
+		return nil, errors.New("callback dial without a range-checked address")
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	pool, err := s.callbackCAPool()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := (&net.Dialer{Timeout: callbackConnectTimeout}).DialContext(ctx, network, pinned)
+	if err != nil {
+		return nil, err
+	}
+	if deadline, ok := attemptDeadline(ctx); ok {
+		_ = raw.SetDeadline(deadline)
+	}
+	conn := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host, RootCAs: pool})
+	if err := conn.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	_ = raw.SetDeadline(time.Time{})
+	return conn, nil
+}
+
+// callbackReadTimeout is the per-attempt bound; a Server built without
+// NewServer's defaults falls back to the delivery bound.
+func (s *Server) callbackReadTimeout() time.Duration {
+	if s.Config.CallbackReadTimeout > 0 {
+		return s.Config.CallbackReadTimeout
+	}
+	return s.Config.AgentReadTimeout
+}
+
 // dialCallbackOnce signs and POSTs one callback attempt against the pinned
 // IP, preserving the hostname for Host and TLS SNI.
 func (s *Server) dialCallbackOnce(
@@ -359,27 +453,14 @@ func (s *Server) dialCallbackOnce(
 	if port == "" {
 		port = "443"
 	}
-	pinned := net.JoinHostPort(ip.String(), port)
-	// Re-read the trust bundle per attempt so a rotated CA applies without a
-	// gateway restart; the transport is already rebuilt for every dial.
-	callbackCAs, err := s.callbackCAPool()
-	if err != nil {
-		return 0, err
-	}
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, pinned)
-		},
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname(), RootCAs: callbackCAs},
-	}
-	client := &http.Client{
-		Transport: transport, Timeout: s.Config.AgentReadTimeout,
-		// The pinned transport already keeps a redirect from leaving the
-		// checked host; refusing them outright removes the ambiguity (#153).
-		CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
+	attemptCtx := context.WithValue(ctx, pinnedAddrKey{}, net.JoinHostPort(ip.String(), port))
+	if timeout := s.callbackReadTimeout(); timeout > 0 {
+		var cancel context.CancelFunc
+		attemptCtx, cancel = withAttemptDeadline(attemptCtx, timeout)
+		defer cancel()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, parsed.String(), bytes.NewReader(payload))
 	if err != nil {
 		return 0, err
 	}
@@ -387,7 +468,7 @@ func (s *Server) dialCallbackOnce(
 	if channel.Spec.Webhook.CallbackAuth != nil {
 		signCallback(req, channel.Spec.Webhook.CallbackAuth, secret, requestID, payload, time.Now())
 	}
-	resp, err := client.Do(req)
+	resp, err := s.callbackHTTPClient().Do(req)
 	if err != nil {
 		return 0, err
 	}

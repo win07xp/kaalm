@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,16 +27,21 @@ import (
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -69,6 +75,9 @@ type AgentReconciler struct {
 	// OperatorNamespace hosts the gateway and controller (kaalm-system).
 	// Agents in this namespace are rejected to protect SAN integrity.
 	OperatorNamespace string
+	// MaxConcurrentReconciles is the number of reconciles that may run at
+	// once; controller-runtime still serializes per object. 0 means one.
+	MaxConcurrentReconciles int
 	// Activity fetches per-namespace gateway activity for idle detection.
 	// nil disables idle and hibernation transitions (no data, no evidence).
 	Activity ActivityClient
@@ -99,6 +108,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	statusBefore := agent.Status.DeepCopy()
 
 	if !agent.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &agent)
@@ -126,7 +136,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if agent.Namespace == r.OperatorNamespace {
 		r.setReady(&agent, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("Agents may not run in the operator namespace %q", r.OperatorNamespace))
-		return ctrl.Result{}, r.Status().Update(ctx, &agent)
+		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
 	// Step 1 continued: resolve the AgentClass.
@@ -135,7 +145,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if apierrors.IsNotFound(err) {
 			r.setReady(&agent, false, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q does not exist", agent.Spec.AgentClassRef.Name))
-			return ctrl.Result{}, r.Status().Update(ctx, &agent)
+			return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 		}
 		return ctrl.Result{}, err
 	}
@@ -160,7 +170,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	case kaalmv1beta1.AgentHibernating:
 		return r.driveHibernating(ctx, &agent)
 	case kaalmv1beta1.AgentHibernated:
-		return ctrl.Result{}, r.Status().Update(ctx, &agent)
+		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
 	// Step 5: Ready=False gates that block Pod creation without degrading.
@@ -169,7 +179,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 	if gated {
-		if err := r.Status().Update(ctx, &agent); err != nil {
+		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 			return ctrl.Result{}, err
 		}
 		return gateResult, nil
@@ -185,7 +195,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			r.setPhase(&agent, kaalmv1beta1.AgentProvisioning)
 		}
 		r.setReady(&agent, false, "CertificateNotReady", "waiting for cert-manager to issue the agent certificate")
-		if err := r.Status().Update(ctx, &agent); err != nil {
+		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
@@ -209,7 +219,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		res = r.evaluateActivity(ctx, &agent, eff)
 	}
 
-	if err := r.Status().Update(ctx, &agent); err != nil {
+	if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("reconciled Agent", "phase", agent.Status.Phase)
@@ -645,11 +655,21 @@ func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalm
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 		return err
 	}
-	err := r.Create(ctx, desired)
-	if apierrors.IsAlreadyExists(err) {
+	// Read from the informer before writing: a create that is expected to
+	// fail AlreadyExists is still a POST the apiserver has to reject, once
+	// per agent per pass (#174).
+	var current corev1.ServiceAccount
+	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current)
+	if err == nil {
 		return nil
 	}
-	return err
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
 }
 
 func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec) error {
@@ -685,6 +705,12 @@ func (r *AgentReconciler) ensurePVC(
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 		return err
 	}
+	var current corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
 	err := r.Create(ctx, desired)
 	if apierrors.IsAlreadyExists(err) {
 		err = nil
@@ -709,6 +735,9 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 			return err
 		}
 		return r.Create(ctx, desired)
+	}
+	if equality.Semantic.DeepEqual(current.Spec, desired.Spec) {
+		return nil
 	}
 	current.Spec = desired.Spec
 	return r.Update(ctx, &current)
@@ -916,6 +945,7 @@ func (r *AgentReconciler) setReady(agent *kaalmv1beta1.Agent, ok bool, reason, m
 // platform-level map-func watches.
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		For(&kaalmv1beta1.Agent{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
@@ -923,10 +953,54 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&cmapi.Certificate{}).
-		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass)).
-		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider)).
-		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider)).
+		// The platform-level watches fan out to every Agent that references
+		// the changed object, so they must fire only for changes an Agent
+		// consumes: the spec of a class or tool provider (their status is
+		// bookkeeping the Agent never reads), and for a model provider the
+		// spec or the set of namespaces its budget blocks. Without the
+		// predicates every in-use count the class reconciler wrote and every
+		// ten-second budget publish re-enqueued the whole fleet (#174).
+		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider),
+			builder.WithPredicates(providerChangeMatters())).
+		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
+}
+
+// providerChangeMatters admits a ModelProvider update to the Agent fan-out
+// when its spec changed or when the set of namespaces in the Blocked budget
+// state changed, which is all an Agent reads from a provider's status.
+// Spend counters and health conditions change on their own cadence and
+// affect no Agent.
+func providerChangeMatters() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldMP, ok1 := e.ObjectOld.(*kaalmv1beta1.ModelProvider)
+			newMP, ok2 := e.ObjectNew.(*kaalmv1beta1.ModelProvider)
+			if !ok1 || !ok2 {
+				return true
+			}
+			if oldMP.Generation != newMP.Generation {
+				return true
+			}
+			return !equality.Semantic.DeepEqual(blockedNamespaces(oldMP), blockedNamespaces(newMP))
+		},
+	}
+}
+
+// blockedNamespaces returns the namespaces a provider's status reports as
+// budget-blocked, sorted, so two statuses compare by content.
+func blockedNamespaces(mp *kaalmv1beta1.ModelProvider) []string {
+	var out []string
+	for _, u := range mp.Status.BudgetUsage {
+		if u.State == kaalmv1beta1.BudgetStateBlocked {
+			out = append(out, u.Namespace)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (r *AgentReconciler) agentsForClass(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -963,4 +1037,17 @@ func (r *AgentReconciler) agentsForToolProvider(ctx context.Context, obj client.
 		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
 	}
 	return reqs
+}
+
+// updateStatusIfChanged writes the Agent's status only when a pass changed
+// it: every Agent reconciles on its periodic requeue and on every event
+// from its children, and a status write per pass was one of the three
+// per-agent writes a settled fleet paid for every pass (#174).
+func (r *AgentReconciler) updateStatusIfChanged(
+	ctx context.Context, agent *kaalmv1beta1.Agent, before *kaalmv1beta1.AgentStatus,
+) error {
+	if equality.Semantic.DeepEqual(before, &agent.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, agent)
 }

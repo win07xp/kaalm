@@ -91,6 +91,9 @@ type holdResult struct {
 	Client            *loadResult        `json:"client"`
 	MessagesByStatus  map[string]float64 `json:"messagesByStatus"`
 	MessageDurationMs stats              `json:"messageDurationMs"`
+	DeliveryAttempts  map[string]float64 `json:"deliveryAttempts"`
+	Audit             *apiAudit          `json:"audit,omitempty"`
+	Series            []runtimeSample    `json:"series,omitempty"`
 	Callbacks         float64            `json:"callbacks"`
 	ReadyBefore       int                `json:"readyBefore"`
 	ReadyAfter        int                `json:"readyAfter"`
@@ -120,6 +123,160 @@ type churnResult struct {
 	HibernationsTotal   float64            `json:"hibernationsTotal"`
 	Callbacks           float64            `json:"callbacks"`
 	TeardownSec         float64            `json:"teardownSec"`
+	Idle                *apiAudit          `json:"idle,omitempty"`
+}
+
+// apiAudit is what the operator asked of the control plane over a window:
+// client-side requests by method per component (rest_client_requests_total),
+// apiserver requests by verb and resource across every client, and the
+// per-agent-minute write rates, which transfer to any cluster.
+type apiAudit struct {
+	Seconds                        float64            `json:"seconds"`
+	Agents                         int                `json:"agents"`
+	Controller                     map[string]float64 `json:"controller"`
+	Gateway                        map[string]float64 `json:"gateway"`
+	APIServer                      map[string]float64 `json:"apiserver"`
+	ControllerRequestsPerSec       float64            `json:"controllerRequestsPerSec"`
+	GatewayRequestsPerSec          float64            `json:"gatewayRequestsPerSec"`
+	ControllerWritesPerAgentMinute float64            `json:"controllerWritesPerAgentMinute"`
+	GatewayWritesPerAgentMinute    float64            `json:"gatewayWritesPerAgentMinute"`
+}
+
+// runtimeSample is one reading of a component's Go runtime during a hold.
+type runtimeSample struct {
+	AtSec      float64 `json:"atSec"`
+	Component  string  `json:"component"`
+	Goroutines float64 `json:"goroutines"`
+	HeapMiB    float64 `json:"heapMiB"`
+	RSSMiB     float64 `json:"rssMiB"`
+}
+
+// restartResult is what a rolling restart costs with the fleet up: the
+// controller's rollout and its time to the first reconcile afterwards
+// (leader handoff included), and the gateway's rollout under LLM traffic
+// with the requests that failed while it rolled.
+type restartResult struct {
+	Agents                      int         `json:"agents"`
+	ControllerRolloutSec        float64     `json:"controllerRolloutSec"`
+	ControllerFirstReconcileSec float64     `json:"controllerFirstReconcileSec"`
+	GatewayRolloutSec           float64     `json:"gatewayRolloutSec"`
+	GatewayClient               *loadResult `json:"gatewayClient"`
+	GatewayFailed               int         `json:"gatewayFailed"`
+}
+
+// auditSnapshots is the three scrapes an audit window starts and ends with.
+type auditSnapshots struct {
+	at           time.Time
+	gw, ctl, api *snapshot
+}
+
+func (h *harness) auditSnapshot(ctx context.Context) (*auditSnapshots, error) {
+	gw, err := h.scrapeGateway(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctl, err := h.scrapeController(ctx)
+	if err != nil {
+		return nil, err
+	}
+	api, err := h.k.scrapeAPIServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &auditSnapshots{at: time.Now(), gw: gw, ctl: ctl, api: api}, nil
+}
+
+func writeRequests(byMethod map[string]float64) float64 {
+	return byMethod["POST"] + byMethod["PUT"] + byMethod["PATCH"] + byMethod["DELETE"]
+}
+
+// audit folds two snapshot sets into the per-window numbers.
+func audit(before, after *auditSnapshots, agents int) *apiAudit {
+	secs := after.at.Sub(before.at).Seconds()
+	a := &apiAudit{
+		Seconds:    round3(secs),
+		Agents:     agents,
+		Controller: counterByLabel(before.ctl, after.ctl, "rest_client_requests_total", "method", nil),
+		Gateway:    counterByLabel(before.gw, after.gw, "rest_client_requests_total", "method", nil),
+		APIServer:  apiRequestsByVerbResource(before.api, after.api),
+	}
+	var ctlTotal, gwTotal float64
+	for _, v := range a.Controller {
+		ctlTotal += v
+	}
+	for _, v := range a.Gateway {
+		gwTotal += v
+	}
+	if secs > 0 {
+		a.ControllerRequestsPerSec = round3(ctlTotal / secs)
+		a.GatewayRequestsPerSec = round3(gwTotal / secs)
+		if agents > 0 {
+			a.ControllerWritesPerAgentMinute = round3(writeRequests(a.Controller) / float64(agents) / (secs / 60))
+			a.GatewayWritesPerAgentMinute = round3(writeRequests(a.Gateway) / float64(agents) / (secs / 60))
+		}
+	}
+	return a
+}
+
+func (h *harness) logAudit(label string, a *apiAudit) {
+	h.logf("  %s over %.0fs, %d agents: controller %.1f req/s (%v), %.2f writes/agent/min; "+
+		"gateway %.1f req/s (%v), %.2f writes/agent/min",
+		label, a.Seconds, a.Agents, a.ControllerRequestsPerSec, topEntries(a.Controller, 4),
+		a.ControllerWritesPerAgentMinute, a.GatewayRequestsPerSec, topEntries(a.Gateway, 4),
+		a.GatewayWritesPerAgentMinute)
+	h.logf("  %s apiserver by verb and resource: %v", label, topEntries(a.APIServer, 10))
+}
+
+// runtimeSampler reads goroutines, heap in use, and RSS from both
+// components on an interval; over a long hold the series is the soak.
+type runtimeSampler struct {
+	mu      sync.Mutex
+	samples []runtimeSample
+	stop    chan struct{}
+	done    chan struct{}
+}
+
+func (h *harness) sampleRuntime(ctx context.Context, interval time.Duration) *runtimeSampler {
+	s := &runtimeSampler{stop: make(chan struct{}), done: make(chan struct{})}
+	start := time.Now()
+	go func() {
+		defer close(s.done)
+		for {
+			select {
+			case <-s.stop:
+				return
+			case <-time.After(interval):
+			}
+			for comp, scrape := range map[string]func(context.Context) (*snapshot, error){
+				"gateway": h.scrapeGateway, "controller": h.scrapeController,
+			} {
+				snap, err := scrape(ctx)
+				if err != nil {
+					continue
+				}
+				smp := runtimeSample{
+					AtSec: round3(time.Since(start).Seconds()), Component: comp,
+					Goroutines: snap.gauge("go_goroutines", nil),
+					HeapMiB:    round3(snap.gauge("go_memstats_heap_inuse_bytes", nil) / (1 << 20)),
+					RSSMiB:     round3(snap.gauge("process_resident_memory_bytes", nil) / (1 << 20)),
+				}
+				s.mu.Lock()
+				s.samples = append(s.samples, smp)
+				s.mu.Unlock()
+				h.logf("    %s at %.0fs: %.0f goroutines, heap %.1f MiB, rss %.1f MiB",
+					comp, smp.AtSec, smp.Goroutines, smp.HeapMiB, smp.RSSMiB)
+			}
+		}
+	}()
+	return s
+}
+
+func (s *runtimeSampler) finish() []runtimeSample {
+	close(s.stop)
+	<-s.done
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.samples
 }
 
 type tasksResult struct {
@@ -525,15 +682,17 @@ func (h *harness) runHold(ctx context.Context) error {
 
 	res.ReadyBefore = countReady(timings)
 	res.RestartsBefore = sumRestarts(timings)
-	before, err := h.scrapeGateway(ctx)
+	auditBefore, err := h.auditSnapshot(ctx)
 	if err != nil {
 		return err
 	}
+	before := auditBefore.gw
 	rate := float64(count) / cfg.HoldPerAgentInterval.Seconds()
 	h.logf("hold: %d agents, %.2f msg/s for %s (one message per agent per %s)",
 		count, rate, cfg.HoldDuration, cfg.HoldPerAgentInterval)
 	holdStart := time.Now()
 	sampler := h.sampleUsage(ctx)
+	runtimeSamples := h.sampleRuntime(ctx, cfg.HoldSampleInterval)
 	client, err := h.k.runLoadgen(ctx, cfg.Namespace, "loadgen-hold", cfg.LoadgenImage, []string{
 		flagMode, modeChannels,
 		"-path-prefix", "/channels/" + cfg.Namespace + "/ramp-",
@@ -543,19 +702,24 @@ func (h *harness) runHold(ctx context.Context) error {
 		flagDuration, cfg.HoldDuration.String(),
 	}, "", cfg.HoldDuration+3*time.Minute)
 	peak := sampler.finish()
+	res.Series = runtimeSamples.finish()
 	if err != nil {
 		return err
 	}
 	res.Client = client
 	// Let detached deliveries and callbacks settle before reading the counters.
 	time.Sleep(30 * time.Second)
-	after, err := h.scrapeGateway(ctx)
+	auditAfter, err := h.auditSnapshot(ctx)
 	if err != nil {
 		return err
 	}
+	after := auditAfter.gw
+	res.Audit = audit(auditBefore, auditAfter, count)
+	h.logAudit("hold audit", res.Audit)
 	webhook := map[string]string{"channel_type": channelTypeWebhook}
 	res.MessagesByStatus = counterByLabel(before, after, "kaalm_channel_messages_total", "status", webhook)
 	res.MessageDurationMs = histStats(histogramDelta(before, after, "kaalm_channel_message_duration_seconds", webhook))
+	res.DeliveryAttempts = counterByLabel(before, after, "kaalm_channel_delivery_attempts_total", "outcome", nil)
 	res.Callbacks = counterDelta(before, after, "kaalm_channel_callback_total", nil)
 	res.GatewayUsageMax = peak["kaalm-gateway"]
 	res.ControllerUsage = peak["kaalm-controller"]
@@ -571,6 +735,7 @@ func (h *harness) runHold(ctx context.Context) error {
 			res.Flaps++
 		}
 	}
+	h.logf("  delivery attempts by outcome %v", res.DeliveryAttempts)
 	h.logf("  %d messages accepted, statuses %v, callbacks %.0f, Ready %d -> %d, restarts %d -> %d, flaps %d",
 		client.Requests, res.MessagesByStatus, res.Callbacks, res.ReadyBefore, res.ReadyAfter,
 		res.RestartsBefore, res.RestartsAfter, res.Flaps)
@@ -688,6 +853,25 @@ func (h *harness) runChurn(ctx context.Context) error {
 	res.FirstHibernationSec = summarize(firstHib)
 	h.logf("  all Hibernated after %.0fs (Ready-to-Hibernated p50 %.0fs p95 %.0fs)",
 		res.AllHibernatedSec, res.FirstHibernationSec.P50, res.FirstHibernationSec.P95)
+
+	if cfg.IdleDuration > 0 {
+		h.logf("idle: %d hibernated agents, counting control-plane traffic for %s", cfg.ChurnAgents, cfg.IdleDuration)
+		idleBefore, err := h.auditSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(cfg.IdleDuration):
+		}
+		idleAfter, err := h.auditSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		res.Idle = audit(idleBefore, idleAfter, cfg.ChurnAgents)
+		h.logAudit("idle audit", res.Idle)
+	}
 
 	gwBefore, err := h.scrapeGateway(ctx)
 	if err != nil {
@@ -844,5 +1028,86 @@ func (h *harness) runTasks(ctx context.Context) error {
 	}
 	res.TeardownSec = round3(took.Seconds())
 	h.sum.Tasks = res
+	return nil
+}
+
+// runRestart rolls each component with the ramp fleet up: the controller
+// alone (rollout wall time, then time to the first reconcile of the new
+// leader, which includes the leader-election handoff), and the gateway under
+// a 60 s token-tier LLM leg, counting the requests that failed while it
+// rolled.
+func (h *harness) runRestart(ctx context.Context) error {
+	cfg := h.cfg
+	timings, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp)
+	if err != nil {
+		return err
+	}
+	if len(timings) == 0 {
+		return errors.New("restart: no ramp fleet; run the ramp phase first")
+	}
+	res := &restartResult{Agents: len(timings)}
+
+	h.logf("restart: rolling the controller with %d agents up", res.Agents)
+	t0 := time.Now()
+	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "restart", "deploy/kaalm-controller"); err != nil {
+		return err
+	}
+	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "status",
+		"deploy/kaalm-controller", "--timeout=5m"); err != nil {
+		return err
+	}
+	res.ControllerRolloutSec = round3(time.Since(t0).Seconds())
+	// The new processes start their counters at zero, so the first reconcile
+	// anywhere is the first nonzero total across the replicas.
+	if err := pollUntil(ctx, 5*time.Minute, 2*time.Second, func() (bool, error) {
+		snap, err := h.scrapeController(ctx)
+		if err != nil {
+			return false, nil // a scrape can miss a pod mid-roll
+		}
+		return snap.counter("controller_runtime_reconcile_total", nil) > 0, nil
+	}); err != nil {
+		return fmt.Errorf("restart: controller never reconciled after the roll: %w", err)
+	}
+	res.ControllerFirstReconcileSec = round3(time.Since(t0).Seconds())
+	h.logf("  controller rolled in %.0fs, first reconcile at %.0fs",
+		res.ControllerRolloutSec, res.ControllerFirstReconcileSec)
+
+	h.logf("restart: rolling the gateway under a 60s token-tier leg (%d callers)", cfg.GatewayConcurrency)
+	type outcome struct {
+		res *loadResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := h.k.runLoadgen(ctx, cfg.Namespace, "loadgen-restart", cfg.LoadgenImage, []string{
+			flagMode, modeGateway,
+			"-model", providerFast + "/mock-model",
+			"-concurrency", strconv.Itoa(cfg.GatewayConcurrency),
+			flagDuration, "60s",
+		}, "", 4*time.Minute)
+		done <- outcome{r, err}
+	}()
+	time.Sleep(15 * time.Second)
+	t1 := time.Now()
+	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "restart", "deploy/kaalm-gateway"); err != nil {
+		return err
+	}
+	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "status", "deploy/kaalm-gateway", "--timeout=5m"); err != nil {
+		return err
+	}
+	res.GatewayRolloutSec = round3(time.Since(t1).Seconds())
+	out := <-done
+	if out.err != nil {
+		return fmt.Errorf("restart: gateway leg: %w", out.err)
+	}
+	res.GatewayClient = out.res
+	for status, n := range out.res.Statuses {
+		if status != "200" {
+			res.GatewayFailed += n
+		}
+	}
+	h.logf("  gateway rolled in %.0fs; %d requests, %d failed during the roll (statuses %v)",
+		res.GatewayRolloutSec, out.res.Requests, res.GatewayFailed, out.res.Statuses)
+	h.sum.Restart = res
 	return nil
 }

@@ -87,6 +87,8 @@ type Config struct {
 	MaxResponseBodyBytes int64
 	// AgentReadTimeout bounds each delivery attempt (default 10s).
 	AgentReadTimeout time.Duration
+	// CallbackReadTimeout bounds each callback attempt (default 10s).
+	CallbackReadTimeout time.Duration
 	// AgentConnectTimeout is the hibernation-detection connect bound (1s).
 	AgentConnectTimeout time.Duration
 	// SyncDeliveryDeadline bounds sync-mode wall-clock (default 30s).
@@ -155,9 +157,21 @@ type Server struct {
 	upstreamCAs    *tlsutil.CAPoolLoader
 	callbackCAs    *tlsutil.CAPoolLoader
 
-	agentClientOnce   sync.Once
-	agentClientLoader *tlsutil.CertLoader
-	agentClientErr    error
+	agentClientOnce sync.Once
+	agentClient     *http.Client
+	agentClientErr  error
+
+	callbackClientOnce sync.Once
+	callbackClient     *http.Client
+
+	// AgentResolver resolves agent Service names for delivery dials; nil
+	// means net.DefaultResolver. Tests inject a counting fake.
+	AgentResolver ipResolver
+}
+
+// ipResolver is the slice of net.Resolver the delivery dialer uses.
+type ipResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
 // initOutboundCAs builds the file-backed outbound trust loaders once.
@@ -217,6 +231,9 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 	}
 	if cfg.AgentReadTimeout == 0 {
 		cfg.AgentReadTimeout = 10 * time.Second
+	}
+	if cfg.CallbackReadTimeout == 0 {
+		cfg.CallbackReadTimeout = 10 * time.Second
 	}
 	if cfg.AgentConnectTimeout == 0 {
 		cfg.AgentConnectTimeout = time.Second
@@ -394,10 +411,23 @@ func (s *Server) mcpUpstreamTimeout() time.Duration {
 	return s.Config.UpstreamTimeout
 }
 
+// The default transport keeps two idle connections per host. A provider is
+// one host serving every concurrent request, so with more callers than
+// that nearly every request dialed and ran a full TLS handshake: 40% of
+// gateway CPU at 32 callers under the load baseline (#174). The per-host
+// limit is sized for hundreds of in-flight requests to one provider; the
+// total bounds the pool across every provider a gateway forwards to.
+const (
+	upstreamMaxIdleConnsPerHost = 256
+	upstreamMaxIdleConns        = 1024
+)
+
 // upstream returns the shared provider-facing HTTP client.
 func (s *Server) upstream() *http.Client {
 	s.upstreamOnce.Do(func() {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.MaxIdleConnsPerHost = upstreamMaxIdleConnsPerHost
+		transport.MaxIdleConns = upstreamMaxIdleConns
 		if len(s.Config.UpstreamCAFiles) > 0 || s.Config.UpstreamCAs != nil {
 			// Build the TLS config per dial rather than once, so a rotated
 			// bundle is picked up without a restart. Pooled connections keep

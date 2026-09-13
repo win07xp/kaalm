@@ -102,7 +102,7 @@ On delete, the reconciler holds the ToolProvider in `Terminating` while any Agen
 
 Watches: `Agent`, plus owned `Pod`, `PVC`, `Service`, `ConfigMap`, `NetworkPolicy`, `ServiceAccount`, `cert-manager.io/v1/Certificate`. The cert-manager-managed `Secret` (`spec.secretName` output) is **not** owned by the reconciler: cert-manager owns it and populates it from the `Certificate`.
 
-Two map-func watches make the reconciler react to platform-level changes without waiting for the periodic requeue:
+Two map-func watches make the reconciler react to platform-level changes without waiting for the periodic requeue. They fire only for changes an Agent consumes: a class's or tool provider's spec (their status is bookkeeping the Agent never reads), and a model provider's spec or the set of namespaces its budget blocks, so the spend counters the gateway publishes every ten seconds and the in-use counts the class reconciler writes on every Agent create do not re-enqueue the fleet:
 
 - `AgentClass` via `handler.EnqueueRequestsFromMapFunc`: when an AgentClass changes (e.g., `allowedProviders` updated, `maxLimits` lowered), re-queue all Agents referencing that class (via indexed lookup on `agentClassRef.name`).
 - `ModelProvider` via `handler.EnqueueRequestsFromMapFunc`: when a ModelProvider's `allowedNamespaces`, `Healthy` condition, or other spec fields change, re-queue all Agents whose `spec.providers[*].providerRef` references that ModelProvider (via an indexed lookup on `providerRef.name`).
@@ -159,6 +159,8 @@ The Certificate is named `{agentName}-tls` in the Agent's namespace, owned by th
 - `spec.usages`: `server auth`, `client auth` (the same cert acts as the agent's serving cert and as its mTLS client cert when calling the gateway).
 
 **Pod creation is gated on `Certificate.status.conditions[type=Ready].status == True`.** If the cert is not yet ready (first-time issuance typically takes a few seconds), the reconciler requeues with backoff and **does not create the Pod**: otherwise the Pod would hang on its projected Secret mount until cert-manager caught up.
+
+Every child is read from the informer before it is written, and the status is written only when a pass changed it: an Agent reconciles on its periodic requeue and on every event from its children, and under the load baseline a create that expected AlreadyExists, an unconditional NetworkPolicy update, and a status write per pass were three apiserver writes per agent per pass with nothing in them new.
 
 Subsequent rotation is transparent: cert-manager rotates per `renewBefore`, kubelet propagates the new Secret contents into the Pod's projected volume, and the agent reloads via the file-watch pattern (see [Starter Templates](../runtime/starter-templates.md)). CA rotation requires no reconciler participation, and a CA re-key is a manual dual-trust runbook; see [In-cluster TLS](../security/tls.md#in-cluster-tls) for the full trust chain, and [TLS on the Cluster Listener](../gateways/listener-tls.md).
 
@@ -307,7 +309,7 @@ Reconciliation steps:
 5. **Maintain `status.phase`** by reducing the referenced Agent's phase to a Channel phase. See [Channel phase reduction](#channel-phase-reduction) below.
 6. **Prune expired async response ConfigMaps.** See [Async ConfigMap pruning](#async-configmap-pruning) below.
 
-A validation failure requeues after a minute, the same cadence as a healthy channel: the reconciler watches no Secrets (its Secret access is scoped per channel), so a credential fixed in place is only ever noticed by a later pass.
+A validation failure requeues after a minute, the same cadence as a healthy channel: the reconciler watches no Secrets (its Secret access is scoped per channel), so a credential fixed in place is only ever noticed by a later pass. A pass writes status only when it changed something: every channel reconciles at least once a minute and on every change to its Agent, and a write per pass would be the controller's largest write with nothing new in it.
 
 The AgentChannelReconciler does not own Pod resources. The gateway watches `AgentChannel` resources directly, reads the referenced credentials from user namespaces, and manages the live platform connections; see [User Gateway Request Flow](../gateways/user/overview.md#request-flow). The reconciler's role is validation and status reporting.
 
@@ -325,7 +327,7 @@ The scoped Secrets are:
 
 When both references point to the same Secret, `resourceNames` lists it once; when they differ, the list contains both.
 
-The Role is bound by two RoleBindings: one to the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) and one to the operator ServiceAccount (`kaalm-system/kaalm-controller`). If the inbound auth type, the outbound auth type, or any Secret reference has changed since the last reconcile (detectable by comparing the current Role's `resourceNames` against the desired set), the reconciler updates the Role to the new `resourceNames` so neither the gateway nor the operator retains read access to a Secret either no longer needs. The Role name is deterministic so successive reconciles are idempotent.
+The Role is bound by two RoleBindings: one to the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) and one to the operator ServiceAccount (`kaalm-system/kaalm-controller`). If the inbound auth type, the outbound auth type, or any Secret reference has changed since the last reconcile (detectable by comparing the current Role's `resourceNames` against the desired set), the reconciler updates the Role to the new `resourceNames` so neither the gateway nor the operator retains read access to a Secret either no longer needs. The Role name is deterministic so successive reconciles are idempotent. Both bindings, like the Role, are read from the informer before any write, so a settled channel costs the apiserver nothing per pass.
 
 After the Role exists, the reconciler reads each referenced Secret via this scoped path and validates:
 

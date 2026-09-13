@@ -54,6 +54,13 @@ type config struct {
 	// Hold-and-serve: message load across the whole active fleet.
 	HoldDuration         time.Duration
 	HoldPerAgentInterval time.Duration
+	// HoldSampleInterval spaces the runtime samples (goroutines, heap, RSS)
+	// taken from both components during the hold; a long hold is the soak.
+	HoldSampleInterval time.Duration
+
+	// IdleDuration is the window, inside the churn phase, over which the
+	// control-plane traffic of a fully hibernated fleet is counted.
+	IdleDuration time.Duration
 
 	// Hibernation churn on a persistence-enabled subset.
 	ChurnAgents   int
@@ -77,6 +84,7 @@ const (
 	phaseTeardown = "teardown"
 	phaseChurn    = "churn"
 	phaseTasks    = "tasks"
+	phaseRestart  = "restart"
 )
 
 // Strings shared between the orchestrator and the in-cluster load generator.
@@ -101,7 +109,7 @@ const (
 	providerHard = "load-hard"
 )
 
-var allPhases = []string{phaseGateway, phaseRamp, phaseHold, phaseTeardown, phaseChurn, phaseTasks}
+var allPhases = []string{phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks}
 
 func parseRunFlags(args []string) (config, error) {
 	var c config
@@ -129,6 +137,10 @@ func parseRunFlags(args []string) (config, error) {
 		"how long to drive messages across the whole active fleet")
 	fs.DurationVar(&c.HoldPerAgentInterval, "hold-interval", time.Minute,
 		"each active agent receives one message per this interval")
+	fs.DurationVar(&c.HoldSampleInterval, "hold-sample-interval", time.Minute,
+		"how often to sample goroutines, heap, and RSS from both components during the hold")
+	fs.DurationVar(&c.IdleDuration, "idle-duration", 3*time.Minute,
+		"how long to count control-plane traffic once the churn fleet is fully hibernated (0 skips it)")
 
 	fs.IntVar(&c.ChurnAgents, "churn-agents", 100, "persistence-enabled agents in the hibernation churn")
 	fs.DurationVar(&c.ChurnCycle, "churn-cycle", 90*time.Second,
