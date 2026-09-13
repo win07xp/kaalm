@@ -3,13 +3,9 @@
 ## Project Overview
 
 **Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
-type. v0.6.0 released 2026-08-24: the API graduation (v1beta1 as hub and
-storage version with conversion from the deprecated-but-served v1alpha1,
-the leader-run storage migrator, the S21 upgrade e2e against the previous
-released chart, the dual-era MCP 2026-07-28 tool plane; S21 proven).
-Current milestone (v0.7.0, "Reach", tracking issue #50): Discord and
-WhatsApp channel adapters, cross-format provider fallback; see
-`docs/src/ROADMAP.md` and the GitHub milestones.
+type. Latest release v0.7.0 (2026-08-31); current milestone v1.0.0
+(tracking issue #51). Status lives in `docs/src/ROADMAP.md` and the GitHub
+milestone, not here.
 
 - API group: `kaalm.io` | Versions: `v1beta1` (the storage version and the contract) and `v1alpha1` (deprecated, served, converted by the controller)
 - Stack: Go, controller-runtime (kubebuilder), Helm
@@ -19,12 +15,20 @@ WhatsApp channel adapters, cross-format provider fallback; see
 ## Documentation
 
 Three mdBooks: `docs/` (the design book, which is the spec), `guide/`
-(task-oriented user guide, complete), and `learn/` (beginner tutorial, written
-and walked against 0.6.0). Build all with `make books`.
-Each book has its own CLAUDE.md with its authoring rules. Conventions that
-bind all prose in this repo: no em-dashes or en-dashes; the numbered
-validation rules, runtime-contract items, and scenario IDs are cited by
-number, so numbering is immutable.
+(task-oriented user guide), and `learn/` (beginner tutorial). Each has a
+CLAUDE.md with its own charter. `make books` builds all three after
+`make docs-check`; `make diagrams` renders the PlantUML figures.
+
+Prose rules for every book, README, and release note:
+
+- Write with the `google-dev-docs-style` skill (sentence-case headings,
+  present tense, second person, no "via", "e.g.", or "just").
+- No em dashes or en dashes anywhere.
+- Product pages describe the present: no release history ("since v0.4.0")
+  and no future promises outside `docs/src/ROADMAP.md` and the vision
+  page's Scope for v1 section.
+- Numbered validation rules, runtime-contract items, and scenario IDs are
+  cited by number; numbering never changes.
 
 ## Build Commands
 
