@@ -80,7 +80,7 @@ forward upstream
 stop
 
 legend bottom
-  **Gate A is the only tier conditional gate.** It is the one that needs an Agent
+  **Gate A is the only tier conditional gate.** It is the only gate that needs an Agent
   and an AgentClass to read, so it has nothing to consult in the gateway-only tier.
   Gates B and C run identically for both tiers.
   **Gate C is not a tenancy boundary**: it resolves the model. An unknown modelId

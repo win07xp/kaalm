@@ -59,7 +59,7 @@ TIME_PATTERNS = [
     r"\bin v\d+\.\d+\.\d+\b",
     r"\bused to\b",
     r"\bpreviously\b",
-    r"\bsoon\b",
+    r"(?<!as )\bsoon\b",
     r"\bv1\.1\b",
     r"\bpost-1\.0\b",
     r"\bTODO\b",

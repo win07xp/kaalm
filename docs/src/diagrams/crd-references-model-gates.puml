@@ -1,0 +1,43 @@
+@startuml crd-references-model-gates
+' Figure 2 of 4: the two references that together admit a workload to a
+' ModelProvider. The class allows the provider and the workload names it;
+' both edges are gates, not one list. Source of truth:
+' docs/src/concepts/core-concepts.md
+!include _style.puml
+
+skinparam nodesep 25
+skinparam ranksep 50
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "**Cluster scope** (platform team manages)" as clusterband #line:9E9E9E;line.dashed;text:555555 {
+  rectangle "**AgentClass**\nspec.allowedProviders" as ac #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**ModelProvider**" as mp #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**ToolProvider**" as tp #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+}
+
+rectangle "**Namespace scope** (developer manages)" as nsband #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "**Agent**\nspec.providers[].providerRef" as ag #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentTask**\nspec.providers[].providerRef" as at #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentChannel**" as ch #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+
+ac -[hidden]right- mp
+mp -[hidden]right- tp
+ac -[hidden]-> ag
+mp -[hidden]-> at
+tp -[hidden]-> ch
+ag -[hidden]right- at
+at -[hidden]right- ch
+
+
+ac -[#B71C1C,bold]-> mp : **allowedProviders**\n//the class permits it//
+mp <-[#B71C1C,bold]- ag : **providers[].providerRef**\n//the workload asks//
+mp <-[#B71C1C,bold]- at : providers[].providerRef
+
+legend bottom
+  Grey = cluster-scoped policy | Purple = namespaced workload
+  **Both red edges must pass:** the class allows the provider //and// the workload asks for it
+endlegend
+@enduml
