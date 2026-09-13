@@ -204,8 +204,23 @@ chart-package: chart-sync ## Package the chart into dist/ (VERSION defaults to C
 	@V=$${VERSION:-$(CHART_APP_VERSION)}; mkdir -p dist; \
 		helm package $(CHART_DIR) --version $$V --app-version $$V --destination dist
 
+PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
+# Until the #142 audit lands, time-bound wording is reported, not fatal.
+DOCS_CHECK_FLAGS ?= --time-report
+
+.PHONY: docs-check
+docs-check: ## Check the three books: links and anchors, SUMMARY coverage, dashes, time-bound wording, cited files, diagrams.
+	python3 hack/docs/check.py $(DOCS_CHECK_FLAGS)
+
+.PHONY: diagrams
+diagrams: ## Render docs/src/diagrams/*.puml to SVG, then copy the figures the guide embeds (guide/src/diagrams/SOURCES).
+	@echo "rendering docs/src/diagrams/*.puml with $(PLANTUML_JAR)"
+	@java -jar $(PLANTUML_JAR) -tsvg $(filter-out docs/src/diagrams/_style.puml,$(wildcard docs/src/diagrams/*.puml))
+	@awk '!/^#/ && NF' guide/src/diagrams/SOURCES | while read -r f; do \
+		cp docs/src/diagrams/$$f guide/src/diagrams/$$f && echo "copied $$f to guide/src/diagrams"; done
+
 .PHONY: books
-books: ## Build all mdBooks: the design book (docs/), the user guide (guide/), and the tutorial (learn/).
+books: docs-check ## Check, then build all mdBooks: the design book (docs/), the user guide (guide/), and the tutorial (learn/).
 	mdbook build docs
 	mdbook build guide
 	mdbook build learn

@@ -62,7 +62,7 @@ skinparam maxMessageSize 160
 ' 3. Escape a leading '--' in any label as '~--'. Creole reads --text-- as
 '    strikethrough, so a flag like --create-namespace renders struck through.
 '
-' diagram_check.py enforces all three.
+' hack/docs/diagram_check.py enforces all three (make docs-check).
 
 ' ---- notes --------------------------------------------------------------
 skinparam NoteBackgroundColor $noteBg
