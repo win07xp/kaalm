@@ -2,21 +2,21 @@
 
 The LLM Gateway is the shared cluster-level component responsible for mediating LLM traffic between agent containers and upstream providers. It is where spend tracking, budget guardrails (soft by default, hard by opt-in), rate limiting, fallback, and credential isolation live.
 
-The pages in this chapter follow a single request through the gateway. [Request Handling](request-handling.md#request-flow) walks the end-to-end request flow, streaming, and model identification; [Workload Identity](workload-identity.md) covers how the gateway establishes which namespace a caller belongs to; and [Listener TLS](../listener-tls.md) covers the certificates and per-path client-auth rules on the listener itself. [Provider Routing and Adapters](provider-routing.md) covers picking a ModelProvider and translating to its wire format, [Budgets and Rate Limits](budgets-and-rate-limits.md#budget-state-management) covers spend accounting and throttling, and [Fallback Logic](fallback.md) covers what happens when the chosen provider fails. [LLM Gateway Operations](operations.md#gateway-readiness) collects readiness, observability, and failure modes.
+The pages in this chapter follow a single request through the gateway. [Request handling](request-handling.md#request-flow) walks the end-to-end request flow, streaming, and model identification; [Workload identity](workload-identity.md) covers how the gateway establishes which namespace a caller belongs to; and [TLS on the cluster listener](../listener-tls.md) covers the certificates and per-path client-auth rules on the listener itself. [Provider routing and adapters](provider-routing.md) covers picking a ModelProvider and speaking its wire format, [Budgets and rate limits](budgets-and-rate-limits.md#budget-state-management) covers spend accounting and throttling, and [Fallback logic](fallback.md) covers what happens when the chosen provider fails. [LLM Gateway operations](operations.md#gateway-readiness) collects readiness, observability, and failure modes.
 
 For the User Gateway (channel message delivery, activator, activity tracking), see [User Gateway](../user/overview.md). For the HTTP endpoint contracts agents use, see [HTTP API](../api/overview.md).
 
-## Why a Shared Gateway
+## Why a shared gateway
 
 Agent containers need to call LLM providers. Doing this naively (agents holding API keys and calling providers directly) gives up all centralized control: no spend visibility, no fallback, no per-namespace accounting, and every agent image must embed credentials. Kaalm interposes on LLM traffic to deliver ModelProvider guarantees.
 
 Similarly, agents need to be reachable from user-facing platforms (Discord, WhatsApp, webhooks). Rather than requiring each developer to build their own webhook receiver and protocol adapter, Kaalm provides a shared channel ingress point.
 
-### Architecture Option Analysis
+### Architecture option analysis
 
 Three architectural options were evaluated for the LLM proxy component.
 
-**Option A: Per-Agent Sidecar Proxy**
+**Option A: per-Agent sidecar proxy**
 
 A small proxy container runs as a sidecar in every Agent Pod.
 
@@ -24,21 +24,21 @@ Pros: Small failure domain; no shared state contention at request time.
 
 Cons: Kubernetes `NetworkPolicy` cannot enforce per-container rules within a Pod. The sidecar and agent container share the same network namespace and the same IP, so NetworkPolicy cannot prevent the agent container from making direct egress calls to LLM providers if the node allows it. Credentials must be copied into user namespaces. Budget state requires eventual-consistent replication across all sidecars.
 
-**Option B: Namespace-Scoped Gateway (not selected)**
+**Option B: namespace-scoped gateway (not selected)**
 
 One proxy Deployment per namespace.
 
 Cons: More complex operator (gateway lifecycle per namespace), harder to reason about at scale, still requires per-namespace credential propagation.
 
-**Option C: Cluster-Wide Gateway (SELECTED for v1)**
+**Option C: cluster-wide gateway (selected)**
 
 One replicated proxy Deployment in `kaalm-system`.
 
-Pros: Credentials never leave `kaalm-system`. NetworkPolicy cleanly isolates agent Pods (deny all egress to LLM provider IPs; allow egress to the gateway Service, which is cross-Pod and fully enforceable). Budget state is centralized in one component: cross-replica reconciliation reduces to a single per-provider ConfigMap exchange with a bounded staleness window (see [Budget State Management](budgets-and-rate-limits.md#budget-state-management)), rather than the per-sidecar eventual-consistency mesh Option A would require. The gateway also serves as the activator for hibernated agents. SPOF concern is addressed with 2-3 replicas, a PodDisruptionBudget (`minAvailable: 1`), and `maxUnavailable: 1` rolling updates.
+Pros: Credentials never leave `kaalm-system`. NetworkPolicy cleanly isolates agent Pods (deny all egress to LLM provider IPs; allow egress to the gateway Service, which is cross-Pod and fully enforceable). Budget state is centralized in one component: cross-replica reconciliation reduces to a single per-provider ConfigMap exchange with a bounded staleness window (see [Budget state management](budgets-and-rate-limits.md#budget-state-management)), rather than the per-sidecar eventual-consistency mesh Option A would require. The gateway also serves as the activator for hibernated agents. SPOF concern is addressed with 2-3 replicas, a PodDisruptionBudget (`minAvailable: 1`), and `maxUnavailable: 1` rolling updates.
 
-**v1 ships with Option C.** The per-Pod sidecar pattern was rejected because the same-Pod network namespace sharing undermines the credential isolation guarantee on standard Kubernetes clusters without a service mesh.
+**Kaalm ships Option C.** The per-Pod sidecar pattern was rejected because the same-Pod network namespace sharing undermines the credential isolation guarantee on standard Kubernetes clusters without a service mesh.
 
-## Gateway Architecture
+## Gateway architecture
 
 The gateway process hosts both listeners and the activator. The cluster listener runs the request pipeline shown below; the User Gateway listener and the activator are covered in [User Gateway](../user/overview.md).
 

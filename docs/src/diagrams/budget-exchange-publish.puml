@@ -1,0 +1,25 @@
+@startuml budget-exchange-publish
+' The replica side of the budget counter exchange: seed, count, publish, fold.
+' Cadences, key kinds, and the enforcement rule are the prose on
+' docs/src/gateways/llm/budgets-and-rate-limits.md (the source of truth).
+!include _style.puml
+
+participant "Gateway\nreplica-0" as r0 #90EE90
+participant "Gateway\nreplica-1" as r1 #90EE90
+participant "kaalm-budget-{provider}\nConfigMap" as cm #FFD580
+
+== Startup ==
+r0 -> cm : read _canonical
+cm --> r0 : seed the counter
+
+== Every LLM call ==
+r0 -> r0 : increment the\nin-memory counter
+
+== Every 10s ==
+r0 -> cm : SSA own key
+r1 -> cm : SSA own key
+
+== Every ConfigMap watch event ==
+cm --> r0 : changed
+r0 -> r0 : fold peer partials\nplus _retired
+@enduml
