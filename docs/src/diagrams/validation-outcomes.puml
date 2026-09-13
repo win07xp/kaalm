@@ -1,0 +1,26 @@
+@startuml validation-outcomes
+' What a reconcile-time violation becomes, by rule family. The mapping is
+' the table on docs/src/resources/validation-and-defaulting.md (the source
+' of truth).
+!include _style.puml
+
+skinparam ConditionEndStyle hline
+skinparam ActivityFontSize 12
+skinparam ArrowFontSize 10
+
+start
+:reconcile-time rule;
+if (rule family?) then (reference or validity)
+  :**Ready=False**\nreason names the rule\nAgentChannel: phase=Failed; <<#FFCDD2>>
+  kill
+elseif (rule family?) then (class mismatch)
+  :**Agent: phase=Degraded**\nrecovers when the specs align\n**AgentTask: phase=Failed**; <<#FFE0B2>>
+  kill
+elseif (rule family?) then (cap)
+  :**clamped** to the class value\nno status change; <<#E8F5E9>>
+  kill
+else (advisory)
+  :**Warning event**\nReady unaffected; <<#FFF8DC>>
+  kill
+endif
+@enduml

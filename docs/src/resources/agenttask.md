@@ -2,7 +2,7 @@
 
 AgentTask is a namespace-scoped resource representing an ephemeral, goal-driven agent workload. It is analogous to a Kubernetes Job: it runs once, pursues a completion condition, produces artifacts, and terminates.
 
-Where an [Agent](agent.md) is a long-running service, an AgentTask has a beginning and an end. The spec therefore centers on two questions a Job never has to answer for an AI workload: how does the system know the task is done (`spec.completion`), and how does the task hand back its results (`spec.artifacts`)?
+Where an [Agent](agent.md) is a long-running service, an AgentTask has a beginning and an end. The spec therefore answers two questions a Job never has to for an AI workload: how the system knows the task is done (`spec.completion`), and how the task hands back its results (`spec.artifacts`).
 
 ## Spec
 
@@ -13,10 +13,14 @@ metadata:
   name: fix-issue-342
   namespace: team-support
 spec:
+  # Required. Rule 1.
   agentClassRef:
     name: sandboxed
 
+  # Must match the class allowlist (rule 2). Defaults from the class.
   image: "registry.internal.corp/agents/coder:v1.0.0"
+  # Merged with the injected KAALM_* set. There is no command or args
+  # override on a task; the image's entrypoint is the task.
   env:
     - name: TASK_GOAL
       value: "Fix GitHub issue #342 in repo acme/widgets and open a PR"
@@ -24,157 +28,129 @@ spec:
       valueFrom:
         secretKeyRef: { name: github-bot-token, key: token }
 
+  # Optional. Rules 3 to 5.
   providers:
     - providerRef: { name: anthropic-shared }
 
-  # Tool grants (since v0.4.0), identical to Agent.spec.tools: rules 35 to 38
-  # gate them, settling as terminal Failed since tasks have no Degraded
-  # phase. See The Tool Plane in the gateways section.
+  # Optional. Rules 35 to 38; a violation settles the task as Failed, since
+  # tasks have no Degraded phase.
   tools:
     - providerRef: { name: search-tools }
-      tools: ["web_search"]   # optional narrowing; omitted means every tool
+      tools: ["web_search"]
 
+  # Clamped to the class maxLimits (rule 6).
   resources:
     requests: { cpu: "1", memory: "2Gi" }
     limits:   { cpu: "2", memory: "4Gi" }
 
-  # Scratch persistence for the task. Lifecycle is tied to the AgentTask.
-  # Setting enabled=true requires the referenced AgentClass to also have
-  # persistence.enabled=true; see rule 24 in Cross-Resource Validation.
+  # Workspace PVC for the task's lifetime. Requires persistence.enabled on
+  # the class (rule 24). No existingClaim on a task.
   persistence:
     enabled: true
     sizeGi: 10
+    # Default /var/task/workspace.
     mountPath: "/workspace"
 
-  # Completion semantics
   completion:
-    # How the task signals completion.
-    # "agentReported": agent POSTs to gateway /v1/task/complete
-    # "exitCode": task is complete when the container exits 0
-    # "webhook": external service calls a controller webhook (v1.1+, not in v1)
+    # "agentReported" (schema default): the container POSTs
+    # /v1/task/complete. "exitCode": the task is complete when the
+    # container exits.
     condition: agentReported
+    # Bounds running time, measured from status.startTime. Unset means no
+    # bound: the task runs until it reports or exits.
     timeout: "1h"
-    # What to do if timeout is hit before completion. "Fail" (default) settles
-    # the task in phase=TimedOut, a failure-class terminal phase kept distinct
-    # from Failed so timeouts are attributable and exempt from backoffLimit
-    # retries. "Succeed" settles it in phase=Succeeded, keeping any partial
-    # agent-reported payload best-effort. See the AgentTask lifecycle.
-    onTimeout: Fail    # "Fail" | "Succeed" (rarely used) | "Retry" (v1.1+)
-    # Retry on failure. v1 supports simple count-based retries, no backoff tuning.
+    # "Fail" (schema default) settles a timeout as TimedOut, exempt from
+    # backoffLimit. "Succeed" settles it as Succeeded with any partial
+    # agent-reported payload kept.
+    onTimeout: Fail
+    # Pod recreations before Failed is terminal. Count-based only.
     backoffLimit: 0
 
-  # Artifacts to collect on completion. The agent includes values for these
-  # names in the POST /v1/task/complete body.
-  # Only valid with condition: agentReported. CRD schema enforces:
-  # x-kubernetes-validations:
-  #   - rule: "!has(self.artifacts) || size(self.artifacts) == 0 || !has(self.completion) || !has(self.completion.condition) || self.completion.condition != 'exitCode'"
-  #     message: "artifacts cannot be collected with exitCode completion; use agentReported"
-  # The has() guards are load-bearing: in CRD CEL, reading an absent optional
-  # field is an evaluation error that FAILS validation. completion.condition
-  # is defaulted at reconcile time (see Defaulting), so the stored spec may
-  # omit it; an unguarded self.completion.condition would reject every
-  # manifest that declares artifacts without an explicit completion block.
+  # Names the container includes in its POST /v1/task/complete body. Only
+  # valid with condition agentReported (rule 17, apply time).
   artifacts:
     - name: pr-url
     - name: summary
 
-  # Retention: how long to keep the AgentTask resource after completion.
+  # Seconds to keep the resource after it settles. Unset means it is never
+  # cleaned up.
   ttlSecondsAfterFinished: 3600
 ```
 
-A few points worth calling out before the design notes:
-
-- **Persistence is opt-in and gated by the class.** The scratch volume's lifecycle is tied to the AgentTask, and `persistence.enabled: true` is only allowed when the referenced AgentClass also has `persistence.enabled: true` (rule 24 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation)).
-- **The artifacts CEL rule looks over-defensive on purpose.** In CRD CEL, reading an absent optional field is an evaluation error, and an evaluation error fails validation. Because `completion.condition` is defaulted at reconcile time (see [Defaulting](validation-and-defaulting.md#defaulting)) rather than at admission, the stored spec may legitimately omit it. Without the `has()` guards, every manifest that declared artifacts but no explicit `completion` block would be rejected, even though its effective condition is the artifact-compatible default.
-- **`timeout` measures execution, not scheduling.** It counts from `status.startTime`, which is stamped when the Pod becomes Ready (see [Status](#status) below).
+`kubectl get at` prints the phase and the class.
 
 ## Status
 
 ```yaml
 status:
   observedGeneration: 1
-  phase: Succeeded   # Pending | Provisioning | Running | Completing | Succeeded | Failed | TimedOut | Terminating
+  phase: Succeeded
   conditions:
     - type: Completed
       status: "True"
-      reason: AgentReported
-      message: "Agent reported completion at 2026-04-05T11:30:42Z"
-  # Stamped when the task transitions Provisioning -> Running (Pod Ready), in
-  # the same status write as the phase change. spec.completion.timeout measures
-  # from startTime, so scheduling and image-pull time never count against it;
-  # Provisioning is bounded separately (see the AgentTask lifecycle).
+      reason: TaskSucceeded
+      message: "PR opened successfully"
   startTime: "2026-04-05T11:05:12Z"
   completionTime: "2026-04-05T11:30:42Z"
   podName: "fix-issue-342-xk9p2"
   currentPodUID: "9d3e2c1b-4a5f-6d7e-8c9b-1a2f3e4d5c6b"
-  # Incremented at the start of each backoffLimit retry cycle; compared
-  # against spec.completion.backoffLimit to decide whether Failed is terminal.
-  # See Retry mechanics.
   retries: 0
-  # Artifact values captured inline. Oversize artifacts are rejected by the
-  # gateway with HTTP 413; agents must externalize large outputs and pass a
-  # reference URL inline (see design notes below).
   artifactValues:
     pr-url: "https://github.com/acme/widgets/pull/587"
     summary: "Fixed null pointer in WidgetService.get(). Added regression test."
-  agentReportedStatus: "success"   # "success" | "failure"
+  agentReportedStatus: "success"
   agentReportedMessage: "PR opened successfully"
 ```
 
-Three status fields deserve emphasis:
+| Field | Meaning |
+|---|---|
+| `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
+| `Completed` | `True` with `reason: TaskSucceeded` or `TaskFailed` once the task settles; the message is the agent's reported message, the container's exit summary, or the validation failure. |
+| `startTime` | Stamped on the transition to `Running` (Pod Ready), in the same status write. `spec.completion.timeout` measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
+| `completionTime` | Stamped when the task settles. |
+| `podName` | The current Pod. |
+| `currentPodUID` | For an `agentReported` task, the UID of the Pod allowed to report completion, stamped on every Pod creation and cleared during a retry reset. Never set for an `exitCode` task. |
+| `retries` | Incremented at the start of each `backoffLimit` retry cycle and compared with the limit to decide whether `Failed` is terminal ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). |
+| `artifactValues` | The values the container reported, keyed by declared name. |
+| `agentReportedStatus`, `agentReportedMessage` | The `status` (`success` or `failure`) and `message` from the completion report. |
 
-- **`startTime`** is stamped when the task transitions Provisioning to Running (Pod Ready), in the same status write as the phase change. Because `spec.completion.timeout` measures from `startTime`, scheduling and image-pull time never count against the task's time budget; the Provisioning phase is bounded separately (see [AgentTask](../controller/task-lifecycle.md)).
-- **`retries`** is incremented at the start of each `backoffLimit` retry cycle and compared against `spec.completion.backoffLimit` to decide whether `Failed` is terminal. See [Retry mechanics](../controller/task-lifecycle.md).
-- **`currentPodUID`** identifies which Pod is currently allowed to report completion. Its role as an identity gate is explained under [the completion protocol](#the-completion-protocol-data-channel-and-identity-gate) below.
-
-## Design Notes
+## Design notes
 
 ### Task names must be DNS-1123 labels
 
-`metadata.name` must be a DNS-1123 label, the same constraint and rationale as the [Agent CRD](agent.md), including the 63-character bound (the task name becomes a single DNS label in the SAN). It is enforced via the same **root-scoped** CRD CEL pattern: `x-kubernetes-validations: [{rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') && size(self.metadata.name) <= 63", message: "AgentTask name must be a DNS-1123 label (no dots, max 63 characters)"}]` at the root of the AgentTask schema.
-
-The constraint is load-bearing for workload identity: the gateway extracts the namespace from the `{name}.{namespace}.task.kaalm.io` SAN shape by splitting on `.` and reading label index 1. A dotted task name would shift the namespace label and defeat identification. See [Namespace Identification § Mode 1](../gateways/llm/workload-identity.md).
+`metadata.name` carries the same root-scoped rule as the Agent schema (rule 21), for the same reason: the task name becomes one DNS label in the `{name}.{namespace}.task.kaalm.io` SAN, and the gateway reads the namespace by position ([Name validation](agent.md#name-validation-dns-1123-label-enforced-at-the-schema-root)).
 
 ### Completion modes
 
-**`completion.condition: agentReported` is the v1 default.** The agent container calls the gateway's completion endpoint with a status payload that may include artifact key-value pairs. This is more flexible than exit codes alone because the agent can report structured metadata and artifacts in a single call. See [POST /v1/task/complete](../gateways/api/task-complete.md) for the endpoint spec.
+**`agentReported` is the default.** The container calls [`POST /v1/task/complete`](../gateways/api/task-complete.md) with a status, a message, and artifact values in one call, which is more than an exit code can carry.
 
-**`exitCode` does not support artifact collection.** Artifacts are collected via the `POST /v1/task/complete` payload, which is only used by `agentReported` mode. Declaring `spec.artifacts` with `completion.condition: exitCode` is rejected by CRD schema validation. Tasks using `exitCode` that need to produce output should write results to an external system (e.g., a Git repository, object storage) and rely on the container logs for status.
+**`exitCode` collects no artifacts.** Artifacts travel in the completion payload, which only `agentReported` mode sends. Declaring `spec.artifacts` with `condition: exitCode` is rejected at apply time (rule 17). An `exitCode` task that produces output writes it to an external system and relies on container logs for status.
 
-**`onTimeout: Retry` and `completion.condition: webhook` are intentionally deferred.** v1 is simple: one attempt, report or exit, collect artifacts, done. The CRD schema enforces this: `spec.completion.condition` accepts only `agentReported` and `exitCode` in v1 via `x-kubernetes-validations: [{rule: "self in ['agentReported', 'exitCode']", message: "webhook completion condition is not supported in v1"}]`, so invalid values are rejected at apply time.
+**There is no webhook condition and no retry on timeout.** The schema enums bound `condition` to `agentReported` and `exitCode` and `onTimeout` to `Fail` and `Succeed`.
+
+### Timeout and retention are unbounded by default
+
+`completion.timeout` has no default. Unset, the task runs until it reports or exits; an `agentReported` task whose container never reports holds its Pod, PVC, and certificate indefinitely. `ttlSecondsAfterFinished` has no default either: unset, a settled task and its children are never removed. As shipped, no AgentClass field bounds or defaults either value, unlike the idle and hibernation timings for Agents; issue #239 tracks it. Set both on every task.
 
 ### Artifact collection
 
-Artifacts are declared by name in the spec; the agent includes artifact values (keyed by name) in the `POST /v1/task/complete` body. The gateway validates the payload's artifact names against `spec.artifacts` and returns `400 invalid_request` synchronously on mismatch. The rule splits by `status`:
+Artifacts are declared by name; the container reports values keyed by name. The gateway validates the names against `spec.artifacts` and the per-artifact and total size caps before writing the completion mailbox, and answers synchronously so the container can log and exit non-zero ([Task completion](../gateways/api/task-complete.md)). The reconciler re-validates when it reads the mailbox. Large outputs are externalized (object storage, Git) and referenced by URL in the value; there is no spill into ConfigMaps.
 
-- `status: "success"` requires every declared name present and no undeclared names.
-- `status: "failure"` enforces only the no-undeclared-names half, so a failing task can report a subset of declared artifacts (or none).
-
-See [POST /v1/task/complete](../gateways/api/task-complete.md) for the wire contract; the AgentTaskReconciler re-validates defensively when reading the ConfigMap.
-
-This payload-based design eliminates race conditions, removes the need for `pods/exec` RBAC, gives the agent a synchronous error it can log and exit non-zero on, and keeps the artifact contract simple.
-
-Artifact size limits apply: **4 KiB per artifact, 32 KiB total**. Oversize payloads are rejected at the gateway with HTTP 413; agents must externalize large outputs (object storage, Git, etc.) and place a reference URL in the artifact value. There is no auto-spill into ConfigMaps: the inline payload is the only delivery path.
-
-Related: **`status.agentReportedStatus`** mirrors the `status` field from the agent's [`POST /v1/task/complete`](../gateways/api/task-complete.md) payload, `"success"` or `"failure"`. The gateway rejects other values with `400 invalid_request` synchronously, so `agentReportedStatus` always settles to one of those two when populated.
+This payload-based design has no race, needs no `pods/exec` RBAC, and keeps the artifact contract small.
 
 ### The completion protocol: data channel and identity gate
 
 The gateway and the reconciler coordinate completion through two mechanisms:
 
-- The per-task `{taskName}-completion` ConfigMap is the **data** channel. The gateway patches it with the completion payload; the reconciler watches it for changes.
-- `status.currentPodUID` is the **identity gate**. The AgentTaskReconciler stamps it with the current Pod's UID on every Pod creation (initial provisioning and `backoffLimit` retries) and clears it (`""`) during the retry-reset window. The gateway resolves the calling Pod's UID at `/v1/task/complete` admission and rejects mismatched callers with `403 access_denied` `reason=StalePodCompletion`.
+- The per-task `{taskName}-completion` ConfigMap is the data channel. The gateway writes the completion payload; the reconciler watches it ([The completion mailbox](../runtime/child-resources.md#the-completion-mailbox)).
+- `status.currentPodUID` is the identity gate. The reconciler stamps it on every Pod creation of an `agentReported` task and clears it during the retry-reset window; the gateway rejects a report from any other Pod with `403 access_denied` and a `StalePodCompletion` message, and a report against a settled task with `TaskAlreadyCompleted`.
 
-Combined with a terminal-phase rejection (`reason=TaskAlreadyCompleted` when `status.phase ∈ {Succeeded, Failed, TimedOut}`), the identity gate prevents two failure modes the data-channel reset alone cannot close: stale writes from a terminated Pod (in-flight after a retry), and silent drops from a delayed second call against a completed task. See [/v1/task/complete](../gateways/api/task-complete.md) 403 cases (c) and (d) for the wire-level contract, and [Retry mechanics](../controller/task-lifecycle.md) for the clear/reset/create/restamp ordering.
+The wire-level contract is on [Task completion](../gateways/api/task-complete.md), and the clear, reset, create, and restamp order on [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 
-### Retention and concurrency
+### Concurrency
 
-**`ttlSecondsAfterFinished`** mirrors Job semantics. The controller garbage-collects the resource (and its Pod, PVC) after the TTL.
+Unlike a Job, an AgentTask is always one Pod. There is no parallelism field, and fan-out is not a property of the resource.
 
-**Concurrency**: unlike Job, AgentTask is always parallelism=1 in v1. Parallel fan-out tasks would be a separate future resource (`AgentTaskSet`) rather than a field on AgentTask.
+### Runtime-contract guarantees
 
-### Runtime-contract guarantees (same as Agent)
-
-The AgentTaskReconciler injects the full `$KAALM_*` environment-variable set on the task Pod (`$KAALM_HEALTH_PORT`, `$KAALM_GATEWAY_ENDPOINT`, `$KAALM_CA_CERT`, `$KAALM_TLS_CERT`, `$KAALM_TLS_KEY`) and creates a per-task cert-manager `Certificate` (`{taskName}-tls`) with `usages: [client auth]`. The output Secret mounts at `/var/run/kaalm/`, so the task image presents a valid mTLS client cert on every call to `$KAALM_GATEWAY_ENDPOINT`: LLM requests and `POST /v1/task/complete`. Tasks send no heartbeats; `/v1/agent/heartbeat` is Agent-only and rejects per-task certs with 403.
-
-The Certificate's SAN is `{taskName}.{namespace}.task.kaalm.io`, a non-Service shape, since tasks have no Service. See [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) and [Namespace Identification](../gateways/llm/workload-identity.md) for the full flow.
+The task Pod gets the same injected `$KAALM_*` set as an Agent, no probes, and a per-task certificate with `client auth` only, since a task has no listener. The obligations on the image are [The runtime contract](../runtime/contract.md), items 3 and 6; the child objects are on [AgentTask child resources](../runtime/child-resources.md#agenttask-child-resources).

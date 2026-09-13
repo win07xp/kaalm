@@ -2,7 +2,7 @@
 
 AgentClass is a cluster-scoped policy resource. It describes the runtime configuration, isolation, resource defaults, and allowed providers for a category of agents. It is analogous to StorageClass: developers reference an AgentClass by name in their Agent or AgentTask spec, and the platform team controls what each class permits.
 
-This split is the core of Kaalm's governance model. Developers pick a class; the class decides what images may run, how much compute they get, where their traffic may go, and which LLM providers they may call. When a live AgentClass is edited, the change propagates to running workloads through a controlled mechanism described in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling). The reconciler that materializes an AgentClass into cluster objects is documented in [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).
+This split is the core of Kaalm's governance model. Developers pick a class; the class decides what images may run, how much compute they get, where their traffic may go, and which LLM providers and tool servers they may call. When a live AgentClass is edited, the change propagates to running workloads along the paths in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling). The reconciler is [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).
 
 ## Spec
 
@@ -14,102 +14,88 @@ kind: AgentClass
 metadata:
   name: standard
 spec:
-  # Runtime backend. Only "pod" is supported in v1.
-  # "agentSandbox" backend (Sandbox CRD integration) is planned for v1.1.
   runtime:
+    # "pod" is the only accepted value and the schema default.
     backend: pod
     # Optional. When set, must name a RuntimeClass that exists on the cluster
-    # (e.g., gvisor): Pod admission fails with "RuntimeClass not found"
-    # otherwise. Omit (the default) to use the cluster's default container
-    # runtime (runc in practice); stock clusters define no RuntimeClass
-    # objects at all, so pinning e.g. "runc" here would break scheduling.
+    # (for example gvisor); Pod admission fails otherwise. Omit to use the
+    # cluster's default container runtime.
     # runtimeClassName: gvisor
 
-  # Image policy
   image:
-    # If set, only images matching one of these patterns may be used.
-    # Empty list = any image allowed (not recommended).
+    # Glob patterns (path.Match). A workload image must match one when the
+    # list is non-empty. Empty list: any image, with no warning.
     allowedImages:
       - "registry.internal.corp/agents/*"
       - "ghcr.io/myorg/agents/*:v*"
-    # Default image if the Agent spec does not provide one.
+    # Applied at reconcile time when the workload omits its image.
     defaultImage: "registry.internal.corp/agents/base:v1"
     # Whether Agents of this class may mount a handler ConfigMap into a
-    # reference base image (Agent.spec.handler). Default false: a mounted
-    # handler injects code into an image this allowlist already approved,
-    # so the capability is an explicit per-class grant. An Agent with
-    # spec.handler set against a class where this is false is moved to
-    # phase=Degraded (reason=HandlerMountNotAllowed) at reconcile time.
-    # See rule 30 in Cross-Resource Validation.
+    # reference base image (Agent.spec.handler). Default false; rule 30.
     allowHandlerMounts: false
+    # Any string is accepted by the schema; an invalid value surfaces only
+    # when the kubelet rejects the Pod. See the design notes.
     pullPolicy: IfNotPresent
+    # Resolved in the workload's namespace at Pod creation; rule 23.
     imagePullSecrets:
       - name: registry-credentials
 
-  # Resource defaults and caps. Agent.spec.resources may override within caps.
   resources:
+    # Applied whole, and only when the workload sets neither requests nor
+    # limits. See the design notes.
     defaults:
       requests: { cpu: "500m", memory: "1Gi" }
       limits:   { cpu: "1",    memory: "2Gi" }
+    # Clamps at reconcile time, never rejects; rule 6.
     maxLimits:
       cpu: "4"
       memory: "8Gi"
 
-  # Persistence defaults
   persistence:
-    # When false, Agents and AgentTasks of this class cannot request a PVC:
-    # an Agent with persistence.enabled=true is moved to phase=Degraded
-    # (reason=PersistenceNotAllowed), and an AgentTask with the same setting
-    # is moved to phase=Failed (reason=PersistenceNotAllowed), at reconcile
-    # time. See rule 24 in Cross-Resource Validation.
+    # When false, workloads of this class cannot request a PVC; rule 24.
     enabled: true
+    # Applied at reconcile time when the workload omits sizeGi.
     defaultSizeGi: 5
+    # Clamps sizeGi; rule 7.
     maxSizeGi: 50
-    storageClassName: "standard"   # k8s StorageClass
-    # What happens to the per-Agent PVC when the Agent is deleted. Distinct from
-    # PersistentVolume.persistentVolumeReclaimPolicy (which governs PV fate on
-    # PVC deletion): this field controls PVC fate on Agent deletion.
+    storageClassName: "standard"
+    # What happens to a Kaalm-provisioned Agent PVC when the Agent is
+    # deleted. Schema default Delete. Distinct from the PV reclaim policy.
     pvcRetention: Delete           # Delete | Retain
 
-  # Provider access: which ModelProviders may agents of this class reference?
-  # Empty list = no providers allowed.
+  # ModelProviders workloads of this class may reference; rule 5.
+  # Empty list: none.
   allowedProviders:
     - name: anthropic-shared
     - name: openai-fallback
 
-  # Tool access (since v0.4.0): which ToolProviders may workloads of this
-  # class be granted (rule 37)? Empty list = none, the same default as
-  # allowedProviders.
+  # ToolProviders workloads of this class may be granted; rule 37.
+  # Empty list: none.
   allowedToolProviders:
     - name: search-tools
 
-  # Network policy hints (the controller translates these into NetworkPolicy resources)
   network:
     egress:
-      # Allowed external destinations beyond the Kaalm gateway, expressed as
-      # CIDR blocks. Agent containers call providers through the gateway; this
-      # governs other direct egress (from v0.4.0, MCP tool traffic
-    # preferentially rides the gateway's tool plane instead). Enforced on any CNI that implements
-      # standard Kubernetes NetworkPolicy.
+      # CIDR blocks the synthesized NetworkPolicy allows beyond the gateway
+      # and cluster DNS, on every port. Enforced on any CNI that implements
+      # NetworkPolicy. Malformed entries: rule 19.
       allowedCIDRs:
-        - "10.42.0.0/16"         # internal MCP subnet
-        - "140.82.112.0/20"      # api.github.com (example; pin to actual ranges)
-      # Optional DNS-based allowlist. Only enforced on CNIs that support FQDN
-      # egress policies (e.g., Cilium, Calico Enterprise). On standard CNIs this
-      # field is ignored and AgentClassReconciler emits a Warning event. Use
-      # allowedCIDRs for portable enforcement; use allowedHosts in addition only
-      # when you have a CNI that supports FQDN-based policy.
+        - "10.42.0.0/16"
+        - "140.82.112.0/20"
+      # DNS names. Validated (rule 20), and the class reports whether the
+      # CNI has an FQDN policy type (FQDNPolicySupported), but the
+      # controller synthesizes no FQDN policy from it on any CNI.
       allowedHosts:
         - "mcp.internal.corp"
         - "api.github.com"
+    # Accepted by the schema and never applied as shipped (#226).
     allowHostNetwork: false
-    # Allow ingress from other agent Pods in the same namespace.
-    # When true, the controller adds a NetworkPolicy ingress rule that allows
-    # traffic from any Pod in the same namespace bearing the kaalm agent label.
-    # Default false (deny all ingress except from the Kaalm gateway).
+    # When true, an Agent's NetworkPolicy admits every Pod in the Agent's
+    # namespace on every port. Agents only; a task's policy admits no
+    # ingress. Default false: only the gateway reaches the agent.
     allowSameNamespaceIngress: false
 
-  # Pod security
+  # Applied verbatim to every workload Pod and container.
   security:
     podSecurityContext:
       runAsNonRoot: true
@@ -120,29 +106,30 @@ spec:
       readOnlyRootFilesystem: true
       capabilities: { drop: ["ALL"] }
 
-  # Lifecycle defaults (overridable per-Agent within limits)
   lifecycle:
+    # Default and clamp for Agent.spec.lifecycle.idleTimeout; rule 8.
     defaultIdleTimeout: "30m"
     maxIdleTimeout: "24h"
-    # Hard policy lever. When false, Agents of this class cannot opt in to
-    # hibernation: an Agent with lifecycle.hibernationEnabled=true is moved
-    # to phase=Degraded, reason=HibernationNotAllowed at reconcile time. See
-    # rule 26 in Cross-Resource Validation.
+    # When false, Agents of this class cannot enable hibernation; rule 26.
     hibernationAllowed: true
-    defaultHibernationDelay: "30m"  # how long an agent stays Idle before hibernating
-    maxHibernationDelay: "2h"      # cap on per-Agent hibernationDelay overrides
-    defaultWakeTimeout: "2m"       # default time gateway waits for Pod Ready on wake
-    maxWakeTimeout: "5m"           # cap on per-Agent wakeTimeout overrides
+    # Default and clamp for hibernationDelay; rule 10.
+    defaultHibernationDelay: "30m"
+    maxHibernationDelay: "2h"
+    # Accepted by the schema and not applied as shipped: the gateway reads
+    # the Agent's own wakeTimeout and uses 2m when it is unset (rule 9,
+    # #204).
+    defaultWakeTimeout: "2m"
+    maxWakeTimeout: "5m"
     terminationGracePeriodSeconds: 60
 
-  # Labels and annotations added to every Pod created under this class
+  # Merged onto every workload Pod.
   podMetadata:
     labels:
       cost-center: "platform"
     annotations: {}
 ```
 
-The `PersistenceNotAllowed` and `HibernationNotAllowed` outcomes referenced in the comments are rules 24 and 26 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation).
+`resources.defaults` is a full `ResourceRequirements` block, so the schema also accepts `claims`; the controller does not read it.
 
 ## Status
 
@@ -153,71 +140,69 @@ status:
     - type: Ready
       status: "True"
       reason: AllReferencesResolved
-      message: "All referenced ModelProviders exist and are healthy"
+      message: "class is valid"
       lastTransitionTime: "2026-04-05T12:00:00Z"
-  agentsInUse: 14       # count of Agents currently using this class
-  tasksInUse: 2         # count of AgentTasks currently using this class
+    - type: FQDNPolicySupported
+      status: "False"
+      reason: NoHostsRequested
+  agentsInUse: 14
+  tasksInUse: 2
 ```
 
-The `Ready` condition reports whether every reference the class makes (its `allowedProviders` and `allowedToolProviders` lists) resolves to an existing provider. `agentsInUse` and `tasksInUse` count the Agents and AgentTasks currently using this class, which tells the platform team what a change to the class will affect.
+| Condition | Meaning |
+|---|---|
+| `Ready` | `True` with `reason: AllReferencesResolved` when every `allowedProviders` and `allowedToolProviders` entry names an existing provider, every `allowedCIDRs` entry parses (rule 19), and every `allowedHosts` entry is a DNS name (rule 20). Otherwise `False` with `reason: InvalidReference` and a message listing every problem, sorted and joined with `; `. Provider health is not consulted. |
+| `FQDNPolicySupported` | Set on every pass: `reason: NoHostsRequested` while `allowedHosts` is empty; otherwise `FQDNPolicySupported` or `FQDNPolicyUnsupported` from the CNI probe described under the design notes. |
 
-## Design Notes
+`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. `kubectl get ac` prints both counts.
 
-### An image allowlist is effectively mandatory
+## Design notes
 
-`allowedImages` is mandatory in practice for real clusters. An empty list means "any image", and validation will emit a warning when it sees one. Leave it empty only in throwaway environments.
+### An image allowlist is mandatory in practice
 
-### How `pvcRetention: Retain` works
+An empty `allowedImages` means any image, and nothing warns about it. Leave it empty only in throwaway environments.
 
-AgentClass-derived per-Agent PVCs carry an ownerRef back to the Agent, like other [child resources](../runtime/child-resources.md). That means the default Kubernetes cascade garbage collection removes the PVC when the Agent is deleted.
+### Defaults and maxLimits
 
-To honor `Retain`, the Agent finalizer strips the PVC's ownerRef before the Agent's own finalizer is removed; cascade GC then leaves the PVC untouched. When the policy is `Delete`, the finalizer leaves the ownerRef in place and cascade GC removes the PVC. See [Finalizers](../controller/finalizers.md).
+`resources.defaults` applies whole, and only when the workload sets neither `requests` nor `limits`. A workload that sets either one gets no class defaults for the other.
+
+`maxLimits` clamps and never rejects, at reconcile time (rule 6): a limit above the cap is lowered to it, a request above the cap is lowered to it, and a resource named in `maxLimits` that the workload leaves without a limit is given the cap as its limit. The same holds for `maxSizeGi`, `maxIdleTimeout`, and `maxHibernationDelay` (rules 7, 8, and 10). The full default-versus-cap table is on [Defaulting](validation-and-defaulting.md#defaulting).
+
+### `pvcRetention`
+
+The field governs the PVC Kaalm provisions for an Agent. Under `Retain`, the Agent finalizer strips the PVC's ownerRef before the Agent is removed, so cascade garbage collection leaves the PVC behind ([Finalizers](../controller/finalizers.md)). Two cases are outside it: a PVC referenced by `Agent.spec.persistence.existingClaim` never carries an ownerRef and survives deletion under either value, and an AgentTask's workspace PVC is always removed with the task, whatever the class sets.
 
 ### `allowHandlerMounts` guards the image review boundary, not code execution
 
-Anyone who can create an Agent can already run arbitrary code: any image matching `allowedImages`. What a mounted handler ([`Agent.spec.handler`](agent.md), consumed by the [reference base images](../runtime/base-images.md)) uniquely adds is code that *bypasses* image review: the platform team allowlisted `kaalm-agent-python`, not the handler source injected into it. `allowHandlerMounts` therefore defaults to `false`, and enabling it is the class-level statement that, for workloads of this category, namespace-level ConfigMap authorship is an acceptable code provenance. Classes for production fleets built from reviewed images leave it off; a starter or development class turns it on. Enforcement is rule 30 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation), with the same recoverable `Degraded` handling as the persistence and hibernation gates, including on class drift: flipping this to `false` on a live class degrades existing Agents that mount handlers.
-
-Stated as RBAC, so there is no room to misread it: **granting `allowHandlerMounts` makes ConfigMap write access in a namespace equivalent to code execution as that namespace's handler-mounting Agents**, with their ServiceAccount, their certificate identity, and their gateway access, taking effect at the next Pod recreation (including a wake from hibernation). Grant it only on classes whose namespaces already treat every ConfigMap author as a code author, and see the corresponding row in the [threat model](../security/threat-model.md#workload-isolation).
+Anyone who can create an Agent can already run arbitrary code: any image matching `allowedImages`. What a mounted handler ([`Agent.spec.handler`](agent.md), consumed by the [reference base images](../runtime/base-images.md)) adds is code that bypasses image review: the platform team approved `kaalm-agent-python`, not the handler source injected into it. The field therefore defaults to `false`, and enabling it is the class-level statement that ConfigMap authorship in a namespace is an acceptable code provenance for that category of workload. Classes for production fleets built from reviewed images leave it off; a starter or development class turns it on. Enforcement is rule 30, with the same recoverable `Degraded` handling as the persistence and hibernation gates, including on class drift. What the grant means in RBAC terms is stated once in the [threat model](../security/threat-model.md#workload-isolation).
 
 ### Image pattern glob semantics
 
-Patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules. Two consequences matter:
+Patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules:
 
-- **`*` does not cross path separators.** The wildcard matches any sequence of non-`/` characters. So `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo:latest` but NOT `registry.internal.corp/agents/team/foo:latest`. Use explicit multi-segment patterns (e.g., `registry.internal.corp/agents/team/*`) for nested paths.
-- **Digest references DO match globs.** `*` matches any run of non-`/` characters *including* `@` and `:`, so `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo@sha256:…` as well as tagged refs. Where digest exclusion matters, anchor the tag (e.g., `registry.internal.corp/agents/*:v*` works because a hex digest contains no `v`, so digest refs cannot match) or list permitted digests explicitly.
+- `*` does not cross path separators. `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo:latest` but not `registry.internal.corp/agents/team/foo:latest`. Use a multi-segment pattern for nested paths.
+- Digest references do match. `*` matches any run of non-`/` characters, `@` and `:` included, so `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo@sha256:...`. To exclude digests, anchor the tag (`registry.internal.corp/agents/*:v*` works because a hex digest contains no `v`) or list permitted digests explicitly.
 
-### Network egress: `allowedCIDRs` vs. `allowedHosts`
+### `image.pullPolicy` is unvalidated
 
-`allowedCIDRs` is the portable primitive. It maps directly to `NetworkPolicy.egress.to.ipBlock.cidr`, which every CNI implementing Kubernetes NetworkPolicy supports.
+The schema accepts any string. A typo is stored and surfaces only when the kubelet rejects the Pod; issue #241 tracks an enum on the field.
 
-`allowedHosts` (DNS names) cannot be expressed in standard `NetworkPolicy`. It requires a CNI with FQDN egress policies: Cilium (via `CiliumNetworkPolicy`) or Calico Enterprise. The AgentClassReconciler detects the cluster CNI on startup; if `allowedHosts` is set but no supported FQDN-policy CRD is present, a `Warning` event is emitted and `allowedHosts` is ignored.
+### Network egress: `allowedCIDRs` and `allowedHosts`
 
-Prefer `allowedCIDRs` for egress governance; layer `allowedHosts` on top only when the CNI supports it.
+`allowedCIDRs` is the portable primitive. Each entry becomes a `NetworkPolicy` egress rule to that `ipBlock`, on every port, which every CNI that implements NetworkPolicy enforces. The full synthesized rule set is on [Child resources](../runtime/child-resources.md#what-the-synthesized-networkpolicy-protects).
 
-### `allowedProviders` is one gate in a chain, and only in the full lifecycle tier
+`allowedHosts` cannot be expressed in standard `NetworkPolicy`, and the controller synthesizes no FQDN policy from it on any CNI. What it does: validate the names, probe the cluster's API groups for an FQDN policy type (Cilium's `CiliumNetworkPolicy` or Calico Enterprise's equivalent) the first time a class sets the field, cache the answer for the process lifetime, and report it in `FQDNPolicySupported`, with a `Warning` event when the type is absent. Use `allowedCIDRs` for egress governance. A hostname allowlist is a CNI-native policy the platform team writes beside Kaalm's.
 
-`allowedProviders` is the access control mechanism for LLM providers at the class level, but it is not the whole story in either direction.
+An invalid `allowedCIDRs` entry makes the class `Ready=False`, but the Agent reconciler does not consult the class's `Ready` condition, and the NetworkPolicy write for each Agent then fails with no Agent-visible condition; issue #241 tracks it.
 
-For a full-lifecycle Agent or AgentTask, the gateway enforces a chain, not a pair. Three tenancy layers must all admit the request: the workload's own `spec.providers`, this class's `allowedProviders`, and the target `ModelProvider.allowedNamespaces`. A fourth check, that the requested model exists in `ModelProvider.spec.models`, is a model-resolution prerequisite rather than a tenancy boundary, and it applies regardless.
+### Provider access gates
 
-In the gateway-only tier the class layer **disappears entirely**. Those callers are not Agents and reference no AgentClass, so there is nothing for `allowedProviders` to gate; `ModelProvider.allowedNamespaces` is the only tenancy check they face. Platform teams who need class-scoped provider policy must onboard workloads through the full lifecycle tier.
-
-Since v0.4.0 the same chain exists for tools, gate for gate: the workload's `spec.tools`, this class's `allowedToolProviders` (rule 37), and the target `ToolProvider.allowedNamespaces` (rule 36), with the per-tool narrowing and catalog check (rule 38) layered on top. See [The Tool Plane](../gateways/tool-plane.md#grants).
-
-See [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating) for the enforced chain end to end, including which gate produces which error, and [Provider Routing](../gateways/llm/provider-routing.md) for how the gateway resolves each layer.
-
-### Defaults vs. maxLimits
-
-Defaults are applied at reconcile time if the Agent does not specify a value. `maxLimits` are enforced regardless, and reject manifests that exceed them. A class can therefore be generous by default while still holding a hard ceiling.
+`allowedProviders` is one gate in a chain. For a full-lifecycle Agent or AgentTask, the workload's own `spec.providers`, this class's `allowedProviders`, and the target `ModelProvider.allowedNamespaces` must all admit the request, and the model must exist in the provider's catalog. In the gateway-only tier the class layer does not exist: those callers reference no AgentClass, and `ModelProvider.allowedNamespaces` is the only tenancy check they face. The enforced chain, with the error each gate produces, is on [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating). The tool chain is the same, gate for gate, with `allowedToolProviders` (rule 37) in this class's place ([Grants](../gateways/tool-plane.md#grants)).
 
 ### `imagePullSecrets` namespace resolution
 
-AgentClass is cluster-scoped, but `imagePullSecrets[*].name` references a Secret, and Secrets live in namespaces. The reconciler resolves each entry in the **Agent's (or AgentTask's) namespace** at Pod-creation time, not in `kaalm-system`. Secrets are never copied across namespaces.
+AgentClass is cluster-scoped, but `imagePullSecrets[*].name` references a Secret, and Secrets live in namespaces. The reconciler resolves each entry in the workload's namespace at Pod-creation time, never in `kaalm-system`, and copies nothing across namespaces. A missing Secret sets `Ready=False, reason=ImagePullSecretMissing` on the workload and the Pod is not created (rule 23).
 
-If any referenced Secret is missing from the target namespace, the Agent enters `Ready=False, reason=ImagePullSecretMissing` with a message naming the namespace and secret, and the Pod is not created. See rule 23 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation) and the reconcile step in [AgentReconciler](../controller/reconcilers.md#agentreconciler) / [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler).
+### `runtime.backend` accepts only `pod`
 
-### `runtime.backend` is locked to `pod` in v1
-
-`runtime.backend` only accepts `pod` in v1. The `agentSandbox` value (which creates Agent Sandbox `Sandbox` CRs instead of raw Pods) is deferred to v1.1.
-
-The CRD schema enforces this with an enum on the `runtime.backend` field (`+kubebuilder:validation:Enum=pod`). Invalid values are therefore rejected at apply time rather than surfaced as a reconcile error, which gives the author immediate feedback, and adding `agentSandbox` later is an additive enum change on the frozen v1beta1 schema. See [Integration Points](../concepts/system-architecture.md#integration-points) for the planned integration design.
+The schema enum rejects any other value at apply time, so the author gets immediate feedback. The field exists so that another backend is an additive enum change on the frozen v1beta1 schema; isolation comes from `runtime.runtimeClassName` ([Runtime isolation](../concepts/system-architecture.md#runtime-isolation)).
