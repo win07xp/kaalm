@@ -1,114 +1,99 @@
-# Security Model and Isolation
+# Security model and isolation
 
-This part of the book defines Kaalm's security posture: the RBAC model, credential scoping, isolation guarantees, and the trust boundaries between platform engineers, developers, agent containers, and the cluster itself. It is written to be the answer sheet when a security team asks "what can go wrong here?"
+This part of the book defines Kaalm's security design: who trusts whom, how agent Pods are isolated, what traffic crosses which boundary, what the audit trail records, and how to deploy Kaalm safely. This page is the map. Each mechanism it names is specified once, on its own page: [RBAC and authentication](rbac.md) for the ServiceAccounts, their grants, and how callers authenticate; [Credential handling](credentials.md) for the lifecycle of every secret Kaalm touches; [TLS and certificates](tls.md#in-cluster-tls) for the trust chain; and [Threat model](threat-model.md) for the threats and the decision on each.
 
-This page covers the foundations: who trusts whom, how agent Pods are isolated at the runtime, Pod-security, network, and resource layers, what data crosses which boundary, and how to deploy Kaalm safely. The remaining pages in this part drill into each mechanism: [RBAC and authentication](rbac.md) covers the ServiceAccounts, roles, and how agents authenticate to the gateway; [credential handling](credentials.md#lifecycle-of-an-llm-api-key) traces the lifecycle of every secret Kaalm touches; [TLS and certificates](tls.md#in-cluster-tls) is the canonical reference for the in-cluster trust chain; and the [threat model](threat-model.md) enumerates concrete attacks and their mitigations.
-
-## Trust Model
+## Trust model
 
 Kaalm assumes four trust tiers:
 
 1. **Cluster administrator**: trusted to install Kaalm, manage CRDs, and deploy the operator.
-2. **Platform engineer**: trusted to create AgentClasses and ModelProviders, and to manage LLM credentials. This role should be distinct from agent developers.
-3. **Agent developer**: trusted to deploy workloads in their namespace within the guardrails set by the platform team. Not trusted with LLM credentials or cross-namespace access.
-4. **Agent container**: **not trusted**. Even developer-authored agents may execute LLM-generated code. Agent containers should be treated as potentially adversarial.
+2. **Platform engineer**: trusted to create AgentClasses, ModelProviders, and ToolProviders, and to manage credentials. Keep this role distinct from agent developers.
+3. **Agent developer**: trusted to deploy workloads in their namespace within the guardrails the platform team sets. Not trusted with credentials or cross-namespace access.
+4. **Agent container**: not trusted. Even a developer-authored agent may execute LLM-generated code, so the container is treated as adversarial.
 
-Kaalm's security design flows from the assumption that agent containers are untrusted. Whenever a later page explains why a control exists, that assumption is usually the reason.
+Most controls on the following pages exist because of tier 4.
 
 ## Isolation
 
-Isolation is layered. The runtime boundary (RuntimeClass) decides how strongly the kernel is separated from the container; Pod Security Standards constrain what the container may ask the kernel for; NetworkPolicy constrains what it can reach; and resource limits constrain what it can consume.
+Isolation is layered. The RuntimeClass decides how strongly the kernel is separated from the container, the Pod security context constrains what the container may ask the kernel for, NetworkPolicy constrains what it can reach, and resource limits constrain what it can consume. All four come from the AgentClass ([AgentClass](../resources/agentclass.md)).
 
 ### RuntimeClass
 
-AgentClass may specify a `runtimeClassName` naming a Kubernetes `RuntimeClass` that must already exist on the cluster. Pod admission fails with "RuntimeClass not found" otherwise, and stock clusters (kubeadm, EKS, GKE, AKS) define none. In particular there is no built-in RuntimeClass named `runc`, so naming one is a common and avoidable way to break admission.
-
-Platform teams use this field to require stronger isolation for risky agents:
+An AgentClass may set `spec.runtime.runtimeClassName`, naming a Kubernetes `RuntimeClass` that must already exist on the cluster; the controller copies it onto every Pod of that class. Pod admission fails with `RuntimeClass not found` otherwise. Stock clusters (kubeadm, EKS, GKE, AKS) define none, and there is no built-in RuntimeClass named `runc`: leaving the field unset is what selects the cluster's default runtime. The chart's `standard` class leaves it unset.
 
 | `runtimeClassName` | Isolation | Use when |
 |---|---|---|
-| unset (default) | Cluster's default container runtime, runc in practice. Standard container isolation. | The agent only calls APIs and is trusted. |
-| `gvisor` / `runsc` | Userspace kernel, syscall filtering. | The agent executes untrusted code. |
-| `kata` | VM-level isolation from a lightweight hypervisor. | Strong multi-tenancy is required. |
-| `firecracker` (through Kata or Agent Sandbox) | microVM isolation. Highest isolation, comparable cost to Kata. | The strongest available boundary is required. |
+| unset (default) | The cluster's default container runtime, runc in practice | The agent only calls APIs and runs no generated code |
+| `gvisor` or `runsc` | Userspace kernel with syscall filtering | The agent executes untrusted code |
+| `kata` | A lightweight VM per Pod | Strong multi-tenancy is required |
+| `firecracker` (through Kata or Agent Sandbox) | microVM isolation | The strongest available boundary is required |
 
-The default is *unset*, not `runc`: leaving the field empty is what selects the cluster's default runtime.
-
-Platform teams create separate AgentClasses for each isolation tier (for example, `standard` leaves `runtimeClassName` unset and `sandboxed` requires gVisor) and developers choose based on their needs.
+Platform teams create one AgentClass per isolation tier (`standard` with the field unset, `sandboxed` requiring gVisor, and so on), and developers pick a class.
 
 ### Pod Security Standards
 
-Every Kaalm-created Pod complies with the `restricted` Pod Security Standard by default:
+The Pod and container security contexts of every Kaalm-created Pod are exactly what its AgentClass declares in `spec.security.podSecurityContext` and `spec.security.containerSecurityContext`. The controller applies no defaults of its own, and the chart's `standard` class declares none, so a Pod under that class runs with the cluster's defaults. A class that must satisfy the `restricted` Pod Security Standard declares the block shown on [AgentClass](../resources/agentclass.md#spec). Pod Security Admission on the workload namespaces enforces the standard on the namespace, outside the class; as shipped, Kaalm emits no warning for a class that declares less.
 
-- `runAsNonRoot: true`
-- `allowPrivilegeEscalation: false`
-- `readOnlyRootFilesystem: true`. Writable storage comes from the PVC when persistence is enabled, and the controller additionally mounts an `emptyDir` at `/tmp` in every Agent and AgentTask Pod so images that write temp files work under a read-only root even without a PVC
-- All Linux capabilities dropped
-- `seccompProfile: RuntimeDefault`
+### Network policy
 
-AgentClass can override these defaults, but the operator emits warnings for any deviation and the AgentClass reconciler sets a condition for any deviation from the restricted baseline. Deviating is possible, but never silent.
+The controller synthesizes one NetworkPolicy per Agent and per AgentTask from the class's `spec.network` fields; [What the synthesized NetworkPolicy protects](../runtime/child-resources.md#what-the-synthesized-networkpolicy-protects) specifies the object. The policy denies both directions and then allows:
 
-### Network Policy
+- **Egress** to the gateway Pods in `kaalm-system` on the cluster listener port, and DNS on port 53 to every Pod in `kube-system`. Because the gateway is a separate Pod and not a sidecar, standard Kubernetes NetworkPolicy enforces the rule on every CNI that implements it; no service mesh is needed. MCP tool servers are reached through the gateway's [tool plane](../gateways/tool-plane.md), so tools need no per-agent egress.
+- **Egress** to each CIDR in `spec.network.egress.allowedCIDRs`, on every port. This is the portable escape hatch for direct external access. `spec.network.egress.allowedHosts` is validated but synthesizes nothing, because standard NetworkPolicy has no hostname rule: the AgentClassReconciler reports whether the CNI has an FQDN policy type ([rule 20](../resources/validation-and-defaulting.md#cross-resource-validation), [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler)), and a cluster that needs hostname egress writes the CNI's own policy beside Kaalm's.
+- **Ingress** from the gateway Pods on the agent's health port, which carries `POST /v1/message`. The agent-side mTLS check on that path ([The runtime contract](../runtime/contract.md), item 4) is a second layer under the policy.
+- **Ingress** from every Pod in the same namespace, on every port, when the class sets `spec.network.allowSameNamespaceIngress: true`. As shipped the rule is an empty pod selector, so it admits every Pod in the namespace, not only Kaalm agents. The default is off.
 
-AgentClass includes network policy fields that the controller translates into `NetworkPolicy` resources.
+Gateway-only-tier workloads have no Agent resource and get no synthesized policy.
 
-**Egress**: by default, deny all egress except to the Kaalm gateway in `kaalm-system` and DNS. Because the gateway is a separate Pod (not a sidecar), this is enforceable with standard Kubernetes NetworkPolicy without requiring a service mesh. The platform team adds explicit allowlist entries for external APIs and other direct egress with two fields (from v0.4.0, MCP tool servers are preferentially reached through the gateway's [tool plane](../gateways/tool-plane.md), which needs no per-agent egress at all; the fields remain the escape hatch):
+### Resource isolation
 
-- **`spec.network.egress.allowedCIDRs`**: array of CIDR blocks. Maps directly to `NetworkPolicy.egress.to.ipBlock.cidr` and works on every CNI that implements Kubernetes NetworkPolicy. This is the portable primitive and should be preferred.
-- **`spec.network.egress.allowedHosts`**: array of DNS names. Only enforceable on CNIs that support FQDN egress policies (Cilium with `CiliumNetworkPolicy.toFQDNs`, Calico Enterprise). Standard `NetworkPolicy` has no equivalent. On unsupported CNIs the AgentClassReconciler emits a `Warning` event and ignores the field; `allowedCIDRs` alone governs egress. See [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).
+A Pod gets the resources its Agent spec sets, or the class's `spec.resources.defaults` when the spec sets none, and `spec.resources.maxLimits` clamps both limits and requests to the class cap. A class that sets neither leaves the Pod without limits, so a class meant to contain a runaway agent must set at least `maxLimits`.
 
-**Ingress**: by default, deny all ingress except from the Kaalm gateway (which delivers channel messages through `POST /v1/message`). The Service makes the agent reachable within the cluster by the gateway; no other inbound traffic is allowed by default. NetworkPolicy and the agent-side mTLS check on `POST /v1/message` (see [The Runtime Contract](../runtime/contract.md) bullet 4) are layered controls: a misconfigured per-Agent NetworkPolicy no longer opens delivery to arbitrary in-cluster callers.
+## Data flow and audit
 
-**Inter-agent**: disabled by default. To allow same-namespace agent-to-agent traffic, platform teams set `spec.network.allowSameNamespaceIngress: true` on the AgentClass. The controller translates this into a NetworkPolicy `ingress.from.podSelector` rule scoped to Pods in the same namespace bearing the Kaalm agent label. This is opt-in: the default deny-all-ingress posture reflects the assumption that agent containers are untrusted.
+### What flows where
 
-**The "standard Kubernetes NetworkPolicy is sufficient" claim is scoped to agent → gateway enforcement and to IP-/CIDR-level egress governance.** Hostname-based egress (`allowedHosts`) is *not* enforceable on standard NetworkPolicy; clusters that require FQDN-level egress must use Cilium or Calico Enterprise.
+Fourteen traffic classes carry Kaalm's data. Seven stay inside the cluster and seven cross its boundary. Two are optional.
 
-### Resource Isolation
+| Class | From, to | Carries | Transport |
+|---|---|---|---|
+| 1 | Agent to gateway | Prompts and completions, heartbeats, task completion, tool calls | TLS to the cluster listener; the agent presents its client certificate ([Mode 1](../gateways/llm/workload-identity.md#mode-1-mtls-client-certificate)) |
+| 2 | Gateway to agent | The normalized message envelope on `POST /v1/message` | mTLS both ways; each side verifies the other's SAN |
+| 3 | Gateway to controller | `POST /v1/activate` | mTLS, authorized by SAN ([Internal endpoint authentication](rbac.md#internal-endpoint-authentication)) |
+| 4 | Controller to gateway | `GET /v1/activity`, `GET /v1/channels/health` | mTLS, authorized by SAN |
+| 5 | Gateway to API server | `TokenReview`; budget, spend, and async ConfigMaps in `kaalm-system`; the completion ConfigMap in a task's namespace; the channel-disconnected annotation | The API server's TLS |
+| 6 | Controller and API server | Watches, status writes, child objects, Events; the conversion webhook the API server calls on `:9444` | The API server's TLS; the webhook serves `kaalm-controller-tls` |
+| 7 | Console (optional) | Fleet reads under its own ServiceAccount; `POST /v1/test-chat` and `GET /v1/spend` on the gateway | mTLS, authorized by SAN ([Console](../console/overview.md)) |
+| 8 | Channel platform to gateway | Inbound webhook events | HTTPS through the Ingress to the User listener |
+| 9 | Gateway to LLM provider | Prompts and completions, with the provider key injected | HTTPS; custom CA bundles through [Upstream TLS configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration) |
+| 10 | Gateway to MCP tool server | Brokered tool calls, with the tool credential injected | HTTPS to the ToolProvider endpoint, in or outside the cluster ([The broker](../gateways/tool-plane.md#the-broker)) |
+| 11 | Gateway to `callbackUrl` | Async response and error payloads, which may carry PII | HTTPS, every POST signed ([rule 25](../resources/validation-and-defaulting.md#cross-resource-validation)); the receiver is chosen by the channel owner and is not trusted, so the target passes the deny ranges and the checked IP is pinned into the dial ([SSRF through callbackUrl](threat-model.md#ssrf-through-callbackurl)) |
+| 12 | Gateway to platform reply API | Agent replies, carrying the channel's platform credential | HTTPS to the operator-set `gateway.platforms.<type>.apiBaseUrl` ([The platform adapters](../gateways/user/platform-adapters.md)) |
+| 13 | Controller to LLM provider and tool server | Health probes, carrying the provider key or tool credential | HTTPS ([Liveness probe](../controller/reconcilers.md#liveness-probe)) |
+| 14 | Gateway to OTLP collector (optional) | Trace spans with request metadata, never prompt or reply content | HTTPS verified against the upstream trust pool when one is configured, else the system roots; `http://` endpoints send in the clear ([Tracing](../operations/observability.md#tracing)) |
 
-Every Agent/AgentTask has resource limits enforced through Pod `resources.limits`. AgentClass.maxLimits sets the cap. This prevents a runaway agent from exhausting node resources.
+![The seven traffic classes that stay inside the cluster: the agent's calls to the gateway, delivery back to the agent, the two internal endpoint directions between gateway and controller, both components' API server traffic, and the optional console's calls.](../diagrams/traffic-inside.svg)
 
-## Data Flow and Audit
+![The seven traffic classes that cross the cluster boundary: the inbound webhook, and the outbound edges from the gateway to the LLM provider, the MCP tool server, the callbackUrl receiver, and the platform reply API, plus the controller's health probes and the optional OTLP export.](../diagrams/traffic-crossing.svg)
 
-### What Flows Where
+Six classes leave the cluster carrying a credential or content: 9, 10, 11, 12, 13, and 14. Class 11 is the only one whose target the platform team does not choose, which is why it carries the most controls. Classes 9, 10, 12, and 13 go to hosts an operator or platform engineer configured, and defending the gateway against its own operator is out of scope by the trust model.
 
-Eleven traffic classes cross a Kaalm boundary; the last three exist only when the matching feature is in use. Knowing which is which is the fastest way to reason about what an attacker on any given wire would see.
+### Audit trail
 
-- **Agent → LLM Gateway**: prompts and completions. In-cluster HTTPS (TLS terminated at the gateway; the agent trusts the Kaalm CA through the projected trust bundle). See [In-cluster TLS](tls.md#in-cluster-tls).
-- **LLM Gateway → LLM Provider**: prompts and completions over egress. Always HTTPS. Custom CA bundles supported for enterprise environments, see [Upstream TLS Configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration).
-- **Channel Platform → User Gateway**: inbound webhook messages. HTTPS inbound to the gateway's public endpoint, through Ingress.
-- **User Gateway → Agent**: normalized message envelope through `POST /v1/message` to the agent's ClusterIP Service over **bidirectional mTLS** (the gateway verifies the agent's cert-manager-issued TLS certificate against `kaalm-ca`; the agent verifies the gateway's client cert with SAN-match against `kaalm-ca` per [The Runtime Contract](../runtime/contract.md) bullet 4). See [In-cluster TLS](tls.md#in-cluster-tls).
-- **User Gateway → `callbackUrl`**: async response and error payloads POSTed to the AgentChannel's configured callback receiver, the gateway's third outbound traffic class alongside provider egress and agent delivery. Always HTTPS; every POST is signed per `spec.webhook.callbackAuth` ([rule 25](../resources/validation-and-defaulting.md#cross-resource-validation)); targets are constrained by the deny-internal ranges / `gateway.callbackUrl.allowlist` with pre-dial host re-resolution and the checked IP pinned into the dial (see the SSRF row in [§ Threat Model](threat-model.md)). Payloads contain agent replies, which may carry PII: receivers are outside Kaalm's trust boundary and are chosen by the channel owner.
-- **Controller → Gateway**: activity timestamp queries through `GET /v1/activity` (mTLS with SAN-based authorization, internal ClusterIP Service). See [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication).
-- **Gateway → API Server**: task completion data written to per-task ConfigMaps in user namespaces; async response payloads and per-replica budget partials written to ConfigMaps in `kaalm-system`.
-- **Controller ↔ API server**: CRD updates, Pod creation, events. Standard kubelet/apiserver channels.
-- **User Gateway → Platform reply API** (since v0.7.0): agent replies to Discord and WhatsApp, POSTed to the operator-configured `gateway.platforms.<type>.apiBaseUrl` carrying that channel's platform credential. This is the gateway's third outbound edge that leaves the boundary; unlike `callbackUrl` its target is operator-set, not developer-set (see the matching [threat model note](threat-model.md#channels-and-webhooks)). See [The platform adapters](../gateways/user/platform-adapters.md).
-- **Operator's browser ↔ Console** (optional, since v0.5.0): fleet metadata, spend figures, and test-chat over TLS with an in-memory session. The console reads the API server under its own ServiceAccount and dials the gateway's `/v1/test-chat` and `/v1/spend` over mTLS with SAN authorization. See [the console](../console/overview.md) and [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication).
-- **Gateway → OTLP collector** (optional, since v0.5.0): trace spans, carrying request metadata only, never prompt or reply content. The endpoint is operator-set; an `https` endpoint is verified against the gateway's upstream trust pool. See [Tracing](../operations/observability.md#tracing).
+The operator emits Kubernetes Events for phase transitions on Agents and AgentTasks, hibernation and wake, task completion, reconcile-time validation failures, and provider health changes ([Event emission](../controller/operations.md#event-emission) lists the reasons). The gateway emits `Warning` events on the resources it governs at runtime: `FallbackIneligible` and `CredentialsInvalid` on a ModelProvider during a fallback walk, and `CallbackRejected` on an AgentChannel when a platform refuses or exhausts a reply. A callback receiver that fails the pre-dial check or refuses a delivery is recorded on the channel's health status, not as an Event ([Channel health](../gateways/user/platform-adapters.md#channel-health-tracking)). Event messages carry reasons and status codes, never credential material; a `CallbackRejected` message quotes at most a short prefix of the platform's response body.
 
-![A component diagram of the traffic classes framed by Kaalm's trust boundary. Inside the boundary sit a kaalm-system frame holding the gateway and controller, a user namespaces frame holding an Agent Pod, and the Kubernetes API server. Outside the cluster sit the channel platform, the LLM provider, and the callbackUrl receiver, which is marked as untrusted. Classes 1, 4, 6, 7 and 8 stay inside the boundary. Class 3, the inbound webhook, crosses in but never out. Three edges leave the boundary, all drawn in red from the gateway: class 2 to the LLM provider, class 5 to the callbackUrl receiver, which terminates at a receiver Kaalm does not trust, and class 9, the platform reply, back to the channel platform. The optional console and OTLP classes 10 and 11 are named in the legend rather than drawn.](../diagrams/trust-boundaries.svg)
+Per-request decisions are not Events. Provider access grants and denials, budget threshold crossings, and brokered tool calls are counted as [metrics](../operations/observability.md#metrics), and tool calls are also written as audit log lines ([Audit and metering](../gateways/tool-plane.md#audit-and-metering)). Credential rotation writes nothing: the gateway follows the Secret through a watch.
 
-**Reading the diagram.** Count the red edges. Three of the eleven classes leave the trust boundary, all outbound from the gateway, and one of them (class 5) ends at a receiver Kaalm does not choose and does not trust. That asymmetry is why class 5 carries the most machinery: signing, allowlisting, and pre-dial re-resolution with the checked IP pinned into the connection. Classes 2 and 9 leave too, but toward hosts the operator configured, which is why neither needs class 5's defenses. The figure deliberately says nothing about component responsibilities or wiring; [System Architecture](../concepts/system-architecture.md) owns that.
+Events persist in etcd for the cluster's Event retention. For long-term audit, ship them to an external audit log with Kubernetes audit logging or a tool such as Falco.
 
-### Audit Trail
+Kaalm does not log prompts or completions. LLM payloads may carry PII or proprietary data, and the default build compiles the body logger out ([PII safety](../operations/observability.md#pii-safety)). If you need prompt auditing, implement it outside Kaalm, for example as a provider adapter that duplicates traffic to a log sink.
 
-The operator emits Kubernetes Events for:
+## Recommendations for deployment
 
-- Every phase transition on Agent/AgentTask.
-- Every provider access decision (grant/deny).
-- Every budget threshold crossing.
-- Every credential rotation.
-
-Since v0.7.0 the gateway also emits `Warning` events on the resources it governs at runtime: `FallbackIneligible` and `CredentialsInvalid` on a ModelProvider during a fallback walk, and `CallbackRejected` on an AgentChannel when a callback receiver or a platform refuses a reply. Event messages carry reasons and status codes, never credential material, and a `CallbackRejected` detail quotes at most a short bounded prefix of the platform's response body. See [Gateway ServiceAccount permissions](rbac.md#gateway-serviceaccount-permissions) for the grant that carries them.
-
-Events persist in etcd per the cluster's Event retention. For long-term audit, platform teams should ship events to an external audit log (standard k8s audit logging, Falco, etc.).
-
-Kaalm does **not** log prompts or completions. LLM payloads are sensitive (they may contain PII or proprietary data) and Kaalm takes no responsibility for their persistence. If prompt auditing is required, it should be implemented as a separate concern (for example, an auditing provider adapter that duplicates traffic to a log sink).
-
-## Recommendations for Deployment
-
-1. **Install Kaalm in a dedicated, locked-down namespace** (`kaalm-system`). Restrict who can `exec` into or modify resources in this namespace.
-2. **Expose the User Gateway through a dedicated Ingress or LoadBalancer** with TLS termination. The gateway's public endpoint receives inbound platform events.
-3. **Enable k8s audit logging** at the `Metadata` level minimum, `RequestResponse` for Secret access if feasible.
-4. **Standard Kubernetes NetworkPolicy is sufficient** for the agent → gateway egress rule and for CIDR-scoped external egress (`allowedCIDRs`), no service mesh required. The cluster-level gateway architecture makes agent→gateway egress cross-Pod and fully enforceable. If you need FQDN-based egress (`allowedHosts`), install Cilium or Calico Enterprise; standard NetworkPolicy cannot express hostname rules. **This guarantee is automatic only for Kaalm-managed Pods (Agents and AgentTasks).** Gateway-only-tier workloads do not receive a Kaalm-synthesized NetworkPolicy: platform teams adopting that tier must apply their own default-deny egress posture on those namespaces if they want to prevent direct provider calls. See the matching rows in the [threat model](threat-model.md).
-5. **Separate LLM credential management from platform engineering access** if possible (for example, only a secrets-admin role can read/write credential Secrets in `kaalm-system`). This requires cluster RBAC beyond Kaalm's scope.
-6. **Require an appropriate RuntimeClass for any AgentClass that allows LLM code execution.** Platform admins own RuntimeClass installation and compatibility validation.
+1. **Install Kaalm in a dedicated namespace** (`kaalm-system`) and restrict who can `exec` into it or modify resources in it.
+2. **Write a NetworkPolicy for `kaalm-system`.** As shipped the chart creates none for its own components, so the conversion listener on `:9444`, the controller metrics port `:8080`, and the gateway metrics port `:9090` are reachable from any Pod with network reach. The metrics ports are unauthenticated and label spend by namespace and model ([Deployment](../operations/deployment.md#helm-chart-contents)).
+3. **Expose the User listener through a dedicated Ingress or LoadBalancer** with an HTTPS backend; the listener is TLS-only ([TLS and Ingress](../gateways/user/overview.md#tls-and-ingress)).
+4. **Enable Kubernetes audit logging** at the `Metadata` level at least, and `RequestResponse` for Secret access where the volume allows it.
+5. **Rely on standard NetworkPolicy** for the agent-to-gateway rule and for CIDR egress. It is enforced on every CNI that implements NetworkPolicy and needs no service mesh. Hostname egress is a CNI feature you configure beside Kaalm's policy. Workloads in the gateway-only tier get no synthesized policy, so apply a default-deny egress policy on those namespaces yourself if direct provider calls must be prevented.
+6. **Separate credential management from platform engineering** where you can: a secrets-admin Role for the credential Secrets in `kaalm-system` and the channel namespaces, distinct from the catalog role ([Roles for people](rbac.md#roles-for-people)).
+7. **Require a RuntimeClass on any AgentClass that runs LLM-generated code.** Installing the RuntimeClass and validating it on the cluster is the platform team's job.

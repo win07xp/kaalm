@@ -1,0 +1,27 @@
+@startuml cert-runtime
+' The per-workload certificate in use: mount, verification, rotation, deletion.
+' Source of truth: docs/src/security/tls.md
+!include _style.puml
+skinparam maxMessageSize 300
+participant "cert-manager" as CM #F5F5F5
+participant "**Agent** Pod" as AP #E6E6FA
+participant "**AgentTask** Pod" as TP #E6E6FA
+participant "**Gateway**" as GW #90EE90
+== Mounted ==
+CM -> AP : /var/run/kaalm/tls.crt and tls.key
+CM -> TP : /var/run/kaalm/tls.crt and tls.key
+== Verified ==
+AP -> GW : LLM request, heartbeat: presents {name}-tls
+GW -> AP : POST /v1/message: mTLS both ways
+TP -> GW : LLM request, task-complete: presents {taskName}-tls
+TP -[#B71C1C]->x GW : POST /v1/agent/heartbeat: 403
+== Rotated ==
+loop within renewBefore
+  CM -> AP : Secret re-issued, projected volume updated
+  AP -> AP : reload on the directory watch
+  CM -> TP : Secret re-issued, projected volume updated
+  TP -> TP : reload on the directory watch
+end
+== Deleted ==
+CM -> CM : workload deleted, ownerRef cascade deletes the Certificate, then its Secret
+@enduml

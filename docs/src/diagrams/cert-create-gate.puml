@@ -1,0 +1,16 @@
+@startuml cert-create-gate
+' Both reconcilers create a per-workload Certificate and hold the Pod until it is Ready.
+' Source of truth: docs/src/security/tls.md
+!include _style.puml
+skinparam maxMessageSize 300
+participant "**AgentReconciler**\n**AgentTaskReconciler**" as R #87CEEB
+participant "cert-manager\n(kaalm-ca-issuer)" as CM #F5F5F5
+participant "**Pod**" as P #E6E6FA
+R -> CM : Certificate {name}-tls: Service SANs, server auth and client auth (Agent)
+R -> CM : Certificate {taskName}-tls: one task.kaalm.io SAN, client auth (AgentTask)
+CM -> CM : issue, write the output Secret in the workload's namespace
+loop until Certificate Ready
+  R -> R : Ready=False, reason=CertificateNotReady, requeue 5s
+end
+R -> P : create the Pod
+@enduml
