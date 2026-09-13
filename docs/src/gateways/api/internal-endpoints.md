@@ -1,12 +1,12 @@
-# Internal Endpoints
+# Internal endpoints
 
-"Internal" here means Kaalm's own components only: these four endpoints are mTLS-only, each additionally requires a specific peer SAN (the controller's for the activity and channel-health endpoints, the console's for test-chat and spend; Agent and AgentTask client certs are rejected with `403`), and their authentication model is defined in [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
+"Internal" here means Kaalm's own components only: these four endpoints are mTLS-only, each additionally requires a specific peer SAN (the controller's for the activity and channel-health endpoints, the console's for test-chat and spend; Agent and AgentTask client certs are rejected with `403`), and their authentication model is defined in [Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication).
 
 All four endpoints share a deliberate placement decision: they are served on the cluster listener (port 8443), not the User listener (port 8080). Port 8080 only serves inbound webhook traffic (`/channels/*`) and the async polling fallback (`/v1/channels/responses/*`); mTLS-authenticated internal endpoints live on 8443. This listener split ensures that an Ingress fronting 8080 cannot route untrusted traffic to an endpoint whose authorization assumes a controller-SAN client cert.
 
 ## GET /v1/activity
 
-Called by the [AgentReconciler](../../controller/reconcilers.md#agentreconciler) to read per-namespace last-activity timestamps for idle and hibernation transitions. Authenticated via **mTLS**: the caller must present the controller's `kaalm-controller-tls` client cert, verified against `kaalm-ca`, with a SAN that matches the controller Service DNS. There is no bearer-token or HMAC alternative. See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
+Called by the [AgentReconciler](../../controller/reconcilers.md#agentreconciler) to read per-namespace last-activity timestamps for idle and hibernation transitions. Authenticated by **mTLS**: the caller must present the controller's `kaalm-controller-tls` client cert, verified against `kaalm-ca`, with a SAN that matches the controller Service DNS. There is no bearer-token or HMAC alternative. See [Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication).
 
 **Request:**
 
@@ -36,18 +36,18 @@ The request carries no auth header; authentication is the mTLS client cert prese
 
 | Field | Type | Description |
 |---|---|---|
-| `replicaStartedAt` | timestamp | When this gateway replica started. The controller compares this to each Agent's `status.phaseTransitionTime` to detect post-restart "data is unknown" windows; see [Activity Tracking API](../user/activation-and-activity.md#activity-tracking-api) |
+| `replicaStartedAt` | timestamp | When this gateway replica started. The controller compares this to each Agent's `status.phaseTransitionTime` to detect post-restart "data is unknown" windows; see [Activity tracking API](../user/activation-and-activity.md#activity-tracking-api) |
 | `agents` | map | Keys are Agent names in the requested namespace; values are per-source last-activity timestamps as observed by this replica |
 | `gatewayTraffic` | timestamp or null | Last LLM-gateway request or inbound channel-message delivery this replica observed for the agent. `null` if no traffic since the replica started |
 | `heartbeat` | timestamp or null | Last `POST /v1/agent/heartbeat` this replica received from the agent. `null` if none since the replica started |
 
-Both signal sources are always returned. The controller applies the `Agent.spec.lifecycle.activitySource` filter (selecting `gatewayTraffic`, `heartbeat`, or the max of both) **after** merging timestamps across replicas. See [Activity Tracking API](../user/activation-and-activity.md#activity-tracking-api) for the per-Pod-IP fan-out, the per-replica restart-detection logic, and the `tls.Config.ServerName` override required to make per-Pod-IP dialing work against a Service-DNS-scoped SAN.
+Both signal sources are always returned. The controller applies the `Agent.spec.lifecycle.activitySource` filter (selecting `gatewayTraffic`, `heartbeat`, or the max of both) **after** merging timestamps across replicas. See [Activity tracking API](../user/activation-and-activity.md#activity-tracking-api) for the per-Pod-IP fan-out, the per-replica restart-detection logic, and the `tls.Config.ServerName` override required to make per-Pod-IP dialing work against a Service-DNS-scoped SAN.
 
 **Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only agents in the requested namespace are returned.
 
 ## GET /v1/channels/health
 
-Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated via **mTLS**: the caller must present the controller's `kaalm-controller-tls` client cert, verified against `kaalm-ca`, with a SAN that matches the controller Service DNS. There is no bearer token or HMAC header. See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
+Called by the `AgentChannelReconciler` to populate `status.conditions[type=PlatformConnected]` on AgentChannel resources. This endpoint is internal and authenticated by **mTLS**: the caller must present the controller's `kaalm-controller-tls` client cert, verified against `kaalm-ca`, with a SAN that matches the controller Service DNS. There is no bearer token or HMAC header. See [Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication).
 
 **Request:**
 
@@ -96,13 +96,13 @@ The request carries no auth header; authentication is the mTLS client cert prese
 | `timestamp` | timestamp or null | Time of the most recent in-window observation contributing to `state` (most recent success for `success`; most recent failure for `failure`). `null` when `state: "empty"` |
 | `lastError` | string or null | Most recent error message seen by the gateway for this channel within the window; `null` if no error |
 
-The third channel in the example (`new-channel`) shows `state: "empty"`: this replica has no in-window observations for that path. The controller decides whether this means the channel is genuinely silent (`Unknown` with `reason=NoRecentTraffic`) or whether observation is incomplete (preserve existing condition) by comparing `replicaStartedAt` to the window length and checking other replicas. See [Channel Health Tracking](../user/platform-adapters.md#channel-health-tracking) and [AgentChannelReconciler](../../controller/reconcilers.md#agentchannelreconciler) step 4.
+The third channel in the example (`new-channel`) shows `state: "empty"`: this replica has no in-window observations for that path. The controller decides whether this means the channel is genuinely silent (`Unknown` with `reason=NoRecentTraffic`) or whether observation is incomplete (preserve existing condition) by comparing `replicaStartedAt` to the window length and checking other replicas. See [Channel health tracking](../user/platform-adapters.md#channel-health-tracking) and [AgentChannelReconciler](../../controller/reconcilers.md#agentchannelreconciler), step 4.
 
 **Response codes:** `200 OK` on success. `400 Bad Request` if the `namespace` parameter is missing. TLS handshake failures or SAN-authorization mismatches terminate the request at the TLS layer or with `403 Forbidden`. Only channels whose path lies under the requested namespace's `/channels/{namespace}/` prefix are returned.
 
 ## POST /v1/test-chat
 
-Called by the optional [console](../../console/overview.md) (since the v0.5.0 design) to deliver one operator-authored test message to one agent and return the reply. Authenticated via **mTLS**: the caller must present the console's `kaalm-console-tls` client cert, verified against `kaalm-ca`, with a SAN matching the console Service DNS (`kaalm-console.kaalm-system.svc.cluster.local` or `.svc`). The gateway does not re-authorize the human behind the request: the console performs the `TokenReview` and `SubjectAccessReview` before calling ([Authentication](../../console/overview.md#authentication)), and possession of the console SAN carries that authorization, the same trust class as the controller on the two endpoints above.
+Called by the optional [console](../../console/overview.md) to deliver one operator-authored test message to one agent and return the reply. Authenticated by **mTLS**: the caller must present the console's `kaalm-console-tls` client cert, verified against `kaalm-ca`, with a SAN matching the console Service DNS (`kaalm-console.kaalm-system.svc.cluster.local` or `.svc`). The gateway does not re-authorize the human behind the request: the console performs the `TokenReview` and `SubjectAccessReview` before calling ([Authentication](../../console/overview.md#authentication)), and possession of the console SAN carries that authorization, the same trust class as the controller on the two endpoints above.
 
 **Request:**
 
@@ -128,7 +128,7 @@ The gateway builds a standard [`POST /v1/message` envelope](agent-endpoints.md#r
 
 ## GET /v1/spend
 
-Called by the optional [console](../../console/overview.md) (since the v0.5.0 per-workload spend ledger) to read one namespace's current-period spend broken down by workload. Authenticated via **mTLS** with the console SAN, exactly as `POST /v1/test-chat` above. Any single gateway replica answers authoritatively: every replica holds the folded union of its own live counters and every peer's latest published partial, current to within one publish interval. See [Per-Workload Spend](../llm/budgets-and-rate-limits.md#per-workload-spend) for the ledger this reads.
+Called by the optional [console](../../console/overview.md) to read one namespace's current-period spend broken down by workload. Authenticated by **mTLS** with the console SAN, exactly as `POST /v1/test-chat` above. Any single gateway replica answers authoritatively: every replica holds the folded union of its own live counters and every peer's latest published partial, current to within one publish interval. See [Per-workload spend](../llm/budgets-and-rate-limits.md#per-workload-spend) for the ledger this reads.
 
 **Request:**
 
