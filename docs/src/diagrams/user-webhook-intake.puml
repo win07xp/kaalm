@@ -1,0 +1,54 @@
+@startuml user-webhook-intake
+' Every check on POST /channels/{namespace}/{path} in the order the User
+' Gateway runs them, then the mode split. Each row is an elseif cascade,
+' laid out left to right. What each check reads and why is the prose on
+' docs/src/gateways/user/overview.md.
+!include _style.puml
+
+start
+:POST /channels/{namespace}/{path};
+
+partition "intake" {
+  if (body within\nmaxMessageBodyBytes?) then (no)
+    :**413** request_too_large;
+    kill
+  elseif (path registered to a\nReady=True AgentChannel?) then (no)
+    :**401**;
+    kill
+  elseif (channel Terminating?) then (yes)
+    :**401**;
+    kill
+  elseif (bearer or HMAC\nauth passes?) then (no)
+    :**401**;
+    kill
+  else (yes)
+  endif
+}
+
+partition "envelope and target" {
+  if (body normalizes?) then (no)
+    :**400** invalid_request;
+    kill
+  elseif (referenced Agent exists?) then (no)
+    :**502** delivery_failed;
+    kill
+  elseif (responseMode?) then (sync)
+    :wake if needed,\ndeliver, answer inline;
+    stop
+  else (async)
+  endif
+}
+
+partition "async accept" {
+  if (pending records below\nmaxPendingAsyncResponses?) then (no)
+    :**503** internal_unavailable;
+    kill
+  elseif (placeholder ConfigMap\ncreated?) then (no)
+    :**503** internal_unavailable;
+    kill
+  else (yes)
+    :**202** {requestId, channelPath};
+    stop
+  endif
+}
+@enduml

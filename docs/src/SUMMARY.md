@@ -49,11 +49,11 @@
   - [Budgets and rate limits](gateways/llm/budgets-and-rate-limits.md)
   - [Fallback logic](gateways/llm/fallback.md)
   - [LLM Gateway operations](gateways/llm/operations.md)
-- [The Tool Plane](gateways/tool-plane.md)
+- [The tool plane](gateways/tool-plane.md)
 - [User Gateway](gateways/user/overview.md)
-  - [Platform Adapters and Channel Health](gateways/user/platform-adapters.md)
-  - [Activation and Activity Tracking](gateways/user/activation-and-activity.md)
-  - [User Gateway Operations](gateways/user/operations.md)
+  - [Platform adapters and channel health](gateways/user/platform-adapters.md)
+  - [Activation and activity tracking](gateways/user/activation-and-activity.md)
+  - [User Gateway operations](gateways/user/operations.md)
 
 # The Controller
 

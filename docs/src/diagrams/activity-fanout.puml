@@ -52,7 +52,7 @@ end
 rec -> rec : **then** apply the activitySource filter:\ngatewayTraffic | heartbeat | max of both
 
 note over rec
-  The filter runs **after** the merge, and the controller owns it.
+  The filter runs **after** the merge, and the controller applies it.
   The gateway always returns both sources and never reads Agent specs.
 end note
 

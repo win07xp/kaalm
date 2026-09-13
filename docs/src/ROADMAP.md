@@ -122,6 +122,13 @@ they are likely to matter:
   ([#147](https://github.com/win07xp/kaalm/issues/147) records the
   alignment). Google now brands the platform the Gemini Enterprise Agent
   Platform; the wire API is unchanged.
+- **Tool plane extensions.** Pricing tool calls (a `costPerCallUSD` facet
+  for provider-side tools on the ModelProvider, a per-call cost on the
+  ToolProvider catalog), the MCP surfaces the broker denies (`resources/*`,
+  `prompts/*`, `sampling/*`, and the server-initiated notification stream),
+  and in-process tool observability at the LLM gateway. Each is designed
+  far enough to name in [The tool plane](gateways/tool-plane.md) and
+  deliberately not built.
 - **Larger horizons.** Agent-to-agent orchestration, multi-cluster
   federation, and agent-aware scheduling (GPU awareness, priority, preemption).
 

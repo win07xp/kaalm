@@ -1,0 +1,57 @@
+@startuml platform-channel-intake
+' Every check on an inbound Discord interaction or WhatsApp event in the
+' order the adapter runs them, ending at the acknowledgement. Each row is an
+' elseif cascade, laid out left to right. What each check reads and why is
+' the prose on docs/src/gateways/user/platform-adapters.md.
+!include _style.puml
+
+start
+:request on /channels/{namespace}/{path};
+
+partition "route (shared with webhook channels)" {
+  if (body within\nmaxMessageBodyBytes?) then (no)
+    :**413** request_too_large;
+    kill
+  elseif (path registered to a\nReady=True channel?) then (no)
+    :**401**;
+    kill
+  else (yes)
+  endif
+}
+
+partition "verify" {
+  if (WhatsApp verification GET?) then (yes)
+    if (hub.verify_token matches?) then (no)
+      :**403**;
+      kill
+    else (yes)
+      :**200** hub.challenge;
+      stop
+    endif
+  elseif (platform signature valid?) then (no)
+    :**401**;
+    kill
+  elseif (body parses?) then (no)
+    :**400**;
+    kill
+  else (yes)
+  endif
+}
+
+partition "kind, scope, acknowledge" {
+  if (Discord PING?) then (yes)
+    :**200** PONG;
+    stop
+  elseif (Discord component,\nautocomplete, or modal?) then (yes)
+    :fixed answer, no envelope;
+    stop
+  elseif (in scope?\nguildId, allowedChannelIds,\nphone_number_id) then (no)
+    :ephemeral refusal, or **200**\nno envelope, rejected count;
+    stop
+  else (yes)
+    :acknowledge: Discord deferred\nresponse, WhatsApp **200**;
+    :one envelope per message\nto the background pipeline;
+    stop
+  endif
+}
+@enduml
