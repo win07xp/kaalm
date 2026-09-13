@@ -1,16 +1,16 @@
-# Providing Tool Access
+# Providing tool access
 
 A ToolProvider gives teams access to an MCP tool server without ever handing
-them its credential. The shape is the one you already know from
-[Providing LLM Access](llm-access.md): the credential lives in a Secret in
+them its credential. The pattern is the same as in
+[Providing LLM access](llm-access.md): the credential lives in a Secret in
 `kaalm-system`, the gateway injects it server-side on every brokered call,
 and teams see tool names, never keys. Agents reach the server only through
-the gateway, so there is no per-team egress hole to punch or audit.
+the gateway, so there is no per-team egress exception to add or audit.
 
 ## 1. Create the credential Secret
 
-In the operator namespace, not a team namespace. The pattern from
-`test/e2e/testdata/s18-toolplane.yaml`:
+In the operator namespace, not a team namespace. The Secret the sample
+provider in `config/samples/kaalm_v1beta1_toolprovider.yaml` names:
 
 ```yaml
 apiVersion: v1
@@ -20,8 +20,10 @@ metadata:
   namespace: kaalm-system
 type: Opaque
 stringData:
-  token: <the tool server's API token>
+  token: TOOL_SERVER_TOKEN
 ```
+
+Replace `TOOL_SERVER_TOKEN` with the tool server's API token.
 
 If the server needs no authentication, skip this step and omit
 `credentialsRef` below.
@@ -51,7 +53,7 @@ spec:
     intervalSeconds: 60
 ```
 
-What each block buys you:
+What each block does:
 
 - **`endpoint`** must be `https://`; the schema rejects anything else because
   the gateway forwards the credential to this URL. In-cluster and external
@@ -65,7 +67,9 @@ What each block buys you:
   declared catalog collapse to one `uncataloged` label value. Declare it
   whenever you know the server's tool set.
 - **`healthCheck`** drives the `Healthy` column with a probe that speaks
-  MCP itself: an `initialize` followed by `tools/list`. The probe trusts
+  MCP itself: `server/discover` and a `tools/list` for a server on the
+  2026-07-28 revision, or `initialize` then `tools/list` for an older one.
+  The revision it negotiated lands in `status.mcpRevision`. The probe trusts
   system CA roots by default. For a server with a private CA (a
   cluster-internal certificate, for example), give the controller the same
   trust you give the gateway: `controller.trustClusterCAForProbes=true`
@@ -74,12 +78,14 @@ What each block buys you:
   `gateway.trustClusterCAForUpstream` and `gateway.upstreamCA`. Enable both
   sides, so the server is both forwarded to and probed `Healthy`.
 
+![Flowchart of every check on POST /v1/mcp/{toolProvider} in the order the broker runs them, as four rows. Route and namespace: ToolProvider exists, else 400 invalid_request; caller namespace in allowedNamespaces, else 403 access_denied. Workload grant, for mTLS callers only: ToolProvider in the workload's spec.tools providerRef, and in the AgentClass allowedToolProviders, else 403 access_denied. Request: token bucket per namespace and ToolProvider, else 429 rate_limited; body within the cap, else 413 request_too_large; one JSON-RPC message, else 400 invalid_request; method on the allowlist, else 403 tool_denied. Tool and session: modern headers match the body, else 400 with JSON-RPC error -32020; tools/call names a tool in the grant and catalog, else 403 tool_denied; a legacy session id is owned by this caller, else 403 access_denied; then inject the credential and forward.](../diagrams/tool-grant-chain.svg)
+
 ## 3. Open the grant chain
 
 Tool access stacks the same three gates as model access
-([Managing Team Access](managing-access.md)): the class must allow the
+([Managing team access](managing-access.md)): the class must allow the
 provider, the provider must admit the namespace, and the workload must ask
-for it. You own the first (the second is step 2 above); the team owns the
+for it. You set the first (the second is step 2 above); the team sets the
 third. The pattern from `test/e2e/testdata/s18-toolplane.yaml`, on the
 AgentClass:
 
@@ -91,7 +97,7 @@ allowedToolProviders:
 As with `allowedProviders`, an empty list allows none. The team then lists
 the provider in their Agent's or AgentTask's `spec.tools`, optionally
 narrowed to named tools; that side is covered in
-[Calling Tools Through the Gateway](../developers/calling-tools.md).
+[Calling tools through the gateway](../developers/calling-tools.md).
 
 A grant that fails any gate is visible in status, not silently ignored: an
 Agent goes `Degraded` with reason `ClassConstraintViolation` (provider not
@@ -128,24 +134,22 @@ kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=-1 \
   | grep '"msg":"mcp call"'
 ```
 
-Each record carries the calling workload and its kind, the namespace, the
-provider, the JSON-RPC method, the real tool name (even one outside the
-declared catalog), the HTTP status, the error type and a human-readable
-`detail` on denials, the duration, and the request and response sizes. A
-denied call is in the log but never reached the tool server; that is the
-broker doing its job, and the e2e suite proves it by counting requests on a
-mock server.
+Each record names the calling workload, the provider, the tool, the outcome,
+and the duration; the design book's tool plane page lists every field. A
+denied call is in the log but never reached the tool server, and the e2e
+suite proves it by counting requests on a mock server.
 
 On the metrics side:
 
 - `kaalm_tool_calls_total{provider, namespace, tool, status}` counts every
   brokered call. `status` is `ok`, an error type such as `tool_denied`, or
-  `upstream_error` for a server-side failure the broker relayed.
+  `upstream_error` for a server-side failure the broker relayed. Tool names
+  outside the declared catalog collapse to `uncataloged`.
 - `kaalm_tool_call_duration_seconds{provider, tool}` observes forwarded
   calls only, so local denials cannot drag the percentiles down.
 
 Tools that run inside an LLM provider (a model's built-in web search, for
-example) never cross the broker; the LLM path counts those separately as
+example) never pass through the broker; the LLM path counts those separately as
 `kaalm_llm_server_tool_use_total`.
 
 ## 6. Verify
@@ -155,13 +159,14 @@ kubectl get toolproviders
 ```
 
 The columns read as ModelProvider's do: `Ready` means the spec is valid and
-the credential Secret resolves; `Healthy` reports the periodic probe. Ready
+the credential Secret, when one is named, resolves; `Healthy` reports the
+periodic probe. Ready
 without Healthy means valid config, unreachable server, and it recovers on
 its own when the probe succeeds again.
 
 ---
 
-*How this works: design book pages Gateways, The Tool Plane (the broker,
-the grant chain, and every enforcement point), Security, Credentials (why
+*How this works: design book pages Gateways, The tool plane (the broker,
+the grant chain, and every enforcement point), Security, Credential handling (why
 the token lives only in kaalm-system), and Operations, Observability (the
 metric catalog and its cardinality rules).*

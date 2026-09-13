@@ -10,7 +10,7 @@ one Graph API call per reply.
 ## Before you begin
 
 - A running Agent with `service.enabled: true` (the default). See
-  [Your First Agent](first-agent.md).
+  [Your first agent](first-agent.md).
 - The user gateway reachable from the internet over HTTPS at a hostname with
   a certificate Meta can verify. See
   [Exposing it outside the cluster](connecting-a-channel.md#exposing-it-outside-the-cluster).
@@ -31,12 +31,13 @@ back when it verifies your webhook URL.
 ```bash
 kubectl create secret generic support-whatsapp-creds \
   --namespace team-support \
-  --from-literal=verifyToken=<a string you choose> \
-  --from-literal=appSecret=<app secret> \
-  --from-literal=accessToken=<access token>
+  --from-literal=verifyToken=VERIFY_TOKEN \
+  --from-literal=appSecret=APP_SECRET \
+  --from-literal=accessToken=ACCESS_TOKEN
 ```
 
-All three keys are required; a channel whose Secret is missing one reports
+Replace `VERIFY_TOKEN` with a string you choose, and `APP_SECRET` and
+`ACCESS_TOKEN` with the values from the app. All three keys are required; a channel whose Secret is missing one reports
 `Ready=False` with reason `CredentialsMissing`.
 
 ## Create the channel
@@ -57,17 +58,17 @@ spec:
     path: /channels/team-support/support-whatsapp
     credentialsRef:
       name: support-whatsapp-creds
-    # The business number this channel answers as. Events for other numbers
-    # under the same app are acknowledged and dropped.
     phoneNumberId: "106540352242922"
 ```
 
-The `path` follows the same rules as a webhook channel: it starts with
+`phoneNumberId` is the business number this channel answers as; events for
+other numbers under the same app are acknowledged and dropped. The `path`
+follows the same rules as a webhook channel: it starts with
 `/channels/{namespace}/` and never with `/v1/`. Apply the manifest and wait
-for `Ready`:
+for the `Phase` column to read `Active`:
 
 ```bash
-kubectl get agentchannel support-whatsapp -n team-support -o wide
+kubectl get agentchannel support-whatsapp -n team-support
 ```
 
 ## Point Meta at the channel
@@ -83,7 +84,7 @@ https://bots.example.com/channels/team-support/support-whatsapp
 When you click **Verify and save**, Meta sends a `GET` with your verify
 token and a challenge; the gateway echoes the challenge and Meta accepts
 the URL. Then subscribe the webhook to the **messages** field. Do this only
-after the channel is `Ready`: an unregistered path answers `401` and the
+after the channel is `Active`: an unregistered path answers `401` and the
 verification fails.
 
 ## Try it
@@ -95,11 +96,9 @@ from the same phone number carries the same session ID, so the agent can
 keep a conversation going.
 
 The agent receives a message envelope with `channelType: whatsapp`, the
-customer's WhatsApp ID as `userId`, the message text as `content` (for a
-button or list reply, the chosen title; for a photo or document, the
-caption), and the customer's profile name, the message ID, and the raw
-message under `metadata`. Media arrives as a reference with the media ID
-and MIME type; the gateway does not download it.
+customer's WhatsApp ID as `userId`, and the message text as `content`; the
+design book's WhatsApp channel page lists every envelope field and how each
+message type maps.
 
 ## The 24-hour window
 
@@ -132,6 +131,6 @@ reach the agent.
 ---
 
 *How this works: design book pages Resources, AgentChannel (the Platform
-types section), Gateways, User, Platform Adapters (the inbound steps and reply
-delivery), and Gateways, API, WhatsApp Channel (the wire contract on both
+types section), Gateways, User, Platform adapters and channel health (the inbound steps and reply
+delivery), and Gateways, API, WhatsApp channel (the wire contract on both
 sides).*

@@ -1,4 +1,4 @@
-# Installing the Grafana Dashboards
+# Installing the Grafana dashboards
 
 Three Grafana dashboards ship with the repository as JSON in
 `config/grafana/`, one per level of the topology:
@@ -10,7 +10,7 @@ Three Grafana dashboards ship with the repository as JSON in
 | `kaalm-cluster.json` | The whole cluster: scrape targets, controller leader and reconcile health, fleet totals, hibernations and wakes, LLM and tool traffic, spend by provider | `datasource`, `job` |
 
 Each file is self-contained and imports unchanged. The data source is a
-`datasource` template variable, which is the one import form that works both
+`datasource` template variable, which is the only import form that works both
 through the Grafana UI and through file provisioning.
 
 ## 1. Scrape the metrics
@@ -50,8 +50,13 @@ other panel is independent of how the scrape is configured.
 
 ## 2. Import or provision
 
-Through the UI: **Dashboards**, then **New**, then **Import**; upload a file
-and pick your Prometheus data source when asked. No edits to the JSON.
+Through the UI:
+
+1. Open **Dashboards**, then **New**, then **Import**.
+2. Upload one of the three files.
+3. Pick your Prometheus data source when asked.
+
+The JSON needs no edits.
 
 Through file provisioning, the way the verification stack does it: a
 dashboards provider pointing at a directory, and the three files mounted
@@ -71,14 +76,15 @@ The files reach that directory as a ConfigMap built straight from the
 repository directory:
 
 ```bash
-kubectl -n <grafana-namespace> create configmap kaalm-dashboards --from-file=config/grafana
+kubectl -n GRAFANA_NAMESPACE create configmap kaalm-dashboards --from-file=config/grafana
 ```
 
-mounted at `/var/lib/grafana/dashboards/kaalm` in the Grafana Pod. Because
+Replace `GRAFANA_NAMESPACE` with the namespace Grafana runs in, and mount the
+ConfigMap at `/var/lib/grafana/dashboards/kaalm` in the Grafana Pod. Because
 the data source is a variable, provisioning never needs a substituted
 `__inputs` block.
 
-## 3. Read them
+## 3. Read the panels
 
 Two conventions matter when you read the panels or build your own on the
 same series:
@@ -93,16 +99,18 @@ same series:
   the percentiles describe real upstream round trips. The per-namespace
   rate-limit panel is the `rate_limited` outcome of that counter.
 
-Every query on the three dashboards is over the documented metric catalog,
-and every catalog metric is on at least one panel; a test under
-`test/dashboards` pins both directions, so the dashboards and the catalog
-cannot drift apart unnoticed.
+Every Kaalm metric a panel queries is in the documented metric catalog, and
+every catalog metric is on at least one panel; a test under `test/dashboards`
+pins both directions. The only series outside the catalog are on the cluster
+dashboard's control-plane row: the scrape `up` series and controller-runtime's
+reconcile, work-queue, and leader-election families.
 
 ## 4. Verify against a live cluster
 
-`make dashboards-verify` proves the files end to end. Run it right after
-`make e2e`, while the suite's counters are still in the running controller
-and gateway:
+`make dashboards-verify` proves the files against a live cluster. Run it
+after `make e2e`: it re-applies four of the suite's fixtures (the namespace,
+the mock provider, the console viewer, and the spend fixture) and waits for
+a hibernation, so the series the panels need exist:
 
 ```bash
 make e2e
