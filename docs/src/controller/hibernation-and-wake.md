@@ -1,4 +1,4 @@
-# Hibernation and Wake
+# Hibernation and wake
 
 A persistent Agent that nobody is talking to still costs a Pod. Hibernation reclaims that cost: after a period of inactivity the controller deletes the Agent's Pod but keeps its PVC, and recreates the Pod on the next inbound message. The agent's state survives; the compute does not.
 
@@ -14,30 +14,30 @@ Three `Agent.spec.lifecycle` durations govern the cycle. Each defaults from the 
 |---|---|---|---|
 | `idleTimeout` | Inactivity before `Running` -> `Idle` | `defaultIdleTimeout` (`30m` in the chart's `standard` class) | `maxIdleTimeout` (`24h`) |
 | `hibernationDelay` | Time spent `Idle` before `Idle` -> `Hibernating` | `defaultHibernationDelay` (`30m`) | `maxHibernationDelay` (`2h`) |
-| `wakeTimeout` | How long the gateway waits for a woken Pod to become Ready | `defaultWakeTimeout` (`2m`, i.e. 120s) | `maxWakeTimeout` (`5m`) |
+| `wakeTimeout` | How long the gateway waits for a woken Agent's Service to become reachable | `defaultWakeTimeout` (`2m`); not applied as shipped, the gateway uses 2m when the Agent leaves `wakeTimeout` unset | `maxWakeTimeout` (`5m`); not enforced as shipped |
 
-Hibernation only happens at all when `spec.lifecycle.hibernationEnabled` is `true` and the class permits it via `lifecycle.hibernationAllowed`.
+Hibernation only happens at all when `spec.lifecycle.hibernationEnabled` is `true` and the class permits it with `lifecycle.hibernationAllowed`.
 
-## Activity Detection
+## Activity detection
 
 ### Activity lives in the gateway, not in etcd
 
-Activity timestamps are maintained **in-memory in the gateway**, not in etcd. Writing an annotation on every request would not scale as the Agent count grows: v1 targets 1000 Agents/AgentTasks per cluster, and the in-memory activity store is deliberately designed so future versions can reach an order of magnitude higher without a design change. At that scale, per-request etcd writes would dominate the API server.
+Activity timestamps are maintained **in-memory in the gateway**, not in etcd. Writing an annotation on every request would not scale as the Agent count grows: the design target is 1000 Agents and AgentTasks per cluster, and the in-memory store scales an order of magnitude past that without a design change. At that scale, per-request etcd writes would dominate the API server.
 
-The reconciler therefore does not own the activity clock. It reads the clock from the gateway and writes `status.lastActivityTime` on the Agent **only when a phase transition is warranted**, which keeps the etcd write rate proportional to transitions rather than to traffic.
+The reconciler therefore does not keep the activity clock. It reads the clock from the gateway and writes `status.lastActivityTime` on the Agent **only when a phase transition is warranted**, which keeps the etcd write rate proportional to transitions rather than to traffic.
 
 ### Two signal sources
 
-Two signals feed the gateway's in-memory activity store (see [Activity Tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api)):
+Two signals feed the gateway's in-memory activity store (see [Activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api)):
 
 - **Gateway traffic**: the LLM Gateway and User Gateway record the timestamp of each request for an Agent in-memory.
 - **Agent heartbeat**: the agent calls [`POST /v1/agent/heartbeat`](../gateways/api/agent-endpoints.md#post-v1agentheartbeat) on the gateway; the gateway updates the agent's timestamp in its in-memory store.
 
 ### Fan-out and merge
 
-The gateway exposes `GET /v1/activity?namespace={ns}`, returning a map of agent names to last-activity timestamps. Because each gateway replica maintains its own in-memory store, updated only by the traffic that replica handled, the controller fans the query out to **all gateway Pod IPs in parallel**, enumerating them via its Pod informer. Querying the ClusterIP Service instead would round-robin to a single replica and miss activity recorded by the others, making busy agents look idle.
+The gateway exposes `GET /v1/activity?namespace={ns}`, returning a map of agent names to last-activity timestamps. Because each gateway replica maintains its own in-memory store, updated only by the traffic that replica handled, the controller fans the query out to **all gateway Pod IPs in parallel**, enumerating them from its Pod informer. Querying the ClusterIP Service instead would round-robin to a single replica and miss activity recorded by the others, making busy agents look idle.
 
-The controller takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable are skipped, and data from the remaining replicas is used. The `replicaStartedAt` field in each response is evaluated per-replica for restart detection. See [Activity Tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api) for the full fan-out protocol.
+The controller takes the **most recent timestamp per agent** across all responses. Replicas that are unreachable are skipped, and data from the remaining replicas is used. The `replicaStartedAt` field in each response is evaluated per-replica for restart detection. See [Activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api) for the full fan-out protocol.
 
 ### The activitySource filter
 
@@ -47,7 +47,7 @@ The `/v1/activity` response returns both signal sources separately per agent. Th
 - `agentHeartbeat`: only the `heartbeat` timestamp field is considered.
 - `both`: the most recent timestamp from either field is used.
 
-The order matters: merge first across replicas, then filter. The gateway returns both signal sources unconditionally, and the controller (which already holds the Agent spec) owns the filtering decision. This avoids a dependency on the gateway watching Agent resources.
+The order matters: merge first across replicas, then filter. The gateway returns both signal sources unconditionally, and the controller (which already holds the Agent spec) makes the filtering decision. This avoids a dependency on the gateway watching Agent resources.
 
 ### When activity data is missing
 
@@ -63,29 +63,29 @@ Reading the diagram: the rule "absence of data is not evidence of inactivity" is
 
 **Operational consequence:** a synchronized gateway restart (rollout, image deploy, chart upgrade) defers all idle and hibernation transitions for `idleTimeout`, since no replica satisfies the "up for `idleTimeout`" condition until that long has elapsed post-restart. Operators choosing multi-hour `idleTimeout` values should expect a corresponding window of deferred hibernation after every gateway restart.
 
-## Hibernation Mechanics
+## Hibernation mechanics
 
 Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. The Service remains (with no endpoints) while the Agent is hibernated. Wake is triggered by the [User Gateway](../gateways/user/activation-and-activity.md#the-activator) (on channel message arrival) or manual annotation, not by traffic to the Service.
 
 Hibernation presupposes the PVC: `spec.lifecycle.hibernationEnabled: true` with `spec.persistence.enabled: false` is refused at reconcile time (`Degraded, reason=HibernationRequiresPersistence`, [rule 29](../resources/validation-and-defaulting.md#cross-resource-validation)). Without a PVC there is nothing to carry state, including the [The Runtime Contract](../runtime/contract.md) item 7 dedup buffer, across the delete-Pod/recreate-Pod cycle.
 
-## Wake Trigger
+## Wake trigger
 
-When an Agent is `Hibernated`, its ClusterIP Service has no endpoints, so traffic is not routed to it. Nothing in the data path can wake the Agent. The gateway therefore serves as the activator: on a channel message for a hibernated Agent it calls `POST /v1/activate/{namespace}/{agentName}` on the controller over mTLS, waits up to `wakeTimeout` for the Pod to become Ready, then delivers the message, surfacing `504` (sync) or a `wake_timeout` / `controller_unavailable` error payload (async) if it cannot. The full activator flow, its TLS setup, and its failure responses are documented in [Activator](../gateways/user/activation-and-activity.md#the-activator) and [§ Failure Modes](../gateways/user/operations.md#failure-modes).
+When an Agent is `Hibernated`, its ClusterIP Service has no endpoints, so traffic is not routed to it. Nothing in the data path can wake the Agent. The gateway therefore serves as the activator: on a channel message for a hibernated Agent it calls `POST /v1/activate/{namespace}/{agentName}` on the controller over mTLS, waits up to `wakeTimeout` for the Pod to become Ready, then delivers the message, surfacing `504` (sync) or a `wake_timeout` / `controller_unavailable` error payload (async) if it cannot. The full activator flow, its TLS setup, and its failure responses are documented in [The activator](../gateways/user/activation-and-activity.md#the-activator) and [Failure modes](../gateways/user/operations.md#failure-modes).
 
-The full sequence, including the two counterintuitive orderings (the `202` precedes the wake, and the replica that receives the activator call is not the one that performs the reconcile), is drawn in [The wake sequence](../gateways/user/activation-and-activity.md#the-wake-sequence).
+The full sequence, including the two counterintuitive orderings (the `202` precedes the wake, and the replica that receives the activator call is not necessarily the replica that performs the reconcile), is drawn in [The wake sequence](../gateways/user/activation-and-activity.md#the-wake-sequence).
 
 While waiting, the gateway holds the message. The generic webhook adapter has no side channel to signal progress on: sync callers simply block, and async callers already hold their `202`. The Discord adapter's deferred acknowledgement is the platform's own progress signal (the bot shows as thinking until the reply lands); the WhatsApp adapter has none.
 
 ### From activator call to Resuming
 
-The controller side of that call is deliberately thin. The activator handler is served on **every** controller replica, and all it does is patch `kaalm.io/wake=true` on the target Agent via the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` runs the manual-wake path (step 9) to transition the Agent to `Resuming` and recreate the Pod.
+The controller side of that call is deliberately thin. The activator handler is served on **every** controller replica, and all it does is patch `kaalm.io/wake=true` on the target Agent through the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` runs the manual-wake path (step 9) to transition the Agent to `Resuming` and recreate the Pod.
 
-This is why the handler does not need to run on the leader. The Service round-robins the POST across replicas, but any replica that receives it can drive the wake, because the signal is an annotation on the resource rather than an in-memory call on the leader. See [Operator Structure](overview.md).
+This is why the handler does not need to run on the leader. The Service round-robins the POST across replicas, but any replica that receives it can drive the wake, because the signal is an annotation on the resource rather than an in-memory call on the leader. See [Operator structure](overview.md).
 
 ### Wake-failure state machine
 
-`wakeTimeout` is purely a gateway-side caller-facing deadline (504 sync / `wake_timeout` async, see [Activator](../gateways/user/activation-and-activity.md#the-activator)). The controller has no wake deadline of its own: per [AgentReconciler step 9](reconcilers.md#agentreconciler), a failed Pod recreation simply requeues the reconcile with the wake annotation still in place.
+`wakeTimeout` is purely a gateway-side caller-facing deadline (504 sync, `wake_timeout` async, see [The activator](../gateways/user/activation-and-activity.md#the-activator)). The controller has no wake deadline of its own: per [AgentReconciler step 9](reconcilers.md#agentreconciler), a failed Pod recreation simply requeues the reconcile with the wake annotation still in place.
 
 An Agent stays in `Resuming` until one of three outcomes:
 
@@ -97,7 +97,7 @@ A gateway-side `wakeTimeout` exhaustion does not interrupt this: the caller gets
 
 ### Manual wake
 
-Manual wake is also supported via annotation:
+Manual wake is also supported by annotation:
 
 ```
 kubectl annotate agent foo kaalm.io/wake=true
@@ -105,7 +105,7 @@ kubectl annotate agent foo kaalm.io/wake=true
 
 Operational uses include pre-warming an agent before expected traffic or forcing a wake when no AgentChannel is configured. The AgentReconciler handles this annotation with phase-dependent removal so a failed reconcile cannot silently drop the wake:
 
-- If the agent is in any non-`Hibernated` phase, the annotation is removed immediately. A `Warning` event (`reason=WakeIgnored`) is emitted **unless the agent is in `Resuming`**, where the annotation is removed silently: a wake observed during `Resuming` is a benign idempotent re-attempt, not the misfire case the Warning is meant to surface. Phase is unchanged in either branch. (Outside `Resuming`, the Warning is the defense against the gateway's lazy hibernation detection misfiring on transient network failures, see [Activator](../gateways/user/activation-and-activity.md#the-activator).)
+- If the agent is in any non-`Hibernated` phase, the annotation is removed immediately. A `Warning` event (`reason=WakeIgnored`) is emitted **unless the agent is in `Resuming`**, where the annotation is removed silently: a wake observed during `Resuming` is a benign idempotent re-attempt, not the misfire case the Warning is meant to surface. Phase is unchanged in either branch. (Outside `Resuming`, the Warning is the defense against the gateway's lazy hibernation detection misfiring on transient network failures, see [The activator](../gateways/user/activation-and-activity.md#the-activator).)
 - If the agent is `Hibernated`, the reconciler transitions it to `Resuming` and recreates the Pod. The annotation is removed **only after** the transition to `Resuming` has been committed. If the status update or the subsequent Pod recreation fails and the reconcile is requeued, the annotation is left in place so the next reconcile pass can re-observe the wake intent.
 - The wake also stamps `status.lastActivityTime`, because the message that woke the agent is activity. The gateway records that message only once delivery succeeds, after the Pod is Ready, and the controller's activity read is cached per namespace, so the first `Running` reconcile after a wake can see only the record that preceded the sleep. The idle and hibernation windows after a wake are therefore measured from no earlier than the wake stamp; without it, an agent that slept longer than `idleTimeout + hibernationDelay` would go straight back through `Idle` to `Hibernating` after answering one message.
 

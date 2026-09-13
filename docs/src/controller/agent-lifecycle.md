@@ -1,6 +1,6 @@
-# Agent Lifecycle
+# Agent lifecycle
 
-An Agent is a persistent workload: the controller provisions a Pod for it and keeps that Pod alive until the Agent goes idle, hibernates, or is deleted. `status.phase` is the single field that says where an Agent is in that story, and it takes one of ten values: `Pending`, `Provisioning`, `Running`, `Idle`, `Hibernating`, `Hibernated`, `Resuming`, `Degraded`, `Failed`, `Terminating`.
+An Agent is a persistent workload: the controller provisions a Pod for it and keeps that Pod alive until the Agent goes idle, hibernates, or is deleted. `status.phase` is the single field that says where an Agent is in that lifecycle, and it takes one of ten values: `Pending`, `Provisioning`, `Running`, `Idle`, `Hibernating`, `Hibernated`, `Resuming`, `Degraded`, `Failed`, `Terminating`.
 
 The happy path is a straight line: an Agent is admitted (`Pending`), its child resources are built (`Provisioning`), and its Pod reports Ready (`Running`). Everything else in this page is a branch off that line, and the branches fall into three groups:
 
@@ -8,7 +8,7 @@ The happy path is a straight line: an Agent is admitted (`Pending`), its child r
 - **Re-provisioning.** Spec drift or an involuntary Pod disruption sends a live Agent back through `Provisioning` for a Pod replacement.
 - **Trouble.** `Degraded` for a mismatch the developer can fix, `Failed` for one they cannot, `Terminating` for deletion.
 
-This page is the state machine itself: the diagram, and the canonical table of every transition and its trigger. The mechanics that hang off individual transitions live on their own pages: [Activity Detection](hibernation-and-wake.md#activity-detection) (how the controller knows an Agent is idle), [Hibernation mechanics](hibernation-and-wake.md#hibernation-mechanics), [Wake trigger](hibernation-and-wake.md#wake-trigger), and [AgentClass change handling](change-propagation.md#agentclass-change-handling) (how a class edit propagates to already-provisioned Agents). For what the reconciler actually does on each pass, see [AgentReconciler](reconcilers.md#agentreconciler).
+This page is the state machine itself: the diagram, and the canonical table of every transition and its trigger. The mechanics behind individual transitions live on their own pages: [Activity detection](hibernation-and-wake.md#activity-detection) (how the controller knows an Agent is idle), [Hibernation mechanics](hibernation-and-wake.md#hibernation-mechanics), [Wake trigger](hibernation-and-wake.md#wake-trigger), and [AgentClass change handling](change-propagation.md#agentclass-change-handling) (how a class edit propagates to already-provisioned Agents). For what the reconciler actually does on each pass, see [AgentReconciler](reconcilers.md#agentreconciler).
 
 ## State diagram
 
@@ -23,10 +23,10 @@ This table is the canonical list. Rows whose behavior needs more than a sentence
 | Pending -> Provisioning | References validated, AgentClass resolved, per-Agent `Certificate` created |
 | Provisioning -> Running | Per-Agent `Certificate` reaches `Ready=True`, Pod is created and reports Ready, Service endpoint populated. See [Waiting on the Certificate](#waiting-on-the-certificate). |
 | Running -> Idle | `lastActivityTime` older than `idleTimeout` |
-| Idle -> Running | Activity observed (see [Activity Detection](hibernation-and-wake.md#activity-detection)) |
+| Idle -> Running | Activity observed (see [Activity detection](hibernation-and-wake.md#activity-detection)) |
 | Idle -> Hibernating | Idle for `hibernationDelay` (defaults from AgentClass) AND `hibernationEnabled` |
 | Hibernating -> Hibernated | Pod scaled to 0, PVC retained, Service remains |
-| Hibernated -> Resuming | Gateway [Activator](../gateways/user/activation-and-activity.md#the-activator) calls `POST /v1/activate/{namespace}/{agentName}` on the controller (triggered by a channel message arriving via the User Gateway for this Agent), OR `kaalm.io/wake: "true"` annotation (manual override) |
+| Hibernated -> Resuming | The gateway [activator](../gateways/user/activation-and-activity.md#the-activator) calls `POST /v1/activate/{namespace}/{agentName}` on the controller (triggered by a channel message arriving through the User Gateway for this Agent), OR `kaalm.io/wake: "true"` annotation (manual override) |
 | Resuming -> Running | Pod becomes Ready |
 | Running/Idle -> Provisioning | Spec drift (Agent or AgentClass) re-derives a Pod spec that differs in replacement-triggering fields. Drift is detected in both `Running` and `Idle`, since an idle Agent still has a Pod to replace. See [Spec change handling](change-propagation.md#spec-change-handling). |
 | Running/Idle -> Provisioning | **Involuntary Pod disruption**: the Pod was deleted out-of-band, or is present but terminal without kubelet recovery. See [Involuntary Pod disruption](#involuntary-pod-disruption). |
@@ -46,13 +46,13 @@ An Agent in `Running` or `Idle` returns to `Provisioning` when its Pod goes away
 - **Deleted out-of-band**: node drain / eviction API, manual `kubectl delete`, or node loss followed by Pod GC.
 - **Present but terminal without kubelet recovery**: node-pressure eviction leaves the Pod object at `status.phase: Failed`, `reason: Evicted`. `restartPolicy: Always` does **not** resurrect it, because the kubelet restarts containers inside a live Pod, never a dead Pod. The eviction increments no `restartCount`, so crash-loop detection never sees it either.
 
-Agent Pods are bare Pods, so there is no Deployment or ReplicaSet standing behind them: the reconciler *is* the self-healing loop. It deletes the dead Pod object if one remains and re-enters `Provisioning`, preserving the PVC, Service, and Certificate exactly as in the spec-drift recreate. Detection is event-driven via the owned-Pod watch.
+Agent Pods are bare Pods, so there is no Deployment or ReplicaSet standing behind them: the reconciler *is* the self-healing loop. It deletes the dead Pod object if one remains and re-enters `Provisioning`, preserving the PVC, Service, and Certificate exactly as in the spec-drift recreate. Detection is event-driven through the owned-Pod watch.
 
 Two phases need no handling here. `Hibernated` is unaffected because no Pod exists. `Resuming` already requeues on failed Pod creation.
 
 ### Entering Degraded
 
-`Degraded` is the phase for a mismatch between the Agent's spec and the AgentClass that admits it. The developer, not the controller, is the one who can fix it. Four class-vs-spec mismatches trigger it:
+`Degraded` is the phase for a mismatch between the Agent's spec and the AgentClass that admits it. The developer, not the controller, can fix it. Four class-vs-spec mismatches trigger it:
 
 - `spec.image` not in `image.allowedImages`.
 - `spec.providers` references a ModelProvider not in `allowedProviders`, or one whose `allowedNamespaces` no longer includes the Agent's namespace.
@@ -74,7 +74,7 @@ The `reason` names the specific mismatch:
 
 **`preDegradedPhase` bookkeeping.** On the first transition into `Degraded` from a non-Degraded phase, the controller records the current phase in `status.preDegradedPhase`. If a new Degraded-triggering condition arises while the Agent is *already* in `Degraded`, only `reason` and `message` are updated: `preDegradedPhase` is preserved, so the Agent still remembers where it came from.
 
-**Not everything bad is a phase change.** Recoverable runtime issues (transient provider unhealthy, budget exhaustion) set a `Degraded` *condition* on the Agent without touching `status.phase`. See [Error Handling](operations.md#error-handling). For the phase-transition path, see [Degrade-when-irreconcilable](change-propagation.md#agentclass-change-handling).
+**Not everything bad is a phase change.** Recoverable runtime issues (transient provider unhealthy, budget exhaustion) set a `Degraded` *condition* on the Agent without touching `status.phase`. See [Error handling](operations.md#error-handling). For the phase-transition path, see [Degrade-when-irreconcilable](change-propagation.md#agentclass-change-handling).
 
 ### Leaving Degraded
 
