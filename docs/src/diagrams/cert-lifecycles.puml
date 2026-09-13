@@ -83,9 +83,9 @@ end note
 
 loop continuously, within spec.renewBefore (chart default 2160h / 720h, 90d / 30d)
   CM -> AP : Secret re-issued, kubelet\nupdates the projected volume
-  AP -> AP : reload via cert-file watch
+  AP -> AP : reload on cert-file watch
   CM -> TP : Secret re-issued, kubelet\nupdates the projected volume
-  TP -> TP : HTTP client reloads via\ncert-file watch
+  TP -> TP : HTTP client reloads on\ncert-file watch
 end
 
 == 6. Deleted ==

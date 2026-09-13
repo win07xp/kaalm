@@ -1,11 +1,11 @@
-# Providing Tool Access
+# Providing tool access
 
 A ToolProvider gives teams access to an MCP tool server without ever handing
-them its credential. The shape is the one you already know from
-[Providing LLM Access](llm-access.md): the credential lives in a Secret in
+them its credential. The pattern is the same as in
+[Providing LLM access](llm-access.md): the credential lives in a Secret in
 `kaalm-system`, the gateway injects it server-side on every brokered call,
 and teams see tool names, never keys. Agents reach the server only through
-the gateway, so there is no per-team egress hole to punch or audit.
+the gateway, so there is no per-team egress exception to add or audit.
 
 ## 1. Create the credential Secret
 
@@ -51,7 +51,7 @@ spec:
     intervalSeconds: 60
 ```
 
-What each block buys you:
+What each block does:
 
 - **`endpoint`** must be `https://`; the schema rejects anything else because
   the gateway forwards the credential to this URL. In-cluster and external
@@ -77,9 +77,9 @@ What each block buys you:
 ## 3. Open the grant chain
 
 Tool access stacks the same three gates as model access
-([Managing Team Access](managing-access.md)): the class must allow the
+([Managing team access](managing-access.md)): the class must allow the
 provider, the provider must admit the namespace, and the workload must ask
-for it. You own the first (the second is step 2 above); the team owns the
+for it. You set the first (the second is step 2 above); the team sets the
 third. The pattern from `test/e2e/testdata/s18-toolplane.yaml`, on the
 AgentClass:
 
@@ -91,7 +91,7 @@ allowedToolProviders:
 As with `allowedProviders`, an empty list allows none. The team then lists
 the provider in their Agent's or AgentTask's `spec.tools`, optionally
 narrowed to named tools; that side is covered in
-[Calling Tools Through the Gateway](../developers/calling-tools.md).
+[Calling tools through the gateway](../developers/calling-tools.md).
 
 A grant that fails any gate is visible in status, not silently ignored: an
 Agent goes `Degraded` with reason `ClassConstraintViolation` (provider not
@@ -161,7 +161,7 @@ its own when the probe succeeds again.
 
 ---
 
-*How this works: design book pages Gateways, The Tool Plane (the broker,
-the grant chain, and every enforcement point), Security, Credentials (why
+*How this works: design book pages Gateways, The tool plane (the broker,
+the grant chain, and every enforcement point), Security, Credential handling (why
 the token lives only in kaalm-system), and Operations, Observability (the
 metric catalog and its cardinality rules).*

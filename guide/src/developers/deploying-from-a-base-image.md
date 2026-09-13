@@ -1,4 +1,4 @@
-# Deploying from a Base Image
+# Deploying from a base image
 
 Kaalm publishes two reference base images that implement the whole runtime
 contract, so deploying an agent needs no Dockerfile and no registry of your
@@ -8,7 +8,7 @@ own:
   ConfigMap, and serves a built-in echo handler until you supply one.
 - `ghcr.io/win07xp/kaalm-agent-go` runs the same built-in default in a
   compiled binary; custom Go handlers are built `FROM` it (see
-  [Building Your Own Agent Image](building-your-own-image.md)).
+  [Building your own agent image](building-your-own-image.md)).
 
 Both are published per release with the same version tags as the operator.
 Pick the tag matching your installed Kaalm minor version; within a minor
@@ -19,7 +19,7 @@ series, newer patch tags are drop-in.
 Handler mounts are a per-class grant. The AgentClass you deploy under must
 set `image.allowHandlerMounts: true`, and its `allowedImages` must include
 the base image. Both are the platform team's call; see
-[Offering Agent Classes](../platform/agent-classes.md) for their side of it.
+[Offering agent classes](../platform/agent-classes.md) for their side of it.
 
 ## 1. Run the default handler
 
@@ -102,10 +102,10 @@ to change behavior, which is the property that makes rollbacks trustworthy.
 The moment your handler needs a dependency the base image does not bundle,
 move to the `FROM` pattern: same base image, same handler file, plus a
 one-line `pip install`. The class gate no longer applies (a `FROM` build
-passes ordinary image review via `allowedImages`), and the trade-offs are on
-[Building Your Own Agent Image](building-your-own-image.md). If the
+passes ordinary image review through `allowedImages`), and the trade-offs are on
+[Building your own agent image](building-your-own-image.md). If the
 dependency you need is an agent framework, that is its own page:
-[Running Framework Agents](framework-agents.md).
+[Running framework agents](framework-agents.md).
 
 ## If the handler never runs
 
@@ -122,7 +122,7 @@ dependency you need is an agent framework, that is its own page:
 
 ---
 
-*How this works: design book pages Runtime, Reference Base Images (the
+*How this works: design book pages Runtime, Reference base images (the
 image contract, the handler resolution rules, and the `FROM` pattern), and
-Resources, Validation and Defaulting (rules 30 and 31, the class gate and
+Resources, Validation and defaulting (rules 30 and 31, the class gate and
 the missing-ConfigMap condition).*

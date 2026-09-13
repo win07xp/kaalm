@@ -1,4 +1,4 @@
-# Using the Console
+# Using the console
 
 The console is an optional web view of the fleet: which agents are running
 or hibernated, what each namespace spends against its budgets, task history,
@@ -32,7 +32,7 @@ decision.
 
 ## 2. Give someone access
 
-The console authenticates with the cluster's own machinery. A person pastes
+The console authenticates with Kubernetes itself. A person pastes
 a bearer token; the console validates it with a `TokenReview`, then gates
 every namespace read with a `SubjectAccessReview`:
 
@@ -134,7 +134,7 @@ consequences follow:
 - The chat counts as activity: it wakes a hibernated agent and resets its
   idle clock.
 - Any LLM or tool calls the agent makes while answering are metered,
-  budgeted, and audited as usual. There is no console-shaped hole in the
+  budgeted, and audited as usual. The console cannot bypass the
   budget.
 - The gateway's delivery log names you, because the message's `userId` is
   the identity from your token.
@@ -192,8 +192,8 @@ removed, so a script written against it keeps working.
 
 ---
 
-*How this works: design book pages The Console, Console Overview (scope,
+*How this works: design book pages Console, Console overview (scope,
 data sources, the read API, authentication, and test-chat semantics),
-Security, RBAC and Authentication (how the console authenticates to the
+Security, RBAC and authentication (how the console authenticates to the
 gateway), and Operations, Deployment (the console values and why one
 replica).*

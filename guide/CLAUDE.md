@@ -13,6 +13,9 @@ and that every cited `config/samples/` or `test/e2e/testdata/` file exists);
   documents, link there instead of restating it.
 - Uses the stock mdBook theme (no custom CSS). Do not copy the design book's
   theme or wide-figure conventions.
+- Figures are copies of design-book renders, never sources of their own: list
+  the file in `src/diagrams/SOURCES` and run `make diagrams` to copy it.
+  `make docs-check` fails if a copy drifts from its source.
 - Cross-book links are GitHub blob URLs to the source page
   (`https://github.com/win07xp/kaalm/blob/main/docs/src/...`), with the
   target page's title as the link text; the "How this works" footers name

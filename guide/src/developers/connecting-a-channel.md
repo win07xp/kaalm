@@ -1,4 +1,4 @@
-# Connecting a Channel
+# Connecting a channel
 
 An AgentChannel gives your running Agent an inbound address: an authenticated
 webhook path on the user gateway. Callers POST a message; your agent's reply
@@ -33,7 +33,7 @@ spec:
 
 Three rules about `path`:
 
-- It must have the shape `/channels/{namespace}/{name}` matching the
+- It must have the form `/channels/{namespace}/{name}` matching the
   channel's own namespace and name.
 - The `/v1/` prefix is reserved for the gateway's API and rejected.
 - The bearer Secret (`e2e-hook`) lives in your namespace, next to the
@@ -84,6 +84,6 @@ certificate's SANs.
 ---
 
 *How this works: design book pages Resources, AgentChannel (auth types and
-the delete handshake), Gateways, User (the delivery pipeline and what happens
-when the agent is hibernated), and Gateways, API, Async Responses (the
+the delete handshake), Gateways, User Gateway (the delivery pipeline and what happens
+when the agent is hibernated), and Gateways, API, Async webhook responses (the
 retry arithmetic and TTLs).*

@@ -19,7 +19,7 @@ Running --> Idle : idleTimeout elapsed
 Idle --> Running : activity observed
 Idle --> Hibernating : hibernationEnabled=true\nAND idle for hibernationDelay
 Hibernating --> Hibernated : pod scaled to 0,\nPVC retained
-Hibernated --> Resuming : channel message via User Gateway\nOR manual wake annotation
+Hibernated --> Resuming : channel message through the User Gateway\nOR manual wake annotation
 Resuming --> Running : pod Ready
 
 ' ---- Re-provisioning (spec drift / disruption) ----

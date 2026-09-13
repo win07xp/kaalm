@@ -44,7 +44,7 @@ CTRL -[#7a3f00]-> API : **8. Controller to and from API server**\nwatches in, CR
 API -[#7a3f00]-> CTRL
 
 ' ---------- inbound across the boundary ----------
-PLAT -[#8B4513,bold]-> GW : **3. Channel platform to User Gateway**\ninbound webhook messages\nHTTPS via Ingress\n**inbound: crosses in, never out**
+PLAT -[#8B4513,bold]-> GW : **3. Channel platform to User Gateway**\ninbound webhook messages\nHTTPS through the Ingress\n**inbound: crosses in, never out**
 
 ' ---------- the only two edges that leave ----------
 GW -[#B71C1C,bold]-> LLM : **2. LLM Gateway to LLM Provider**\nprompts and completions\nHTTPS egress\n**LEAVES THE BOUNDARY**

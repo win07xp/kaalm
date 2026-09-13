@@ -22,7 +22,7 @@ note right of Active
   and Hibernating: transient gaps are
   the delivery layer's job (wake on
   demand, bounded retry) and surface
-  via PlatformConnected, not phase
+  through PlatformConnected, not phase
 end note
 
 state "any phase" as AnyPhase #F5F5F5

@@ -1,4 +1,4 @@
-# Calling Tools Through the Gateway
+# Calling tools through the gateway
 
 If your platform team has registered a ToolProvider for you, your agent can
 call MCP tools through the gateway. You never see or carry the tool server's
@@ -31,7 +31,7 @@ an AgentTask denied at provisioning fails terminally.
 ## 2. Point your MCP client at the broker
 
 The base URL is `$KAALM_GATEWAY_ENDPOINT/v1/mcp/<toolProvider>`, with the
-same TLS posture as every other gateway call: present your client
+same TLS setup as every other gateway call: present your client
 certificate (`$KAALM_TLS_CERT` / `$KAALM_TLS_KEY`) and trust the cluster CA
 (`$KAALM_CA_CERT`). If you use an MCP SDK, point its streamable HTTP
 transport at that URL with those credentials; everything past the connection
@@ -58,7 +58,7 @@ post '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' "$sess"
 post '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"web_search","arguments":{}}}' "$sess"
 ```
 
-Three wire facts worth knowing:
+Three wire facts:
 
 - The session id is minted by the gateway, not the tool server. Treat it as
   opaque and echo it back on every request after `initialize`. Sessions are
@@ -98,6 +98,6 @@ the ToolProvider; there is nothing to rotate or fix on your side.
 
 ---
 
-*How this works: design book pages Gateways, The Tool Plane (the broker end
-to end), Gateways, API, Errors (the envelope and the full status table),
-and Runtime, Runtime Contract (the TLS posture of every gateway call).*
+*How this works: design book pages Gateways, The tool plane (the broker end
+to end), Gateways, API, Error reference (the envelope and the full status table),
+and Runtime, The runtime contract (the TLS setup of every gateway call).*

@@ -72,7 +72,7 @@ end
 
 legend bottom
   Starter templates watch $KAALM_CA_CERT and rebuild both pools on change, which makes this
-  transparent. Custom images carry the same obligation: the inbound server rebuilds ClientCAs via a
+  transparent. Custom images carry the same obligation: the inbound server rebuilds ClientCAs with a
   tls.Config.GetConfigForClient callback returning a config with the fresh pool, and the outbound
   HTTP client rebuilds RootCAs. A CA-bundle change MUST rebuild both.
 endlegend

@@ -56,7 +56,7 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.upstreamCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
 | `gateway.trustClusterCAForCallbacks` | `false` | Also trust the cluster CA for `AgentChannel.spec.webhook.callbackUrl` TLS, so async responses can be delivered to in-cluster or self-hosted receivers served with a `kaalm-ca-issuer` certificate. Public receivers need only the system roots. |
 | `gateway.callbackUrl.allowlist` | unset | List of DNS-name suffixes or CIDR blocks whose `AgentChannel.spec.webhook.callbackUrl` targets are permitted despite the deny-internal default. Loopback, link-local and the cloud-metadata IPs stay refused even when listed. |
-| `controller.networkPolicy.dnsSelector` | `{ namespaceLabels: { "kubernetes.io/metadata.name": "kube-system" }, podLabels: { "k8s-app": "kube-dns" } }` | Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy. |
+| `controller.networkPolicy.dnsSelector` | `{ namespaceLabels: { "kubernetes.io/metadata.name": "kube-system" }, podLabels: { "k8s-app": "kube-dns" } }` | Intended selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy. The chart accepts the value but does not pass it to the controller; see the note after this table. |
 | `controller.trustClusterCAForProbes` | `false` | Also trust the cluster CA (`kaalm-ca`, already mounted) for ModelProvider and ToolProvider health probes, added to the system roots. The probe-side mirror of `gateway.trustClusterCAForUpstream`: enable both so an in-cluster provider under a `kaalm-ca-issuer` certificate is both forwarded to and probed `Healthy`. |
 | `controller.probeCA.configMap` | `""` | Name of an operator-supplied ConfigMap of additional CA certificates to trust for health probes, mirroring `gateway.upstreamCA`. Composes with `trustClusterCAForProbes` into one additive pool; the controller re-reads it when it rotates. |
 | `controller.probeCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
@@ -94,7 +94,7 @@ The values that need more than a sentence of explanation follow.
 
 **`console.enabled`.** The console Deployment is fixed at one replica with no PodDisruptionBudget and no replica floor: login sessions are held in memory, so a second replica would break logins rather than add availability, and a read surface carries no wake-on-demand style dependency. The chart deliberately ships no `console.replicas` knob. Exposure is also deliberate: no Ingress and no LoadBalancer are templated; operators reach it by port-forward or front it themselves. See [Console overview](../console/overview.md).
 
-**`controller.networkPolicy.dnsSelector`.** The object has the shape `{ namespaceLabels: {...}, podLabels: {...} }` and supplies the `namespaceSelector` and `podSelector` for the DNS egress rule. The default matches kubeadm, EKS, GKE, AKS, and the upstream CoreDNS chart. Override it for clusters that run DNS in a non-standard namespace or with custom labels. See [Protecting agent containers from LLM provider access](../security/credentials.md#protecting-agent-containers-from-llm-provider-access).
+**`controller.networkPolicy.dnsSelector`.** The object has the form `{ namespaceLabels: {...}, podLabels: {...} }` and is meant to supply the `namespaceSelector` and `podSelector` for the DNS egress rule. The controller does not read it: the rule it synthesizes is fixed to the `kube-system` namespace and Pods labeled `k8s-app: kube-dns`, which matches kubeadm, EKS, GKE, AKS, and the upstream CoreDNS chart. A cluster that runs DNS elsewhere needs a NetworkPolicy of its own beside Kaalm's until the value is wired through. See [Protecting agent containers from LLM provider access](../security/credentials.md#protecting-agent-containers-from-llm-provider-access).
 
 **`gateway.externalHostnames`.** Required when the User Gateway is exposed through a TLS pass-through Ingress, so that external clients see a cert whose SAN matches the public hostname they dialed. Backend re-encrypt Ingress works without it, because the Ingress controller dials the in-cluster Service DNS, which is already in the default SAN set. See [TLS and Ingress](../gateways/user/overview.md#tls-and-ingress).
 
@@ -227,7 +227,6 @@ Values whose change has workload-visible effects are the ones to review before a
 | Value | Effect on change |
 |---|---|
 | `gateway.replicas` | Rate-limit buckets re-divide on the next refill cycle. See [Rate limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting). |
-| `controller.networkPolicy.dnsSelector` | Regenerates every synthesized per-agent NetworkPolicy. |
 | `gateway.channelHealthWindow` | Changes `PlatformConnected` flapping behavior. |
 | The body-size caps | In-flight requests sized between the old and new caps change fate. |
 

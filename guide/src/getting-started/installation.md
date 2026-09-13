@@ -22,17 +22,20 @@ of them:
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version <version> \
+  --version VERSION \
   -n kaalm-system --create-namespace \
-  --set certManager.clusterResourceNamespace=cert-manager
+  --set certManager.clusterResourceNamespace=cert-manager \
+  --wait
 ```
 
-Find the current `<version>` on the
+Replace `VERSION` with the release you are installing, for example `0.7.0`.
+
+Releases are listed on the
 [Releases page](https://github.com/win07xp/kaalm/releases). The chart and the
 controller and gateway images it pulls all share that version, so the install
 is fully pinned.
 
-Two settings worth knowing:
+Two settings to know:
 
 - `certManager.clusterResourceNamespace` must match your cert-manager install's
   cluster resource namespace (a default cert-manager install uses
@@ -40,7 +43,9 @@ Two settings worth knowing:
 - The controller and gateway each have a hard floor of two replicas; the chart
   refuses to render below it.
 
-Then continue to [Verifying the Install](verifying.md).
+With `--wait`, the command returns when both Deployments are rolled out,
+about a minute on a small cluster. Then continue to
+[Verifying the install](verifying.md).
 
 ## Trying Kaalm locally
 
@@ -51,7 +56,9 @@ already installed:
 make k3d-up   # k3d cluster + cert-manager + trust-manager
 ```
 
-Then run the same `helm install` as above against it. This gives you a full
+The cluster is named `kaalm-dev`; set `CLUSTER=<name>` to pick another. The
+script switches your kubectl context to it. Then run the same `helm install`
+as in [Install](#install) against it. This gives you a full
 local install from the published artifacts without building anything.
 
 ## From source
@@ -71,8 +78,12 @@ helm upgrade --install kaalm charts/kaalm \
   --set controller.image.tag=dev \
   --set gateway.image.repository=<registry>/kaalm-gateway \
   --set gateway.image.tag=dev \
-  --set certManager.clusterResourceNamespace=cert-manager
+  --set certManager.clusterResourceNamespace=cert-manager \
+  --wait
 ```
+
+The checkout's chart reports the placeholder version `0.2.0` in `helm list`
+and its notes; the release workflow stamps the real version at tag time.
 
 On k3d you can skip the registry and `k3d image import` the two images
 instead; `make e2e-images` builds and imports them, and `make e2e-deploy`
@@ -81,5 +92,5 @@ installs the local chart in one step.
 ---
 
 *How this works: design book pages Operations, Deployment (the Helm tunables
-and the tiered on-ramp) and Security, TLS (why cert-manager is a hard
+and the tiered on-ramp) and Security, TLS and certificates (why cert-manager is a hard
 prerequisite).*

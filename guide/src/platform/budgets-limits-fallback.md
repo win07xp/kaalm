@@ -1,4 +1,4 @@
-# Budgets, Limits, and Fallback
+# Budgets, limits, and fallback
 
 This page is the operating manual for the guardrails on a ModelProvider: what
 each knob does, what the calling agent experiences when it fires, and how to
@@ -8,9 +8,9 @@ One design fact up front: budgets are **soft limits by default**. Each
 gateway replica keeps a local ledger and replicas exchange totals through a
 ConfigMap, so a burst of parallel requests can overshoot a ceiling slightly
 before every replica has caught up. Soft budgets are guardrails against
-runaway spend, not billing-grade metering. Since v0.3.0 a provider can opt
-in to hard enforcement, which turns its block policies into a cap with a
-stated guarantee; that task is [below](#turning-on-hard-enforcement).
+runaway spend, not billing-grade metering. A provider can opt in to hard
+enforcement, which turns its block policies into a cap with a stated
+guarantee; see [Turning on hard enforcement](#turning-on-hard-enforcement).
 
 ## Budget policies: warn, degrade, block
 
@@ -56,7 +56,7 @@ your side of the same picture. Each affected Agent also carries a `Degraded`
 condition (reason `BudgetExhausted`) visible in `kubectl describe agent`,
 with its phase preserved; the condition clears on its own when the budget
 frees up. All of this is identical under hard enforcement; what hard adds
-is the behavior just below and at the ceiling.
+is the behavior near and at the ceiling.
 
 ## Turning on hard enforcement
 
@@ -124,11 +124,11 @@ sync interval; it is the display surface, not the enforcement counter.
 ```yaml
 rateLimits:
   requestsPerMinute: 300
-  tokensPerMinute: 500000
 ```
 
 Buckets are per `(namespace, model)`: each pair gets the full configured
-ceiling, so a namespace using three models can reach three times the ceiling
+ceiling of requests per minute (the schema also accepts `tokensPerMinute`, which
+the gateway does not enforce), so a namespace using three models can reach three times the ceiling
 against the provider in aggregate. The configured value is the intended
 cluster-wide limit; each gateway replica enforces its share. A limited caller
 gets `429` with error type `rate_limited`; unlike a budget block, this clears
@@ -174,6 +174,6 @@ chain depth-first. The rules that surprise people:
 ---
 
 *How this works: design book pages Resources, ModelProvider (fallback trees,
-with the diagram of the depth cap), Gateways, LLM, Budgets and Rate Limits
-(the ledger and the replica exchange), and Gateways, LLM, Fallback (the
+with the diagram of the depth cap), Gateways, LLM, Budgets and rate limits
+(the ledger and the replica exchange), and Gateways, LLM, Fallback logic (the
 traversal pseudocode).*
