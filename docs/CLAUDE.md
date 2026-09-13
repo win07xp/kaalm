@@ -1,7 +1,8 @@
 # Design book (docs/)
 
 The design book is the spec: it documents exactly how the system works. Start at
-`src/SUMMARY.md`. Build with `mdbook build docs` (or `make books` for both books);
+`src/SUMMARY.md`. Build with `make books` (which runs `make docs-check` first; the
+checks are listed in the docstring of `hack/docs/check.py`);
 `mdbook serve docs` for live preview.
 
 ## Layout of src/
@@ -31,16 +32,15 @@ Do not restate them:
 
 ## Diagrams
 
-50 PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
-Regenerate with:
-
-```bash
-java -jar ~/java/plantuml-1.2026.6.jar -tsvg docs/src/diagrams/*.puml
-```
+PlantUML sources plus rendered SVGs in `src/diagrams/`, both committed.
+Regenerate with `make diagrams` (the jar path is `PLANTUML_JAR`, default
+`~/java/plantuml-1.2026.6.jar`); the same target copies the figures the
+guide embeds into `guide/src/diagrams/`.
 
 Every diagram must `!include _style.puml`, which carries the colour language
 (purple agents, blue controller, green gateway, orange external) and documents
-three PlantUML traps that fail silently. Read it before adding a diagram.
+three PlantUML traps that fail silently; `hack/docs/diagram_check.py` (run
+by `make docs-check`) fails the build on them. Read it before adding a diagram.
 Diagrams are single-sourced like the prose: one figure per concept on its
 canonical page. `theme/custom.css` lets figures overhang the 750px prose
 column; keep them under ~1090px wide so they render at full size.
