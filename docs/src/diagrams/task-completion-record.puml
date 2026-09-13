@@ -1,0 +1,19 @@
+@startuml task-completion-record
+' The record path once every gate has passed: the mailbox Patch, the 200, and
+' the reconciler's watch. The gates are task-completion-gates.puml; mailbox
+' provisioning is on docs/src/runtime/child-resources.md.
+!include _style.puml
+
+participant "Task Pod" as P $agentBg
+participant "Gateway" as GW $gwBg
+participant "{taskName}-completion\nConfigMap" as CM $storeBg
+participant "AgentTask\nReconciler" as R $ctrlBg
+
+P -> GW : POST /v1/task/complete (mTLS)
+GW -> GW : gates, then validation
+GW -> CM : Patch (scoped Role)
+GW --> P : 200
+CM -> R : watch fires
+R -> R : artifact re-check
+R -> R : status.phase = Completing
+@enduml

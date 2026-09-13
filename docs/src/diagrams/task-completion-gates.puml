@@ -1,0 +1,60 @@
+@startuml task-completion-gates
+' Every gate on POST /v1/task/complete in the order the gateway runs them:
+' the mTLS profile in middleware, then the handler. Each row is an elseif
+' cascade, which PlantUML lays out left to right. Triggers, wire messages,
+' and rationale are the prose on docs/src/gateways/api/task-complete.md.
+!include _style.puml
+
+start
+:POST /v1/task/complete;
+
+partition "mTLS profile (middleware)" {
+  if (client cert?) then (no)
+    :**401** unauthorized;
+    kill
+  elseif (SAN kind is AgentTask?) then (no)
+    :**403** access_denied;
+    kill
+  elseif (source IP resolves to a Pod\nin the SAN namespace?) then (no)
+    :**401** unauthorized;
+    kill
+  else (yes)
+  endif
+}
+
+partition "handler: admission" {
+  if (an AgentTask backs the caller?) then (no)
+    :**403** access_denied;
+    kill
+  elseif (completion.condition\nis agentReported?) then (no)
+    :**403** TaskNotAgentReported;
+    kill
+  elseif (status.phase terminal?) then (yes)
+    :**403** TaskAlreadyCompleted;
+    kill
+  elseif (Pod UID = status.currentPodUID?) then (no)
+    :**403** StalePodCompletion\nretryable;
+    kill
+  else (yes)
+  endif
+}
+
+partition "handler: validation and write" {
+  if (body and artifact names valid?) then (no)
+    :**400** invalid_request;
+    kill
+  elseif (4 KiB per artifact,\n32 KiB combined?) then (no)
+    :**413** request_too_large;
+    kill
+  else (yes)
+    :Patch {taskName}-completion;
+    if (Patch succeeds?) then (no)
+      :**503** internal_unavailable\nretryable, Retry-After: 1;
+      kill
+    else (yes)
+      :**200** OK;
+      stop
+    endif
+  endif
+}
+@enduml

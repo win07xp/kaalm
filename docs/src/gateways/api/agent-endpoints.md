@@ -1,50 +1,56 @@
-# Agent Endpoints
+# Agent endpoints
 
 Two endpoints make up the gateway's contract with long-running agent containers. They point in opposite directions:
 
-- `POST /v1/agent/heartbeat` is implemented by the gateway and called by the agent, to signal liveness.
-- `POST /v1/message` is implemented by the agent and called by the gateway, to deliver channel messages.
+- `POST /v1/agent/heartbeat` is served by the gateway and called by the agent, to signal liveness.
+- `POST /v1/message` is served by the agent and called by the gateway, to deliver channel messages.
 
-Both are restricted to Pods backed by an Agent resource. AgentTask Pods are rejected (see the callout under [`POST /v1/agent/heartbeat`](#post-v1agentheartbeat) below).
+Both are for Pods backed by an Agent resource. AgentTask Pods are rejected on the heartbeat and are never delivered to.
 
 ## POST /v1/agent/heartbeat
 
-Called by the agent container to signal liveness for idle detection. It is only meaningful when the Agent's [`spec.lifecycle.activitySource`](../../resources/agent.md) is `agentHeartbeat` or `both`.
+An Agent container calls this to signal liveness for idle detection. Authentication is mTLS with the Agent's certificate under the [agent-report regime](../listener-tls.md#per-path-client-auth-enforcement): the certificate must be present, its SAN must be an Agent identity, and the source IP must resolve to a Pod in that namespace. Any HTTP method is accepted; issue #237 tracks method enforcement.
 
-The gateway accepts heartbeats unconditionally: every heartbeat updates the agent's last-activity timestamp in the gateway's in-memory activity store, regardless of the Agent's `activitySource` setting. Per-Agent filtering by `activitySource` happens controller-side at merge time (see [`/v1/activity` response semantics](internal-endpoints.md#get-v1activity) and [Activity Detection](../../controller/hibernation-and-wake.md#activity-detection)). Heartbeats from a `gatewayTraffic`-only agent are therefore recorded at the gateway and silently dropped at merge, which means starter templates may emit heartbeats unconditionally without consulting the Agent CR.
-
-**Footgun: unconditional heartbeats under a non-default `activitySource`.** The safe-by-default behavior above only holds because `gatewayTraffic` is the default. `agentHeartbeat` and `both` are intended for custom agent images that gate heartbeat emission on actual work. If an image emits an unconditional periodic heartbeat (as the starter templates do, every 30s, in agent mode only; task-mode runtimes send no heartbeats) and the Agent is set to `agentHeartbeat` or `both`, the last-activity timestamp stays permanently fresh and the agent will never transition to `Idle` or `Hibernated`. Starter-template-based images should leave `activitySource` at the default `gatewayTraffic`. See the [`activitySource` design note](../../resources/agent.md) and [Starter Templates](../../runtime/starter-templates.md).
+The gateway records every heartbeat as the agent's last-activity timestamp in its in-memory activity store, with no API server write. It does not consult the Agent's [`spec.lifecycle.activitySource`](../../resources/agent.md): the controller applies that filter when it merges the per-replica timestamps ([Activity detection](../../controller/hibernation-and-wake.md#activity-detection)), so a heartbeat from an agent set to `gatewayTraffic` is recorded and then ignored. An image that heartbeats on a timer therefore keeps an agent set to `agentHeartbeat` or `both` from ever going idle; the starter templates heartbeat on a timer and are meant for the default `gatewayTraffic` ([The heartbeat toggle and the hibernation footgun](../../runtime/starter-templates.md#the-heartbeat-toggle-and-the-hibernation-footgun)).
 
 **Request body:** empty or `{}`.
 
-**Response:** `200 OK` with empty body.
+**Response:** `200 OK` with an empty body.
 
-**Error responses.** Errors carry the structured `{ "error": { "type", "message", "retryable" } }` envelope, reusing the type vocabulary from [`/v1/task/complete`](task-complete.md) and the [User Gateway error table](errors.md#user-gateway-error-responses):
+**Errors** carry the [error envelope](errors.md#the-error-envelope):
 
-| Status | `error.type` | `retryable` | When |
-|---|---|---|---|
-| `401 Unauthorized` | `unauthorized` | `false` | The source-IP → Pod cross-check fails: the source IP does not resolve to any Pod in the cert-SAN-derived namespace via the gateway's informer cache. Same envelope shape as the [LLM Gateway 401 row](errors.md#llm-gateway-error-responses). |
-| `403 Forbidden` | `access_denied` | `false` | The calling Pod is not associated with an Agent. This includes the AgentTask-SAN-at-listener / Agent-only-at-handler case: an AgentTask Pod's cert passes the TLS listener but this handler accepts Agents only. See [The Kaalm Gateway](../overview.md). |
+| Status | `error.type` | Raised when |
+|---|---|---|
+| `401` | `unauthorized` | No client certificate, or the source IP does not resolve to a Pod in the SAN's namespace in the gateway's informer cache |
+| `403` | `invalid_cert` | The certificate's SAN is not an Agent or AgentTask identity |
+| `403` | `access_denied` | The certificate is an AgentTask identity. The message is `AgentTask callers are not accepted on this path`. |
 
-There is **no** live API-server fallback on this endpoint, unlike [`/v1/task/complete`](task-complete.md). Heartbeats are periodic, so a single call dropped during informer lag is recovered on the next heartbeat tick, and the per-call API cost of a fallback is not justified here. Custom agents that emit a heartbeat within the first ~100ms of startup may observe a `401` for this reason; the standard advice is to either delay the first heartbeat past informer-lag or accept the missed tick.
-
-**Frequency.** Heartbeat frequency is the agent's choice. A reasonable default is every 30-60 seconds. The gateway coalesces rapid heartbeats in memory: no etcd or API server writes occur per heartbeat.
+Unlike [`/v1/task/complete`](task-complete.md), the cross-check here has no live API-server fallback: heartbeats repeat, so a call dropped during informer lag (a heartbeat in the first hundred milliseconds of a Pod's life can see a `401`) is recovered by the next one. Frequency is the agent's choice; every 30 to 60 seconds is a reasonable default. The gateway applies no rate limit to this path.
 
 ## POST /v1/message
 
-This endpoint is **implemented by the agent container**, not by the gateway. The User Gateway calls it to deliver normalized channel messages (see [User Gateway Request Flow](../user/overview.md#request-flow)). Agents that use AgentChannel must expose this endpoint on `$KAALM_HEALTH_PORT` (default 8080).
+This endpoint is served by the agent container, not by the gateway. The User Gateway calls it to deliver normalized channel messages ([Request flow](../user/overview.md#request-flow)). An agent that is the target of an AgentChannel must serve it on `$KAALM_HEALTH_PORT` (default 8080), the same port as its probes.
 
-### Agent-side auth contract
+### Requirements on the agent
 
-Because the agent is the server here, the agent is responsible for authenticating the gateway:
+The agent is the server, so the [runtime contract](../../runtime/contract.md) puts three obligations on it:
 
-- The `/v1/message` listener must terminate TLS using the agent's cert-manager-issued cert (`$KAALM_TLS_CERT` / `$KAALM_TLS_KEY`).
-- It must request client certificates with `tls.Config.ClientAuth = tls.VerifyClientCertIfGiven` (or equivalent), with `ClientCAs` loaded from `$KAALM_CA_CERT`.
-- It must enforce per-path at the handler: `/v1/message` returns `401 Unauthorized` when no client cert was presented, and `403 Forbidden` when the peer cert's SAN does not match the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `kaalm-gateway.kaalm-system.svc`).
+- Serve TLS on `$KAALM_HEALTH_PORT` with the certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, and reload it on rotation ([item 4](../../runtime/contract.md#4-message-endpoint)).
+- Verify the gateway's client certificate per path, not at the handshake: `401 Unauthorized` when no client certificate was presented, `403 Forbidden` when its SAN is not the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `kaalm-gateway.kaalm-system.svc`). [Client-certificate verification](../../runtime/contract.md#client-certificate-verification-on-v1message) says why the handshake cannot do it.
+- Deduplicate on `messageId`, and persist the dedup buffer across Pod restarts when hibernation is enabled ([item 7](../../runtime/contract.md#7-message-deduplication)).
 
-Enforcement cannot live at the TLS handshake (`RequireAndVerifyClientCert`): the kubelet's HTTP probes share the same port and present no client certificate, so a handshake-level requirement would fail every probe and leave the agent permanently unready. This is the same `VerifyClientCertIfGiven` + per-path pattern the controller `:9443` and gateway `:8443` listeners use. Layered with the synthesized NetworkPolicy gateway → agent ingress allow rule, this is what keeps the message path safe under a misconfigured per-Agent NetworkPolicy. See [The Runtime Contract item 4](../../runtime/contract.md) and [In-cluster TLS](../../security/tls.md#in-cluster-tls).
+### How the gateway calls it
 
-Both endpoints on this page are drawn with the auth on every other agent-to-gateway call under [The runtime contract](../../runtime/contract.md#3-gateway-communication), item 3; the port they share with the kubelet probes is drawn under item 4.
+| Property | Value |
+|---|---|
+| URL | `https://{agentName}.{namespace}.svc.cluster.local:{port}/v1/message`, where the port is `spec.service.port` when set and 8080 otherwise |
+| Client certificate | `kaalm-gateway-tls` |
+| Headers | `Content-Type: application/json`; `traceparent` and `tracestate` when tracing is enabled ([item 8](../../runtime/contract.md#8-trace-context-propagation)). No `Authorization` header. |
+| Attempts | Four: immediately, then after 1s, 5s, and 25s |
+| Per-attempt bound | The delivery context: the sync deadline in sync mode, the async pipeline bound in async mode |
+| Response cap | `gateway.maxResponseBodyBytes` (default 900 KiB). A reply over the cap is `response_too_large` and is not retried. |
+
+A connection error, a non-2xx status, or a `2xx` with an unusable envelope is retried on the schedule. The same `messageId` is sent on every attempt.
 
 ### Request body (sent by the gateway)
 
@@ -63,32 +69,30 @@ Both endpoints on this page are drawn with the auth on every other agent-to-gate
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `messageId` | string (UUID) | yes | Unique identifier for this message, generated by the gateway. **All agents MUST deduplicate on this value**; see below. |
-| `channelType` | string | yes | Platform type: `"webhook"`, `"discord"`, or `"whatsapp"` |
-| `channelId` | string | yes | The AgentChannel's path, for every type; a platform's own room identifiers ride in `metadata` |
-| `userId` | string | yes | Platform-specific user identifier, extracted per AgentChannel config; see below |
-| `sessionId` | string | no | Deterministic session identifier, present when `AgentChannel.spec.session.enabled: true`; see [Session identity](#session-identity-the-sessionid-derivation) below |
-| `content` | string | yes | The user's message text, populated per `AgentChannel.spec.webhook.content` extraction (`fromHeader`, `fromBody`, or raw-body fallback when unconfigured); see [AgentChannel design notes](../../resources/agentchannel.md) |
-| `attachments` | array | no | List of attachment objects (platform-specific schema); see the v1 contract note below |
+| `messageId` | string (UUID) | yes | Generated by the gateway and reused across delivery retries; the agent deduplicates on it |
+| `channelType` | string | yes | `"webhook"`, `"discord"`, `"whatsapp"`, or `"console"` for a [test chat](internal-endpoints.md#post-v1test-chat) |
+| `channelId` | string | yes | The AgentChannel's path, for every type; a platform's own room identifiers are in `metadata` |
+| `userId` | string | yes | The sender's identity as the channel extracts it; see below |
+| `sessionId` | string | no | Present when `AgentChannel.spec.session.enabled` is `true`; see [Session identity](#session-identity-the-sessionid-derivation) |
+| `content` | string | yes | The message text, per `AgentChannel.spec.webhook.content` (`fromHeader`, `fromBody`, or the raw body when unset) or the platform adapter's rule ([Extracting userId and content](../../resources/agentchannel.md#extracting-userid-and-content)) |
+| `attachments` | array | no | Attachment references, never bytes; see the contract note below |
 | `metadata` | map | no | Platform-specific fields (for example `guildId` for Discord); see the contract note below |
 
-**`messageId` deduplication (mandatory).** All agents implementing `/v1/message` MUST deduplicate on `messageId`. The gateway's agent-delivery retry pipeline (up to 3 retries with 1s/5s/25s backoff, see [`delivery_failed`](async-responses.md)) reuses the same `messageId` across attempts for every agent, and an earlier attempt may have reached the agent even when the gateway's read of the response failed. An in-memory LRU is sufficient for non-hibernated agents; agents with `hibernationEnabled: true` must additionally persist the dedup buffer across pod restarts. Caller retries (for example, a webhook caller resending after a sync-mode 504) are delivered as a fresh message with a new `messageId`. See [The Runtime Contract item 7](../../runtime/contract.md).
+**`userId` extraction.** Per `AgentChannel.spec.webhook.userId` (`fromHeader` or `fromBody`), falling back to the configured `fallback` value, or the empty string when neither yields one. When `session.enabled` is `true` and `userId` is empty, every unattributed request shares one session.
 
-**`userId` extraction.** Extracted per the `AgentChannel.spec.webhook.userId` config (`fromHeader` or `fromBody`); falls back to the configured `fallback` value, or the empty string if unconfigured. When `session.enabled: true` and `userId` is empty, all unattributed requests share a session.
-
-**Contract for `attachments` and `metadata`.** The generic webhook adapter always passes `[]` and `{}` respectively; the Discord and WhatsApp adapters fill them per platform, as references and identifiers, never as bytes ([Discord Channel](channel-discord.md#normalization), [WhatsApp Channel](channel-whatsapp.md#normalization)). See [Request Flow step 3](../user/overview.md#request-flow) and [AgentChannel content extraction](../../resources/agentchannel.md).
+**Contract for `attachments` and `metadata`.** The webhook adapter always sends `[]` and `{}`. The Discord and WhatsApp adapters fill them with references and identifiers ([Discord channel](channel-discord.md#normalization), [WhatsApp channel](channel-whatsapp.md#normalization)).
 
 ### Session identity: the sessionId derivation
 
-When `AgentChannel.spec.session.enabled: true`, the gateway computes a **deterministic** `sessionId` for each message:
+When `AgentChannel.spec.session.enabled` is `true`, the gateway computes a deterministic `sessionId` for each message:
 
 ```
 sessionId = UUIDv5(namespace: f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d, name: channelId + ":" + userId)
 ```
 
-The namespace constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` is a purpose-generated UUID published as part of the Kaalm API specification. It is identical across all installations and versions. **This constant must not change after v1 ships**: any change would invalidate existing session state in agent PVCs, because agents key their conversation state by `sessionId`.
+The namespace constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` is a purpose-generated UUID published as part of the Kaalm API. It is identical across installations and versions and never changes: a change would invalidate the session state agents key by `sessionId` in their PVCs.
 
-Because the derivation is a pure function of `channelId` and `userId`, the resulting ID is stable across gateway replicas and gateway restarts, and no gateway-side session state is required. Session expiry and rotation are the agent's responsibility: the agent uses its PVC to track conversation state and decides when a "session" is over. When `session.enabled: false`, no `sessionId` is included in the envelope.
+Because the derivation is a pure function of `channelId` and `userId`, the id is stable across gateway replicas and restarts, and the gateway holds no session state. Session expiry and rotation are the agent's responsibility. When `session.enabled` is `false`, the envelope carries no `sessionId`.
 
 ### Response body (returned by the agent)
 
@@ -103,21 +107,11 @@ Because the derivation is a pure function of `channelId` and `userId`, the resul
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `content` | string | yes | The agent's reply text |
-| `attachments` | array | no | Attachments to send in the reply. Passed through by the gateway as-is (see the agent → gateway contract below); generic webhook callers receive them as opaque JSON; the Discord and WhatsApp adapters send text replies only and ignore them |
-| `metadata` | map | no | Optional platform-specific reply metadata. Pass-through identical to `attachments` above |
+| `attachments` | array | no | Passed through unchanged. Webhook callers receive them as opaque JSON; the Discord and WhatsApp adapters send text only and ignore them. |
+| `metadata` | map | no | Passed through unchanged, as `attachments` is |
 
-### Agent → gateway
+### What the gateway does with the answer
 
-`200 OK` with a JSON-parseable response envelope containing the required `content` field is expected. The gateway validates the envelope shape before forwarding: a non-2xx status, a connection error, an unparseable body, or a 200 with a missing or non-string `content` field all feed the gateway's agent-delivery retry pipeline as a `delivery_failed` signal, with the same schedule in both sync and async modes (see [`delivery_failed`](async-responses.md)).
+`200 OK` with a JSON envelope whose `content` is a string is a delivery. Anything else, a non-2xx status, a connection error, an unparseable body, or a `200` with a missing or non-string `content`, is one failed attempt, and the schedule above continues. After the fourth failure the message is `delivery_failed`.
 
-On retry exhaustion, sync callers receive `502` with the `delivery_failed` envelope (under default config, `504 sync_deadline_exceeded` fires first; `502 delivery_failed` is reached only when `syncDeliveryDeadline` is raised above the delivery-retry budget, see the [reachability callout](channel-webhook.md) under the sync-mode response table). Async callers receive the same payload via callback or polling. Failures are recorded in AgentChannel status conditions in either case.
-
-Optional fields (`attachments`, `metadata`) are not validated by the gateway and pass through as-is.
-
-### Gateway → webhook caller (sync mode only)
-
-The gateway returns the agent's response body verbatim with `200 OK` on success. On failure it returns a structured error envelope using the [User Gateway Error Responses](errors.md#user-gateway-error-responses) status mapping: `502` for `delivery_failed`; `504` for `wake_timeout`, `controller_unavailable`, and `sync_deadline_exceeded`; `413` for `response_too_large`.
-
-Sync callers face a delivery-retry budget on the order of half a minute to just over a minute before `delivery_failed` is returned; the arithmetic behind that range is worked through, and drawn on a single time axis, in [Sync-Mode Reachability](async-responses.md#sync-mode-reachability). The `gateway.syncDeliveryDeadline` Helm knob (default 30s) bounds the total sync-mode wall-clock: the gateway short-circuits with `504 sync_deadline_exceeded` (`retryable: true`) if delivery plus agent processing would exceed the deadline, giving callers a deterministic upper SLA. Callers needing a tighter SLA should prefer `responseMode: async` with `callbackUrl` or polling; the async budget is unchanged and is not bounded by `syncDeliveryDeadline`.
-
-Channels backing hibernated agents should default to `responseMode: async` regardless of caller SLA: `wakeTimeout` (default 120s) exceeds `syncDeliveryDeadline` (default 30s) by 4x, so a sync caller under defaults will never observe `wake_timeout` and will instead see `sync_deadline_exceeded` mid-wake. The full sync-reachability argument, with the timeline figure, lives at [Sync-Mode Reachability](async-responses.md#sync-mode-reachability).
+In sync mode the webhook caller then receives `502 delivery_failed`, though under default settings `504 sync_deadline_exceeded` fires first ([Reachability under default config](channel-webhook.md#reachability-under-default-config)). In async mode the same payload is sent by callback or stored for polling, and a platform channel sends it as the reply text. Each outcome is recorded as a channel-health observation.
