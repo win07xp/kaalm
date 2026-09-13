@@ -1,0 +1,26 @@
+@startuml load-harness-topology
+' What the load harness drives, and the two request paths it measures.
+' Source of truth: docs/src/operations/load-and-scale.md
+!include _style.puml
+skinparam nodesep 24
+skinparam ranksep 40
+skinparam rectangle {
+  roundCorner 4
+}
+rectangle "**harness** (make load, on the host)" as H #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+rectangle "load cluster: k3d, one server and two agent nodes" as CL #line:9E9E9E;line.dashed;text:555555 {
+  rectangle "load generator Job" as LG #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+  rectangle "**Gateway** x2" as GW #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+  rectangle "**Controller** x2" as CTRL #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  rectangle "mock provider: immediate, 50 ms, and callback receiver" as MOCK #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+  rectangle "agent fleet, one namespace, one class" as FLEET #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+H -[#8B4513]-> CL : creates objects, reads metrics and status
+LG -[#1B5E20,bold]-> GW : LLM leg: POST /v1/chat/completions
+GW -[#1B5E20,bold]-> MOCK : provider call
+LG -[#4A148C,bold]-> GW : channel leg: async webhook per agent
+GW -[#4A148C,bold]-> FLEET : POST /v1/message
+FLEET -[#4A148C]-> GW : reply, LLM call
+GW -[#4A148C,bold]-> MOCK : callback POST
+CTRL -[#0D47A1]-> FLEET : reconciles, wakes
+@enduml

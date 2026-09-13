@@ -1,0 +1,24 @@
+@startuml load-phase-order
+' The seven harness phases in order, and which ones run on the ramp fleet.
+' Source of truth: docs/src/operations/load-and-scale.md
+!include _style.puml
+left to right direction
+skinparam nodesep 12
+skinparam ranksep 24
+skinparam rectangle {
+  roundCorner 4
+}
+rectangle "1. gateway" as P1 #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+rectangle "2. ramp" as P2 #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+rectangle "3. hold" as P3 #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+rectangle "4. restart" as P4 #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+rectangle "5. teardown" as P5 #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+rectangle "6. churn" as P6 #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+rectangle "7. tasks" as P7 #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+P1 -> P2
+P2 -[#4A148C,bold]-> P3 : the ramp fleet
+P3 -[#4A148C,bold]-> P4
+P4 -[#4A148C,bold]-> P5
+P5 -> P6
+P6 -> P7
+@enduml
