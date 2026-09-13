@@ -1,4 +1,4 @@
-# Setting Up Your Laptop
+# Setting up your laptop
 
 You need four tools. Three of them you may already have.
 
@@ -13,7 +13,7 @@ You need four tools. Three of them you may already have.
 > something in charge that decides where each program runs and restarts it when
 > it dies. Kubernetes is the something in charge. Here the whole cluster is a
 > single container on your laptop, which is why it starts in seconds and
-> disappears just as fast.
+> disappears as fast.
 
 ## Install them
 
@@ -40,12 +40,12 @@ helm version --short
 
 If `docker version` complains that it cannot connect, Docker is installed but
 not running. Start Docker Desktop, or start the daemon on Linux, and try again.
-Everything in this book fails in confusing ways if Docker is not up, so it is
-worth fixing now.
+Everything in this book fails in confusing ways if Docker is not up, so fix
+that first.
 
 You do **not** need an account with any AI provider yet. The agent you run in
 the next few chapters does not call a model at all. That comes later, in [Give
 It a Real Brain](give-it-a-real-brain.md), and it is the only part that costs
 money.
 
-Next: [A Cluster in One Command](a-cluster-in-one-command.md).
+Next: [A cluster in one command](a-cluster-in-one-command.md).

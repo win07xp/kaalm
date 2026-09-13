@@ -20,7 +20,7 @@ the later chapters' output true. When the pin moves, re-walk the whole book
 rather than editing the version string.
 
 Chapters 1 to 9 use no ModelProvider, so the tutorial needs no API key and
-cannot fail on a reader's billing. "Give It a Real Brain" is the single paid
+cannot fail on a reader's billing. "Give it a real brain" is the single paid
 chapter and the only one not walked end to end; it is written as a signpost
 to the guide and says so.
 
@@ -36,6 +36,10 @@ to the guide and says so.
   facts belong to the design book; link there instead of restating. If a fact
   appears here, it must be a copy of something tested (same rule as the
   guide: YAML comes from config/samples/ or test/e2e/testdata/, cited).
+- **Cross-book links are GitHub blob URLs** to the source page
+  (`https://github.com/win07xp/kaalm/blob/main/guide/src/...`), with the
+  target page's title as the link text, because no hosted root exists for the
+  three books.
 - **Second person, present tense, exact commands with expected output.**
   Tutorials rot fastest; every command shown must be re-walked when the
   install path changes.

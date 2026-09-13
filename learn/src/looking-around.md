@@ -1,6 +1,6 @@
-# Looking Around
+# Looking around
 
-Before creating anything, get comfortable with the one tool you will use for
+Before creating anything, get comfortable with the only tool you will use for
 the rest of this book.
 
 ## kubectl is a conversation
@@ -33,7 +33,7 @@ That is a success, not an error. You have not created an agent yet, so the
 correct answer is that there are none. The same is true for tasks and channels.
 
 > **A namespace**, which you met when installing, is why the message says "in
-> default namespace". Objects live in a namespace, and `kubectl` uses the one
+> default namespace". Objects live in a namespace, and `kubectl` uses the namespace
 > called `default` unless told otherwise. Kaalm's own programs went into
 > `kaalm-system`, which is why you needed `-n kaalm-system` to see them.
 
@@ -59,13 +59,13 @@ sleeping, and the two features are the interesting part of this book.
 
 ## Describing things
 
-`get` gives you a line. `describe` gives you the story:
+`get` gives you a line. `describe` gives you the details:
 
 ```bash
 kubectl describe agentclass standard
 ```
 
-The output is long. Skim it. Two things are worth noticing, because you will
+The output is long. Skim it. Notice two things, because you will
 rely on them constantly:
 
 - A **Spec** section, which is what somebody asked for.
@@ -93,4 +93,4 @@ Three parts, always: which vocabulary the object comes from (`apiVersion`),
 which noun it is (`kind`), and what it is called (`metadata.name`). Then a
 `spec` saying what you want. You will write your first one now.
 
-Next: [Running an Agent](running-an-agent.md).
+Next: [Running an agent](running-an-agent.md).

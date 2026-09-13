@@ -1,7 +1,7 @@
-# Make It Yours
+# Make it yours
 
 The echo came from the image's default handler. In this chapter you replace it
-with code you wrote, and the part worth noticing is everything you will not
+with code you wrote, and notice everything you will not
 do: no Dockerfile, no build, no registry, no new image. The code travels to
 the cluster the same way your manifests did, with `kubectl`.
 
@@ -24,12 +24,12 @@ def handle_message(envelope):
 
 Nine lines, and two of them are the interesting ones. `kaalm.memory` is the
 runtime's persistent store, and it writes to the volume Kaalm attached back in
-[Running an Agent](running-an-agent.md), not to the program's memory. Your
+[Running an agent](running-an-agent.md), not to the program's memory. Your
 handler receives each message as `envelope` (the text your channel extracts
 arrives as `envelope["content"]`) and returns its reply. Everything else that
 an agent must get right, the TLS serving, the certificate rotation, the
 deduplication of redelivered messages, stays the image's job; the
-[runtime contract](https://github.com/win07xp/kaalm) chapter of the design
+[runtime contract](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/contract.md) chapter of the design
 book is the full list.
 
 ## Ship it as configuration
@@ -53,7 +53,7 @@ The name matters more than it looks: `handler-v1`, not `handler`. Editing a
 ConfigMap that a running agent mounts does not restart the agent, so the way
 to ship a change is to create `handler-v2` and repoint, which also makes
 rolling back a one-line change. You will do exactly that in
-[Give It a Real Brain](give-it-a-real-brain.md).
+[Give it a real brain](give-it-a-real-brain.md).
 
 ## Attach it
 
@@ -63,7 +63,7 @@ kubectl patch agent helper --type=merge \
 ```
 
 This is the moment the class permission from
-[Running an Agent](running-an-agent.md) earns its keep:
+[Running an agent](running-an-agent.md) earns its keep:
 `spec.handler` only works because the `tutorial` class said
 `allowHandlerMounts: true`. The class's image list is a review boundary, and
 mounted code slips past it by design, so a platform team grants that per
@@ -115,8 +115,8 @@ curl -sk -X POST https://127.0.0.1:18080/channels/default/helper-webhook \
 
 **"message 2 from you".** Your handler is counting, and because
 `kaalm.memory` writes to the agent's volume, it is counting on disk, not in
-RAM. That distinction looks academic right now. It is the whole point of the
+RAM. That distinction looks academic right now. It is the reason for the
 chapter after next, when the program holding that count gets shut down
 entirely and a new one takes its place.
 
-Next: [Giving It a Job](giving-it-a-job.md).
+Next: [Giving it a job](giving-it-a-job.md).

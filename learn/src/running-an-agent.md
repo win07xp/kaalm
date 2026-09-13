@@ -1,9 +1,9 @@
-# Running an Agent
+# Running an agent
 
 An agent is code in a container. You do not have to write or build any of it
 to get one running: Kaalm publishes reference images that already speak the
 operator's protocol, and out of the box they answer every message by echoing
-it back. That is not clever, and that is the point for now: it lets everything
+it back. That is not clever, and that is deliberate: it lets everything
 else in this book work without an API key, and without Docker builds. Two
 chapters from here you hand this agent your own code, still without building
 anything.
@@ -50,8 +50,8 @@ spec:
 Reading the class: agents of this class run as pods, may use storage, may be
 put to sleep, and may run code you hand them as configuration
 (`allowHandlerMounts: true`) instead of code baked into an image. That last
-permission is the one this tutorial is built around; you use it in
-[Make It Yours](make-it-yours.md).
+permission is what this tutorial is built on; you use it in
+[Make it yours](make-it-yours.md).
 
 The two timers are set aggressively short so that you can watch hibernation
 happen in this sitting. A real class would use something like the 30 minutes
@@ -113,10 +113,11 @@ helper-memory   Bound    pvc-5babc3ae-fbec-4fa9-856d-1e6ee45113e5   1Gi        R
 
 `Bound` means real disk is attached and ready. Note the name: `helper-memory`,
 derived from the agent's. Kaalm names the things it creates after the thing you
-asked for, which makes them easy to find and easy to reason about.
+asked for, so you can find them and reason about them by name.
 
-If you want the whole story of what gets created and why, the design book
-covers [child resources](https://github.com/win07xp/kaalm) in detail. For now
-it is enough to know that deleting the agent later cleans all of it up.
+For everything that gets created and why, the design book
+covers [child resources](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/child-resources.md) in detail. For
+this chapter it is enough to know that deleting the agent later cleans all of
+it up.
 
-Next: [Talking to Your Agent](talking-to-your-agent.md).
+Next: [Talking to your agent](talking-to-your-agent.md).
