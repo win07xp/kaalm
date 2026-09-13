@@ -1,4 +1,4 @@
-# Give It a Real Brain
+# Give it a real brain
 
 Everything so far ran without an account anywhere, because the handler you
 wrote counts instead of thinking. This chapter is about swapping that for a
@@ -9,7 +9,7 @@ for you: the commands below need a provider account and an API key, so the
 outputs are not captured from a walk the way every other chapter's are. Treat
 it as the map from the tutorial to real work rather than a script to paste.
 
-## The shape of the change
+## What changes
 
 Three things have to line up:
 
@@ -20,9 +20,11 @@ Three things have to line up:
 
 ## 1. The provider
 
-Put your key in a Secret, then describe the provider. Note where the key
-lives: in a Secret in Kaalm's namespace, not in your agent's image, not in its
-environment. Your code never sees it.
+Put your key in a Secret, then describe the provider. This is
+`config/samples/kaalm_v1beta1_modelprovider.yaml` with the tutorial's
+namespace in `allowedNamespaces` and the sample's budget block left out. Note
+where the key lives: in a Secret in Kaalm's namespace, not in your agent's
+image, not in its environment. Your code never sees it.
 
 ```yaml
 apiVersion: v1
@@ -61,15 +63,17 @@ Check it came up:
 kubectl get modelproviders
 ```
 
-A `Ready` provider means Kaalm resolved the credential and reached the
-endpoint. If it is not ready, `kubectl describe modelprovider anthropic-shared`
-and read the conditions; a wrong or expired key says so there.
+`Ready` means Kaalm accepted the description and found the credential; the
+`Healthy` column reports its periodic check of the endpoint. If either is
+false, `kubectl describe modelprovider anthropic-shared` and read the
+conditions; a wrong or expired key says so there.
 
 ## 2. Point the agent at it
 
 Two edits to `agent.yaml`. The class gains an allow-list:
 
 ```yaml
+# on the AgentClass named tutorial
 spec:
   allowedProviders:
     - name: anthropic-shared
@@ -78,6 +82,7 @@ spec:
 and the agent claims it:
 
 ```yaml
+# on the Agent named helper
 spec:
   providers:
     - providerRef:
@@ -89,16 +94,17 @@ providers a class may use, and a developer picks from what the class permits.
 
 ## 3. Teach the code to think
 
-Open `handler.py`, the file you wrote in [Make It Yours](make-it-yours.md).
-To call a model, make the handler `async def` and use the pre-configured mTLS
-client the runtime hands every handler: `await kaalm.gateway.post(...)`. You
+Open `handler.py`, the file you wrote in [Make it yours](make-it-yours.md).
+To call a model, make the handler `async def` and use the runtime's
+preconfigured client, which the `import kaalm` at the top already gives you:
+`await kaalm.gateway.post(...)`. You
 address a model by its qualified name, `provider/model`, so here
 `anthropic-shared/claude-opus-4-6`. The gateway recognizes your agent by its
 certificate, checks it is allowed that provider, injects the API key, forwards
 the call, and records what it cost. The wire details of the request live in
 the guide's LLM chapter linked below.
 
-That last sentence is the payoff for all the machinery in the earlier chapters:
+That last sentence is the payoff for the earlier chapters:
 your code sends a normal-looking model request with no credential in it, and
 credential handling, permission checks, and accounting happen on the way past.
 
@@ -119,13 +125,13 @@ rollback.
 
 This chapter is a signpost, not a manual. The full versions:
 
-- [Providing LLM Access](https://github.com/win07xp/kaalm) in the User Guide,
+- [Providing LLM access](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/llm-access.md) in the user guide,
   for providers, credentials, and the qualified model name.
-- [Budgets, Limits, and Fallback](https://github.com/win07xp/kaalm), for
+- [Budgets, limits, and fallback](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/budgets-limits-fallback.md), for
   capping spend and what happens at the cap.
-- [Deploying from a Base Image](https://github.com/win07xp/kaalm), for
+- [Deploying from a base image](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/deploying-from-a-base-image.md), for
   everything the handler mount can do, and
-  [Building Your Own Agent Image](https://github.com/win07xp/kaalm), for the
+  [Building your own agent image](https://github.com/win07xp/kaalm/blob/main/guide/src/developers/building-your-own-image.md), for the
   day your handler outgrows a ConfigMap.
 
-Next: [Where to Go Next](where-to-go-next.md).
+Next: [Where to go next](where-to-go-next.md).

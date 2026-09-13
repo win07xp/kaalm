@@ -1,4 +1,4 @@
-# Sleep and Wake
+# Sleep and wake
 
 This is the chapter where Kaalm stops looking like a fancy way to run a
 container.
@@ -19,10 +19,10 @@ minute. Stop sending messages and watch:
 kubectl get agents -w
 ```
 
-The agent moves from `Running` through `Idle` and `Hibernating` to
-`Hibernated`. The two middle states can pass in a second or two, so do not
-worry if you blink and miss them; `Hibernated` is the one that sticks. Press
-Ctrl-C when it settles:
+`-w` keeps the command running and prints a new line each time the agent
+changes. It moves from `Running` to `Idle` after 30 seconds of quiet, holds
+there for the 30-second hibernation delay, passes through `Hibernating` in a
+second or two, and settles at `Hibernated`. Press Ctrl-C when it settles:
 
 ```
 NAME     PHASE        READY   CLASS      AGE
@@ -71,7 +71,7 @@ NAME            STATUS   VOLUME                                     CAPACITY   A
 helper-memory   Bound    pvc-5babc3ae-fbec-4fa9-856d-1e6ee45113e5   1Gi        RWO            local-path     <unset>                 3m17s
 ```
 
-That is the trick in one screen: the expensive part (a running program) is
+That is hibernation in one screen: the expensive part (a running program) is
 gone, and the parts that make it *this* agent rather than a fresh one (its
 name, its identity, its disk) are all still here.
 
@@ -99,7 +99,16 @@ message arrived. It picked up the count from the volume Kaalm reattached, and
 carried on.
 
 On the walk that produced this book, the whole thing took two seconds. Your
-caller waited; nothing was lost; the agent simply answered.
+caller waited; nothing was lost; the agent answered.
+
+> **One thing the walk hid.** A `sync` channel gives the caller 30 seconds,
+> and a cold wake on a real cluster can take longer than that: pulling the
+> image, attaching the disk, issuing nothing new but waiting on more. On this
+> laptop the wake won that race with time to spare. For a channel in front of
+> an agent that hibernates, use `responseMode: async`: the caller gets an
+> immediate acknowledgement and the reply arrives when the agent is up. The
+> guide's [Troubleshooting](https://github.com/win07xp/kaalm/blob/main/guide/src/reference/troubleshooting.md) page
+> has the symptom and the fix.
 
 ```bash
 kubectl get agents
@@ -119,9 +128,9 @@ hibernation you pay for a hundred running programs around the clock. With it
 you pay for the handful that happen to be in a conversation right now, and the
 rest cost you nothing but disk.
 
-The catch is the one you just watched Kaalm handle: an agent that is shut down
+The hard part is what you watched Kaalm handle: an agent that is shut down
 and restarted must not lose the thread. That is why storage is a first-class
 part of the declaration, and why the count kept going. Anything your agent
 keeps on that volume survives; anything it holds only in memory does not.
 
-Next: [Give It a Real Brain](give-it-a-real-brain.md).
+Next: [Give it a real brain](give-it-a-real-brain.md).

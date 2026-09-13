@@ -1,7 +1,8 @@
-# A Cluster in One Command
+# A cluster in one command
 
 Making the cluster really is one command. Kaalm then needs three installs on
-top of it: two things it depends on, and Kaalm itself.
+top of it: two things it depends on, and Kaalm itself. It also needs a
+cluster network that enforces policies, and k3d's comes with that.
 
 ## The cluster
 
@@ -30,7 +31,7 @@ here on lands in the right place.
 > That deletes everything: the cluster, the agent, the storage, all of it.
 > Nothing outside Docker is touched.
 
-## The two prerequisites
+## The prerequisites
 
 Kaalm gives every agent its own TLS identity, which is how the pieces prove to
 each other who they are. It does not implement that itself; it builds on two
@@ -57,7 +58,7 @@ helm install trust-manager jetstack/trust-manager \
 cert-manager issues the certificates; trust-manager distributes the shared
 certificate authority so everyone can verify everyone else. The
 `--enable-certificate-owner-ref` flag matters: it makes cert-manager clean up a
-certificate's secret when the certificate goes away, which is how Kaalm avoids
+certificate's Secret when the certificate goes away, which is how Kaalm avoids
 leaving credentials behind when you delete an agent.
 
 > **Helm** is the installer, and a **chart** is the package it installs: a
@@ -75,14 +76,15 @@ leaving credentials behind when you delete an agent.
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
   --version 0.7.0 \
   --namespace kaalm-system --create-namespace \
-  --set certManager.clusterResourceNamespace=cert-manager
+  --set certManager.clusterResourceNamespace=cert-manager \
+  --wait
 ```
 
 `0.7.0` is the release this book was walked against. Newer releases are on the
 [releases page](https://github.com/win07xp/kaalm/releases) and install the same
 way.
 
-## What just got installed
+## What got installed
 
 Two commands tell you it worked. First, the programs:
 
@@ -133,4 +135,4 @@ customresourcedefinition.apiextensions.k8s.io/toolproviders.kaalm.io
 > nouns, which is why `kubectl get agents` will work in the next chapter even
 > though "agent" is not a Kubernetes concept.
 
-Next: [Looking Around](looking-around.md).
+Next: [Looking around](looking-around.md).
