@@ -1,4 +1,4 @@
-# Implementation Roadmap
+# Implementation roadmap
 
 The rest of this book is the design. This page is where the implementation stands
 against it, and what comes next.
@@ -55,30 +55,53 @@ envtest suites against a real apiserver, a k3d end-to-end suite (76 specs)
 that is green both locally and in GitHub Actions, and the 6-spec upgrade
 suite that gates every release tag.
 
-Two honest caveats:
+Two caveats:
 
 - `v1alpha1` is deprecated. Everything that says it keeps working, with a
   warning per request, at least through v1.0.0; the
   [deprecation policy](operations/api-versioning.md#deprecation-policy) is
   the contract, and moving a manifest is one `apiVersion` line because the
   schema is identical.
-- The `v0.1.0` tag predates the release machinery and installs only from
+- The `v0.1.0` tag predates the release workflow that publishes the chart and images, and installs only from
   source.
 
 ## Next
 
-The next milestone is **v1.0.0, "The complete release"** (tracking issue
+The open milestone is **v1.0.0, "The complete release"** (tracking issue
 [#51](https://github.com/win07xp/kaalm/issues/51)): the security pass, the
-scale proof, the Agent Sandbox decision, and the docs audit.
+scale proof, the Agent Sandbox decision, and the docs audit. Where it stands:
 
-The Agent Sandbox decision is made
-([#141](https://github.com/win07xp/kaalm/issues/141)): v1 stays on raw Pods
-and documents the RuntimeClass alternative, and the **v1.1.0** milestone
-opens with the isolation theme. It carries the `agentSandbox` runtime
-backend ([#167](https://github.com/win07xp/kaalm/issues/167)), gated on
-upstream shipping identity association and its first stable series earning
-a track record, and the verified microVM path, Kata first
-([#168](https://github.com/win07xp/kaalm/issues/168)).
+- **Security pass, done.** The threat model was refreshed and the audit
+  checklist written ([#138](https://github.com/win07xp/kaalm/issues/138)),
+  then every listener was walked for authorization and SSRF
+  ([#139](https://github.com/win07xp/kaalm/issues/139)). The ten findings
+  ([#147](https://github.com/win07xp/kaalm/issues/147) to
+  [#156](https://github.com/win07xp/kaalm/issues/156)) are fixed;
+  `make audit-drift` reports which verdicts need a re-walk when the code they
+  cover moves. The design is the [threat model](security/threat-model.md).
+- **Scale proof, done.** A repeatable load harness and its published baseline
+  ([#140](https://github.com/win07xp/kaalm/issues/140)), then a performance
+  pass under that baseline
+  ([#174](https://github.com/win07xp/kaalm/issues/174)): profiling found the
+  gateway paying a TLS handshake per upstream request and the controller
+  writing status on every pass of a settled fleet; both are fixed and the
+  page is re-baselined. The numbers are in
+  [Load and scale](operations/load-and-scale.md).
+- **Agent Sandbox decision, made**
+  ([#141](https://github.com/win07xp/kaalm/issues/141)): v1 stays on raw
+  Pods and documents the RuntimeClass alternative, and the **v1.1.0**
+  milestone opens with the isolation theme. It carries the `agentSandbox`
+  runtime backend ([#167](https://github.com/win07xp/kaalm/issues/167)),
+  gated on upstream shipping identity association and its first stable
+  series earning a track record, and the verified microVM path, Kata first
+  ([#168](https://github.com/win07xp/kaalm/issues/168)).
+- **Docs audit, in progress**
+  ([#142](https://github.com/win07xp/kaalm/issues/142)): every page of the
+  three books checked against the shipped surface and rewritten to one
+  style, with `make docs-check` keeping it that way.
+- **Release checklist** ([#143](https://github.com/win07xp/kaalm/issues/143)):
+  the last item. The API stays at `v1beta1` for this release; graduation to
+  `v1` moves to the watchlist, pulled by real usage.
 
 Beyond those two milestones, items below remain the unscheduled backlog.
 
