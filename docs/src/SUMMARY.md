@@ -24,10 +24,10 @@
 
 # Agent Runtime
 
-- [The Runtime Contract](runtime/contract.md)
-- [Reference Base Images](runtime/base-images.md)
-- [Starter Templates](runtime/starter-templates.md)
-- [Child Resources](runtime/child-resources.md)
+- [The runtime contract](runtime/contract.md)
+- [Reference base images](runtime/base-images.md)
+- [Starter templates](runtime/starter-templates.md)
+- [Child resources](runtime/child-resources.md)
 
 # The Gateways
 
