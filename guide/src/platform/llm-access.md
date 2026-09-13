@@ -23,7 +23,7 @@ stringData:
 
 ## 2. Create the ModelProvider
 
-From `config/samples/kaalm_v1alpha1_modelprovider.yaml`:
+From `config/samples/kaalm_v1beta1_modelprovider.yaml`:
 
 ```yaml
 apiVersion: kaalm.io/v1beta1

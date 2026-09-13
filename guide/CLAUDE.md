@@ -1,8 +1,10 @@
 # User guide (guide/)
 
 Task-oriented book for two readers: the platform engineer installing Kaalm,
-and the developer deploying an agent. Build with `mdbook build guide` (or
-`make books` for both books); `mdbook serve guide` for live preview.
+and the developer deploying an agent. Build with `make books` (which runs
+`make docs-check` first: links, SUMMARY coverage, dashes, time-bound wording,
+and that every cited `config/samples/` or `test/e2e/testdata/` file exists);
+`mdbook serve guide` for live preview.
 
 ## Voice and boundaries
 
