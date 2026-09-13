@@ -84,6 +84,7 @@ Kaalm's differentiator is the combination none of its neighbors has: **dollar-de
 
 - Agent-to-agent communication and multi-agent orchestration
 - Audit-log export
+- Cost analytics and chargeback reporting
 - Multi-cluster federation
 - Advanced scheduling (GPU awareness, priority classes, preemption policies specific to agents)
 - Serving the `google-vertex` provider type (the enum is reserved, no inbound path is routed) and any cross-format fallback involving it
