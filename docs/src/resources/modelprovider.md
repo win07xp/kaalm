@@ -4,7 +4,7 @@ ModelProvider is a cluster-scoped resource that defines a managed LLM provider. 
 
 Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, but only the namespaces listed in `spec.allowedNamespaces` may do so. The gateway enforces every limit defined here (model allowlist, budgets, rate limits, fallback) on each request it routes.
 
-`allowedNamespaces` is the one tenancy gate that every caller faces, in both adoption tiers. For where it sits relative to the class-level and workload-level gates, and which error each one returns, see [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating).
+`allowedNamespaces` is the only tenancy gate that every caller faces, in both adoption tiers. For where it sits relative to the class-level and workload-level gates, and which error each one returns, see [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating).
 
 ## Spec
 
@@ -22,7 +22,7 @@ spec:
 
   # Endpoint override (for self-hosted or custom gateways). Optional for known types.
   # Must use https://, because the gateway forwards provider credentials to this URL;
-  # a non-TLS scheme would leak them in cleartext. CRD schema enforces this via
+  # a non-TLS scheme would leak them in cleartext. CRD schema enforces this with
   # x-kubernetes-validations:
   #   - rule: "self.startsWith('https://')"
   #     message: "endpoint must use https"
@@ -39,7 +39,7 @@ spec:
   # models are in this list; unknown models are rejected.
   # Each entry's `id` must be unique within the provider: the gateway routes
   # by the qualified name `{providerRef}/{modelId}`, so duplicates would silently
-  # win-last. Uniqueness is enforced structurally, not via CEL: the CRD schema
+  # win-last. Uniqueness is enforced structurally, not by CEL: the CRD schema
   # declares the list as a map keyed by id:
   #   x-kubernetes-list-type: map
   #   x-kubernetes-list-map-keys: ["id"]
@@ -55,7 +55,7 @@ spec:
       costPer1MInputTokens:  "15.00"
       costPer1MOutputTokens: "75.00"
     - id: "claude-sonnet-4-6"
-      # Declared output ceiling (since v0.7.0). Consumed at a fallback edge
+      # Declared output ceiling. Consumed at a fallback edge
       # crossing INTO this provider from an OpenAI-format caller: an OpenAI
       # request may omit max_tokens, Anthropic's API may not, and the
       # gateway supplies this value (and caps a larger request to it). A
@@ -111,6 +111,7 @@ spec:
   # intended cluster-wide limit regardless of replica count.
   rateLimits:
     requestsPerMinute: 300
+    # Accepted by the schema but not enforced: requestsPerMinute is the only ceiling the gateway applies.
     tokensPerMinute: 500000
 
   # Fallback chain. If this provider is unavailable (network error, 5xx,
@@ -125,14 +126,14 @@ spec:
   # exhausted by upstream error or maxFallbackDepth, the gateway returns a
   # fallback-exhausted error: 502 provider_error in the general case, or
   # 503/504 when every attempt failed unreachable / timed out (see Depth
-  # cap semantics for the failure-class mapping). Since v0.3.0, a walk
-  # exhausted entirely by budget outcomes returns 429 budget_exhausted
+  # cap semantics for the failure-class mapping). A walk exhausted
+  # entirely by budget outcomes returns 429 budget_exhausted
   # (or 503 budget_state_unavailable when fail-closed candidates are the
   # cause), never 502. The
   # gateway walks each fallback provider's own fallback chain, up to the
   # gateway-level maxFallbackDepth setting (default 3). Referenced providers
   # must also allow the namespace, and must carry the same spec.type as this
-  # provider or, since v0.7.0, a type the gateway translates to: anthropic
+  # provider or a type the gateway translates to: anthropic
   # and openai / openai-compatible cross in either direction, google-vertex
   # stays same-type (rule 12; see Fallback trees below).
   # See Fallback Logic for the traversal algorithm.
@@ -181,15 +182,15 @@ status:
   clusterSpentUSD: "699.50"
 ```
 
-Two conditions summarize provider health: `Ready` reports whether the spec is valid and credentials check out, and `Healthy` reports the result of the periodic upstream probe. Hard-enforcement providers can carry a third, `BoundaryMarginRaised`: the gateway observed traffic that required a wider boundary margin than `hard.boundaryMarginPercent` configures, so the knob is undersized for the deployment (the guarantee held anyway; see [Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). The probe runs by default; set `healthCheck.enabled: false` to disable it (for example for a provider type with no probe, or an offline test fixture). `healthCheck.intervalSeconds` sets the probe cadence (default 60) and `healthCheck.timeoutSeconds` bounds each probe request (default 10). `budgetUsage` shows per-namespace spend for the current period, and `clusterSpentUSD` shows the sum across all namespaces.
+Two conditions summarize provider health: `Ready` reports whether the spec is valid and credentials check out, and `Healthy` reports the result of the periodic upstream probe. Hard-enforcement providers can carry a third, `BoundaryMarginRaised`: the gateway observed traffic that required a wider boundary margin than `hard.boundaryMarginPercent` configures, so the knob is undersized for the deployment (the guarantee held anyway; see [Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). The probe runs by default; set `healthCheck.enabled: false` to disable it (for example for a provider type with no probe, or an offline test fixture). `healthCheck.intervalSeconds` sets the probe cadence (default 60) and `healthCheck.timeoutSeconds` bounds each probe request (default 10). `budgetUsage` shows per-namespace spend for the current period, and `clusterSpentUSD` shows the sum across all namespaces.
 
 Each `budgetUsage` entry's `state` is a small per-namespace state machine over the current period:
 
 ![Per-namespace budget state machine for one ModelProvider and one period. The period opening enters Normal. Normal moves to Throttled when spend crosses a degrade policy's atPercent, with requests rerouted to the degradeTo model. Normal or Throttled move to Blocked when spend crosses a block policy's atPercent or a request would exceed perNamespaceUSD or clusterUSD; a note records that Blocked answers requests with 429 budget_exhausted and a Retry-After equal to the seconds until the next period reset. The only arrows out of Throttled and Blocked back to Normal are the period rollover. A closing note records that warn policies emit an event and change no state, that spend is monotonic within a period, that the state is per provider and namespace, and that this status field is display truth while enforcement reads each gateway replica's live counter plus its peers' partials.](../diagrams/budget-namespace-states.svg)
 
-Reading the diagram: the asymmetry is the point. Within a period the arrows only ever move right, because spend is monotonic; nothing un-throttles or un-blocks a namespace except the clock. If a state seems wrong mid-period, the correcting levers are the spec (raise the budget, edit the policy), which re-evaluates immediately, not the counter. One known seam: the reconciler derives this display state with a simpler rule (Blocked dominates) than the gateway's highest-threshold-wins enforcement decision, so the two can disagree transiently at threshold edges. The drift is display-only; enforcement never reads this field. Hard enforcement changes nothing in this state machine: the boundary region is a transient gateway admission mode, not a namespace state.
+Reading the diagram: the arrows are asymmetric on purpose. Within a period the arrows only ever move right, because spend is monotonic; nothing un-throttles or un-blocks a namespace except the clock. If a state seems wrong mid-period, the correcting levers are the spec (raise the budget, edit the policy), which re-evaluates immediately, not the counter. One known divergence: the reconciler derives this display state with a coarser rule (Blocked dominates) than the gateway's highest-threshold-wins enforcement decision, so the two can disagree transiently at threshold edges. The drift is display-only; enforcement never reads this field. Hard enforcement changes nothing in this state machine: the boundary region is a transient gateway admission mode, not a namespace state.
 
-## Design Notes
+## Design notes
 
 ### Credential scoping
 
@@ -197,7 +198,7 @@ Credentials are referenced from the operator's namespace and read directly by th
 
 ### Budget accounting
 
-Budget state persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy. See [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management).
+Budget state persisted in status is the source of truth for display, but the gateway maintains a local authoritative counter that is synced to status periodically. This matters because status updates are rate-limited and lossy. See [Budget state management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management).
 
 Budget periods reset at midnight UTC:
 
@@ -205,11 +206,11 @@ Budget periods reset at midnight UTC:
 - `weekly` resets Monday 00:00 UTC.
 - `daily` resets at 00:00 UTC.
 
-Per-replica rollover detection, archival of previous-period totals to status, and the underestimate behavior during rollover are documented in [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management). The `Retry-After` header on `429 budget_exhausted` ([LLM Gateway error responses](../gateways/api/errors.md#llm-gateway-error-responses)) is the delta-seconds to the next reset.
+Per-replica rollover detection, archival of previous-period totals to status, and the underestimate behavior during rollover are documented in [Budget state management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management). The `Retry-After` header on `429 budget_exhausted` ([LLM Gateway error responses](../gateways/api/errors.md#llm-gateway-error-responses)) is the delta-seconds to the next reset.
 
 ### Budget enforcement hierarchy
 
-Every routed request evaluates both ceilings against last-known spend: utilization is the worse of `nsSpent / perNamespaceUSD` and `clusterSpent / clusterUSD`, and the highest policy threshold at or below that utilization fires. There is no pre-request cost estimation, deliberately: a request's cost is knowable only after the response (streaming especially), so soft mode counts after the fact within its stated bound, and hard mode bounds the crossing with serialized admission rather than estimates ([Hard Enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). When a block fires, `error.message` names which ceiling won (`"cluster budget exhausted"` vs `"namespace budget exhausted: <ns>"`) so operators can attribute it, and `Retry-After` is the delta-seconds to the next period reset. Setting `clusterUSD` without `perNamespaceUSD` (or vice versa) is supported: the unset ceiling is simply not enforced. See [Budget State Management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management) for replica-side accounting.
+Every routed request evaluates both ceilings against last-known spend: utilization is the worse of `nsSpent / perNamespaceUSD` and `clusterSpent / clusterUSD`, and the highest policy threshold at or below that utilization fires. There is no pre-request cost estimation, deliberately: a request's cost is knowable only after the response (streaming especially), so soft mode counts after the fact within its stated bound, and hard mode bounds the crossing with serialized admission rather than estimates ([Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). When a block fires, `error.message` names which ceiling won (`"cluster budget exhausted"` vs `"namespace budget exhausted: <ns>"`) so operators can attribute it, and `Retry-After` is the delta-seconds to the next period reset. Setting `clusterUSD` without `perNamespaceUSD` (or the reverse) is supported: the unset ceiling is not enforced. See [Budget state management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management) for replica-side accounting.
 
 ### Glob semantics in `allowedNamespaces`
 
@@ -223,9 +224,9 @@ Fallback chains form a tree (each provider may have its own `spec.fallback` list
 
 **Reading the diagram.** Follow the visit numbers, not the levels. `anthropic-overflow` is a direct child of the primary, one level up from `anthropic-eu`, and it is still cut, because the depth-first walk reaches it fifth and the three attempt slots are already gone. That is what "bounds the providers attempted, not the nesting depth" means in practice. The two notes cover the asymmetry that catches people out: a budget-blocked *primary* ends the request at `429 budget_exhausted` before the tree is walked at all, while a budget-blocked *fallback* silently costs an attempt slot and still has its children visited.
 
-Circular references are rejected by validation. Each `spec.fallback[]` entry is a `FallbackReference`: a `name`, and since v0.7.0 an optional `modelMap` (rule 41) for an edge that crosses formats. Rule 12 governs which types may reference which: `anthropic` and `openai` or `openai-compatible` may cross in either direction, and the gateway translates the request and the response at the crossing; `google-vertex` chains stay same-type. The mapping lives on the edge rather than on the provider because the same fallback can serve different primaries under different names, and because the primary is the resource the platform team edits when they add a backup. See [Crossing formats](../gateways/llm/fallback.md#crossing-formats) for the matrix and what cannot cross.
+Circular references are rejected by validation. Each `spec.fallback[]` entry is a `FallbackReference`: a `name`, and an optional `modelMap` (rule 41) for an edge that crosses formats. Rule 12 governs which types may reference which: `anthropic` and `openai` or `openai-compatible` may cross in either direction, and the gateway translates the request and the response at the crossing; `google-vertex` chains stay same-type. The mapping lives on the edge rather than on the provider because the same fallback can serve different primaries under different names, and because the primary is the resource the platform team edits when they add a backup. See [Crossing formats](../gateways/llm/fallback.md#crossing-formats) for the matrix and what cannot cross.
 
-The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster. See [Fallback Logic](../gateways/llm/fallback.md) for the traversal pseudocode and [Depth cap semantics](../gateways/llm/fallback.md#depth-cap-semantics) for how exhaustion maps to error codes.
+The depth cap is a gateway-level operational setting (not per-ModelProvider) because it bounds request latency for the entire cluster. See [Fallback logic](../gateways/llm/fallback.md) for the traversal algorithm and [Depth cap semantics](../gateways/llm/fallback.md#depth-cap-semantics) for how exhaustion maps to error codes.
 
 ### Cost fields are strings
 
@@ -233,6 +234,6 @@ Cost fields are strings (not floats) to avoid precision issues. The gateway pars
 
 ### `degradeTo` validation
 
-Every `degradeTo` value in `budget.policies` must reference a model `id` in the same provider's `spec.models` list. The ModelProviderReconciler validates this and sets `Ready=False, reason=InvalidDegradeTarget` if violated. See validation rule 18 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation).
+Every `degradeTo` value in `budget.policies` must reference a model `id` in the same provider's `spec.models` list. The ModelProviderReconciler validates this and sets `Ready=False, reason=InvalidDegradeTarget` if violated. See validation rule 18 in [Cross-resource validation](validation-and-defaulting.md#cross-resource-validation).
 
 After the existence check passes, the reconciler also runs a cost sanity check: it computes `(costPer1MInputTokens + costPer1MOutputTokens) / 2` for the degrade target and compares it against the same metric for every other model in `spec.models`. If the target is not strictly the cheapest, the reconciler emits a `Warning` event (`reason=DegradeTargetNotCheapest`) on the ModelProvider naming the cheaper alternative. This is **advisory only**: it does not block `Ready=True`, since platform teams may have non-cost reasons to prefer a particular degrade target (latency, capability, quality). The check catches the common misconfiguration where a policy labelled "degrade" silently escalates cost at the budget threshold. See [ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler).
