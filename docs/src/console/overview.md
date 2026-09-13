@@ -257,7 +257,7 @@ Scenario
 chapter end to end: enable, log in, see the fleet, read spend, test-chat a
 hibernated agent, and watch an unauthorized token see nothing. Its e2e spec
 is `Operator console (S19)`
-([Scenario Coverage](../appendix/scenario-coverage.md)).
+([Scenario coverage](../appendix/scenario-coverage.md)).
 
 ## See also
 
