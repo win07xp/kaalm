@@ -87,6 +87,6 @@
 
 ---
 
-- [Acceptance Scenarios](appendix/scenarios.md)
-- [Scenario Coverage](appendix/scenario-coverage.md)
-- [Lifecycles at a Glance](appendix/lifecycles.md)
+- [Acceptance scenarios](appendix/scenarios.md)
+- [Scenario coverage](appendix/scenario-coverage.md)
+- [Lifecycles at a glance](appendix/lifecycles.md)
