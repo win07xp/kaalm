@@ -1,0 +1,65 @@
+@startuml tool-grant-chain
+' Every check on POST /v1/mcp/{toolProvider} in the order the broker runs
+' them. Each row is an elseif cascade, laid out left to right. What each
+' check reads and why is the prose on docs/src/gateways/tool-plane.md.
+!include _style.puml
+
+start
+:POST /v1/mcp/{toolProvider};
+
+partition "route and namespace" {
+  if (ToolProvider exists?) then (no)
+    :**400** invalid_request;
+    kill
+  elseif (caller namespace in\nallowedNamespaces?) then (no)
+    :**403** access_denied;
+    kill
+  else (yes)
+  endif
+}
+
+partition "workload grant (mTLS callers; the bearer tier skips this row)" {
+  if (caller carries a workload?) then (no)
+  elseif (ToolProvider in workload\nspec.tools[].providerRef?) then (no)
+    :**403** access_denied;
+    kill
+  elseif (ToolProvider in AgentClass\nallowedToolProviders?) then (no)
+    :**403** access_denied;
+    kill
+  else (yes)
+  endif
+}
+
+partition "request" {
+  if (token bucket\n(namespace, ToolProvider)?) then (empty)
+    :**429** rate_limited;
+    kill
+  elseif (body within the cap?) then (no)
+    :**413** request_too_large;
+    kill
+  elseif (one JSON-RPC message?) then (no)
+    :**400** invalid_request;
+    kill
+  elseif (method on the allowlist?) then (no)
+    :**403** tool_denied;
+    kill
+  else (yes)
+  endif
+}
+
+partition "tool and session" {
+  if (modern headers\nmatch the body?) then (no)
+    :**400** JSON-RPC ~-32020;
+    kill
+  elseif (tools/call names a tool\nin the grant and catalog?) then (no)
+    :**403** tool_denied;
+    kill
+  elseif (legacy session id\nowned by this caller?) then (no)
+    :**403** access_denied;
+    kill
+  else (yes)
+    :inject the credential, forward;
+    stop
+  endif
+}
+@enduml

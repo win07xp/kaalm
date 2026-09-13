@@ -1,123 +1,79 @@
-# Activation and Activity Tracking
+# Activation and activity tracking
 
-Two mechanisms keep hibernation honest, and they run in opposite directions.
+Two mechanisms make hibernation work, and they run in opposite directions.
 
-The **activator** is the wake path: a message arrives for an Agent that has been scaled to zero, and something has to bring the Pod back before the message can be delivered. The **activity tracking API** is the sleep path: the controller needs to know when an Agent last did anything, and that knowledge lives in the gateway's memory rather than in etcd.
+The **activator** is the wake path: a message arrives for an Agent whose Pod has been deleted, and something has to bring the Pod back before the message can be delivered. The **activity tracking API** is the sleep path: the controller needs to know when an Agent last did anything, and that knowledge lives in the gateway's memory rather than in etcd.
 
-Both cross the gateway/controller boundary, and both are mTLS-authenticated with SAN-based authorization.
+Both are calls between the gateway and the controller, one in each direction, and both are mTLS-authenticated with SAN-based authorization.
 
-## The Activator
+## The activator
 
-When an Agent is in the `Hibernated` phase, its Service has no endpoints. The gateway detects this **lazily, on delivery**, with a bounded connect timeout (`gateway.agentDeliveryConnectTimeout`, default 1s). Any connect-phase failure inside that window is the hibernation signal:
+Wake-on-demand is a hard dependency on the controller. While the activator endpoint is unreachable, a hibernated Agent cannot receive a message and the caller gets `controller_unavailable`; Agents that are already `Running` are unaffected. The chart's two-replica floor on the controller exists to keep this endpoint reachable through drains ([Deployment](../../operations/deployment.md#the-two-deployments)).
 
-- A **TCP RST** from iptables-mode kube-proxy against a ClusterIP Service with empty endpoints.
-- A **connect timeout** on service data paths that drop packets to empty-endpoint ClusterIPs (IPVS, Cilium kube-proxy replacement, eBPF).
-
-There is no separate Endpoint or EndpointSlice watch on the gateway. Connect failure is the whole detection mechanism.
-
-Transient network failures take the same path, so the design has to tolerate a wake request for an Agent that was never actually hibernated. It does: on a still-`Running` Agent, the manual-wake handler in [`AgentReconciler` step 9](../../controller/reconcilers.md#agentreconciler) removes the annotation immediately and emits a `WakeIgnored` warning event without changing phase. That handler is purpose-built so stale annotations cannot trigger spurious wakes (see [Wake trigger](../../controller/hibernation-and-wake.md#wake-trigger)).
-
-On clusters whose service data path drops rather than RSTs to empty-endpoint ClusterIPs, lazy detection adds up to one connect-timeout to the user-visible wake latency. This is a **per-wake cost, not per-message**: once the Pod is Ready, subsequent dials succeed immediately.
+The gateway wakes an Agent when the Agent's cached `status.phase` is `Hibernated` at delivery time ([Request flow](overview.md#request-flow), step 7). It watches no Endpoints and infers nothing from connect failures: a connect failure during delivery is an ordinary failed attempt, retried on the delivery schedule. As shipped the trigger is the `Hibernated` phase alone, so a message that arrives while the Agent is `Hibernating`, with its Pod being deleted, is not woken and fails delivery.
 
 ### The wake sequence
 
-![Sequence diagram of waking a hibernated Agent. The User Gateway dials POST /v1/message at the Agent Service and the connect fails; a note records that connect-phase failure is the whole detection mechanism, arriving either as a TCP RST from iptables-mode kube-proxy or as a connect timeout within agentDeliveryConnectTimeout on data paths that drop to empty-endpoint ClusterIPs, with no Endpoint or EndpointSlice watch involved. When the controller is reachable, the gateway POSTs /v1/activate/{ns}/{name} over mTLS to the controller activator on :9443, which lands on any replica; that replica patches kaalm.io/wake=true via the apiserver and returns 202 Accepted immediately. A highlighted note marks that the 202 precedes the wake and only confirms the annotation was written. The apiserver then fires the Agent watch on the leader only, whose AgentReconciler step 9 transitions Hibernated to Resuming and recreates the Pod; a second highlighted note marks that the replica which took the call is not the one that does the work, because the apiserver is the message bus. The gateway meanwhile polls the Agent Service for readiness rather than learning it from the activator response, bounded by wakeTimeout at 120s, then delivers. Two failure arms: wakeTimeout exceeded yields wake_timeout (504 in sync mode, an error payload to callbackUrl or the polling endpoint in async mode), and an unreachable controller yields controller_unavailable (504 with Retry-After: 5 in sync mode), leaving the Agent Hibernated with the wake never attempted.](../../diagrams/wake-sequence.svg)
+![Sequence diagram of waking a hibernated Agent. The User Gateway sees the cached Agent phase Hibernated and POSTs /v1/activate/{namespace}/{name} over mTLS to the controller activator on :9443, on any replica. The activator patches kaalm.io/wake=true through the apiserver and answers 202 Accepted. The apiserver fires the Agent watch on the controller leader, which sets Resuming and creates the Pod. The gateway polls a TCP connect to the Agent Service every two seconds up to wakeTimeout, then POSTs /v1/message and receives the response envelope.](../../diagrams/wake-sequence.svg)
 
-Reading the diagram: the two facts that surprise people are both visible in the ordering. The `202` is returned before any wake work happens, and the replica that answers the POST is not the replica that drives the reconcile. Both fall out of the same design choice: the activator writes an annotation and lets the leader's existing watch do the rest.
+1. The gateway calls `POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service at `:9443` over mTLS, with a ten-second client timeout and no retry.
+2. The activator handler, served on every controller replica, patches `kaalm.io/wake=true` on the Agent through the apiserver and answers `202 Accepted` before any wake work happens. The `202` confirms the annotation was written, not that the Agent is coming up.
+3. The leader's Agent watch fires, and the wake handling in [AgentReconciler step 1](../../controller/reconcilers.md#agentreconciler) moves the Agent to `Resuming`; the next pass creates the Pod. The replica that answered the POST is not necessarily the leader: the annotation is the message, and the apiserver carries it. See [Wake trigger](../../controller/hibernation-and-wake.md#wake-trigger).
+4. The gateway polls a TCP connect to the Agent Service every two seconds, bounded by the Agent's `spec.lifecycle.wakeTimeout` (2 minutes when unset; see [Hibernation and wake](../../controller/hibernation-and-wake.md#timing-knobs) for the class default and cap), then delivers the message.
 
-The gateway serves as the activator:
+![Flowchart of how a wake fails, in the order the gateway finds out, as two rows. Wake: activator configured, reachable, and answering 202, else controller_unavailable (sync 504 with Retry-After 5); Agent Service reachable within wakeTimeout, else wake_timeout (sync 504). Deliver: sync deadline still open, else sync_deadline_exceeded (504, sync only); delivered within four attempts, else delivery_failed (sync 502); otherwise the reply.](../../diagrams/wake-failures.svg)
 
-1. A channel message arrives at the User Gateway targeting a hibernated Agent (via AgentChannel).
-2. The gateway calls the controller's activator endpoint (`POST /v1/activate/{namespace}/{agentName}` on the controller's ClusterIP Service, port `:9443`) to signal a wake request. **This call is mTLS over HTTPS.** The controller serves its activator endpoint with a cert-manager-issued `Certificate` (`kaalm-controller-tls`) signed by the same `ClusterIssuer` (`kaalm-ca-issuer`) that signs the gateway cert, so the gateway verifies the controller's cert against the Kaalm CA and the controller verifies the gateway's client cert against the same CA. See [Activator Authentication](#activator-authentication) below.
-3. The activator handler (served on **every controller replica**) patches `kaalm.io/wake=true` on the target Agent via the apiserver. The leader's existing Agent watch observes the annotation and runs the manual-wake path in `AgentReconciler` step 9, which transitions the Agent from `Hibernated` to `Resuming` and recreates the Pod. The handler does not need to be on the leader: any replica that receives the POST can patch the annotation, and the leader picks it up through the watch. See [Agent State Machine](../../controller/agent-lifecycle.md) for the full lifecycle and [Operator Structure](../../controller/overview.md) for the handler wiring.
-4. The gateway waits for the Pod to become Ready (bounded by `spec.lifecycle.wakeTimeout`, which defaults from [AgentClass](../../resources/agentclass.md)), then delivers the message. If the timeout is exceeded:
-   - **Sync mode**: the gateway returns HTTP 504 to the webhook caller.
-   - **Async mode**: the gateway delivers a `wake_timeout` error payload to `callbackUrl` (if configured, with retries) or stores it at the polling endpoint under the original `requestId`. The error expires after 1 hour, same as successful responses. See [Async Webhook Response](../api/async-responses.md) for the error payload schema.
-5. **Controller unreachable**: if the gateway cannot reach the controller's activator endpoint at all (connection refused, TLS handshake fails, client-cert authorization rejection, or 5xx after one internal retry), the wake cannot be attempted. The Agent remains `Hibernated`. In sync mode, the gateway returns `504 Gateway Timeout` with an error body carrying `error.type: controller_unavailable` and `retryable: true`. In async mode, the gateway delivers a `controller_unavailable` error payload to `callbackUrl` (with retries) or stores it at the polling endpoint. See [Async Webhook Response](../api/async-responses.md). Already-`Running` agents are unaffected: this failure mode only impacts wake-on-demand.
+| Failure | Trigger | Sync mode | Async mode |
+|---|---|---|---|
+| `controller_unavailable` | No activator configured, a connect or TLS failure, a SAN rejection, the ten-second timeout, or any response other than `202` (a `404` for a deleted Agent, a `5xx`). The Agent stays `Hibernated`. | `504`, `Retry-After: 5`, `retryable: true` | error payload to `callbackUrl` or the polling endpoint |
+| `wake_timeout` | The Service is not reachable within `wakeTimeout`. The controller keeps working; the next message calls the activator again, which is idempotent. | `504` | error payload |
 
-The placement of step 3 is the part worth remembering. The wake handler is an HTTP endpoint on the controller, not on the gateway, and it is live on every replica rather than only the leader. It does no lifecycle work itself; it writes one annotation and lets the normal watch-driven reconcile do the rest.
+Under default settings a sync caller never sees `wake_timeout`: `gateway.syncDeliveryDeadline` (30s) fires first and the caller gets `504 sync_deadline_exceeded`. [Sync-mode reachability](../api/async-responses.md#sync-mode-reachability) draws the three bounds on one axis, and [Response: sync mode](../api/channel-webhook.md#response-sync-mode) is the status table. The payload forms are under [Error payloads](../api/async-responses.md#error-payloads).
 
 ### Sync-mode retry risk
 
-In sync mode, a wake can take longer than the webhook caller's HTTP timeout. Callers commonly time out at 30-60s, which is shorter than the default `wakeTimeout` of 2 minutes. The caller receives a 504 and will typically retry the webhook call.
+A channel backed by a hibernating Agent should use `responseMode: async`. In sync mode the caller gets `504 sync_deadline_exceeded` at 30 seconds by default, before a cold wake completes, and typically retries. The gateway treats that retry as a new delivery with a fresh gateway-generated `messageId`, so caller retries never redeliver the same id. The gateway's own delivery retries do reuse the `messageId`, so an agent that received an earlier attempt sees it again; agents deduplicate on `messageId` per [The runtime contract](../../runtime/contract.md).
 
-The gateway treats that retry as a **new delivery** with a fresh gateway-generated `messageId`. Because `messageId` is gateway-side and not derived from the caller's payload, caller retries do not produce same-`messageId` redelivery.
+### Activator authentication
 
-The same-`messageId` case is driven separately, by the gateway's own agent-delivery retry pipeline (up to 3 retries; see [Async Webhook Response](../api/async-responses.md) for the schedule and `delivery_failed` semantics). If an earlier attempt actually reached the agent but the gateway's read of the response failed, the next retry redelivers the same `messageId`. Agents with `hibernationEnabled: true` must deduplicate on `messageId` to handle that case. See the [Agent Runtime Contract](../../runtime/contract.md).
+Both directions authenticate by mTLS with SAN authorization, and neither carries a shared secret or bearer token on top of the tunnel.
 
-### Activator Authentication
+| Direction | Client cert | Verified against | SAN required | Otherwise |
+|---|---|---|---|---|
+| Gateway to controller, `POST /v1/activate/...` | `kaalm-gateway-tls` | `kaalm-ca` | the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `.svc`) | `401` without a client cert, `403` with any other SAN |
+| Controller to gateway, `GET /v1/activity` and `GET /v1/channels/health` | `kaalm-controller-tls` | `kaalm-ca` | the controller Service DNS | the same |
 
-The activator endpoint authenticates callers via **mTLS**. There is no shared-secret layer on top of TLS. The controller's activator listener requires a client certificate on every connection:
-
-- The gateway presents its `kaalm-gateway-tls` cert as the client cert when calling `POST /v1/activate/{namespace}/{agentName}`.
-- The controller verifies the client cert against the Kaalm CA (`kaalm-ca`) and authorizes the request only if the cert's SAN matches the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `.svc`). Any other SAN, even one signed by `kaalm-ca`, is rejected with `403 Forbidden`.
-
-Both certs are issued and rotated continuously by cert-manager from `kaalm-ca-issuer`, so there is no separate Secret to manage or rotate; the full trust chain is described in [In-cluster TLS](../../security/tls.md#in-cluster-tls). See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication) for the matching SAN authorization rules on the reverse direction (controller → gateway activity API).
+Both certs are issued and rotated by cert-manager from `kaalm-ca-issuer`; the trust chain is under [In-cluster TLS](../../security/tls.md#in-cluster-tls) and the SAN rules under [Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication).
 
 ---
 
-## Activity Tracking API
+## Activity tracking API
 
-The gateway maintains per-agent activity timestamps **in-memory**, updated on every LLM request, channel message delivery, and agent heartbeat. This avoids per-request etcd writes: v1 targets 1000 Agents/AgentTasks per cluster, and the in-memory store is deliberately designed to scale an order of magnitude higher without a design change as future versions grow the target. The controller uses this data to evaluate idle and hibernation transitions. See [Activity Detection](../../controller/hibernation-and-wake.md#activity-detection).
+Each gateway replica keeps per-agent activity timestamps in memory, one per signal source: `gatewayTraffic`, stamped by a successful channel delivery and by every LLM request an Agent forwards through the proxy (AgentTask traffic is not tracked, since idle detection does not apply to tasks), and `heartbeat`, stamped by `POST /v1/agent/heartbeat`. The controller reads them to drive the idle and hibernation transitions. Why the store is in memory and how the controller evaluates it are under [Activity detection](../../controller/hibernation-and-wake.md#activity-detection).
 
-Note that heartbeats are an **Agent-only** signal: `POST /v1/agent/heartbeat` rejects AgentTask callers with `403` at the handler, since idle detection does not apply to one-shot tasks. See [POST /v1/agent/heartbeat](../api/agent-endpoints.md#post-v1agentheartbeat).
+Heartbeats are an Agent-only signal: the mTLS middleware rejects an AgentTask caller on that path with `403 access_denied`. See [POST /v1/agent/heartbeat](../api/agent-endpoints.md#post-v1agentheartbeat).
 
 ### The endpoint
 
-The gateway exposes an internal endpoint for the controller to query activity state. The endpoint serves **HTTPS** using the gateway's `kaalm-gateway-tls` Certificate and **requires an mTLS client cert on this path**. The controller presents its `kaalm-controller-tls` cert; the gateway verifies against `kaalm-ca` and authorizes only if the client cert's SAN matches the controller Service DNS (`kaalm-controller.kaalm-system.svc.cluster.local` or `.svc`). There is no separate shared-secret or bearer-token layer on top of the mTLS tunnel. See [Internal Endpoint Authentication](../../security/rbac.md#internal-endpoint-authentication).
-
-**`GET /v1/activity?namespace={ns}`**
-
-Returns a JSON object containing the gateway's startup timestamp and a map of agent names to their last-activity timestamps, broken out by signal source, for the given namespace:
-
-```json
-{
-  "replicaStartedAt": "2026-04-05T06:00:00Z",
-  "agents": {
-    "support-assistant": {
-      "gatewayTraffic": "2026-04-05T11:58:22Z",
-      "heartbeat": "2026-04-05T11:57:10Z"
-    },
-    "code-helper": {
-      "gatewayTraffic": "2026-04-05T11:45:10Z",
-      "heartbeat": null
-    }
-  }
-}
-```
-
-The gateway tracks both signal sources (gateway-observed LLM and channel traffic, and agent heartbeats) separately per agent and always returns both. The controller applies the `activitySource` filter (from `Agent.spec.lifecycle.activitySource`) after merging results across replicas, selecting `gatewayTraffic`, `heartbeat`, or the max of both depending on the setting. The gateway does not need to read Agent specs to perform this filtering; the controller owns the policy.
-
-A `null` value for a source means the gateway has no record of that signal type for the agent since its last restart.
-
-The `replicaStartedAt` field indicates when the gateway started. The controller uses this to detect gateway restarts: if the gateway started more recently than an agent's `status.phaseTransitionTime` (a dedicated Agent status field set by the AgentReconciler on every phase change, see the [Agent CRD design notes](../../resources/agent.md)), missing activity data is treated as "unknown" rather than "no activity".
+`GET /v1/activity?namespace={ns}` on the cluster listener returns the replica's `replicaStartedAt` and, for each agent in the namespace it has seen, both source timestamps, `null` for a source it has not observed since it started. Both sources are always returned; the gateway never reads Agent specs, and the controller applies `Agent.spec.lifecycle.activitySource` after merging replicas. The wire contract, request, response, and status codes are under [GET /v1/activity](../api/internal-endpoints.md#get-v1activity).
 
 ### Multi-replica fan-out
 
-Each gateway replica maintains its own in-memory activity store, updated only by the traffic that replica handles. Querying the gateway ClusterIP Service (which round-robins to one replica) would therefore return only that replica's view, and agents whose last request landed on a different replica would appear idle.
+Each replica records only the traffic it handled, so a query to the gateway Service, which round-robins to one replica, would show agents whose last request landed elsewhere as idle. The controller instead queries every gateway Pod IP directly.
 
-The controller instead queries **all gateway Pod IPs directly, in parallel**: it enumerates gateway Pods via its Pod informer (matching the gateway label selector in `kaalm-system`) and issues one `GET /v1/activity?namespace={ns}` request per Pod IP. It takes the **most recent timestamp per agent per source** across all responses. Replicas that are unreachable (connection refused, timeout) are skipped; data from the remaining replicas is used.
+![Sequence diagram of the AgentReconciler's activity read. The reconciler asks its per-namespace cache, valid for 15 seconds; on a hit it receives the cached replicas. On a miss it issues one GET /v1/activity?namespace=X per gateway Pod IP in parallel; Pods A and B return replicaStartedAt and agents, Pod C is unreachable. The reconciler stores the reachable replicas in the cache, takes the newest timestamp per agent per source, then applies activitySource.](../../diagrams/activity-fanout.svg)
 
-![Sequence diagram of the AgentReconciler's activity fan-out. The reconciler first asks its reconciler-local 15-second per-namespace cache for namespace X. On a cache hit inside the window it gets the per-agent timestamps for both sources with zero HTTP, which is how every other agent reconcile in that namespace is served. On a cache miss or expired window, the reconciler fans out in parallel, issuing one GET /v1/activity?namespace=X per gateway Pod IP: Pod A and Pod B return their replicaStartedAt plus per-agent gatewayTraffic and heartbeat timestamps, while Pod C is unreachable and is skipped, with the remaining replicas' data still used. A note records that the calls are dialed by Pod IP rather than the Service, because the Service round-robins and would return a single replica's partial view, and that because Pod IPs are absent from the gateway cert's SAN the transport pins tls.Config.ServerName to the gateway Service DNS so SAN verification still passes against kaalm-ca. The reconciler then merges the most recent timestamp per agent per source, stores the result for 15 seconds, and only then applies the activitySource filter. A legend notes that the cache turns O(agents x replicas) HTTP calls per window into O(namespaces x replicas).](../../diagrams/activity-fanout.svg)
-
-Reading the diagram: two separate reductions are stacked here. The cache collapses the call count from per-agent to per-namespace, and the merge collapses the per-replica partial views into one. The `activitySource` filter deliberately sits last, after the merge, because the gateway returns both sources unconditionally and the controller owns the policy.
-
-Restart detection is likewise per-replica: the `replicaStartedAt` field in each response is evaluated on its own, so if one replica has restarted more recently than an agent's `status.phaseTransitionTime`, only that replica's data is treated as unknown. See [AgentReconciler](../../controller/reconcilers.md#agentreconciler) for the reconciler implementation detail, including the per-namespace 15-second cache that keeps this fan-out from running once per agent reconcile.
+1. The reconciler consults a per-namespace cache with a 15-second window. Every Agent reconcile in that namespace within the window is served from it, so the fan-out runs once per namespace per window rather than once per Agent.
+2. On a miss it lists gateway Pods from its informer by the gateway label in `kaalm-system`, skips Pods without an IP or with a deletion timestamp, and issues one `GET /v1/activity?namespace={ns}` per Pod IP in parallel, with a five-second client timeout. A replica that is unreachable, times out, or answers anything but `200` is skipped; the reachable replicas are used.
+3. The reachable replicas are cached for the window, with the count of targets.
+4. For an Agent, the newest timestamp per source across replicas is taken, then `activitySource` selects `gatewayTraffic`, `heartbeat`, or the newer of the two.
 
 ### TLS verification on per-Pod-IP dials
 
-Dialing Pod IPs breaks ordinary SAN verification, and the fix is worth understanding before you read the controller code.
-
-The gateway cert's SAN list covers the gateway's Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local`, `.svc`, `localhost`), not Pod IPs, which would be impractical to enroll. The controller's HTTP transport therefore sets `tls.Config.ServerName = "kaalm-gateway.kaalm-system.svc.cluster.local"` for these per-Pod-IP dials, so SAN verification succeeds against the Service DNS while the dial target remains the Pod IP.
-
-Cert authenticity is unchanged: verification still chains to `kaalm-ca`, and the SAN match is performed against the explicit `ServerName`. Without this override, every fan-out dial would fail TLS verification because the Pod IP does not appear in the cert's SAN.
+The gateway cert's SAN list covers the gateway Service DNS names, not Pod IPs. The controller's transport therefore sets `tls.Config.ServerName` to `kaalm-gateway.kaalm-system.svc.cluster.local` for these dials, so SAN verification succeeds against the Service DNS while the dial target is the Pod IP. The chain is still verified against `kaalm-ca`.
 
 ### Query cadence and restart behavior
 
-The controller queries all replica Pod IPs on each reconcile for agents in `Running` or `Idle` phase to evaluate idle and hibernation transitions. If all replicas are unreachable, the controller preserves the agent's current phase: no idle transitions are made without activity data.
+The fan-out runs on every reconcile of an Agent in `Running` or `Idle` whose effective `idleTimeout` is above zero, when the controller has a TLS identity to dial with. If no replica is reachable, the controller preserves the phase, sets `GatewayReachable=False` on the Agent, and requeues in 30 seconds. No idle or hibernation transition is made without activity data.
 
-Activity data is ephemeral. It is lost on gateway restart. The gateway includes its `replicaStartedAt` timestamp in the `/v1/activity` response so the controller can detect this condition. After a gateway restart:
-
-- The controller defers idle and hibernation transitions for agents whose last phase transition predates the gateway's `replicaStartedAt`, treating missing data as "unknown" until the gateway has been running for at least `idleTimeout`.
-- Agents that are actively sending traffic re-establish their activity timestamps immediately.
-- Agents that are truly idle will transition to `Idle` after `idleTimeout` elapses from the gateway's startup, which is the correct behavior.
+Activity data is lost on a gateway restart, and an empty store looks like silence. `replicaStartedAt` is how the controller tells them apart. There is no per-replica comparison: when no reachable replica has a record for the Agent, the controller proceeds only if some reachable replica has been up for at least `idleTimeout`, and then counts silence from the Agent's `status.phaseTransitionTime`; otherwise it defers and requeues in 30 seconds. A synchronized gateway restart therefore defers every idle and hibernation transition for `idleTimeout`. The full decision, and how a wake stamps `status.lastActivityTime` so a woken Agent gets a full `idleTimeout`, are under [When activity data is missing](../../controller/hibernation-and-wake.md#when-activity-data-is-missing).

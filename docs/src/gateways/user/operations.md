@@ -1,71 +1,43 @@
-# User Gateway Operations
+# User Gateway operations
 
-This page covers how the User Gateway is monitored in production and how it behaves when its dependencies fail. Read [Request Flow](overview.md#request-flow) first: the metrics and failure modes here name specific steps of that flow.
+This page covers how the User Gateway is monitored in production and how it behaves when its dependencies fail. Read [Request flow](overview.md#request-flow) first: the metrics and failure modes here name steps of that flow.
 
 ## Observability
 
-The gateway exposes Prometheus metrics on `:9090/metrics`.
+The gateway serves Prometheus metrics on `:9090/metrics` ([Endpoints](../../operations/observability.md#endpoints)). The channel metrics:
 
-**Message delivery.**
+| Metric | Type | Labels | Increments when |
+|---|---|---|---|
+| `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` | a message finishes the delivery pipeline (step 8 of the request flow), or a platform event is rejected before it |
+| `kaalm_channel_message_duration_seconds` | histogram | `channel_type` | the same, with the whole pipeline's duration, wake included |
+| `kaalm_channel_wake_total` | counter | `namespace` | the activator is called for a `Hibernated` Agent |
+| `kaalm_channel_wake_duration_seconds` | histogram | `namespace`, `result` | a wake ends, measured from the activator call: `result` is `ready`, `controller_unavailable`, or `wake_timeout` |
+| `kaalm_channel_delivery_attempts_total` | counter | `namespace`, `outcome` | every `POST /v1/message` attempt, retries included |
+| `kaalm_channel_callback_total` | counter | `namespace`, `status` | an outbound reply ends: an async webhook callback, or a Discord or WhatsApp reply |
+| `kaalm_channel_callback_duration_seconds` | histogram | `namespace` | the same, with the reply's duration across its attempts |
+| `kaalm_channel_response_too_large_total` | counter | `namespace`, `mode` | an agent reply exceeds `gateway.maxResponseBodyBytes`: `mode` is `sync` for the blocking webhook and test-chat path, `async` for async webhooks and platform channels |
+| `kaalm_channel_async_patch_failed_total` | counter | `namespace` | the response `Patch` into the polling record fails on all four attempts and the payload is dropped |
 
-- `kaalm_channel_messages_total{channel_type,namespace,status}`
-- `kaalm_channel_message_duration_seconds{channel_type}`
+Label vocabularies:
 
-`channel_type` is the channel's type (`webhook`, and since v0.7.0 `discord` or `whatsapp`) for channel deliveries and `console` for [test-chat](../api/internal-endpoints.md#post-v1test-chat) deliveries (since the v0.5.0 console). `status` is `delivered` or the failing error type: `delivery_failed`, `wake_timeout`, `controller_unavailable`, or `response_too_large`; for a platform channel it can also be `rejected`, an inbound event the channel was configured not to accept (a Discord interaction outside its scope, a WhatsApp event for another number), which is counted here and never becomes a health observation. The duration histogram covers the whole delivery pipeline, wake included.
+- **`channel_type`** is `webhook`, `discord`, or `whatsapp`, and `console` for [test-chat](../api/internal-endpoints.md#post-v1test-chat) deliveries.
+- **`status` on messages** is `delivered` or the failing error type: `delivery_failed`, `wake_timeout`, `controller_unavailable`, or `response_too_large`. For a platform channel it is also `rejected`, an inbound event that produced no envelope (a Discord interaction out of scope, a WhatsApp event for another number, a status callback, or an unparseable message), which is counted here and never becomes a health observation. A sync request cut off by `gateway.syncDeliveryDeadline` is counted under the failure that was in progress, or not at all when the deadline fell inside a backoff, so `sync_deadline_exceeded` never appears here.
+- **`outcome` on delivery attempts** is `ok` or the layer that failed: `dns`, `connect` (refused, reset, unreachable, or every connect within the attempt hit its bound), `tls`, `timeout` (the per-attempt read deadline), `status` (the agent answered outside 2xx), `malformed` (2xx with an unusable envelope), `too_large` (not retried), `canceled` (the delivery's own context ended), or `other`. Each failed attempt is also logged at warning level with the namespace, agent, message id, attempt number, outcome, and error.
+- **`status` on callbacks** is `delivered`, `rejected`, `exhausted`, or `invalid`, specified with their triggers under [Callback failure buckets](../api/async-responses.md#callback-failure-buckets) and, for platform replies, [Reply delivery](platform-adapters.md#reply-delivery). `exhausted` on a webhook callback means the payload is still retrievable by polling; on a platform reply it means the payload is dropped.
 
-**Wake-on-demand.** These two metrics are meant to be read together. `kaalm_channel_wake_total` tells you how often the activator fired; `kaalm_channel_wake_duration_seconds` tells you how long each wake took and how it ended. Together they make wake-on-demand latency observable end to end, which is what lets you put an SLO on the hard control-plane dependency called out in [The Kaalm Gateway](../overview.md).
+The wake counter and histogram read together: how often the activator fired, how long each wake took, and how it ended, which is what an SLO on the wake-on-demand dependency needs. `kaalm_channel_async_patch_failed_total` is the operator-side signal that the [replica-local drop](../api/async-responses.md#response-patch-failure) fired; any sustained nonzero rate warrants an alert ([Recommended alerts](../../operations/observability.md#recommended-alerts)). As shipped the counter is not raised when the pipeline's 10-minute ceiling cuts the `Patch` off mid-backoff, so that drop leaves no signal.
 
-- `kaalm_channel_wake_total{namespace}` (count of hibernation wakes triggered)
-- `kaalm_channel_wake_duration_seconds{namespace,result}`, a histogram of time from `POST /v1/activate` to either Agent ready or wake timeout, with `result ∈ {ready, controller_unavailable, wake_timeout}`
+For LLM Gateway metrics, see [LLM Gateway operations](../llm/operations.md#observability).
 
-**Delivery attempts.** `kaalm_channel_delivery_attempts_total{namespace,outcome}` counts every `POST /v1/message` attempt, retries included, so a retry rate reads back to its cause. `outcome` is `ok` or the layer that failed: `dns` (name resolution), `connect` (TCP refused, reset, unreachable, or every connect within the attempt hit its bound), `tls` (handshake or certificate verification), `timeout` (the per-attempt read deadline), `status` (the agent answered outside 2xx), `malformed` (2xx with an unusable envelope), `too_large` (reply over the body cap, not retried), `canceled` (the delivery's own context ended), or `other`. Each failed attempt is also logged at warning level with the agent, the message id, the attempt number, and the error.
+## Failure modes
 
-**Async callback delivery.** A counter and a histogram covering the push half of async mode:
-
-- `kaalm_channel_callback_total{namespace,status}`
-- `kaalm_channel_callback_duration_seconds{namespace}`
-
-The `status` label is `delivered`, `exhausted`, `rejected`, or `invalid`:
-
-| `status` | Meaning |
-|---|---|
-| `delivered` | Receiver answered 2xx. |
-| `exhausted` | Retry schedule burned; response stored at the polling endpoint. |
-| `rejected` | Terminal receiver rejection (`CallbackRejected` bucket). |
-| `invalid` | Pre-dial deny-range / allowlist re-check failed (`CallbackInvalid`). |
-
-`exhausted` is the visible form of the best-effort callback semantic: the push gave up, but the payload is still retrievable by polling. See [Request Flow steps 5a, 6a, 8](overview.md#request-flow) and [Callback failure modes](../api/async-responses.md).
-
-**Response size rejections.**
-
-- `kaalm_channel_response_too_large_total{namespace,mode}`, a counter of agent responses rejected for exceeding the configured size limit. `mode ∈ {sync, async}` separates the size-limit signal by response mode.
-
-**Async patch failures.**
-
-- `kaalm_channel_async_patch_failed_total{namespace}`, a counter of async response-`Patch` pipelines that exhausted all 4 attempts and dropped the payload.
-
-This is the operator-side signal that the v1 silent-loss limitation fired. From the caller's side the loss is invisible: pollers observe `202` until the TTL flips the record to `404` with no stored envelope ever appearing. The metric is the only place the drop surfaces, so any sustained nonzero rate warrants an alert. See [Response-Patch failure semantics](../api/async-responses.md) and [Recommended alerts](../../operations/observability.md#recommended-alerts).
-
-For LLM Gateway metrics, see [LLM Gateway Operations](../llm/operations.md#observability).
-
-## Failure Modes
-
-| Failure | Behavior |
-|---|---|
-| All gateway replicas down | Inbound webhooks fail at the Ingress; agent LLM calls fail; channel-driven wakes cannot be triggered; controller defers idle/hibernation transitions and sets `GatewayReachable=False`. |
-| Gateway replica not ready (listener, informer, or cert not loaded) | Replica removed from Service endpoints until readiness passes. |
-| Channel credential invalid | AgentChannel marked `Ready=False`; platform connection drops. |
-| Agent Pod not ready (resuming) | User Gateway holds or retries message delivery up to configured timeout. |
-| Controller unreachable | Wake-on-demand fails; sync callers get `504` `controller_unavailable`; async gets the same error via callback or polling. |
-| Sync-mode wall-clock budget exceeded | Sync callers get `504` `sync_deadline_exceeded`, `retryable: true`. Async mode unaffected. |
-| Async response ConfigMap not found | Poll returns `404`: the response is unknown or has expired past the 1-hour TTL. |
-
-**All gateway replicas down.** Inbound webhooks fail at the user-provisioned Ingress, which has no ready backend, so callers see the Ingress's own 502/503 rather than anything Kaalm produced. LLM calls from agents fail. Channel-driven wakes cannot be triggered at all, because wakes originate at the gateway. The controller defers idle and hibernation transitions and sets `GatewayReachable=False` on affected Agents: with no activity data it cannot safely conclude an Agent is idle. See [Activity Detection](../../controller/hibernation-and-wake.md#activity-detection).
-
-**Gateway replica not ready.** The replica is removed from Service endpoints until readiness passes, so traffic lands only on replicas that can actually serve it. See [Gateway Readiness](../llm/operations.md#gateway-readiness).
-
-**Controller unreachable.** Wake-on-demand fails. Sync callers receive `504` with `error.type: controller_unavailable`; in async mode the gateway stores a `controller_unavailable` error at the polling endpoint or delivers it to `callbackUrl`. Already-`Running` agents are unaffected, since they need no wake. See [Activator § controller unreachable](activation-and-activity.md#the-activator).
-
-**Sync-mode wall-clock budget exceeded.** When total wall-clock exceeds `gateway.syncDeliveryDeadline` (default 30s) mid-retry, sync callers receive `504` with `error.type: sync_deadline_exceeded` and `retryable: true`. Async mode is unaffected because it has no wall-clock budget. See [Request Flow step 6a](overview.md#request-flow).
-
-**Async response ConfigMap not found.** A poll returns `404` when the response is unknown or has expired past the 1-hour TTL. Configuring `callbackUrl` makes the gateway push the response with retries, but that push is best-effort, not durable; receivers that miss it can still poll within the TTL. See [Async Webhook Response](../api/async-responses.md).
+| Failure | What happens | What the operator sees |
+|---|---|---|
+| All gateway replicas down | Inbound webhooks fail at the user-provisioned Ingress, which has no ready backend, so callers see the Ingress's own `502` or `503`. Agent LLM calls fail. Channel-driven wakes cannot be triggered, since wakes originate at the gateway. | `GatewayReachable=False` on affected Agents; the controller defers idle and hibernation transitions ([Activity detection](../../controller/hibernation-and-wake.md#activity-detection)). |
+| Gateway replica not ready | The replica is removed from the Service endpoints while its readiness probe fails. As shipped `/readyz` answers `ok` as soon as the health listener is up; the four checks under [Gateway readiness](../llm/operations.md#gateway-readiness) are the design, not the probe. | Pod readiness only. |
+| Channel credential invalid | The AgentChannel is `Ready=False`, the gateway stops resolving its path, and inbound requests answer `401`. | The `Ready` condition; `kaalm_channel_messages_total` stops moving for the channel. |
+| Agent hibernated | The gateway calls the activator and waits for the Service, up to `wakeTimeout`. An Agent that is not ready for any other reason gets the four-attempt delivery retry and then `delivery_failed`. | `kaalm_channel_wake_total` and the wake histogram; `delivery_attempts_total{outcome}` names the failing layer. |
+| Controller unreachable | Wake-on-demand fails and the Agent stays `Hibernated`; `Running` Agents are unaffected. | `status="controller_unavailable"` on messages and `result="controller_unavailable"` on wakes. The wire form is under [The activator](activation-and-activity.md#the-activator). |
+| Sync deadline exceeded | The caller gets `504 sync_deadline_exceeded`, `retryable: true`; async mode has no deadline. | No dedicated metric; the in-progress failure is counted, or none is. See [Request flow](overview.md#request-flow), step 9. |
+| Async response record missing | A poll answers `404`: the `requestId` is unknown, belongs to another channel, or is past the 1-hour TTL. | Nothing; polling is receiver-driven. See [Poll status codes](../api/async-responses.md#poll-status-codes). |
+| Async payload dropped | A replica died between the `202` and the `Patch`, or the `Patch` retries were exhausted. Pollers see `202` until the TTL turns the record to `404`. | `kaalm_channel_async_patch_failed_total` for the exhausted case; nothing for a replica death. See [Replica failure](../api/async-responses.md#replica-failure). |
