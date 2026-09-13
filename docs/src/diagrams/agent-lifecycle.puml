@@ -1,60 +1,36 @@
 @startuml agent-lifecycle
-' Agent (persistent mode) state machine.
-' Source of truth: docs/src/controller/agent-lifecycle.md
+' The Agent phase machine: every phase and the transition that moves between
+' them, one trigger per edge. Triggers and their mechanics are the table on
+' docs/src/controller/agent-lifecycle.md.
 !include _style.puml
 
-' ---- Happy path + idle/hibernate cycle ----
-state "Pending" as Pending
-state "Provisioning" as Provisioning
-state "Running" as Running
-state "Idle" as Idle
-state "Hibernating" as Hibernating
-state "Hibernated" as Hibernated
-state "Resuming" as Resuming
+state Pending
+state Provisioning
+state Running
+state Idle
+state Hibernating
+state Hibernated
+state Resuming
+state "any phase" as Any #F5F5F5
+state Degraded
+state Failed
+state Terminating
 
 [*] --> Pending
-Pending --> Provisioning : references validated,\nclass resolved
-Provisioning --> Running : Pod becomes Ready
+Pending --> Provisioning : Certificate created
+Provisioning --> Running : Pod Ready
 Running --> Idle : idleTimeout elapsed
 Idle --> Running : activity observed
-Idle --> Hibernating : hibernationEnabled=true\nAND idle for hibernationDelay
-Hibernating --> Hibernated : pod scaled to 0,\nPVC retained
-Hibernated --> Resuming : channel message via User Gateway\nOR manual wake annotation
-Resuming --> Running : pod Ready
+Idle --> Hibernating : hibernationDelay elapsed
+Hibernating --> Hibernated : Pod gone
+Hibernated --> Resuming : wake annotation
+Resuming --> Provisioning : Pod created
+Running --> Provisioning : spec drift,\nPod disruption
+Idle --> Provisioning : spec drift,\nPod disruption
 
-' ---- Re-provisioning (spec drift / disruption) ----
-Running -[#0D47A1]-> Provisioning : spec drift (Agent or AgentClass)\nOR involuntary Pod disruption
-Idle -[#0D47A1]-> Provisioning : spec drift (Agent or AgentClass)\nOR involuntary Pod disruption
-
-note left of Provisioning
-  creating Pod/PVC/Service
-  ....
-  re-provisioning is recreate-and-clamp:
-  Pod replaced, PVC/Service/Certificate
-  preserved
-end note
-note right of Hibernating : scaling pod to zero
-note right of Resuming : scaling pod back up
-
-' ---- Branches available from any phase ----
-state "any phase" as AnyPhase #F5F5F5
-state "Degraded" as Degraded
-state "Failed" as Failed
-state "Terminating" as Terminating
-
-AnyPhase --> Degraded : AgentClass-vs-Agent-spec mismatch\n(at Pending on initial provisioning, OR introduced\nby class or ModelProvider drift while in\nRunning/Idle/Resuming; Hibernated agents defer\nthe check to next wake) at any point
-AnyPhase --> Failed : irrecoverable error\nat any point
-AnyPhase --> Terminating : deletion requested\nat any point
-
-note right of Degraded : re-enters status.preDegradedPhase\nwhen resolved
-note right of Terminating : resource removed\nafter finalizers run
-note bottom of AnyPhase
-  Not a phase change: transient provider unhealthy
-  and budget exhaustion set a Degraded CONDITION
-  on the Agent with status.phase preserved.
-  See Errors, Events, and Testing.
-end note
-
-' ---- Layout hints ----
-Resuming -[hidden]-> AnyPhase
+Any --> Degraded : class mismatch
+Degraded --> Any : mismatch cleared
+Any --> Failed : crash loop,\nimage pull
+Any --> Terminating : deleted
+Failed --> Provisioning : Pod recovers\nor is replaced
 @enduml

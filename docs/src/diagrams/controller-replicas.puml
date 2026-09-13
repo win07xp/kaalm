@@ -1,0 +1,38 @@
+@startuml controller-replicas
+' What every controller replica serves and what only the leader runs, and
+' how a wake that lands on a non-leader reaches the leader. The prose on
+' docs/src/controller/overview.md carries the ports and the reasons.
+!include _style.puml
+
+rectangle "Gateway" as gw #back:90EE90;line:1B5E20;text:0b3d0b
+rectangle "Service kaalm-controller" as svc #back:F5F5F5;line:9E9E9E;text:2a0a4a
+
+rectangle "Controller Deployment, kaalm-system" as dep {
+  rectangle "Replica A, leader" as a #back:87CEEB;line:0D47A1;line.bold;text:0a2540 {
+    rectangle ":9443 activator" as a1 #back:87CEEB;line:0D47A1;text:0a2540
+    rectangle ":9444 conversion" as a2 #back:87CEEB;line:0D47A1;text:0a2540
+    rectangle ":8080 metrics" as a3 #back:87CEEB;line:0D47A1;text:0a2540
+    rectangle "six reconcilers" as a4 #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  }
+  rectangle "Replica B" as b #back:87CEEB;line:0D47A1;text:0a2540 {
+    rectangle ":9443 activator" as b1 #back:87CEEB;line:0D47A1;text:0a2540
+    rectangle ":9444 conversion" as b2 #back:87CEEB;line:0D47A1;text:0a2540
+    rectangle ":8080 metrics" as b3 #back:87CEEB;line:0D47A1;text:0a2540
+  }
+}
+
+a1 -[hidden]-> a2
+a2 -[hidden]-> a3
+a3 -[hidden]-> a4
+b1 -[hidden]-> b2
+b2 -[hidden]-> b3
+
+database "apiserver\nand leader Lease" as api #back:FFD580;line:7a3f00;text:3a1f00
+
+gw -[#1B5E20]-> svc : POST /v1/activate
+svc -[#1B5E20]-> b1 : any replica
+b1 -[#0D47A1]-> api : patch kaalm.io/wake=true
+api -[#0D47A1,dashed]-> a4 : Agent watch
+a4 .[#9E9E9E].> api : holds the Lease
+b .[#9E9E9E].> api : waits on the Lease
+@enduml

@@ -1,100 +1,66 @@
-# Errors, Events, and Testing
+# Errors, events, and testing
 
-Reconcilers do the work; this page covers what happens around that work. How a failure is classified decides whether the controller retries, degrades, or gives up. What the controller tells you about that decision arrives through Kubernetes Events and Prometheus metrics. And all of it has to be testable without a real LLM provider in the loop.
+Reconcilers do the work; this page covers what happens around it. How a failure is classified decides whether the controller retries, degrades, gates, or gives up. What the controller reports about that decision arrives through Kubernetes Events and Prometheus metrics. All of it is testable without a real LLM provider in the loop.
 
-Read [Operator Structure](overview.md) and the [Reconciler Responsibilities](reconcilers.md#agentreconciler) first if you have not: the rules below refer to specific reconciler steps.
+Read [Operator structure](overview.md) and [Reconcilers](reconcilers.md#agentreconciler) first: the rules here refer to reconciler steps.
 
-## Error Handling
+## Error handling
 
-Errors are classified into three categories. The category determines the controller's response, so classifying correctly matters more than the specific error type.
+The controller classifies a failure in the order below, and the class decides the response.
 
-| Bucket | Controller response |
-|---|---|
-| **Transient** | Retry with backoff |
-| **Recoverable** | Set `Degraded` condition, continue reconciling |
-| **Terminal** | Set `Failed` phase, stop reconciling except on spec change |
+![Flowchart of how the controller classifies a failure, as two rows. Retry or degrade: an apiserver or probe transport error returns the error and requeues with backoff; a provider budget blocking the namespace sets the Degraded condition with the phase unchanged; a class or provider no longer admitting the spec sets phase Degraded with preDegradedPhase kept. Gate or fail: a missing dependency such as an image, Secret, PVC, ConfigMap, or Certificate sets Ready=False and requeues in 30 or 5 seconds; a Pod that cannot run because of a crash loop or image pull sets phase Failed until the Pod recovers; an AgentTask out of retries settles phase Failed, terminal.](../diagrams/controller-error-buckets.svg)
 
-### Transient
+| Class | Members | Response |
+|---|---|---|
+| Transient | apiserver conflicts and transport errors; a failed status or child write | return the error; controller-runtime requeues with per-item exponential backoff (5 ms, doubling, capped at 1000 s) under a 10 requests per second bucket, none of which the controller overrides |
+| Recoverable | a referenced ModelProvider reports the Agent's namespace as budget-blocked | the `Degraded` condition with `reason=BudgetExhausted` on the Agent, phase unchanged; cleared when the provider reports the namespace unblocked, driven by the ModelProvider watch. As shipped this is the condition's only member: a provider outage sets conditions on the ModelProvider, not on the Agent, and the `ProvidersReady` condition the API declares is never written |
+| Irreconcilable | a class or provider no longer admits the workload's stored spec | `phase=Degraded` for an Agent, terminal `Failed` for an AgentTask; see [Degraded](agent-lifecycle.md#degraded). A ModelProvider's `allowedNamespaces` dropping the Agent's namespace is here, not in the recoverable class: nothing fixes itself, a human aligns one side |
+| Gated | a missing image, `existingClaim`, pull Secret, or handler ConfigMap; a Certificate still being issued; a provider probe failure | `Ready=False` naming the gate, requeued in 30 seconds (5 for the Certificate, the probe interval for a provider); the phase is untouched. A failed provider probe never returns an error, so it gets the fixed interval, not backoff |
+| Failed Pod | a container in `CrashLoopBackOff` at five restarts or in `ImagePullBackOff` | `phase=Failed` for an Agent, re-derived on every pass and cleared when the Pod recovers; see [Failed](agent-lifecycle.md#failed). For an AgentTask a provisioning failure is a retry or, with `backoffLimit` spent, the terminal `Failed` |
 
-Something failed, but the same operation will probably succeed shortly. Members:
+There is no bucket that stops reconciling: every class keeps the resource reconciling on its events and cadence, and a spec change re-enters the pass like any other event.
 
-- API server conflicts (409)
-- Transient Pod failures (crashloop with recent start)
-- Network errors talking to ModelProvider for health checks
+## Event emission
 
-Handled by returning a `Requeue` result with exponential backoff (250ms -> 30s max).
+The controller emits these Events. Each reason is a stable string; the message carries the detail.
 
-### Recoverable
+| Resource | Reason | Type | When |
+|---|---|---|---|
+| Agent | `PhaseChanged` | Normal | `Running` to `Idle`, `Idle` to `Hibernating`, and recovery from `Degraded`, each with a message naming the cause. As shipped no other phase change emits an event |
+| Agent | `Hibernated`, `Woken` | Normal | the Pod is gone after hibernation; a wake annotation is honored |
+| Agent | `WakeIgnored` | Warning | a wake annotation on a non-`Hibernated` Agent, except in `Resuming` |
+| Agent | `PodDisrupted`, `SpecDrift` | Warning, Normal | a terminal Pod is replaced; a spec hash change replaces the Pod |
+| Agent | the Degraded reason (`ClassConstraintViolation`, `PersistenceNotAllowed`, `HibernationNotAllowed`, `HibernationRequiresPersistence`, `HandlerMountNotAllowed`, `ToolNotInCatalog`) | Warning | the first entry into `Degraded`, once per entry |
+| AgentTask | `TaskSucceeded`; `TaskFailed`, `TimeoutExceeded`, `TimeoutSucceeded`, and the provisioning and class reasons | Normal; Warning | the task settles, or a retry starts (message suffix `retrying (n/limit)`); see [Event reasons](task-lifecycle.md#event-reasons) |
+| ModelProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
+| ModelProvider | `DegradeTargetNotCheapest`, `MaxOutputTokensUnset` | Warning | the cost sanity check; a cross-format fallback into an Anthropic model with no `maxOutputTokens` |
+| ModelProvider | `BoundaryMarginRaised` as shipped (the condition's reason is `ObservedTrafficExceededMargin`) | Warning | a gateway replica first raises the boundary margin flag |
+| ToolProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
+| AgentClass | `FQDNPolicyUnsupported` | Warning | `allowedHosts` is set on a CNI without FQDN egress |
 
-The resource cannot do its job right now, but the configuration is valid and the situation may resolve on its own. Members:
-
-- Referenced ModelProvider becomes unhealthy (transient connectivity / 5xx from the provider)
-- Budget exhaustion
-
-The Agent remains in its current phase with `Degraded` condition set. Reconciles continue on relevant resource events, which is why the AgentReconciler watches `ModelProvider` and re-queues on change rather than waiting out the periodic requeue.
-
-One exclusion is deliberate and easy to get wrong. A ModelProvider whose `allowedNamespaces` stops including the Agent's namespace is **not** in this bucket. That is a class-vs-spec mismatch, not a transient outage: it is handled via `phase=Degraded` per [AgentReconciler step 2](reconcilers.md#agentreconciler), consistent with [Per-Agent and Per-Task Child Resources bucket 2](../runtime/child-resources.md). The distinction is that nothing will fix itself here: a human has to align the Agent or the ModelProvider spec.
-
-### Terminal
-
-The configuration cannot produce a working resource, and retrying will not change that. Members:
-
-- Image pull failure after max retries
-- PVC provisioning failure that exceeds retry budget
-- Invalid configuration that cannot be corrected
-
-Reconciling stops until the spec changes, because a spec change is the only thing that can plausibly fix the problem.
-
-## Event Emission
-
-The controller emits Kubernetes Events for:
-
-- Phase transitions (`Normal`, reason=`PhaseChanged`, message includes old->new).
-- Provider errors (`Warning`, reason=`ProviderUnhealthy` or `BudgetExhausted`).
-- Validation failures caught at reconcile time (`Warning`, reason=`InvalidReference`).
-- Hibernation/wake events (`Normal`, reason=`Hibernated` / `Woken`).
-- Task completion (`Normal`, reason=`TaskSucceeded` or `TaskFailed`).
-
-Events are critical for `kubectl describe` usability. Err toward emitting events on every meaningful state change: an operator debugging a stuck Agent reaches for `kubectl describe` before they reach for metrics or logs, and an event that was never emitted is a dead end.
-
-Individual reconcilers emit further reasons of their own beyond this core set, for example `FQDNPolicyUnsupported` from the [AgentClassReconciler](reconcilers.md#agentclassreconciler) and `FallbackIneligible` / `DegradeTargetNotCheapest` from the [ModelProviderReconciler](reconcilers.md#modelproviderreconciler).
+Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals the design calls for are not Events as shipped: budget exhaustion and reconcile-time validation failures (`InvalidReference`, `CredentialsMissing`, and the other `Ready=False` reasons) are conditions only, and `FallbackIneligible` is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).
 
 ## Observability
 
-The controller exposes Prometheus metrics on `:8080/metrics` (standard controller-runtime port).
+The chart serves the controller's Prometheus metrics on `:8080/metrics` over plain HTTP ([Endpoints](../operations/observability.md#endpoints)); the binary keeps metrics off unless a bind address is passed. Standard controller-runtime metrics (reconcile counts, duration, queue depth) are emitted automatically, and the leader is the only replica with non-zero values for them. The Kaalm-specific metrics:
 
-Standard controller-runtime metrics (reconcile counts, duration, queue depth) are emitted automatically. The following Kaalm-specific metrics are added.
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `kaalm_agents` | gauge | `phase`, `namespace` | Agent count by phase |
+| `kaalm_tasks` | gauge | `phase`, `namespace` | AgentTask count by phase |
+| `kaalm_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` | AgentChannel count by `status.phase`, the `Ready` condition, and the tri-state `PlatformConnected` condition, the last two as `true`, `false`, or `unknown` |
+| `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` | the canonical spend total the ModelProvider fold writes ([step 4](reconcilers.md#modelproviderreconciler)), distinct from the gateway's per-replica `kaalm_llm_spend_usd_total` partials |
+| `kaalm_hibernations_total` | counter | `namespace` | hibernations completed |
+| `kaalm_wakes_total` | counter | `namespace`, `trigger` | wakes honored. As shipped `trigger` is always `activator`, since the reconciler cannot tell a channel-driven annotation from a manual one |
+| `kaalm_storage_migrated_objects_total` | counter | `kind` | custom resources the storage-version migrator rewrote at `v1beta1`: zero on a fresh install, the pre-upgrade object count on the first leader start after an upgrade, zero after that ([Storage version migration](../operations/api-versioning.md#storage-version-migration)) |
 
-### Gauges
+The three phase gauges carry no `_total` suffix, which OpenMetrics reserves for counters. They are computed from the manager cache on every scrape, a resource the reconciler has not stamped yet counting as `Pending`, and every replica serves them from its own cache, so dashboards aggregate them with `max`, not `sum`. Budget policy actions are counted where they happen, on the gateway's request path, as `kaalm_budget_threshold_events_total` ([LLM Gateway operations](../gateways/llm/operations.md#observability)); the channel metrics are under [User Gateway operations](../gateways/user/operations.md#observability).
 
-- `kaalm_agents{phase,namespace}`: gauge of Agent count by phase and namespace
-- `kaalm_tasks{phase,namespace}`: gauge of AgentTask count by phase and namespace
-- `kaalm_channels{namespace,phase,ready,platform_connected}`: gauge of AgentChannel count
-- `kaalm_provider_budget_canonical_usd{provider,namespace,period}`: gauge of the reconciler-summed canonical spend total
+## Testing strategy notes
 
-The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserves it for counters, and promlint flags non-counter `_total` names. They are computed from the manager cache on every scrape (a resource the reconciler has not stamped yet counts as `Pending`), and every controller replica serves them from its own cache, so dashboards aggregate them with `max`, not `sum`.
+- Reconcilers run under envtest, a real `kube-apiserver` and `etcd` launched from `KUBEBUILDER_ASSETS`, with the fake client used only for isolated helpers. The suite injects fakes at the three points where a reconciler would leave the cluster: the `ProviderHealthChecker` and `ToolHealthChecker` interfaces behind the probes, and the `ActivityClient` behind the activity and channel-health fan-outs.
+- State machine transitions are table tests over those fakes.
+- `make cover-check` gates union coverage at 85 percent, run with `GOWORK=off` and excluding the e2e packages, the same gate CI runs.
+- End-to-end tests run against a k3d cluster with a stub LLM provider (an HTTP server answering canned completions with fake token counts) and mock MCP, Discord, and WhatsApp servers; [Scenario coverage](../appendix/scenario-coverage.md) maps them to the acceptance scenarios.
 
-`kaalm_channels` is rolled up by `status.phase` (`Active` | `Degraded` | `Failed` | `Terminating`, see [AgentChannelReconciler step 5](reconcilers.md#agentchannelreconciler)), `status.conditions[type=Ready]`, and `status.conditions[type=PlatformConnected]`. The two condition labels keep their `true` | `false` | `unknown` values. This surfaces both the bound-Agent state (via `phase`) and the tri-state `PlatformConnected` condition computed by [AgentChannelReconciler step 4](reconcilers.md#agentchannelreconciler).
-
-`kaalm_provider_budget_canonical_usd` is written by [ModelProviderReconciler step 3](reconcilers.md#modelproviderreconciler) after pruning stale-replica partials. It is distinct from the gateway's per-replica `kaalm_llm_spend_usd_total` (the partials before reconciliation). Dashboards plot this gauge to show authoritative spend without summing across replicas.
-
-### Counters
-
-- `kaalm_hibernations_total{namespace}`: counter of hibernation events
-- `kaalm_wakes_total{namespace,trigger}`: counter of wake events (trigger = `channel` | `annotation`)
-- `kaalm_storage_migrated_objects_total{kind}`: counter of custom resources the storage-version migrator rewrote at the `v1beta1` storage version, by kind; zero on a fresh install, the number of pre-upgrade objects on the first leader start after an upgrade, and zero on every start after that ([API Versioning and Deprecation](../operations/api-versioning.md#storage-version-migration))
-
-Budget policy actions are counted where they happen, on the gateway's request path: `kaalm_budget_threshold_events_total` in [LLM Gateway Operations](../gateways/llm/operations.md#observability).
-
-For gateway metrics (LLM and channel), see [LLM Gateway Operations](../gateways/llm/operations.md#observability) and [User Gateway Operations](../gateways/user/operations.md#observability).
-
-## Testing Strategy Notes
-
-While detailed test guidance lives in the (deferred) contribution guide, the design assumes:
-
-- Each reconciler is unit-testable by injecting a fake client.
-- State machine transitions are table-testable.
-- Integration tests use `envtest` for API server + etcd in-memory.
-- End-to-end tests run against a kind cluster with a stubbed LLM provider (an HTTP server that responds with canned completions and reports fake token counts).
-
-The controller should not hardcode assumptions about real LLM providers. Testability depends on the gateway being swappable with a mock: because agents never talk to providers directly and all LLM traffic goes through the gateway, substituting a stub at that one seam covers the whole system.
+The controller holds no assumptions about specific LLM providers. Because agents never talk to providers directly and all LLM traffic goes through the gateway, substituting a stub at that one point covers the whole system.

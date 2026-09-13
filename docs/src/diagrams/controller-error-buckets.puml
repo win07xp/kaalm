@@ -1,0 +1,36 @@
+@startuml controller-error-buckets
+' How the controller classifies a failure, in the order it decides. Each
+' row is an elseif cascade, laid out left to right. The members of each
+' bucket are the prose on docs/src/controller/operations.md.
+!include _style.puml
+
+start
+:a reconcile step fails;
+
+partition "retry, or degrade" {
+  if (an apiserver or\nprobe transport error?) then (yes)
+    :return the error,\nrequeue with backoff;
+    kill
+  elseif (a provider budget\nblocks the namespace?) then (yes)
+    :Degraded condition,\nphase unchanged;
+    kill
+  elseif (a class or provider\nno longer admits the spec?) then (yes)
+    :phase=Degraded,\npreDegradedPhase kept;
+    kill
+  else (no)
+  endif
+}
+
+partition "gate, or fail" {
+  if (a dependency missing:\nimage, Secret, PVC,\nConfigMap, Certificate?) then (yes)
+    :Ready=False,\nrequeue 30s or 5s;
+    kill
+  elseif (the Pod cannot run:\ncrash loop, image pull?) then (yes)
+    :phase=Failed, until\nthe Pod recovers;
+    kill
+  else (AgentTask out of retries)
+    :phase=Failed, terminal;
+    stop
+  endif
+}
+@enduml

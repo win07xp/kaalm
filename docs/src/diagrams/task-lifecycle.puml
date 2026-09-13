@@ -1,51 +1,29 @@
 @startuml task-lifecycle
-' AgentTask state machine.
-' Source of truth: docs/src/controller/task-lifecycle.md
+' The AgentTask phase machine: every phase and the transition that moves
+' between them, one trigger per edge. Triggers and their mechanics are the
+' table on docs/src/controller/task-lifecycle.md.
 !include _style.puml
 
-state "Pending" as Pending
-state "Provisioning" as Provisioning
-state "Running" as Running
-state "Completing" as Completing
-state "Succeeded" as Succeeded
-state "Failed" as Failed
-state "TimedOut" as TimedOut
-state "Terminating" as Terminating
-state "any state" as AnyState $mutedBg
+state Pending
+state Provisioning
+state Running
+state Completing
+state Succeeded
+state Failed
+state TimedOut
+state Terminating
+state "any phase" as Any #F5F5F5
 
-note right of Provisioning : creating Pod/PVC
-note right of Completing : collecting artifacts,\nscheduling teardown
-
-' ---- Main path ----
 [*] --> Pending
-Pending --> Provisioning : references validated
+Pending --> Provisioning : Certificate created
 Provisioning --> Running : Pod Ready
-Running --> Completing : completion signal,\ntimeout, or exit
-Completing --> Succeeded : success reported
-Completing --> Failed : failure reported
-Completing --> TimedOut : timeout hit
-
-' ---- Failure and retry paths ----
-Pending -[#0D47A1]-> Failed : spec irreconcilable
-Provisioning -[#0D47A1]-> Failed : Pod-start error
-Running -[#0D47A1]-> Failed : Pod disruption
-Failed -[#0D47A1]-> Provisioning : retry while\nstatus.retries < backoffLimit
-
-' ---- Teardown ----
-AnyState --> Terminating : deletion requested
-Succeeded -[#0D47A1]-> Terminating : ttlSecondsAfterFinished\nexpired
-Failed -[#0D47A1]-> Terminating : ttlSecondsAfterFinished\nexpired
-TimedOut -[#0D47A1]-> Terminating : ttlSecondsAfterFinished\nexpired
-
-note bottom of Failed
-  Pending: PersistenceNotAllowed or
-  ClassConstraintViolation. Not retried.
-  ....
-  Provisioning and Running failures are
-  retried under backoffLimit.
-end note
-
-' ---- Layout hints ----
-Succeeded -[hidden]-> AnyState
-TimedOut -[hidden]-> AnyState
+Running --> Completing : completion, exit, or timeout
+Completing --> Succeeded : success
+Completing --> Failed : failure
+Completing --> TimedOut : timeout, onTimeout Fail
+Pending --> Failed : spec irreconcilable
+Provisioning --> Failed : Pod start failed,\nspec irreconcilable
+Running --> Failed : Pod lost, mailbox empty
+Failed --> Provisioning : retries left
+Any --> Terminating : deleted, or TTL expired
 @enduml
