@@ -37,7 +37,7 @@ alt #FFF8DC controller reachable
 
   note over ctrl, leader #FFE4B5
     **The replica that took the call is not**
-    **the one that does the work.**
+    **necessarily the replica that recreates the Pod.**
     The apiserver is the message bus, which is
     why the handler need not run on the leader.
   end note
