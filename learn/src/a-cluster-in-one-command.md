@@ -1,4 +1,4 @@
-# A Cluster in One Command
+# A cluster in one command
 
 Making the cluster really is one command. Kaalm then needs three installs on
 top of it: two things it depends on, and Kaalm itself.
@@ -82,7 +82,7 @@ helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
 [releases page](https://github.com/win07xp/kaalm/releases) and install the same
 way.
 
-## What just got installed
+## What got installed
 
 Two commands tell you it worked. First, the programs:
 
@@ -133,4 +133,4 @@ customresourcedefinition.apiextensions.k8s.io/toolproviders.kaalm.io
 > nouns, which is why `kubectl get agents` will work in the next chapter even
 > though "agent" is not a Kubernetes concept.
 
-Next: [Looking Around](looking-around.md).
+Next: [Looking around](looking-around.md).

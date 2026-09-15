@@ -1,10 +1,10 @@
-# What Is Kaalm
+# What is Kaalm
 
 An AI agent, in this book's sense, is a small program with a model behind it.
 You send it a message, it thinks, it answers. You can also hand it a job and
 walk away while it works.
 
-Writing that program is the easy part. A few dozen lines will call a model and
+Writing that program is the small part. A few dozen lines will call a model and
 print a reply. The hard part starts when you want to actually run it, and keep
 running it, for real people.
 
@@ -58,4 +58,4 @@ A cluster on your laptop running Kaalm, and on it:
 
 Then you throw the whole thing away with one command.
 
-Next: [Setting Up Your Laptop](setting-up.md).
+Next: [Setting up your laptop](setting-up.md).

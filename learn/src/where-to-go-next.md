@@ -1,4 +1,4 @@
-# Where to Go Next
+# Where to go next
 
 ## Tear it down
 
@@ -16,8 +16,8 @@ Nothing survives on your laptop except the files you wrote.
 And those are the part that matters. Three manifests and one handler
 (`agent.yaml`, `channel.yaml`, `task.yaml`, `handler.py`) describe an agent,
 a front door, a job, and the agent's actual behavior in well under a hundred
-lines, and they work the same against a real cluster as against the one you
-just deleted. That is the point of declaring things rather than operating
+lines, and they work the same against a real cluster as against the cluster you
+deleted a moment ago. That is the benefit of declaring things rather than operating
 them.
 
 ## What you actually learned
@@ -28,21 +28,21 @@ closes the gap between them. Everything else was Kaalm's vocabulary: classes as
 rules, agents as long-lived things with storage and an address, tasks as
 one-shot work, channels as doors.
 
-And you watched the one behavior that is genuinely hard to build yourself: an
+And you watched the behavior that is genuinely hard to build yourself: an
 agent shutting down when nobody needs it, and coming back with its memory
 intact when somebody does.
 
 ## Three doors onward
 
-**Do real work.** The [User Guide](https://github.com/win07xp/kaalm) is
+**Do real work.** The [user guide](https://github.com/win07xp/kaalm/blob/main/guide/src/introduction.md) is
 task-shaped: installing for real, offering classes to teams, wiring up
 providers, setting budgets, connecting channels, and a troubleshooting chapter
 organized by the symptom you are actually seeing.
 
 **Understand the machine.** The
-[design book](https://github.com/win07xp/kaalm) is the specification: how the
+[design book](https://github.com/win07xp/kaalm/blob/main/docs/src/introduction.md) is the specification: how the
 controller reconciles, how the gateway routes and bills, how the TLS identity
-fabric is built, and the twenty acceptance scenarios the whole system is
+fabric is built, and the twenty-four acceptance scenarios the whole system is
 tested against. Start with its architecture chapter.
 
 **Write a bigger agent.** You already write handlers; that is the whole
@@ -50,7 +50,7 @@ programming model. When one outgrows a ConfigMap, usually the day it needs a
 dependency the base image does not bundle, the same handler moves into a
 `FROM ghcr.io/win07xp/kaalm-agent-python` image, and beyond that lie the
 starter templates and fully custom images. Whatever the packaging, the image
-keeps handling the parts that are easy to get wrong: TLS with certificate
+keeps handling the parts that are hard to get right: TLS with certificate
 rotation, verifying the gateway, deduplicating redelivered messages, and
 persisting state so hibernation does not lose the thread. The runtime
 contract chapter in the design book is the authority on what an agent must
@@ -63,7 +63,7 @@ Deliberately, so that one sitting stayed one sitting:
 - **Budgets and cost control.** You saw where prices are declared; you did not
   set a limit or watch an agent degrade when it hit one.
 - **Multiple teams.** Everything here lived in one namespace as one user. The
-  guide's [Managing Team Access](https://github.com/win07xp/kaalm) covers
+  guide's [Managing team access](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/managing-access.md) covers
   handing classes and providers to teams without handing over credentials.
 - **The TLS fabric.** Certificates were issued, rotated, and verified for you
   throughout, and the book never mentioned it beyond installing cert-manager.

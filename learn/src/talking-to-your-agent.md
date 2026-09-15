@@ -1,4 +1,4 @@
-# Talking to Your Agent
+# Talking to your agent
 
 Your agent is running, but nothing can reach it yet. On purpose: Kaalm wraps
 every agent in a network policy that refuses traffic by default, so an agent is
@@ -101,8 +101,8 @@ cluster nothing skips verification.
 
 `echo:` is the image's built-in default handler talking. Every reference image
 answers like this until you hand it real code, which is exactly what makes it
-safe to poke at: the loop you just proved (token, gateway, mTLS, delivery,
-reply) is the hard part, and it now works. The code is the easy part, and it is
+safe to poke at: the loop you proved (token, gateway, mTLS, delivery,
+reply) is the hard part, and it works. The code is the small part, and it is
 the next chapter.
 
-Next: [Make It Yours](make-it-yours.md).
+Next: [Make it yours](make-it-yours.md).

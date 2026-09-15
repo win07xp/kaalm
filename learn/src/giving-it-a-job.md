@@ -1,11 +1,11 @@
-# Giving It a Job
+# Giving it a job
 
 An agent is something you talk to; it sits there waiting. A **task** is
 something you fire off: it starts, does one piece of work, reports what
 happened, and goes away.
 
 Same class, entirely different lifecycle. The image changes too, to the Go
-sibling of the one your agent runs: a task brings its whole program rather
+sibling of the Python image your agent runs: a task brings its whole program rather
 than a mounted handler, and the Go reference image has a tutorial shortcut
 built in that you will use in a moment.
 
@@ -37,7 +37,7 @@ spec:
 finished when the program exits; it is finished when the program *says* it is,
 by calling the gateway to report a result. That distinction matters for real
 work: a coding agent that opens a pull request wants to hand back the URL, not
-just an exit code.
+an exit code alone.
 
 The Go reference image has a shortcut for this tutorial:
 `KAALM_TASK_AUTOCOMPLETE` makes it report `success` as soon as it starts, so
@@ -110,4 +110,4 @@ name, storage, and an address, and it stays. A task is cattle: it appears,
 does one job, reports, and is collected on the schedule you set. Kaalm runs both because agent work comes in
 both shapes.
 
-Next: [Sleep and Wake](sleep-and-wake.md).
+Next: [Sleep and wake](sleep-and-wake.md).

@@ -206,7 +206,7 @@ chart-package: chart-sync ## Package the chart into dist/ (VERSION defaults to C
 
 PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
 # Until the #142 audit lands, time-bound wording is reported, not fatal.
-DOCS_CHECK_FLAGS ?= --time-report
+DOCS_CHECK_FLAGS ?=
 
 .PHONY: docs-check
 docs-check: ## Check the three books: links and anchors, SUMMARY coverage, dashes, time-bound wording, cited files, diagrams.
