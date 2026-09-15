@@ -1,10 +1,10 @@
-# Errors, Events, and Testing
+# Errors, events, and testing
 
 Reconcilers do the work; this page covers what happens around that work. How a failure is classified decides whether the controller retries, degrades, or gives up. What the controller tells you about that decision arrives through Kubernetes Events and Prometheus metrics. And all of it has to be testable without a real LLM provider in the loop.
 
-Read [Operator Structure](overview.md) and the [Reconciler Responsibilities](reconcilers.md#agentreconciler) first if you have not: the rules below refer to specific reconciler steps.
+Read [Operator structure](overview.md) and [Reconcilers](reconcilers.md#agentreconciler) first if you have not: the rules below refer to specific reconciler steps.
 
-## Error Handling
+## Error handling
 
 Errors are classified into three categories. The category determines the controller's response, so classifying correctly matters more than the specific error type.
 
@@ -22,7 +22,7 @@ Something failed, but the same operation will probably succeed shortly. Members:
 - Transient Pod failures (crashloop with recent start)
 - Network errors talking to ModelProvider for health checks
 
-Handled by returning a `Requeue` result with exponential backoff (250ms -> 30s max).
+Handled by returning an error, which controller-runtime requeues with its default per-item exponential backoff (5 ms, doubling, capped at 1000 s) under an overall 10 requests per second bucket.
 
 ### Recoverable
 
@@ -33,7 +33,7 @@ The resource cannot do its job right now, but the configuration is valid and the
 
 The Agent remains in its current phase with `Degraded` condition set. Reconciles continue on relevant resource events, which is why the AgentReconciler watches `ModelProvider` and re-queues on change rather than waiting out the periodic requeue.
 
-One exclusion is deliberate and easy to get wrong. A ModelProvider whose `allowedNamespaces` stops including the Agent's namespace is **not** in this bucket. That is a class-vs-spec mismatch, not a transient outage: it is handled via `phase=Degraded` per [AgentReconciler step 2](reconcilers.md#agentreconciler), consistent with [Per-Agent and Per-Task Child Resources bucket 2](../runtime/child-resources.md). The distinction is that nothing will fix itself here: a human has to align the Agent or the ModelProvider spec.
+One exclusion is deliberate and easy to get wrong. A ModelProvider whose `allowedNamespaces` stops including the Agent's namespace is **not** in this bucket. That is a class-vs-spec mismatch, not a transient outage: it is handled with `phase=Degraded` per [AgentReconciler step 2](reconcilers.md#agentreconciler), consistent with [Bucket 2: degrade-when-irreconcilable](change-propagation.md#bucket-2-degrade-when-irreconcilable). The distinction is that nothing will fix itself here: a human has to align the Agent or the ModelProvider spec.
 
 ### Terminal
 
@@ -45,7 +45,7 @@ The configuration cannot produce a working resource, and retrying will not chang
 
 Reconciling stops until the spec changes, because a spec change is the only thing that can plausibly fix the problem.
 
-## Event Emission
+## Event emission
 
 The controller emits Kubernetes Events for:
 
@@ -74,7 +74,7 @@ Standard controller-runtime metrics (reconcile counts, duration, queue depth) ar
 
 The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserves it for counters, and promlint flags non-counter `_total` names. They are computed from the manager cache on every scrape (a resource the reconciler has not stamped yet counts as `Pending`), and every controller replica serves them from its own cache, so dashboards aggregate them with `max`, not `sum`.
 
-`kaalm_channels` is rolled up by `status.phase` (`Active` | `Degraded` | `Failed` | `Terminating`, see [AgentChannelReconciler step 5](reconcilers.md#agentchannelreconciler)), `status.conditions[type=Ready]`, and `status.conditions[type=PlatformConnected]`. The two condition labels keep their `true` | `false` | `unknown` values. This surfaces both the bound-Agent state (via `phase`) and the tri-state `PlatformConnected` condition computed by [AgentChannelReconciler step 4](reconcilers.md#agentchannelreconciler).
+`kaalm_channels` is rolled up by `status.phase` (`Active` | `Degraded` | `Failed` | `Terminating`, see [AgentChannelReconciler step 5](reconcilers.md#agentchannelreconciler)), `status.conditions[type=Ready]`, and `status.conditions[type=PlatformConnected]`. The two condition labels keep their `true` | `false` | `unknown` values. This surfaces both the bound-Agent state (through `phase`) and the tri-state `PlatformConnected` condition computed by [AgentChannelReconciler step 4](reconcilers.md#agentchannelreconciler).
 
 `kaalm_provider_budget_canonical_usd` is written by [ModelProviderReconciler step 3](reconcilers.md#modelproviderreconciler) after pruning stale-replica partials. It is distinct from the gateway's per-replica `kaalm_llm_spend_usd_total` (the partials before reconciliation). Dashboards plot this gauge to show authoritative spend without summing across replicas.
 
@@ -82,19 +82,19 @@ The phase-count gauges deliberately carry no `_total` suffix. OpenMetrics reserv
 
 - `kaalm_hibernations_total{namespace}`: counter of hibernation events
 - `kaalm_wakes_total{namespace,trigger}`: counter of wake events (trigger = `channel` | `annotation`)
-- `kaalm_storage_migrated_objects_total{kind}`: counter of custom resources the storage-version migrator rewrote at the `v1beta1` storage version, by kind; zero on a fresh install, the number of pre-upgrade objects on the first leader start after an upgrade, and zero on every start after that ([API Versioning and Deprecation](../operations/api-versioning.md#storage-version-migration))
+- `kaalm_storage_migrated_objects_total{kind}`: counter of custom resources the storage-version migrator rewrote at the `v1beta1` storage version, by kind; zero on a fresh install, the number of pre-upgrade objects on the first leader start after an upgrade, and zero on every start after that ([API versioning and deprecation](../operations/api-versioning.md#storage-version-migration))
 
-Budget policy actions are counted where they happen, on the gateway's request path: `kaalm_budget_threshold_events_total` in [LLM Gateway Operations](../gateways/llm/operations.md#observability).
+Budget policy actions are counted where they happen, on the gateway's request path: `kaalm_budget_threshold_events_total` in [LLM Gateway operations](../gateways/llm/operations.md#observability).
 
-For gateway metrics (LLM and channel), see [LLM Gateway Operations](../gateways/llm/operations.md#observability) and [User Gateway Operations](../gateways/user/operations.md#observability).
+For gateway metrics (LLM and channel), see [LLM Gateway operations](../gateways/llm/operations.md#observability) and [User Gateway operations](../gateways/user/operations.md#observability).
 
-## Testing Strategy Notes
+## Testing strategy notes
 
-While detailed test guidance lives in the (deferred) contribution guide, the design assumes:
+The design assumes:
 
 - Each reconciler is unit-testable by injecting a fake client.
 - State machine transitions are table-testable.
 - Integration tests use `envtest` for API server + etcd in-memory.
-- End-to-end tests run against a kind cluster with a stubbed LLM provider (an HTTP server that responds with canned completions and reports fake token counts).
+- End-to-end tests run against a k3d cluster with a stubbed LLM provider (an HTTP server that responds with canned completions and reports fake token counts).
 
-The controller should not hardcode assumptions about real LLM providers. Testability depends on the gateway being swappable with a mock: because agents never talk to providers directly and all LLM traffic goes through the gateway, substituting a stub at that one seam covers the whole system.
+The controller should not hardcode assumptions about real LLM providers. Testability depends on the gateway being swappable with a mock: because agents never talk to providers directly and all LLM traffic goes through the gateway, substituting a stub at that one point covers the whole system.

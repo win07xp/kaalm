@@ -1,0 +1,32 @@
+@startuml controller-replicas
+' What every controller replica serves, what only the leader does, and how a wake that lands on a non-leader still reaches the leader.
+' Source of truth: docs/src/controller/overview.md
+!include _style.puml
+
+rectangle "Kaalm Gateway\nkaalm-system" as gw #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+rectangle "Service kaalm-controller\n:9443 activator · :9444 conversion" as svc #back:F5F5F5;line:9E9E9E;text:2a0a4a
+
+rectangle "Controller Deployment (2 replicas, kaalm-system)" as dep {
+  rectangle "**Replica A (leader)**\n:9443 activator + probes\n:9444 conversion webhook\n:8080 metrics\n**six reconcilers, running**" as leader #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+  rectangle "**Replica B**\n:9443 activator + probes\n:9444 conversion webhook\n:8080 metrics (zeros)\nreconcilers idle" as follower #back:87CEEB;line:0D47A1;text:0a2540
+}
+
+database "Kubernetes API\n+ leader Lease" as apiserver #back:FFD580;line:7a3f00;text:3a1f00
+
+gw -[#1B5E20,bold]-> svc : POST /v1/activate\n(mTLS, round-robin)
+svc -[#1B5E20,bold]-> follower : lands on any replica
+follower -[#0D47A1]-> apiserver : patch kaalm.io/wake=true\non the Agent
+apiserver -[#0D47A1,dashed]-> leader : Agent watch fires
+leader -[#0D47A1]-> apiserver : reconcile: Hibernated to Resuming,\nrecreate the Pod
+leader .[#9E9E9E].> apiserver : holds the Lease
+follower .[#9E9E9E].> apiserver : waits on the Lease
+
+legend bottom
+  Every replica serves the activator, the probes, the conversion webhook, and
+  metrics. Only the Lease holder runs reconcilers. A wake that lands on a
+  non-leader is not lost, because the wake is an annotation write and the
+  apiserver is the message bus: the leader's watch picks it up. Non-leader
+  metrics are controller-runtime defaults at zero, so dashboards filter on the
+  leader or aggregate with max.
+endlegend
+@enduml

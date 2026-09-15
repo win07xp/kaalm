@@ -1,4 +1,4 @@
-# AgentTask Lifecycle
+# AgentTask lifecycle
 
 An [AgentTask](../resources/agenttask.md) is a run-to-completion workload: the operator provisions a Pod, the Pod does its work, the operator collects the result and tears the Pod down. Unlike an Agent, which is long-lived and hibernates between requests, an AgentTask always settles in a terminal phase.
 
@@ -90,7 +90,7 @@ The reconciler stamps `AgentTask.status.currentPodUID = Pod.UID` whenever the ag
 
 The reconciler watches Pod phase: exit 0 -> `Succeeded`, non-zero -> `Failed`.
 
-This mode depends on task Pods being created with `restartPolicy: Never`, which the AgentTaskReconciler pins unconditionally because Kaalm owns retries via `backoffLimit`. With `Always` or `OnFailure`, the kubelet restarts the exited container in place and the Pod phase never reaches `Succeeded`/`Failed`, so completion would never be observed. In-place kubelet restarts would also bypass `status.retries` accounting and blur the one-run-per-`currentPodUID` assumption.
+This mode depends on task Pods being created with `restartPolicy: Never`, which the AgentTaskReconciler pins unconditionally because the reconciler performs retries through `backoffLimit`. With `Always` or `OnFailure`, the kubelet restarts the exited container in place and the Pod phase never reaches `Succeeded`/`Failed`, so completion would never be observed. In-place kubelet restarts would also bypass `status.retries` accounting and blur the one-run-per-`currentPodUID` assumption.
 
 Agent Pods, by contrast, are pinned `restartPolicy: Always`. Crash-loop detection there reads `containerStatuses` restart counts (CrashLoopBackOff), not Pod phase.
 
@@ -98,14 +98,14 @@ Agent Pods, by contrast, are pinned `restartPolicy: Always`. Crash-loop detectio
 
 In `agentReported` mode, artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required.
 
-Artifact-name conformance against `spec.artifacts` is enforced synchronously at the gateway: `400 invalid_request` is returned to the agent before the ConfigMap is patched (see [POST /v1/task/complete](../gateways/api/task-complete.md)). The reconciler re-checks defensively when reading the ConfigMap, as belt-and-suspenders against any future RBAC drift on the per-task `update, patch` Role, but under normal operation the re-check is a no-op.
+Artifact-name conformance against `spec.artifacts` is enforced synchronously at the gateway: `400 invalid_request` is returned to the agent before the ConfigMap is patched (see [POST /v1/task/complete](../gateways/api/task-complete.md)). The reconciler re-checks defensively when reading the ConfigMap, as a second check against RBAC drift on the per-task `update, patch` Role, but under normal operation the re-check is a no-op.
 
 Oversize artifacts are rejected at the gateway with HTTP 413:
 
 - more than **4 KiB per artifact**, or
 - more than **32 KiB total**.
 
-Agents must externalize large outputs (object storage, Git, etc.) and pass a reference URL inline. There is no auto-spill mechanism and no `status.artifactRefs` field.
+Agents must externalize large outputs (object storage, Git) and pass a reference URL inline. There is no auto-spill mechanism and no `status.artifactRefs` field.
 
 ## Retry mechanics
 
@@ -117,14 +117,14 @@ When [`spec.completion.backoffLimit`](../resources/agenttask.md) is `> 0` and th
 4. The `{taskName}-completion` ConfigMap is reset to `data: {}`.
 5. The PVC is retained, so the retry runs with the same scratch storage.
 6. The task transitions back to `Provisioning` and a new Pod is created.
-7. The reconciler observes the new Pod via the informer and stamps `status.currentPodUID = newPod.UID`.
+7. The reconciler observes the new Pod through the informer and stamps `status.currentPodUID = newPod.UID`.
 8. If the retry also fails and `status.retries` equals `backoffLimit`, the task remains in `Failed` as a terminal state.
 
 Steps 2 and 7 bracket the run: clearing the UID closes the in-flight stale-write window, and re-stamping it re-opens the gate for the new Pod. In between, no Pod can write a completion.
 
-![Sequence diagram of an AgentTask retry. The reconciler increments status.retries, then clears status.currentPodUID to the empty string, which closes the gate (shaded region). Inside the closed gate it deletes the old Pod, patches the completion ConfigMap back to an empty data map, and creates the new Pod with the PVC retained. Two different completions arrive while the gate is closed and both receive 403 StalePodCompletion from the gateway: a late in-flight completion from the terminated old Pod, and the new Pod's first completion racing the reconciler's stamp. The gate re-opens when the reconciler observes the new Pod via its informer and stamps status.currentPodUID to the new Pod's UID, after which the new Pod's completion is accepted and written to the ConfigMap.](../diagrams/task-retry-race.svg)
+![Sequence diagram of an AgentTask retry. The reconciler increments status.retries, then clears status.currentPodUID to the empty string, which closes the gate (shaded region). Inside the closed gate it deletes the old Pod, patches the completion ConfigMap back to an empty data map, and creates the new Pod with the PVC retained. Two different completions arrive while the gate is closed and both receive 403 StalePodCompletion from the gateway: a late in-flight completion from the terminated old Pod, and the new Pod's first completion racing the reconciler's stamp. The gate re-opens when the reconciler observes the new Pod through its informer and stamps status.currentPodUID to the new Pod's UID, after which the new Pod's completion is accepted and written to the ConfigMap.](../diagrams/task-retry-race.svg)
 
-Reading the diagram: the shaded region is the window in which `currentPodUID` is empty, and the gateway's identity gate therefore rejects everything. Both rejections inside it return the same `403 StalePodCompletion` for opposite reasons. The old Pod's late write is the case the gate exists to stop, and rejecting it is the whole point. The new Pod's early write is a benign informer-lag race that the agent retries through. The two are indistinguishable to the gateway, which is why the status code is shared and why the runtime contract makes `StalePodCompletion` retryable rather than fatal.
+Reading the diagram: the shaded region is the window in which `currentPodUID` is empty, and the gateway's identity gate therefore rejects everything. Both rejections inside it return the same `403 StalePodCompletion` for opposite reasons. The old Pod's late write is the case the gate exists to stop, and rejecting it is the gate's purpose. The new Pod's early write is a benign informer-lag race that the agent retries through. The two are indistinguishable to the gateway, which is why the status code is shared and why the runtime contract makes `StalePodCompletion` retryable rather than fatal.
 
 **On step 1 (when the counter moves).** The increment happens at the start of each retry cycle, before the [pre-Pod cross-check in AgentTaskReconciler step 1](reconcilers.md#agenttaskreconciler) runs. A retry whose new Pod fails the cross-check (`reason=ClassConstraintViolation` or `reason=PersistenceNotAllowed`) therefore consumes one unit of `backoffLimit` even though the failure cause is admin misconfiguration of the AgentClass or ModelProvider rather than the workload. Operators that have aligned the class spec mid-backoff and want a clean retry should delete and recreate the AgentTask. A `kubectl apply` of the same or modified spec does not reset `status.retries`, since status is controller-owned and Kubernetes apply patches only `spec`. The new AgentTask starts at `status.retries = 0` against the now-aligned class.
 
@@ -132,7 +132,7 @@ Reading the diagram: the shaded region is the window in which `currentPodUID` is
 
 **On step 4 (resetting the mailbox).** The reconciler patches the ConfigMap back to empty rather than deleting and re-creating it, so the existing ownerRef and the gateway's name-scoped `update, patch` Role remain valid for the retry.
 
-**On step 7 (re-stamping the UID).** There is a narrow informer-lag window (typically <100ms versus seconds of agent startup) where the new Pod's first `/v1/task/complete` may race the stamp and receive `403 StalePodCompletion`. Agents handle this per [/v1/task/complete](../runtime/contract.md) with a bounded retry on `StalePodCompletion`.
+**On step 7 (re-stamping the UID).** There is a narrow informer-lag window (typically <100ms versus seconds of agent startup) where the new Pod's first `/v1/task/complete` may race the stamp and receive `403 StalePodCompletion`. Agents handle this per [The runtime contract](../runtime/contract.md), item 6, with a bounded retry on `StalePodCompletion`.
 
 ### Timeouts are not retried
 

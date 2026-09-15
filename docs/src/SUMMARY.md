@@ -57,14 +57,14 @@
 
 # The Controller
 
-- [Operator Structure](controller/overview.md)
+- [Operator structure](controller/overview.md)
 - [Reconcilers](controller/reconcilers.md)
-- [Agent Lifecycle](controller/agent-lifecycle.md)
-- [Hibernation and Wake](controller/hibernation-and-wake.md)
-- [Change Propagation](controller/change-propagation.md)
-- [AgentTask Lifecycle](controller/task-lifecycle.md)
+- [Agent lifecycle](controller/agent-lifecycle.md)
+- [Hibernation and wake](controller/hibernation-and-wake.md)
+- [Change propagation](controller/change-propagation.md)
+- [AgentTask lifecycle](controller/task-lifecycle.md)
 - [Finalizers](controller/finalizers.md)
-- [Errors, Events, and Testing](controller/operations.md)
+- [Errors, events, and testing](controller/operations.md)
 
 # The Console
 
