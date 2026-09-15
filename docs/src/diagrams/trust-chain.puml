@@ -57,7 +57,7 @@ legend bottom
   dashed because only a console-enabled install creates it (the console is off by default). Neither the
   gateway nor the controller ever reads the CA Secret: trust arrives only as the projected ConfigMap.
   ====
-  **Namespace placement is the point.** One Secret, one namespace, two readers: the CA ClusterIssuer
+  **Namespace placement is the constraint.** One Secret, one namespace, two readers: the CA ClusterIssuer
   resolves ca.secretName only in cert-manager's --cluster-resource-namespace, and trust-manager reads
   Bundle sources only from its --trust-namespace. Both default to cert-manager, so one copy serves both.
   Put the Secret anywhere else (kaalm-system is the tempting mistake) and kaalm-ca-issuer goes

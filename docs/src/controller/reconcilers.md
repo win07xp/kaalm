@@ -14,7 +14,7 @@ AgentClass has no owned child resources, so its reconciliation is lightweight: v
 
 1. Validate that all referenced `allowedProviders` and `allowedToolProviders` exist (emit a `Ready=False` condition if any are missing).
 2. Validate `network.egress.allowedCIDRs`: every entry must parse as a valid CIDR block (IPv4 or IPv6). Invalid entries set `Ready=False, reason=InvalidReference` with a message naming the offending entry (rule 19).
-3. Validate `network.egress.allowedHosts`: every entry must be a valid DNS name (RFC 1123). If `allowedHosts` is non-empty, check the cached result of the startup **CNI FQDN-policy probe** (see below). If the cluster's CNI does not support FQDN egress policies, emit a `Warning` event (`reason=FQDNPolicyUnsupported`, message naming the AgentClass and the unsupported entries) on the AgentClass and mark the condition `FQDNPolicySupported=False` on status. `allowedHosts` is **ignored** when the AgentClassReconciler (or any dependent reconciler) synthesizes per-agent NetworkPolicy: only `allowedCIDRs` is applied. The AgentClass itself still becomes `Ready=True`; the warning is actionable for the platform engineer but not blocking.
+3. Validate `network.egress.allowedHosts`: every entry must be a valid DNS name (RFC 1123). If `allowedHosts` is non-empty, check the cached result of the startup **CNI FQDN-policy probe** (see below) and record it as the `FQDNPolicySupported` condition; when the cluster's CNI has no FQDN policy type, emit a `Warning` event (`reason=FQDNPolicyUnsupported`) on the AgentClass as well. Either way, no reconciler synthesizes anything from `allowedHosts`: only `allowedCIDRs` reaches the per-agent NetworkPolicy. The AgentClass still becomes `Ready=True`.
 4. Count `Agent` and `AgentTask` resources referencing this class; populate `status.agentsInUse` and `status.tasksInUse`.
 5. Update `status.conditions` accordingly.
 
@@ -202,7 +202,7 @@ Either one drives the [involuntary-disruption transition](agent-lifecycle.md) ba
 - (b) the DNS egress rule from the Helm value `controller.networkPolicy.dnsSelector`,
 - (c) the default ingress allow from the gateway for `$KAALM_HEALTH_PORT`,
 - (d) `AgentClass.spec.network.egress.allowedCIDRs` translated into `NetworkPolicy.egress.to.ipBlock.cidr` rules,
-- (e) `AgentClass.spec.network.egress.allowedHosts` translated into `CiliumNetworkPolicy.toFQDNs` (or the Calico-Enterprise equivalent) **only** when the AgentClassReconciler's startup CNI probe reported FQDN-policy support; otherwise `allowedHosts` is silently ignored and the matching `Warning` event is emitted on the AgentClass, not the Agent,
+- (e) nothing from `AgentClass.spec.network.egress.allowedHosts`: the controller synthesizes no FQDN policy on any CNI. The AgentClassReconciler validates the names and reports whether the CNI could enforce them (`FQDNPolicySupported`, with a `Warning` event when it could not), and the field is otherwise inert,
 - (f) inter-agent ingress only when `AgentClass.spec.network.allowSameNamespaceIngress: true`.
 
 ### Injected environment and probes

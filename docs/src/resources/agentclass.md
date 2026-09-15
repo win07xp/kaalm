@@ -94,11 +94,11 @@ spec:
       allowedCIDRs:
         - "10.42.0.0/16"         # internal MCP subnet
         - "140.82.112.0/20"      # api.github.com (example; pin to actual ranges)
-      # Optional DNS-based allowlist. Only enforced on CNIs that support FQDN
-      # egress policies (Cilium, Calico Enterprise). On standard CNIs this
-      # field is ignored and AgentClassReconciler emits a Warning event. Use
-      # allowedCIDRs for portable enforcement; use allowedHosts in addition only
-      # when you have a CNI that supports FQDN-based policy.
+      # Optional DNS-based allowlist. Validated, and the class reports whether
+      # the CNI has an FQDN policy type (FQDNPolicySupported), but the
+      # controller synthesizes no FQDN policy from it on any CNI. Use
+      # allowedCIDRs for enforcement; treat allowedHosts as documentation of
+      # intent that a CNI-native policy beside Kaalm's can carry out.
       allowedHosts:
         - "mcp.internal.corp"
         - "api.github.com"
@@ -192,9 +192,9 @@ Patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Matc
 
 `allowedCIDRs` is the portable primitive. It maps directly to `NetworkPolicy.egress.to.ipBlock.cidr`, which every CNI implementing Kubernetes NetworkPolicy supports.
 
-`allowedHosts` (DNS names) cannot be expressed in standard `NetworkPolicy`. It requires a CNI with FQDN egress policies: Cilium (through `CiliumNetworkPolicy`) or Calico Enterprise. The AgentClassReconciler detects the cluster CNI on startup; if `allowedHosts` is set but no supported FQDN-policy CRD is present, a `Warning` event is emitted and `allowedHosts` is ignored.
+`allowedHosts` (DNS names) cannot be expressed in standard `NetworkPolicy`, and the controller synthesizes no FQDN policy from it on any CNI. What it does: validate the names, detect at startup whether the cluster has an FQDN policy type (Cilium's `CiliumNetworkPolicy`, Calico Enterprise), report that as the class's `FQDNPolicySupported` condition, and emit a `Warning` event when the CNI could not enforce hostnames.
 
-Prefer `allowedCIDRs` for egress governance; layer `allowedHosts` on top only when the CNI supports it.
+Use `allowedCIDRs` for egress governance. A hostname allowlist is a CNI-native policy the platform team writes beside Kaalm's.
 
 ### `allowedProviders` is one gate in a chain, and only in the full lifecycle tier
 

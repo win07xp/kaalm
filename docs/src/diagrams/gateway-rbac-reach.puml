@@ -48,13 +48,13 @@ legend bottom
   **Fact 1: a ClusterRole bound with a ClusterRoleBinding applies in every namespace.** There is no way to say
   "this grant, but only in kaalm-system". So anything that must be namespace-limited ships as a separate
   namespaced Role, which is why the gateway has a ClusterRole/Role **pair** rather than one object, and why
-  Services **get** is an honest cluster-wide grant: it cannot be narrowed to "user namespaces only". Service
+  Services **get** is a cluster-wide grant: it cannot be narrowed to "user namespaces only". Service
   objects carry no secret material, so the extra reach is benign.
   ====
   **Fact 2: resourceNames constrains get, update, patch, delete and watch, but NOT list and NOT create.** Both
   dotted grants therefore omit a verb on purpose. **list** is dead weight on a name-scoped Secret read, and a
   name-scoped **watch** must set fieldSelector metadata.name=<secret> to satisfy the check. **create** is the
-  load-bearing omission: granting create on a named ConfigMap would silently widen the gateway to **all**
+  deliberate omission: granting create on a named ConfigMap would silently widen the gateway to **all**
   ConfigMaps in that namespace, so the reconciler pre-creates the object and grants only update, patch.
   ====
   **delete on kaalm-system ConfigMaps is absent for a different reason:** cleanup is controller-side. The

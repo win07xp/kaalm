@@ -14,28 +14,27 @@ rectangle "**Operator ServiceAccount**\nkaalm-system/kaalm-controller" as OPSA #
 
 ' ---------- family 1: ClusterRole ----------
 rectangle "**reach: every namespace in the cluster**\na ClusterRoleBinding cannot be namespace-limited" as band #line:B71C1C;line.dashed;text:B71C1C {
-  rectangle "**Kaalm CRDs**\nAgent, AgentTask, AgentChannel,\nModelProvider, AgentClass\n**get, list, watch, create,**\n**update, patch, delete**\n....\n***/status**  **update, patch**\nseparate grants: with the status\nsubresource enabled, write on the main\nresource does **not** permit status writes\n....\n***/finalizers**  **update**\nreconcilers set ownerRefs with\nblockOwnerDeletion: true, and the\nOwnerReferencesPermissionEnforcement\nadmission plugin authorizes that against\nthe owner's finalizers subresource" as crds #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**Kaalm CRDs**\nAgent, AgentTask, AgentChannel,\nModelProvider, ToolProvider, AgentClass\n**get, list, watch, update, patch**\n(delete on AgentTask, for TTL cleanup)\n....\n***/status**  **get, update, patch**\nseparate grants: with the status\nsubresource enabled, write on the main\nresource does **not** permit status writes\n....\n***/finalizers**  **update**\nreconcilers set ownerRefs with\nblockOwnerDeletion: true, and the\nOwnerReferencesPermissionEnforcement\nadmission plugin authorizes that against\nthe owner's finalizers subresource\n....\n**customresourcedefinitions**  **get**\n**customresourcedefinitions/status**  **patch**\nresourceNames: the six Kaalm CRDs,\nfor the storage-version migrator" as crds #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 
-  rectangle "**Pods**, **PersistentVolumeClaims**,\n**Services**, **ConfigMaps**,\n**NetworkPolicies**, **ServiceAccounts**\n**get, list, watch, create,**\n**update, patch, delete**\nNetworkPolicy and ServiceAccount are\nsynthesized per Agent / per AgentTask and\nowner-referenced for cascade GC, so create\nand delete must reach user namespaces.\nlist and watch feed controller-runtime's\ninformers. Pods is cluster-wide also because\nthe AgentReconciler enumerates gateway\nPods in kaalm-system for the activity fan-out." as core #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**PersistentVolumeClaims**, **Services**,\n**ConfigMaps**, **ServiceAccounts**,\n**NetworkPolicies**\n**get, list, watch, create,**\n**update, patch, delete**\n**Pods**  **get, list, watch, create, delete**\n(a Pod is replaced, never edited)\nNetworkPolicy and ServiceAccount are\nsynthesized per Agent / per AgentTask and\nowner-referenced for cascade GC, so create\nand delete must reach user namespaces.\nlist and watch feed controller-runtime's\ninformers. Pods is cluster-wide also because\nthe AgentReconciler enumerates gateway\nPods in kaalm-system for the activity fan-out." as core #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 
   rectangle "**cert-manager.io/v1 Certificate**\n**get, list, watch, create,**\n**update, patch, delete**\nthe per-Agent and per-AgentTask certs live\nalongside the workload, not kaalm-system.\nlist and watch are required so the reconciler\ncan observe status.conditions[type=Ready]\nbefore creating the dependent Pod." as certs #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 
-  rectangle "**roles**, **rolebindings**\n(rbac.authorization.k8s.io)\n**get, list, watch, create, update, delete**\n**+ escalate**   **+ bind**\nboth verbs are load-bearing: see the legend" as rbacres #back:F5F5F5;line:B71C1C;line.bold;text:2a0a4a
+  rectangle "**roles**, **rolebindings**\n(rbac.authorization.k8s.io)\n**get, list, watch, create, update, patch, delete**\nno escalate, no bind: every permission the\nminted Roles grant is one the operator\nalready holds cluster-wide" as rbacres #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 
-  rectangle "**RuntimeClass**, **StorageClass**, **Namespaces**\n**get, list, watch** (validation)\n....\n**Events**  **create, patch**" as meta #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**Secrets**\n**get, list, watch**\nin **every** namespace: provider and tool\ncredential validation and probes, and the\nchannel credential key check. Read-only,\nnever copied. The tighter grant the design\npoints at (a kaalm-system read plus escalate\nand bind) is not what the chart grants." as secs #back:FFD580;line:B71C1C;line.bold;text:3a1f00
 
-  rectangle "**ciliumnetworkpolicies.cilium.io**\nor the Calico Enterprise equivalent\n//conditional: the chart templates these//\n//rules only when FQDN egress synthesis is//\n//switched on (allowedHosts on a supported//\n//CNI). A cluster without it never grants them.//" as cni #back:F5F5F5;line:9E9E9E;line.dashed;text:757575
+  rectangle "**Events**  **create, patch**" as meta #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
 }
 
 ' ---------- family 2: namespaced Role ----------
 rectangle "namespace: **kaalm-system**" as nssys #line:0D47A1;line.dashed;text:0a2540 {
-  rectangle "**Leases**\n**get, list, watch, create,**\n**update, patch, delete**\ncontroller-runtime's leader-election lock\nneeds the full set. Shipping it as the\nnamespaced Role is what actually\nconfines it to kaalm-system." as leases #back:FFD580;line:7a3f00;line.bold;text:3a1f00
-  rectangle "**Secrets**\n**get, list, watch**\nkaalm-system **only**, never cluster-wide.\nValidates that ModelProvider credential\nSecrets exist and are well-formed." as secs #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**Leases**\n**get, list, watch, create,**\n**update, patch, delete**\ncontroller-runtime's leader-election lock\nneeds the full set. Shipping it as the\nnamespaced Role is what confines it\nto kaalm-system. Events and ConfigMaps\nride the same Role for the lock." as leases #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 
 ' ---------- family 3: dynamic per-namespace Roles ----------
 rectangle "a user namespace, per AgentChannel" as nsuser #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "channel **Secret(s)**\n**get, watch**\nresourceNames-scoped to the Secret(s) named\nby that AgentChannel's webhook auth config.\n//list omitted//: resourceNames cannot\nconstrain it. A name-scoped watch must set\nfieldSelector metadata.name=<secret>.\n....\nUsed **only** by the AgentChannelReconciler, to\ncheck that the configured **data** key is present.\nTorn down with the AgentChannel." as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "channel **Secret(s)**\n**get, watch**\nresourceNames-scoped to the Secret(s) named\nby that AgentChannel's credential config.\n//list omitted//: resourceNames cannot\nconstrain it. A name-scoped watch must set\nfieldSelector metadata.name=<secret>.\n....\nA mirror of the gateway's Role, minted for\nconsistency: the operator's own limit is the\ncluster-wide read above. Torn down with\nthe AgentChannel." as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 
 ' ---------- the three edge classes ----------
@@ -43,33 +42,26 @@ OPSA -[#B71C1C,bold]-> crds : **ClusterRole**\n+ ClusterRoleBinding
 OPSA -[#B71C1C,bold]-> core
 OPSA -[#B71C1C,bold]-> certs
 OPSA -[#B71C1C,bold]-> rbacres
+OPSA -[#B71C1C,bold]-> secs
 OPSA -[#B71C1C,bold]-> meta
-OPSA .[#9E9E9E,bold].> cni : conditional
 OPSA -[#0D47A1]-> leases : **Role** + RoleBinding\nin kaalm-system
-OPSA -[#0D47A1]-> secs
 OPSA .[#7a3f00,bold].> chsec : **dynamic Role**\nper AgentChannel
 
 crds -[hidden]down- core
 core -[hidden]down- certs
 certs -[hidden]down- rbacres
-rbacres -[hidden]down- meta
-meta -[hidden]down- cni
-leases -[hidden]down- secs
+rbacres -[hidden]down- secs
+secs -[hidden]down- meta
 
 legend bottom
   **The same three edge classes as the gateway, and the same ClusterRole/Role split**, for the same reason: a
-  ClusterRoleBinding applies in every namespace, so anything that must be namespace-limited (Leases, Secrets)
-  has to ship as a separate namespaced Role. **The operator does not hold cluster-wide Secret access.** Unlike a
-  sidecar model, credentials stay with the gateway in kaalm-system and are never copied to user namespaces.
+  ClusterRoleBinding applies in every namespace, so anything that must be namespace-limited (the Lease) ships
+  as a separate namespaced Role. The ClusterRole is generated from the reconcilers' RBAC markers and copied into
+  the chart, so the figure describes what the chart grants.
   ====
-  **Why escalate AND bind.** Kubernetes escalation prevention forbids creating a Role that grants permissions the
-  creator does not itself hold, and the per-channel Roles grant user-namespace Secret reads the operator
-  deliberately lacks as a standing permission. **escalate** satisfies that check when creating or updating the Role.
-  **bind** is separately required for the RoleBinding half: Kubernetes permits creating a RoleBinding referencing a
-  Role only if the creator either holds everything the Role grants, or holds bind on it. One verb does not cover both.
-  ====
-  **This is a deliberate trade, and the operator ServiceAccount should be audited as privileged.** The alternative that
-  satisfies the escalation check without escalate is granting the operator standing Secret read across all user
-  namespaces, which is strictly worse: it turns a create-time capability into an always-on read surface.
+  **The red Secrets box is the one to audit.** The operator's standing Secret read reaches every namespace. It
+  writes nothing and copies nothing, but a compromised operator reads every provider key in kaalm-system and every
+  channel credential in every user namespace. Escalation prevention is satisfied without escalate or bind because
+  the minted per-channel and per-task Roles never grant more than that standing read.
 endlegend
 @enduml
