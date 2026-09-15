@@ -1,6 +1,6 @@
-# Discord Channel
+# Discord channel
 
-*(Since v0.7.0.)* `POST /channels/{namespace}/{channel-path}` for an AgentChannel of `spec.type: discord` is the Discord application's **Interactions Endpoint URL**. Discord POSTs every interaction for the application to it: the verification `PING` when the operator saves the URL, and each slash command a person invokes. The gateway acknowledges within Discord's 3-second budget and delivers the agent's reply later through the interaction's follow-up webhook.
+`POST /channels/{namespace}/{channel-path}` for an AgentChannel of `spec.type: discord` is the Discord application's **Interactions Endpoint URL**. Discord POSTs every interaction for the application to it: the verification `PING` when the operator saves the URL, and each slash command a person invokes. The gateway acknowledges within Discord's 3-second budget and delivers the agent's reply later through the interaction's follow-up webhook.
 
 The channel fields are in [Platform types](../../resources/agentchannel.md#discord); the adapter mechanics and the reply delivery buckets are in [The platform adapters](../user/platform-adapters.md#the-platform-adapters). This page is the wire contract on both sides.
 

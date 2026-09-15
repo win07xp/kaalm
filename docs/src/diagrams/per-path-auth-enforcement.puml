@@ -1,67 +1,50 @@
 @startuml per-path-auth-enforcement
-' One weak handshake setting on :8443, plus a per-path client-auth decision tree in HTTP middleware.
-' Source of truth: docs/src/gateways/llm/listener-tls.md
+' One permissive handshake setting on :8443, then per-path client-auth
+' decisions in HTTP middleware. The rationale for each branch is the prose on
+' docs/src/gateways/listener-tls.md (the source of truth).
 !include _style.puml
 
 start
-:**TLS handshake on :8443**\n**ClientAuth = tls.VerifyClientCertIfGiven**\n(permissive on purpose: a caller with no client\ncert must still complete the handshake);
+:TLS handshake on :8443\nClientAuth = VerifyClientCertIfGiven;
+:Route by path family;
 
-:Route by **path family** (HTTP middleware);
-
-if (path family?) then (**LLM proxy**)
-
-  :/v1/messages\n/v1/chat/completions\n/v1/completions\n+ adapter-registered\nprovider paths;
-
-  if (Client cert present?) then (yes)
-    :**Mode 1: mTLS**\nNamespace from the SAN.\nSAN shape + label\ncount enforced.\n(Bearer header, if\nalso present, is\nignored: mTLS wins.);
+if (path family?) then (dual-mode)
+  :/v1/messages, /v1/chat/completions,\n/v1/completions, provider paths,\n/v1/mcp/*;
+  if (client cert?) then (yes)
+    :**Mode 1: mTLS**\nnamespace from the SAN;
   else (no)
-    if (Authorization: Bearer present?) then (no)
-      :**401 Unauthorized**\nneither auth\nmaterial present;
+    if (bearer header?) then (yes)
+      :**Mode 2: bearer**\nPod precheck, then TokenReview;
+    else (no)
+      :**401**;
       stop
-    else (yes)
-      :**Mode 2: bearer**\nPod-ownership\nprecheck **first**,\nthen TokenReview;
     endif
   endif
-
-elseif (path family?) then (**agent-report**)
-
+elseif (path family?) then (mTLS only)
   :/v1/agent/heartbeat,\n/v1/task/complete;
-
-  if (Client cert present?) then (no)
-    :**401 Unauthorized**\n**regardless of any**\n**bearer header**\n(mTLS-only: no\nbearer fallback);
+  if (client cert?) then (no)
+    :**401**;
     stop
   else (yes)
   endif
-  :Admitted on an Agent\n**or** AgentTask SAN;
-  :**Handler-level**\n**caller-type split**\nheartbeat: **Agent** only\ntask-complete:\n**AgentTask** only\nthe other kind:\n**403 Forbidden**;
-
-else (**controller-only**)
-
+  if (SAN kind matches the path?) then (no)
+    :**403**;
+    stop
+  else (yes)
+  endif
+else (controller only)
   :/v1/activity,\n/v1/channels/health;
-
-  if (Client cert present?) then (no)
-    :**401 Unauthorized**;
+  if (client cert?) then (no)
+    :**401**;
     stop
   else (yes)
   endif
-  if (SAN matches the\ncontroller Service DNS?) then (no)
-    :**403 Forbidden**;
+  if (controller SAN?) then (no)
+    :**403**;
     stop
   else (yes)
   endif
-  :Authorized as the controller;
 endif
-
-:Proceed to the handler;
+:Handler;
 stop
-
-legend bottom
-  **The inversion is the point.** One socket serves three auth regimes, and a single
-  tls.Config.ClientAuth value cannot express path-conditional requirements.
-  **RequireAndVerifyClientCert** would lock out gateway-only-tier callers: their handshake
-  would fail before the path router ever ran. **NoClientCert** would silently downgrade the
-  mTLS tier: a cert would be presented but never verified. So the handshake is deliberately
-  weak and the per-path tree above carries the whole enforcement burden. A routing bug here
-  would let agent-cert holders reach controller-only paths.
-endlegend
 @enduml

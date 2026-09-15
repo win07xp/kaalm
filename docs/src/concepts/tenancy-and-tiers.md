@@ -59,7 +59,7 @@ For full-lifecycle workloads, an Agent or AgentTask can use a provider only when
 
 All three layers must pass. Gateway-only-tier callers have no Agent, AgentTask, or AgentClass to consult, so they are gated by `ModelProvider.allowedNamespaces` alone.
 
-Separately, the requested model must exist in `ModelProvider.spec.models`. That check is a model-resolution prerequisite enforced at the gateway, not a tenancy boundary, and it applies to callers in both tiers: see [Gateway overview](../gateways/overview.md).
+Separately, the requested model must exist in `ModelProvider.spec.models`. That check is a model-resolution prerequisite enforced at the gateway, not a tenancy boundary, and it applies to callers in both tiers: see [Request format detection](../gateways/llm/request-handling.md#request-format-detection).
 
 ![The gate chain the LLM gateway applies to a request carrying a qualified model name: identify the caller's namespace from an mTLS certificate SAN (full lifecycle tier) or a TokenReview-verified bearer token (gateway-only tier), then Gate A checks the providerRef against the workload's spec.providers and the AgentClass allowedProviders, Gate B checks the calling namespace against ModelProvider allowedNamespaces, and Gate C resolves the modelId against ModelProvider models. Gate A sits in a lane of its own that gateway-only callers bypass entirely. Budget and rate-limit checks follow, and every denial arm is labelled with its status code and error type.](../diagrams/provider-access-gates.svg)
 
@@ -73,7 +73,7 @@ Gateway rate-limit token buckets are keyed on (namespace, model) against the clu
 
 Both controls apply to gateway-only-tier callers as well, because both are enforced at the gateway from the namespace identified on every request; the gateway derives that namespace from the caller's workload identity, whichever auth mode it used (see [Workload identity](../gateways/llm/workload-identity.md)).
 
-See [Gateway overview](../gateways/overview.md) for the per-request enforcement points, and [Multi-replica state](../gateways/overview.md#multi-replica-state) for the cross-replica reconciliation strategies (both counters live in gateway replicas, so they need reconciling).
+See [Request handling](../gateways/llm/request-handling.md#request-flow) for the per-request enforcement points, and [Multi-replica state](../gateways/overview.md#multi-replica-state) for the cross-replica reconciliation strategies (both counters live in gateway replicas, so they need reconciling).
 
 ### NetworkPolicy as the cross-tenant boundary
 
