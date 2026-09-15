@@ -67,11 +67,12 @@ legend bottom
   three slots, so visits 4 and 5 are never reached, even though anthropic-overflow sits one
   level below the primary and anthropic-eu sits two.
 
-  **Exhaustion never returns 429.** Every attempt failed at the connect layer: 503
-  provider_unavailable. Every attempt timed out pre-stream: 504 provider_timeout. Anything
-  else, including a walk exhausted purely by budget-blocked candidates: 502 provider_error.
+  **Exhaustion maps to the failure classes recorded.** Every attempt unreachable: 503
+  provider_unavailable. Every attempt timed out pre-stream: 504 provider_timeout. Every
+  candidate budget-blocked or throttled: 429 budget_exhausted, or 503 budget_state_unavailable
+  when a fail-closed candidate is among them. Any other mix: 502 provider_error.
 
   **Rule 11**: the tree must not be circular. **Rule 12**: every provider in it carries the
-  primary's spec.type. The traversal algorithm itself lives in Fallback Logic.
+  primary's spec.type or a type the gateway translates to. The traversal itself is in Fallback logic.
 endlegend
 @enduml
