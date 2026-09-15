@@ -82,7 +82,7 @@ cacert -[hidden]down- cacm
 
 legend bottom
   **This is an inventory: what the chart installs and where it lands.** For how the CA, the issuers, the Bundle and
-  the leaf certs actually chain together, see the trust chain figure; that page owns it. The per-Agent and
+  the leaf certs actually chain together, see the trust chain figure; that page draws it. The per-Agent and
   per-AgentTask Certificates are absent here on purpose: reconcilers create them at provisioning time, not the chart.
   ====
   **The chart never installs the three prerequisites above,** so teams with an existing cert-manager reuse it. It ships

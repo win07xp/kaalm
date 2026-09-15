@@ -1,4 +1,4 @@
-# Load and Scale
+# Load and scale
 
 This page is the scale proof for the v1.0.0 design: a repeatable load harness, the environment it runs on, and the baseline it produced. The numbers are a baseline, not a pass mark: later releases run the same harness on the same environment and compare against it, and the page states what a real cluster changes.
 
@@ -25,7 +25,7 @@ make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'   # the
 make load-down                  # delete the cluster
 ```
 
-`make load` takes about an hour on the baseline machine. Results land in `test/load/results/` as JSON; the published baseline lives in `test/load/baseline/`. The flags in `test/load/config.go` change the fleet size, the wave size, the phase list, and every duration. The defaults are the baseline shape, so a baseline re-run is the one-line command. The load deploy also opens the [profiling](observability.md#profiling) listeners on both components (`LOAD_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the pure functions on the gateway's request paths with no cluster at all; save two runs and compare them with `benchstat` before and after a change to one of those paths.
+`make load` takes about an hour on the baseline machine. Results land in `test/load/results/` as JSON; the published baseline lives in `test/load/baseline/`. The flags in `test/load/config.go` change the fleet size, the wave size, the phase list, and every duration. The defaults are the baseline shape, so a baseline re-run is the one-line command. The load deploy also opens the [Profiling](observability.md#profiling) listeners on both components (`LOAD_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the pure functions on the gateway's request paths with no cluster at all; save two runs and compare them with `benchstat` before and after a change to one of those paths.
 
 The harness checks two host prerequisites before it starts:
 
@@ -48,7 +48,7 @@ The harness is a release-time local gate, listed in the release checklist, not a
 
 ## Baseline numbers
 
-Every table is from the one `make load` run of September 12, 2026. Where a number moved by a multiple since the September 11 baseline, the sentence after the table says why; the run-to-run spread on this machine is stated where it matters.
+Every table is from the single `make load` run of September 12, 2026. Where a number moved by a multiple since the September 11 baseline, the sentence after the table says why; the run-to-run spread on this machine is stated where it matters.
 
 ### Gateway
 
@@ -61,7 +61,7 @@ Four legs of 60 s at 32 concurrent callers in an in-cluster load generator:
 | mTLS, soft budget, 50 ms upstream | 615 | 51.9 / 53.2 / 54.0 | 75.0 / 97.5 / 99.5 | 6.0 cores, 56 MiB |
 | mTLS, hard budget, immediate upstream | 15176 | 1.7 / 4.6 / 6.4 | 2.5 / 4.8 / 5.1 | 5.8 cores, 55 MiB |
 
-Against the September 11 baseline the immediate legs run at about 3.5x the requests per second (4238, 4626, and 4295 then) with p99 down from about 90 ms to under 8 ms, and the gateway's CPU per request fell from about 1.1 ms to about 0.4 ms. The provider-facing transport kept the default two idle connections per host, so at 32 callers nearly every request dialed and ran a full TLS handshake; the pool is now sized for hundreds of in-flight requests per host. The 50 ms leg is bound by the 32 callers times the upstream delay and does not move. The immediate legs vary between runs on this machine: 13.5k to 17.5k rps across the three `make load` runs of September 12.
+Against the September 11 baseline the immediate legs run at about 3.5x the requests per second (4238, 4626, and 4295 then) with p99 down from about 90 ms to under 8 ms, and the gateway's CPU per request fell from about 1.1 ms to about 0.4 ms. The provider-facing transport kept the default two idle connections per host, so at 32 callers nearly every request dialed and ran a full TLS handshake; the September 12 code sizes the pool for hundreds of in-flight requests per host. The 50 ms leg is bound by the 32 callers times the upstream delay and does not move. The immediate legs vary between runs on this machine: 13.5k to 17.5k rps across the three `make load` runs of September 12.
 
 ### Max-active ramp
 
@@ -79,7 +79,7 @@ Waves of 50 agents, persistence and hibernation off, until the environment's fir
 | 7 | 400 | 71 | 38 / 59 / 65 | 32 / 52 | 33 | 2 / 11 | 3.5 / 234.1 | 85 / 71 | 6563 |
 | 8 | stopped | 170 | 40 / 150 / 155 | 27 / 45 | 29 | 11 / 106 | 3.4 / 234.6 | 110 / 93 | 5472 |
 
-The ramp stopped in wave 8 at agent Pods crash-looping on probe timeouts, and the fleet the later phases ran on is the 400 agents of waves 0 to 7. Memory per running agent is 16.6 MiB of host memory (the starter agent, BestEffort). Time-to-Ready is certificate issuance: the certificate column is the bulk of every wave's p50, and Pod start to Ready is about a second. Reconcile p50 is now 3.5 ms (9 to 30 ms on September 11): a pass that changes nothing writes nothing, and the reconcile count per wave is flat at about 1100 where it climbed from 1000 to 2000 as the fleet grew, because a class's in-use count and a provider's spend counters no longer re-enqueue every agent that references them.
+The ramp stopped in wave 8 at agent Pods crash-looping on probe timeouts, and the fleet the later phases ran on is the 400 agents of waves 0 to 7. Memory per running agent is 16.6 MiB of host memory (the starter agent, BestEffort). Time-to-Ready is certificate issuance: the certificate column is the bulk of every wave's p50, and Pod start to Ready is about a second. Reconcile p50 is 3.5 ms, against 9 to 30 ms on September 11: a pass that changes nothing writes nothing. The reconcile count per wave is flat at about 1100, where on September 11 it climbed from 1000 to 2000 as the fleet grew, because a class's in-use count and a provider's spend counters re-enqueued every agent that referenced them.
 
 ### Hold and serve
 
@@ -96,7 +96,7 @@ One message per agent per minute for three minutes, through each agent's async w
 | Gateway peak | 102 mCPU, 152 MiB |
 | Controller peak | 253 mCPU, 126 MiB |
 
-The delivery tail is the environment. Every failed attempt is counted by the layer that failed, and the retried attempts are TCP connects that go unanswered for 10 s or more on fresh flows to the same destination, alongside about 1250 retransmit timeouts on established connections per three-minute hold on the busy gateway Pod, while conntrack and bridge counters on the nodes stay clean: this is the 16-core WSL2 box delaying packets under 400 agent Pods. The failure count swings between runs on identical code (5 to 163 of 1200 across the five holds of September 12), so read it as a range. The gateway's own cost on this path is fixed: a dropped packet costs one connect bound rather than a whole attempt, connections are pooled per agent, the agent is resolved once per attempt, and nothing leaks. Channel activation for 400 channels is seconds (372 s on September 11): the channel reconciler wrote status and posted its RoleBindings on every pass, and no longer does.
+The delivery tail is the environment. Every failed attempt is counted by the layer that failed, and the retried attempts are TCP connects that go unanswered for 10 s or more on fresh flows to the same destination, alongside about 1250 retransmit timeouts on established connections per three-minute hold on the busy gateway Pod, while conntrack and bridge counters on the nodes stay clean: this is the 16-core WSL2 box delaying packets under 400 agent Pods. The failure count swings between runs on identical code (5 to 163 of 1200 across the five holds of September 12), so read it as a range. The gateway's own cost on this path is fixed: a dropped packet costs one connect bound rather than a whole attempt, connections are pooled per agent, the agent is resolved once per attempt, and nothing leaks. Channel activation for 400 channels is seconds (372 s on September 11): on September 11 the channel reconciler wrote status and posted its RoleBindings on every pass.
 
 ### Control-plane traffic
 
@@ -137,7 +137,7 @@ A persistence-enabled fleet of 100 with a 10 s idle timer, one message per agent
 | Wake latency | p50 4.0 s, p95 10.0 s |
 | Teardown | 100 agents and their PVCs gone in 13 s |
 
-Wake latency is the Pod's start on this machine plus the NetworkPolicy programming lag the CNI bullet below describes; the shape is the number that transfers, not the value.
+Wake latency is the Pod's start on this machine plus the NetworkPolicy programming lag the CNI bullet below describes; the breakdown is what transfers, not the value.
 
 ### Concurrent tasks
 
@@ -173,7 +173,7 @@ The heap curves are the async records, not a leak. Every async message leaves a 
 
 The baseline is one developer machine. The numbers that transfer are the per-unit ones (memory per running agent, the gateway's per-request cost, wake latency shape); the absolute fleet ceiling does not.
 
-- **Provider latency.** Real providers answer in hundreds of milliseconds to seconds, so the gateway's own cost, which the immediate legs isolate, is a small fraction of every request. The 50 ms leg is the shape to compare against.
+- **Provider latency.** Real providers answer in hundreds of milliseconds to seconds, so the gateway's own cost, which the immediate legs isolate, is a small fraction of every request. Compare against the 50 ms leg.
 - **Memory and nodes.** The ramp stops where host memory runs out on one machine. On a real cluster the fleet ceiling is the sum of node capacity divided by the per-agent figure, plus whatever the agent image itself needs beyond the starter.
 - **Certificate issuance.** Every agent gates on a cert-manager Certificate before its Pod exists, so starting a fleet is paced by cert-manager's issuance rate. A production cert-manager can be tuned and scaled; the baseline runs the default single replica.
 - **The CNI.** k3d's flannel enforces NetworkPolicy through kube-router, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which lands inside wake latency. Cilium and Calico program policies differently and typically faster.
