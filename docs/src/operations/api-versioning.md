@@ -129,4 +129,4 @@ This is the policy a `v1alpha1` user can plan against, and the rule set every la
 
 ## Scenario
 
-[S21: Upgrade In Place and Keep Every Agent](../appendix/scenarios.md#s21-upgrade-in-place-and-keep-every-agent) is the acceptance scenario for this chapter: a platform running the previous release, with `v1alpha1` manifests in Git, runs the two documented steps and keeps every agent, task, and channel, with nothing recreated and the legacy manifests still applying. Its coverage row is on [Scenario Coverage](../appendix/scenario-coverage.md).
+[S21: Upgrade in place and keep every agent](../appendix/scenarios.md#s21-upgrade-in-place-and-keep-every-agent) is the acceptance scenario for this chapter: a platform running the previous release, with `v1alpha1` manifests in Git, runs the two documented steps and keeps every agent, task, and channel, with nothing recreated and the legacy manifests still applying. Its coverage row is on [Scenario coverage](../appendix/scenario-coverage.md).
