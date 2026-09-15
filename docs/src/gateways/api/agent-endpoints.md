@@ -44,7 +44,7 @@ Because the agent is the server here, the agent is responsible for authenticatin
 
 Enforcement cannot live at the TLS handshake (`RequireAndVerifyClientCert`): the kubelet's HTTP probes share the same port and present no client certificate, so a handshake-level requirement would fail every probe and leave the agent permanently unready. This is the same `VerifyClientCertIfGiven` + per-path pattern the controller `:9443` and gateway `:8443` listeners use. Layered with the synthesized NetworkPolicy gateway → agent ingress allow rule, this is what keeps the message path safe under a misconfigured per-Agent NetworkPolicy. See [The Runtime Contract item 4](../../runtime/contract.md) and [In-cluster TLS](../../security/tls.md#in-cluster-tls).
 
-Both endpoints on this page, the port they share with the kubelet probes, and the auth on every other agent-to-gateway call are drawn together in [Communication summary](../../runtime/contract.md#communication-summary).
+Both endpoints on this page are drawn with the auth on every other agent-to-gateway call under [The runtime contract](../../runtime/contract.md#3-gateway-communication), item 3; the port they share with the kubelet probes is drawn under item 4.
 
 ### Request body (sent by the gateway)
 
