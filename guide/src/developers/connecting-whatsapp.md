@@ -10,7 +10,7 @@ one Graph API call per reply.
 ## Before you begin
 
 - A running Agent with `service.enabled: true` (the default). See
-  [Your First Agent](first-agent.md).
+  [Your first agent](first-agent.md).
 - The user gateway reachable from the internet over HTTPS at a hostname with
   a certificate Meta can verify. See
   [Exposing it outside the cluster](connecting-a-channel.md#exposing-it-outside-the-cluster).
@@ -132,6 +132,6 @@ reach the agent.
 ---
 
 *How this works: design book pages Resources, AgentChannel (the Platform
-types section), Gateways, User, Platform Adapters (the inbound steps and reply
-delivery), and Gateways, API, WhatsApp Channel (the wire contract on both
+types section), Gateways, User, Platform adapters and channel health (the inbound steps and reply
+delivery), and Gateways, API, WhatsApp channel (the wire contract on both
 sides).*

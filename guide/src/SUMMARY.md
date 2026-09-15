@@ -2,40 +2,41 @@
 
 [Introduction](introduction.md)
 
-# Getting Started
+# Getting started
 
 - [Installation](getting-started/installation.md)
-- [Verifying the Install](getting-started/verifying.md)
+- [Verifying the install](getting-started/verifying.md)
 - [Upgrading Kaalm](getting-started/upgrading.md)
 
-# For Platform Teams
+# For platform teams
 
-- [Offering Agent Classes](platform/agent-classes.md)
-- [Providing LLM Access](platform/llm-access.md)
-- [Budgets, Limits, and Fallback](platform/budgets-limits-fallback.md)
-- [Providing Tool Access](platform/tool-access.md)
-- [Managing Team Access](platform/managing-access.md)
+- [Offering agent classes](platform/agent-classes.md)
+- [Providing LLM access](platform/llm-access.md)
+- [Budgets, limits, and fallback](platform/budgets-limits-fallback.md)
+- [Providing tool access](platform/tool-access.md)
+- [Managing team access](platform/managing-access.md)
+- [Tuning the controller and gateway](platform/tuning.md)
 
-# Observing the Platform
+# Observing the platform
 
-- [Using the Console](observing/console.md)
-- [Installing the Grafana Dashboards](observing/dashboards.md)
-- [Enabling Tracing](observing/tracing.md)
+- [Using the console](observing/console.md)
+- [Installing the Grafana dashboards](observing/dashboards.md)
+- [Enabling tracing](observing/tracing.md)
 
-# For Agent Developers
+# For agent developers
 
-- [Your First Agent](developers/first-agent.md)
-- [Connecting a Channel](developers/connecting-a-channel.md)
+- [Your first agent](developers/first-agent.md)
+- [Connecting a channel](developers/connecting-a-channel.md)
 - [Connecting Discord](developers/connecting-discord.md)
 - [Connecting WhatsApp](developers/connecting-whatsapp.md)
-- [Running Tasks](developers/running-tasks.md)
-- [Calling Tools Through the Gateway](developers/calling-tools.md)
-- [Agent Lifecycle Day-to-Day](developers/lifecycle.md)
-- [Deploying from a Base Image](developers/deploying-from-a-base-image.md)
-- [Running Framework Agents](developers/framework-agents.md)
-- [Building Your Own Agent Image](developers/building-your-own-image.md)
+- [Running tasks](developers/running-tasks.md)
+- [Calling tools through the gateway](developers/calling-tools.md)
+- [Agent lifecycle day to day](developers/lifecycle.md)
+- [Deploying from a base image](developers/deploying-from-a-base-image.md)
+- [Running framework agents](developers/framework-agents.md)
+- [Building your own agent image](developers/building-your-own-image.md)
 
 # Reference
 
 - [Troubleshooting](reference/troubleshooting.md)
-- [Status Cheatsheet](reference/status-cheatsheet.md)
+- [Status cheatsheet](reference/status-cheatsheet.md)

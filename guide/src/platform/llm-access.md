@@ -1,4 +1,4 @@
-# Providing LLM Access
+# Providing LLM access
 
 A ModelProvider gives teams LLM access without ever handing them the API key.
 The credential lives in a Secret in `kaalm-system`; the gateway reads it
@@ -52,7 +52,7 @@ spec:
         degradeTo: claude-opus-4-6
 ```
 
-What each block buys you:
+What each block does:
 
 - **`models`** is the catalog. Agents request models as
   `anthropic-shared/claude-opus-4-6`; a model not in this list is rejected.
@@ -71,22 +71,42 @@ What each block buys you:
 kubectl get modelproviders
 ```
 
-The columns tell the story: `Ready` means the spec is valid and the credential
-Secret resolves; `Healthy` reports the periodic upstream probe. A provider can
-be Ready but Unhealthy (endpoint down); it recovers on its own when the probe
-succeeds again.
+The two columns to read: `Ready` means the spec is valid and the credential
+resolves; `Healthy` reports the periodic upstream probe. A provider can be
+Ready but Unhealthy (endpoint down); it recovers on its own when the probe
+succeeds again. A key the provider rejects is different: the probe reports
+it as `Ready=False` with reason `CredentialsInvalid`, and the provider stays
+that way until the Secret holds a key the provider accepts.
 
 The probe is configurable through `spec.healthCheck` (`enabled`, default
 true; `intervalSeconds`, default 60; `timeoutSeconds`, default 10). Disabling
-it is useful for offline fixtures or provider types with no probe. The probe
-trusts system CA roots by default; for an in-cluster or private-CA endpoint,
-set `controller.trustClusterCAForProbes=true` (the cluster CA) or
-`controller.probeCA.configMap` (any bundle) on the chart, the probe-side
-mirror of the gateway's upstream trust values, so the provider can be both
-forwarded to and probed `Healthy`.
+it is useful for offline fixtures or provider types with no probe.
+
+## 4. Trust a private CA
+
+Both the gateway (which forwards requests) and the controller (which probes)
+trust the system CA roots by default. A provider served with a certificate
+from your own CA, an in-cluster model server for example, needs the same
+trust on both sides, set on the chart:
+
+| Endpoint certificate issued by | Gateway side | Controller side |
+|---|---|---|
+| The Kaalm cluster CA (`kaalm-ca-issuer`) | `gateway.trustClusterCAForUpstream=true` | `controller.trustClusterCAForProbes=true` |
+| Any other CA | `gateway.upstreamCA.configMap=<name>` | `controller.probeCA.configMap=<name>` |
+
+For the second row, create a ConfigMap in `kaalm-system` whose `ca.crt` key
+holds the PEM bundle (the key name is `gateway.upstreamCA.key` and
+`controller.probeCA.key`, default `ca.crt`). Both components re-read the
+bundle when it rotates, with no restart. The two rows compose: enabling both
+merges the cluster CA and your bundle into one trust pool. Enable a side
+without the other and the provider is either forwarded to but never
+`Healthy`, or `Healthy` but every call fails TLS verification.
+
+The same choice exists for async webhook callbacks to receivers under a
+private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.
 
 ---
 
 *How this works: design book pages Resources, ModelProvider (every field and
-the status shape), Security, Credentials (why keys live only in
-kaalm-system), and Gateways, LLM (how the proxy injects the credential).*
+the status shape), Security, Credential handling (why keys live only in
+kaalm-system), and Gateways, LLM Gateway (how the proxy injects the credential).*

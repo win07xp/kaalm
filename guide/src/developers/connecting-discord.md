@@ -9,7 +9,7 @@ to Discord: the gateway only answers requests Discord makes.
 ## Before you begin
 
 - A running Agent with `service.enabled: true` (the default). See
-  [Your First Agent](first-agent.md).
+  [Your first agent](first-agent.md).
 - The user gateway reachable from the internet over HTTPS at a hostname with a
   certificate Discord can verify. Discord refuses a self-signed endpoint. See
   [Exposing it outside the cluster](connecting-a-channel.md#exposing-it-outside-the-cluster).
@@ -154,6 +154,6 @@ Ingress first.
 ---
 
 *How this works: design book pages Resources, AgentChannel (the Platform
-types section), Gateways, User, Platform Adapters (the inbound steps and reply
-delivery), and Gateways, API, Discord Channel (the wire contract on both
+types section), Gateways, User, Platform adapters and channel health (the inbound steps and reply
+delivery), and Gateways, API, Discord channel (the wire contract on both
 sides).*

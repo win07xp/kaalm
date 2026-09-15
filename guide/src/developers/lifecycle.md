@@ -1,4 +1,4 @@
-# Agent Lifecycle Day-to-Day
+# Agent lifecycle day to day
 
 This page describes the lifecycle as you observe it: what the phases mean in
 `kubectl get agents -w`, what hibernation looks like, and what deletion
@@ -6,20 +6,12 @@ actually tears down.
 
 ## The phase walk
 
-A healthy persistent agent moves through:
+A healthy persistent agent moves through `Pending`, `Provisioning`, and
+`Running`; goes `Idle` after `idleTimeout` with no activity, then through
+`Hibernating` to `Hibernated` once `hibernationDelay` elapses; and comes
+back through `Resuming` to `Running` when a message arrives or you wake it.
 
-```
-Pending -> Provisioning -> Running
-                             |  (idleTimeout with no activity)
-                             v
-                           Idle
-                             |  (hibernationDelay elapses)
-                             v
-                        Hibernating -> Hibernated
-                             |  (a message arrives, or you wake it)
-                             v
-                         Resuming -> Running
-```
+![Agent state machine: Pending to Provisioning to Running, with an idle and hibernate cycle through Idle, Hibernating, Hibernated, and Resuming back to Running, and branches from any phase to Degraded, Failed, and Terminating.](../diagrams/agent-lifecycle.svg)
 
 `Degraded` is a side state (provider revoked, budget exhausted: the agent
 runs but something it needs is missing), `Failed` is a crash-loop verdict,
@@ -48,7 +40,7 @@ The timing caveat that matters: under default settings, a sync-mode channel
 times out (`504 sync_deadline_exceeded` at 30 seconds) before a cold wake
 completes (`wakeTimeout` 120 seconds). **Give hibernation-backed channels
 `responseMode: async`**; the caller gets its `202` instantly and the reply
-arrives via callback or polling once the agent is up. If the wake itself
+arrives by callback or polling once the agent is up. If the wake itself
 exceeds `wakeTimeout`, async callers receive a `wake_timeout` error payload
 instead of silence.
 
@@ -60,7 +52,7 @@ kubectl annotate agent support-assistant kaalm.io/wake=true
 
 ## Promoting a task to a persistent agent
 
-When a finished task's sandbox is worth keeping (a human wants to inspect or
+When a finished task's sandbox should be kept (a human wants to inspect or
 take over), the pattern uses standard Kubernetes primitives, before the
 task's `ttlSecondsAfterFinished` cleans up its PVC:
 
@@ -80,7 +72,7 @@ underneath.
 
 ---
 
-*How this works: design book pages Controller, Agent Lifecycle (the state
-machine and every timer), Gateways, User, Activation and Activity (the wake
+*How this works: design book pages Controller, Agent lifecycle (the state
+machine and every timer), Gateways, User, Activation and activity tracking (the wake
 sequence, drawn step by step), and Resources, Agent (the lifecycle spec
 fields and their class-level bounds).*

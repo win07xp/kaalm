@@ -1,4 +1,4 @@
-# Status Cheatsheet
+# Status cheatsheet
 
 Everything Kaalm tells you through `kubectl get` and `describe`, resource
 by resource. Conditions listed are the ones the controller actually sets.
@@ -11,7 +11,7 @@ Phases, in lifecycle order:
 
 | Phase | Meaning |
 |---|---|
-| `Pending` | Accepted, children not yet created |
+| `Pending` | Accepted, children not created |
 | `Provisioning` | Pod, PVC, Service, Certificate, NetworkPolicy coming up; the Pod waits on its certificate |
 | `Running` | Everything up; `Ready: True` |
 | `Idle` | No activity for `idleTimeout`; still running |
@@ -32,7 +32,12 @@ granted tool is outside the ToolProvider's declared catalog). A wake can
 also be refused with event reason `WakeIgnored` (for
 example, hibernation not in effect). Handler-mount problems surface as
 Ready-condition reasons: `HandlerMountNotAllowed` (the class does not allow
-mounts) and `HandlerConfigMapNotFound`.
+mounts) and `HandlerConfigMapNotFound`. Other class gates that degrade an
+Agent: `PersistenceNotAllowed`, `HibernationNotAllowed`, and
+`HibernationRequiresPersistence`. Other Ready-condition reasons:
+`ExistingClaimNotFound` (the adopted PVC is missing), `ImagePullSecretMissing`,
+and `SystemNamespaceForbidden` (an Agent in `kaalm-system` or a system
+namespace is never provisioned).
 
 ## AgentTask
 
@@ -59,11 +64,13 @@ until the finalizer is installed. `Connected` shows the
 reach the agent (reasons like `AgentReachable`, `WebhookReady`,
 `NoRecentTraffic`, `AgentNotFound`).
 
-Spec problems show as Ready-condition reasons: `InvalidPath`,
-`PathConflict`, `InvalidCallbackURL`, `CallbackAuthMissing`,
-`SystemNamespaceForbidden`, and for a platform channel (`type: discord` or `whatsapp`)
-`CredentialsMissing` (a required key is absent from the credential Secret)
-or `CredentialsInvalid` (the Discord public key is not a valid Ed25519 key).
+Spec problems show as Ready-condition reasons: `AgentNotFound` (the bound
+Agent does not exist; the phase is `Failed`), `AgentServiceDisabled` (the
+bound Agent has `service.enabled: false`), `InvalidPath`, `PathConflict`,
+`InvalidCallbackUrl`, `SystemNamespaceForbidden`, `CredentialsMissing` (the
+auth, callback-auth, or platform credential Secret is absent or lacks a
+required key), and `CredentialsInvalid` (the Discord public key is not a
+valid Ed25519 key).
 `PlatformConnected=False` reasons name what failed most recently:
 `WebhookAuthFailed` (signature or token), `AgentNotReady`, `DispatchFailed`,
 `CallbackInvalid`, `CallbackRejected` (a callback receiver or a platform
@@ -102,8 +109,9 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 - `Healthy`: the periodic probe, which speaks MCP (`initialize` then
   `tools/list`); `UpstreamReachable` when good, `ProviderUnhealthy` when
   not. As with ModelProvider, Ready without Healthy means valid config,
-  unreachable server. The probe trusts system CA roots only; disable it for
-  a server on a private CA.
+  unreachable server. The probe trusts the system CA roots plus whatever
+  `controller.trustClusterCAForProbes` and `controller.probeCA.configMap`
+  add ([Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca)).
 
 ## AgentClass
 
@@ -112,16 +120,18 @@ live usage, which is also your "is anyone still using this class" check
 before deleting one.
 
 Conditions: `Ready` and `FQDNPolicySupported` (whether the CNI supports the
-FQDN egress rules the class asks for; reason `FQDNPolicyUnsupported` when
-not).
+FQDN egress rules the class asks for; reason `NoHostsRequested` when the
+class names no `allowedHosts`, `FQDNPolicyUnsupported` when it does and the
+CNI cannot carry them out). A fresh class shows empty `AGENTS` and `TASKS`
+columns until something uses it.
 
-## One-liners worth keeping
+## One-liners
 
 ```bash
 # Watch an agent come up or wake
 kubectl get agents -w
 
-# Everything Kaalm owns in a namespace
+# Every Kaalm object in a namespace
 kubectl get agents,agenttasks,agentchannels -n <ns>
 
 # The cluster-scoped set
@@ -136,6 +146,6 @@ kubectl describe agent <name> | sed -n '/Conditions:/,/Events:/p'
 
 ---
 
-*How this works: design book pages Controller, Agent Lifecycle (the phase
+*How this works: design book pages Controller, Agent lifecycle (the phase
 machine), Resources (each CRD page documents its full status shape), and
 Operations, Observability (the metrics that complement these statuses).*

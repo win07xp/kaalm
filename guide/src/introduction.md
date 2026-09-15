@@ -11,7 +11,7 @@ the security model, and the wire contracts in full. Pages here end with a short
 
 ## The mental model, in six resources
 
-Three are cluster-scoped and owned by the platform team:
+Three are cluster-scoped and managed by the platform team:
 
 - **AgentClass** is a policy template: which images may run, how much storage an
   agent may claim, what lifecycle limits apply. Think of it as a runtime class
@@ -24,14 +24,14 @@ Three are cluster-scoped and owned by the platform team:
   catalog bounds what can be called, and an allowlist decides which
   namespaces may use it.
 
-Three are namespaced and owned by application teams:
+Three are namespaced and managed by application teams:
 
 - **Agent** is a long-lived, stateful agent: it gets a Pod, optional persistent
   storage, and hibernation when idle.
 - **AgentTask** is a run-to-completion agent: it does one job, reports a result,
   and is cleaned up.
-- **AgentChannel** connects an Agent to the outside world through an inbound
-  webhook.
+- **AgentChannel** connects an Agent to the outside world: an inbound
+  webhook, a Discord slash command, or a WhatsApp business number.
 
 Every LLM call an agent makes, and every brokered tool call, goes through
 the Kaalm gateway, which injects the credential server-side, so API keys
@@ -40,11 +40,11 @@ never appear in an agent's namespace, container, or environment.
 ## Which chapters are for you
 
 - **Platform engineer** (you install Kaalm and offer classes and providers to
-  teams): read Getting Started, then the For Platform Teams part. The
-  Observing the Platform part comes next, when you want the fleet on a
+  teams): read Getting started, then For platform teams. Observing the
+  platform comes next, when you want the fleet on a
   screen, dashboards, and traces.
 - **Agent developer** (someone already runs Kaalm for you; you deploy agents):
-  skim the mental model above, then start at [Your First Agent](developers/first-agent.md).
+  skim the mental model above, then start at [Your first agent](developers/first-agent.md).
 
 ## What you need before starting
 

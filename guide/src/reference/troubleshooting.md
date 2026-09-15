@@ -69,7 +69,7 @@ One of the three gates denied; the error message names which:
 
 Read the error type; the two cases behave differently:
 
-- **`rate_limited`**: per (namespace, model) requests or tokens per minute;
+- **`rate_limited`**: per (namespace, model) requests per minute;
   clears in seconds. Back off and retry.
 - **`budget_exhausted`**: the namespace or cluster budget is spent;
   `Retry-After` is the seconds until the period resets. Retrying sooner is
@@ -105,7 +105,7 @@ on the chart. The same applies to a ToolProvider's `Healthy` column.
 
 ---
 
-*How this works: design book pages Gateways, API, Errors (the full error
-catalog), Controller, Operations (error-handling philosophy), and Appendix,
+*How this works: design book pages Gateways, API, Error reference (the full error
+catalog), Controller, Errors, events, and testing (error-handling philosophy), and Appendix,
 Scenarios (S5, S7, S10, S14 cover the revocation, hibernation, and budget
 stories behind these symptoms).*

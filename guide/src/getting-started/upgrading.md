@@ -14,8 +14,8 @@ helm pull oci://ghcr.io/win07xp/charts/kaalm --version <version> --untar
 kubectl apply --server-side --force-conflicts -f kaalm/crds/
 ```
 
-`--force-conflicts` is part of the command: Helm owns every CRD field from
-the install, and the first server-side apply takes that ownership over.
+`--force-conflicts` is part of the command: Helm is the field manager for every CRD field from
+the install, and the first server-side apply takes that management over.
 
 Find `<version>` on the
 [Releases page](https://github.com/win07xp/kaalm/releases). If you work from
@@ -36,14 +36,26 @@ the controller and gateway rollouts are complete.
 
 Running agents are not restarted by either step. The controller replaces an
 agent Pod only when the Pod's own spec changes, and a Kaalm upgrade does not
-change it.
+change it. Before and after the two steps, a running agent and a finished
+task read the same:
+
+```text
+NAME                               PHASE     READY   CLASS      AGE
+agent.kaalm.io/support-assistant   Running   True    standard   4m39s
+
+NAME                                PHASE       CLASS      AGE
+agenttask.kaalm.io/nightly-report   Succeeded   standard   102s
+```
+
+and their Pods keep their names and ages, while `helm history kaalm -n
+kaalm-system` shows the new revision as `deployed`.
 
 ## Upgrading across v0.6.0
 
 v0.6.0 graduates the API: `v1beta1` becomes the storage version and the
 version the components speak, and `v1alpha1` stays served, deprecated, and
 converted by the controller. The upgrade is still the same two steps, with
-one window worth knowing about.
+one window to know about.
 
 **Between step 1 and step 2**, reads keep working, but a write at `v1alpha1`,
 including `kubectl apply` of an existing manifest, fails with a conversion
@@ -90,6 +102,6 @@ removal before it happens.
 your manifests; if you must roll back, reinstall the old version fresh and
 reapply them.
 
-*How this works: design book pages Operations, API Versioning and Deprecation
+*How this works: design book pages Operations, API versioning and deprecation
 (the storage migration, the conversion webhook, and the deprecation policy);
 Operations, Deployment (the rolling upgrade order).*

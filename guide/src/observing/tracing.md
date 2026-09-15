@@ -1,9 +1,9 @@
-# Enabling Tracing
+# Enabling tracing
 
 Tracing connects one user message to the LLM and tool calls it caused,
 across the gateway, the agent, and the provider. It is off by default: with
 no endpoint configured the gateway installs no tracer, creates no trace
-context, and handles requests exactly as before. Two values turn it on.
+context, and carries no tracing overhead. Two values turn it on.
 
 ## 1. Point the gateway at a collector
 
@@ -48,8 +48,8 @@ production collector.
 ## 3. Send a message and find its trace
 
 Send one message to any agent through its channel
-([Connecting a Channel](../developers/connecting-a-channel.md)), or from the
-console's test-chat panel ([Using the Console](console.md)). In Jaeger, pick
+([Connecting a channel](../developers/connecting-a-channel.md)), or from the
+console's test-chat panel ([Using the console](console.md)). In Jaeger, pick
 the service `kaalm-gateway` and filter by the tag `kaalm.namespace` set to
 the agent's namespace. The e2e spec asks the same question of the Jaeger API:
 
@@ -103,12 +103,12 @@ requirement.
 
 Set `gateway.tracing.otlpEndpoint` back to the empty string and upgrade.
 No tracer is installed, no context is created or forwarded, and request
-handling behaves as it did before tracing existed.
+handling carries no tracing overhead.
 
 ---
 
 *How this works: design book pages Operations, Observability (the Tracing
 section: span inventory, attributes, exporter, and what the controller does
-not trace), Runtime, Contract (item 8, trace-context propagation), Runtime,
-Base Images (`kaalm.trace_context()`), and Appendix, Scenarios (S20, one
+not trace), Runtime, The runtime contract (item 8, trace-context propagation), Runtime,
+Base Images (`kaalm.trace_context()`), and Appendix, Acceptance scenarios (S20, one
 message across the hops).*

@@ -1,9 +1,9 @@
-# Running Framework Agents
+# Running framework agents
 
 Kaalm never dictates what code produces a reply. The runtime contract
 governs how a container behaves; a framework agent (LangGraph, LangChain,
-or anything else) is just the code between envelope in and reply out. If
-you already have one, you do not have to ditch it. There are two
+or anything else) is the code between envelope in and reply out. If you
+already have one, you can keep it. There are two
 integration levels, and the first needs no conversion at all.
 
 ## Level 1: gateway only, zero conversion
@@ -57,7 +57,7 @@ the rest of this page.
 
 On the base image, the framework is a `pip install` in a `FROM` build and
 the graph runs inside `handle_message(envelope)`. The base image keeps
-owning the contract plumbing; your handler builds its model clients from
+providing the contract code; your handler builds its model clients from
 two ABI members made for exactly this:
 
 ```python
@@ -92,8 +92,8 @@ different combination:
   tool credential never exists in the pod and the tool list is already
   filtered to the grant. The MCP connection reuses
   `kaalm.http_async_client` through the adapter's client factory. The
-  calling side of that story is
-  [Calling Tools Through the Gateway](calling-tools.md).
+  calling side is
+  [Calling tools through the gateway](calling-tools.md).
 - **`examples/langgraph-task/`**: a run-to-completion summarize, critique,
   refine graph as an AgentTask (next section).
 
@@ -101,13 +101,13 @@ different combination:
 
 An AgentTask's work is its whole program, not a resident message loop, so
 the handler mount is deliberately not its extension point. The
-`langgraph-task` example owns the slice of the contract a task needs: it
+`langgraph-task` example implements the slice of the contract a task needs: it
 reads its goal from its own `spec.env` (Kaalm injects no goal variables),
 runs the graph, and reports through `POST /v1/task/complete` with
 `status: "success"` and the artifacts declared in `spec.artifacts`,
 retrying only the retryable rejection (`StalePodCompletion`, on 100ms,
 500ms, 2s) and treating `TaskAlreadyCompleted` as done. See
-[Running Tasks](running-tasks.md) for the task lifecycle itself.
+[Running tasks](running-tasks.md) for the task lifecycle itself.
 
 ## When the platform pushes back
 
@@ -145,7 +145,7 @@ rebuilt when TLS errors appear.
 
 ---
 
-*How this works: design book pages Runtime, Base Images (the ABI and the
-on-ramp rungs), Gateways, LLM, Request Handling (formats, adapters, and
-what is never translated), Gateways, API, Errors (the envelope), and
+*How this works: design book pages Runtime, Reference base images (the ABI and the
+on-ramp rungs), Gateways, LLM, Request handling (formats, adapters, and
+what is never translated), Gateways, API, Error reference (the envelope), and
 Operations, Deployment (the tiered on-ramp).*

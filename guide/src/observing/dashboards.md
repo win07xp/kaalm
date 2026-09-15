@@ -1,4 +1,4 @@
-# Installing the Grafana Dashboards
+# Installing the Grafana dashboards
 
 Three Grafana dashboards ship with the repository as JSON in
 `config/grafana/`, one per level of the topology:
@@ -10,7 +10,7 @@ Three Grafana dashboards ship with the repository as JSON in
 | `kaalm-cluster.json` | The whole cluster: scrape targets, controller leader and reconcile health, fleet totals, hibernations and wakes, LLM and tool traffic, spend by provider | `datasource`, `job` |
 
 Each file is self-contained and imports unchanged. The data source is a
-`datasource` template variable, which is the one import form that works both
+`datasource` template variable, which is the only import form that works both
 through the Grafana UI and through file provisioning.
 
 ## 1. Scrape the metrics

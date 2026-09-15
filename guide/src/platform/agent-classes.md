@@ -1,4 +1,4 @@
-# Offering Agent Classes
+# Offering agent classes
 
 An AgentClass is the policy contract between you and the teams deploying
 agents: which images may run, how much storage an agent may claim, and what
@@ -7,7 +7,12 @@ exceed what it grants.
 
 ## A standard class
 
-From `config/samples/kaalm_v1beta1_agentclass.yaml`:
+The chart installs a class named `standard` that allows any image, allows no
+ModelProvider, and does not enable persistence, so an agent under it runs
+with no model access and no volume. Either replace it with your own policy
+or disable it (`--set standardAgentClass.enabled=false`) and ship classes
+under your own names. The sample from
+`config/samples/kaalm_v1beta1_agentclass.yaml` is a complete policy:
 
 ```yaml
 apiVersion: kaalm.io/v1beta1
@@ -31,7 +36,7 @@ spec:
     hibernationAllowed: true
 ```
 
-The load-bearing decisions:
+The decisions that matter:
 
 - **`image.allowedImages`** is a glob allowlist. An Agent or AgentTask whose
   image does not match is rejected at reconcile time, so this is your control
@@ -51,7 +56,13 @@ kubectl apply -f config/samples/kaalm_v1beta1_agentclass.yaml
 kubectl get agentclasses
 ```
 
-The list shows how many Agents and Tasks currently use each class. The Ready
+Applying over the chart's class prints one warning about a missing
+`last-applied-configuration` annotation, because Helm created the object;
+`kubectl` patches the annotation in and the apply succeeds. Fields the sample
+does not set (the chart's resource defaults and lifecycle ceilings) stay as
+they were.
+
+The `AGENTS` and `TASKS` columns count the live users of each class. The Ready
 condition (`kubectl describe agentclass standard`) goes True when the spec is
 coherent (for example, every `allowedProviders` entry names a ModelProvider
 that exists).
@@ -60,7 +71,7 @@ that exists).
 
 The reference base images can run handler source that developers ship as a
 ConfigMap (`Agent.spec.handler`; the developer's side is
-[Deploying from a Base Image](../developers/deploying-from-a-base-image.md)).
+[Deploying from a base image](../developers/deploying-from-a-base-image.md)).
 That capability is off by default, because it changes what `allowedImages`
 means: your allowlist is an image review boundary, and a mounted handler
 injects code that no image review ever saw. Granting it is a per-class
@@ -100,11 +111,55 @@ handling as the other class gates.
 ## A sandboxed class for code-executing agents
 
 Agents that execute untrusted code (a coding agent running arbitrary build
-commands) deserve a separate class with a stricter posture: a tighter image
-allowlist and lower storage ceilings now, and the `agentSandbox` runtime
-backend once it lands (post v1). Offer it as a second class, for example
-`sandboxed`, rather than loosening `standard`; classes are cheap and teams
-pick by name.
+commands) need a separate class with stricter settings: a
+`runtime.runtimeClassName` naming a gVisor or Kata `RuntimeClass` the cluster
+has installed, a tighter image allowlist, and lower storage ceilings. Offer it
+as a second class, for example `sandboxed`, rather than loosening `standard`;
+classes cost nothing and teams pick by name. Pin a `RuntimeClass` only where it
+exists: a class that names one the cluster lacks puts every agent that
+selects it into `Degraded`.
+
+## Pod security defaults
+
+The class's `security` block is applied to every Pod and container created
+under it. Nothing is set by default; a hardened class looks like this:
+
+```yaml
+spec:
+  security:
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      seccompProfile: { type: RuntimeDefault }
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: ["ALL"] }
+```
+
+Both fields take the standard Kubernetes `PodSecurityContext` and
+`SecurityContext` shapes. Check the images your teams run before setting
+`readOnlyRootFilesystem`: the reference base images write their memory
+store under `/var/agent`, which is a volume when persistence is on.
+
+## Labels and annotations on every Pod
+
+`podMetadata` adds labels and annotations to every Pod of the class, for
+cost allocation, scheduling, or a service mesh:
+
+```yaml
+spec:
+  podMetadata:
+    labels:
+      cost-center: platform
+    annotations:
+      prometheus.io/scrape: "false"
+```
+
+Kaalm's own labels (`kaalm.io/agent`, `kaalm.io/workload`) are added after
+yours and cannot be overridden. A change to `podMetadata` replaces the Pods
+of existing agents on their next reconcile, the same way any other Pod-spec
+change does.
 
 ## Changing a class later
 
@@ -116,6 +171,6 @@ not an eviction.
 ---
 
 *How this works: design book pages Resources, AgentClass (every field),
-Controller, Change Propagation (exactly what a class edit triggers), and
-Concepts, Tenancy and Tiers (how the class gate stacks with the other two
+Controller, Change propagation (exactly what a class edit triggers), and
+Concepts, Multi-tenancy and adoption tiers (how the class gate stacks with the other two
 access gates).*
