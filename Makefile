@@ -192,7 +192,7 @@ chart-sync: manifests kustomize ## Sync generated CRDs (with the conversion stan
 	rm -f $(CHART_DIR)/crds/*.yaml
 	$(KUSTOMIZE) build config/crd | go run ./hack/splitcrds $(CHART_DIR)/crds
 	@mkdir -p $(CHART_DIR)/files
-	@awk '/^rules:/{f=1;next} f' config/rbac/role.yaml > $(CHART_DIR)/files/controller-rules.yaml
+	@awk '/^---/{if(f)exit} /^rules:/{f=1;next} f' config/rbac/role.yaml > $(CHART_DIR)/files/controller-rules.yaml
 	@echo "synced $$(ls $(CHART_DIR)/crds/*.yaml | wc -l) CRDs and the controller RBAC into $(CHART_DIR)/"
 
 .PHONY: chart-lint

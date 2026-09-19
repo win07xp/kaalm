@@ -258,6 +258,7 @@ func TestMain(m *testing.M) {
 	if err := (&AgentReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
+		SecretReader:      mgr.GetAPIReader(),
 		Activity:          fakeActivity,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
@@ -265,6 +266,7 @@ func TestMain(m *testing.M) {
 	if err := (&AgentTaskReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
+		SecretReader:      mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}
@@ -272,6 +274,7 @@ func TestMain(m *testing.M) {
 	if err := (&AgentChannelReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
+		SecretReader:      mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}

@@ -55,7 +55,7 @@ type ToolProviderReconciler struct {
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders/finalizers,verbs=update
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents;agenttasks;agentclasses,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",namespace=kaalm-system,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile validates and probes the tool provider and reconciles its status.

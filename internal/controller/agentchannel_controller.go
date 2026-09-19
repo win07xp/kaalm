@@ -86,6 +86,10 @@ type AgentChannelReconciler struct {
 	client.Client
 	Recorder          record.EventRecorder
 	OperatorNamespace string
+	// SecretReader reads Secrets in user namespaces straight from the
+	// apiserver: the manager's cache holds the operator namespace's Secrets
+	// only. nil falls back to the embedded client.
+	SecretReader client.Reader
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
@@ -316,7 +320,7 @@ func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, chann
 		}
 	}
 
-	for _, sa := range []string{"kaalm-gateway", "kaalm-controller"} {
+	for _, sa := range []string{gatewayServiceAccount, controllerServiceAccount} {
 		rb := &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: channelRoleName(channel.Name) + "-" + strings.TrimPrefix(sa, "kaalm-"), Namespace: channel.Namespace,
@@ -383,9 +387,9 @@ func equalStrings(a, b []string) bool {
 func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *kaalmv1beta1.AgentChannel) (string, string) {
 	check := func(ref *kaalmv1beta1.SecretKeyReference) (string, string) {
 		var sec corev1.Secret
-		if err := r.Get(ctx, types.NamespacedName{Namespace: channel.Namespace, Name: ref.Name}, &sec); err != nil {
-			return kaalmv1beta1.ReasonCredentialsMissing,
-				fmt.Sprintf("Secret %q not found in namespace %q", ref.Name, channel.Namespace)
+		if err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
+			types.NamespacedName{Namespace: channel.Namespace, Name: ref.Name}, &sec); err != nil {
+			return kaalmv1beta1.ReasonCredentialsMissing, secretReadMessage(err, ref.Name, channel.Namespace)
 		}
 		if v, ok := sec.Data[ref.Key]; !ok || len(v) == 0 {
 			return kaalmv1beta1.ReasonCredentialsMissing,
@@ -433,6 +437,16 @@ const (
 	whatsAppKeyAccessToken = "accessToken"
 )
 
+// secretReadMessage words a failed credential read. Only a NotFound answer
+// says the Secret is absent; anything else (the scoped Role not yet honored,
+// an apiserver error) is reported as it is.
+func secretReadMessage(err error, name, namespace string) string {
+	if apierrors.IsNotFound(err) {
+		return fmt.Sprintf("Secret %q not found in namespace %q", name, namespace)
+	}
+	return fmt.Sprintf("Secret %q in namespace %q is not readable: %v", name, namespace, err)
+}
+
 // validatePlatformSecret is rule 40 for one platform channel: the Secret
 // exists, carries every required key, and (when a shape check is given) the
 // key the adapter builds its verifier from is well-formed. A malformed key is
@@ -443,9 +457,9 @@ func (r *AgentChannelReconciler) validatePlatformSecret(
 	shape func(data map[string][]byte) string,
 ) (string, string) {
 	var sec corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Namespace: channel.Namespace, Name: name}, &sec); err != nil {
-		return kaalmv1beta1.ReasonCredentialsMissing,
-			fmt.Sprintf("Secret %q not found in namespace %q", name, channel.Namespace)
+	if err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
+		types.NamespacedName{Namespace: channel.Namespace, Name: name}, &sec); err != nil {
+		return kaalmv1beta1.ReasonCredentialsMissing, secretReadMessage(err, name, channel.Namespace)
 	}
 	for _, key := range required {
 		if v, ok := sec.Data[key]; !ok || len(v) == 0 {

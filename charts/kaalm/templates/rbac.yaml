@@ -46,6 +46,38 @@ subjects:
     name: kaalm-controller
     namespace: {{ .Release.Namespace }}
 ---
+# The controller's only standing Secret read: provider credentials in the
+# release namespace. The ClusterRole carries no secrets rule; a Secret in a
+# user namespace is read through a Role the reconcilers mint for exactly the
+# names a channel or a class references.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kaalm-controller-credentials
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kaalm-controller-credentials
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kaalm-controller-credentials
+subjects:
+  - kind: ServiceAccount
+    name: kaalm-controller
+    namespace: {{ .Release.Namespace }}
+---
 # Leader-election and event RBAC for the manager, scoped to the release
 # namespace.
 apiVersion: rbac.authorization.k8s.io/v1

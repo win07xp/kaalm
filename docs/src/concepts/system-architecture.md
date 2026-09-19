@@ -93,7 +93,7 @@ In the other direction, the AgentReconciler reads per-namespace last-activity ti
 
 ### RBAC surface
 
-The controller's ServiceAccount holds cluster-wide watches on the six CRDs, cluster-wide management of the child object kinds including Pods and ConfigMaps, and the per-channel and per-task Roles and RoleBindings it writes in user namespaces; a namespaced Role in `kaalm-system` carries Leases and Events. The full grant list and its reasoning are on [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount).
+The controller's ServiceAccount holds cluster-wide watches on the six CRDs, cluster-wide management of the child object kinds including Pods and ConfigMaps, and the per-channel, per-task, and per-workload Roles and RoleBindings it writes in user namespaces; two namespaced Roles in `kaalm-system` carry Leases and Events, and the read of provider credential Secrets. The full grant list and its reasoning are on [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount).
 
 ## Integration points
 
