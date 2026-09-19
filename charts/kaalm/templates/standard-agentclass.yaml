@@ -37,12 +37,27 @@ spec:
     defaults:
       requests: { cpu: "500m", memory: "1Gi" }
       limits: { cpu: "1", memory: "2Gi" }
+  # Storage is granted with a ceiling, because hibernation needs a volume to
+  # hibernate onto (rule 29). pvcRetention is written out although it is the
+  # schema default, so the rendered object matches what the apiserver stores.
+  persistence:
+    enabled: true
+    defaultSizeGi: 5
+    maxSizeGi: 50
+    pvcRetention: Delete
+  {{- with .Values.standardAgentClass.allowedProviders }}
+  allowedProviders:
+    {{- range . }}
+    - name: {{ . }}
+    {{- end }}
+  {{- end }}
   # Durations in Go's canonical form (30m0s, not 30m): the controller's
   # reconcile-time defaulting re-serializes what it reads, and a value that
   # round-trips byte-identical never changes field ownership, so a
   # server-side-apply helm (v4) upgrades without conflicting with the
   # controller's manager over these fields.
   lifecycle:
+    hibernationAllowed: true
     defaultIdleTimeout: 30m0s
     maxIdleTimeout: 24h0m0s
     defaultHibernationDelay: 30m0s

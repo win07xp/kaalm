@@ -5,8 +5,9 @@ your platform team has given you three names: an AgentClass (here `standard`)
 that lists your ModelProvider in its `allowedProviders`, the ModelProvider
 (here `anthropic-shared`), and confirmation that your namespace is on the
 provider's allowlist (here `team-demo`, which the sample provider's `team-*`
-glob admits). The `standard` class the chart ships lists no providers, so an
-Agent under it goes `Degraded` until the platform team has edited it
+glob admits). The `standard` class the chart ships allows storage and
+hibernation, but it lists no ModelProvider until the platform team names one,
+and an Agent that names a provider the class does not list goes `Degraded`
 ([Offering agent classes](../platform/agent-classes.md)).
 
 ## 1. Pick an image
@@ -110,7 +111,7 @@ To send it that message from outside the cluster, continue to
   certificate).
 - `Degraded` with `ClassConstraintViolation` naming the provider: the class
   does not list `anthropic-shared` in `allowedProviders`, which is the case
-  for the chart's unedited `standard` class. Ask your platform team.
+  for a `standard` class with no provider named on it. Ask your platform team.
 - If the class sets `allowedImages`, the image must match one of its globs.
 - Check the provider allows your namespace: this surfaces as a `403` on the
   agent's LLM calls, not a Pod failure.

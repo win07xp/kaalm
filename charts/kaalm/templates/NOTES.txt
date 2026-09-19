@@ -8,7 +8,15 @@ The chart installs:
   - the cert-manager trust chain (kaalm-selfsigned + kaalm-ca-issuer
     ClusterIssuers, the kaalm-ca root Certificate, the gateway and controller
     leaf Certificates) and the trust-manager kaalm-ca Bundle
-  - a default "standard" AgentClass
+  - a default "standard" AgentClass, which allows storage and hibernation
+{{- if and .Values.standardAgentClass.enabled (not .Values.standardAgentClass.allowedProviders) }}
+
+The "standard" AgentClass allows no ModelProvider, so an Agent that names one
+goes Degraded with ClassConstraintViolation. Create a ModelProvider (the
+repository's config/samples/ has a manifest per kind), then name it:
+  helm upgrade {{ .Release.Name }} <the chart you installed> -n {{ .Release.Namespace }} \
+    --set standardAgentClass.allowedProviders={YOUR-PROVIDER-NAME}
+{{- end }}
 
 Prerequisites (the chart does NOT install these):
   1. cert-manager, running with --enable-certificate-owner-ref=true
