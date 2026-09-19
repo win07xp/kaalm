@@ -1,85 +1,36 @@
 @startuml validation-enforcement
-' Where each validation rule with a stated enforcement point is enforced: an apply-time CEL gate that rejects before storage, then a reconcile-time gate that surfaces violations as status on stored objects.
-' Source of truth: docs/src/resources/validation-and-defaulting.md
+' Where a check is enforced: the apiserver at apply time, or a reconciler
+' after the object is stored. The outcomes of a reconcile-time rule are
+' validation-outcomes.puml; the rule-to-outcome mapping is the table on
+' docs/src/resources/validation-and-defaulting.md (the source of truth).
 !include _style.puml
 
 skinparam ConditionEndStyle hline
-skinparam ActivityDiamondFontSize 11
 skinparam ActivityFontSize 12
 skinparam ArrowFontSize 10
-skinparam wrapWidth 150
-skinparam nodesep 12
 
 |$agentBg|Developer|
-|$ctrlBg|apiserver / CEL|
+|$ctrlBg|apiserver|
 |$storeBg|etcd|
 |$ctrlBg|Reconciler|
-|$gwBg|status|
 
 |Developer|
 start
 :kubectl apply;
 
-|$ctrlBg|apiserver / CEL|
-if (CRD CEL gate\n**16 17 21 25 27 32 34**) then (violates)
-  |$agentBg|Developer|
-  :**rejected**\nbefore storage; <<#FFCDD2>>
-  stop
+|apiserver|
+if (schema and CEL rules) then (violates)
+  |Developer|
+  :**rejected**\nthe object never exists; <<#FFCDD2>>
+  kill
 else (passes)
 endif
 
-|$storeBg|etcd|
+|etcd|
 :object stored;
 
-|$ctrlBg|Reconciler|
-:reconciler reads\nthe stored object;
-
-switch (reconcile-time gate)
-case (resolution\nor validity)
-  |$gwBg|status|
-  :**Ready=False**\nreason per rule (see table)\n**1 11 12 13 14 15 18**\n**19 22 23 25 27 28 31 33**; <<#FFCDD2>>
-  stop
-case (class\nmismatch)
-  |$gwBg|status|
-  :**phase=Degraded**\n+ preDegradedPhase\non an **Agent**\n**2 3 4 5 24 26 29 30**; <<#FFE0B2>>
-  stop
-case (class\nmismatch)
-  |$gwBg|status|
-  :**phase=Failed**\nno Degraded phase\non an **AgentTask**\n**2 3 4 5 24**; <<#FFCDD2>>
-  stop
-case (advisory)
-  |$gwBg|status|
-  :**Warning event**\nReady unaffected\n**20**; <<#FFF8DC>>
-  stop
-endswitch
-
-legend bottom
-  Every arm below is a violation. A rule that passes both gates leaves **Ready=True**.
-  ====
-  **Scope.** This draws the rules that reject or degrade. Two categories are not drawn
-  as arms. The provider-access rules (3, 4, 5) join rule 2 in the ClassConstraintViolation
-  row of the table below. The cap rules (6, 7, 8, 9, 10) do not reject at all: they
-  **clamp** the effective value to the class maximum at reconcile time, so a workload that
-  asks for more silently gets the cap rather than an error.
-  ====
-  **Why the reconcile-time rules cannot be CEL.** Three structural reasons:
-  the rule **spans two resources** and CEL on an Agent cannot read AgentClass (24, 26, 30);
-  it needs **metadata.namespace**, which CRD validation cannot reach at any scope,
-  only metadata.name and metadata.generateName (15, 28);
-  or it must surface on **pre-existing objects** as recoverable status rather than a
-  blocked write (29). Kaalm runs no admission webhook server, so there is no third place.
-  ====
-  |= rule |= reason |= rule |= reason |
-  | 15 | InvalidPath / PathConflict | 2, 3, 4, 5 | ClassConstraintViolation |
-  | 19 | InvalidCIDR | 24 | PersistenceNotAllowed |
-  | 22 | InvalidCallbackUrl | 26 | HibernationNotAllowed |
-  | 23 | ImagePullSecretMissing | 29 | HibernationRequiresPersistence |
-  | 25 | CallbackAuthMissing / CallbackAuthInvalid | 20 | FQDNPolicyUnsupported |
-  | 27 | ExistingClaimNotFound | 14 | AgentServiceDisabled |
-  | 28 | SystemNamespaceForbidden | 18 | InvalidDegradeTarget |
-  | 30 | HandlerMountNotAllowed | 31 | HandlerConfigMapNotFound |
-  | 33 | HardBudgetUnpriced | | |
-  | 1, 11, 12, 13 | Ready=False (reference resolution) | 6-10 | clamped, no reject |
-endlegend
-
+|Reconciler|
+:reconcile-time rules;
+:status on the object;
+stop
 @enduml

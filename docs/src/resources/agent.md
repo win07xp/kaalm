@@ -1,10 +1,10 @@
 # Agent
 
-Agent is a namespace-scoped, developer-facing resource representing a persistent agent workload. It is the primary interface developers interact with: you pick an [AgentClass](agentclass.md) published by your platform team, point at the [ModelProviders](modelprovider.md) you need, and the controller provisions and manages the Pod, Service, PVC, and TLS identity on your behalf.
+Agent is a namespace-scoped, developer-facing resource representing a persistent agent workload. You pick an [AgentClass](agentclass.md) published by your platform team, name the [ModelProviders](modelprovider.md) and [ToolProviders](toolprovider.md) you need, and the controller provisions and manages the Pod, Service, PVC, and TLS identity ([Child resources](../runtime/child-resources.md)).
 
 ## Spec
 
-The annotated example below shows every spec field. Only `agentClassRef` is required.
+The annotated example shows every spec field. Only `agentClassRef` is required.
 
 ```yaml
 apiVersion: kaalm.io/v1beta1
@@ -13,181 +13,168 @@ metadata:
   name: support-assistant
   namespace: team-support
 spec:
-  # Reference to an AgentClass (required).
+  # Required. Rule 1.
   agentClassRef:
     name: standard
 
-  # Container spec for the agent itself. Image must match AgentClass.allowedImages.
+  # Must match the class allowlist (rule 2). Defaults from the class.
   image: "registry.internal.corp/agents/support:v2.3.1"
-  command: []            # optional override
-  args: []               # optional override
-  env:                   # optional env vars (merged with controller-injected ones)
+  command: []            # optional entrypoint override
+  args: []               # optional args override
+  env:                   # merged with the injected KAALM_* set
     - name: LOG_LEVEL
       value: "info"
 
-  # Optional: handler source for a reference base image. The controller
-  # mounts the named ConfigMap read-only at /opt/kaalm/handler and injects
-  # KAALM_HANDLER_PATH. Requires the referenced AgentClass to have
-  # image.allowHandlerMounts=true (rule 30), and the ConfigMap must exist
-  # in this namespace (rule 31); see Cross-Resource Validation and the
-  # design notes below. Agent-only: AgentTask has no handler field.
+  # Optional. Handler source for a reference base image, mounted read-only
+  # at /opt/kaalm/handler with KAALM_HANDLER_PATH injected. Requires the
+  # class to set image.allowHandlerMounts (rule 30); the ConfigMap must
+  # exist in this namespace (rule 31). Agent only.
   # handler:
   #   configMapRef:
   #     name: greeter-handler
 
-  # ModelProviders this agent uses.
-  # Optional: omit entirely for agents that do not call LLM providers
-  # (e.g., sub-agents, coding agents with IDE integration, pure webhook handlers).
+  # Optional. Omit for an agent that makes no LLM calls. Rules 3 to 5.
   providers:
     - providerRef: { name: anthropic-shared }
 
-  # Resource overrides (must fit within AgentClass.resources.maxLimits).
+  # Optional. Rules 35 to 38. Omitted means no brokered tools.
+  tools:
+    - providerRef:
+        name: search-tools
+      tools: ["web_search"]   # optional narrowing; omitted means every tool
+
+  # Clamped to the class maxLimits (rule 6). Defaults from the class when
+  # neither requests nor limits is set.
   resources:
     requests: { cpu: "500m", memory: "1Gi" }
     limits:   { cpu: "1",    memory: "2Gi" }
 
-  # Persistence: request a PVC mounted into the agent container.
-  # Setting enabled=true requires the referenced AgentClass to also have
-  # persistence.enabled=true; see rule 24 in Cross-Resource Validation.
   persistence:
+    # Requires persistence.enabled on the class (rule 24).
     enabled: true
+    # Clamped to maxSizeGi (rule 7); defaults from the class.
     sizeGi: 10
+    # Default /var/agent/memory.
     mountPath: "/var/agent/memory"
-    # Optional: mount a pre-existing PVC instead of provisioning a new one
-    # (e.g., a PVC restored from a VolumeSnapshot of a finished AgentTask's
-    # workspace, the S9 promotion pattern). Mutually exclusive with sizeGi;
-    # CRD CEL enforces: !has(self.sizeGi) || !has(self.existingClaim).
-    # The PVC must already exist in the Agent's namespace. See rule 27 in
-    # Cross-Resource Validation and the design notes below.
+    # Optional. Mount a pre-existing PVC instead of provisioning one.
+    # Excludes sizeGi (rule 27); the claim must exist in this namespace.
     # existingClaim: "fix-issue-342-workspace-snap"
 
   lifecycle:
-    idleTimeout: "30m"           # transition to Idle after this much inactivity
-    # Setting hibernationEnabled=true requires the referenced AgentClass to
-    # also have lifecycle.hibernationAllowed=true (rule 26) AND this Agent to
-    # have spec.persistence.enabled=true (rule 29); see Cross-Resource
-    # Validation.
+    # Defaults from the class and clamped by it (rule 8).
+    idleTimeout: "30m"
+    # Requires hibernationAllowed on the class (rule 26) and
+    # persistence.enabled on this Agent (rule 29).
     hibernationEnabled: true
-    hibernationDelay: "30m"      # how long to stay Idle before hibernating; defaults from AgentClass
-    activitySource: gatewayTraffic   # "gatewayTraffic" | "agentHeartbeat" | "both"
-    wakeTimeout: "2m"                # max time gateway waits for Pod Ready on wake; defaults from AgentClass
+    # Defaults from the class and clamped by it (rule 10).
+    hibernationDelay: "30m"
+    # "gatewayTraffic" (schema default) | "agentHeartbeat" | "both".
+    activitySource: gatewayTraffic
+    # How long the gateway waits for the Service to accept a TCP connection
+    # after a wake. As shipped the gateway uses this value as written, or
+    # 120 seconds when unset; no class default or cap applies (#204).
+    wakeTimeout: "2m"
 
-  # Service exposure. Only ClusterIP is supported in v1.
+  # An omitted block means an enabled Service on port 8080.
   service:
     enabled: true
     port: 8080
-
-  # Tool grants (since v0.4.0): gateway-brokered access to ToolProviders,
-  # per server with optional per-tool narrowing. Each grant must resolve
-  # (rule 35), be admitted by the provider's allowedNamespaces (rule 36),
-  # appear in the class's allowedToolProviders (rule 37), and name only
-  # cataloged tools when the provider declares a catalog (rule 38). Omitted
-  # means no brokered tools: no grant, no tools. See The Tool Plane in the
-  # gateways section. (The inert mcpServers field this replaces was removed
-  # in v0.4.0.)
-  tools:
-    - providerRef:
-        name: search-tools
-      # Optional narrowing; empty or omitted means every tool the server
-      # offers.
-      tools: ["web_search"]
 ```
+
+`kubectl get ag` prints the phase, the `Ready` condition, and the class.
 
 ## Status
 
 ```yaml
 status:
   observedGeneration: 1
-  phase: Running       # Pending | Provisioning | Running | Idle | Hibernating | Hibernated | Resuming | Degraded | Failed | Terminating
+  phase: Running
   conditions:
     - type: Ready
       status: "True"
       reason: PodRunning
-    - type: ProvidersReady
+    - type: GatewayReachable
       status: "True"
-      reason: AllProvidersHealthy
+      reason: GatewayReady
   endpoint: "https://support-assistant.team-support.svc.cluster.local:8080"
   podName: "support-assistant-7d4b9f"
   pvcName: "support-assistant-memory"
   lastActivityTime: "2026-04-05T11:58:22Z"
-  phaseTransitionTime: "2026-04-05T08:00:00Z"   # set on every status.phase change
+  phaseTransitionTime: "2026-04-05T08:00:00Z"
   hibernatedAt: null
-  preDegradedPhase: null   # set on entry to Degraded, cleared on recovery
+  preDegradedPhase: null
 ```
 
-## Design Notes
+| Field | Meaning |
+|---|---|
+| `phase` | One of `Pending`, `Provisioning`, `Running`, `Idle`, `Hibernating`, `Hibernated`, `Resuming`, `Degraded`, `Failed`, `Terminating`. The transitions are on [Agent lifecycle](../controller/agent-lifecycle.md). |
+| `Ready` | `True` with `reason: PodRunning`. `False` with a reason naming what blocks the Pod: a validation rule's reason (`InvalidReference`, `ImagePullSecretMissing`, `ExistingClaimNotFound`, `HandlerConfigMapNotFound`, `SystemNamespaceForbidden`), `CertificateNotReady`, `PodProvisioning`, `PodNotReady`, `PodDisrupted`, `SpecDrift`, `Hibernated`, `Woken`, or the container's own waiting reason. |
+| `GatewayReachable` | Whether the gateway answered the activity fan-out: `True` with `GatewayReady`, else `False` with `GatewayUnavailable` and idle transitions deferred ([Activity detection](../controller/hibernation-and-wake.md#activity-detection)). |
+| `Degraded` | A recoverable condition, distinct from the phase: `True` with `reason: BudgetExhausted` while a referenced provider's budget is blocked for this namespace ([Error handling](../controller/operations.md#error-handling)). |
+| `endpoint` | The in-cluster HTTPS URL. Set only when the Service is enabled, and not cleared if it is later disabled. |
+| `podName`, `pvcName` | The current Pod, and the PVC Kaalm provisioned. `pvcName` is not set for an `existingClaim`. |
+| `lastActivityTime` | The merged last-activity timestamp the controller read from the gateway. |
+| `phaseTransitionTime` | Set on every phase change, in the same status write. The condition `lastTransitionTime` values move on non-phase events too, so this field is the witness for "when did the phase last change". |
+| `hibernatedAt` | Set on entry to `Hibernated`, cleared on wake. |
+| `preDegradedPhase` | The phase to restore when a class-mismatch `Degraded` clears. |
+
+The constants `ProvidersReady` and `AllProvidersHealthy` exist in the API but no reconciler sets them (#231).
+
+## Design notes
 
 ### Name validation: DNS-1123 label, enforced at the schema root
 
-`metadata.name` must be a DNS-1123 label: lowercase alphanumerics and `-` only, no dots, starting and ending with an alphanumeric, at most 63 characters.
-
-This is enforced via a root-scoped CRD CEL rule. Validation rules are not allowed under `metadata`, and `metadata.name` (together with `generateName`) is the only metadata field reachable from the object root, so the rule sits at the root of the Agent schema:
+`metadata.name` must be a DNS-1123 label: lowercase alphanumerics and `-`, no dots, starting and ending with an alphanumeric, at most 63 characters (rule 21). Validation rules are not allowed under `metadata`, and `metadata.name` is the only metadata field reachable from the object root, so the rule is a root-scoped CEL rule on the Agent schema:
 
 ```yaml
 x-kubernetes-validations:
   - rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') && size(self.metadata.name) <= 63"
-    message: "Agent name must be a DNS-1123 label (no dots, max 63 characters)"
+    message: "metadata.name must be a DNS-1123 label: lowercase alphanumerics and hyphens, no dots, at most 63 characters"
 ```
 
-Both halves of the rule carry weight:
+Both halves matter. The name is used verbatim as one DNS label in the certificate SAN and as the Service name, both capped at 63, where Kubernetes would otherwise allow 253. And the no-dots restriction is a security requirement: the gateway reads an agent's namespace by splitting the `{name}.{namespace}.svc.cluster.local` SAN on dots, so a name such as `admin.svc` would shift which label is read as the namespace. The gateway's label-count check is defense in depth against the same pattern ([Workload identity](../gateways/llm/workload-identity.md)). The AgentTask schema carries the same rule.
 
-- **The length bound matters as much as the charset.** Kubernetes allows namespaced resource names up to 253 characters, but the Agent name is used verbatim as a single DNS label in the cert SAN and as the per-Agent Service name (Service names are RFC-1035 labels, max 63). A longer name would produce an invalid SAN label and fail Service creation.
-- **The no-dots restriction is a security requirement**, not a style choice. The gateway identifies an agent's namespace by parsing the `{name}.{namespace}.svc.cluster.local` SAN from its client certificate. If dotted names were allowed, a crafted Agent name (for example `admin.svc`) would shift which label the gateway reads as the namespace, creating a namespace-identification bypass. The gateway's label-count check is defense in depth against this same pattern; the full SAN parsing mechanics and threat analysis live in [Namespace Identification § Mode 1](../gateways/llm/workload-identity.md).
+### Persistent is the only agent mode
 
-### Persistent is the only agent mode in v1
-
-AgentTask serves the ephemeral use case. If future modes (e.g., `scheduled` for cron-style agents) are needed, a `mode` field will be added to the Agent spec.
-
-### `status.phaseTransitionTime`
-
-Updated by the AgentReconciler on every `status.phase` change, in the same status patch that commits the new phase. It is distinct from the various `conditions[*].lastTransitionTime` fields, which can change on non-phase events (Ready toggling on PodNotReady, ProvidersReady changes, etc.) and so are not a reliable witness for "when did this Agent last change phase." The controller compares this timestamp against the gateway's `replicaStartedAt` to decide whether missing activity data should be treated as "unknown" versus genuine "no activity": see [Activity Detection](../controller/hibernation-and-wake.md#activity-detection) and [Activity Tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api).
+An Agent is always a long-lived workload. AgentTask serves the ephemeral use case; there is no scheduled or cron-style mode.
 
 ### `providers` is optional
 
-Agents that do not call LLM providers (sub-agents, coding agents with IDE integration, pure message handlers) omit it entirely. When present, it is a flat list of provider references. All providers are routed through `$KAALM_GATEWAY_ENDPOINT`. The agent uses a qualified model name format (`{providerRef}/{modelId}`, e.g., `anthropic-shared/claude-opus-4-6`) in API calls to identify both the provider and model. See [Provider Routing](../gateways/llm/provider-routing.md) for the full routing chain.
+An agent that makes no LLM calls (a sub-agent, a coding agent with IDE integration, a pure message handler) omits it. When present, it is a flat list of provider references, all routed through `$KAALM_GATEWAY_ENDPOINT` with the qualified model name `{providerRef}/{modelId}` ([Provider routing and adapters](../gateways/llm/provider-routing.md)).
 
 ### `activitySource`
 
-Agents may not always have meaningful LLM traffic (they could be polling, or waiting on webhooks). Supporting `agentHeartbeat` lets the agent explicitly signal liveness. See [Activity Detection](../controller/hibernation-and-wake.md#activity-detection) for the heartbeat protocol.
-
-**`agentHeartbeat` and `both` are intended for custom agent images that gate heartbeat emission on actual work.** Starter-template-based images should leave this at the default `gatewayTraffic`: the templates' unconditional 30s heartbeat (emitted in agent mode only; task-mode runtimes send no heartbeats) would otherwise keep the agent's last-activity timestamp permanently fresh and prevent any `Idle`/`Hibernated` transition. See [Starter Templates](../runtime/starter-templates.md).
+An agent may have no meaningful LLM traffic (polling, waiting on webhooks), so `agentHeartbeat` lets it signal liveness itself, and `both` counts either signal. Both values are for images that emit a heartbeat only while real work is in flight. The reference runtimes heartbeat on a timer in Agent mode, which under `agentHeartbeat` or `both` keeps the agent from ever going idle ([The heartbeat toggle and the hibernation footgun](../runtime/starter-templates.md#the-heartbeat-toggle-and-the-hibernation-footgun)).
 
 ### Hibernation requires persistence (rule 29)
 
-`lifecycle.hibernationEnabled: true` on an Agent without `spec.persistence.enabled: true` moves the Agent to `phase=Degraded, reason=HibernationRequiresPersistence` at reconcile time. Hibernation is delete-Pod-keep-PVC: with no PVC there is nothing that survives the Pod, and the dedup-buffer persistence required by [The Runtime Contract](../runtime/contract.md) item 7 would be impossible. See rule 29 in [Cross-Resource Validation](validation-and-defaulting.md#cross-resource-validation).
+`lifecycle.hibernationEnabled: true` without `spec.persistence.enabled: true` moves the Agent to `phase=Degraded, reason=HibernationRequiresPersistence`. Hibernation deletes the Pod and keeps the PVC; with no PVC nothing survives the Pod, and the dedup-buffer persistence the [runtime contract](../runtime/contract.md#7-message-deduplication) requires would be impossible.
 
 ### `persistence.existingClaim`
 
-Mounts a pre-existing PVC instead of provisioning one. This is the enabler for promoting a finished AgentTask's workspace to a persistent Agent ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover): snapshot the task PVC via standard `VolumeSnapshot` before TTL cleanup, restore it to a PVC, reference it here). Constraints:
+Mounts a pre-existing PVC instead of provisioning one. It is the enabler for promoting a finished AgentTask's workspace to a persistent Agent ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)): snapshot the task PVC with a `VolumeSnapshot` before TTL cleanup, restore it to a PVC, and reference it here. Constraints:
 
-- Mutually exclusive with `sizeGi` (CRD CEL, rule 27).
-- The claim must exist in the Agent's namespace at reconcile time, else `Ready=False, reason=ExistingClaimNotFound` and the Pod is not created.
-- `AgentClass.spec.persistence.enabled: true` is still required (rule 24 gates `persistence.enabled` regardless of provisioning source).
-- `maxSizeGi` is not enforced against pre-existing claims; platform teams bound those with namespace ResourceQuota.
-- The reconciler does **not** add an ownerRef to a pre-existing PVC, so `pvcRetention` never applies to it: the Agent finalizer only manages PVCs Kaalm provisioned, and an `existingClaim` PVC survives Agent deletion under either `pvcRetention` setting.
-- AgentTask does not support `existingClaim` in v1; task scratch storage is always task-owned.
+- Mutually exclusive with `sizeGi` (rule 27, apply time), and the claim must exist in the Agent's namespace at reconcile time (`Ready=False, reason=ExistingClaimNotFound`).
+- `AgentClass.spec.persistence.enabled: true` is still required (rule 24).
+- `maxSizeGi` is not enforced against a pre-existing claim; bound those with a namespace ResourceQuota.
+- The reconciler adds no ownerRef, so the claim survives Agent deletion under either `pvcRetention` setting, and `status.pvcName` stays unset ([Ownership and deletion](../runtime/child-resources.md#ownership-and-deletion)).
+- AgentTask has no `existingClaim`; task storage is always task-owned.
 
 ### `spec.handler` is a reference, not a volume mount
 
-The Agent spec deliberately exposes no general-purpose volume mounts, and `spec.handler` does not change that. It is a single-purpose reference consumed by the [reference base images](../runtime/base-images.md): the AgentReconciler mounts the named ConfigMap read-only at `/opt/kaalm/handler`, injects `$KAALM_HANDLER_PATH`, and does nothing else with it. Constraints:
+The Agent spec exposes no general-purpose volume mount, and `spec.handler` does not change that. It is a single-purpose reference consumed by the [reference base images](../runtime/base-images.md#the-handler-mount): the reconciler mounts the named ConfigMap read-only at `/opt/kaalm/handler`, injects `$KAALM_HANDLER_PATH`, and does nothing else with it. The class must allow it (rule 30, `Degraded` with `reason=HandlerMountNotAllowed`), and the ConfigMap must exist (rule 31, `Ready=False, reason=HandlerConfigMapNotFound`). Content is read at container start and not tracked; repointing the name is the redeploy path ([Handler update semantics](../runtime/base-images.md#handler-update-semantics)). The field exists only on the Agent schema.
 
-- The referenced AgentClass must set `image.allowHandlerMounts: true` (rule 30, default `false`). `allowedImages` is an image review boundary, and a mounted handler injects code into an image that review already approved, so the capability is a per-class grant. Violations degrade the Agent (`reason=HandlerMountNotAllowed`) with the same recoverable handling as rules 24, 26, and 29.
-- The ConfigMap must exist in the Agent's namespace at reconcile time (rule 31), else `Ready=False, reason=HandlerConfigMapNotFound` and the Pod is not created, the same surfacing as rules 23 and 27.
-- The reconciler adds **no ownerRef** to the ConfigMap. It is developer-owned and survives Agent deletion, exactly like an `existingClaim` PVC.
-- ConfigMap **content** is not tracked. Handler source is read at container start; edits land on the next Pod creation (manual delete, wake from hibernation, involuntary recreate, or drift replacement). Repointing `configMapRef.name` at a new ConfigMap is ordinary Pod-replacing spec drift and is the clean redeploy path. See [Handler update semantics](../runtime/base-images.md#handler-update-semantics).
-- The field exists only on the Agent schema. An AgentTask's work is its whole program, not a resident message handler; see [Task mode](../runtime/base-images.md#task-mode).
+### `service`
 
-### `service` is always ClusterIP
+The Service is always ClusterIP, and the two ports are decoupled:
 
-`spec.service.port` is the Service-facing port (default 8080) and is the only field a developer can override. The synthesized Service's `targetPort` is **always** the value of `$KAALM_HEALTH_PORT` injected into the Pod (default 8080), which is the port the agent process actually binds. The two are decoupled deliberately: the agent only knows about `$KAALM_HEALTH_PORT`, and overriding `spec.service.port` to expose a different cluster-facing port (e.g., 80) does not require any agent-side change. Setting them to different values is supported and works correctly.
+| Port | Set by | Faces |
+|---|---|---|
+| `spec.service.port` (default 8080) | The developer | Callers inside the cluster, the gateway included |
+| `targetPort`, always `$KAALM_HEALTH_PORT` | The controller, fixed at 8080 | The port the agent process binds |
 
-The Kaalm User Gateway uses this Service to deliver channel messages over HTTPS (see [User Gateway Request Flow](../gateways/user/overview.md#request-flow)). Developers who need external exposure create their own Ingress/HTTPRoute pointing at the Service.
+Changing `spec.service.port` needs no agent-side change. The gateway delivers channel messages through the Service ([Agent endpoints](../gateways/api/agent-endpoints.md#post-v1message)); external exposure is the developer's Ingress or HTTPRoute. An Agent with the Service disabled is outbound-only and cannot be the target of an AgentChannel (rule 14).
 
-### TLS environment variables
+### TLS identity
 
-The controller injects `$KAALM_CA_CERT` (path to the Kaalm CA trust bundle), `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY` (paths to the cert-manager-issued per-Agent cert and key) into every agent Pod. These cert/key files serve a dual purpose:
-
-- **Server TLS** (gateway to agent): the agent serves HTTPS on its health/message port using this cert, which the gateway verifies against `kaalm-ca` on message delivery.
-- **Client TLS / mTLS** (agent to gateway): the agent presents this same cert as a client certificate when calling `$KAALM_GATEWAY_ENDPOINT` (LLM requests and heartbeats), allowing the gateway to cryptographically identify the agent and its namespace without relying on network-layer source IPs.
-
-Starter templates handle both uses automatically; see [Starter Templates](../runtime/starter-templates.md). Custom images must configure their HTTP client to present the client cert for all calls to the gateway and must watch the cert/key files for rotation updates.
+The controller injects `$KAALM_CA_CERT`, `$KAALM_TLS_CERT`, and `$KAALM_TLS_KEY` and mounts the per-Agent certificate, which serves the agent's HTTPS listener and is presented as the client certificate on every call to the gateway. The obligations on the image are [The runtime contract](../runtime/contract.md), items 3 and 4.
