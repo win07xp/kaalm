@@ -60,6 +60,12 @@ const (
 	handlerVolumeName = "kaalm-handler"
 	handlerMountPath  = "/opt/kaalm/handler"
 
+	// defaultMemoryMountPath is where spec.persistence lands when the Agent
+	// names no mountPath. Both reference runtimes default their memory
+	// directory to the same path, so an Agent that takes the default keeps
+	// working whether or not $KAALM_MEMORY_DIR reaches it.
+	defaultMemoryMountPath = "/var/agent/memory"
+
 	// Selector keys used when synthesizing NetworkPolicy peers.
 	labelKeyNamespaceName = "kubernetes.io/metadata.name"
 	labelKeyComponent     = "app.kubernetes.io/component"
@@ -381,6 +387,13 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 	}
 	annotations[annotationPodSpecHash] = podSpecHash(eff)
 
+	// Resolved once: the same path names the volume mount and the memory
+	// directory the runtime is told about.
+	memoryMountPath := eff.MountPath
+	if memoryMountPath == "" {
+		memoryMountPath = defaultMemoryMountPath
+	}
+
 	env := []corev1.EnvVar{
 		{Name: "KAALM_HEALTH_PORT", Value: fmt.Sprintf("%d", eff.HealthPort)},
 		{Name: "KAALM_GATEWAY_ENDPOINT", Value: gatewayEndpoint(operatorNamespace)},
@@ -392,6 +405,13 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 	// knows to serve the built-in default handler (docs/src/runtime/base-images.md).
 	if eff.HandlerConfigMap != "" {
 		env = append(env, corev1.EnvVar{Name: "KAALM_HANDLER_PATH", Value: handlerMountPath})
+	}
+	// Injected iff there is a volume: it points the runtime's state file at the
+	// mount, so a custom mountPath survives hibernation (contract item 7).
+	// Without a volume there is nothing to name and the runtime's own default
+	// applies.
+	if eff.PersistenceOn {
+		env = append(env, corev1.EnvVar{Name: "KAALM_MEMORY_DIR", Value: memoryMountPath})
 	}
 	env = append(env, eff.Env...)
 
@@ -422,17 +442,13 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 		if claim == "" {
 			claim = agentPVCName(agent.Name)
 		}
-		mountPath := eff.MountPath
-		if mountPath == "" {
-			mountPath = "/var/agent/memory"
-		}
 		volumes = append(volumes, corev1.Volume{
 			Name: "agent-memory",
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim},
 			},
 		})
-		mounts = append(mounts, corev1.VolumeMount{Name: "agent-memory", MountPath: mountPath})
+		mounts = append(mounts, corev1.VolumeMount{Name: "agent-memory", MountPath: memoryMountPath})
 	}
 
 	if eff.HandlerConfigMap != "" {

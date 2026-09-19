@@ -120,7 +120,7 @@ Replace `VERSION` with the installed chart version. Neither of the two mechanism
 
 Both runtimes keep one state file, `state.json`, in the memory directory: `$KAALM_MEMORY_DIR` when set, `/var/agent/memory` otherwise. The file holds two disjoint areas, the handler's `Memory` keys under the `user/` prefix and the runtime's dedup window of the last 1024 `messageId`s with their cached responses ([contract item 7](contract.md#7-message-deduplication)). When the directory is not writable, the runtime logs it and continues in memory only.
 
-The PVC backs the file only when it is mounted at that directory. The controller mounts the Agent PVC at `spec.persistence.mountPath`, default `/var/agent/memory`, and does not inject `$KAALM_MEMORY_DIR`, so an Agent with a custom `mountPath` keeps its state on the container filesystem and loses it on every restart; issue #229 tracks it. An AgentTask's workspace PVC mounts at `/var/task/workspace` by default, which neither runtime reads, so a task's memory is in-memory unless `spec.persistence.mountPath` names the memory directory.
+The PVC backs the file only when it is mounted at that directory. The controller mounts the Agent PVC at `spec.persistence.mountPath`, default `/var/agent/memory`, and injects `$KAALM_MEMORY_DIR` with that same path, so whichever `mountPath` an Agent names is the directory the runtime writes to. An AgentTask Pod gets no `$KAALM_MEMORY_DIR`, and its workspace PVC mounts at `/var/task/workspace` by default, which neither runtime reads, so a task's memory is in-memory unless `spec.persistence.mountPath` names the memory directory.
 
 ## The default handler
 
