@@ -78,7 +78,7 @@ func (s *Server) UserHandler() http.Handler {
 	mux.HandleFunc("/channels/", s.handleWebhook)
 	mux.HandleFunc("/v1/channels/responses/", s.handlePoll)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		unauthorized(w, "unknown path")
+		unauthorizedUser(w)
 	})
 	return mux
 }
@@ -110,13 +110,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	channel, ok := s.Store.ChannelByPath(r.Context(), r.URL.Path)
 	if !ok {
-		unauthorized(w, "auth failed or path not registered")
+		unauthorizedUser(w)
 		return
 	}
 	// Write gate: a Terminating channel accepts no new work, which is what
 	// makes the delete-time finalizer sweep race-free.
 	if channel.Status.Phase == kaalmv1beta1.ChannelTerminating {
-		unauthorized(w, "auth failed or path not registered")
+		unauthorizedUser(w)
 		return
 	}
 
@@ -127,14 +127,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost || channel.Spec.Webhook == nil {
-		unauthorized(w, "unknown path")
+		unauthorizedUser(w)
 		return
 	}
 
 	if !s.authenticateWebhook(r.Context(), channel, r, body) {
 		s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonAuthFailed,
 			"webhook auth validation failed: 401 Unauthorized")
-		unauthorized(w, "auth failed or path not registered")
+		unauthorizedUser(w)
 		return
 	}
 

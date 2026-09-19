@@ -185,17 +185,17 @@ func (d *discordAdapter) Handle(
 	channel *kaalmv1beta1.AgentChannel, body []byte,
 ) inboundResult {
 	if r.Method != http.MethodPost {
-		unauthorized(w, "unknown path")
+		unauthorizedUser(w)
 		return inboundResult{}
 	}
 	pub, err := d.publicKey(ctx, channel)
 	if err != nil {
-		unauthorized(w, "auth failed or path not registered")
+		unauthorizedUser(w)
 		return inboundResult{authFailed: "discord publicKey unusable: " + err.Error()}
 	}
 	if !verifyDiscordSignature(pub, r.Header.Get("X-Signature-Ed25519"), r.Header.Get("X-Signature-Timestamp"),
 		body, time.Now()) {
-		unauthorized(w, "auth failed or path not registered")
+		unauthorizedUser(w)
 		return inboundResult{authFailed: "discord signature or timestamp rejected: 401 Unauthorized"}
 	}
 	var in discordInteraction

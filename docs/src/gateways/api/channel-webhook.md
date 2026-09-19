@@ -53,7 +53,7 @@ Sync mode (`spec.webhook.responseMode: sync`, the default) answers `200` with th
 | 504 | `controller_unavailable` | The Agent is hibernated and the activator is unreachable or not configured; `Retry-After: 5` |
 | 504 | `sync_deadline_exceeded` | The request outlived `gateway.syncDeliveryDeadline` |
 
-The `401` message is `unknown path` when no channel owns the path or the method is not `POST`, and `auth failed or path not registered` when a channel owns it. The design calls for one message on both branches so that a caller cannot enumerate registered paths; issue #236 tracks the difference.
+The `401` body is the same on every branch: the message is `auth failed or path not registered` whether no channel owns the path, the method is not `POST`, or the credential is wrong. A caller cannot enumerate registered paths from it.
 
 ### Reachability under default config
 

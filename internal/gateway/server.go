@@ -297,9 +297,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/test-chat", s.Auth.ConsolePaths(s.handleTestChat))
 	mux.HandleFunc("/v1/spend", s.Auth.ConsolePaths(s.handleSpend))
 
-	// Anything else on the cluster listener is an unrecognized path.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		badRequest(w, "unrecognized path "+r.URL.Path)
+	// Anything else on the cluster listener is an unrecognized path. The
+	// message is constant: the answer never echoes what the caller sent.
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		badRequest(w, "unrecognized path")
 	})
 	return mux
 }
