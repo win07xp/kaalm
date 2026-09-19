@@ -1,54 +1,26 @@
 @startuml channel-delete-handshake
-' AgentChannel delete: the six-step disconnect handshake and the sweep race it closes.
-' Source of truth: docs/src/controller/finalizers.md
+' AgentChannel deletion: the handshake between the reconciler and the
+' gateway replicas, one message per numbered step. The rules behind each
+' step are the prose on docs/src/controller/finalizers.md.
 !include _style.puml
 
-actor "kubectl" as K $extBg
-participant "apiserver" as API $mutedBg
-participant "AgentChannel\nReconciler" as R $ctrlBg
-participant "Gateway r1" as G1 $gwBg
-participant "Gateway r2" as G2 $gwBg
+participant "apiserver" as API #FFD580
+participant "AgentChannel\nReconciler" as R #87CEEB
+participant "Gateway\nreplica 1" as G1 #90EE90
+participant "Gateway\nreplica 2" as G2 #90EE90
 
-K -> API : delete agentchannel
-API -> API : set deletionTimestamp;\nkaalm.io/channel-finalizer blocks
-API -> R : watch event
-
+API -> R : deletionTimestamp set
 R -> API : 1. status.phase = Terminating
-API -> G1 : watch event
-API -> G2 : watch event
-G1 -> G1 : 2. drop connection,\nstop creating async records
-G2 -> G2 : 2. drop connection,\nstop creating async records
-G1 -> API : 3. annotate\nkaalm.io/channel-disconnected: "true"
-
-alt annotation observed
-  API -> R : 4. disconnect confirmed
-else gateway unavailable
-  R -> R : 4. bounded 30s timeout
+API -> G1 : watch
+API -> G2 : watch
+G1 -> G1 : 2. answer 401 on the path
+G2 -> G2 : 2. answer 401 on the path
+G1 -> API : 3. annotate channel-disconnected
+alt annotation seen
+  API -> R : 4. confirmed
+else 30s since deletionTimestamp
+  R -> R : 4. proceed unconfirmed
 end
-
-R -> API : 5. delete kaalm-async-* ConfigMaps\nin kaalm-system by label selector\nchannel-namespace + channel-name
-R -> API : 6. remove kaalm.io/channel-finalizer
-API -> API : object deleted
-
-note over R, G2
-  What closes the race.
-  Each replica gates async-record
-  creation on the channel being live
-  (step 2), so once it observes
-  Terminating it writes no more. The
-  disconnect annotation (step 3)
-  confirms that transition has
-  propagated, so by the sweep (step 5)
-  no replica is still producing records
-  to orphan. Without the gate, an
-  in-flight write from r2 could land
-  after the sweep: these ConfigMaps
-  sit in kaalm-system, carry no
-  ownerRef to the channel, and are
-  invisible to cascade GC, so the
-  sweep is their only cleanup.
-  The 30s timeout stops a dead gateway
-  from wedging the delete.
-end note
-
+R -> API : 5. delete kaalm-async-* by channel labels
+R -> API : 6. remove the finalizer
 @enduml

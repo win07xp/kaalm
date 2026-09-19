@@ -1,78 +1,46 @@
-# AgentTask Lifecycle
+# AgentTask lifecycle
 
-An [AgentTask](../resources/agenttask.md) is a run-to-completion workload: the operator provisions a Pod, the Pod does its work, the operator collects the result and tears the Pod down. Unlike an Agent, which is long-lived and hibernates between requests, an AgentTask always settles in a terminal phase.
+An [AgentTask](../resources/agenttask.md) is a run-to-completion workload: the operator provisions a Pod, the Pod does its work, and the operator records the result; the Pod is removed with the task when its TTL expires. Unlike an Agent, which is long-lived and hibernates between requests, an AgentTask always settles in a terminal phase.
 
-This page covers the AgentTask state machine, how the operator decides a task is done, how artifacts get from the container into `status`, and what happens on a retry.
+This page covers the AgentTask state machine, how the operator decides a task is done, how artifacts get from the container into `status`, and what happens on a retry. The order in which one reconcile pass runs these steps is under [AgentTaskReconciler](reconcilers.md#agenttaskreconciler); the wire contract of the completion call is [POST /v1/task/complete](../gateways/api/task-complete.md).
 
 ## State machine
 
-![AgentTask state machine: Pending to Provisioning to Running to Completing, which settles in Succeeded, Failed, or TimedOut. Failed retries back to Provisioning under backoffLimit, and any state can move to Terminating on delete or TTL expiry.](../diagrams/task-lifecycle.svg)
+The other lifecycles in the system are indexed on [Lifecycles at a glance](../appendix/lifecycles.md).
+
+![AgentTask state machine, one trigger per edge. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Completing on completion, exit, or timeout, and Completing to Succeeded on success, to Failed on failure, or to TimedOut on a timeout with onTimeout Fail. Pending to Failed when the spec is irreconcilable, Provisioning to Failed when the Pod fails to start or the spec is irreconcilable, Running to Failed when the Pod is lost with an empty mailbox, and Failed back to Provisioning while retries are left. Any phase moves to Terminating when deleted or when the TTL expires.](../diagrams/task-lifecycle.svg)
 
 ## Transition triggers
 
-| From -> To | Trigger |
-|---|---|
-| Pending -> Provisioning | References valid |
-| Provisioning -> Running | Pod Ready. `status.startTime` is stamped in the same status write. |
-| Provisioning -> Failed | Unrecoverable Pod-start error. Retryable under `backoffLimit`. |
-| Running -> Completing | Agent reports completion, container exits, or timeout hits |
-| Running -> Failed | Involuntary Pod disruption mid-run (eviction, out-of-band delete, node loss). Retryable under `backoffLimit`. |
-| Completing -> Succeeded | Completion reported success AND artifacts collected |
-| Completing -> Failed | Completion reported failure OR artifact collection failed OR container exited non-zero |
-| Failed -> Provisioning | `backoffLimit > 0` AND `status.retries < backoffLimit` (retry, see [Retry mechanics](#retry-mechanics)) |
-| Completing -> TimedOut | Timeout hit before completion reported AND `spec.completion.onTimeout: Fail` (the default) |
-| Pending -> Failed | Reconcile-time validation determines the spec is irreconcilable with its referenced AgentClass |
-| Succeeded/Failed/TimedOut -> Terminating | TTL expired OR deletion requested |
+| From | To | Trigger |
+|---|---|---|
+| `Pending` | `Provisioning` | The pre-Pod checks pass and the Certificate exists; the task holds in `Provisioning` until the Certificate is Ready. |
+| `Pending`, `Provisioning` | `Failed` (terminal) | A class-versus-spec violation under rules 2, 4, 5, 24, or 35 to 38: `ClassConstraintViolation`, `PersistenceNotAllowed`, or `ToolNotInCatalog`. Checked whenever no Pod exists, so a retry is validated against the class as it now stands. Not retried. |
+| `Provisioning` | `Running` | The Pod reports Ready. `status.startTime` is stamped in the same write, and the timeout clock starts. |
+| `Provisioning` | `Failed` | The container image name is invalid or can never be pulled (`InvalidImageName`, `ErrImageNeverPull`); the Pod reaches a terminal phase before Ready (`PodStartFailed`); or the Pod is not Ready five minutes after creation, whatever the cause (`ProvisioningDeadlineExceeded`). Retryable. An `exitCode` task whose Pod exits 0 before Ready goes to `Completing` instead. |
+| `Running` | `Completing` | The completion mailbox holds a payload (`agentReported`), the container exits (`exitCode`), or the timeout elapses. |
+| `Running` | `Failed` | The Pod is lost mid-run and the mailbox is empty (`PodDisrupted`). Retryable. See [Completion beats disruption](#completion-beats-disruption). |
+| `Completing` | `Succeeded` | The payload reports success and its artifact names pass the re-check, or the container exited 0. |
+| `Completing` | `Failed` | The payload reports failure, its artifact names fail the re-check, the container exited non-zero, or the Pod is gone with no payload. Retryable. |
+| `Completing` | `TimedOut` | The timeout has elapsed and the mailbox is empty, with `onTimeout: Fail` (the default). With `onTimeout: Succeed` the task settles `Succeeded`. Not retried. |
+| `Failed` | `Provisioning` | `status.retries` is below `backoffLimit`. See [Retry mechanics](#retry-mechanics). A `Failed` task with no `completionTime` on a later pass is a retry interrupted by a controller restart and resumes here too. |
+| any terminal | `Terminating` | `ttlSecondsAfterFinished` has elapsed since `completionTime`, or deletion was requested. A task with no TTL is kept. |
 
-The rest of this section expands the rows whose reasoning does not fit in a table cell.
+A terminal `Failed` carries `completionTime`; a transient `Failed` written mid-retry does not, which is how the two are told apart.
 
-### Provisioning -> Running: the clock starts here
+### The clock starts at Ready
 
-`spec.completion.timeout` measures from `status.startTime`, and `startTime` is stamped only when the Pod becomes Ready. Scheduling and image-pull time therefore never count against the task's wall-clock budget.
+`spec.completion.timeout` measures from `status.startTime`, stamped when the Pod reports Ready, so scheduling and image-pull time never count against the task's budget. A retry clears `startTime`, so each attempt gets the full timeout. A task stuck before Ready is bounded by the fixed five-minute provisioning deadline instead.
 
-### Provisioning -> Failed: three distinct causes
+### Completion beats disruption
 
-- **Fatal config errors** (for example `InvalidImageName`) fail immediately.
-- **A Pod that reaches a terminal phase before ever becoming Ready** fails immediately. The container started and exited, and under `restartPolicy: Never` one crash is terminal, so there is nothing to wait for.
-- **An image-pull or scheduling failure** fails after persisting past a fixed **5-minute provisioning deadline**. This is a documented constant, not a spec field.
+The Pod can vanish mid-run: evicted, deleted out of band, or its node lost. Before classifying the loss, the reconciler reads the completion mailbox. A payload already stamped through the identity gate wins and drives `Running` to `Completing`; only an empty mailbox makes the loss a retryable `Failed`. Without this order, an eviction landing right after a successful completion call would wipe a valid result in the retry sequence and re-run a finished task. `exitCode` mode needs no such rule: an evicted Pod reaches `status.phase: Failed` with no exit code, and terminal-without-exit-code is failure.
 
-All three are normal retryable failures, subject to the `Failed -> Provisioning` backoff below.
+### Completing re-reads the evidence
 
-### Running -> Failed: completion beats disruption
+`Completing` is brief, but it is not a pass-through. On entering it the reconciler re-reads the mailbox, the Pod, and the clock, in that precedence: a payload settles the task by its status, then a terminal container by its exit code, then an elapsed timeout by `onTimeout`, and a Pod gone with none of these is a retryable disruption. A timeout-triggered transition therefore still settles by payload when the completion landed in the meantime, and `onTimeout` decides only when the mailbox is empty.
 
-The Pod can vanish mid-run: evicted, deleted out-of-band, or its node lost. That is a normal retryable failure under `backoffLimit`. But the operator must not classify the loss until it has checked whether the task actually finished first.
-
-**Precedence rule.** For an `agentReported` task, the reconciler first reads the `{taskName}-completion` ConfigMap:
-
-- A valid completion already stamped through the identity gate (the write passed `status.currentPodUID` before the Pod departed) **wins**, and drives `Running -> Completing` normally.
-- Only an **empty mailbox** classifies the loss as `Failed`.
-
-Without this ordering, an eviction landing just after a successful `/v1/task/complete` would wipe a valid result in the retry sequence and re-run a finished task.
-
-`exitCode` mode needs no carve-out. An evicted Pod reaches `status.phase: Failed` with **no** container exit code, so terminal-without-exit-code is treated as failure rather than waiting for an exit status that will never appear.
-
-### Completing -> Failed: what "artifact collection failed" means
-
-Artifact collection fails on a ConfigMap read error, or on the defensive reconciler-side artifact-name re-check tripping. Note that the gateway already rejects name mismatches synchronously with `400 invalid_request` before they can reach this state, so the re-check firing here would indicate something has drifted.
-
-### Completing -> TimedOut: why timeouts are their own phase
-
-With `spec.completion.onTimeout: Succeed`, the same trigger settles in `Succeeded` instead of `TimedOut`. `TimedOut` is deliberately distinct from `Failed` so that timeouts are attributable and exempt from `backoffLimit` retries (see [Retry mechanics](#retry-mechanics)).
-
-### Pending -> Failed: irreconcilable spec
-
-Reconcile-time validation can determine the AgentTask spec cannot be satisfied by its referenced AgentClass:
-
-- `reason=PersistenceNotAllowed` per [rule 24](../resources/validation-and-defaulting.md#cross-resource-validation).
-- `reason=ClassConstraintViolation` for an image/provider/namespace mismatch detected during initial provisioning. These are the same conditions that send an Agent to `Degraded`.
-
-This is terminal because AgentTask has no `Degraded` phase. It mirrors the existing class-drift handling for backoff retries against a tightened class (see [AgentClass change handling](change-propagation.md#agentclass-change-handling) and [AgentTaskReconciler](reconcilers.md#agenttaskreconciler)).
-
-### Completing is a pass-through, not a decision point
-
-`Completing` is a brief artifact-collection state. The eventual terminal phase (`Succeeded` / `Failed` / `TimedOut`) is determined by the trigger that caused the `Running -> Completing` transition, not by a separate event inside `Completing`.
-
-Timeout-triggered transitions still pass through `Completing` so any partial agent-reported payload can be picked up best-effort before settling in the phase `spec.completion.onTimeout` selects: `TimedOut` for `Fail` (the default), `Succeeded` for `Succeed`.
+`TimedOut` is distinct from `Failed` so that timeouts are attributable and exempt from retries: a timeout means the budget was too small, and retrying with the same timeout would time out again. Raise `spec.completion.timeout` and re-apply the task instead.
 
 ## Completion detection
 
@@ -80,60 +48,37 @@ How the operator learns a task is done depends on `spec.completion.condition`.
 
 ### agentReported
 
-The gateway receives [POST /v1/task/complete](../gateways/api/task-complete.md) from the agent container. The gateway updates the pre-existing `{taskName}-completion` ConfigMap in the task's namespace (created by the AgentTaskReconciler at provisioning time) with the completion payload: status, message, and artifact key-values. The reconciler watches the ConfigMap for changes and transitions to `Completing` once the payload is populated.
+The agent container calls [POST /v1/task/complete](../gateways/api/task-complete.md). The gateway writes the payload (status, message, and artifact key-values) into the pre-existing `{taskName}-completion` ConfigMap in the task's namespace, and the reconciler, watching that ConfigMap, moves the task to `Completing` once a payload is present. A ConfigMap rather than a Pod annotation keeps the completion data across Pod crashes and evictions between the agent's call and the reconciler's next pass, which is what makes the precedence rule above possible.
 
-Using a ConfigMap rather than a Pod annotation ensures completion data survives Pod crashes or eviction between the agent's completion call and the reconciler's next pass. This is what makes the precedence rule above possible.
-
-The reconciler stamps `AgentTask.status.currentPodUID = Pod.UID` whenever the agent's Pod is created (initial provisioning and `backoffLimit` retries). The gateway's `/v1/task/complete` admission uses this field as the identity gate: see [POST /v1/task/complete](../gateways/api/task-complete.md) 403 cases (c) `StalePodCompletion` and (d) `TaskAlreadyCompleted`.
+The reconciler stamps `status.currentPodUID` from the Create response in the same pass that creates the Pod, so the identity gate at `/v1/task/complete` is open before the container starts. A stamp lost to a failed status write is repaired on the next pass from the observed Pod. The gate's two 403 cases, `StalePodCompletion` and `TaskAlreadyCompleted`, are specified on the wire page. `exitCode` tasks carry no `currentPodUID`.
 
 ### exitCode
 
-The reconciler watches Pod phase: exit 0 -> `Succeeded`, non-zero -> `Failed`.
-
-This mode depends on task Pods being created with `restartPolicy: Never`, which the AgentTaskReconciler pins unconditionally because Kaalm owns retries via `backoffLimit`. With `Always` or `OnFailure`, the kubelet restarts the exited container in place and the Pod phase never reaches `Succeeded`/`Failed`, so completion would never be observed. In-place kubelet restarts would also bypass `status.retries` accounting and blur the one-run-per-`currentPodUID` assumption.
-
-Agent Pods, by contrast, are pinned `restartPolicy: Always`. Crash-loop detection there reads `containerStatuses` restart counts (CrashLoopBackOff), not Pod phase.
+The reconciler watches the Pod phase: `Succeeded` settles `Succeeded`, `Failed` settles `Failed` with the container's exit message. This depends on task Pods being created with `restartPolicy: Never`, which the reconciler pins unconditionally: with `Always` or `OnFailure` the kubelet restarts the exited container in place and the Pod phase never reaches a terminal value, and an in-place restart would also bypass `status.retries` and blur the one-run-per-`currentPodUID` gate. Agent Pods are pinned `Always` for the opposite reason; their crash-loop detection reads container restart counts, not Pod phase.
 
 ## Artifact collection
 
-In `agentReported` mode, artifact values are embedded in the completion payload written by the agent. The reconciler reads them from the `{taskName}-completion` ConfigMap and writes them to `status.artifactValues`. No exec into the container is required.
-
-Artifact-name conformance against `spec.artifacts` is enforced synchronously at the gateway: `400 invalid_request` is returned to the agent before the ConfigMap is patched (see [POST /v1/task/complete](../gateways/api/task-complete.md)). The reconciler re-checks defensively when reading the ConfigMap, as belt-and-suspenders against any future RBAC drift on the per-task `update, patch` Role, but under normal operation the re-check is a no-op.
-
-Oversize artifacts are rejected at the gateway with HTTP 413:
-
-- more than **4 KiB per artifact**, or
-- more than **32 KiB total**.
-
-Agents must externalize large outputs (object storage, Git, etc.) and pass a reference URL inline. There is no auto-spill mechanism and no `status.artifactRefs` field.
+In `agentReported` mode the artifact values travel in the completion payload. The reconciler reads them from the ConfigMap and writes them to `status.artifactValues`, along with `status.agentReportedStatus` and `status.agentReportedMessage`; no exec into the container is needed. The gateway enforces artifact-name conformance against `spec.artifacts` and the size caps before it writes the ConfigMap; the reconciler re-checks the names when it reads them, as a second check against RBAC drift on the per-task Role, and a re-check failure is a retryable `Failed`. The caps, the `413` response, and the externalize-and-reference guidance are on [POST /v1/task/complete](../gateways/api/task-complete.md).
 
 ## Retry mechanics
 
-When [`spec.completion.backoffLimit`](../resources/agenttask.md) is `> 0` and the task transitions to `Failed` with `status.retries` below the limit:
+When the task fails and `status.retries` is below `backoffLimit`, one status write increments `status.retries`, clears `status.currentPodUID`, `status.startTime`, and the previous attempt's artifact and report fields, sets a transient `Failed` phase, and emits a `Warning` event naming the failure and the attempt count. The reconciler then deletes the old Pod, resets the `{taskName}-completion` ConfigMap to `data: {}` (an update rather than a delete, so the ownerRef and the gateway's name-scoped Role stay valid), and sets `Provisioning`. The next pass creates the new Pod and stamps `currentPodUID` from the Create response in the same write. The PVC is retained, so the retry runs with the same scratch storage.
 
-1. The reconciler increments `status.retries`.
-2. The reconciler clears `status.currentPodUID = ""`.
-3. The existing Pod is deleted (it has already exited or will be terminated).
-4. The `{taskName}-completion` ConfigMap is reset to `data: {}`.
-5. The PVC is retained, so the retry runs with the same scratch storage.
-6. The task transitions back to `Provisioning` and a new Pod is created.
-7. The reconciler observes the new Pod via the informer and stamps `status.currentPodUID = newPod.UID`.
-8. If the retry also fails and `status.retries` equals `backoffLimit`, the task remains in `Failed` as a terminal state.
+![Sequence diagram of an AgentTask retry. The reconciler increments retries and clears currentPodUID in one status write, which closes the gate. Inside the closed gate it deletes the old Pod, whose late completion call receives 403 StalePodCompletion from the gateway, resets the completion ConfigMap to an empty data map, creates the new Pod, and stamps currentPodUID with the new UID. The new Pod's completion call is then accepted and the gateway writes the result.](../diagrams/task-retry-race.svg)
 
-Steps 2 and 7 bracket the run: clearing the UID closes the in-flight stale-write window, and re-stamping it re-opens the gate for the new Pod. In between, no Pod can write a completion.
+Clearing the UID before resetting the mailbox is what closes the stale-write window: a late completion from the old Pod arriving after the clear fails the gate with `403 StalePodCompletion` instead of refilling the emptied mailbox. Clearing the UID and stamping the new one bracket the window in which the gateway rejects every completion. The window is the gap between the Create call and the status write that stamps the new UID, so a new Pod whose first completion call is that early also receives `403 StalePodCompletion`; agents retry on it per [The runtime contract](../runtime/contract.md), item 6. As shipped the old Pod's terminating object is still visible to the pass that follows the retry, which can stamp its UID back and count its terminal state as a further failure.
 
-![Sequence diagram of an AgentTask retry. The reconciler increments status.retries, then clears status.currentPodUID to the empty string, which closes the gate (shaded region). Inside the closed gate it deletes the old Pod, patches the completion ConfigMap back to an empty data map, and creates the new Pod with the PVC retained. Two different completions arrive while the gate is closed and both receive 403 StalePodCompletion from the gateway: a late in-flight completion from the terminated old Pod, and the new Pod's first completion racing the reconciler's stamp. The gate re-opens when the reconciler observes the new Pod via its informer and stamps status.currentPodUID to the new Pod's UID, after which the new Pod's completion is accepted and written to the ConfigMap.](../diagrams/task-retry-race.svg)
+A retry re-runs the pre-Pod class check against the class as it now stands. A violation there settles the task as terminal `Failed` at once, whatever `backoffLimit` remains, and the increment already spent is not refunded. To retry a task against a class you have since aligned, delete and recreate the task: a `kubectl apply` of the same spec does not reset `status.retries`, since status is controller-owned and apply patches only `spec`.
 
-Reading the diagram: the shaded region is the window in which `currentPodUID` is empty, and the gateway's identity gate therefore rejects everything. Both rejections inside it return the same `403 StalePodCompletion` for opposite reasons. The old Pod's late write is the case the gate exists to stop, and rejecting it is the whole point. The new Pod's early write is a benign informer-lag race that the agent retries through. The two are indistinguishable to the gateway, which is why the status code is shared and why the runtime contract makes `StalePodCompletion` retryable rather than fatal.
+## Event reasons
 
-**On step 1 (when the counter moves).** The increment happens at the start of each retry cycle, before the [pre-Pod cross-check in AgentTaskReconciler step 1](reconcilers.md#agenttaskreconciler) runs. A retry whose new Pod fails the cross-check (`reason=ClassConstraintViolation` or `reason=PersistenceNotAllowed`) therefore consumes one unit of `backoffLimit` even though the failure cause is admin misconfiguration of the AgentClass or ModelProvider rather than the workload. Operators that have aligned the class spec mid-backoff and want a clean retry should delete and recreate the AgentTask. A `kubectl apply` of the same or modified spec does not reset `status.retries`, since status is controller-owned and Kubernetes apply patches only `spec`. The new AgentTask starts at `status.retries = 0` against the now-aligned class.
+| Reason | Type | When |
+|---|---|---|
+| `TaskSucceeded` | Normal | the task settles `Succeeded` |
+| `TaskFailed` | Warning | the task settles `Failed` from a reported failure, a non-zero exit, or an artifact re-check |
+| `TimeoutExceeded`, `TimeoutSucceeded` | Warning, Normal | the task settles `TimedOut`, or `Succeeded` under `onTimeout: Succeed` |
+| `PodStartFailed`, `ProvisioningDeadlineExceeded`, `InvalidImageName`, `ErrImageNeverPull` | Warning | a provisioning failure settles or retries |
+| `PodDisrupted` | Warning | the Pod was lost mid-run or before completion settled |
+| `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog` | Warning | the pre-Pod class check settles the task `Failed` |
 
-**On step 2 (clearing the UID).** Any `/v1/task/complete` from the terminated old Pod arriving after this point fails the gateway's identity gate with `403 StalePodCompletion` instead of overwriting the new Pod's data.
-
-**On step 4 (resetting the mailbox).** The reconciler patches the ConfigMap back to empty rather than deleting and re-creating it, so the existing ownerRef and the gateway's name-scoped `update, patch` Role remain valid for the retry.
-
-**On step 7 (re-stamping the UID).** There is a narrow informer-lag window (typically <100ms versus seconds of agent startup) where the new Pod's first `/v1/task/complete` may race the stamp and receive `403 StalePodCompletion`. Agents handle this per [/v1/task/complete](../runtime/contract.md) with a bounded retry on `StalePodCompletion`.
-
-### Timeouts are not retried
-
-Only `Failed` transitions trigger backoff retries. `TimedOut` is terminal. A timeout indicates the workload's wall-clock budget was insufficient, not a transient failure: retrying with the same `timeout` would re-time-out without progress. Tasks that genuinely need a longer budget should raise `spec.completion.timeout` and re-apply the CR.
+A retry emits the failure's reason with the message suffix `retrying (n/limit)`; the settled event fires once, when the terminal phase is written.

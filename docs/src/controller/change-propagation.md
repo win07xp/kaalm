@@ -1,104 +1,78 @@
-# Change Propagation
+# Change propagation
 
-Two kinds of change reach an Agent's already-provisioned child resources: edits to the Agent's own spec, and edits to the AgentClass or ModelProvider it references. This page defines both paths. It is the canonical description of AgentClass-change propagation; the [AgentReconciler](reconcilers.md#agentreconciler) drift step and the [child-resources overview](../runtime/child-resources.md) both defer here.
+Two kinds of change reach an Agent's provisioned child resources: edits to the Agent's own spec, and edits to the AgentClass, ModelProvider, or ToolProvider it references. This page defines both paths. It is the canonical description of class-change propagation; the [AgentReconciler](reconcilers.md#agentreconciler) and the [child resources](../runtime/child-resources.md) page both defer here.
 
-## Spec Change Handling
+## Spec change handling
 
-When a developer updates an Agent's spec while it is in `Running` or `Idle` phase, the controller detects spec drift by hash comparison. It hashes the desired Pod spec, derived from the current Agent spec and AgentClass, and compares it against the hash stamped as an annotation on the existing Pod at creation time. This is the Deployment `pod-template-hash` idiom.
+When a developer edits an Agent's spec, the controller detects drift by hash comparison. It hashes the Pod spec it would derive from the current Agent spec and class, and compares the result with the hash stamped as the `kaalm.io/pod-spec-hash` annotation on the existing Pod at creation time, the Deployment `pod-template-hash` idiom. The comparison is never made against the live Pod object: the apiserver defaults and injects fields on admission (`serviceAccountName`, `nodeName`, tolerations, `imagePullPolicy`), so a deep-equal against the live object would report drift on every pass and recreate the Pod in a loop.
 
-The comparison is never made against the live Pod object itself. The apiserver defaults and injects fields on admission (`serviceAccountName`, `nodeName`, tolerations, `imagePullPolicy`), so a naive deep-equal of derived spec vs. live spec always reports drift and would recreate the Pod in a loop.
+The hash covers the image, command, args, env, resources, the provider names, and the handler ConfigMap name (never its content). Kaalm replaces the Pod on any change to these, for a clean process restart, even where Kubernetes would allow an in-place change such as an image or, on clusters with in-place Pod resize, resources. On a hash mismatch the Agent transitions to `Provisioning`, the Pod is deleted with its `terminationGracePeriodSeconds`, and a new Pod is created from the new spec. The PVC, Service, Certificate, ServiceAccount, and NetworkPolicy are preserved.
 
-The hash covers the replacement-triggering fields: image, resources, command, args, env, provider wiring. Not all of these are immutable in Kubernetes. A Pod's `image` is mutable in place, and `resources` is in-place-resizable on newer clusters. Kaalm deliberately replaces the Pod on any such change for a clean process restart.
+Fields outside the hash are never applied to a live Pod: the reconciler creates, deletes, and reads Pods, and never patches one. A change to such a field takes effect when the Pod is next replaced for another reason. The Service and the NetworkPolicy are converged in place, so a `spec.service.port` change or a class egress change reaches a running Agent without a restart.
 
-On a hash mismatch, the controller recreates the Pod:
-
-1. The Agent transitions to `Provisioning`.
-2. The existing Pod is deleted (SIGTERM is sent; the agent has `terminationGracePeriodSeconds` to shut down).
-3. The controller creates a new Pod with the updated spec.
-4. Once the new Pod is Ready, the Agent transitions back to `Running`.
-
-The PVC, Service, and Certificate are preserved; only the Pod is replaced. This is intentionally disruptive: the agent process restarts, but its persistent state (PVC) is retained.
-
-Changes to mutable fields (labels, annotations, non-structural metadata) are patched in place without Pod recreation.
-
-If the Agent is `Hibernated`, spec changes are applied on the next wake. No Pod exists to recreate.
-
-### Effect by Phase
-
-For non-`Running`/`Idle` phases, the AgentReconciler's converge pass (see [step 6](reconcilers.md#agentreconciler)) picks up spec edits on every reconcile, but the user-visible effect is bounded by the Agent's phase:
+### Effect by phase
 
 | Phase during edit | Effect |
 |---|---|
-| `Provisioning`, `Resuming` | Applied to the Pod being created. No recreate is needed since the Pod is not yet `Ready`. |
-| `Hibernating` | Applies on the next wake's Pod creation. The in-progress hibernation completes first. |
-| `Hibernated` | Applies on the next wake, as above. |
-| `Degraded` | Evaluated on every reconcile. That is the recovery path: aligning the Agent or AgentClass spec is the documented way out of `Degraded` (see [AgentReconciler step 5](reconcilers.md#agentreconciler)). |
+| `Running`, `Idle` | The Pod is replaced on the next pass. |
+| `Provisioning`, `Resuming` | A Pod that already exists is replaced like any other, since the hash check runs before the readiness check. An edit that lands before the Pod is created is absorbed into it. |
+| `Hibernating`, `Hibernated` | Applied on the next wake, which creates the Pod from the new spec. The in-progress hibernation completes first. |
+| `Degraded` | The cross-checks re-run on every pass, so aligning the Agent or class spec is the way out of `Degraded`; see [Degraded](agent-lifecycle.md#degraded). |
 
-The user-facing contract is therefore: a spec edit's effect is guaranteed visible only after `status.phase` next stabilizes at `Running`, `Hibernated`, or, for class-recovery, the restored `preDegradedPhase`.
+A spec edit's effect is guaranteed visible only after `status.phase` next settles at `Running`, `Hibernated`, or, for class recovery, the restored `preDegradedPhase`.
 
-## AgentClass Change Handling
+## AgentClass change handling
 
-When an AgentClass field that affects already-provisioned child resources is changed (e.g., `resources.maxLimits` lowered, `security.podSecurityContext` tightened, `network.egress.allowedCIDRs` reduced, `image.allowedImages` narrowed, `allowedProviders` reduced), the [AgentReconciler](reconcilers.md#agentreconciler) and [AgentTaskReconciler](reconcilers.md#agenttaskreconciler) re-queue every Agent and AgentTask referencing the class via their existing `EnqueueRequestsFromMapFunc` watches. The AgentClass watch uses an indexed lookup on `agentClassRef.name`; a parallel ModelProvider watch uses an indexed lookup on `providerRef.name`. Propagation is therefore event-driven rather than waiting for the 5-minute periodic requeue.
+When an AgentClass, ModelProvider, or ToolProvider spec changes, the [AgentReconciler](reconcilers.md#agentreconciler) re-enqueues every Agent referencing it through three indexed watches (`agentClassRef.name`, `providers[].providerRef.name`, `tools[].providerRef.name`), so propagation is event-driven rather than waiting for a periodic requeue. The [AgentTaskReconciler](reconcilers.md#agenttaskreconciler) watches AgentClass only. Each watch is gated so that status-only writes never fan out: a class or tool provider fires on a spec generation change, and a model provider on a spec change or a change to the set of namespaces its budget blocks.
 
-A change propagates along one of three paths, depending on whether it constrains the derived Pod spec, excludes the Agent's stored spec, or only affects per-request routing.
+A change propagates along one of three paths, decided in this order: does it exclude the Agent's stored spec (bucket 2), does it change the Pod spec hash (bucket 1), or neither (bucket 3, or an in-place child update).
 
-![Decision tree for an AgentClass or ModelProvider spec edit. The edit re-queues every referencing workload through EnqueueRequestsFromMapFunc, the AgentClass watch indexed on agentClassRef.name and the ModelProvider watch indexed on providerRef.name. For an Agent, the first test asks whether the change excludes the Agent's stored spec; if so the result is bucket 2, phase=Degraded with preDegradedPhase recorded and a reason naming the mismatch. Otherwise a Pod-spec-hash comparison asks whether a replacement-triggering field changed; if not the result is bucket 3, a routing-concern change handled by the gateway's watches with no Agent-side effect. If it did, the result is bucket 1, recreate-and-clamp: a Hibernated Agent defers to its next wake, otherwise the Agent goes to Provisioning, the Pod is deleted with SIGTERM, a new Pod is created from the clamped spec, and the Agent returns to Running. For an AgentTask, terminal tasks ignore class drift and proceed to TTL cleanup, in-flight tasks run to completion under the class snapshot taken at Pod creation, and a task retrying from Failed increments status.retries and re-validates against the new class, reaching Failed with reason=ClassConstraintViolation if it is no longer admitted.](../diagrams/agentclass-propagation.svg)
+![Flowchart of what a class or provider edit does to a provisioned Agent, as one cascade. If the stored spec is no longer admitted by the class and providers, the Agent becomes Degraded with the Pod untouched. Otherwise, if the Pod spec hash is unchanged, the children are converged in place with no restart. Otherwise a Hibernated Agent applies the change on its next wake, and any other Agent goes to Provisioning, where the Pod is deleted and created from the new spec.](../diagrams/agentclass-propagation.svg)
 
-Reading the diagram: the order of the two Agent-side tests is the whole design. The exclusion test runs first, and only if it passes does the field-category question arise. This is why a restrictive `allowedNamespaces` edit lands in bucket 2 even though `allowedNamespaces` is listed under bucket 3: bucket membership follows what the change does to the stored spec, not what kind of field it is.
+The exclusion test runs first, so bucket membership follows what the change does to the stored spec, not the field's nominal category: a restrictive `allowedNamespaces` edit is bucket 2 even though `allowedNamespaces` is listed under bucket 3.
 
-### Bucket 1: Recreate-and-Clamp (Default)
+### Bucket 1: recreate-and-clamp (default)
 
-If the new AgentClass invariants can be applied by re-deriving the desired Pod spec, the controller does so without any phase excursion beyond a normal restart. Examples: `maxLimits` lowered, `runtime` changed, `security` tightened, `network.egress.allowedCIDRs` reduced, `image.allowedImages` narrowed but still admitting the Agent's `image`.
+A class change that reaches the Pod spec hash replaces the Pod: `maxLimits` lowered (the Agent's `resources.limits` are clamped to it), `defaultImage` changed for an Agent with no image of its own, or `defaultResources` changed for an Agent with none. The reconciler transitions the Agent to `Provisioning`, deletes the Pod gracefully, and creates a new one from the clamped spec; a `Hibernated` Agent applies the change on its next wake. Agents must tolerate restart.
 
-The reconciler re-derives the [child-resource set](../runtime/child-resources.md) for every Agent referencing the class: clamping `resources.limits` down to the new `maxLimits`, applying the tighter `securityContext`, regenerating the per-Agent `NetworkPolicy` from the new egress rules. It then transitions the Agent to `Provisioning`, deletes the existing Pod (graceful SIGTERM honoring `terminationGracePeriodSeconds`), and creates a new Pod with the adjusted spec. The PVC, Service, and Certificate are preserved. This mirrors the [spec-drift behavior above](#spec-change-handling); agents must tolerate restart.
+Class fields outside the hash reach a running Agent by other routes or not at all:
 
-Drift is detected exactly as for Agent spec edits: by comparing the Pod-spec hash annotation against the hash of the re-derived spec, never by a DeepEqual against the live Pod. Recreation triggers when the new spec differs in the replacement-triggering fields (image, resources, command, args, env, provider wiring); Kaalm deliberately replaces the Pod even for fields that are technically mutable in place.
+| Class change | Effect on a provisioned Agent |
+|---|---|
+| `network.egress.allowedCIDRs`, `allowSameNamespaceIngress` | the NetworkPolicy is updated in place; no restart |
+| `image.allowedImages` narrowed but still admitting the image | none |
+| `security`, `runtime.runtimeClassName`, `image.pullPolicy`, `image.imagePullSecrets`, `lifecycle.terminationGracePeriodSeconds`, `podMetadata` | as shipped, none until the Pod is next replaced for another reason: these fields are derived into a new Pod but not hashed |
+| `lifecycle` defaults and caps | applied on the next activity evaluation; no restart |
 
-This design makes AgentClass a live policy lever for Agents without disrupting one-shot task work (see [AgentTask handling](#agenttask-handling-no-degraded-phase) below).
+### Bucket 2: degrade-when-irreconcilable
 
-Hibernated Agents apply the new invariants on their next wake. Recreation happens automatically as the wake path provisions a new Pod from the now-clamped desired spec.
+Some changes exclude the Agent's spec rather than constrain its derived Pod spec. The reconciler does not touch the Pod for these; it moves the Agent to `phase=Degraded` with a `reason` naming the mismatch and a message naming the offending field. A class or provider change can newly introduce any of these:
 
-### Bucket 2: Degrade-When-Irreconcilable
+1. The Agent's `spec.image` no longer matches `image.allowedImages` (rule 2).
+2. A `spec.providers` entry is no longer in `allowedProviders`, has been deleted, or its own `allowedNamespaces` no longer includes the Agent's namespace (rules 3 to 5). Rule 4, a provider dropping the namespace, is the canonical case ([scenario S5](../appendix/scenarios.md)).
+3. A `spec.tools` entry is no longer in `allowedToolProviders`, its ToolProvider no longer admits the namespace or has been deleted, or a granted tool has left the declared catalog (rules 35 to 38).
+4. `spec.persistence.enabled: true` while the class has `persistence.enabled: false` (rule 24).
+5. `spec.lifecycle.hibernationEnabled: true` while the class has `lifecycle.hibernationAllowed: false` (rule 26).
+6. `spec.handler` set while the class has `image.allowHandlerMounts: false` (rule 30).
 
-Four kinds of change exclude the Agent's spec rather than just constrain its derived Pod spec:
+The reasons, the `preDegradedPhase` bookkeeping, per-mismatch recovery, and what happens to the Pod meanwhile are specified under [Degraded](agent-lifecycle.md#degraded). Either side of the mismatch can be aligned, the workload spec or the class or provider, and the controller restores the prior phase on the next pass after every mismatch has cleared. Recoverable runtime issues (a transient provider outage, budget exhaustion) are a different bucket: they set a `Degraded` condition without changing the phase, see [Error handling](operations.md#error-handling).
 
-1. The Agent's `spec.image` no longer matches `image.allowedImages`.
-2. Its `spec.providers` references a ModelProvider no longer in `allowedProviders`, or one whose own `allowedNamespaces` no longer includes the Agent's namespace. A referenced ModelProvider that has been deleted outright is handled the same way (see [AgentReconciler step 2](reconcilers.md#agentreconciler)).
-3. Its `spec.persistence.enabled: true` while the class has `persistence.enabled: false`.
-4. Its `spec.lifecycle.hibernationEnabled: true` while the class has `lifecycle.hibernationAllowed: false`.
+### Bucket 3: routing-concern changes
 
-In these cases the reconciler does not recreate the Pod. It transitions the Agent to `phase=Degraded` with a `reason` naming the specific mismatch and a message naming the offending field: `ClassConstraintViolation` for image, provider, or namespace mismatches, `PersistenceNotAllowed` for persistence, `HibernationNotAllowed` for hibernation. The class-comparison checks reuse [cross-resource validation](../resources/validation-and-defaulting.md#cross-resource-validation) rules 2, 4, 5, 24, and 26. A class or ModelProvider change can newly introduce any of these: rule 4 (a provider dropping the namespace, [scenario S5](../appendix/scenarios.md)) is the canonical case. One further coupling degrades an Agent the same way but is **spec-internal**, so a class change can never introduce it: `spec.lifecycle.hibernationEnabled: true` while the Agent's own `spec.persistence.enabled` is `false` gets `reason=HibernationRequiresPersistence` (rule 29), enforced on every reconcile regardless of drift. They fail at reconcile and surface as `Degraded` rather than being silently re-applied to a recreated Pod.
+Routing-concern fields propagate through the gateway's CRD and Secret watches with no Agent-side effect: `spec.models` shrinkage, fallback-chain edits, credential rotations on `credentialsRef`, and additive changes to `allowedNamespaces` or `allowedProviders` that exclude no bound provider or namespace. These take effect on the next routed call without any Pod-level transition. See [LLM Gateway](../gateways/llm/overview.md) for the per-request routing and credential mechanics.
 
-The same `Degraded` handling applies whether the conflict is discovered during initial provisioning (a developer applies an Agent that already violates the referenced class) or via class or ModelProvider drift on an already-running Agent. The developer must update the Agent spec to comply; the controller resumes normal operation on the next reconcile after the Agent spec is reconciled with the class.
+### AgentTask handling (no Degraded phase)
 
-Note the boundary with the [recoverable error bucket](operations.md#error-handling): recoverable runtime issues (transient provider unhealthy, budget exhaustion) set a `Degraded` *condition* on the Agent without changing `status.phase`. A ModelProvider's `allowedNamespaces` removing the Agent's namespace is not in that recoverable bucket; it is a class-vs-spec mismatch handled via `phase=Degraded` under this bucket.
+AgentTask has no `Degraded` phase. Where an Agent would degrade, the task settles terminal `Failed` with the same reason.
 
-#### preDegradedPhase Mechanics
+| Task state at the edit | Effect |
+|---|---|
+| has a Pod (`Provisioning` with a Pod, `Running`, `Completing`) | none; the task finishes under the class snapshot its Pod was created from |
+| no Pod yet (`Pending`, or `Provisioning` before creation), or retrying from `Failed` | the pre-Pod class check runs against the new class; a violation settles the task `Failed` at once, whatever `backoffLimit` remains |
+| terminal (`Succeeded`, `Failed`, `TimedOut`) | none; the task proceeds to TTL cleanup |
 
-On the first transition into `Degraded` from a non-Degraded phase, the controller records the current phase in `status.preDegradedPhase`. If a new Degraded-triggering condition arises while the Agent is already in `Degraded`, only `reason` and `message` are updated and `preDegradedPhase` is preserved.
+A retry spends its `status.retries` increment before the check runs and does not get it back. To retry against a class you have since aligned, delete and recreate the task; a `kubectl apply` of the same spec does not reset `status.retries`, since status is controller-owned and apply patches only `spec`. Only an AgentClass change re-enqueues tasks; a ModelProvider or ToolProvider change is picked up at the task's next pass.
 
-Recovery is per-condition. The controller clears the current `reason` when its condition resolves and, if other conditions remain outstanding, swaps `reason` to the next one without leaving `Degraded`. The Agent only exits `Degraded` once every outstanding Degraded-triggering condition has cleared. On exit, `status.phase` is restored from `preDegradedPhase` and `preDegradedPhase = null` is set atomically in the same status write, so a subsequent transition into `Degraded` cannot reuse a stale value.
+### Bulk impact
 
-The idle clock is not reset. The controller evaluates idleness against the gateway's activity timestamp, which is continuous through the Degraded period. If the pre-degradation phase was `Idle` and `hibernationDelay` has since elapsed, the agent transitions to `Hibernating` on the next reconcile.
-
-#### Operational Example
-
-[Scenario S5](../appendix/scenarios.md) shows this bucket in production terms. When a platform admin removes a team's namespace from a ModelProvider's `allowedNamespaces`, two things happen: the gateway denies the namespace's next LLM call, and the controller, re-queued event-driven via its ModelProvider watch, transitions the affected Agents to `Degraded, reason=ClassConstraintViolation`, so the revocation is visible in `kubectl get agents`. The Pods keep running, but LLM access is gone.
-
-### Bucket 3: Routing-Concern Changes
-
-Routing-concern fields propagate via the gateway's CRD and Secret watches with no Agent-side effect: `spec.models` shrinkage, fallback-chain edits, credential rotations on `credentialsRef` (ModelProvider), and *additive* changes to `allowedNamespaces` or `allowedProviders` that do not exclude any currently-bound provider or namespace. These take effect on the next routed call without any Pod-level transition. See [LLM Gateway](../gateways/llm/overview.md) for the per-request routing and credential mechanics.
-
-Restrictive changes to `allowedNamespaces` or `allowedProviders` that exclude a currently-bound provider or namespace fall under bucket 2's `Degraded` handling, not this one. Bucket membership depends on whether the change excludes a stored spec value, not on the field's nominal category.
-
-### AgentTask Handling (No Degraded Phase)
-
-AgentTask has no `Degraded` phase. Where an Agent would degrade, the task transitions to `phase=Failed` with the same `reason` instead; the persistence cross-check, for example, yields `Failed, reason=PersistenceNotAllowed`.
-
-AgentTasks are not subject to mid-execution recreation. In-flight tasks (`Running` or `Provisioning`) finish under the class snapshot in effect at task-Pod creation time, and the new invariants take effect only when the task next provisions a Pod. That next event is either a backoff retry from `Failed` (where standard validation against the new class runs; if the spec no longer admits, the retry is rejected and the task is marked `Failed, reason=ClassConstraintViolation`) or a subsequent AgentTask CR. Tasks already in `Succeeded`, `Failed`, or `TimedOut` are unaffected; terminal-state tasks ignore class drift and proceed to TTL-based cleanup.
-
-One retry-accounting nuance: `status.retries` increments at the start of each retry cycle, before the pre-Pod cross-check runs. A retry whose new Pod fails the cross-check therefore consumes one unit of [`backoffLimit`](../resources/agenttask.md) even though the failure cause is admin misconfiguration of the AgentClass or ModelProvider rather than the workload. Operators that have aligned the class spec mid-backoff and want a clean retry should delete and recreate the AgentTask. A `kubectl apply` of the same or modified spec does not reset `status.retries`, since status is controller-owned and Kubernetes apply patches only `spec`. The new AgentTask starts at `status.retries = 0` against the now-aligned class.
-
-### Bulk Impact and Staged Rollouts
-
-Tightening AgentClass policy on a class with many Agents triggers a rolling Pod restart of every affected Agent that falls into the recreate-and-clamp path. In-flight AgentTasks are not part of this rollout. Platform teams that need staged rollouts should split tightening across multiple AgentClasses (e.g., `standard-v2`) and migrate Agents incrementally rather than mutating an in-use class.
+Tightening a class with many Agents re-enqueues every one of them at once, and the restarts run concurrently up to `controller.maxConcurrentReconciles` (default 4). There is no ordering, pacing, or max-unavailable bound. Platform teams that need a staged rollout split the tightening across classes (`standard-v2`, say) and migrate Agents incrementally rather than editing an in-use class.
