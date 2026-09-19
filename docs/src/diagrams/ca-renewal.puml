@@ -1,0 +1,17 @@
+@startuml ca-renewal
+' Routine CA renewal: the key is reused, so every existing leaf keeps verifying.
+' Source of truth: docs/src/security/tls.md
+!include _style.puml
+skinparam maxMessageSize 200
+participant "cert-manager" as CM #F5F5F5
+participant "**Secret** kaalm-ca" as SEC #FFD580
+participant "**Bundle**\nkaalm-ca" as TM #F5F5F5
+participant "**ConfigMap**\nkaalm-ca" as CFG #FFD580
+participant "gateway, controller,\nagents" as C #90EE90
+CM -> SEC : re-issue within renewBefore, same key
+SEC -> TM : source changed
+TM -> CFG : re-project the bundle
+CFG -> C : kubelet updates the projected volume
+C -> C : rebuild both trust pools
+C -> C : every existing leaf still verifies
+@enduml

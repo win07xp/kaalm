@@ -1,138 +1,128 @@
-# TLS and Certificates
+# TLS and certificates
 
-This page is the canonical reference for Kaalm's in-cluster trust chain: how the Kaalm CA is created, how leaf certificates are issued and rotated, how trust is distributed to workload namespaces, and what happens when a certificate or the CA itself must be replaced. The [cluster listener TLS page](../gateways/listener-tls.md) and the [deployment page](../operations/deployment.md#certificate-lifecycle) summarize this material and link here.
+This page is the reference for Kaalm's in-cluster trust chain: how the Kaalm CA is created, how leaf certificates are issued and rotated, how trust reaches workload namespaces, and what to do when the CA itself must be replaced. [TLS on the cluster listener](../gateways/listener-tls.md) specifies the gateway listener's TLS configuration and reload, and [Deployment](../operations/deployment.md#certificate-lifecycle) carries the chart values; both link here.
 
-## In-Cluster TLS
+## In-cluster TLS
 
-All traffic between agent containers and the gateway is encrypted with TLS in both directions. Kaalm uses cert-manager (with the `trust-manager` sub-controller) as its sole CA and leaf-cert management stack. Both are **required dependencies**.
+Every hop that carries agent, user, or tool traffic is TLS. Kaalm uses cert-manager, with trust-manager, as its only CA and leaf-certificate stack, and both are required dependencies. The chart ships the Kaalm-specific `ClusterIssuer`, `Certificate`, and `Bundle` resources, never the controllers themselves, so both must already run in the cluster. Kaalm registers no admission webhooks; cert-manager also serves the CRD conversion webhook's `caBundle` (step 5 of the [trust chain](#trust-chain)).
 
-The Helm chart ships the Kaalm-specific `ClusterIssuer`, `Certificate`, and `Bundle` resources, never the cert-manager or trust-manager controllers themselves. Both controllers must already be present in the cluster; teams with existing deployments reuse them. Admission webhooks are not used; the cert-manager dependency covers TLS lifecycle management and, since v0.6.0, the CRD conversion webhook's `caBundle` (step 5 of the [Trust Chain](#trust-chain)).
+cert-manager must run with `--enable-certificate-owner-ref=true` (Helm: `extraArgs={--enable-certificate-owner-ref=true}`). Deleting an Agent or AgentTask cascade-deletes its `Certificate`, and this flag is what makes cert-manager delete the output Secret one hop later. The flag is off by default, so without it every deleted workload orphans a TLS Secret in its namespace. If you reuse an existing cert-manager install, verify the flag: as shipped nothing in Kaalm checks it.
 
-cert-manager must run with **`--enable-certificate-owner-ref=true`** (Helm: `extraArgs={--enable-certificate-owner-ref=true}`). Kaalm's per-workload Secret cleanup depends on it: deleting an Agent or AgentTask cascade-GCs its owned `Certificate`, and this flag is what makes cert-manager delete the output Secret one hop later. The flag is off by default, and without it every deleted workload orphans a TLS Secret in its namespace. Teams reusing an existing cert-manager deployment must verify the flag is set.
+### Trust chain
 
-### Trust Chain
+1. The chart installs a self-signed `ClusterIssuer` named `kaalm-selfsigned`.
+2. The chart installs a `Certificate` named `kaalm-ca` with `isCA: true`, the Kaalm root. Its `issuerRef` is `kaalm-selfsigned`. The `Certificate` and the `kaalm-ca` Secret it writes live in cert-manager's cluster resource namespace (Helm value `certManager.clusterResourceNamespace`, default `cert-manager`), not in `kaalm-system`, because of step 3.
+3. The chart installs a `ClusterIssuer` named `kaalm-ca-issuer` whose `ca.secretName` is `kaalm-ca`. cert-manager resolves a `ClusterIssuer`'s CA Secret only in its cluster resource namespace (the `--cluster-resource-namespace` flag); the reference has no namespace field. A CA Secret anywhere else leaves the issuer `Ready=False, reason=SecretNotFound` and fails issuance cluster-wide. A `ClusterIssuer` rather than a namespaced `Issuer` is used because a `Certificate`'s `issuerRef` cannot cross a namespace boundary, and the per-workload certificates live in user namespaces.
+4. The chart installs the gateway serving certificate `kaalm-gateway-tls`, issued from `kaalm-ca-issuer`. It serves both gateway listeners; [Where the listener's TLS material comes from](../gateways/listener-tls.md#where-the-listeners-tls-material-comes-from) lists its SANs and the `gateway.externalHostnames` value that extends them.
+5. The chart installs the controller certificate `kaalm-controller-tls`. The controller's `:9443` listener serves it for the activator, and the conversion webhook listener on `:9444` serves the same certificate to the API server. cert-manager's cainjector copies the CA from this Secret's `ca.crt` into each Kaalm CRD's `spec.conversion.webhook.clientConfig.caBundle` (annotation `cert-manager.io/inject-ca-from: kaalm-system/kaalm-controller-tls`) and keeps it current ([API versioning and deprecation](../operations/api-versioning.md#where-the-conversion-webhook-runs)).
+6. When the [console](../console/overview.md) is enabled, the chart installs `kaalm-console-tls` from the same issuer. A default install never creates it, so the gateway's console-only routes have no authorized caller.
+7. The [AgentReconciler](../controller/reconcilers.md#agent-certificate) and [AgentTaskReconciler](../controller/reconcilers.md#agenttask-certificate) create a `Certificate` per workload and hold the Pod until it is Ready; see [Lifecycle of an Agent TLS serving certificate](#lifecycle-of-an-agent-tls-serving-certificate).
 
-1. The chart installs a cluster-scoped self-signed `ClusterIssuer` named `kaalm-selfsigned`.
-2. The chart installs a `Certificate` named `kaalm-ca` with `isCA: true`. This is the Kaalm root, long-lived (chart default 5y). Its `issuerRef` points at `kaalm-selfsigned`. The CA `Certificate` and the `kaalm-ca` Secret it writes live in cert-manager's **cluster resource namespace** (Helm value `certManager.clusterResourceNamespace`, default `cert-manager`), not in `kaalm-system`, because of the constraint in step 3.
-3. The chart installs a cluster-scoped `ClusterIssuer` named `kaalm-ca-issuer` whose `ca.secretName` is `kaalm-ca`'s output Secret.
-   - cert-manager resolves a `ClusterIssuer`'s `spec.ca.secretName` **only in its cluster resource namespace** (the `--cluster-resource-namespace` flag, default `cert-manager`). The secret ref has no namespace field. A CA Secret placed anywhere else leaves the issuer `Ready=False, reason=SecretNotFound` and fails issuance cluster-wide.
-   - All Kaalm leaf certs, including the per-Agent and per-AgentTask certs created in user namespaces, are issued from this `ClusterIssuer`.
-   - A `ClusterIssuer` is used instead of a namespace-scoped `Issuer` because cert-manager's `issuerRef` on a `Certificate` does not resolve a namespaced `Issuer` across a namespace boundary. The `ClusterIssuer` lets `Certificate` resources in user namespaces reference the same signing key.
-4. The chart installs a `Certificate` for the gateway serving cert (`kaalm-gateway-tls`), issued from `kaalm-ca-issuer`.
-   - SANs: `kaalm-gateway.kaalm-system.svc.cluster.local`, `kaalm-gateway.kaalm-system.svc`, `localhost`.
-   - The Helm value `gateway.externalHostnames` (see [Helm Chart Contents](../operations/deployment.md#helm-chart-contents)) extends this SAN list with operator-supplied public hostnames. It is required when the User listener is exposed through a TLS pass-through Ingress.
-   - The gateway cert serves both listeners: the cluster listener on port 8443 and the User listener on port 8080. Despite the conventional HTTP association of port 8080, the User listener is TLS-only. There is no plaintext gateway listener. An Ingress fronting the User listener must use HTTPS as its backend protocol. External webhook traffic arrives through an Ingress configured for backend re-encrypt or TLS pass-through, so there is no plaintext hop anywhere. See [TLS and Ingress](../gateways/user/overview.md#tls-and-ingress).
-5. The chart installs a `Certificate` for the controller's activator, activity-API, and channels-health serving cert (`kaalm-controller-tls`), also issued from `kaalm-ca-issuer`. The controller's HTTPS endpoints on port 9443 use it, and the gateway trusts `kaalm-ca` to verify it. Since v0.6.0 the controller's conversion webhook listener on port 9444 serves the same certificate, and the apiserver verifies it against the Kaalm CA: cert-manager's cainjector copies the CA from this leaf Secret's `ca.crt` into each Kaalm CRD's `spec.conversion.webhook.clientConfig.caBundle` (annotation `cert-manager.io/inject-ca-from: kaalm-system/kaalm-controller-tls`) and keeps it current ([API Versioning and Deprecation](../operations/api-versioning.md#where-the-conversion-webhook-runs)). Both the gateway and controller `Certificate` resources declare `usages: [server auth, client auth]`, because each also presents its cert as a client cert when dialing the other's authenticated endpoints (see [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication)).
-6. When the [console](../console/overview.md) is enabled (it is off by default), the chart additionally installs `kaalm-console-tls` from the same issuer: SANs `kaalm-console.kaalm-system.svc.cluster.local`, `.svc`, and `localhost`; usages `server auth, client auth` (the console serves its UI over TLS and presents the cert as a client cert on the gateway's `/v1/test-chat` and `/v1/spend`, see [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication)). A default install never creates it, and with it absent the gateway's console-only routes have no authorized caller.
-7. Per-Agent and per-AgentTask `Certificate` resources are created at reconcile time by the [AgentReconciler](../controller/reconcilers.md#agentreconciler) and [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler), not by the chart. The reconcilers gate Pod creation on the per-workload `Certificate` reaching `Ready=True`, requeueing until issuance completes, so a Pod never hangs on a missing projected Secret. The [two lifecycle walkthroughs](#lifecycle-of-an-agent-tls-serving-certificate) cover these certs step by step.
+The gateway, controller, and console certificates carry `usages: [server auth, client auth]`, because each also presents its certificate as a client on another component's authenticated endpoint ([Internal endpoint authentication](rbac.md#internal-endpoint-authentication)). Neither the gateway nor the controller reads the CA Secret. Their trust material arrives as the projected `kaalm-ca` ConfigMap, so no Kaalm component needs RBAC outside `kaalm-system` for trust distribution.
 
-Neither the gateway nor the controller ever reads the CA Secret directly. Their trust material arrives in the trust-manager-projected `kaalm-ca` ConfigMap described next, so no Kaalm component needs RBAC outside `kaalm-system` for trust distribution.
+![The Kaalm trust chain: the self-signed ClusterIssuer issues the kaalm-ca Certificate, whose Secret lives in cert-manager's cluster resource namespace; the kaalm-ca-issuer ClusterIssuer resolves that Secret only there and signs the gateway, controller, console, Agent, and AgentTask certificates; the trust-manager Bundle reads the same Secret and projects the kaalm-ca ConfigMap into every namespace.](../diagrams/trust-chain.svg)
 
-### Trust Bundle Projection
+### Trust bundle projection
 
-The chart installs a trust-manager `Bundle` resource (itself named `kaalm-ca`) that projects the Kaalm CA into a ConfigMap named `kaalm-ca` in workload namespaces. trust-manager reads `Bundle` sources only from its trust namespace (`--trust-namespace`, default `cert-manager`). That must be, and by default is, the same cluster resource namespace that holds the CA Secret, so one copy serves both cert-manager and trust-manager. Operators who run either controller with a non-default namespace must set `certManager.clusterResourceNamespace` to match, or issuance fails cluster-wide with `SecretNotFound`.
+The chart installs a trust-manager `Bundle` named `kaalm-ca` that projects the CA certificate into a ConfigMap named `kaalm-ca`. trust-manager reads `Bundle` sources only from its trust namespace (`--trust-namespace`, default `cert-manager`). That must be, and by default is, the same cluster resource namespace that holds the CA Secret, so one copy serves both controllers. If you run either controller with a non-default namespace, set `certManager.clusterResourceNamespace` to match; otherwise issuance fails cluster-wide with `SecretNotFound`.
 
-The `Bundle` targets every non-system namespace, including namespaces created after install:
+As shipped the `Bundle` has no namespace selector, so trust-manager projects the ConfigMap into every namespace, `kube-system` included, and into namespaces created after install. The CA certificate is public material, and the broad projection means the operator needs no permission on Namespaces. To narrow it, set the Helm value `trustManager.bundleSelector` (an object with `matchLabels` or `matchExpressions`, passed verbatim as the `Bundle`'s `target.namespaceSelector`). The selector must still match `kaalm-system`: the gateway and controller mount the projected ConfigMap from there, and a selector that excludes it leaves both without trust material.
 
-```yaml
-target:
-  namespaceSelector:
-    matchExpressions:
-      - { key: kubernetes.io/metadata.name, operator: NotIn, values: [kube-system, kube-public, kube-node-lease] }
-```
+Agent and AgentTask Pods mount the ConfigMap at `/var/run/kaalm/ca.crt`, where `$KAALM_CA_CERT` points, and verify the gateway's certificate against it. The ConfigMap and the workload's own certificate Secret arrive as one projected volume at `/var/run/kaalm/` ([TLS material layout](../runtime/contract.md#tls-material-layout)).
 
-The default selector is broad on purpose. CA bundle material is non-secret, and broad projection avoids the operator needing `patch` on Namespaces to label-target only Agent-hosting namespaces. Platform teams that want a tighter projection can override it with the Helm value `trustManager.bundleSelector` (an object with `matchLabels` / `matchExpressions` keys, passed verbatim into the `Bundle`'s `target.namespaceSelector`).
+### Traffic directions
 
-Agent and AgentTask Pods mount the projected ConfigMap at `/var/run/kaalm/ca.crt` (the `$KAALM_CA_CERT` env var points at this path) and use it to verify the gateway's certificate on `$KAALM_GATEWAY_ENDPOINT`. The CA ConfigMap and the workload's own cert-manager Secret (`tls.crt`, `tls.key`) are delivered together as a single projected volume at `/var/run/kaalm/`; the agent container must watch that directory and reload on rotation, as specified in [the runtime contract](../runtime/contract.md).
+| Hop | Server certificate | Client certificate | Client verification |
+|---|---|---|---|
+| Agent to gateway, cluster listener `:8443` | `kaalm-gateway-tls` | `{name}-tls`, required per path | The agent verifies the gateway against the projected CA |
+| Gateway-only workload to gateway `:8443` | `kaalm-gateway-tls` | none; a bearer token ([Mode 2](../gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token)) | Against the projected CA |
+| Ingress to the User listener `:8080` | `kaalm-gateway-tls` | none | The Ingress's backend trust ([TLS and Ingress](../gateways/user/overview.md#tls-and-ingress)) |
+| Gateway to agent, `POST /v1/message` | `{name}-tls` | `kaalm-gateway-tls`, required on that path | The agent requires the gateway Service SAN ([The runtime contract](../runtime/contract.md), item 4) |
+| Gateway to controller `:9443` | `kaalm-controller-tls` | `kaalm-gateway-tls`, required on `/v1/activate` | Both verify against the projected CA |
+| Controller to gateway `:8443` | `kaalm-gateway-tls` | `kaalm-controller-tls`, required on the internal paths | Both verify against the projected CA |
+| Console to gateway `:8443` | `kaalm-gateway-tls` | `kaalm-console-tls`, required on the console paths | Both verify against the projected CA |
+| API server to the conversion listener `:9444` | `kaalm-controller-tls` | none | The `caBundle` cainjector keeps in each CRD |
 
-![The Kaalm trust chain drawn across three namespace frames. A cluster-scoped kaalm-selfsigned ClusterIssuer signs the kaalm-ca Certificate (isCA, 5y, rotationPolicy Never), which cert-manager writes as the kaalm-ca Secret into cert-manager's cluster resource namespace. Two readers consume that one Secret: the kaalm-ca-issuer ClusterIssuer, which resolves ca.secretName only in that namespace, and the trust-manager kaalm-ca Bundle, which reads sources only from its trust namespace. The issuer signs the leaf families: kaalm-gateway-tls and kaalm-controller-tls in kaalm-system, the conditional kaalm-console-tls drawn dashed because only a console-enabled install creates it, and the per-Agent and per-AgentTask certificates in user namespaces, each with its own SANs and usages. The Bundle projects a kaalm-ca ConfigMap into every non-system namespace, mounted at /var/run/kaalm/ca.crt.](../diagrams/trust-chain.svg)
+The listeners that require a client certificate on some paths run `ClientAuth: tls.VerifyClientCertIfGiven` and enforce the requirement in per-path middleware ([Per-path client auth enforcement](../gateways/listener-tls.md#per-path-client-auth-enforcement)). The two metrics ports, controller `:8080` and gateway `:9090`, are plain HTTP and carry no agent, user, or tool traffic ([Helm chart contents](../operations/deployment.md#helm-chart-contents)).
 
-**Reading the diagram.** Follow the chain top to bottom: self-signed issuer, CA `Certificate`, CA `Secret`, CA issuer, leaves. The one thing to take away is horizontal, not vertical: the `kaalm-ca` Secret sits in **cert-manager's namespace**, and both consumers resolve it only there. The amber boxes are the material (a Secret and the ConfigMap projected from it); the gray boxes are cert-manager and trust-manager machinery; the leaves are colored by who consumes them. The red edge is the constraint that breaks clusters when it is violated.
+### Rotation defaults
 
-### Traffic Directions
+cert-manager re-issues each leaf within `spec.renewBefore` of its expiry.
 
-- **Agent → Gateway (LLM traffic)**: the cluster listener serves TLS using the `kaalm-gateway-tls` Secret. Agents verify it against the projected Kaalm CA. See [TLS on the Cluster Listener](../gateways/listener-tls.md).
-- **Gateway → Agent (channel message delivery)**: delivery on `POST /v1/message` is bidirectional mTLS. The gateway verifies the agent's cert-manager-issued `{agentName}-tls` against `kaalm-ca`, and the agent verifies the gateway's `kaalm-gateway-tls` against the same CA, requiring a SAN match on the gateway Service DNS (see [The Runtime Contract](../runtime/contract.md) bullet 4 for the agent-side enforcement). This protects user messages, which may contain PII or sensitive data, from network-level sniffing on shared nodes, and removes the need to treat NetworkPolicy as the sole access control on the message path.
-- **Controller endpoints (activator, activity, health)**: the controller's HTTPS endpoints on port 9443 use `kaalm-controller-tls`; the gateway trusts `kaalm-ca` to verify. See [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication).
-- **apiserver → Controller (CRD conversion, since v0.6.0)**: the conversion listener on port 9444 serves `kaalm-controller-tls`; the apiserver verifies it against the `caBundle` cainjector keeps in each CRD and presents no client certificate. See [API Versioning and Deprecation](../operations/api-versioning.md#where-the-conversion-webhook-runs).
-- **Console → Gateway (test-chat and spend, since v0.5.0, console enabled only)**: the console presents `kaalm-console-tls` as its client cert on `/v1/test-chat` and `/v1/spend`; the gateway verifies against `kaalm-ca` and authorizes by the console SAN. See [Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication).
+| Certificate | `spec.duration` | `spec.renewBefore` | Set by |
+|---|---|---|---|
+| `kaalm-ca` | `43800h` (5y) | `8760h` (1y) | The chart |
+| `kaalm-gateway-tls`, `kaalm-controller-tls`, `kaalm-console-tls` | `2160h` (90d) | `720h` (30d) | The chart |
+| `{name}-tls` per Agent, `{taskName}-tls` per AgentTask | `2160h` (90d) | `720h` (30d) | The reconcilers; as shipped a constant with no chart value |
 
-### Rotation Defaults
+When cert-manager rewrites a certificate's Secret, kubelet updates the projected volume in every Pod that mounts it, and the consumer reloads from disk. The gateway and controller compare the files' modification times on each new handshake, connection, and dial and re-read when they change ([Reload mechanism](../gateways/listener-tls.md#reload-mechanism)). An agent carries the same obligation under [the runtime contract](../runtime/contract.md), and the [starter templates](../runtime/starter-templates.md) watch the mount directory, because kubelet swaps the whole directory on an update.
 
-cert-manager rotates each leaf continuously. Chart defaults:
+The gateway, the controller, and every agent both serve TLS and dial TLS peers, so each holds two trust pools built from the same CA bundle: `ClientCAs` for verifying callers and `RootCAs` for verifying peers it dials. A CA bundle change must rebuild both. Rebuilding one leaves the other stale, which surfaces during a re-key as a one-directional failure. The runtime contract's item 4 states the obligation for agent images.
 
-| Certificate | `spec.duration` | `spec.renewBefore` |
+### CA renewal and re-key
+
+`kaalm-ca` pins `spec.privateKey.rotationPolicy: Never`, cert-manager's default made explicit. Renewal within `spec.renewBefore` reuses the CA key pair, so every leaf issued before the renewal keeps verifying against the renewed CA certificate. The only observable change is the new CA bytes in the projected bundle. cert-manager does not re-issue leaves on CA renewal and trust-manager keeps no automatic dual-CA overlap; neither is needed under key reuse, and no reconciler takes part.
+
+![Routine CA renewal: cert-manager re-issues the CA certificate with the same key, trust-manager re-projects the bundle, kubelet updates the volumes, consumers rebuild both pools, and every existing leaf still verifies.](../diagrams/ca-renewal.svg)
+
+A CA re-key, for compromise recovery, is a manual runbook. Adding a source to the `Bundle` changes only what consumers trust, never what `kaalm-ca-issuer` signs with, so the new key must land in the `kaalm-ca` Secret and the old certificate must be kept trusted separately:
+
+1. Copy the current CA certificate from the `kaalm-ca` Secret into a ConfigMap in the trust namespace and add it as a second source on the `Bundle`. From now on the bundle carries the old CA twice.
+2. Delete the `kaalm-ca` Secret. cert-manager re-issues the CA with a new key pair, because `rotationPolicy: Never` has no existing key to reuse, and trust-manager re-projects the bundle as new CA plus the old copy. Every consumer rebuilds both pools.
+3. Run `cmctl renew` on every leaf `Certificate`: the chart's three, and every `{name}-tls` and `{taskName}-tls`. The re-issued leaves chain to the new key.
+4. Remove the old CA source once no live leaf chains to it. The window closes.
+
+An agent that missed the bundle change at step 2 fails at step 3, in both directions: its `RootCAs` rejects the re-issued gateway leaf, and its `ClientCAs` rejects the gateway's re-issued client certificate. The window is finite, so the agent does not recover on its own.
+
+![The CA re-key runbook: keep the old CA trusted as a second Bundle source, delete the kaalm-ca Secret so cert-manager issues a new key, renew every leaf, and remove the old source. An agent that rebuilt both pools keeps working; one that missed the change fails in both directions when the leaves are re-issued.](../diagrams/ca-rekey-window.svg)
+
+As shipped the chart hard-codes the `Bundle`'s single source, so the second source from step 1 is an edit to a Helm-managed object and the next `helm upgrade` removes it. Finish the runbook, or re-add the source, before upgrading.
+
+The CRD `caBundle` is the one consumer that does not read the `Bundle`: cainjector refreshes it from `kaalm-controller-tls`'s `ca.crt` when step 3 re-issues that leaf, while the controller picks up the leaf through its projected volume. For up to the kubelet sync period, about a minute, the API server may trust only the new CA while a replica still serves the old leaf. During that gap only `v1alpha1` requests fail; `v1beta1` traffic never touches the webhook ([What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook)).
+
+No operator code implements renewal or re-key. An operator-managed CA was considered and rejected: the code to manage CA generation, bundle rotation, staged leaf re-issuance, and cross-namespace distribution would be large and would duplicate what cert-manager and trust-manager already do.
+
+### Containment, not revocation
+
+Re-issuing a leaf does nothing to the old one. There is no CRL or OCSP, and Go's `crypto/tls` performs no revocation checking, so a leaked certificate and key stay valid until their `notAfter` regardless of rotation. That is why the mTLS tier's credential surface is one artifact, a namespace-pinned client certificate with a 90-day `notAfter` ([Agent to gateway authentication](rbac.md#agent-to-gateway-authentication)). A known-compromised leaf is invalidated only by the re-key runbook or by waiting out `notAfter`. As shipped the per-workload duration is a constant in the reconcilers, so a shorter bound is not configurable.
+
+### Dependency failure modes
+
+Both controllers are cluster-critical dependencies. Monitor them as such.
+
+- **cert-manager not installed or unhealthy.** Chart install fails if `kaalm-ca-issuer` cannot be created. A mismatched `certManager.clusterResourceNamespace` surfaces as the issuer stuck `Ready=False, reason=SecretNotFound`. At runtime, new Agent and AgentTask provisioning holds at `CertificateNotReady` and rotation stops, but running workloads continue until their current certificates expire.
+- **trust-manager not installed or unhealthy.** Chart install fails if the `Bundle` cannot be created. At runtime the CA ConfigMap stops appearing in new namespaces, so Pods scheduled there fail to mount `/var/run/kaalm/ca.crt` and cannot verify the gateway. Namespaces that already hold the ConfigMap are unaffected until the next CA change.
+
+## Lifecycle of an Agent TLS serving certificate
+
+1. **Created** by the AgentReconciler before the Pod ([AgentReconciler](../controller/reconcilers.md#agentreconciler), step 7): a `Certificate` named `{agentName}-tls` in the Agent's namespace with an ownerRef to the Agent, `issuerRef` `kaalm-ca-issuer` (`ClusterIssuer`), SANs `{name}.{namespace}.svc.cluster.local`, `{name}.{namespace}.svc`, and `{name}.{namespace}`, and usages `server auth` and `client auth`.
+2. **Stored.** cert-manager writes the output Secret, named by `spec.secretName` (for example `team-support/support-assistant-tls`), in the Agent's namespace. The reconciler holds the Pod with `Ready=False, reason=CertificateNotReady`, requeued every five seconds, until the `Certificate` is Ready.
+3. **Mounted** into the Pod at `/var/run/kaalm/tls.crt` and `/var/run/kaalm/tls.key`. The agent serves HTTPS with it and presents it as a client certificate on every call to the gateway.
+4. **Verified** by the gateway against `kaalm-ca` on every inbound call, and on `POST /v1/message` delivery the gateway verifies the agent's serving certificate the same way.
+5. **Rotated.** cert-manager re-issues within `renewBefore`, kubelet updates the projected volume, and the agent reloads on its directory watch. The same watch covers the CA ConfigMap, so a bundle change rebuilds both pools.
+6. **Deleted.** Deleting the Agent cascade-deletes the `Certificate` through its ownerRef, and the Secret follows one hop later through the ownerRef cert-manager sets on it when `--enable-certificate-owner-ref=true`.
+
+## Lifecycle of an AgentTask TLS client certificate
+
+1. **Created** by the AgentTaskReconciler ([AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler), step 4): a `Certificate` named `{taskName}-tls` in the task's namespace with an ownerRef to the AgentTask, the same `issuerRef`, one SAN `{taskName}.{namespace}.task.kaalm.io`, and usage `client auth` only. A task has no Service and is never a delivery target, so the certificate never serves TLS.
+2. **Stored** as `{taskName}-tls` in the task's namespace, with the same Ready gate as an Agent.
+3. **Mounted** at the same paths. The task presents the certificate on LLM requests and task completion. Tasks send no heartbeats: a task certificate on `/v1/agent/heartbeat` is rejected with `403`.
+4. **Verified** by the gateway against `kaalm-ca` on every call, reading the namespace from the SAN.
+5. **Rotated** as an Agent certificate is: the task's HTTP client reloads on the directory watch.
+6. **Deleted** with the task through the ownerRef, the Secret one hop later.
+
+## The two lifecycles side by side
+
+![Both reconcilers create a per-workload Certificate, the Agent's with Service SANs and both usages and the AgentTask's with one task SAN and client auth only, and hold the Pod with CertificateNotReady, requeued every five seconds, until cert-manager reports it Ready.](../diagrams/cert-create-gate.svg)
+
+![The per-workload certificate in use: mounted at /var/run/kaalm, presented by the Agent on LLM requests and heartbeats and by the AgentTask on LLM requests and task completion, with the AgentTask's heartbeat rejected 403; both re-issued within renewBefore and reloaded on the directory watch; both removed by the ownerRef cascade.](../diagrams/cert-runtime.svg)
+
+| | Agent | AgentTask |
 |---|---|---|
-| Gateway cert (`kaalm-gateway-tls`) | `2160h` (90d) | `720h` (30d) |
-| Per-agent cert | `2160h` (90d) | `720h` (30d) |
-| Kaalm CA (`kaalm-ca`) | `43800h` (5y) | `8760h` (1y) |
+| SAN | `{name}.{namespace}.svc.cluster.local`, `.svc`, `{name}.{namespace}` | `{taskName}.{namespace}.task.kaalm.io` |
+| Usages | `server auth`, `client auth` | `client auth` |
+| Serves TLS | Yes, `POST /v1/message` | No |
+| Presents on | LLM requests, heartbeats, tool calls | LLM requests, task completion, tool calls |
+| Heartbeat | Accepted | `403` |
 
-When cert-manager updates a `Certificate`'s Secret, kubelet updates the projected volume in any Pod that mounts it, and the consumer (gateway, controller, or agent) reloads from disk. The gateway watches `kaalm-gateway-tls` for changes itself; agent containers carry the same reload obligation under [the runtime contract](../runtime/contract.md), and the [starter templates](../runtime/starter-templates.md) demonstrate the inotify-based reload pattern that custom images must implement.
-
-Every Kaalm component speaks mTLS in both directions, so each one holds two trust pools built from the same CA bundle: an inbound `ClientCAs` pool for verifying the certs of callers, and an outbound `RootCAs` pool for verifying the certs of peers it dials. **A CA-bundle change MUST rebuild both.** This applies to the gateway, the controller, and every agent. Rebuilding only one leaves the other stale, which surfaces during a re-key as a one-directional failure: calls in the refreshed direction keep working while the other side rejects certs re-issued under the new key. The dual-trust window of the [re-key runbook](#ca-renewal-and-re-key) is finite, so a component that misses the update does not recover on its own.
-
-### CA Renewal and Re-Key
-
-The `kaalm-ca` `Certificate` pins `spec.privateKey.rotationPolicy: Never`. That is cert-manager's default, made explicit because it is load-bearing. Renewal within `spec.renewBefore` re-uses the CA key pair, so all previously issued leaves keep verifying against the renewed CA cert. kubelet's projected-volume update of the new CA bytes is the only observable change, and no dual-trust window is needed.
-
-cert-manager does **not** proactively re-issue leaves on CA renewal, and trust-manager does **not** maintain an automatic dual-CA overlap; neither is needed under key-reuse renewal. CA rotation requires no reconciler participation.
-
-A CA **re-key** (compromise recovery) is a documented manual runbook, not an automatic behavior:
-
-1. Add the new CA as a second source on the trust-manager `Bundle`, alongside the old one, so both CAs are trusted during the transition.
-2. Force leaf re-issuance with `cmctl renew` on the leaf `Certificate`s.
-3. Remove the old source once no live leaf chains to it.
-
-The runbook's dual-trust window is finite. Whenever the CA bundle changes (routine renewal or re-key), every consumer of the bundle must rebuild **both** of its trust pools:
-
-- the inbound `/v1/message` server's `ClientCAs` (in Go, served through a `tls.Config.GetConfigForClient` callback that returns a config with the fresh pool), so a gateway leaf re-issued under a re-keyed CA is still accepted, and
-- the outbound HTTP client's `RootCAs`, so calls to the re-issued gateway cert still verify.
-
-The starter templates do this by watching `$KAALM_CA_CERT`, making CA rotation transparent to long-lived agent processes in both directions. An agent that misses the CA-bundle change eventually breaks in both directions once gateway leaves are re-issued under the new key.
-
-The CRD `caBundle` (since v0.6.0) is the one consumer that does not read the `Bundle`: cainjector refreshes it from `kaalm-controller-tls`'s `ca.crt` when step 2 re-issues that leaf, while the controller picks up the re-issued leaf through the projected volume. For up to the kubelet sync period (about a minute) the apiserver may therefore trust only the new CA while a replica still serves the old leaf. During that gap only `v1alpha1` requests fail, and only until the volume catches up; `v1beta1` traffic never touches the webhook ([API Versioning and Deprecation](../operations/api-versioning.md#what-depends-on-the-webhook)).
-
-![A sequence diagram of the CA re-key runbook across a platform engineer, cert-manager, trust-manager, the projected kaalm-ca ConfigMap, an Agent process holding both trust pools, and the gateway. Step 1 adds the new CA as a second Bundle source, opening the dual-trust window; trust-manager re-projects the bundle, kubelet swaps the ..data symlink, and both the agent and the gateway rebuild their ClientCAs and RootCAs pools. Step 2 runs cmctl renew, re-issuing the gateway and agent leaves under the new CA key. Step 3 removes the old source, closing the window. An agent that rebuilt both pools keeps working in both directions; an agent that missed the change fails outbound, because RootCAs still holds only the old CA, and inbound, because ClientCAs does too.](../diagrams/ca-rekey-window.svg)
-
-**Reading the diagram.** The window opens at step 1 and closes at step 3, but the failure it guards against does not appear at either boundary: it appears at **step 2**, when leaves are re-issued under the new key. That deferral is what makes a missed reload hard to catch, and because the failure lands on both pools at once, it presents as total loss of connectivity rather than as a one-directional error.
-
-No operator code implements either the renewal path or the re-key path. That was the main motivation for adopting cert-manager. This decision supersedes an earlier self-managed-CA design, and the earlier operator-managed 4-step rotation sequence has been removed. The earlier design was rejected because the operator code needed to manage CA generation, bundle rotation, staged leaf re-issuance, and cross-namespace cert distribution was large, had no analogue to borrow from, and duplicated functionality that cert-manager and trust-manager already provide correctly.
-
-### Containment, Not Revocation
-
-Leaf rotation is containment, not revocation. Re-issuing a leaf does nothing to the old one: there is no CRL or OCSP, and Go's `crypto/tls` performs no revocation checking. A leaked cert plus key stays valid until its `notAfter`, regardless of any rotation.
-
-This is why the mTLS tier's credential surface is kept to a single artifact: a bounded-lifetime (90d default `notAfter`), namespace-pinned client cert (see [Agent→Gateway Authentication](rbac.md#agent-to-gateway-authentication)). A known-compromised leaf is invalidated only by the [CA re-key runbook](#ca-renewal-and-re-key) or by waiting out `notAfter`. Clusters that need a tighter compromise bound should shorten the per-Agent `Certificate` `duration`.
-
-### Dependency Failure Modes
-
-Both controllers are cluster-critical dependencies and should be monitored as such.
-
-- **cert-manager not installed or unhealthy**: chart install fails fast if `kaalm-ca-issuer` cannot be created. A mismatched `certManager.clusterResourceNamespace` surfaces as the issuer stuck `Ready=False, reason=SecretNotFound`, since the `ClusterIssuer` resolves the CA Secret only there. Runtime degradation delays new Agent and AgentTask provisioning (the `Certificate` Secret is not populated) and blocks cert rotation, but running agents continue until their current certs approach expiry.
-- **trust-manager not installed or unhealthy**: chart install fails fast if the `Bundle` resource cannot be created. Runtime degradation prevents the Kaalm CA ConfigMap from appearing in new namespaces, so Pods scheduled into those namespaces fail to mount `/var/run/kaalm/ca.crt` and cannot verify the gateway's TLS cert. Existing namespaces with the ConfigMap already projected are unaffected until the next CA rotation.
-
-## Lifecycle of an Agent TLS Serving Certificate
-
-This certificate and the [AgentTask client certificate](#lifecycle-of-an-agenttask-tls-client-certificate) run the same six steps. [The figure at the end of this page](#the-two-lifecycles-side-by-side) walks both through that skeleton at once, with the differences called out.
-
-1. **Created**: by the AgentReconciler when provisioning the agent's Pod. The reconciler creates a cert-manager `Certificate` resource named `{agentName}-tls` in the Agent's namespace, owner-referenced to the Agent. Its `issuerRef` is `{ name: "kaalm-ca-issuer", kind: "ClusterIssuer" }`; the SAN list covers `{name}.{namespace}.svc.cluster.local`, `{name}.{namespace}.svc`, and `{name}.{namespace}`; usages are `server auth` and `client auth` (the same cert serves both directions).
-2. **Stored**: cert-manager writes the output Secret (name = `Certificate.spec.secretName`, for example `team-support/support-assistant-tls`) in the Agent's namespace.
-3. **Mounted**: into the agent Pod at `/var/run/kaalm/tls.crt` and `/var/run/kaalm/tls.key`. The agent serves HTTPS using this certificate and presents it as a client cert on agent→gateway calls.
-4. **Verified**: the gateway verifies the agent's certificate against the Kaalm CA (`kaalm-ca`) on every message delivery request and on every inbound mTLS call.
-5. **Rotated**: cert-manager continuously re-issues the cert within `spec.renewBefore` of expiry (chart defaults: 90d duration, 30d renewBefore). kubelet updates the projected volume in the running Pod when the Secret changes; the agent reloads with a cert-file watch (the [starter templates](../runtime/starter-templates.md) demonstrate the pattern). Starter templates also watch `$KAALM_CA_CERT` and rebuild both trust pools when trust-manager re-projects the CA ConfigMap, as described in [CA Renewal and Re-Key](#ca-renewal-and-re-key).
-6. **Deleted**: the `Certificate` resource is owner-referenced to the Agent, so deleting the Agent cascade-deletes the `Certificate`; cert-manager in turn cleans up the output Secret.
-
-## Lifecycle of an AgentTask TLS Client Certificate
-
-1. **Created**: by the AgentTaskReconciler when provisioning the task Pod. The reconciler creates a cert-manager `Certificate` resource named `{taskName}-tls` in the AgentTask's namespace, owner-referenced to the AgentTask. `issuerRef` is `{ name: "kaalm-ca-issuer", kind: "ClusterIssuer" }`; the SAN is a single entry `{taskName}.{namespace}.task.kaalm.io` (non-Service shape, since tasks have no Service); usages is `client auth` only.
-2. **Stored**: cert-manager writes the output Secret (`{taskName}-tls`) in the AgentTask's namespace.
-3. **Mounted**: into the task Pod at `/var/run/kaalm/tls.crt` and `/var/run/kaalm/tls.key`. The task presents this cert on every call to `$KAALM_GATEWAY_ENDPOINT`: LLM requests and task completion. Tasks do not send heartbeats; per-task certs are rejected `403` on `/v1/agent/heartbeat`. Tasks are not delivery targets for channel messages, so the cert does not need to serve TLS.
-4. **Verified**: the gateway verifies the task's cert against the Kaalm CA on every inbound mTLS call and extracts the namespace from the SAN.
-5. **Rotated**: same mechanism as Agent certs. cert-manager re-issues within `spec.renewBefore`, kubelet propagates the update to the projected volume, and the task's HTTP client reloads with a cert-file watch.
-6. **Deleted**: the `Certificate` is owner-referenced to the AgentTask, so task cleanup cascade-deletes it and cert-manager removes the output Secret.
-
-### The two lifecycles side by side
-
-![A sequence diagram comparing the Agent serving certificate and the AgentTask client certificate across the same six steps. Both reconcilers create a {workload}-tls Certificate in the workload's own namespace from kaalm-ca-issuer; the Agent's carries Service DNS SANs and server auth plus client auth usages, while the AgentTask's carries a single {taskName}.{namespace}.task.kaalm.io SAN and client auth only. cert-manager writes the output Secret, and a Ready-gate loop blocks Pod creation, requeueing until the Certificate reports Ready. Both mount at /var/run/kaalm/tls.crt and tls.key, but only the Agent has a listener and an inbound POST /v1/message edge from the gateway; the AgentTask has no Service, no inbound edge, and is rejected 403 on /v1/agent/heartbeat. A rotation loop re-issues both leaves within renewBefore, and ownerRef cascade-deletion removes both.](../diagrams/cert-lifecycles.svg)
-
-**Reading the diagram.** The skeleton is shared, so read the deltas. All four of them (SAN shape, usages, listener, inbound edge) fall out of one fact: an Agent has a Service and is a delivery target, and an AgentTask is neither. The Ready-gate in the middle is identical on both paths, and it is what keeps a Pod from ever starting against a Secret cert-manager has not written yet.
+Every difference follows from one fact: an Agent has a Service and is a delivery target, and an AgentTask is neither. The Ready gate is identical, and it is what keeps a Pod from starting against a Secret cert-manager has not written.

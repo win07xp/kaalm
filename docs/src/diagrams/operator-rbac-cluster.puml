@@ -1,0 +1,29 @@
+@startuml operator-rbac-cluster
+' The operator ServiceAccount's ClusterRole: every grant applies in every namespace.
+' Source of truth: docs/src/security/rbac.md
+!include _style.puml
+skinparam nodesep 14
+skinparam ranksep 30
+skinparam rectangle {
+  roundCorner 4
+}
+rectangle "**Operator ServiceAccount** kaalm-system/kaalm-controller" as OPSA #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+rectangle "**ClusterRole** kaalm-controller: reach is every namespace" as band #line:B71C1C;line.dashed;text:B71C1C {
+  rectangle "Kaalm CRDs: get, list, watch, update, patch (delete on agenttasks)" as crds #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "CRD status subresources: get, update, patch" as status #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "CRD finalizers subresources: update" as fin #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "customresourcedefinitions: get; /status: patch (six named CRDs)" as crddef #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "Pods: get, list, watch, create, delete" as pods #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "ConfigMaps, PVCs, Services, ServiceAccounts, NetworkPolicies, Certificates, Roles, RoleBindings: all verbs" as core #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "Secrets: get, list, watch" as secs #back:FFD580;line:B71C1C;line.bold;text:3a1f00
+  rectangle "Events: create, patch" as ev #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+}
+OPSA -[#B71C1C,bold]-> crds
+crds -[hidden]down- status
+status -[hidden]down- fin
+fin -[hidden]down- crddef
+crddef -[hidden]down- pods
+pods -[hidden]down- core
+core -[hidden]down- secs
+secs -[hidden]down- ev
+@enduml

@@ -1,262 +1,212 @@
-# Threat Model
+# Threat model
 
-This page enumerates the threats Kaalm defends against, the threats it deliberately does **not** defend against, and the reasoning behind each boundary. It is organized into ten themes. Every threat has exactly one row. Where a mitigation needs more than a sentence, the row states the decision and links to a note that carries the full argument.
+This page lists the threats Kaalm defends against, the threats it accepts, and the threats it leaves to the platform team. Each threat is one table row with the mitigation and a decision: **mitigated**, **accepted** (a bound Kaalm chooses to live with), **out of scope** (outside the trust boundary), or **as shipped** (the design says one thing and the code does another; an issue tracks it). A row whose argument needs more than a sentence links to a note after its table.
 
-Read [Trust Model](model.md#trust-model) first: several rows resolve to "out of scope" purely because of where the trust boundary sits. A threat being out of scope is a design decision, not an oversight.
+Read [Trust model](model.md#trust-model) first: several rows are out of scope only because of where the trust boundary sits.
 
-## Credential Containment and Egress
+## Credential containment and egress
 
-The central invariant is that LLM provider credentials never leave `kaalm-system`. Agent Pods reach providers only by proxying through the gateway, and a synthesized NetworkPolicy is what makes that the only reachable path.
+Provider credentials stay in `kaalm-system`, and agent Pods reach providers only through the gateway.
 
-| Threat | Mitigation |
-|---|---|
-| Malicious agent container (Kaalm-managed Pod) tries to call LLM providers directly | Credentials never leave `kaalm-system`; the AgentReconciler synthesizes a per-Agent NetworkPolicy whose default-deny egress (standard k8s, no service mesh required) blocks direct egress from the agent Pod to provider IPs. Same for AgentTask Pods. |
-| Gateway-only-tier workload calls LLM providers directly with its own keys | **Not mitigated by Kaalm.** See [Gateway-only-tier workload calls providers directly](#gateway-only-tier-workload-calls-providers-directly). |
-| Developer authors a permissive NetworkPolicy in their own namespace that broadens Agent Pod egress | **Out of scope by trust model.** See [Developer authors a permissive NetworkPolicy](#developer-authors-a-permissive-networkpolicy). |
-| Developer bypasses gateway by embedding credentials in image | No mitigation at the platform level: process/review concern; mitigate with image scanning and registry controls. |
-
-### Notes
+| Threat | Mitigation | Decision |
+|---|---|---|
+| A Kaalm-managed agent container calls an LLM provider directly | The synthesized NetworkPolicy denies all egress except the gateway and DNS ([Network policy](model.md#network-policy)), on any CNI that enforces NetworkPolicy. A class `allowedCIDRs` entry reopens exactly that CIDR. | Mitigated |
+| A gateway-only-tier workload calls providers with its own keys | No Agent resource, so no synthesized policy. See [Gateway-only-tier workload calls providers directly](#gateway-only-tier-workload-calls-providers-directly). | Out of scope |
+| A developer writes a permissive NetworkPolicy that widens agent egress | NetworkPolicy is additive. See [Developer authors a permissive NetworkPolicy](#developer-authors-a-permissive-networkpolicy). | Out of scope |
+| A developer embeds provider credentials in the image | Image scanning and registry controls, outside Kaalm. | Out of scope |
+| A provider key or tool credential leaves `kaalm-system` on the controller's health probe | The probe sends the credential to the configured provider or tool endpoint, the same host the gateway sends it to ([Liveness probe](../controller/reconcilers.md#liveness-probe)). | Accepted |
 
 #### Gateway-only-tier workload calls providers directly
 
-Gateway-only-tier workloads are existing Deployments that the platform team has granted gateway access to through `TokenReview`; they have no Agent CR and therefore no Kaalm-synthesized NetworkPolicy. Routing through the gateway is voluntary in this tier: a workload that holds its own provider credentials can bypass the gateway entirely. Platform teams adopting the gateway-only tier must apply their own default-deny egress NetworkPolicy (or use a service mesh) on those namespaces if they want to enforce gateway routing. The full Agent lifecycle tier remains the only path with automatic NetworkPolicy enforcement.
+Gateway-only-tier workloads are existing Deployments the platform team has granted gateway access through `TokenReview`. They have no Agent resource and so no synthesized NetworkPolicy, and routing through the gateway is voluntary: a workload holding its own credentials can bypass the gateway. If you adopt this tier and need gateway routing enforced, apply a default-deny egress NetworkPolicy on those namespaces yourself. The Agent lifecycle tier is the only path with automatic enforcement.
 
 #### Developer authors a permissive NetworkPolicy
 
-[§ Trust Model](model.md#trust-model) places the developer in the trusted tier; opting out of guardrails is the developer's choice, not a defended-against threat. NetworkPolicy is additive, so an additional permissive policy unions with Kaalm's synthesized one: Kaalm cannot prevent this through synthesis alone. Platform teams who treat developers as untrusted should restrict `networkpolicies` create/patch in user namespaces with cluster RBAC. The agent-container threat (the actual untrusted actor) cannot author NetworkPolicies: its ServiceAccount has no such permissions by default. See [§ Network Policy](model.md#network-policy) and [§ Protecting agent containers from LLM provider access](credentials.md#protecting-agent-containers-from-llm-provider-access).
+The trust model places the developer in a trusted tier, so opting out of a guardrail is the developer's choice. NetworkPolicy is additive: a permissive policy unions with Kaalm's, and synthesis alone cannot prevent that. A platform team that treats developers as untrusted restricts `networkpolicies` create and patch in user namespaces with cluster RBAC. The agent container, the untrusted actor, cannot author a NetworkPolicy: its ServiceAccount has no RBAC ([Agent Pod ServiceAccount](rbac.md#agent-pod-serviceaccount)).
 
-## Workload Isolation
+## Workload isolation
 
-Agent containers execute LLM-generated code, so they are treated as the untrusted actor inside an otherwise trusted namespace.
+Agent containers execute LLM-generated code and are the untrusted actor inside an otherwise trusted namespace.
 
-| Threat | Mitigation |
-|---|---|
-| Developer deploys agent with resource bomb | AgentClass.maxLimits enforced; image allowlist prevents arbitrary images |
-| Agent container executes LLM-generated code that attempts container escape | RuntimeClass (gVisor/Kata) provides kernel-level isolation; Pod Security Standards prevent privilege escalation |
-| Namespace member with ConfigMap write injects unreviewed code into an image-review-approved base image through a handler mount ([`Agent.spec.handler`](../resources/agent.md)) | Off by default: [rule 30](../resources/validation-and-defaulting.md#cross-resource-validation) requires `AgentClass.spec.image.allowHandlerMounts: true`, so image review stays authoritative unless a class explicitly opts out. See [What granting `allowHandlerMounts` means](#what-granting-allowhandlermounts-means). |
+| Threat | Mitigation | Decision |
+|---|---|---|
+| A developer deploys an agent that exhausts node resources | `spec.resources.maxLimits` on the class clamps limits and requests; the image allowlist keeps arbitrary images out ([Resource isolation](model.md#resource-isolation)). A class that sets no `maxLimits` and no defaults leaves the Pod unlimited. | Mitigated when the class sets `maxLimits` |
+| Generated code attempts a container escape | The class RuntimeClass (gVisor, Kata) isolates the kernel; the class security contexts, when declared, prevent privilege escalation ([RuntimeClass](model.md#runtimeclass)). As shipped the controller applies no security defaults of its own. | Mitigated when the class declares them |
+| A namespace member with ConfigMap write injects code into a reviewed base image through a handler mount | Off by default: [rule 30](../resources/validation-and-defaulting.md#cross-resource-validation) requires `allowHandlerMounts: true` on the class. See [What granting allowHandlerMounts means](#what-granting-allowhandlermounts-means). | Mitigated |
+| Generated code in one agent reaches another agent in the same namespace | Ingress is denied by default. With `allowSameNamespaceIngress: true`, as shipped every Pod in the namespace can reach the agent on every port, not only other agents. | Mitigated by default; as shipped when opted in |
 
-See [§ RuntimeClass](model.md#runtimeclass) for the enforcement details.
+#### What granting allowHandlerMounts means
 
-### Notes
+Granting the gate makes ConfigMap write access in a namespace equivalent to code execution as that namespace's handler-mounting Agents, with their ServiceAccount, certificate identity, and gateway access, effective at the next Pod recreation. Grant it on dedicated classes whose namespaces treat every ConfigMap author as a code author. Injected code runs under the same containment as reviewed code: the class security context, a RoleBinding-less ServiceAccount, the synthesized NetworkPolicy, and the optional RuntimeClass. A cross-namespace reference is unrepresentable because `configMapRef` is a local reference ([AgentClass](../resources/agentclass.md#spec), rules 30 and 31).
 
-#### What granting `allowHandlerMounts` means
+## Credential storage and rotation
 
-**Granting the gate makes ConfigMap write access in a namespace equivalent to code execution as that namespace's handler-mounting Agents**, with their ServiceAccount, certificate identity, and gateway access, effective at the next Pod recreation. Grant it on dedicated classes whose namespaces treat every ConfigMap author as a code author.
+| Threat | Mitigation | Decision |
+|---|---|---|
+| Platform credentials leak through an etcd backup | Encrypt etcd at rest, outside Kaalm. | Out of scope |
+| Stale credentials after rotation fail silently | The gateway follows every Secret it uses through a watch; the ModelProviderReconciler re-reads the key and probes the provider on every pass ([Lifecycle of an LLM API key](credentials.md#lifecycle-of-an-llm-api-key)). | Mitigated |
+| A channel credential leaks from an agent namespace | The Secret lives in that namespace, so the exposure is that namespace's channels. The platform team rotates it. | Accepted |
 
-Injected code runs under the same containment as reviewed code: the class SecurityContext, a RoleBinding-less ServiceAccount, the synthesized NetworkPolicy, and the optional RuntimeClass. A cross-namespace reference is unrepresentable, because `configMapRef` is a local reference. See [Reference Base Images](../runtime/base-images.md) and rules 30 and 31.
+## Component compromise
 
-## Credential Storage and Rotation
+These rows ask what an attacker gains by taking over a Kaalm component. For Secrets the answer is everything the component can read: `kaalm-system` plus the channel Secrets each AgentChannel names for the gateway, and the whole cluster for the operator.
 
-| Threat | Mitigation |
-|---|---|
-| Platform credentials leak through an etcd backup | Standard k8s concern; encrypt etcd at rest |
-| Stale credentials after rotation cause silent failures | Gateway watches Secrets for changes; ModelProviderReconciler verifies credential validity on each health check |
-| Channel credential leaked from agent namespace | Channel credentials are stored in the agent's namespace; blast radius is limited to that namespace's channels. The platform team (not the developer) is responsible for rotation. |
-
-Lifecycle detail lives in [§ Lifecycle of an LLM API key](credentials.md#lifecycle-of-an-llm-api-key).
-
-## Component Compromise
-
-These rows ask what an attacker gains by taking over Kaalm's own control-plane components. The honest answer for credential reads is: everything in `kaalm-system`. The scoping that exists is a least-privilege default and an integrity control against drift, not a hard boundary.
-
-| Threat | Mitigation |
-|---|---|
-| Compromised operator reads credential Secrets | No cluster-wide Secret access; standing read scoped to `kaalm-system`, which does contain every provider key. See [Compromised operator reads credential Secrets](#compromised-operator-reads-credential-secrets). |
-| Compromised gateway reads all LLM credentials | Gateway Secret access scoped to `kaalm-system`; gateway image should be signed and verified; restrict who can update gateway Deployment |
-| Compromised gateway writes malicious ConfigMaps to user namespaces | Gateway has **no `create` verb** on user-namespace ConfigMaps. See [Compromised gateway writes malicious ConfigMaps](#compromised-gateway-writes-malicious-configmaps). |
-| Untrusted workload sends a hostile or oversized request body to exploit the gateway's parsers (JSON decoding; since v0.7.0 the cross-format translator) | Every listener bounds its reads before parsing and fails closed on a body it cannot decode; the translator adds no parsing trust. See [Hostile bodies and the parsers](#hostile-bodies-and-the-parsers). |
-
-### Notes
+| Threat | Mitigation | Decision |
+|---|---|---|
+| A compromised operator reads credential Secrets | The operator's standing Secret read is cluster-wide, and as shipped the manager's cache holds every Secret in memory. See [Compromised operator reads credential Secrets](#compromised-operator-reads-credential-secrets). | As shipped |
+| A compromised gateway reads credential Secrets | The standing read is `kaalm-system`; in user namespaces it reads only the Secrets each AgentChannel names ([Summary of the gateway's reach](rbac.md#summary-of-the-gateways-reach)). Sign and verify the gateway image and restrict who can update its Deployment. | Accepted |
+| A compromised gateway writes ConfigMaps into user namespaces | No `create` on user-namespace ConfigMaps; `update, patch` only on each task's pre-created completion ConfigMap ([Dynamic per-namespace grants: task completion ConfigMaps](rbac.md#dynamic-per-namespace-grants-task-completion-configmaps)). | Mitigated |
+| A hostile or oversized body reaches the gateway's parsers | Every listener bounds its reads before parsing and fails closed on a body it cannot decode. See [Hostile bodies and the parsers](#hostile-bodies-and-the-parsers). | Mitigated |
+| A compromised console reads credentials or cluster state | The console ServiceAccount reads every Kaalm resource and the Namespace list cluster-wide, creates `TokenReview` and `SubjectAccessReview`, and holds no Secret access. See [What a compromised console gains](#what-a-compromised-console-gains). | Accepted |
 
 #### Compromised operator reads credential Secrets
 
-The operator has no cluster-wide Secret access: its standing Secret read is scoped to `kaalm-system`, which **does** contain every LLM provider key, so a compromised operator reads them all, the same blast radius as a compromised gateway (mitigate identically: image signing, restricted Deployment update rights, audit logging on `kaalm-system` Secret access). In user namespaces the only reach is through dynamic per-AgentChannel Roles, each `resourceNames`-scoped to that channel's auth Secret(s); a compromised operator cannot *directly* enumerate or read arbitrary user-namespace Secrets.
-
-The `escalate`/`bind` grants on `roles`/`rolebindings` (see [Operator ServiceAccount](rbac.md#operator-serviceaccount)) mean a fully compromised operator could widen those Roles and bind them to principals of its choosing. The per-channel scoping is an integrity control against drift and a least-privilege default, not a hard boundary against operator compromise.
-
-#### Compromised gateway writes malicious ConfigMaps
-
-The `{taskName}-completion` ConfigMap is pre-created by the AgentTaskReconciler with the AgentTask as `ownerRef`; the gateway's per-task Role grants only `update, patch` on that exact name (`resourceNames`-scoped, with `get` omitted since the write is a blind merge patch). The gateway has **no `create` verb** on user-namespace ConfigMaps, so a compromised gateway cannot introduce new ConfigMaps in user namespaces: it can mutate only the per-task and per-channel resources it has explicit name-scoped access to. See [§ Gateway ServiceAccount permissions](rbac.md#gateway-serviceaccount-permissions).
+The operator's ClusterRole carries `get, list, watch` on Secrets in every namespace ([Operator ServiceAccount](rbac.md#operator-serviceaccount)), so a compromised operator reads every provider key and tool credential in `kaalm-system` and every channel credential in every user namespace. As shipped the reads go through the manager's cached client, so the process also holds every Secret in the cluster in memory from its first read on; a heap dump or a debug endpoint exposes them without an API call. The operator never writes or copies a Secret, so the exposure is read-only. Mitigate as for the gateway: image signing, restricted Deployment update rights, and audit logging on Secret access. The narrower design, a standing read scoped to `kaalm-system` with `escalate` and `bind` for the per-channel Roles and live reads for the credential checks, is not what ships.
 
 #### Hostile bodies and the parsers
 
-Every listener bounds its reads before parsing: the LLM proxy rejects oversized bodies with `413` at its configured cap, and the message, MCP, and platform paths carry their own caps. Bodies decode with the standard library into typed structures; an unparseable body fails closed with `400` before any provider or agent is contacted.
-
-The translator adds no parsing trust: it rewrites between two shapes the proxy has already decoded, and a request it cannot express in the target format makes that candidate ineligible rather than producing a partial translation. Prompt bodies are never logged in the default build ([PII safety](../operations/observability.md#pii-safety)).
-
-## Tenant Isolation and Budgets
-
-Budgets are guardrails by default, not hard caps; providers that need a cap opt in to [hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement), which states its guarantee and its bounds. Two rows here restate the default's consequence so it is not mistaken for a bug.
-
-| Threat | Mitigation |
-|---|---|
-| One tenant exhausts another tenant's budget through a shared provider | Per-namespace spend accounting; `allowedNamespaces` restricts access; budgets are soft limits with bounded overspend, or hard-capped when the provider opts in |
-| Agent makes requests to unauthorized provider | Gateway validates model against ModelProvider.models and namespace against allowedNamespaces. Every fallback candidate is re-validated the same way during the walk, including a cross-format candidate's mapped model against that candidate's own catalog ([rules 12 and 41](../resources/validation-and-defaulting.md#cross-resource-validation)) |
-| Budget guardrails exceeded under high concurrency | Soft mode documents its bounded overspend; hard enforcement bounds the crossing to the stated in-flight guarantee; provider account limits remain defense in depth |
-| Gateway-only tenant uses a provider their AgentClass would have denied in the mTLS tier | **Expected behavior, not a vulnerability.** See [Gateway-only tenant uses a provider AgentClass would have denied](#gateway-only-tenant-uses-a-provider-agentclass-would-have-denied). |
-| Denied caller probes which providers and models exist | Authorization ordering protects the model catalog; provider existence is deliberately distinguishable. See [What a denied caller learns](#what-a-denied-caller-learns). |
-| Fallback routes a request to a provider outside the workload's AgentClass `allowedProviders` | **Expected behavior: the edge is the platform team's routing decision.** See [Fallback edges and allowedProviders](#fallback-edges-and-allowedproviders). |
-| Upstream provider error text leaks platform detail to callers | Only non-fallbackable 4xx answers relay verbatim; every other failure reduces to a generic classified envelope. See [What flows back from a failed provider call](#what-flows-back-from-a-failed-provider-call). |
-
-### Notes
-
-#### Gateway-only tenant uses a provider AgentClass would have denied
-
-The gateway-only tier is deliberately not gated by AgentClass: those workloads have no Agent resource and therefore no `allowedProviders` to consult. Access control reduces to `ModelProvider.spec.allowedNamespaces` plus `spec.models`. Platform teams who need class-scoped provider policy must onboard workloads through the full Agent lifecycle tier. See [Provider Routing § Gateway-only tier](../gateways/llm/provider-routing.md).
-
-#### What a denied caller learns
-
-Authorization ordering keeps the model catalog behind the namespace gate: `allowedNamespaces` is checked before model existence, so a namespace that is not allowed to use a provider cannot learn which models it hosts. Provider existence is the accepted remainder: an unknown provider answers `400 invalid_request` and a denied one answers `403 access_denied`, so a caller can tell whether a provider name exists. Provider names are cluster-scoped identifiers on the same footing as namespace names, and both planes, the LLM proxy and the MCP broker, share this posture.
-
-#### Fallback edges and allowedProviders
-
-A fallback candidate is re-validated against its own `allowedNamespaces` and catalog ([rules 12 and 41](../resources/validation-and-defaulting.md#cross-resource-validation)), but not against the workload's AgentClass `allowedProviders`. The workload gates govern what a caller may request; a fallback edge is the platform team's routing decision, declared on the provider they own ([Fallback Logic](../gateways/llm/fallback.md) lists the static checks). A platform team that does not want traffic reaching a provider through fallback does not declare the edge.
-
-#### What flows back from a failed provider call
-
-Only a non-fallbackable provider answer (`400`, `422`, and the other 4xx statuses except `401`, `403`, and `429`) relays to the caller verbatim, translated into the caller's format when the serving candidate crossed. The statuses that could echo credential material (`401`, `403`) and the retryable classes (`429`, 5xx, transport errors) never relay: the fallback walk continues past them, and exhaustion answers with a generic classified envelope. Transport error text is reduced to a failure class before it can carry an upstream URL or address, so provider-side detail cannot travel back through error text.
-
-## Channels and Webhooks
-
-Inbound webhooks come from third parties that follow their own signing conventions, and outbound callbacks leave the gateway, which has stronger egress than any user namespace. Both directions get explicit treatment.
-
-| Threat | Mitigation |
-|---|---|
-| Malicious message from channel platform | Webhook adapter authenticates inbound events (bearer token, HMAC signature) before processing |
-| Captured inbound webhook is replayed against the gateway | Not preventable at the gateway: inbound HMAC is body-only with no timestamp. Cost bounded by budgets; side-effect dedup is the agent's job. See [Captured inbound webhook is replayed](#captured-inbound-webhook-is-replayed). |
-| Forged Discord interaction or WhatsApp event | The platform adapters verify the platform's own signature before anything else: Ed25519 over timestamp and body for Discord, HMAC-SHA256 over the body with the app secret for WhatsApp. A verification handshake is authenticated too. See [Replay bounds on the platform surfaces](#replay-bounds-on-the-platform-surfaces). |
-| Tenant points a platform channel's reply at a host of their choosing, carrying the channel's bearer token | Not expressible: the platform API base URLs are gateway-level Helm values (`gateway.platforms.<type>.apiBaseUrl`), not channel fields. A tenant's Secret holds only that tenant's platform credentials, and the gateway only ever presents them to the operator-configured host. See [Why the platform reply path has no deny-range machinery](#why-the-platform-reply-path-has-no-deny-range-machinery). |
-| Caller with channel A's credentials fetches channel B's async response by supplying channel B's `requestId` to the poll endpoint | Poll endpoint asserts the stored response's channel labels match the authenticated AgentChannel; mismatch returns `404 Not Found`. See [Cross-channel async response fetch](#cross-channel-async-response-fetch). |
-| Developer uses `AgentChannel.spec.webhook.callbackUrl` as SSRF against internal cluster services (such as `kubernetes-dashboard.kube-system` or the cloud metadata IP 169.254.169.254) | `https://` plus internal-IP-range denial enforced at admission, re-checked and IP-pinned on every delivery. See [SSRF through callbackUrl](#ssrf-through-callbackurl). |
-| Third party forges a callback POST to a developer's `callbackUrl` | The gateway signs every callback POST using `AgentChannel.spec.webhook.callbackAuth`, which CRD CEL makes mandatory whenever `callbackUrl` is set. See [Forged callback POST](#forged-callback-post). |
-
-### Notes
-
-#### Captured inbound webhook is replayed
-
-Inbound HMAC is body-only with no timestamp (see [Inbound webhook auth](../gateways/api/channel-webhook.md)): the deliberate cost of supporting arbitrary third-party senders that follow their own signing conventions (GitHub-style body-only HMAC, etc.). The gateway therefore cannot reject replays of a captured `(body, HMAC)` pair until the secret is rotated.
-
-Cost replay is bounded by per-namespace LLM budgets (see [Multi-tenancy](../concepts/tenancy-and-tiers.md#multi-tenancy)). Side-effect replay is the agent's responsibility: agents performing non-idempotent inbound actions must dedup on a caller-supplied idempotency key or content hash. The gateway-side `messageId` dedup ([The Runtime Contract item 7](../runtime/contract.md)) addresses gateway-retry duplicates only, not external replay.
-
-#### Replay bounds on the platform surfaces
-
-Discord's signed timestamp is checked against a 300s skew window, which bounds replay on that surface. WhatsApp's signature is body-only, the same replay posture as the generic webhook: see [Captured inbound webhook is replayed](#captured-inbound-webhook-is-replayed). The adapters and their wire contracts are documented in [The platform adapters](../gateways/user/platform-adapters.md#inbound).
-
-#### Why the platform reply path has no deny-range machinery
-
-The SSRF defenses on `callbackUrl` (deny ranges, pre-dial re-resolution, IP pinning) exist because the URL is developer-supplied. A platform base URL is operator-supplied, set at install time in the same trust tier as a ModelProvider `baseUrl` or an MCP upstream endpoint; defending the gateway against its own operator is out of scope by [the trust model](model.md#trust-model). The value also accepts `http://` for the same reason: the e2e mock platforms stand in at install time, and the operator owns the consequence.
-
-#### Cross-channel async response fetch
-
-The poll endpoint authenticates the caller against the AgentChannel named by the `channelPath` query parameter, then asserts that the stored response's `kaalm.io/channel-namespace` / `kaalm.io/channel-name` labels match that same AgentChannel before returning the payload. `requestId` values are UUIDs but not secrets; the label check prevents cross-channel data leakage. Mismatches return `404 Not Found`, indistinguishable on the wire from "unknown `requestId`", to avoid confirming the existence of a cross-channel response (the gateway logs the mismatch with `reason=ChannelMismatch` for operator debugging). See [Async Webhook Response poll semantics](../gateways/api/async-responses.md).
-
-#### SSRF through callbackUrl
-
-The gateway has stronger egress than any user namespace, so an unrestricted `callbackUrl` would let the developer turn the gateway into a confused deputy. The AgentChannelReconciler enforces at admission/reconcile time that `callbackUrl` uses `https://` and that its host does not resolve to loopback, link-local, RFC1918, unique-local IPv6, shared address space (100.64.0.0/10), benchmarking space (198.18.0.0/15), or cloud-metadata IPs (see [Cross-Resource Validation rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)).
-
-On every delivery attempt the gateway re-resolves the host, re-applies the check, and **dials the exact IP that passed**: a custom dialer resolves once, range-checks the result, and connects to that pinned IP:port while preserving the Host header and SNI (see [Request Flow step 8](../gateways/user/overview.md#request-flow)). Handing the hostname back to the HTTP transport would let it re-resolve independently, re-opening the DNS-rebinding window the check exists to close. Pooled connections to a callback host are reused only after that same check passes again for the attempt. Platform teams may replace the deny-internal default with an explicit allowlist through the Helm value `gateway.callbackUrl.allowlist`.
-
-#### Forged callback POST
-
-The gateway signs every callback POST (success and error payloads alike) using `AgentChannel.spec.webhook.callbackAuth`: bearer (`Authorization: Bearer …`) or HMAC over the canonical string `"{requestId}\n{timestamp}\n{sha256(body)}"` with the timestamp in `X-Kaalm-Timestamp`. `callbackAuth` is required by [cross-resource validation rule 25](../resources/validation-and-defaulting.md#cross-resource-validation) whenever `callbackUrl` is set: CRD CEL rejects AgentChannels that try to configure an unsigned callback, so unsigned callbacks cannot be deployed by accident. Receivers verify the signature using the same Secret material; replay is bounded by a 300s timestamp skew window (mirroring the polling-endpoint contract). See [Callback authentication](../gateways/api/async-responses.md).
-
-## Identity and Namespace Spoofing
-
-Every authorization decision the gateway makes keys off a namespace, so forging a namespace is the highest-value attack. Both auth modes attest identity cryptographically and then cross-check it topologically against the source Pod; both must agree. The full request-time flow, the SAN shapes, and the label counts live in [Namespace Identification](../gateways/llm/workload-identity.md).
-
-| Threat | Mitigation |
-|---|---|
-| Agent spoofs namespace to bypass budget/access controls (mTLS tier) | Namespace comes from the `kaalm-ca`-signed cert SAN; the CA key is unreachable from agent Pods. Two extra defenses close the dotted-name label-shift bypass. See [Agent spoofs namespace (mTLS tier)](#agent-spoofs-namespace-mtls-tier). |
-| Agent spoofs namespace (gateway-only-tier, token auth) | Namespace is extracted from the token's `status.user.username` returned by `TokenReview`, which the apiserver signs. An agent cannot forge a token for a different namespace: the token's signature is checked by the apiserver, not the gateway. Source-IP to Pod cross-check validates the Pod's actual namespace matches. Both cryptographic (apiserver signature) and topological (source IP) attestation must agree. |
-| Gateway-only-tier tenant uses a ServiceAccount token from another namespace to read another tenant's budget | Impossible: `TokenReview`'s returned `status.user.username` names the token's actual namespace of origin. The gateway uses *that* namespace for all authorization decisions, not any namespace the caller claims in the request body. A valid token from namespace A can only be used to act as namespace A. |
-| Stolen `kubernetes.default.svc`-audience token reused against the gateway | Gateway's `TokenReview` request specifies audience `kaalm-gateway`. Tokens minted for a different audience fail validation. Workloads must explicitly project a gateway-audience token. |
-| Kaalm-managed Agent/AgentTask Pod tries to downgrade auth by using its ServiceAccount token instead of mTLS | Rejected by the gateway's **Pod-ownership precheck** on the bearer-token path, before any `TokenReview` call. See [Auth downgrade to ServiceAccount token](#auth-downgrade-to-serviceaccount-token). |
-| Agent created in `kaalm-system` acquires a certificate whose SAN collides with an internal Service identity | The reconcilers refuse to provision Agent, AgentTask, or AgentChannel resources in `kaalm-system` (`Ready=False, reason=SystemNamespaceForbidden`, [rule 28](../resources/validation-and-defaulting.md#cross-resource-validation)). See [SAN collision in kaalm-system](#san-collision-in-kaalm-system). |
-
-### Notes
-
-#### Agent spoofs namespace (mTLS tier)
-
-Namespace is extracted from the cert SAN, signed by `kaalm-ca`. Agents use `{name}.{namespace}.svc.cluster.local`; AgentTasks use `{name}.{namespace}.task.kaalm.io`. An agent cannot forge a cert for a different namespace (the CA key is not reachable from any agent Pod).
-
-Two additional defenses specifically prevent a dotted-name label-shift bypass, where a name containing dots would shift the SAN's labels and make the parser read the wrong position as the namespace:
-
-1. Agent and AgentTask `metadata.name` are restricted to DNS-1123 **label** form (no dots) by CRD CEL. See [Cross-Resource Validation rule 21](../resources/validation-and-defaulting.md#cross-resource-validation).
-2. The gateway's SAN parser requires the exact label count for each shape (5 for Service-DNS, 4 for `.task.kaalm.io`) and rejects any cert whose SAN has extra labels. See [Namespace Identification § Mode 1](../gateways/llm/workload-identity.md#mode-1-mtls-client-certificate).
-
-Source-IP to Pod cross-check validates the cert identity against the actual source Pod; all checks must agree.
-
-#### Auth downgrade to ServiceAccount token
-
-Before any `TokenReview` call, the gateway resolves the request's source IP to a Pod through its informer cache and returns `401 Unauthorized` if that Pod has an `ownerRef` to an `Agent` or `AgentTask` resource or carries the Kaalm-managed label set. The check runs on every request (it is not cached) and runs before `TokenReview`, so it is unaffected by token-cache hits or apiserver latency. The gateway also attempts mTLS first when a client cert is presented; if both auth materials are present the bearer header is ignored.
-
-mTLS remains the only accepted auth mode for that tier, keeping its credential surface to one bounded-lifetime, namespace-pinned artifact. Rotating a leaf cert contains exposure but does not revoke the old one, which is why a single credential surface matters here (see [§ In-cluster TLS](tls.md#in-cluster-tls) for the containment-versus-revocation distinction and the CA re-key runbook). See [Namespace Identification, Mode 2](../gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token).
-
-#### SAN collision in kaalm-system
-
-An Agent named `kaalm-gateway` would be issued SAN `kaalm-gateway.kaalm-system.svc.cluster.local`, exactly the identity that activator, activity, channel-health, and agent-side `/v1/message` authorization trust. The per-Agent SAN shape is distinguishable from the internal-endpoint SANs only by its namespace label, so the guard makes the collision unreachable even for admins; locking down `kaalm-system` ([Recommendation 1](model.md#recommendations-for-deployment)) is the outer layer.
-
-## Internal Endpoint Abuse
-
-Certificates signed by `kaalm-ca` are not interchangeable. Authorization on internal endpoints is by SAN, not by mere possession of a CA-signed cert, which is what keeps a compromised agent from reaching them with its own valid cert.
-
-| Threat | Mitigation |
-|---|---|
-| Unauthorized agent wake-up through the activator endpoint | The activator endpoint requires an mTLS client cert whose SAN matches the gateway Service DNS: any other SAN, even one signed by `kaalm-ca`, is rejected with `403 Forbidden`. The per-Agent SAN shape cannot match the gateway SAN, so a compromised agent cannot use its own cert to trigger wake-ups. See [§ Internal Endpoint Authentication](rbac.md#internal-endpoint-authentication). |
-| Compromised in-cluster Pod with network reach to an agent's Service forges channel messages | The agent's `POST /v1/message` listener requires a client cert with the gateway SAN. NetworkPolicy is the first layer; the agent-side per-path mTLS check is the second. See [Forged channel messages from a compromised Pod](#forged-channel-messages-from-a-compromised-pod). |
-| Non-apiserver in-cluster caller POSTs ConversionReview payloads to the cert-less conversion listener | **Accepted with bounds**: conversion is a pure function with nothing to extract, and request bodies are capped. See [The conversion listener's posture](#the-conversion-listeners-posture). |
-
-### Notes
-
-#### Forged channel messages from a compromised Pod
-
-The agent's `POST /v1/message` listener requires a client certificate whose SAN matches the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` / `.svc`). A compromised non-gateway Pod cannot present such a cert (the `kaalm-ca` private key is not reachable from any non-gateway Pod), so even if it bypasses or piggybacks on a misconfigured per-Agent NetworkPolicy, the request is rejected at the handler: the agent's listener accepts the handshake without a client cert (`VerifyClientCertIfGiven`, so kubelet probes on the shared port keep working) and the `/v1/message` handler then returns `401` for a missing cert or `403` for a non-gateway SAN. NetworkPolicy is the first layer; the agent-side per-path mTLS check is the second. See [The Runtime Contract](../runtime/contract.md) bullet 4 and [§ In-cluster TLS](tls.md#in-cluster-tls).
-
-#### The conversion listener's posture
-
-The CRD conversion listener (`:9444`) requires no client authentication because its caller is the apiserver, which presents no certificate. What an unauthorized in-cluster caller gains is deliberately nothing: the handler is a pure function that decodes a ConversionReview, converts between `kaalm.io` versions, and echoes the result, reading no cluster state and holding no credentials. The remaining lever was resource exhaustion, and request bodies are capped far above any real review. The chart ships no NetworkPolicy for `kaalm-system` components, so restricting who can reach `:9444` and the unauthenticated metrics port `:9090` is the operator's network policy to write; [Deployment](../operations/deployment.md) covers the install-time posture.
-
-## The Console
-
-The [console](../console/overview.md) is optional and off by default. When enabled it is a listener with human callers, so its threats are session-shaped rather than workload-shaped.
-
-| Threat | Mitigation |
-|---|---|
-| Stolen or replayed console session cookie | The cookie is `Secure`, `HttpOnly`, `SameSite=Strict`; sessions live in console memory and expire with the pasted token or after 24 hours, whichever comes first. A console restart invalidates every session. |
-| Caller uses the console to view namespaces their token does not grant | The console fixes the caller's identity at login with `TokenReview` and gates every namespace-scoped read with a `SubjectAccessReview` for that identity. An unauthorized token sees an empty namespace list, `403` on direct access, and `401` when invalid ([S19](../appendix/scenarios.md#s19-see-the-fleet-without-kubectl)). |
-| Compromised console | The console's ServiceAccount reads CRD status and creates `TokenReview`/`SubjectAccessReview`, and holds nothing else: no Secret access anywhere, so no credential can leak through it. The capability gained is the console SAN's test-chat and spend access. See [What a compromised console gains](#what-a-compromised-console-gains). |
-| Cross-site request forgery against test-chat, the console's one state-changing route | The `SameSite=Strict` session cookie is the control; there is no separate CSRF token. See [Why SameSite is the CSRF control](#why-samesite-is-the-csrf-control). |
-
-### Notes
+Every listener bounds its reads before parsing: the LLM proxy answers `413` above its cap, and the message, MCP, and platform paths carry their own caps ([Helm chart contents](../operations/deployment.md#helm-chart-contents) lists the values). Bodies decode with the standard library into typed structures, and an unparseable body fails closed with `400` before any provider or agent is contacted. The cross-format translator adds no parsing trust: it rewrites between two structures the proxy has already decoded, and a request it cannot express in the target format makes that candidate ineligible rather than producing a partial translation. Prompt bodies are never logged in the default build ([PII safety](../operations/observability.md#pii-safety)).
 
 #### What a compromised console gains
 
-The gateway authorizes the console SAN on `POST /v1/test-chat` and `GET /v1/spend`, so a compromised console can wake agents, deliver messages to them (spending their namespaces' budgets), and read spend figures. Test-chat deliveries carry a `/console/{namespace}/{agentName}` channel origin, so they are distinguishable in the gateway's delivery log and in session identity. The component is stateless; the mitigation posture matches the other `kaalm-system` components: restrict and audit access to the namespace, and leave the console disabled where it is not used.
+The gateway authorizes the console SAN on `POST /v1/test-chat` and `GET /v1/spend`, so a compromised console can wake agents, deliver messages to them and spend their namespaces' budgets, and read spend figures. Test-chat deliveries carry a `/console/{namespace}/{agentName}` channel origin, so they are distinguishable in the gateway's delivery log. Through its own ServiceAccount the console reads the spec and status of every Kaalm resource in every namespace. The component is stateless, and the mitigation matches the other `kaalm-system` components: restrict and audit the namespace, and leave the console disabled where it is not used.
+
+## Tenant isolation and budgets
+
+Budgets are guardrails by default, not hard caps; a provider that needs a cap opts in to [hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement), which states its guarantee and its bounds.
+
+| Threat | Mitigation | Decision |
+|---|---|---|
+| One tenant exhausts another tenant's budget through a shared provider | Per-namespace spend accounting; `allowedNamespaces` restricts access; soft limits have bounded overspend, hard limits cap it. | Mitigated within the stated bounds |
+| An agent requests a provider or model it is not allowed | The gateway checks `allowedNamespaces`, the model catalog, and the class `allowedProviders`; every fallback candidate is re-checked against its own namespaces and catalog ([rules 12 and 41](../resources/validation-and-defaulting.md#cross-resource-validation)). | Mitigated |
+| Budget guardrails are exceeded under concurrency | Soft mode documents its bounded overspend; hard enforcement bounds the crossing to its in-flight guarantee; provider account limits remain defense in depth. | Accepted |
+| A gateway-only tenant uses a provider its AgentClass would have denied | No Agent resource, so no class to consult. See [Gateway-only tenant uses a provider AgentClass would have denied](#gateway-only-tenant-uses-a-provider-agentclass-would-have-denied). | Out of scope |
+| A denied caller probes which providers and models exist | Authorization ordering protects the model catalog; provider existence is distinguishable. See [What a denied caller learns](#what-a-denied-caller-learns). | Accepted |
+| Fallback routes a request to a provider outside the class `allowedProviders` | A fallback edge is the platform team's routing decision. See [Fallback edges and allowedProviders](#fallback-edges-and-allowedproviders). | Accepted |
+| Upstream error text leaks platform detail to a caller | Only non-fallbackable 4xx answers relay verbatim; everything else reduces to a classified envelope. See [What flows back from a failed provider call](#what-flows-back-from-a-failed-provider-call). | Mitigated |
+| A Pod with network reach scrapes the gateway metrics port | The port is unauthenticated and labels requests, tokens, and spend by provider, model, and namespace. As shipped the chart ships no NetworkPolicy for `kaalm-system` ([Recommendations for deployment](model.md#recommendations-for-deployment)). | As shipped |
+
+#### Gateway-only tenant uses a provider AgentClass would have denied
+
+Gateway-only workloads have no Agent resource and so no `allowedProviders` to consult; access control reduces to `ModelProvider.spec.allowedNamespaces` plus `spec.models`. A platform team that needs class-scoped provider policy onboards the workload through the Agent lifecycle tier ([Gateway-only tier](../gateways/llm/provider-routing.md#gateway-only-tier-tokenreview)).
+
+#### What a denied caller learns
+
+`allowedNamespaces` is checked before model existence, so a namespace that may not use a provider cannot learn which models it hosts. Provider existence is the accepted remainder: an unknown provider answers `400 invalid_request` and a denied one `403 access_denied`, so a caller can tell whether a provider name exists. Provider names are cluster-scoped identifiers on the same footing as namespace names. The LLM proxy and the MCP broker share this ordering.
+
+#### Fallback edges and allowedProviders
+
+A fallback candidate is re-checked against its own `allowedNamespaces` and catalog, but not against the workload's class `allowedProviders`. The workload gates govern what a caller may request; a fallback edge is declared by the platform team on the provider they own ([Fallback logic](../gateways/llm/fallback.md)). A platform team that does not want traffic reaching a provider through fallback does not declare the edge.
+
+#### What flows back from a failed provider call
+
+Only a non-fallbackable provider answer (`400`, `422`, and the other 4xx statuses except `401`, `403`, and `429`) relays to the caller verbatim, translated when the serving candidate was cross-format. Statuses that could echo credential material (`401`, `403`) and the retryable classes (`429`, 5xx, transport errors) never relay: the walk continues past them, and exhaustion answers with a classified envelope. Transport error text reduces to a failure class before it can carry an upstream address.
+
+## Tool plane
+
+Tool credentials follow the same containment as provider keys, and the broker gates every call before it reads one ([The broker](../gateways/tool-plane.md#the-broker)).
+
+| Threat | Mitigation | Decision |
+|---|---|---|
+| An agent calls a ToolProvider it was not granted | The broker checks the provider's `allowedNamespaces`, the class catalog, and the agent's `spec.tools` grant before any upstream call ([Grants](../gateways/tool-plane.md#grants)). | Mitigated |
+| A tool credential reaches an agent container | The credential is injected on the broker's upstream leg only, and a denied call ends before the credential is read ([Lifecycle of a tool server credential](credentials.md#lifecycle-of-a-tool-server-credential)). | Mitigated |
+| A tool call or response exhausts the gateway or reaches an internal host | Body caps on both directions and the SSRF checks on the upstream endpoint ([Limits and SSRF protection](../gateways/tool-plane.md#limits-and-ssrf-protection)). | Mitigated |
+| One workload uses another's MCP session | Session ids are bound to the workload identity that opened them ([Session ownership](../gateways/tool-plane.md#session-ownership-legacy-revisions)). | Mitigated |
+
+## Channels and webhooks
+
+Inbound webhooks come from third parties with their own signing conventions, and outbound callbacks leave the gateway, which has wider egress than any user namespace.
+
+| Threat | Mitigation | Decision |
+|---|---|---|
+| A forged message arrives from a channel platform | The webhook adapter verifies the bearer token or HMAC before processing ([Inbound webhook auth](../gateways/api/channel-webhook.md)). | Mitigated |
+| A captured inbound webhook is replayed | Inbound HMAC is body-only with no timestamp. See [Captured inbound webhook is replayed](#captured-inbound-webhook-is-replayed). | Accepted |
+| A forged Discord interaction or WhatsApp event | The adapters verify the platform's own signature first ([Inbound](../gateways/user/platform-adapters.md#inbound)). Discord's signed timestamp bounds replay to 300 seconds; WhatsApp's signature is body-only, as for the generic webhook. | Mitigated; replay accepted on WhatsApp |
+| A tenant points a platform reply at a host of their choosing, carrying the channel's token | Not expressible: platform base URLs are Helm values, not channel fields. See [Why the platform reply path has no deny ranges](#why-the-platform-reply-path-has-no-deny-ranges). | Mitigated |
+| A caller with channel A's credentials fetches channel B's async response | The poll endpoint asserts the stored response's channel labels match the authenticated channel and answers `404` otherwise ([Channel-match assertion](../gateways/api/async-responses.md#channel-match-assertion)). See [Cross-channel async response fetch](#cross-channel-async-response-fetch). | Mitigated |
+| A developer uses `callbackUrl` for SSRF against internal services or the cloud metadata IP | `https://` and the deny ranges of [rule 22](../resources/validation-and-defaulting.md#cross-resource-validation) at admission, re-checked and IP-pinned on every delivery. See [SSRF through callbackUrl](#ssrf-through-callbackurl). | Mitigated |
+| A third party forges a callback POST to a developer's `callbackUrl` | Every callback POST is signed with `callbackAuth`, which [rule 25](../resources/validation-and-defaulting.md#cross-resource-validation) requires whenever `callbackUrl` is set ([Callback authentication](../gateways/api/async-responses.md)). | Mitigated |
+
+#### Captured inbound webhook is replayed
+
+Inbound HMAC is body-only with no timestamp, the cost of accepting third-party senders that follow their own conventions, such as GitHub-style body-only HMAC. The gateway cannot reject a replayed `(body, HMAC)` pair until the secret is rotated. Cost replay is bounded by per-namespace budgets ([Multi-tenancy](../concepts/tenancy-and-tiers.md#multi-tenancy)). Side-effect replay is the agent's responsibility: an agent performing non-idempotent inbound actions must deduplicate on a caller-supplied idempotency key or a content hash. The gateway's `messageId` deduplication ([The runtime contract](../runtime/contract.md), item 7) covers gateway retries only, not external replay.
+
+#### Why the platform reply path has no deny ranges
+
+The SSRF defenses on `callbackUrl` exist because the URL is developer-supplied. A platform base URL (`gateway.platforms.<type>.apiBaseUrl`) is operator-supplied at install time, in the same trust tier as a ModelProvider endpoint, and defending the gateway against its own operator is out of scope. The value accepts `http://` for the same reason: the e2e mock platforms stand in at install time.
+
+#### Cross-channel async response fetch
+
+The poll endpoint authenticates the caller against the AgentChannel named by `channelPath`, then requires the stored response's `kaalm.io/channel-namespace` and `kaalm.io/channel-name` labels to match that channel. `requestId` values are UUIDs but not secrets; the label check is the isolation. A mismatch answers `404`, indistinguishable from an unknown `requestId`, so a caller cannot confirm that a cross-channel response exists; the gateway logs it with `reason=ChannelMismatch`.
+
+#### SSRF through callbackUrl
+
+The gateway has wider egress than any user namespace, so an unrestricted `callbackUrl` would make it a confused deputy. Rule 22 rejects a URL at admission unless it is `https://` and its host resolves outside the deny ranges. On every delivery the gateway re-resolves the host, re-applies the check, and dials the exact IP that passed while preserving the Host header and SNI ([Request flow](../gateways/user/overview.md#request-flow), step 8); handing the hostname back to the transport would reopen the DNS-rebinding window. A pooled connection is reused only after the check passes again for that attempt. The Helm value `gateway.callbackUrl.allowlist` replaces the deny-internal default with an explicit allowlist, and loopback, link-local, and unspecified addresses stay denied under any allowlist.
+
+## Identity and namespace spoofing
+
+Every authorization decision keys off a namespace, so forging one is the highest-value attack. Both modes attest identity cryptographically and cross-check it against the source Pod ([Workload identity](../gateways/llm/workload-identity.md)).
+
+| Threat | Mitigation | Decision |
+|---|---|---|
+| An agent spoofs its namespace in the mTLS tier | The namespace comes from the SAN of a `kaalm-ca`-signed certificate; the CA key is unreachable from any workload Pod. See [Agent spoofs namespace (mTLS tier)](#agent-spoofs-namespace-mtls-tier). | Mitigated |
+| A gateway-only workload spoofs its namespace | The namespace comes from the `TokenReview` username, which the API server signs; the source-IP cross-check must agree. | Mitigated |
+| A gateway-only tenant presents a token from another namespace | The token names its own namespace, and the gateway uses that for every decision. A token from namespace A acts only as namespace A. | Mitigated |
+| A stolen `kubernetes.default.svc`-audience token is reused against the gateway | The `TokenReview` names audience `kaalm-gateway`, so a token for another audience fails. | Mitigated |
+| A Kaalm-managed Pod downgrades to its ServiceAccount token | The bearer path's Pod-ownership precheck answers `401` before any `TokenReview`. See [Auth downgrade to ServiceAccount token](#auth-downgrade-to-serviceaccount-token). | Mitigated |
+| An Agent created in `kaalm-system` gets a SAN that collides with an internal Service identity | The reconcilers refuse Agent, AgentTask, and AgentChannel resources in `kaalm-system` (`Ready=False, reason=SystemNamespaceForbidden`, [rule 28](../resources/validation-and-defaulting.md#cross-resource-validation)). See [SAN collision in kaalm-system](#san-collision-in-kaalm-system). | Mitigated |
+
+#### Agent spoofs namespace (mTLS tier)
+
+The namespace is read from the SAN, whose forms and label counts [Mode 1](../gateways/llm/workload-identity.md#mode-1-mtls-client-certificate) specifies. Two defenses close the dotted-name label shift, where a name containing dots would move the namespace to a different label position: Agent and AgentTask names are restricted to DNS-1123 label form ([rule 21](../resources/validation-and-defaulting.md#cross-resource-validation)), and the parser requires the exact label count for each form. The source-IP cross-check then requires the certificate's namespace to match the source Pod's.
+
+#### Auth downgrade to ServiceAccount token
+
+Before any `TokenReview`, the gateway resolves the request's source IP to a Pod and answers `401` if that Pod has an ownerRef to an Agent or AgentTask or carries the Kaalm-managed label. The check is not cached and runs before the token cache, so it is unaffected by cache hits or API server latency. When both a client certificate and a bearer header are present, the certificate wins and the header is ignored. As shipped the Pod still mounts its ServiceAccount token beside the certificate ([Agent Pod ServiceAccount](rbac.md#agent-pod-serviceaccount)); the token grants nothing at the API server and nothing at the gateway. Keeping the tier's credential surface to one artifact matters because leaf rotation contains a leak but does not revoke it ([Containment, not revocation](tls.md#containment-not-revocation)).
+
+#### SAN collision in kaalm-system
+
+An Agent named `kaalm-gateway` in `kaalm-system` would be issued the SAN `kaalm-gateway.kaalm-system.svc.cluster.local`, the identity the activator, the internal endpoints, and the agent-side `/v1/message` check trust. The per-Agent SAN form differs from the internal-endpoint SANs only by its namespace label, so the guard makes the collision unreachable even for administrators; locking down `kaalm-system` ([Recommendations for deployment](model.md#recommendations-for-deployment)) is the outer layer.
+
+## Internal endpoint abuse
+
+Certificates signed by `kaalm-ca` are not interchangeable: internal endpoints authorize by SAN ([Internal endpoint authentication](rbac.md#internal-endpoint-authentication)).
+
+| Threat | Mitigation | Decision |
+|---|---|---|
+| An unauthorized caller wakes agents through the activator | `/v1/activate` requires a client certificate with the gateway Service SAN; any other SAN, even one signed by `kaalm-ca`, answers `403`. | Mitigated |
+| A compromised Pod with network reach to an agent's Service forges channel messages | The agent's `POST /v1/message` requires a client certificate with the gateway SAN. See [Forged channel messages from a compromised Pod](#forged-channel-messages-from-a-compromised-pod). | Mitigated |
+| An in-cluster caller POSTs `ConversionReview` payloads to the cert-less conversion listener | Conversion is a pure function with nothing to extract, and bodies are capped. See [The conversion listener's exposure](#the-conversion-listeners-exposure). | Accepted |
+
+#### Forged channel messages from a compromised Pod
+
+The agent's `POST /v1/message` handler requires a client certificate whose SAN is `kaalm-gateway.kaalm-system.svc.cluster.local` or `.svc`. A non-gateway Pod cannot present one, because the CA key is unreachable from it, so even a Pod that bypasses a misconfigured per-Agent NetworkPolicy is rejected at the handler: `401` without a certificate, `403` with the wrong SAN. The listener accepts the handshake without a client certificate so that kubelet probes on the shared port keep working, and enforces per path ([The runtime contract](../runtime/contract.md), item 4).
+
+#### The conversion listener's exposure
+
+The conversion listener on `:9444` requires no client authentication because its caller, the API server, presents no certificate. An unauthorized caller gains nothing: the handler decodes a `ConversionReview`, converts between `kaalm.io` versions, and echoes the result, reading no cluster state and holding no credentials. The remaining lever is resource exhaustion, and bodies are capped far above any real review. The chart ships no NetworkPolicy for `kaalm-system`, so restricting who can reach `:9444` and the two metrics ports is a policy you write ([Recommendations for deployment](model.md#recommendations-for-deployment)).
+
+## The console
+
+The [console](../console/overview.md) is optional and off by default. Its callers are people with browser sessions.
+
+| Threat | Mitigation | Decision |
+|---|---|---|
+| A console session cookie is stolen or replayed | The cookie is `Secure`, `HttpOnly`, `SameSite=Strict`; sessions live in console memory and expire with the pasted token or after 24 hours; a restart invalidates every session ([Console](../console/overview.md)). | Accepted within those bounds |
+| A caller views namespaces their token does not grant | The console fixes the identity at login with `TokenReview` and gates every namespace read with a `SubjectAccessReview` ([S19](../appendix/scenarios.md#s19-see-the-fleet-without-kubectl)). | Mitigated |
+| Cross-site request forgery against test-chat | The `SameSite=Strict` cookie is the control. See [Why SameSite is the CSRF control](#why-samesite-is-the-csrf-control). | Mitigated |
 
 #### Why SameSite is the CSRF control
 
-Browser sessions ride a `SameSite=Strict` cookie, which browsers do not attach to any cross-site request, so a hostile page cannot ride an operator's session into test-chat. API callers authenticate per request with a bearer header, which a cross-site page cannot set. The login POST carries no session yet, and a forged login would bind the attacker's own token, gaining the attacker nothing. The console therefore carries no separate CSRF token.
+Browsers do not attach a `SameSite=Strict` cookie to any cross-site request, so a hostile page cannot use an operator's session to reach test-chat. API callers authenticate per request with a bearer header, which a cross-site page cannot set. The login POST carries no session yet, and a forged login would bind the attacker's own token. The console therefore carries no separate CSRF token.
 
-## Transport and PKI Dependencies
+## Transport and PKI dependencies
 
-cert-manager and trust-manager are cluster-critical dependencies. Both fail fast at install; both degrade gracefully at runtime, in the sense that running workloads keep working while new provisioning stalls.
+cert-manager and trust-manager are cluster-critical dependencies. Both fail fast at install, and at runtime running workloads keep working while new provisioning stalls ([Dependency failure modes](tls.md#dependency-failure-modes)).
 
-| Threat | Mitigation |
-|---|---|
-| In-cluster traffic sniffed on shared nodes | All agent/gateway and gateway/controller traffic is TLS-encrypted. Certificates are cert-manager-managed and rooted at `kaalm-ca`. See [§ In-cluster TLS](tls.md#in-cluster-tls). |
-| cert-manager not installed or unhealthy | Chart install fails fast if `kaalm-ca-issuer` cannot be created. Runtime degradation delays new provisioning and blocks rotation; running agents continue. See [cert-manager unhealthy](#cert-manager-unhealthy). |
-| trust-manager not installed or unhealthy | Chart install fails fast if the `Bundle` resource cannot be created. Runtime degradation blocks CA distribution to new namespaces. See [trust-manager unhealthy](#trust-manager-unhealthy). |
-
-### Notes
-
-#### cert-manager unhealthy
-
-Chart install fails fast if `kaalm-ca-issuer` cannot be created; a mismatched `certManager.clusterResourceNamespace` (the ClusterIssuer resolves the CA Secret only there) surfaces as the issuer stuck `Ready=False, reason=SecretNotFound`. Runtime degradation of cert-manager delays new Agent/AgentTask provisioning (the `Certificate` Secret is not populated) and blocks cert rotation, but running agents continue until their current certs approach expiry. Operators should monitor cert-manager health as a cluster-critical dependency.
-
-#### trust-manager unhealthy
-
-Chart install fails fast if the `Bundle` resource cannot be created. Runtime degradation prevents the Kaalm CA ConfigMap from appearing in new namespaces, so Pods scheduled into those namespaces fail to mount `/var/run/kaalm/ca.crt` and cannot verify the gateway's TLS cert. Existing namespaces with the ConfigMap already projected are unaffected until the next CA rotation. Monitor trust-manager alongside cert-manager.
-
----
-
-Continue to [Recommendations for Deployment](model.md#recommendations-for-deployment) for the operational posture that backs several of the preceding rows.
+| Threat | Mitigation | Decision |
+|---|---|---|
+| In-cluster traffic is sniffed on shared nodes | Every hop that carries agent, user, or tool traffic is TLS rooted at `kaalm-ca` ([In-cluster TLS](tls.md#in-cluster-tls)). The two metrics ports are plain HTTP. | Mitigated |
+| cert-manager is unhealthy | Install fails if `kaalm-ca-issuer` cannot be created; at runtime new provisioning holds and rotation stops. | Accepted |
+| trust-manager is unhealthy | Install fails if the `Bundle` cannot be created; at runtime new namespaces get no CA ConfigMap. | Accepted |
+| A leaked leaf certificate is used after rotation | Rotation contains, it does not revoke; the leaf stays valid to its `notAfter` ([Containment, not revocation](tls.md#containment-not-revocation)). The CA re-key runbook is the only invalidation. | Accepted |

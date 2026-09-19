@@ -1,0 +1,34 @@
+@startuml traffic-crossing
+' Traffic classes that cross the cluster boundary.
+' Source of truth: docs/src/security/model.md
+!include _style.puml
+skinparam nodesep 20
+skinparam ranksep 46
+skinparam rectangle {
+  roundCorner 4
+}
+rectangle "namespace: **kaalm-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**Gateway**" as GW #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+  rectangle "**Controller**" as CTRL #back:87CEEB;line:0D47A1;line.bold;text:0a2540
+}
+rectangle "outside the cluster" as OUT #line:8B4513;line.dashed;text:3a1f00 {
+  rectangle "**Channel platform**" as PLAT #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+  rectangle "**LLM provider**" as LLM #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+  rectangle "**MCP tool server**" as MCP #back:FFE4B5;line:8B4513;line.bold;text:3a1f00
+  rectangle "**callbackUrl receiver**, not trusted" as CB #back:FFE4B5;line:B71C1C;line.bold;text:3a1f00
+  rectangle "**OTLP collector** (optional)" as OTLP #back:F5F5F5;line:9E9E9E;line.dashed;text:2a0a4a
+}
+PLAT -[#8B4513,bold]-> GW : 8. inbound webhook: HTTPS through Ingress
+GW -[#B71C1C,bold]-> LLM : 9. prompts and completions, key injected
+GW -[#B71C1C,bold]-> MCP : 10. brokered tool calls, credential injected
+GW -[#B71C1C,bold]-> CB : 11. async payloads, signed, deny ranges, pinned dial
+GW -[#B71C1C,bold]-> PLAT : 12. replies with the platform credential, operator-set host
+CTRL -[#B71C1C]-> LLM : 13. health probe with the key
+CTRL -[#B71C1C]-> MCP : 13. health probe with the credential
+GW .[#9E9E9E].> OTLP : 14. span metadata only
+PLAT -[hidden]down- LLM
+LLM -[hidden]down- MCP
+MCP -[hidden]down- CB
+CB -[hidden]down- OTLP
+GW -[hidden]down- CTRL
+@enduml

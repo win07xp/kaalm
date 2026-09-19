@@ -1,0 +1,27 @@
+@startuml gateway-rbac-namespaced
+' The gateway ServiceAccount's namespaced grants: the kaalm-system Role and the two per-object Roles.
+' Source of truth: docs/src/security/rbac.md
+!include _style.puml
+skinparam nodesep 14
+skinparam ranksep 30
+skinparam rectangle {
+  roundCorner 4
+}
+rectangle "**Gateway ServiceAccount** kaalm-system/kaalm-gateway" as GWSA #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+rectangle "**Role** kaalm-gateway in kaalm-system" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "Secrets: get, watch" as secs #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "ConfigMaps: get, list, watch, create, patch" as cms #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+rectangle "**Role** kaalm-channel-{name}-creds in the AgentChannel's namespace" as nsch #line:7a3f00;line.dashed;text:3a1f00 {
+  rectangle "Secrets named by the channel: get, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+rectangle "**Role** kaalm-task-{name}-completion in the AgentTask's namespace" as nstask #line:7a3f00;line.dashed;text:3a1f00 {
+  rectangle "ConfigMap {name}-completion: update, patch" as compcm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+}
+GWSA -[#1B5E20,bold]-> secs : RoleBinding
+GWSA .[#7a3f00,bold].> chsec : RoleBinding, per channel
+GWSA .[#7a3f00,bold].> compcm : RoleBinding, per task
+secs -[hidden]down- cms
+cms -[hidden]down- chsec
+chsec -[hidden]down- compcm
+@enduml
