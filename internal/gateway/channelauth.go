@@ -119,12 +119,30 @@ func verifyHMACHeader(headerValue string, cfg *kaalmv1beta1.ChannelHMAC, expecte
 	return hmac.Equal(supplied, expected)
 }
 
+// webhookPollChannel is true only for a webhook channel with a webhook
+// block. Discord and WhatsApp channels have no polling record (rule 39)
+// and a nil spec.webhook; callers must 401 before reading Auth.
+func webhookPollChannel(channel *kaalmv1beta1.AgentChannel) bool {
+	if channel == nil || channel.Spec.Webhook == nil {
+		return false
+	}
+	switch channel.Spec.Type {
+	case "", kaalmv1beta1.ChannelTypeWebhook:
+		return true
+	default:
+		return false
+	}
+}
+
 // authenticatePoll verifies a polling GET against the channel's inbound auth.
 // Poll requests have no body: bearer presents the same token; HMAC signs
 // "{requestId}\n{timestamp}" with bare lowercase hex and a 300s skew bound.
 func (s *Server) authenticatePoll(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, r *http.Request, requestID string,
 ) bool {
+	if !webhookPollChannel(channel) {
+		return false
+	}
 	auth := channel.Spec.Webhook.Auth
 	secret, err := s.channelSecret(ctx, channel.Namespace, &auth)
 	if err != nil {
