@@ -68,7 +68,7 @@
 
 # The Console
 
-- [Console Overview](console/overview.md)
+- [Console overview](console/overview.md)
 
 # Security
 
@@ -81,9 +81,9 @@
 # Operations
 
 - [Deployment](operations/deployment.md)
-- [API Versioning and Deprecation](operations/api-versioning.md)
+- [API versioning and deprecation](operations/api-versioning.md)
 - [Observability](operations/observability.md)
-- [Load and Scale](operations/load-and-scale.md)
+- [Load and scale](operations/load-and-scale.md)
 
 ---
 
