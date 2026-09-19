@@ -60,7 +60,7 @@ curl -sS --cacert ca.crt \
 
 In `sync` mode the agent's reply is the HTTP response body. The caller
 identity can be threaded through per request (the sample channel in
-`config/samples/kaalm_v1alpha1_agentchannel.yaml` maps it from an
+`config/samples/kaalm_v1beta1_agentchannel.yaml` maps it from an
 `X-User-Id` header), which is what gives each user a stable conversation
 session with the agent.
 

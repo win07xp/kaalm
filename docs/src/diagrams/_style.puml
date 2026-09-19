@@ -6,11 +6,12 @@
 '   blue    the controller and anything lifecycle-driven
 '   green   the gateway and the data plane
 '   orange  systems outside the cluster
-'   cream   notes
+'   cream   decision diamonds
 '   grey    pseudo-nodes and things deliberately de-emphasized
 '
 ' House rules: no em-dashes or en-dashes in any label. Keep diagrams under
-' 900px wide (mdBook's content column is 750px), which in practice means at
+' 1,090px wide (theme/custom.css lets a figure overhang the 750px column by
+' that much; hack/docs/diagram_check.py fails above it), which in practice means at
 ' most 5 or 6 participants and short message labels.
 
 skinparam backgroundColor transparent
@@ -45,7 +46,7 @@ skinparam maxMessageSize 160
 !$storeLine  = "#7a3f00"
 !$storeText  = "#3a1f00"
 
-' Two PlantUML traps, both of which fail SILENTLY (the file parses, the SVG
+' Three PlantUML traps, all of which fail SILENTLY (the file parses, the SVG
 ' renders, and only looking at the image reveals the damage):
 '
 ' 1. In a skinparam block, always pass colors through these variables or write
@@ -62,12 +63,7 @@ skinparam maxMessageSize 160
 ' 3. Escape a leading '--' in any label as '~--'. Creole reads --text-- as
 '    strikethrough, so a flag like --create-namespace renders struck through.
 '
-' diagram_check.py enforces all three.
-
-' ---- notes --------------------------------------------------------------
-skinparam NoteBackgroundColor $noteBg
-skinparam NoteBorderColor $noteLine
-skinparam NoteFontSize 11
+' hack/docs/diagram_check.py enforces all three (make docs-check).
 
 ' ---- state diagrams -----------------------------------------------------
 skinparam state {

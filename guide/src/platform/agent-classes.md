@@ -7,7 +7,7 @@ exceed what it grants.
 
 ## A standard class
 
-From `config/samples/kaalm_v1alpha1_agentclass.yaml`:
+From `config/samples/kaalm_v1beta1_agentclass.yaml`:
 
 ```yaml
 apiVersion: kaalm.io/v1beta1
@@ -47,7 +47,7 @@ The load-bearing decisions:
 Apply and verify:
 
 ```bash
-kubectl apply -f config/samples/kaalm_v1alpha1_agentclass.yaml
+kubectl apply -f config/samples/kaalm_v1beta1_agentclass.yaml
 kubectl get agentclasses
 ```
 

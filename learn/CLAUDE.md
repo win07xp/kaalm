@@ -2,7 +2,8 @@
 
 The beginners' tutorial: one narrative path from an empty laptop to a running
 agent, on k3d. The reader may know roughly what Kubernetes is but none of the
-details. Build with `mdbook build learn` (or `make books` for all books).
+details. Build with `make books` (which runs `make docs-check` first);
+`mdbook serve learn` for live preview.
 
 ## Status
 
