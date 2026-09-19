@@ -502,6 +502,12 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		unauthorized(w, "auth failed")
 		return
 	}
+	// Platform channels (discord/whatsapp) have no polling record and a nil
+	// spec.webhook (rule 39). Answer 401 before authenticatePoll touches it.
+	if !webhookPollChannel(channel) {
+		unauthorized(w, "auth failed")
+		return
+	}
 	if !s.authenticatePoll(r.Context(), channel, r, requestID) {
 		unauthorized(w, "auth failed")
 		return

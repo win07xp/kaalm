@@ -284,6 +284,33 @@ func TestHandlePoll_TTLExpired(t *testing.T) {
 	}
 }
 
+func TestHandlePoll_PlatformChannelUnauthorized(t *testing.T) {
+	t.Run("discord", func(t *testing.T) {
+		h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+		req, _ := http.NewRequest(http.MethodGet, h.userSrv.URL+"/v1/channels/responses/req-1?channelPath=%2Fchannels%2Fteam-a%2Fdisc", nil)
+		resp, err := h.userSrv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 401 {
+			t.Errorf("discord poll = %d, want 401", resp.StatusCode)
+		}
+	})
+	t.Run("whatsapp", func(t *testing.T) {
+		h := newWhatsAppHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+		req, _ := http.NewRequest(http.MethodGet, h.userSrv.URL+"/v1/channels/responses/req-1?channelPath=%2Fchannels%2Fteam-a%2Fwa", nil)
+		resp, err := h.userSrv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 401 {
+			t.Errorf("whatsapp poll = %d, want 401", resp.StatusCode)
+		}
+	})
+}
+
 // TestDialCallbackOnce_ReusesTheConnection: attempts to one receiver ride a
 // pooled connection instead of dialing and handshaking each time, and the
 // pooled client still dials only the pinned address.

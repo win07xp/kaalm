@@ -151,6 +151,42 @@ func TestAuthenticatePoll_HMAC(t *testing.T) {
 	}
 }
 
+func TestAuthenticatePoll_NilWebhook(t *testing.T) {
+	s := &Server{Store: newFakeStore()}
+	ctx := context.Background()
+	req, _ := http.NewRequest(http.MethodGet, "/poll", nil)
+
+	discord := &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "disc", Namespace: "team-a"},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			Type: kaalmv1beta1.ChannelTypeDiscord,
+			Discord: &kaalmv1beta1.AgentChannelDiscord{
+				Path: "/channels/team-a/disc",
+			},
+		},
+	}
+	if s.authenticatePoll(ctx, discord, req, "req-1") {
+		t.Error("discord channel must fail closed, not deref webhook")
+	}
+
+	whatsapp := &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "wa", Namespace: "team-a"},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			Type: kaalmv1beta1.ChannelTypeWhatsApp,
+			WhatsApp: &kaalmv1beta1.AgentChannelWhatsApp{
+				Path: "/channels/team-a/wa",
+			},
+		},
+	}
+	if s.authenticatePoll(ctx, whatsapp, req, "req-1") {
+		t.Error("whatsapp channel must fail closed, not deref webhook")
+	}
+
+	if s.authenticatePoll(ctx, nil, req, "req-1") {
+		t.Error("nil channel must fail closed")
+	}
+}
+
 func TestSignCallback_Bearer(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com/cb", nil)
 	auth := &kaalmv1beta1.ChannelAuth{Type: authTypeBearer}
