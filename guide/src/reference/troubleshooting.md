@@ -49,8 +49,8 @@ authentication succeeds, on purpose:
   accepts traffic.
 - Wrong or missing bearer token: compare with the channel's Secret.
 
-A `403` on a channel path comes only from a WhatsApp verification `GET` whose
-verify token does not match. A connection that never answers at all is
+A WhatsApp verification `GET` whose verify token does not match answers the
+same `401`. A connection that never answers at all is
 usually a NetworkPolicy between the caller and the gateway; on k3d or
 kube-router a freshly created client Pod can be denied for around 20 seconds
 after start while the CNI catches up, so retry before concluding the policy

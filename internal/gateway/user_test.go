@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -860,4 +861,54 @@ type stallingResolver struct{}
 func (stallingResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
 	<-ctx.Done()
 	return nil, &net.DNSError{Err: "i/o timeout", Name: host, IsTimeout: true}
+}
+
+// TestUserListener_RejectionsAreIdentical: every rejection the user listener
+// writes before a credential is accepted has the same status and the same
+// body, so a caller cannot tell a registered channel path from any other.
+func TestUserListener_RejectionsAreIdentical(t *testing.T) {
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }
+	wa := newWhatsAppHarness(t, ok)
+	wa.seedChannel("sync")
+	disc := newDiscordHarness(t, ok)
+	wa.store.channels[disc.channel.Spec.Discord.Path] = disc.channel
+	wa.store.secrets["team-a/disc-creds/publicKey"] = disc.store.secrets["team-a/disc-creds/publicKey"]
+
+	poll := "/v1/channels/responses/req-1?channelPath="
+	cases := []struct{ name, method, path string }{
+		{"unregistered channel path", http.MethodPost, "/channels/team-a/none"},
+		{"unregistered channel path, GET", http.MethodGet, "/channels/team-a/none"},
+		{"path outside the mux", http.MethodGet, "/healthz"},
+		{"webhook channel, no credential", http.MethodPost, "/channels/team-a/support"},
+		{"webhook channel, wrong method", http.MethodGet, "/channels/team-a/support"},
+		{"discord channel, no signature", http.MethodPost, "/channels/team-a/disc"},
+		{"discord channel, wrong method", http.MethodGet, "/channels/team-a/disc"},
+		{"whatsapp channel, no signature", http.MethodPost, "/channels/team-a/wa"},
+		{"whatsapp channel, wrong verify token", http.MethodGet, "/channels/team-a/wa?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x"},
+		{"whatsapp channel, wrong method", http.MethodPut, "/channels/team-a/wa"},
+		{"poll, unregistered channel", http.MethodGet, poll + "%2Fchannels%2Fteam-a%2Fnone"},
+		{"poll, webhook channel, no credential", http.MethodGet, poll + "%2Fchannels%2Fteam-a%2Fsupport"},
+		{"poll, wrong method", http.MethodPost, poll + "%2Fchannels%2Fteam-a%2Fsupport"},
+	}
+	var want string
+	for _, c := range cases {
+		req, err := http.NewRequest(c.method, wa.userSrv.URL+c.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := wa.userSrv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s = %d, want 401", c.name, resp.StatusCode)
+		}
+		if want == "" {
+			want = string(raw)
+		} else if string(raw) != want {
+			t.Errorf("%s body = %s, want %s", c.name, raw, want)
+		}
+	}
 }

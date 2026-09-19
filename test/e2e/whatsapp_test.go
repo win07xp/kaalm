@@ -153,7 +153,7 @@ var _ = Describe("WhatsApp channel (S23)", Ordered, func() {
 		Expect(strings.Trim(string(ok.Body), `"`)).To(Equal("1158201444"))
 
 		bad := verify("guess", "1158201444")
-		Expect(bad.Status).To(Equal(403))
+		Expect(bad.Status).To(Equal(401))
 	})
 
 	It("rejects a badly signed event and shows it on PlatformConnected", func() {

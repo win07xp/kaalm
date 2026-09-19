@@ -71,8 +71,7 @@ The `:8080` listener raises these on `/channels/*`, in sync mode as the response
 | Status | `error.type` | `retryable` | `Retry-After` | Raised when |
 |---|---|---|---|---|
 | 400 | `invalid_request` | no | | The body cannot be read, `fromBody` extraction is configured and the body is not JSON, the raw-body path finds invalid UTF-8, or a platform event body is not JSON |
-| 401 | `unauthorized` | no | | Auth failed, the path is not registered to a `Ready=True` channel, the channel is `Terminating`, or the method is not one the channel type serves |
-| 403 | `unauthorized` | no | | WhatsApp only: the verification `GET` carried the wrong `hub.verify_token` |
+| 401 | `unauthorized` | no | | Auth failed (a WhatsApp verification `GET` with the wrong `hub.verify_token` included), the path is not registered to a `Ready=True` channel, the channel is `Terminating`, or the method is not one the channel type serves |
 | 413 | `request_too_large` | no | | A `POST` body exceeds `gateway.maxMessageBodyBytes` (default 1 MiB) |
 | 413 | `response_too_large` | no | | The agent's reply exceeds `gateway.maxResponseBodyBytes` (default 900 KiB) |
 | 502 | `delivery_failed` | no | | The referenced Agent does not exist, or every delivery attempt failed |
@@ -84,8 +83,7 @@ The `:8080` listener raises these on `/channels/*`, in sync mode as the response
 
 Notes on the rows:
 
-- **`401` messages.** The message is `unknown path` when no channel owns the path or the method is wrong for the channel type, and `auth failed or path not registered` when a channel owns the path. The two messages let a caller tell a registered path from an unregistered one, which the design forbids; issue #236 tracks it, together with the `403` row.
-- **`403 unauthorized`.** The WhatsApp verification handshake answers `403` where every other auth failure answers `401`, and reuses the `unauthorized` type. Issue #232 tracks the type and status mismatch.
+- **`401 unauthorized`.** Every cause in the row answers with the same status and the same body, message `auth failed or path not registered` included, so a caller cannot tell a registered path from any other. The listener writes no `403`.
 - **`413 request_too_large`.** The cap is applied to the raw `POST` body before the path is resolved, so an oversized `POST` to any path under `/channels/` answers `413` whether or not the path exists. A `GET` has no body and is not capped.
 - **`502 delivery_failed`.** With an Agent present, the gateway made the initial attempt and three retries at 1s, 5s, and 25s, and each failed with a connection error, a non-2xx status, or a `200` with an unusable envelope. With no Agent, no attempt is made and the message is `referenced Agent not found`.
 - **`503` on async accept.** Both triggers run before the `202`, so a `202` always implies a polling record exists. The pending cap is `spec.webhook.maxPendingAsyncResponses` (default 100).

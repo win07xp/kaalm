@@ -72,6 +72,13 @@ func unauthorized(w http.ResponseWriter, msg string) {
 	writeError(w, http.StatusUnauthorized, errorBody{Type: errUnauthorized, Message: msg}, 0)
 }
 
+// unauthorizedUser is the only 401 the user listener writes. An unknown
+// path, a wrong method, and a failed credential all answer with the same
+// body, so a caller cannot tell a registered channel path from any other.
+func unauthorizedUser(w http.ResponseWriter) {
+	unauthorized(w, "auth failed or path not registered")
+}
+
 func forbidden(w http.ResponseWriter, errType, msg string) {
 	writeError(w, http.StatusForbidden, errorBody{Type: errType, Message: msg}, 0)
 }
