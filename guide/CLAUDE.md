@@ -13,9 +13,10 @@ and the developer deploying an agent. Build with `make books` (which runs
   documents, link there instead of restating it.
 - Uses the stock mdBook theme (no custom CSS). Do not copy the design book's
   theme or wide-figure conventions.
-- Cross-links to the design book assume both books will one day be hosted
-  under a common root (`guide/` and `docs/`); prefer prose references over
-  hard links until that hosting exists.
+- Cross-book links are GitHub blob URLs to the source page
+  (`https://github.com/win07xp/kaalm/blob/main/docs/src/...`), with the
+  target page's title as the link text; the "How this works" footers name
+  design-book chapters in prose.
 
 ## Stub contract
 

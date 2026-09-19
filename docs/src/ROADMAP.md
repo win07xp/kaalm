@@ -1,4 +1,4 @@
-# Implementation Roadmap
+# Implementation roadmap
 
 The rest of this book is the design. This page is where the implementation stands
 against it, and what comes next.
@@ -11,14 +11,15 @@ with a single `helm install` from the published OCI chart, upgrades in place
 from the previous release with two documented commands, and every acceptance
 scenario (S1 to S24) is proven on a real cluster.
 
-The operator is feature-complete against the v1 design: all six CRDs, the
-reconciling controller (lifecycle, hibernation and wake, budgets, health probes,
+Every component of the v1 design ships: all six CRDs, the reconciling
+controller (lifecycle, hibernation and wake, budgets, health probes,
 finalizers), the two-listener gateway (LLM proxy with credential isolation,
 budgets, rate limits, and fallback trees that cross API formats; the MCP tool
 broker; user gateway with webhook, Discord, and WhatsApp channels), the
 optional operator console, the Helm chart with cert-manager TLS wiring, the
 runtime contract with published base images and starter templates, and this
-book.
+book. The v1.0.0 milestone closes the gaps the docs audit found inside that
+surface (the audit follow-ups under Next).
 
 What v0.7.0 added on top of v0.6.0 (the "Reach" milestone):
 
@@ -55,36 +56,68 @@ envtest suites against a real apiserver, a k3d end-to-end suite (76 specs)
 that is green both locally and in GitHub Actions, and the 6-spec upgrade
 suite that gates every release tag.
 
-Two honest caveats:
+Two caveats:
 
 - `v1alpha1` is deprecated. Everything that says it keeps working, with a
   warning per request, at least through v1.0.0; the
   [deprecation policy](operations/api-versioning.md#deprecation-policy) is
   the contract, and moving a manifest is one `apiVersion` line because the
   schema is identical.
-- The `v0.1.0` tag predates the release machinery and installs only from
-  source.
+- The `v0.1.0` tag predates the release workflow that publishes the chart
+  and images, and installs only from source.
 
 ## Next
 
-The next milestone is **v1.0.0, "The complete release"** (tracking issue
+The open milestone is **v1.0.0, "The complete release"** (tracking issue
 [#51](https://github.com/win07xp/kaalm/issues/51)): the security pass, the
-scale proof, the Agent Sandbox decision, and the docs audit.
+scale proof, the Agent Sandbox decision, and the docs audit. Where it stands:
 
-The Agent Sandbox decision is made
-([#141](https://github.com/win07xp/kaalm/issues/141)): v1 stays on raw Pods
-and documents the RuntimeClass alternative, and the **v1.1.0** milestone
-opens with the isolation theme. It carries the `agentSandbox` runtime
-backend ([#167](https://github.com/win07xp/kaalm/issues/167)), gated on
-upstream shipping identity association and its first stable series earning
-a track record, and the verified microVM path, Kata first
-([#168](https://github.com/win07xp/kaalm/issues/168)).
-
-Beyond those two milestones, items below remain the unscheduled backlog.
+- **Security pass, done.** The threat model was refreshed and the audit
+  checklist written ([#138](https://github.com/win07xp/kaalm/issues/138)),
+  then every listener was walked for authorization and SSRF
+  ([#139](https://github.com/win07xp/kaalm/issues/139)). Nine of the ten findings
+  ([#147](https://github.com/win07xp/kaalm/issues/147) to
+  [#156](https://github.com/win07xp/kaalm/issues/156)) are fixed, and #156
+  was a false finding whose corrected verdict the audit record carries;
+  `make audit-drift` reports which verdicts need a re-walk when the code they
+  cover moves. The design is the [threat model](security/threat-model.md).
+- **Scale proof, done.** A repeatable load harness and its published baseline
+  ([#140](https://github.com/win07xp/kaalm/issues/140)), then a performance
+  pass under that baseline
+  ([#174](https://github.com/win07xp/kaalm/issues/174)): profiling found the
+  gateway paying a TLS handshake per upstream request and the controller
+  writing status on every pass of a settled fleet; both are fixed and the
+  page is re-baselined. The numbers are in
+  [Load and scale](operations/load-and-scale.md).
+- **Agent Sandbox decision, made**
+  ([#141](https://github.com/win07xp/kaalm/issues/141)): v1 stays on raw
+  Pods and documents the RuntimeClass alternative, and the **v1.1.0**
+  milestone opens with the isolation theme. It carries the `agentSandbox`
+  runtime backend ([#167](https://github.com/win07xp/kaalm/issues/167)),
+  gated on upstream shipping identity association and its first stable
+  series earning a track record, the verified microVM path, Kata first
+  ([#168](https://github.com/win07xp/kaalm/issues/168)), and the tool-plane
+  and streaming phases of the load harness
+  ([#175](https://github.com/win07xp/kaalm/issues/175)).
+- **Docs audit, in progress**
+  ([#142](https://github.com/win07xp/kaalm/issues/142)): every page of the
+  three books checked against the shipped surface and rewritten to one
+  style, with `make docs-check` holding its links, structure, and wording.
+- **Audit follow-ups.** Reading every page against the code filed the gaps
+  it found as issues, [#192](https://github.com/win07xp/kaalm/issues/192)
+  to [#244](https://github.com/win07xp/kaalm/issues/244): fields the schema
+  accepts and the code never applies, status the design specifies and no
+  reconciler writes, and gateway answers that differ from the wire contract.
+  #192, #193, #194, and #197 are in this milestone; the rest are triaged
+  into v1.0.0 or v1.1.0 as the audit closes. Until each is fixed, its page
+  describes the shipped behavior and cites the issue.
+- **Release checklist** ([#143](https://github.com/win07xp/kaalm/issues/143)):
+  the last item. The API stays at `v1beta1` for this release; graduation to
+  `v1` moves to the watchlist, pulled by real usage.
 
 ## Beyond
 
-These are the deferrals the design itself names (see
+The unscheduled backlog: the deferrals the design itself names (see
 [Scope for v1](concepts/vision-and-scope.md#scope-for-v1)), roughly in the order
 they are likely to matter:
 
@@ -99,12 +132,25 @@ they are likely to matter:
   ([#147](https://github.com/win07xp/kaalm/issues/147) records the
   alignment). Google now brands the platform the Gemini Enterprise Agent
   Platform; the wire API is unchanged.
+- **Tool plane extensions.** Pricing tool calls (a `costPerCallUSD` facet
+  for provider-side tools on the ModelProvider, a per-call cost on the
+  ToolProvider catalog), the MCP surfaces the broker denies (`resources/*`,
+  `prompts/*`, `sampling/*`, and the server-initiated notification stream,
+  tracked as [#80](https://github.com/win07xp/kaalm/issues/80)), stripping
+  or rejecting an undeclared server tool in a request body, and in-process
+  tool observability at the LLM gateway. Each is designed far enough to
+  name in [The tool plane](gateways/tool-plane.md) and not built.
+- **Persona RBAC in the chart.** The four roles the
+  [security model](security/rbac.md#roles-for-people) specifies ship as
+  prose; a values-gated set is
+  [#244](https://github.com/win07xp/kaalm/issues/244).
 - **Larger horizons.** Agent-to-agent orchestration, multi-cluster
-  federation, and agent-aware scheduling (GPU awareness, priority, preemption).
+  federation, agent-aware scheduling (GPU awareness, priority, preemption),
+  audit-log export, and cost analytics and chargeback reporting.
 
 ## How this page is maintained
 
 Items move here from the release notes when a version ships, and out of here into
 the design book when they get designed. History lives in git and in the
-[releases](https://github.com/win07xp/kaalm/releases); this page only ever
-describes the present and the future.
+[releases](https://github.com/win07xp/kaalm/releases); this page describes
+the present, the current milestone, and what is deferred.

@@ -1,11 +1,11 @@
 # Summary
 
 [Introduction](introduction.md)
-[Implementation Roadmap](ROADMAP.md)
+[Implementation roadmap](ROADMAP.md)
 
 # Orientation
 
-- [Vision and Scope](concepts/vision-and-scope.md)
+- [Vision and scope](concepts/vision-and-scope.md)
 - [Core Concepts](concepts/core-concepts.md)
 - [Personas and the Primary Scenario](concepts/personas.md)
 - [System Architecture](concepts/system-architecture.md)
