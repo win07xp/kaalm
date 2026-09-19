@@ -1,0 +1,34 @@
+@startuml crd-references-structure
+' Figure 1 of 4: the structural references between the six Kaalm CRDs, the
+' ones that say what a workload is (its class) and what a channel fronts (its
+' agent). The gate references and the provider internals are drawn on the
+' two sibling figures. Source of truth: docs/src/concepts/core-concepts.md
+!include _style.puml
+
+skinparam nodesep 25
+skinparam ranksep 50
+skinparam rectangle {
+  roundCorner 4
+}
+
+rectangle "**Cluster scope** (platform team manages)" as clusterband #line:9E9E9E;line.dashed;text:555555 {
+  rectangle "**AgentClass**" as ac #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**ModelProvider**" as mp #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+  rectangle "**ToolProvider**" as tp #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a
+}
+
+rectangle "**Namespace scope** (developer manages)" as nsband #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "**Agent**\nspec.agentClassRef" as ag #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentTask**\nspec.agentClassRef" as at #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+  rectangle "**AgentChannel**\nspec.agentRef" as ch #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+}
+
+' keep the three cluster boxes in one row and the providers unconnected here
+ac -[hidden]right- mp
+mp -[hidden]right- tp
+
+ac <-[#4A148C,bold]- ag : agentClassRef
+ac <-[#4A148C,bold]- at : agentClassRef
+ag <-[#4A148C,bold]- ch : agentRef\n//name only, same namespace//\n//an Agent, never an AgentTask//
+
+@enduml

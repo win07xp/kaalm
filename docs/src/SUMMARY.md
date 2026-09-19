@@ -6,10 +6,10 @@
 # Orientation
 
 - [Vision and scope](concepts/vision-and-scope.md)
-- [Core Concepts](concepts/core-concepts.md)
-- [Personas and the Primary Scenario](concepts/personas.md)
-- [System Architecture](concepts/system-architecture.md)
-- [Multi-Tenancy and Adoption Tiers](concepts/tenancy-and-tiers.md)
+- [Core concepts](concepts/core-concepts.md)
+- [Personas and the primary scenario](concepts/personas.md)
+- [System architecture](concepts/system-architecture.md)
+- [Multi-tenancy and adoption tiers](concepts/tenancy-and-tiers.md)
 
 # Resource Model
 
