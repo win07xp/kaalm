@@ -224,6 +224,30 @@ func TestDesiredPod_ContractInjection(t *testing.T) {
 	}
 }
 
+// The runtime derives the gateway SAN it accepts on /v1/message from the
+// injected operator namespace, so an install outside kaalm-system still
+// admits the gateway's deliveries (contract item 4).
+func TestDesiredPods_InjectOperatorNamespace(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
+	pods := map[string]*corev1.Pod{
+		"agent": desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-ops"),
+		"task":  desiredTaskPod(task, effectiveTaskSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-ops"),
+	}
+	for kind, pod := range pods {
+		envMap := map[string]string{}
+		for _, e := range pod.Spec.Containers[0].Env {
+			envMap[e.Name] = e.Value
+		}
+		if envMap["KAALM_OPERATOR_NAMESPACE"] != "kaalm-ops" {
+			t.Errorf("%s pod operator namespace = %q, want kaalm-ops", kind, envMap["KAALM_OPERATOR_NAMESPACE"])
+		}
+		if envMap["KAALM_GATEWAY_ENDPOINT"] != "https://kaalm-gateway.kaalm-ops.svc.cluster.local:8443" {
+			t.Errorf("%s pod gateway endpoint = %q", kind, envMap["KAALM_GATEWAY_ENDPOINT"])
+		}
+	}
+}
+
 func TestDesiredCertificate_Shape(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	cert := desiredCertificate(agent)

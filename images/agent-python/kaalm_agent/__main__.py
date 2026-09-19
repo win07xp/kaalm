@@ -27,7 +27,7 @@ from . import loader, tracecontext
 from .gateway import GatewayClient
 from .httpclient import make_http_async_client, make_http_client
 from .memory import Store, UserMemory
-from .tls import CertReloader, peer_san_matches_gateway, workload_is_task
+from .tls import CertReloader, gateway_sans, peer_san_matches_gateway, workload_is_task
 
 log = logging.getLogger("agent")
 
@@ -44,6 +44,7 @@ class Agent:
         self.is_task = workload_is_task(
             os.environ.get("KAALM_TLS_CERT", "/var/run/kaalm/tls.crt")
         )
+        self.gateway_sans = gateway_sans()
 
     async def respond(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Dedup, dispatch, remember. Transport-independent and test-covered.
@@ -68,7 +69,7 @@ class Agent:
         peercert = ssl_object.getpeercert() if ssl_object else None
         if not peercert:
             return web.Response(status=401, text="client certificate required")
-        if not peer_san_matches_gateway(ssl_object):
+        if not peer_san_matches_gateway(ssl_object, self.gateway_sans):
             return web.Response(status=403, text="gateway identity required")
 
         try:

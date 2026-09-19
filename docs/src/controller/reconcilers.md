@@ -149,7 +149,8 @@ There is no per-Agent configuration ConfigMap. Non-sensitive config is delivered
 | Variable | When | Value |
 |---|---|---|
 | `KAALM_HEALTH_PORT` | always | the port the agent serves its HTTPS health and message endpoint on (default 8080) |
-| `KAALM_GATEWAY_ENDPOINT` | always | the HTTPS URL of the gateway Service in `kaalm-system` on 8443, the base for every agent-to-gateway call, injected whether or not `spec.providers` is set |
+| `KAALM_GATEWAY_ENDPOINT` | always | the HTTPS URL of the gateway Service in the operator namespace on 8443, the base for every agent-to-gateway call, injected whether or not `spec.providers` is set |
+| `KAALM_OPERATOR_NAMESPACE` | always | the namespace the gateway runs in, which is how the container builds the gateway Service DNS it accepts on `POST /v1/message` ([The runtime contract](../runtime/contract.md) item 4) |
 | `KAALM_CA_CERT` | always | the path of the Kaalm CA bundle projected into the Pod |
 | `KAALM_TLS_CERT`, `KAALM_TLS_KEY` | always | the paths of the agent's certificate and key from step 7 |
 | `KAALM_HANDLER_PATH` | when `spec.handler` is set | `/opt/kaalm/handler`, where the handler ConfigMap is mounted read-only; absent otherwise, which is how a base image knows to serve its default handler |

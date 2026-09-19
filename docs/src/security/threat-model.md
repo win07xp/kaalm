@@ -180,7 +180,7 @@ Certificates signed by `kaalm-ca` are not interchangeable: internal endpoints au
 
 #### Forged channel messages from a compromised Pod
 
-The agent's `POST /v1/message` handler requires a client certificate whose SAN is `kaalm-gateway.kaalm-system.svc.cluster.local` or `.svc`. A non-gateway Pod cannot present one, because the CA key is unreachable from it, so even a Pod that bypasses a misconfigured per-Agent NetworkPolicy is rejected at the handler: `401` without a certificate, `403` with the wrong SAN. The listener accepts the handshake without a client certificate so that kubelet probes on the shared port keep working, and enforces per path ([The runtime contract](../runtime/contract.md), item 4).
+The agent's `POST /v1/message` handler requires a client certificate whose SAN is the gateway Service DNS, `kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `.svc`. A non-gateway Pod cannot present one, because the CA key is unreachable from it, so even a Pod that bypasses a misconfigured per-Agent NetworkPolicy is rejected at the handler: `401` without a certificate, `403` with the wrong SAN. The listener accepts the handshake without a client certificate so that kubelet probes on the shared port keep working, and enforces per path ([The runtime contract](../runtime/contract.md), item 4).
 
 #### The conversion listener's exposure
 

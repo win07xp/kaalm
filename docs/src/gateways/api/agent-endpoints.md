@@ -36,7 +36,7 @@ This endpoint is served by the agent container, not by the gateway. The User Gat
 The agent is the server, so the [runtime contract](../../runtime/contract.md) puts three obligations on it:
 
 - Serve TLS on `$KAALM_HEALTH_PORT` with the certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, and reload it on rotation ([item 4](../../runtime/contract.md#4-message-endpoint)).
-- Verify the gateway's client certificate per path, not at the handshake: `401 Unauthorized` when no client certificate was presented, `403 Forbidden` when its SAN is not the gateway Service DNS (`kaalm-gateway.kaalm-system.svc.cluster.local` or `kaalm-gateway.kaalm-system.svc`). [Client-certificate verification](../../runtime/contract.md#client-certificate-verification-on-v1message) says why the handshake cannot do it.
+- Verify the gateway's client certificate per path, not at the handshake: `401 Unauthorized` when no client certificate was presented, `403 Forbidden` when its SAN is not the gateway Service DNS (`kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `kaalm-gateway.{operatorNamespace}.svc`, built from the injected `$KAALM_OPERATOR_NAMESPACE`). [Client-certificate verification](../../runtime/contract.md#client-certificate-verification-on-v1message) says why the handshake cannot do it.
 - Deduplicate on `messageId`, and persist the dedup buffer across Pod restarts when hibernation is enabled ([item 7](../../runtime/contract.md#7-message-deduplication)).
 
 ### How the gateway calls it

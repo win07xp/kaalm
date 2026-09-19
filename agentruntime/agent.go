@@ -8,17 +8,21 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
 
 const (
-	gatewaySANLocal = "kaalm-gateway.kaalm-system.svc.cluster.local"
-	gatewaySANShort = "kaalm-gateway.kaalm-system.svc"
+	gatewayServiceName = "kaalm-gateway"
+	// defaultOperatorNamespace is the chart's default release namespace, used
+	// when $KAALM_OPERATOR_NAMESPACE is absent.
+	defaultOperatorNamespace = "kaalm-system"
 )
 
 // heartbeatPeriod paces the Agent-mode heartbeat loop (contract item 5). A
@@ -38,18 +42,20 @@ type Agent struct {
 	// Memory is the handler's persistent key-value store.
 	Memory *Memory
 
-	reloader   *certReloader
-	store      *store
-	healthPort string
-	isTask     bool
+	reloader    *certReloader
+	store       *store
+	healthPort  string
+	isTask      bool
+	gatewaySANs []string
 }
 
 // New builds an Agent from the standard Kaalm environment: TLS material from
 // the projected volume ($KAALM_TLS_CERT, $KAALM_TLS_KEY, $KAALM_CA_CERT), the
 // gateway endpoint from $KAALM_GATEWAY_ENDPOINT, the serving port from
-// $KAALM_HEALTH_PORT, and the persistence mount from $KAALM_MEMORY_DIR.
-// Workload mode (Agent vs AgentTask) is detected from the certificate's SAN
-// shape, so no extra configuration distinguishes the two.
+// $KAALM_HEALTH_PORT, the persistence mount from $KAALM_MEMORY_DIR, and the
+// gateway's own identity from $KAALM_OPERATOR_NAMESPACE. Workload mode (Agent
+// vs AgentTask) is detected from the certificate's SAN shape, so no extra
+// configuration distinguishes the two.
 func New() (*Agent, error) {
 	reloader, err := newCertReloader(
 		envOr("KAALM_TLS_CERT", "/var/run/kaalm/tls.crt"),
@@ -61,12 +67,13 @@ func New() (*Agent, error) {
 	}
 	st := newStore(envOr("KAALM_MEMORY_DIR", defaultMemoryDir))
 	return &Agent{
-		Gateway:    newGateway(os.Getenv("KAALM_GATEWAY_ENDPOINT"), reloader),
-		Memory:     &Memory{s: st},
-		reloader:   reloader,
-		store:      st,
-		healthPort: envOr("KAALM_HEALTH_PORT", "8080"),
-		isTask:     workloadIsTask(reloader.certificate()),
+		Gateway:     newGateway(os.Getenv("KAALM_GATEWAY_ENDPOINT"), reloader),
+		Memory:      &Memory{s: st},
+		reloader:    reloader,
+		store:       st,
+		healthPort:  envOr("KAALM_HEALTH_PORT", "8080"),
+		isTask:      workloadIsTask(reloader.certificate()),
+		gatewaySANs: gatewayServiceDNS(envOr("KAALM_OPERATOR_NAMESPACE", defaultOperatorNamespace)),
 	}, nil
 }
 
@@ -145,7 +152,7 @@ func (a *Agent) messageHandler(h Handler) http.HandlerFunc {
 			http.Error(w, "client certificate required", http.StatusUnauthorized)
 			return
 		}
-		if !gatewaySANMatches(r.TLS.PeerCertificates[0]) {
+		if !a.gatewaySANMatches(r.TLS.PeerCertificates[0]) {
 			http.Error(w, "gateway identity required", http.StatusForbidden)
 			return
 		}
@@ -245,10 +252,20 @@ func (a *Agent) autocomplete(ctx context.Context, status string) {
 	log.Printf("task auto-complete giving up after %d attempts; last status %q not reported", attempts, status)
 }
 
+// gatewayServiceDNS returns the gateway Service DNS names in the operator
+// namespace, the fully qualified form and the short form. Both are on the
+// gateway's certificate, so either one identifies it.
+func gatewayServiceDNS(operatorNamespace string) []string {
+	return []string{
+		fmt.Sprintf("%s.%s.svc.cluster.local", gatewayServiceName, operatorNamespace),
+		fmt.Sprintf("%s.%s.svc", gatewayServiceName, operatorNamespace),
+	}
+}
+
 // gatewaySANMatches reports whether a cert names the gateway Service DNS.
-func gatewaySANMatches(cert *x509.Certificate) bool {
+func (a *Agent) gatewaySANMatches(cert *x509.Certificate) bool {
 	for _, san := range cert.DNSNames {
-		if san == gatewaySANLocal || san == gatewaySANShort {
+		if slices.Contains(a.gatewaySANs, san) {
 			return true
 		}
 	}

@@ -18,7 +18,15 @@ import (
 	"time"
 )
 
-const taskSAN = "t1.default.task.kaalm.io"
+const (
+	taskSAN = "t1.default.task.kaalm.io"
+
+	// The gateway Service DNS in the chart's default release namespace, the
+	// identity the runtime accepts on /v1/message when nothing else is
+	// injected.
+	gatewaySANLocal = "kaalm-gateway.kaalm-system.svc.cluster.local"
+	gatewaySANShort = "kaalm-gateway.kaalm-system.svc"
+)
 
 var agentSANs = []string{"a1.default.svc.cluster.local"}
 
@@ -305,15 +313,35 @@ func TestServe_TaskModeAutoCompletesAndSkipsHeartbeat(t *testing.T) {
 }
 
 func TestGatewaySANMatches(t *testing.T) {
+	a := &Agent{gatewaySANs: gatewayServiceDNS(defaultOperatorNamespace)}
 	for san, want := range map[string]bool{
 		gatewaySANLocal:                      true,
 		gatewaySANShort:                      true,
 		"intruder.default.svc.cluster.local": false,
 	} {
 		cert := &x509.Certificate{DNSNames: []string{san}}
-		if got := gatewaySANMatches(cert); got != want {
+		if got := a.gatewaySANMatches(cert); got != want {
 			t.Errorf("gatewaySANMatches(%s) = %v, want %v", san, got, want)
 		}
+	}
+}
+
+// An install outside kaalm-system: the accepted identity follows the injected
+// operator namespace, and the default-namespace name is then an intruder.
+func TestGatewaySANMatches_HonorsOperatorNamespace(t *testing.T) {
+	t.Setenv("KAALM_OPERATOR_NAMESPACE", "kaalm-ops")
+	pki := newTestPKI(t)
+	_, addr, _ := startAgent(t, pki, agentSANs, t.TempDir(), "", nil)
+	env := Envelope{MessageID: "m1", Content: "hi"}
+
+	elsewhere := pki.clientFor(t, "gateway", gatewaySANLocal)
+	if resp, _ := postMessage(t, elsewhere, addr, env); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("gateway SAN from another namespace must be 403, got %d", resp.StatusCode)
+	}
+
+	gateway := pki.clientFor(t, "gateway", "kaalm-gateway.kaalm-ops.svc.cluster.local")
+	if resp, _ := postMessage(t, gateway, addr, env); resp.StatusCode != http.StatusOK {
+		t.Errorf("gateway SAN in the operator namespace must be 200, got %d", resp.StatusCode)
 	}
 }
 

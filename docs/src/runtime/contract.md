@@ -89,7 +89,7 @@ The handler verifies the gateway's client certificate. Enforcement is per path, 
 | `POST /v1/message` with a certificate whose SAN is not the gateway Service DNS | `403 Forbidden` |
 | `POST /v1/message` with the gateway's certificate | Handled |
 
-The gateway Service DNS is `kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `kaalm-gateway.{operatorNamespace}.svc`. Both reference runtimes compare against `kaalm-system` as a compiled-in constant, so an install into another namespace fails this check; issue #233 tracks it.
+The gateway Service DNS is `kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `kaalm-gateway.{operatorNamespace}.svc`. Both names are on the gateway's certificate, so either one identifies it. The controller injects the operator namespace as `$KAALM_OPERATOR_NAMESPACE`; both reference runtimes build the two names from that variable and fall back to `kaalm-system`, the chart's default release namespace, when it is absent.
 
 ![Sequence diagram of the agent as a server. The kubelet GETs /readyz and /livez over HTTPS with no client certificate and gets 200 when healthy. The gateway POSTs /v1/message over mTLS with its client certificate, and the agent answers 401 Unauthorized when no peer certificate was presented, 403 Forbidden when the SAN is not the gateway Service DNS, 400 when the body is not an envelope, 500 when the handler fails, and 200 with a response envelope otherwise.](../diagrams/agent-inbound-calls.svg)
 
