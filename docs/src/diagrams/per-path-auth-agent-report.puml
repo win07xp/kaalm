@@ -1,0 +1,28 @@
+@startuml per-path-auth-agent-report
+' The agent-report regime on :8443: /v1/agent/heartbeat and
+' /v1/task/complete. Each branch is AgentReportPaths in
+' internal/gateway/auth.go; the prose is docs/src/gateways/listener-tls.md.
+!include _style.puml
+
+start
+:TLS handshake on :8443\nClientAuth = VerifyClientCertIfGiven;
+:/v1/agent/heartbeat (Agent only),\n/v1/task/complete (AgentTask only);
+if (client certificate?) then (no)
+  :**401 unauthorized**;
+  kill
+endif
+if (SAN parses as Agent or AgentTask?) then (no)
+  :**403 invalid_cert**;
+  kill
+endif
+if (SAN kind matches the path?) then (no)
+  :**403 access_denied**;
+  kill
+endif
+if (source IP in the SAN namespace?) then (no)
+  :**401 unauthorized**;
+  kill
+endif
+:Handler;
+stop
+@enduml

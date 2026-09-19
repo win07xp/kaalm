@@ -1,99 +1,77 @@
-# TLS on the Cluster Listener
+# TLS on the cluster listener
 
-The cluster listener (`:8443`) serves TLS to protect every payload that crosses it in transit within the cluster: LLM requests and responses, brokered tool calls, and the internal endpoints' traffic. Without TLS, prompts, completions, and tool-call content traverse the cluster network in plaintext, which is unacceptable when agent containers run untrusted code on shared nodes. `$KAALM_GATEWAY_ENDPOINT` is an `https://` URL: TLS is not optional.
+The cluster listener (`:8443`) serves TLS so that every payload crossing it, LLM requests and responses, brokered tool calls, and internal endpoint traffic, is protected in transit. Agent containers run untrusted code on shared nodes, so plaintext on the cluster network is not acceptable. `$KAALM_GATEWAY_ENDPOINT` is an `https://` URL, and TLS is not optional.
 
-This page covers what an implementer of the listener needs: which certificate the listener presents, where its trust material comes from, how the socket is configured, and how each path enforces client authentication. The trust chain that produces those certificates, the CA rotation semantics, and the CA re-key runbook are described once in [In-cluster TLS](../security/tls.md#in-cluster-tls); this page links there rather than restating them.
+This page covers what an implementer of the listener needs: which certificate the listener presents, where its trust material comes from, how the socket is configured, and how each path enforces client authentication. The trust chain that produces the certificates, the rotation defaults, and the CA re-key runbook are on [In-cluster TLS](../security/tls.md#in-cluster-tls); this page links there rather than restating them.
 
-## Where the Listener's TLS Material Comes From
+## Where the listener's TLS material comes from
 
-**cert-manager and trust-manager are required dependencies.** Kaalm uses cert-manager to manage the Kaalm CA and every leaf certificate (gateway serving cert, controller activator cert, per-agent serving/client certs). The Helm chart ships the cert-manager resources (two `ClusterIssuer`s and the gateway/controller `Certificate` objects) but not the cert-manager controller itself, so clusters must already have cert-manager installed. Teams with an existing cert-manager deployment reuse it. This replaces an earlier operator-managed CA approach; see the [V1 design note on in-cluster TLS](../security/tls.md#in-cluster-tls).
+cert-manager and trust-manager are required dependencies. The chart ships the two `ClusterIssuer`s and the gateway and controller `Certificate` objects, not the cert-manager controller itself ([Trust chain](../security/tls.md#trust-chain)). Two artifacts matter to the listener:
 
-The chain in brief: a self-signed `ClusterIssuer` (`kaalm-selfsigned`) issues the Kaalm root `Certificate` (`kaalm-ca`, `isCA: true`), which backs the `kaalm-ca-issuer` `ClusterIssuer` that signs every Kaalm leaf, including the per-Agent and per-AgentTask certs created in user namespaces. The full chain, including why the CA `Certificate` and its Secret must live in cert-manager's cluster resource namespace and why a `ClusterIssuer` is used rather than a namespaced `Issuer`, is in [In-cluster TLS](../security/tls.md#in-cluster-tls).
+**The serving certificate, `kaalm-gateway-tls`.** Issued from `kaalm-ca-issuer` by a chart-installed `Certificate`.
 
-Two artifacts matter to the listener itself:
+| Property | Value |
+|---|---|
+| SANs | `kaalm-gateway.kaalm-system.svc.cluster.local`, `kaalm-gateway.kaalm-system.svc`, `localhost`, plus every name in `gateway.externalHostnames` ([Chart values that bind the PKI](../operations/deployment.md#chart-values-that-bind-the-pki)) |
+| Usages | `server auth` and `client auth`. The gateway presents the same certificate as a client when it dials the controller's activator and when it delivers `POST /v1/message` to an agent. |
+| Rotation | The chart defaults in [Rotation defaults](../security/tls.md#rotation-defaults) |
 
-**The serving certificate: `kaalm-gateway-tls`.** Issued from `kaalm-ca-issuer` by a chart-installed `Certificate`.
+`gateway.externalHostnames` is required when the user listener is exposed through a TLS pass-through Ingress.
 
-- SANs: `kaalm-gateway.kaalm-system.svc.cluster.local`, `kaalm-gateway.kaalm-system.svc`, `localhost`.
-- Usages: `server auth`, `client auth`. Client auth is included because the gateway also presents this same cert when dialing the controller's activator, activity, and channels-health endpoints.
-- The Helm value `gateway.externalHostnames` (see [Helm Chart Contents](../operations/deployment.md#helm-chart-contents)) extends this SAN list with operator-supplied public hostnames. It is required when the User listener is exposed via TLS pass-through Ingress.
-- Chart rotation defaults: `spec.duration: 2160h` (90d), `spec.renewBefore: 720h` (30d).
+**The trust bundle, the `kaalm-ca` ConfigMap.** The gateway never reads the CA Secret. Its trust material arrives as the ConfigMap trust-manager projects, the same bundle agent Pods mount at `/var/run/kaalm/ca.crt` ([Trust bundle projection](../security/tls.md#trust-bundle-projection)). The gateway verifies inbound client certificates against it and verifies the peers it dials against it.
 
-**The trust bundle: the `kaalm-ca` ConfigMap.** The gateway never reads the CA Secret directly. Its trust material arrives as a ConfigMap projected by trust-manager, the same bundle that agent Pods mount at `/var/run/kaalm/ca.crt` (`$KAALM_CA_CERT`). The gateway verifies inbound client certificates against this bundle and uses it to verify the certs of in-cluster peers it dials.
+### Reload mechanism
 
-### Reload Mechanism
+The gateway does not watch its files. On every handshake it compares the modification time of the serving certificate and of the CA bundle with the last load, and re-reads a file whose time has changed. kubelet updates the projected volume when cert-manager renews the Secret, so a renewed certificate is served on the next handshake after the volume swap, with no restart.
 
-When a `Certificate`'s Secret is updated by cert-manager, kubelet updates the projected volume in any Pod that mounts it, and the consumer (gateway, controller, agent) reloads from disk. The gateway watches both its serving-cert Secret (`kaalm-gateway-tls`) and its projected `kaalm-ca` trust bundle for changes. Starter templates (see [Starter Templates](../runtime/starter-templates.md)) demonstrate the inotify-based reload pattern that custom images must implement.
+Two reload paths are distinct, and both are needed:
 
-Two reload paths are distinct, and both are required:
+- A **certificate change** reloads the serving certificate and, because the same certificate is used outbound, the client certificate.
+- A **CA-bundle change** rebuilds both trust pools the gateway holds: the inbound `ClientCAs` pool that verifies agent, controller, and console certificates, and the outbound `RootCAs` pool that verifies the peers the gateway dials. Rebuilding only one leaves the other stale, and a CA re-key then breaks that direction once leaves are re-issued under the new key.
 
-- A **cert/key change** reloads the serving certificate (and, since the same cert is used outbound, the client certificate) without a process restart.
-- A **CA-bundle change** MUST rebuild **both** trust pools the gateway holds: the inbound server's `ClientCAs` pool (used to verify agent and controller client certs) and the outbound HTTP client's `RootCAs` pool (used to verify peers the gateway dials). Rebuilding only one leaves the other stale, and a CA re-key then breaks that direction once leaves are re-issued under the new key. The re-key runbook's dual-trust window is finite, so a component that misses the CA-bundle update does not recover on its own.
+The both-pools rule applies to every Kaalm component that speaks mTLS in both directions, which is all of them. The agent-side statement of the same obligation is [Certificate reload on rotation](../runtime/contract.md#certificate-reload-on-rotation) on the runtime contract, and the reason an agent must watch the mount directory rather than the files is on [Starter templates](../runtime/starter-templates.md#why-the-watch-is-on-the-directory-not-the-file).
 
-The both-pools rule applies to every Kaalm component that speaks mTLS in both directions, which is all of them: the gateway, the controller, and each agent. The agent-side statement of the same obligation is [The Runtime Contract](../runtime/contract.md) item 4; see [In-cluster TLS](../security/tls.md#in-cluster-tls) for the re-key runbook that makes it matter.
+CA renewal reuses the key pair, so every leaf issued before it still chains; a CA re-key is a manual runbook ([CA renewal and re-key](../security/tls.md#ca-renewal-and-re-key)). Certificates are contained, not revoked: there is no CRL or OCSP check, so a leaked leaf stays valid until its `notAfter` unless the CA is re-keyed ([Containment, not revocation](../security/tls.md#containment-not-revocation)).
 
-Note that kubelet rotates projected volumes by swapping the `..data` symlink rather than rewriting the leaf files, so a watcher must be anchored to the mount directory, not to `tls.crt` / `ca.crt` themselves. [Starter Templates](../runtime/starter-templates.md) covers this.
+## Mutual TLS on the listener
 
-CA renewal itself is transparent: the `kaalm-ca` `Certificate` pins `spec.privateKey.rotationPolicy: Never`, so renewal re-uses the key pair and every previously issued leaf still chains. A true CA re-key (compromise recovery) is a manual runbook. Both are documented in [In-cluster TLS](../security/tls.md#in-cluster-tls). Note that certificates are contained, not revocable: there is no CRL or OCSP and Go's `crypto/tls` performs no revocation checking, so a leaked leaf stays valid until its `notAfter` unless the CA is re-keyed. See [Agent→Gateway Authentication](../security/rbac.md#agent-to-gateway-authentication).
+Kaalm-managed Pods present their per-workload certificate as the client certificate when calling `$KAALM_GATEWAY_ENDPOINT`. The gateway verifies it against `kaalm-ca` and reads the SAN to identify the workload and its namespace ([Mode 1](llm/workload-identity.md#mode-1-mtls-client-certificate)). Starter templates configure this; a custom image must configure its HTTP client with `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY` ([TLS requirements](../runtime/contract.md#tls-requirements)).
 
-## Mutual TLS on the Listener
+Gateway-only-tier workloads present no client certificate. They authenticate with a bearer token ([Mode 2](llm/workload-identity.md#mode-2-serviceaccount-bearer-token)), so the handshake must complete without one. That optionality is what forces the per-path design below.
 
-The cluster listener requires client certificates from agents in the Kaalm-managed path. Agents present their per-agent TLS certificate (the same cert used for gateway→agent delivery) as the client cert when calling `$KAALM_GATEWAY_ENDPOINT`. The gateway verifies the client cert against `kaalm-ca` and extracts the SAN to identify the agent and namespace. This is the primary identity mechanism for Kaalm-managed Pods; see [Namespace Identification](llm/workload-identity.md) for the SAN shapes and label-count rules.
+### Controller-only paths on the same socket
 
-Starter templates configure client cert presentation automatically. Custom images must configure their HTTP client to use `$KAALM_TLS_CERT` / `$KAALM_TLS_KEY` as the client certificate.
+`GET /v1/activity` and `GET /v1/channels/health` are served on the same socket but require a client certificate whose SAN is the controller Service DNS (`kaalm-controller.kaalm-system.svc.cluster.local` or `kaalm-controller.kaalm-system.svc`). The controller presents `kaalm-controller-tls`. Agent and AgentTask certificates are valid CA-signed certificates whose SANs do not match, so they are rejected: a compromised agent cannot use its own certificate to read activity or channel health across namespaces. `POST /v1/test-chat` and `GET /v1/spend` apply the same rule with the console Service DNS and `kaalm-console-tls` ([Internal endpoint authentication](../security/rbac.md#internal-endpoint-authentication)).
 
-Gateway-only-tier workloads do not present a client cert. They authenticate via `TokenReview` (see [Mode 2](llm/workload-identity.md#mode-2-serviceaccount-bearer-token)), so client certs are optional on the TLS handshake for that path. That optionality is what forces the per-path design below.
+These paths live on `:8443`, not on the Ingress-fronted `:8080`, so an Ingress cannot route an untrusted caller to them ([TLS and Ingress](user/overview.md#tls-and-ingress)).
 
-### Controller-Only Paths on the Same Socket
+## Per-path client auth enforcement
 
-`GET /v1/activity` is served on the same gateway TLS listener but requires a client cert whose SAN matches the controller Service DNS (`kaalm-controller.kaalm-system.svc.cluster.local` or `kaalm-controller.kaalm-system.svc`). The controller presents its `kaalm-controller-tls` cert. Agent and AgentTask certs are rejected on this path because their SANs do not match: defense in depth against a compromised agent using a valid CA-signed certificate to query activity data across namespaces. See [Internal Endpoint Authentication](../security/rbac.md#internal-endpoint-authentication).
+One `tls.Config.ClientAuth` value cannot express a requirement that differs by path. The listener therefore sets `ClientAuth: tls.VerifyClientCertIfGiven`: a client certificate is verified against `kaalm-ca` when one is offered, and the handshake completes without one. Every decision that follows is made in HTTP middleware, per path. The user listener and the health listener request no client certificate at all.
 
-`/v1/channels/health` is served on this listener too. Like `/v1/activity`, it requires an mTLS client cert whose SAN matches the controller Service DNS, and the same SAN-authorization rule applies: requests bearing gateway, agent, or AgentTask certs are rejected. It lives on port 8443, **not** the externally-exposed User listener on 8080, so that Ingress fronting 8080 cannot route an untrusted caller to this endpoint. See [TLS and Ingress](user/overview.md#tls-and-ingress) for the listener-split rationale and [GET /v1/channels/health](api/internal-endpoints.md#get-v1channelshealth).
+The handshake decides nothing on its own. The path-to-regime mapping, not the TLS configuration, is the detail authorization depends on; [The :8443 listener profile](overview.md#the-8443-listener-profile) is the table form of the same mapping. The four regimes:
 
-## Per-Path Client Auth Enforcement
+**Dual mode** (`/v1/messages`, `/v1/chat/completions`, `/v1/completions`, `/v1/mcp/*`). With a client certificate, the SAN must parse as an Agent or AgentTask identity, and the source IP must resolve to a Pod in that namespace; a bearer header is ignored. Without one, the bearer token must be present, must not come from a Kaalm-managed Pod, must pass `TokenReview`, and the source IP must resolve to a Pod in the token's namespace ([Source-IP cross-check](llm/workload-identity.md#source-ip-cross-check-both-modes)).
 
-The cluster listener on `:8443` serves three authentication regimes on a single TLS socket:
+![Activity diagram of the dual-mode regime. After the handshake, a request with a client certificate answers 403 invalid_cert when the SAN does not parse and 401 when the source IP is outside the SAN namespace, otherwise it is Mode 1. A request without one answers 401 when there is no bearer header, 401 when the source Pod is Kaalm-managed, 503 internal_unavailable when TokenReview is unreachable, 401 when the token is rejected, and 401 when the source IP is outside the token namespace, otherwise it is Mode 2. Both modes reach the handler.](../diagrams/per-path-auth-dual-mode.svg)
 
-1. **mTLS-required** for Kaalm-managed Agent/AgentTask requests (Mode 1, see [Namespace Identification](llm/workload-identity.md)).
-2. **mTLS-optional** for gateway-only-tier `TokenReview` callers (Mode 2) who do not present a client cert.
-3. **mTLS-required-with-SAN-authorization** for the controller's `/v1/activity` and `/v1/channels/health` calls.
+**Agent report** (`/v1/agent/heartbeat`, `/v1/task/complete`). A client certificate is required; there is no bearer fallback, because gateway-only-tier workloads have no Agent or AgentTask identity and nothing to report. The SAN must parse, its kind must match the path (Agent for the heartbeat, AgentTask for task completion), and the source IP must resolve to a Pod in the SAN namespace. Task completion uses the live API-server fallback for the cross-check; the heartbeat uses the informer cache alone ([`POST /v1/agent/heartbeat`](api/agent-endpoints.md#post-v1agentheartbeat)).
 
-A single `tls.Config.ClientAuth` value cannot express path-conditional requirements. The gateway therefore configures `ClientAuth: tls.VerifyClientCertIfGiven` at the handshake layer, so callers without a client cert can still complete the TLS handshake, and enforces per-path requirements in HTTP middleware.
+![Activity diagram of the agent-report regime. After the handshake, no client certificate answers 401, a SAN that does not parse answers 403 invalid_cert, a SAN kind that does not match the path answers 403 access_denied, and a source IP outside the SAN namespace answers 401. Otherwise the request reaches the handler.](../diagrams/per-path-auth-agent-report.svg)
 
-![Activity diagram of per-path client-auth enforcement on :8443. The TLS handshake runs with ClientAuth set to tls.VerifyClientCertIfGiven, permissive on purpose so a caller with no client cert can still complete it, after which HTTP middleware routes by path family into three arms. On the LLM proxy paths (/v1/messages, /v1/chat/completions, /v1/completions, and adapter-registered provider paths), a present client cert takes Mode 1 with the namespace extracted from the SAN and the SAN shape and label count enforced, with any bearer header ignored because mTLS wins; an absent cert with no bearer header is 401, and an absent cert with a bearer header takes Mode 2, running the Pod-ownership precheck first and then TokenReview. On the agent-report paths (/v1/agent/heartbeat, /v1/task/complete), an absent client cert is 401 regardless of any bearer header, since these are mTLS-only with no bearer fallback; a present Agent or AgentTask SAN is admitted at the listener and then split at the handler, where heartbeat accepts only Agent and task-complete only AgentTask, the other kind receiving 403 Forbidden. On the controller-only paths (/v1/activity, /v1/channels/health), an absent cert is 401 and a SAN that does not match the controller Service DNS is 403. A legend explains that the handshake is deliberately weak because one socket serves three auth regimes and no single ClientAuth value can express them: RequireAndVerifyClientCert would lock out gateway-only-tier callers before the router ran, and NoClientCert would silently downgrade the mTLS tier.](../diagrams/per-path-auth-enforcement.svg)
+**Controller only and console only** (`/v1/activity`, `/v1/channels/health`; `/v1/test-chat`, `/v1/spend`). A client certificate is required, and its SAN must be the Service DNS of the component the path serves. There is no source-IP cross-check on these paths: the SAN names a `kaalm-system` Service, not a tenant namespace, and the gateway's Pod cache covers tenant workloads.
 
-Reading the diagram: the structure is an inversion of the usual one. Normally the handshake is where client auth is decided; here it is deliberately the weakest link, and every real decision has been pushed down into the tree below it. That is why the path-to-auth mapping, not the TLS config, is the security-load-bearing detail.
+![Activity diagram of the controller-only and console-only regimes. After the handshake, no client certificate answers 401, and a SAN that is not the path's component identity answers 403 access_denied. Otherwise the request reaches the handler with no source-IP cross-check.](../diagrams/per-path-auth-internal.svg)
 
-**LLM proxy paths** (`/v1/messages`, `/v1/chat/completions`, `/v1/completions`, plus adapter-registered provider-specific paths, see [Request Format Detection](llm/request-handling.md#request-format-detection)):
+**Any other path** answers `400 invalid_request` before any credential is examined. The message names the path, which reveals that it is unregistered; issue #236 tracks it.
 
-- If `r.TLS.PeerCertificates` is non-empty, follow the mTLS path (Mode 1: extract the namespace from the SAN, enforce the SAN-shape and label-count rules).
-- If empty, follow the bearer-token path (Mode 2: first run the Pod-ownership precheck described in [Mode 2 § step 0](llm/workload-identity.md#mode-2-serviceaccount-bearer-token) to reject Agent/AgentTask Pods, then `TokenReview`-validate the `Authorization: Bearer <token>` header).
-- If both auth materials are absent, return `401 Unauthorized`.
-- If both are present, the mTLS path wins and the bearer header is ignored. See [Namespace Identification](llm/workload-identity.md).
+Two points the figures leave implicit:
 
-**Agent-report paths** (`/v1/agent/heartbeat`, `/v1/task/complete`): **mTLS-only**. There is no bearer-token fallback on these paths, per the `:8443` auth profile in [The Kaalm Gateway](overview.md) and [HTTP API](api/overview.md). Empty `r.TLS.PeerCertificates` returns `401 Unauthorized` regardless of any bearer header, because gateway-only-tier workloads have no Agent/AgentTask identity and nothing meaningful to report on these endpoints. The Agent-vs-AgentTask split is enforced at the handler (heartbeat: Agent only; task-complete: AgentTask only; the other kind gets `403`).
+- The agent-report, controller-only, and console-only regimes enforce no HTTP method; the handlers accept any method. Issue #237 tracks method enforcement and the missing cross-check.
+- `403 invalid_cert` is distinct from `403 access_denied`: the first means the certificate chains but its SAN is not a shape the gateway recognizes, the second means the SAN is recognized but the path does not accept that identity.
 
-**Controller-only paths** (`/v1/activity`, `/v1/channels/health`): require a client cert whose SAN matches the controller Service DNS. Empty `r.TLS.PeerCertificates` returns `401 Unauthorized`; a present-but-non-matching SAN returns `403 Forbidden`. There is no fallback to bearer-token auth on these paths.
+Path-conditional middleware is the only correct way to express this on Go's `crypto/tls`. `RequireAndVerifyClientCert` on the listener would lock out gateway-only-tier callers, because the handshake would fail before the request reached the path router. `NoClientCert` would silently downgrade the mTLS tier: a certificate would be presented but never verified.
 
-Path-conditional middleware is the only correct way to express this on Go's `crypto/tls`:
+## Agent-side TLS
 
-- Setting `RequireAndVerifyClientCert` on the listener would lock out gateway-only-tier callers, because the TLS handshake would fail before the request reached the path router.
-- Setting `NoClientCert` would silently downgrade the mTLS tier: a cert would be presented but never verified.
-
-## Agent Serving & Client TLS
-
-The User Gateway's delivery to agent Services (`POST /v1/message`) is over HTTPS. The AgentReconciler creates a cert-manager `Certificate` per Agent named `{agentName}-tls` in the Agent's namespace, owner-referenced to the Agent so it is garbage-collected on Agent deletion. Its `issuerRef` is `{ name: "kaalm-ca-issuer", kind: "ClusterIssuer" }`. A `ClusterIssuer` is used because `Certificate` resources in user namespaces cannot reference a namespaced `Issuer` in another namespace across the namespace boundary.
-
-The `spec.secretName` output Secret is mounted into the agent Pod at `/var/run/kaalm/tls.crt` / `tls.key`. The certificate SAN list includes:
-
-- `{agentName}.{namespace}.svc.cluster.local` (Service DNS)
-- `{agentName}.{namespace}.svc`
-- `{agentName}.{namespace}`
-
-The same cert is used as a client cert when the agent calls `$KAALM_GATEWAY_ENDPOINT` (see [Namespace Identification](llm/workload-identity.md)). Only the first of those SANs is a shape the gateway's identity extractor recognizes; the two short forms match no recognized suffix and are ignored.
-
-Chart rotation defaults for the per-agent cert are `spec.duration: 2160h` (90d) and `spec.renewBefore: 720h` (30d). Rotation is fully owned by cert-manager: the reconciler does not batch re-issues or maintain rotation-state ConfigMaps.
-
-### Agent Health Probes and TLS
-
-Because the agent serves HTTPS on `$KAALM_HEALTH_PORT` using the same per-agent certificate, the readiness and liveness probes injected by the AgentReconciler must set `httpGet.scheme: HTTPS`. Kubernetes `httpGet` probes do not verify TLS certificates, so no additional CA configuration is required on the probe. See [Agent Runtime Contract](../runtime/contract.md).
+The other end of the mTLS pair, the per-Agent and per-AgentTask certificates, their SANs, their mounts, and the probes that share the agent's port, is specified once. The certificate lifecycles are on [In-cluster TLS](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate), and the obligations on the container are items 1, 3, and 4 of [The runtime contract](../runtime/contract.md).

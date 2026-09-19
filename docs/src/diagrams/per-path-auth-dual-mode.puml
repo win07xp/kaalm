@@ -1,0 +1,45 @@
+@startuml per-path-auth-dual-mode
+' The dual-mode caller-identity profile on :8443: the LLM proxy paths and
+' /v1/mcp/*. Each branch is the middleware in internal/gateway/auth.go
+' (DualModePaths); the prose is docs/src/gateways/listener-tls.md.
+!include _style.puml
+
+start
+:TLS handshake on :8443\nClientAuth = VerifyClientCertIfGiven;
+:/v1/messages, /v1/chat/completions,\n/v1/completions, /v1/mcp/*;
+if (client certificate?) then (yes)
+  if (SAN parses as Agent or AgentTask?) then (no)
+    :**403 invalid_cert**;
+    kill
+  endif
+  if (source IP in the SAN namespace?) then (no)
+    :**401 unauthorized**;
+    kill
+  endif
+  :**Mode 1: mTLS**;
+else (no)
+  if (bearer header?) then (no)
+    :**401 unauthorized**;
+    kill
+  endif
+  if (source Pod is Kaalm-managed?) then (yes)
+    :**401 unauthorized**;
+    kill
+  endif
+  if (TokenReview reachable?) then (no)
+    :**503 internal_unavailable**;
+    kill
+  endif
+  if (token accepted?) then (no)
+    :**401 unauthorized**;
+    kill
+  endif
+  if (source IP in the token namespace?) then (no)
+    :**401 unauthorized**;
+    kill
+  endif
+  :**Mode 2: bearer**;
+endif
+:Handler;
+stop
+@enduml

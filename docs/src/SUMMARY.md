@@ -31,17 +31,17 @@
 
 # The Gateways
 
-- [Gateway Overview](gateways/overview.md)
-  - [Cluster Listener TLS](gateways/listener-tls.md)
+- [Gateway overview](gateways/overview.md)
+  - [Cluster listener TLS](gateways/listener-tls.md)
 - [HTTP API](gateways/api/overview.md)
-  - [Channel Webhook](gateways/api/channel-webhook.md)
-  - [Discord Channel](gateways/api/channel-discord.md)
-  - [WhatsApp Channel](gateways/api/channel-whatsapp.md)
+  - [Channel webhook](gateways/api/channel-webhook.md)
+  - [Discord channel](gateways/api/channel-discord.md)
+  - [WhatsApp channel](gateways/api/channel-whatsapp.md)
   - [Task Completion](gateways/api/task-complete.md)
   - [Agent Endpoints](gateways/api/agent-endpoints.md)
   - [Async Webhook Responses](gateways/api/async-responses.md)
   - [Internal Endpoints](gateways/api/internal-endpoints.md)
-  - [Error Reference](gateways/api/errors.md)
+  - [Error reference](gateways/api/errors.md)
 - [LLM Gateway](gateways/llm/overview.md)
   - [Request Handling](gateways/llm/request-handling.md)
   - [Workload Identity](gateways/llm/workload-identity.md)

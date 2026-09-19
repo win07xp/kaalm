@@ -1,14 +1,14 @@
-# Discord Channel
+# Discord channel
 
-*(Since v0.7.0.)* `POST /channels/{namespace}/{channel-path}` for an AgentChannel of `spec.type: discord` is the Discord application's **Interactions Endpoint URL**. Discord POSTs every interaction for the application to it: the verification `PING` when the operator saves the URL, and each slash command a person invokes. The gateway acknowledges within Discord's 3-second budget and delivers the agent's reply later through the interaction's follow-up webhook.
+`POST /channels/{namespace}/{channel-path}` for an AgentChannel of `spec.type: discord` is the Discord application's **Interactions Endpoint URL**. Discord posts every interaction for the application to it: the verification `PING` when the operator saves the URL, and each slash command a person invokes. The gateway acknowledges within Discord's 3-second budget and sends the agent's reply later through the interaction's follow-up webhook.
 
-The channel fields are in [Platform types](../../resources/agentchannel.md#discord); the adapter mechanics and the reply delivery buckets are in [The platform adapters](../user/platform-adapters.md#the-platform-adapters). This page is the wire contract on both sides.
+The channel fields are in [Platform types](../../resources/agentchannel.md#discord). The adapter mechanics and the reply delivery buckets are in [The platform adapters](../user/platform-adapters.md#the-platform-adapters). This page is the wire contract on both sides.
 
-## Path shape and exposure
+## Path rules and exposure
 
-`spec.discord.path` follows the webhook path rules unchanged: it must begin with `/channels/{namespace}/` (rule 15) and must not begin with `/v1/` (rule 16). The endpoint is served on the User Gateway listener (`:8080`) behind the cluster Ingress, exactly as the [channel webhook](channel-webhook.md#path-shape-and-exposure) is. Discord requires the registered URL to be reachable over HTTPS with a certificate it can verify, which the Ingress provides.
+`spec.discord.path` follows the [channel webhook path rules](channel-webhook.md#path-rules-and-exposure) unchanged, and the route is served on the same `:8080` listener behind the Ingress. Discord requires the registered URL to be reachable over HTTPS with a certificate it can verify, which the Ingress provides.
 
-Routing is gated on `AgentChannel.status.conditions[type=Ready].status == True`, so apply the channel and wait for `Ready` before saving the URL in the Developer Portal; a URL that answers `401` fails Discord's save-time check.
+Apply the channel and wait for `Ready=True` before saving the URL in the Developer Portal. A path that is not routed answers `401`, which fails Discord's save-time check.
 
 ## Inbound request
 
@@ -20,7 +20,9 @@ Every request carries:
 | `X-Signature-Timestamp` | Unix seconds, as a decimal string |
 | `Content-Type` | `application/json` |
 
-**Verification.** The gateway checks `Ed25519.Verify(publicKey, timestamp || body, signature)` with the raw body bytes and the channel's `publicKey`, then rejects a timestamp more than 300s from its own clock. Either failure is `401` with the generic [User Gateway error envelope](errors.md#user-gateway-error-responses), the same `401` an unregistered path gets. Discord's save-time check sends one valid `PING` and one request with an invalid signature and requires the `401` on the second, so the rejection is part of the contract, not only a defense.
+**Verification.** The gateway loads the channel's `publicKey`, checks `Ed25519.Verify(publicKey, timestamp || body, signature)` over the raw body bytes, and rejects a timestamp more than 300s from its own clock. A failed check, or a `publicKey` that is missing or not a 32-byte hex string, answers `401` with the [User Gateway error envelope](errors.md#user-gateway-error-responses) and records a `WebhookAuthFailed` health observation.
+
+Discord's save-time check sends one valid `PING` and one request with an invalid signature and requires the `401` on the second, so the rejection is part of the contract. As shipped, that probe's `401` also counts as a health failure, so a newly registered channel reports `WebhookAuthFailed` for one health window; issue #228 tracks it.
 
 **Body.** The interaction object. The fields the adapter reads:
 
@@ -41,24 +43,25 @@ Every request carries:
 }
 ```
 
-In a DM the sender is `user` rather than `member.user`. Bodies above `gateway.maxMessageBodyBytes` are `413` before anything else, as on every `:8080` path.
+In a DM the sender is `user` rather than `member.user`.
 
 ## Inbound responses
 
-The response depends on the interaction `type`:
+| Condition | Response |
+|---|---|
+| `POST` body over `gateway.maxMessageBodyBytes` | `413 request_too_large`, before the path is resolved |
+| Path not routed, or method not `POST` | `401 unauthorized` |
+| Signature, timestamp, or `publicKey` rejected | `401 unauthorized` |
+| Body is not JSON | `400 invalid_request` |
+| `type` 1, PING | `200` `{"type": 1}`. No envelope, no health observation. |
+| `type` 2, command in scope | `200` `{"type": 5}`, a deferred message: the person sees the bot thinking. One envelope is dispatched. |
+| `type` 2, command out of scope | `200` `{"type": 4, "data": {"content": "This bot is not available here.", "flags": 64}}`, an ephemeral refusal for an interaction outside `guildId` or `allowedChannelIds`. No envelope. |
+| `type` 3, message component | `200` `{"type": 6}`, a deferred update. Components are out of scope. |
+| `type` 4, autocomplete | `200` `{"type": 8, "data": {"choices": []}}`. Autocomplete is out of scope. |
+| `type` 5, modal submit | `200` `{"type": 4, "data": {"content": "Modals are not supported.", "flags": 64}}`. No envelope. |
+| Any other `type` | `400 invalid_request` |
 
-| Interaction | Response | Meaning |
-|---|---|---|
-| `1` PING | `200` `{"type": 1}` | Verification handshake. No envelope, no health observation. |
-| `2` APPLICATION_COMMAND, in scope | `200` `{"type": 5}` | Deferred channel message: the person sees the bot thinking; the reply arrives through the follow-up webhook. The envelope is dispatched. |
-| `2` APPLICATION_COMMAND, out of scope | `200` `{"type": 4, "data": {"content": "This bot is not available here.", "flags": 64}}` | Ephemeral refusal for an interaction outside `guildId` or `allowedChannelIds`. No envelope. |
-| `3` MESSAGE_COMPONENT | `200` `{"type": 6}` | Deferred update, nothing else: components are out of scope. |
-| `4` APPLICATION_COMMAND_AUTOCOMPLETE | `200` `{"type": 8, "data": {"choices": []}}` | No choices: autocomplete is out of scope. |
-| `5` MODAL_SUBMIT | `200` `{"type": 4, "data": {"content": "Modals are not supported.", "flags": 64}}` | Ephemeral, no envelope. |
-| any | `401` | Signature or timestamp rejected, or the path is not registered to a `Ready=True` channel |
-| any | `413` `request_too_large` | Body over `gateway.maxMessageBodyBytes` |
-
-Every `200` above is returned inside Discord's 3-second window, before the agent is involved.
+Every `200` is returned inside Discord's 3-second window, before the agent is involved. Refused and unknown interactions count on `kaalm_channel_messages_total` with `status="rejected"`.
 
 ## Normalization
 
@@ -70,10 +73,10 @@ An in-scope command becomes one envelope:
   "channelType": "discord",
   "channelId": "/channels/team-support/support-discord",
   "userId": "555555555555555555",
-  "sessionId": "…",
+  "sessionId": "...",
   "content": "Where is my order?",
   "attachments": [
-    { "type": "discord.attachment", "id": "1300000000000000000", "url": "https://cdn.discordapp.com/…", "filename": "receipt.png", "contentType": "image/png", "size": 48213 }
+    { "type": "discord.attachment", "id": "1300000000000000000", "url": "https://cdn.discordapp.com/...", "filename": "receipt.png", "contentType": "image/png", "size": 48213 }
   ],
   "metadata": {
     "interactionId": "1290000000000000001",
@@ -87,13 +90,20 @@ An in-scope command becomes one envelope:
 }
 ```
 
-`content` is the string value of the option named by `spec.discord.contentOption` (default `message`), or the empty string when the command has no such option. `attachments` has one entry per option of the attachment type, resolved from `data.resolved.attachments`; the gateway never fetches the URL. `metadata.options` carries every option by name so a multi-option command remains usable. `sessionId` follows the [session derivation](agent-endpoints.md#session-identity-the-sessionid-derivation) with `channelId` the channel path and `userId` the Discord user.
+| Field | Source |
+|---|---|
+| `content` | The string value of the option named by `spec.discord.contentOption` (default `message`), or the empty string when the command has no such option |
+| `attachments` | One entry per option of the attachment type, resolved from `data.resolved.attachments`. The gateway never fetches the URL. |
+| `metadata.options` | Every option by name, so a multi-option command remains usable |
+| `sessionId` | Present only when `spec.session.enabled` is `true`, derived per [Session identity](agent-endpoints.md#session-identity-the-sessionid-derivation) from the channel path and the Discord user id |
 
 ## Reply requests
 
-The gateway sends the reply to `gateway.platforms.discord.apiBaseUrl` (default `https://discord.com/api/v10`). The interaction token authenticates these requests; no bot token is needed.
+The gateway sends the reply to `gateway.platforms.discord.apiBaseUrl` (default `https://discord.com/api/v10`), split into chunks of at most 2000 characters. A chunk breaks at the last newline in the second half of its window when there is one, so a long reply reads as continued paragraphs. An empty reply is sent as the literal text `(empty reply)`. An error from the delivery pipeline is sent as the text `{error.type}: {error.message}`.
 
-1. The first 2000 characters replace the deferred message:
+The interaction token authenticates the first two request shapes; no bot token is needed for them.
+
+1. The first chunk replaces the deferred message:
 
    ```
    PATCH {apiBaseUrl}/webhooks/{application_id}/{token}/messages/@original
@@ -102,7 +112,7 @@ The gateway sends the reply to `gateway.platforms.discord.apiBaseUrl` (default `
    {"content": "<first chunk>"}
    ```
 
-2. Each further 2000-character chunk is a follow-up:
+2. Each further chunk is a follow-up:
 
    ```
    POST {apiBaseUrl}/webhooks/{application_id}/{token}
@@ -111,7 +121,7 @@ The gateway sends the reply to `gateway.platforms.discord.apiBaseUrl` (default `
    {"content": "<next chunk>"}
    ```
 
-The token is valid for 15 minutes from the interaction; after that both requests answer `404`. When the credential Secret carries `botToken`, a `404` on the first request switches the reply to channel messages, one per chunk:
+The token is valid for 15 minutes from the interaction. The gateway switches to channel messages, one per chunk and authenticated with the credential Secret's `botToken`, in two cases: more than 15 minutes have elapsed since the interaction was received, or the first request answered `404`:
 
 ```
 POST {apiBaseUrl}/channels/{channel_id}/messages
@@ -121,4 +131,4 @@ Content-Type: application/json
 {"content": "<@555555555555555555> <chunk>", "allowed_mentions": {"users": ["555555555555555555"]}}
 ```
 
-Without `botToken`, the `404` is terminal. The buckets (delivered, terminal, retried), the retry schedule, and how a terminal refusal reaches channel health are in [Reply delivery](../user/platform-adapters.md#reply-delivery). An error payload from the async pipeline is sent through the same requests as the text `"{error.type}: {error.message}"`.
+Without `botToken`, either case is a terminal refusal recorded as `CallbackRejected`. The buckets (delivered, terminal, retried), the retry schedule, and how a terminal refusal reaches channel health are in [Reply delivery](../user/platform-adapters.md#reply-delivery).
