@@ -1,0 +1,29 @@
+@startuml agent-inbound-calls
+' The agent as a server: the two callers of $KAALM_HEALTH_PORT and how each
+' is authenticated. Runtime contract items 1 and 4.
+' Source of truth: docs/src/runtime/contract.md
+!include _style.puml
+
+participant "**kubelet**" as kubelet $mutedBg
+box "a user namespace" #FCFCFC
+  participant "**Agent** container\n$KAALM_HEALTH_PORT" as agent $agentBg
+end box
+participant "**Gateway**" as gw $gwBg
+
+kubelet -[#9E9E9E]> agent : GET /readyz, GET /livez\nHTTPS, no client cert
+agent -[#9E9E9E]-> kubelet : 200 when healthy
+
+gw -[#1B5E20]> agent : POST /v1/message\nmTLS, gateway client cert
+alt no peer certificate
+  agent -[#B71C1C]-> gw : 401 Unauthorized
+else SAN is not the gateway Service DNS
+  agent -[#B71C1C]-> gw : 403 Forbidden
+else body is not an envelope
+  agent -[#B71C1C]-> gw : 400 Bad Request
+else handler returns an error
+  agent -[#B71C1C]-> gw : 500 Internal Server Error
+else handled
+  agent -[#1B5E20]-> gw : 200 response envelope
+end
+
+@enduml

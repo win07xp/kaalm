@@ -1,0 +1,18 @@
+@startuml agent-outbound-calls
+' The agent as a client: every call an agent or task container makes to the
+' gateway, and what authenticates it. Runtime contract item 3.
+' Source of truth: docs/src/runtime/contract.md
+!include _style.puml
+
+box "a user namespace" #FCFCFC
+  participant "**Agent**\ncontainer" as agent $agentBg
+  participant "**AgentTask**\ncontainer" as task $agentBg
+end box
+participant "**Gateway**\n$KAALM_GATEWAY_ENDPOINT\n(:8443 cluster listener)" as gw $gwBg
+
+agent -[#4A148C]> gw : LLM request
+agent -[#4A148C]> gw : POST /v1/agent/heartbeat
+task -[#4A148C]> gw : LLM request
+task -[#4A148C]> gw : POST /v1/task/complete
+
+@enduml

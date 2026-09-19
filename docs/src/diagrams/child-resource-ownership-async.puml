@@ -1,38 +1,25 @@
 @startuml child-resource-ownership-async
-' The one link that cannot be an ownerRef: async response ConfigMaps live in another namespace.
-' Source of truth: docs/src/runtime/child-resources.md
+' Async response ConfigMaps live in kaalm-system while their AgentChannel
+' lives in a user namespace, so the link is labels, not an ownerRef. The
+' reasoning and the cleanup paths are on docs/src/runtime/child-resources.md
+' (the source of truth).
 !include _style.puml
+left to right direction
 
 skinparam nodesep 18
-skinparam ranksep 40
+skinparam ranksep 60
 skinparam rectangle {
   roundCorner 4
 }
 
-rectangle "namespace: **team-support**" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
-  rectangle "**AgentChannel**\nsupport-slack\nfinalizer: kaalm.io/channel-finalizer" as chan #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
+rectangle "the channel's namespace" as nsuser #line:4A148C;line.dashed;text:2a0a4a {
+  rectangle "**AgentChannel**\n{name}" as chan #back:E6E6FA;line:4A148C;line.bold;text:2a0a4a
 }
 
-rectangle "namespace: **kaalm-system**" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
-  rectangle "**ConfigMap** kaalm-async-{requestId}\nlabels:\n  kaalm.io/channel-namespace: team-support\n  kaalm.io/channel-name: support-slack\nannotation: kaalm.io/expires-at (1h)" as cm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+rectangle "kaalm-system" as nssys #line:1B5E20;line.dashed;text:0b3d0b {
+  rectangle "**ConfigMap**\nkaalm-async-{requestId}" as cm #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 
-chan -[#B71C1C,dashed]-> cm : **linked by labels, not ownerRef**\nswept explicitly by the\nchannel finalizer
+chan -[#B71C1C,dashed]-> cm : matched by labels
 
-note right of cm
-  **Why no ownerRef.** A cross-namespace ownerReference
-  is invalid. The GC resolves the owner in the //dependent's//
-  namespace, finds nothing, and deletes the ConfigMap
-  **immediately**, emitting OwnerRefInvalidNamespace.
-
-  So nothing collects these. Cleanup is two explicit paths:
-  the reconciler prunes expired entries by label selector on
-  every pass, and the channel finalizer sweeps the whole
-  label-matched set after the gateway confirms disconnect.
-end note
-
-legend bottom
-  **Red dashed** = label linkage with no owner: invisible to cascade GC,
-  and therefore the only child that needs an explicit finalizer sweep.
-endlegend
 @enduml

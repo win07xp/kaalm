@@ -1,6 +1,8 @@
 @startuml projected-volume-rotation
-' Why an inotify watch on a leaf cert path never fires: the leaves are symlinks and only ..data is renamed.
-' Source of truth: docs/src/runtime/starter-templates.md
+' The layout of the projected TLS volume, and what changes on rotation:
+' the leaves are symlinks, and only ..data is renamed. The watch this implies
+' is on docs/src/runtime/starter-templates.md; the layout is specified on
+' docs/src/runtime/contract.md (the source of truth).
 !include _style.puml
 
 skinparam nodesep 20
@@ -9,26 +11,15 @@ skinparam rectangle {
   roundCorner 4
 }
 
-rectangle "mount directory **/var/run/kaalm/**\n**watch this one**: IN_CREATE + IN_MOVED_TO on ..data" as dir #line:4A148C;line.bold;text:2a0a4a {
-
-  rectangle "**tls.crt**  **tls.key**  **ca.crt**\nsymlinks, one hop\n(never written in place)" as leaves #back:F5F5F5;line:9E9E9E;line.bold;text:555555
-
-  rectangle "**..data**\nsymlink to the live directory" as data #back:FFD580;line:7a3f00;line.bold;text:3a1f00
-
-  rectangle "**..2026_07_14_09_00_00.1234**\nthe files served right now" as old #back:F5F5F5;line:9E9E9E;line.bold;text:555555
-
-  rectangle "**..2026_07_14_11_30_00.5678**\nkubelet writes the new files\nhere **first**" as new #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
+rectangle "/var/run/kaalm/" as dir #line:4A148C;line.bold;text:2a0a4a {
+  rectangle "**tls.crt**  **tls.key**  **ca.crt**\nsymlinks" as leaves #back:F5F5F5;line:9E9E9E;line.bold;text:555555
+  rectangle "**..data**\nsymlink" as data #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "**..2026_07_14_09_00_00.1234**" as old #back:F5F5F5;line:9E9E9E;line.bold;text:555555
+  rectangle "**..2026_07_14_11_30_00.5678**" as new #back:90EE90;line:1B5E20;line.bold;text:0b3d0b
 }
 
-leaves -[#9E9E9E,bold]-> data : each leaf points\nat ..data/<key>
-data -[#7a3f00,bold]-> old : before rotation
-data .[#1B5E20,bold].> new : after rotation:\nkubelet **atomically renames**\n..data onto the new directory
+leaves -[#9E9E9E,bold]-> data : ..data/<key>
+data -[#7a3f00,bold]-> old : now
+data .[#1B5E20,bold].> new : after rotation
 
-note right of leaves
-  **The trap.** A watch on a leaf path never sees
-  IN_MODIFY, because no leaf is ever modified:
-  only the ..data symlink moves. Such a watcher
-  silently misses **every** rotation and keeps
-  serving an expired cert until the process restarts.
-end note
 @enduml
