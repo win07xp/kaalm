@@ -1,0 +1,18 @@
+@startuml budget-exchange-reduce
+' The reducer side of the budget counter exchange: one reconcile pass over
+' the ConfigMap. The rule for each step is the prose on
+' docs/src/gateways/llm/budgets-and-rate-limits.md (the source of truth).
+!include _style.puml
+
+participant "kaalm-budget-{provider}\nConfigMap" as cm #FFD580
+participant "ModelProvider\nReconciler" as rec #87CEEB
+participant "ModelProvider\nstatus" as st #87CEEB
+
+rec -> cm : read all keys
+cm --> rec : partials, _retired
+rec -> rec : old period:\narchive, delete key
+rec -> rec : dead replica:\nfold into _retired, delete key
+rec -> rec : sum current partials\nplus _retired
+rec -> cm : write _retired, _canonical
+rec -> st : budgetUsage,\nprevious-period archive
+@enduml
