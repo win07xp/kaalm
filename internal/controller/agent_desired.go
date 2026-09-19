@@ -63,11 +63,16 @@ const (
 	// Selector keys used when synthesizing NetworkPolicy peers.
 	labelKeyNamespaceName = "kubernetes.io/metadata.name"
 	labelKeyComponent     = "app.kubernetes.io/component"
+	labelKeyWorkload      = "kaalm.io/workload"
 
 	schemeHTTPS = "https"
 
 	// componentGateway is the gateway Deployment's component label value.
 	componentGateway = "gateway"
+
+	// workloadAgent is the workload label value on agent Pods. It also selects
+	// the peers of the same-namespace ingress rule, so the two cannot drift.
+	workloadAgent = "agent"
 
 	// annotationPodSpecHash carries the derived-Pod-spec hash for drift
 	// detection (the Deployment pod-template-hash idiom). Never compare
@@ -359,8 +364,8 @@ func desiredPVC(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff e
 
 func agentPodLabels(agent *kaalmv1beta1.Agent) map[string]string {
 	return map[string]string{
-		"kaalm.io/agent":    agent.Name,
-		"kaalm.io/workload": "agent",
+		"kaalm.io/agent": agent.Name,
+		labelKeyWorkload: workloadAgent,
 	}
 }
 
@@ -496,10 +501,11 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 
 // desiredNetworkPolicy synthesizes the per-Agent policy from the AgentClass:
 // egress to the gateway and DNS plus allowedCIDRs, ingress from the gateway on
-// the health port, and optional same-namespace ingress. allowedHosts (FQDN
-// rules) are deliberately not synthesized here: they require a CNI-specific
-// policy kind and land in the hardening phase; when unsupported they are
-// ignored and the AgentClassReconciler emits the Warning.
+// the health port, and optional ingress from the namespace's other agent Pods
+// on that same port. allowedHosts (FQDN rules) are deliberately not synthesized
+// here: they require a CNI-specific policy kind and land in the hardening
+// phase; when unsupported they are ignored and the AgentClassReconciler emits
+// the Warning.
 func desiredNetworkPolicy(
 	agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec, operatorNamespace string,
 ) *networkingv1.NetworkPolicy {
@@ -539,8 +545,16 @@ func desiredNetworkPolicy(
 		{From: []networkingv1.NetworkPolicyPeer{gatewayPeer}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: &protoTCP, Port: &healthPort}}},
 	}
 	if class.Spec.Network.AllowSameNamespaceIngress {
+		// Scoped to agent Pods on the health port: the opt-in is for delivery
+		// between agents, and the agent container is untrusted, so a Pod that
+		// Kaalm does not manage never reaches it.
 		ingress = append(ingress, networkingv1.NetworkPolicyIngressRule{
-			From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
+			From: []networkingv1.NetworkPolicyPeer{{
+				PodSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{labelKeyWorkload: workloadAgent},
+				},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &protoTCP, Port: &healthPort}},
 		})
 	}
 

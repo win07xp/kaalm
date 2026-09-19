@@ -136,7 +136,8 @@ type AgentClassNetwork struct {
 	// AllowHostNetwork permits workload Pods to use host networking.
 	// +optional
 	AllowHostNetwork bool `json:"allowHostNetwork,omitempty"`
-	// AllowSameNamespaceIngress permits ingress from Pods in the same namespace.
+	// AllowSameNamespaceIngress permits ingress from the namespace's other agent
+	// Pods on the agent's health port.
 	// +optional
 	AllowSameNamespaceIngress bool `json:"allowSameNamespaceIngress,omitempty"`
 }

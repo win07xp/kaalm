@@ -44,7 +44,7 @@ The synthesized rules:
 | Egress | To the cluster DNS Pods | 53 TCP and UDP |
 | Egress | To each CIDR in the class's `network.egress.allowedCIDRs` | Any |
 | Ingress | From the gateway Pods in `kaalm-system` | `$KAALM_HEALTH_PORT` |
-| Ingress | From every Pod in the Agent's namespace, when the class sets `network.allowSameNamespaceIngress` | Any |
+| Ingress | From the other agent Pods in the Agent's namespace (`kaalm.io/workload: agent`), when the class sets `network.allowSameNamespaceIngress` | `$KAALM_HEALTH_PORT` |
 
 The two directions carry different weight:
 

@@ -274,6 +274,41 @@ func TestDesiredNetworkPolicy_Rules(t *testing.T) {
 	}
 }
 
+func TestDesiredNetworkPolicy_SameNamespaceIngressScoped(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	class := &kaalmv1beta1.AgentClass{
+		Spec: kaalmv1beta1.AgentClassSpec{
+			Network: kaalmv1beta1.AgentClassNetwork{AllowSameNamespaceIngress: true},
+		},
+	}
+	np := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 9443}, "kaalm-system")
+	if len(np.Spec.Ingress) != 2 {
+		t.Fatalf("want gateway + same-namespace ingress, got %d rules", len(np.Spec.Ingress))
+	}
+	rule := np.Spec.Ingress[1]
+	// The peer is other agent Pods in this namespace, never every Pod.
+	if len(rule.From) != 1 {
+		t.Fatalf("want 1 peer, got %+v", rule.From)
+	}
+	peer := rule.From[0]
+	if peer.NamespaceSelector != nil {
+		t.Errorf("peer must stay same-namespace, got %+v", peer.NamespaceSelector)
+	}
+	if peer.PodSelector == nil || peer.PodSelector.MatchLabels[labelKeyWorkload] != workloadAgent {
+		t.Errorf("peer must select agent Pods on %s, got %+v", labelKeyWorkload, peer.PodSelector)
+	}
+	// And only on the agent's health port.
+	if len(rule.Ports) != 1 {
+		t.Fatalf("want the health port only, got %+v", rule.Ports)
+	}
+	if got := rule.Ports[0].Port; got == nil || got.IntValue() != 9443 {
+		t.Errorf("port = %+v, want 9443", got)
+	}
+	if p := rule.Ports[0].Protocol; p == nil || *p != corev1.ProtocolTCP {
+		t.Errorf("protocol = %+v, want TCP", p)
+	}
+}
+
 func TestDesiredPod_MergesClassPodMetadata(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	eff := effectiveAgentSpec{

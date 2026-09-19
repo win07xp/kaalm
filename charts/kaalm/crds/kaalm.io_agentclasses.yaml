@@ -189,8 +189,9 @@ spec:
                       networking.
                     type: boolean
                   allowSameNamespaceIngress:
-                    description: AllowSameNamespaceIngress permits ingress from Pods
-                      in the same namespace.
+                    description: |-
+                      AllowSameNamespaceIngress permits ingress from the namespace's other agent
+                      Pods on the agent's health port.
                     type: boolean
                   egress:
                     description: Egress lists permitted external destinations beyond
@@ -1020,8 +1021,9 @@ spec:
                       networking.
                     type: boolean
                   allowSameNamespaceIngress:
-                    description: AllowSameNamespaceIngress permits ingress from Pods
-                      in the same namespace.
+                    description: |-
+                      AllowSameNamespaceIngress permits ingress from the namespace's other agent
+                      Pods on the agent's health port.
                     type: boolean
                   egress:
                     description: Egress lists permitted external destinations beyond
