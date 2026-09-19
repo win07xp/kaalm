@@ -14,7 +14,7 @@ holds every credential and brokers, meters, and audits both LLM and MCP tool
 calls (speaking both the stateless MCP 2026-07-28 revision and the earlier
 handshake era). An optional console puts the fleet, its spend, and a
 test-chat panel on one screen; Grafana dashboards and OpenTelemetry tracing
-cover the rest. All twenty-one acceptance scenarios are proven on a real
+cover the rest. All twenty-four acceptance scenarios are proven on a real
 cluster.
 
 ## What it looks like

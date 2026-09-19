@@ -1,8 +1,8 @@
-# Talking to Your Agent
+# Talking to your agent
 
-Your agent is running, but nothing can reach it yet. On purpose: Kaalm wraps
-every agent in a network policy that refuses traffic by default, so an agent is
-unreachable until you deliberately open a door.
+Your agent is running, but nothing can reach it yet. On purpose: the network
+policy from the last chapter lets only the gateway in, and the gateway
+delivers only to agents that have a door.
 
 The door is an **AgentChannel**.
 
@@ -12,7 +12,9 @@ A channel needs a token, because the door has a lock. Kubernetes stores
 credentials in a **Secret**, an object meant for exactly this, kept separate
 from the manifests that refer to it.
 
-Put both in `channel.yaml`:
+The channel is the e2e suite's `s16-py-channel` in
+`test/e2e/testdata/base-image.yaml`, with its own names and a shorter
+`fromBody`. Put both in `channel.yaml`:
 
 ```yaml
 apiVersion: v1
@@ -45,8 +47,10 @@ spec:
         key: token
 ```
 
-`path` is the URL the gateway will answer on. `responseMode: sync` means the
-caller waits and gets the agent's answer as the HTTP response.
+`path` is the URL the gateway will answer on; it must start with
+`/channels/` and your namespace, and the rest is yours to choose.
+`responseMode: sync` means the caller waits and gets the agent's answer as
+the HTTP response.
 `content.fromBody: text` tells the gateway where in your JSON to find the
 message, so posting `{"text": "hello"}` sends `hello` to the agent rather than
 the whole blob.
@@ -61,8 +65,10 @@ NAME             AGENT    PHASE    CONNECTED   AGE
 helper-webhook   helper   Active               2s
 ```
 
-`Active` means the gateway has accepted the path and the token, and is now
-listening.
+`Active` means the agent this channel points at is healthy. Kaalm also
+checked the path and found the token before it let the gateway route the
+channel; had either been wrong, `kubectl describe agentchannel helper-webhook`
+would say so under `Ready`.
 
 ## Reach the gateway
 
@@ -101,8 +107,8 @@ cluster nothing skips verification.
 
 `echo:` is the image's built-in default handler talking. Every reference image
 answers like this until you hand it real code, which is exactly what makes it
-safe to poke at: the loop you just proved (token, gateway, mTLS, delivery,
-reply) is the hard part, and it now works. The code is the easy part, and it is
+safe to poke at: the loop you proved (token, gateway, mTLS, delivery,
+reply) is the hard part, and it works. The code is the small part, and it is
 the next chapter.
 
-Next: [Make It Yours](make-it-yours.md).
+Next: [Make it yours](make-it-yours.md).

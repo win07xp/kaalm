@@ -205,9 +205,9 @@ chart-package: chart-sync ## Package the chart into dist/ (VERSION defaults to C
 		helm package $(CHART_DIR) --version $$V --app-version $$V --destination dist
 
 PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
-# Until the #142 audit lands, time-bound wording and the wording and figure
-# ratchets are reported, not fatal; the last PR of the audit empties this.
-DOCS_CHECK_FLAGS ?= --time-report --ratchet-report
+# Both report-only flags were emptied at the end of the #142 audit, so the
+# time-bound wording lint and the wording and figure ratchets are fatal.
+DOCS_CHECK_FLAGS ?=
 
 .PHONY: docs-check
 docs-check: ## Check the three books; the list of checks is the docstring of hack/docs/check.py.
