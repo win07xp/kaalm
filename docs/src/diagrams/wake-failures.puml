@@ -1,0 +1,33 @@
+@startuml wake-failures
+' How a wake fails, in the order the gateway finds out. Each row is an
+' elseif cascade, laid out left to right. The status codes and payload
+' forms are the prose on docs/src/gateways/user/activation-and-activity.md.
+!include _style.puml
+
+start
+:message for a Hibernated Agent;
+
+partition "wake" {
+  if (activator configured\nand reachable, 202?) then (no)
+    :**controller_unavailable**\nsync 504, Retry-After: 5;
+    kill
+  elseif (Service reachable\nwithin wakeTimeout?) then (no)
+    :**wake_timeout**\nsync 504;
+    kill
+  else (yes)
+  endif
+}
+
+partition "deliver" {
+  if (sync deadline still open?) then (no)
+    :**sync_deadline_exceeded**\n504, sync only;
+    kill
+  elseif (delivered within\n4 attempts?) then (no)
+    :**delivery_failed**\nsync 502;
+    kill
+  else (yes)
+    :reply;
+    stop
+  endif
+}
+@enduml

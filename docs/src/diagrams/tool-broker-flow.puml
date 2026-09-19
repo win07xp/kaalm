@@ -1,0 +1,29 @@
+@startuml tool-broker-flow
+' One brokered tool call, one message per numbered step. The checks in
+' step 3 are the grant chain figure; the rules behind every step are the
+' prose on docs/src/gateways/tool-plane.md.
+!include _style.puml
+
+participant "Agent\ncontainer" as agent
+participant "Gateway broker\n:8443" as gw #90EE90
+participant "Secret\n(kaalm-system)" as sec #FFD580
+participant "Tool server" as tool #FFE4B5
+
+agent -> gw : 1. POST /v1/mcp/{toolProvider}, JSON-RPC body
+gw -> gw : 2. caller identity
+gw -> gw : 3. the checks, in order
+gw -> sec : 4. read the credential
+gw -> gw : 5. strip inbound auth, inject the credential
+gw -> tool : 6. forward, no redirects, upstream timeout
+alt unreachable, redirect, 401, 403, or 5xx
+  gw --> agent : 503 tool_unavailable
+else timeout
+  gw --> agent : 504 tool_timeout
+else response
+  tool --> gw : JSON, or an SSE stream
+  gw -> gw : 7. tools/list: filter, cacheScope private
+  gw -> gw : 8. legacy era: wrap Mcp-Session-Id
+  gw --> agent : 9. relay
+end
+gw -> gw : 10. audit line, metrics
+@enduml
