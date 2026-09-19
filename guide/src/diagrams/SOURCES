@@ -2,3 +2,13 @@
 # docs/src/diagrams/<name>.puml and copied here by `make diagrams`, so the
 # design book stays the single source. `make docs-check` fails if a copy
 # drifts from its source.
+agent-lifecycle.svg
+agentclass-propagation.svg
+helm-install-inventory.svg
+platform-channel-flow.svg
+span-tree.svg
+task-lifecycle.svg
+tool-broker-flow.svg
+tool-grant-chain.svg
+user-webhook-flow.svg
+user-webhook-intake.svg

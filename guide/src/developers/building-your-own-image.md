@@ -1,13 +1,13 @@
-# Building Your Own Agent Image
+# Building your own agent image
 
 An agent image is any container that honors the runtime contract. Most
 agents never need one: the ladder starts at a published base image with a
-mounted handler ([Deploying from a Base Image](deploying-from-a-base-image.md)),
+mounted handler ([Deploying from a base image](deploying-from-a-base-image.md)),
 climbs to a `FROM` build on that base when you need extra dependencies, and
-only ends here, at owning the whole image, when you need another runtime or
+only ends here, at building the whole image, when you need another runtime or
 full control. The templates under `examples/starter-go` and
 `examples/starter-python` implement all of the contract; this page is the
-contract from the implementer's seat, so you can grow out of a template or
+contract from the implementer's side, so you can grow out of a template or
 start clean.
 
 ## What the operator hands your container
@@ -28,7 +28,7 @@ appended after these, so do not shadow the `KAALM_` names.
 
 ## The contract as a checklist
 
-Numbered as in the design book (runtime contract items 1 to 7):
+Numbered as in the design book (runtime contract items 1 to 8):
 
 1. **Health endpoints (required).** Serve `GET /readyz` and `GET /livez`
    over TLS on `$KAALM_HEALTH_PORT`, returning 200 when healthy. The
@@ -54,6 +54,11 @@ Numbered as in the design book (runtime contract items 1 to 7):
    `reason=TaskAlreadyCompleted` as final and exit.
 7. **Message deduplication (required if you implement /v1/message).**
    Deliveries carry a gateway-generated `messageId`; process each id once.
+   With `hibernationEnabled: true` the buffer of seen ids must survive Pod
+   restarts.
+8. **Trace-context propagation (required if you implement /v1/message).**
+   Copy the delivery's `traceparent` and `tracestate` headers onto every
+   gateway call you make while handling that message; never invent them.
 
 ## One image, both modes
 
@@ -66,35 +71,36 @@ only as an override for the heartbeat loop; there is no force-on.
 ## Growing out of a template versus starting clean
 
 Before either: if a base image plus a mounted or `FROM`-baked handler covers
-your case, stay there and skip this whole page. Start from a template if
-your language is Go or Python and you need the whole program: the TLS wiring,
-rotation reload, envelope parsing, dedup, and completion retry logic are the
-fiddly parts, and they are exactly what the templates already do. Start
-clean only when you need another runtime, and port the template's structure
-rather than its lines: serve, verify, reload, dedup.
-
-Replace the template's handler (`handler.go` / `handler.py`) with your agent
-logic; everything else is contract plumbing you should rarely touch.
+your case, stay there and skip this whole page. The templates carry no
+contract code of their own. `examples/starter-python` is a `FROM` build on
+the Python base image plus a `handler.py`, and `examples/starter-go` is a
+`main.go` and `handler.go` that import the `agentruntime` module, which
+implements the TLS wiring, rotation reload, envelope parsing, dedup,
+heartbeat, and completion retry. Start from the Go template if Go is your
+language and you need the whole program. Start clean only when you need
+another runtime, and implement the checklist in order: serve, verify, reload,
+dedup, propagate.
 
 ## Testing an image before pointing an Agent at it
 
-The honest answer: the fastest full-fidelity loop is the e2e
-cluster, because the contract is mostly about TLS identity, and that needs
-the real certificate machinery:
+The fastest full-fidelity loop is the e2e cluster, because the contract is mostly about TLS identity, and that needs
+the real certificate issuance:
 
 ```bash
 make k3d-up e2e-images e2e-deploy
-# then apply an Agent pointing at your image, imported via:
-# docker build -t registry.test/agents/mine:dev . && k3d image import ...
+docker build -t registry.test/agents/mine:dev .
+k3d image import registry.test/agents/mine:dev -c kaalm-dev
 ```
+
+Then apply an Agent pointing at `registry.test/agents/mine:dev`.
 
 For pure handler logic, both templates keep it behind a plain function you
 can unit test without any of the above.
 
 ---
 
-*How this works: design book pages Runtime, Runtime Contract (the normative
+*How this works: design book pages Runtime, The runtime contract (the normative
 version of this checklist, including the dedup rationale), Runtime,
-Reference Base Images (the bottom rungs of the ladder), Runtime, Starter
-Templates (what each template implements), and Gateways, API, Task Complete
+Reference base images (the bottom rungs of the ladder), Runtime, Starter
+templates (what each template implements), and Gateways, API, Task completion
 (the identity gate you are retrying against).*

@@ -1,16 +1,16 @@
-# Budgets, Limits, and Fallback
+# Budgets, limits, and fallback
 
 This page is the operating manual for the guardrails on a ModelProvider: what
-each knob does, what the calling agent experiences when it fires, and how to
+each value does, what the calling agent experiences when it fires, and how to
 read the aftermath from status.
 
-One design fact up front: budgets are **soft limits by default**. Each
-gateway replica keeps a local ledger and replicas exchange totals through a
-ConfigMap, so a burst of parallel requests can overshoot a ceiling slightly
-before every replica has caught up. Soft budgets are guardrails against
-runaway spend, not billing-grade metering. Since v0.3.0 a provider can opt
-in to hard enforcement, which turns its block policies into a cap with a
-stated guarantee; that task is [below](#turning-on-hard-enforcement).
+One design fact up front: budgets are *soft limits by default*. The gateway
+replicas each keep a ledger and exchange totals, so a burst of parallel
+requests can overshoot a ceiling slightly before every replica has caught up
+(the design book's Budgets and rate limits page states the bound). Soft
+budgets are guardrails against runaway spend, not billing-grade metering. A provider can opt in to hard
+enforcement, which turns its block policies into a cap with a stated
+guarantee; see [Turning on hard enforcement](#turning-on-hard-enforcement).
 
 ## Budget policies: warn, degrade, block
 
@@ -29,7 +29,7 @@ budget:
 ```
 
 Policies fire as spend crosses their `atPercent`; when several have been
-crossed, the highest one wins. What each action means from both seats:
+crossed, the highest one wins. What each action means for the caller and for you:
 
 | Action | The caller sees | You see |
 |---|---|---|
@@ -41,7 +41,10 @@ Two validation notes on `degradeTo`: it must name a model in the same
 provider's catalog (`Ready=False, reason=InvalidDegradeTarget` otherwise),
 and if it is not the cheapest model in the catalog the controller emits an
 advisory `DegradeTargetNotCheapest` event, since a "degrade" that escalates
-cost is usually a mistake.
+cost is usually a mistake. As shipped that event repeats on every pass, about
+once a minute, until the target changes. A `degradeTo` that names the model
+being requested, as the sample's does with its single-model catalog, changes
+nothing.
 
 Periods reset at midnight UTC: `monthly` on the first of the month, `weekly`
 on Monday, `daily` every day. `perNamespaceUSD` caps each namespace
@@ -56,7 +59,7 @@ your side of the same picture. Each affected Agent also carries a `Degraded`
 condition (reason `BudgetExhausted`) visible in `kubectl describe agent`,
 with its phase preserved; the condition clears on its own when the budget
 frees up. All of this is identical under hard enforcement; what hard adds
-is the behavior just below and at the ceiling.
+is the behavior near and at the ceiling.
 
 ## Turning on hard enforcement
 
@@ -84,10 +87,10 @@ mode.
 
 What changes at runtime happens only near the ceiling. A few points below
 each block threshold (the margin), requests to that provider serialize: one
-in-flight request at a time per namespace, with concurrent requests
-answered `429 budget_throttled` and `Retry-After: 1`, which callers should
-retry on a short backoff (the opposite of `budget_exhausted`'s
-wait-for-the-period guidance). The request that would cross the ceiling is
+in-flight request at a time per namespace on each gateway replica, with
+concurrent requests answered `429 budget_throttled` and `Retry-After: 1`,
+which callers retry on a short backoff (the opposite of `budget_exhausted`'s
+wait-for-the-period guidance). The request that would take spend past the ceiling is
 rejected with no call to the upstream provider, and the block message names
 which ceiling fired. If a gateway replica cannot verify budget state inside
 that region, it answers `503 budget_state_unavailable` rather than spending
@@ -97,15 +100,15 @@ Two things to watch after enabling it:
 
 - A `BoundaryMarginRaised` condition on the provider means observed traffic
   needed a wider margin than your `boundaryMarginPercent`; the gateway
-  widened it automatically and the guarantee held, but size the knob
-  deliberately using the overspend-bound formula in the design book.
+  widened it automatically and the guarantee held, but size the value
+  using the overspend-bound formula in the design book.
 - A namespace that lives near its ceiling (month-end, typically) lives with
   serialized admission until the period resets. If a team needs throughput
   at high utilization, widen their budget rather than their margin.
 
 The exact guarantee, its fine print (streams, usage-less responses), and
-the mechanism live in the design book's Budgets and Rate Limits chapter,
-Hard Enforcement section.
+the mechanism live in the design book's Budgets and rate limits chapter,
+Hard enforcement section.
 
 ## Reading spend
 
@@ -124,11 +127,11 @@ sync interval; it is the display surface, not the enforcement counter.
 ```yaml
 rateLimits:
   requestsPerMinute: 300
-  tokensPerMinute: 500000
 ```
 
 Buckets are per `(namespace, model)`: each pair gets the full configured
-ceiling, so a namespace using three models can reach three times the ceiling
+ceiling of requests per minute (the schema also accepts `tokensPerMinute`, which
+the gateway does not enforce), so a namespace using three models can reach three times the ceiling
 against the provider in aggregate. The configured value is the intended
 cluster-wide limit; each gateway replica enforces its share. A limited caller
 gets `429` with error type `rate_limited`; unlike a budget block, this clears
@@ -146,8 +149,8 @@ fallback:
 ```
 
 If the provider is unreachable, times out, or returns a 5xx, the gateway
-tries the fallback chain in declared order, walking each fallback's own
-chain depth-first. The rules that surprise people:
+tries the fallback chain in declared order (the design book's Fallback logic
+page draws the traversal). The rules to know:
 
 - A fallback may have a different `spec.type` when the gateway can
   translate between the two: `anthropic` and `openai` (or
@@ -161,12 +164,12 @@ chain depth-first. The rules that surprise people:
   thinking, `response_format`) skips that fallback with a
   `FallbackIneligible` event on your provider.
 - The gateway-level depth cap (`gateway.maxFallbackDepth`, default 3) bounds
-  the **total providers attempted per request, including the primary**, not
+  the *total providers attempted per request, including the primary*, not
   the nesting depth.
-- A budget-blocked **primary** returns `429 budget_exhausted` immediately
+- A budget-blocked *primary* returns `429 budget_exhausted` immediately
   with no fallback: a capped namespace must not drain the backup's budget. A
-  budget-blocked **fallback candidate** is skipped but still consumes an
-  attempt slot.
+  budget-blocked *fallback candidate* is skipped, still consumes an attempt
+  slot, and its own fallbacks are still walked.
 - If the whole walk fails, the caller gets `502 provider_error` in the
   general case, or `503`/`504` when every attempt was unreachable or timed
   out.
@@ -174,6 +177,6 @@ chain depth-first. The rules that surprise people:
 ---
 
 *How this works: design book pages Resources, ModelProvider (fallback trees,
-with the diagram of the depth cap), Gateways, LLM, Budgets and Rate Limits
-(the ledger and the replica exchange), and Gateways, LLM, Fallback (the
+with the diagram of the depth cap), Gateways, LLM, Budgets and rate limits
+(the ledger and the replica exchange), and Gateways, LLM, Fallback logic (the
 traversal pseudocode).*

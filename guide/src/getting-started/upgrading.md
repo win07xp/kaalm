@@ -10,14 +10,14 @@ steps, CRDs first:
 Pull the chart version you are upgrading to and apply its `crds/` directory:
 
 ```bash
-helm pull oci://ghcr.io/win07xp/charts/kaalm --version <version> --untar
+helm pull oci://ghcr.io/win07xp/charts/kaalm --version VERSION --untar
 kubectl apply --server-side --force-conflicts -f kaalm/crds/
 ```
 
-`--force-conflicts` is part of the command: Helm owns every CRD field from
-the install, and the first server-side apply takes that ownership over.
+`--force-conflicts` is part of the command: Helm is the field manager for every CRD field from
+the install, and the first server-side apply takes that management over.
 
-Find `<version>` on the
+Replace `VERSION` with the release you are upgrading to, listed on the
 [Releases page](https://github.com/win07xp/kaalm/releases). If you work from
 a checkout of the repository, `charts/kaalm/crds/` is the same directory.
 
@@ -25,28 +25,51 @@ a checkout of the repository, `charts/kaalm/crds/` is the same directory.
 
 ```bash
 helm upgrade kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version <version> \
-  -n kaalm-system \
-  --set certManager.clusterResourceNamespace=cert-manager
+  --version VERSION \
+  --namespace kaalm-system \
+  --set certManager.clusterResourceNamespace=cert-manager \
+  --wait
 ```
 
 Pass the same `--set` values as your install; `helm upgrade` resets anything
 you leave out to the chart's defaults. With `--wait`, the command returns when
-the controller and gateway rollouts are complete.
+the controller and gateway rollouts are complete. Values whose change has
+workload-visible effects are listed under Helm chart upgrades on the design
+book's Deployment page.
 
 Running agents are not restarted by either step. The controller replaces an
 agent Pod only when the Pod's own spec changes, and a Kaalm upgrade does not
-change it.
+change it. One effect is visible: the gateway rollout resets its in-memory
+activity state, so idle and hibernation transitions defer for one
+`idleTimeout` afterwards; on a cluster with multi-hour idle timeouts, schedule
+the upgrade with that in mind. Before and after the two steps, a running
+agent and a finished task read the same:
+
+```bash
+kubectl get agents,agenttasks -n team-demo
+```
+
+```text
+NAME                               PHASE     READY   CLASS      AGE
+agent.kaalm.io/support-assistant   Running   True    standard   4m39s
+
+NAME                                PHASE       CLASS      AGE
+agenttask.kaalm.io/nightly-report   Succeeded   standard   102s
+```
+
+and their Pods keep their names and ages, while `helm history kaalm -n
+kaalm-system` shows the new revision as `deployed`.
 
 ## Upgrading across v0.6.0
 
 v0.6.0 graduates the API: `v1beta1` becomes the storage version and the
 version the components speak, and `v1alpha1` stays served, deprecated, and
 converted by the controller. The upgrade is still the same two steps, with
-one window worth knowing about.
+one window to know about.
 
-**Between step 1 and step 2**, reads keep working, but a write at `v1alpha1`,
-including `kubectl apply` of an existing manifest, fails with a conversion
+**Between step 1 and step 2**, reads at `v1alpha1` keep working, but a write
+at `v1alpha1`, including `kubectl apply` of an existing manifest, and a read
+at `v1beta1` of an object still stored at `v1alpha1` fail with a conversion
 error: the new CRDs already store at `v1beta1`, and no replica of the old
 controller serves the conversion webhook. The old controller's own status
 writes hit the same error, so expect reconcile errors in its log and
@@ -62,8 +85,8 @@ up) and adopts it again on your next `helm upgrade`. The class stays in
 place throughout.
 
 **After step 2**, verify the storage migration finished. The controller
-rewrites every stored object at `v1beta1` on its first start and then trims
-each CRD's status:
+replica that wins leader election rewrites every stored object at `v1beta1`
+and then trims each CRD's status, retrying with backoff if a pass fails:
 
 ```bash
 kubectl get crd agents.kaalm.io -o jsonpath='{.status.storedVersions}'
@@ -85,11 +108,13 @@ The schema is identical, so moving a manifest to `v1beta1` is a change to its
 `v1alpha1` stays served at least through v1.0.0, and a release announces the
 removal before it happens.
 
-**Downgrading across v0.6.0 is not supported.** Once objects are stored at
+**Downgrading across v0.6.0 is not supported.** After objects are stored at
 `v1beta1`, a chart whose CRDs predate that version cannot serve them. Keep
 your manifests; if you must roll back, reinstall the old version fresh and
 reapply them.
 
-*How this works: design book pages Operations, API Versioning and Deprecation
+---
+
+*How this works: design book pages Operations, API versioning and deprecation
 (the storage migration, the conversion webhook, and the deprecation policy);
 Operations, Deployment (the rolling upgrade order).*

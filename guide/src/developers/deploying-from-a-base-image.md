@@ -1,4 +1,4 @@
-# Deploying from a Base Image
+# Deploying from a base image
 
 Kaalm publishes two reference base images that implement the whole runtime
 contract, so deploying an agent needs no Dockerfile and no registry of your
@@ -8,7 +8,7 @@ own:
   ConfigMap, and serves a built-in echo handler until you supply one.
 - `ghcr.io/win07xp/kaalm-agent-go` runs the same built-in default in a
   compiled binary; custom Go handlers are built `FROM` it (see
-  [Building Your Own Agent Image](building-your-own-image.md)).
+  [Building your own agent image](building-your-own-image.md)).
 
 Both are published per release with the same version tags as the operator.
 Pick the tag matching your installed Kaalm minor version; within a minor
@@ -19,7 +19,7 @@ series, newer patch tags are drop-in.
 Handler mounts are a per-class grant. The AgentClass you deploy under must
 set `image.allowHandlerMounts: true`, and its `allowedImages` must include
 the base image. Both are the platform team's call; see
-[Offering Agent Classes](../platform/agent-classes.md) for their side of it.
+[Offering agent classes](../platform/agent-classes.md) for their side of it.
 
 ## 1. Run the default handler
 
@@ -45,10 +45,13 @@ any of your code enters the picture.
 ## 2. Supply your handler
 
 Write `handler.py` defining `handle_message(envelope)`, sync or async. The
-runtime binds two capabilities before your handler is imported, reached with
+runtime binds five members before your handler is imported, reached with
 `import kaalm`: `kaalm.gateway` (a preconfigured mTLS client for LLM calls
-through the gateway) and `kaalm.memory` (persistent key-value state, backed
-by the agent's volume when persistence is enabled).
+through the gateway), `kaalm.memory` (persistent key-value state, backed by
+the agent's volume when persistence is enabled), `kaalm.http_client()` and
+`kaalm.http_async_client()` (httpx clients carrying the Pod's identity, for
+framework SDKs), and `kaalm.trace_context()` (the current message's trace
+headers).
 
 ```python
 import kaalm
@@ -83,7 +86,8 @@ exact failure.
 ## 3. Roll a change, roll it back
 
 Edits to a mounted ConfigMap do not restart the agent, and content is not
-tracked. Version the name instead:
+tracked, but the edited content is what the next Pod loads, a wake from
+hibernation included. Version the name instead:
 
 ```bash
 kubectl create configmap greeter-handler-v2 --from-file=handler.py
@@ -94,18 +98,19 @@ kubectl patch agent greeter --type=merge \
 Repointing the reference replaces the Pod, which is an ordinary agent
 restart: persistent state survives on the volume, in-flight delivery retries
 cover the gap. Rolling back is repointing to `-v1`. In production, add
-`immutable: true` to handler ConfigMaps: it makes the repoint the only way
-to change behavior, which is the property that makes rollbacks trustworthy.
+`immutable: true` to handler ConfigMaps: it closes the edit-then-wake path
+and makes the repoint the only way to change behavior, which is what makes
+rollbacks trustworthy.
 
 ## When you have outgrown the mount
 
 The moment your handler needs a dependency the base image does not bundle,
 move to the `FROM` pattern: same base image, same handler file, plus a
-one-line `pip install`. The class gate no longer applies (a `FROM` build
-passes ordinary image review via `allowedImages`), and the trade-offs are on
-[Building Your Own Agent Image](building-your-own-image.md). If the
+one-line `pip install`. The class gate does not apply (a `FROM` build
+passes ordinary image review through `allowedImages`), and the trade-offs are on
+[Building your own agent image](building-your-own-image.md). If the
 dependency you need is an agent framework, that is its own page:
-[Running Framework Agents](framework-agents.md).
+[Running framework agents](framework-agents.md).
 
 ## If the handler never runs
 
@@ -122,7 +127,7 @@ dependency you need is an agent framework, that is its own page:
 
 ---
 
-*How this works: design book pages Runtime, Reference Base Images (the
+*How this works: design book pages Runtime, Reference base images (the
 image contract, the handler resolution rules, and the `FROM` pattern), and
-Resources, Validation and Defaulting (rules 30 and 31, the class gate and
+Resources, Validation and defaulting (rules 30 and 31, the class gate and
 the missing-ConfigMap condition).*

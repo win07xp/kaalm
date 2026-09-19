@@ -9,7 +9,7 @@ to Discord: the gateway only answers requests Discord makes.
 ## Before you begin
 
 - A running Agent with `service.enabled: true` (the default). See
-  [Your First Agent](first-agent.md).
+  [Your first agent](first-agent.md).
 - The user gateway reachable from the internet over HTTPS at a hostname with a
   certificate Discord can verify. Discord refuses a self-signed endpoint. See
   [Exposing it outside the cluster](connecting-a-channel.md#exposing-it-outside-the-cluster).
@@ -27,9 +27,9 @@ bot token. Register one guild command named `ask` with a string option named
 hour to appear.
 
 ```bash
-export APP_ID=<application id>
-export GUILD_ID=<your server id>
-export BOT_TOKEN=<bot token from the portal>
+export APP_ID=APPLICATION_ID
+export GUILD_ID=SERVER_ID
+export BOT_TOKEN=BOT_TOKEN
 
 curl -sS -X POST "https://discord.com/api/v10/applications/$APP_ID/guilds/$GUILD_ID/commands" \
   -H "Authorization: Bot $BOT_TOKEN" \
@@ -37,20 +37,22 @@ curl -sS -X POST "https://discord.com/api/v10/applications/$APP_ID/guilds/$GUILD
   -d '{"name":"ask","description":"Ask the agent","options":[{"name":"message","description":"What to ask","type":3,"required":true}]}'
 ```
 
-The option name matters: the gateway takes the value of the option named by
-the channel's `contentOption` (default `message`) as the message text.
+Replace `APPLICATION_ID` and `SERVER_ID` with the ids from the portal and
+`BOT_TOKEN` with the bot token. The option name matters: the gateway takes
+the value of the option named by the channel's `contentOption` (default
+`message`) as the message text.
 
 ## Store the credentials
 
-Copy the application's **Public Key** from the portal's General Information
-page. Create a Secret next to your agent with that key. Add `botToken` if you
-expect the agent to take longer than 15 minutes to answer; see
-[Slow agents](#slow-agents).
+Copy the application's **Public Key**, a hex string, from the portal's
+General Information page. Create a Secret next to your agent with that key.
+Add `botToken` if you expect the agent to take longer than 15 minutes to
+answer; see [Slow agents](#slow-agents).
 
 ```bash
 kubectl create secret generic support-discord-creds \
   --namespace team-support \
-  --from-literal=publicKey=<public key, hex>
+  --from-literal=publicKey=PUBLIC_KEY
 ```
 
 ## Create the channel
@@ -71,17 +73,16 @@ spec:
     path: /channels/team-support/support-discord
     credentialsRef:
       name: support-discord-creds
-    # Optional. Commands from any other server get a short refusal and never
-    # reach the agent.
     guildId: "123456789012345678"
 ```
 
-The `path` follows the same rules as a webhook channel: it starts with
-`/channels/{namespace}/` and never with `/v1/`. Apply the manifest and wait
-for `Ready`:
+`guildId` is optional: with it set, commands from any other server get a
+short refusal and never reach the agent. The `path` follows the same rules
+as a webhook channel: it starts with `/channels/{namespace}/` and never with
+`/v1/`. Apply the manifest and wait for the `Phase` column to read `Active`:
 
 ```bash
-kubectl get agentchannel support-discord -n team-support -o wide
+kubectl get agentchannel support-discord -n team-support
 ```
 
 A channel whose Secret is missing the key, or whose key is not a valid
@@ -101,7 +102,11 @@ https://bots.example.com/channels/team-support/support-discord
 When you save, Discord sends a verification `PING` and a deliberately
 badly-signed request; the gateway answers the first with `PONG` and the second
 with `401`, and Discord accepts the URL. Save only after the channel is
-`Ready`: an unregistered path answers `401` to everything and the save fails.
+`Active`: an unregistered path answers `401` to everything and the save fails.
+As shipped the badly-signed probe is recorded as a `WebhookAuthFailed`
+failure, so `PlatformConnected` reads `False` for up to the health window
+(five minutes by default) after a successful save; the first real command
+clears it.
 
 ## Try it
 
@@ -111,9 +116,10 @@ With `session.enabled: true`, every command from the same person carries the
 same session ID, so the agent can keep a conversation going.
 
 The agent receives a message envelope with `channelType: discord`, the
-person's Discord user ID as `userId`, the option's text as `content`, and the
-command name, guild, channel, and other options under `metadata`. Attachments
-arrive as references with a CDN URL; the gateway does not download them.
+person's Discord user ID as `userId`, and the option's text as `content`; the
+design book's Discord channel page lists every envelope field.
+
+![Sequence diagram of a platform channel message after intake. A person sends a slash command or a message; the platform sends a signed POST to /channels/{namespace}/{path} on the User Gateway, which runs the intake checks and acknowledges. The gateway wakes the Agent if needed and POSTs /v1/message to the Agent Service with up to four attempts, receiving a reply envelope or an error. The gateway then calls SendReply against the platform API with up to four attempts per chunk. On 2xx the reply appears in the chat; on a terminal status, or when the retries are exhausted, the gateway records CallbackRejected and drops the payload.](../diagrams/platform-channel-flow.svg)
 
 ## Slow agents
 
@@ -123,8 +129,8 @@ take longer, add `botToken` to the credential Secret:
 ```bash
 kubectl create secret generic support-discord-creds \
   --namespace team-support \
-  --from-literal=publicKey=<public key, hex> \
-  --from-literal=botToken=<bot token>
+  --from-literal=publicKey=PUBLIC_KEY \
+  --from-literal=botToken=BOT_TOKEN
 ```
 
 When the token has expired, the gateway posts the reply as a normal message
@@ -139,7 +145,8 @@ reply is dropped and the channel's `PlatformConnected` condition reports
 
 - `WebhookAuthFailed`: Discord's signatures do not verify. The `publicKey` in
   the Secret does not match the application, or the interactions URL points
-  at a different channel.
+  at a different channel. Within five minutes of saving the URL, it is the
+  save-time probe, not a misconfiguration.
 - `CallbackRejected`: Discord refused the reply. The message names the HTTP
   status; a `404` means the reply token had expired (see
   [Slow agents](#slow-agents)).
@@ -154,6 +161,6 @@ Ingress first.
 ---
 
 *How this works: design book pages Resources, AgentChannel (the Platform
-types section), Gateways, User, Platform Adapters (the inbound steps and reply
-delivery), and Gateways, API, Discord Channel (the wire contract on both
+types section), Gateways, User, Platform adapters and channel health (the inbound steps and reply
+delivery), and Gateways, API, Discord channel (the wire contract on both
 sides).*

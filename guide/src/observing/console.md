@@ -1,20 +1,21 @@
-# Using the Console
+# Using the console
 
 The console is an optional web view of the fleet: which agents are running
 or hibernated, what each namespace spends against its budgets, task history,
 channel health, and a test-chat panel. It reads status the cluster already
 holds; it cannot create, edit, or delete anything, and it never shows a
-Secret. It is off by default, and enabling it adds one Deployment to
-`kaalm-system` and changes nothing else about the install.
+Secret. It is off by default; enabling it adds six objects to `kaalm-system`
+and changes nothing already installed.
 
 ## 1. Enable it
 
-Add one value to your install or upgrade command (the e2e suite's own
-install, in the Makefile's `e2e-deploy` target, does exactly this):
+Add one value to your install or upgrade command:
 
 ```bash
 --set console.enabled=true
 ```
+
+The e2e suite's own install, the Makefile's `e2e-deploy` target, sets it.
 
 Then wait for the rollout:
 
@@ -22,17 +23,15 @@ Then wait for the rollout:
 kubectl rollout status deployment/kaalm-console -n kaalm-system
 ```
 
-The flag renders a ServiceAccount with a read-only ClusterRole, a
-certificate, a one-replica Deployment, and a ClusterIP Service named
+The flag renders a ServiceAccount, a read-only ClusterRole and its binding,
+a certificate, a one-replica Deployment, and a ClusterIP Service named
 `kaalm-console` on port 8443. Without the flag, `helm template` renders none
-of them. One replica is deliberate: login sessions are held in memory, and a
-second replica would break logins rather than add availability. The chart
-ships no Ingress and no LoadBalancer; how the console is exposed is your
-decision.
+of them. The chart ships one replica with no `console.replicas` value, and
+no Ingress and no LoadBalancer; how the console is exposed is your decision.
 
 ## 2. Give someone access
 
-The console authenticates with the cluster's own machinery. A person pastes
+The console authenticates with Kubernetes itself. A person pastes
 a bearer token; the console validates it with a `TokenReview`, then gates
 every namespace read with a `SubjectAccessReview`:
 
@@ -87,8 +86,8 @@ kubectl create token console-viewer -n console-e2e
 ```
 
 A person with an OIDC user token can paste that instead; the console accepts
-any token the cluster's `TokenReview` accepts. Someone whose token may list
-agents in no namespace sees an empty namespace list, not an error.
+any token the cluster's `TokenReview` accepts. A token that may not list
+agents in any namespace sees an empty namespace list, not an error.
 
 ## 3. Reach it and log in
 
@@ -97,44 +96,47 @@ kubectl port-forward -n kaalm-system svc/kaalm-console 8443:8443
 ```
 
 Open `https://localhost:8443`. The console serves TLS with a certificate
-from the cluster issuer, whose name is the in-cluster Service name, so your
-browser warns about a name mismatch for `localhost`. That is expected on a
-port-forward. Paste the token on the login page.
+from the Kaalm CA, which your browser does not trust, so it warns about an
+unknown issuer. That is expected on a port-forward. Paste the token on the
+login page.
 
-The session cookie is held in memory and expires with the token or after 24
-hours, whichever comes first. If the console restarts, log in again.
+The session is held in the console's memory. It lasts 24 hours, and the
+console re-checks the token every five minutes and ends the session when the
+check fails, so a revoked token keeps its session for at most five minutes.
+If the console restarts, log in again.
 
 ## 4. What you see
 
 The home page lists the namespaces your token may read. A namespace page
 has four panels:
 
-- **Fleet**: each Agent's phase, when it hibernated, and its last activity.
+- **Fleet**: each Agent's phase, readiness, class, when it hibernated, and
+  its last activity.
 - **Spend**: the namespace's spend against each ModelProvider's per-namespace
-  ceiling, plus a per-workload breakdown (`agent/<name>`, `task/<name>`,
-  and an unattributed bucket for gateway-only callers). The breakdown is the
-  current period and sums to the namespace figure.
+  ceiling, plus a per-workload breakdown (`agent/AGENT_NAME`,
+  `task/TASK_NAME`, and an unattributed bucket for gateway-only callers). The
+  breakdown is the current period, read live from the gateway, and can run
+  ahead of the namespace figure, which the controller folds once per pass.
 - **Tasks**: phase, start and completion times, retries, and artifact names.
   Artifact values never appear; task history is about lifecycle, not
   content.
 - **Channels**: each AgentChannel's phase and its `Ready` and
   `PlatformConnected` conditions.
 
-An agent's own page adds its conditions, class, providers, tools, Pod and PVC
-names, and its own current-period spend. Every number is a status field
+An agent's own page adds its conditions, class, providers, tools, endpoint,
+Pod and PVC names, and its own current-period spend. Every number is a status field
 `kubectl get` would also show; the console puts them on one screen.
 
 ## 5. Test-chat
 
-On an agent's page, type a message and send it. The console does not dial
-the agent; it asks the gateway to deliver the message exactly as a channel
-message, so a hibernated agent wakes, answers, and the reply renders. Three
-consequences follow:
+On an agent's page, type a message and send it. The gateway delivers it
+exactly as a channel message, so a hibernated agent wakes, answers, and the
+reply renders. Three consequences follow:
 
 - The chat counts as activity: it wakes a hibernated agent and resets its
   idle clock.
 - Any LLM or tool calls the agent makes while answering are metered,
-  budgeted, and audited as usual. There is no console-shaped hole in the
+  budgeted, and audited as usual. The console cannot bypass the
   budget.
 - The gateway's delivery log names you, because the message's `userId` is
   the identity from your token.
@@ -149,10 +151,10 @@ send the message again.
 
 Everything the pages show is also served as JSON under `/api/v1`, with an
 `Authorization: Bearer` header instead of a login session. From the e2e spec,
-over the same port-forward (`-k` because of the name mismatch):
+over the same port-forward (`-k` because the Kaalm CA is not in your trust store):
 
 ```bash
-TOKEN=$(kubectl create token console-viewer -n console-e2e)
+TOKEN=$(kubectl create token console-viewer -n console-e2e)   # your namespace here
 curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:8443/api/v1/namespaces
 ```
 
@@ -170,19 +172,19 @@ curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:8443/api/v1/namespa
 | `GET /api/v1/namespaces/{ns}/spend` | Budget usage per provider, with the per-workload breakdown |
 | `POST /api/v1/namespaces/{ns}/agents/{name}/chat` | Test-chat: `{"content": "..."}` in, the reply out |
 
-An invalid token gets `401`; a namespace the token may not read gets `403`.
-Responses are console-owned summaries, not raw objects, and the API is
-additive within `/api/v1`: fields and endpoints are added, never renamed or
-removed, so a script written against it keeps working.
+An invalid token gets `401` and a namespace the token may not read gets
+`403`, both as `{"error": {"type": "...", "message": "..."}}`. Fields and
+endpoints are added to `/api/v1`, never renamed or removed, so a script
+written against it keeps working.
 
 ## 7. If something is off
 
 - **The login page rejects the token.** The `TokenReview` failed: the token
   is expired or malformed. Mint a fresh one.
 - **The namespace list is empty.** The token may not `list` agents in any
-  namespace. Authorization results are cached for 5 minutes per identity
-  and namespace, so a Role granted a moment ago can take up to 5 minutes to
-  show.
+  namespace. Authorization results are cached for five minutes per identity,
+  namespace, and permission, so a Role granted a moment ago can take up to
+  five minutes to show.
 - **The per-workload spend rows are missing but the namespace totals are
   there.** The console could not reach the gateway for the breakdown; the
   panel degrades to the namespace rows rather than failing.
@@ -192,8 +194,8 @@ removed, so a script written against it keeps working.
 
 ---
 
-*How this works: design book pages The Console, Console Overview (scope,
+*How this works: design book pages Console, Console overview (scope,
 data sources, the read API, authentication, and test-chat semantics),
-Security, RBAC and Authentication (how the console authenticates to the
+Security, RBAC and authentication (how the console authenticates to the
 gateway), and Operations, Deployment (the console values and why one
 replica).*

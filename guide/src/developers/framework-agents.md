@@ -1,9 +1,9 @@
-# Running Framework Agents
+# Running framework agents
 
 Kaalm never dictates what code produces a reply. The runtime contract
 governs how a container behaves; a framework agent (LangGraph, LangChain,
-or anything else) is just the code between envelope in and reply out. If
-you already have one, you do not have to ditch it. There are two
+or anything else) is the code between envelope in and reply out. If you
+already have one, you can keep it. There are two
 integration levels, and the first needs no conversion at all.
 
 ## Level 1: gateway only, zero conversion
@@ -41,12 +41,13 @@ all configuration:
    real credential, and forwards. Whatever key your client was configured
    with is stripped before forwarding, so a placeholder is safe.
 
-One wire fact to respect: the gateway is protocol-aware but does not
-translate. An OpenAI-format client must target a provider of `spec.type`
-`openai` or `openai-compatible`, an Anthropic-format client an `anthropic`
-provider.
+One wire fact to respect: the primary provider must speak your client's
+format. An OpenAI-format client targets a provider of `spec.type` `openai`
+or `openai-compatible`, an Anthropic-format client an `anthropic` provider.
+The one translation the gateway does is on a cross-format fallback, where
+the answer is rewritten back into your client's format.
 
-What this buys: the API key leaves your pods, and the namespace's budgets,
+What you get: the API key leaves your pods, and the namespace's budgets,
 rate limits, and fallback apply to every call. What it does not: no Agent
 resource means no lifecycle, no hibernation, no channels, and no per-agent
 identity; your namespace is the tenancy unit. That trade is the design
@@ -57,12 +58,12 @@ the rest of this page.
 
 On the base image, the framework is a `pip install` in a `FROM` build and
 the graph runs inside `handle_message(envelope)`. The base image keeps
-owning the contract plumbing; your handler builds its model clients from
+providing the contract code; your handler builds its model clients from
 two ABI members made for exactly this:
 
 ```python
 model = ChatOpenAI(
-    model=os.environ["KAALM_MODEL"],
+    model=os.environ["KAALM_MODEL"],   # set in the Agent's spec.env; Kaalm injects no model name
     base_url=os.environ["KAALM_GATEWAY_ENDPOINT"] + "/v1",
     api_key="managed-by-kaalm",
     http_client=kaalm.http_client(),
@@ -86,14 +87,16 @@ different combination:
   checkpointer on the agent's PVC, keyed by the envelope's `sessionId`.
   Graph state survives hibernation, which the framework alone cannot
   offer. Needs `spec.persistence.enabled: true`; the volume is mounted at
-  `/var/agent/memory` by default.
+  `/var/agent/memory` by default. Keep the default `mountPath`: as shipped
+  the runtime is not told about a custom one, so `kaalm.memory` would fall
+  back to in-process state.
 - **`examples/langgraph-tools/`**: a tool-calling agent whose MCP tools
-  arrive through the gateway's broker at `/v1/mcp/<toolProvider>`, so the
+  arrive through the gateway's broker at `/v1/mcp/{toolProvider}`, so the
   tool credential never exists in the pod and the tool list is already
   filtered to the grant. The MCP connection reuses
   `kaalm.http_async_client` through the adapter's client factory. The
-  calling side of that story is
-  [Calling Tools Through the Gateway](calling-tools.md).
+  calling side is
+  [Calling tools through the gateway](calling-tools.md).
 - **`examples/langgraph-task/`**: a run-to-completion summarize, critique,
   refine graph as an AgentTask (next section).
 
@@ -101,15 +104,15 @@ different combination:
 
 An AgentTask's work is its whole program, not a resident message loop, so
 the handler mount is deliberately not its extension point. The
-`langgraph-task` example owns the slice of the contract a task needs: it
+`langgraph-task` example implements the slice of the contract a task needs: it
 reads its goal from its own `spec.env` (Kaalm injects no goal variables),
 runs the graph, and reports through `POST /v1/task/complete` with
 `status: "success"` and the artifacts declared in `spec.artifacts`,
 retrying only the retryable rejection (`StalePodCompletion`, on 100ms,
 500ms, 2s) and treating `TaskAlreadyCompleted` as done. See
-[Running Tasks](running-tasks.md) for the task lifecycle itself.
+[Running tasks](running-tasks.md) for the task lifecycle itself.
 
-## When the platform pushes back
+## Errors your graph will see
 
 Your graph's model calls are governed calls, and mid-graph a gate can
 close. What the framework sees, from softest to hardest:
@@ -125,7 +128,7 @@ close. What the framework sees, from softest to hardest:
 - **A blocked or hard-capped budget is a 429** with `budget_exhausted`,
   and it will not clear until the period resets or the cap is raised.
   Retrying inside the graph wastes steps: fail the run and surface the
-  error. Branch on `error.type` from the response body, never on the
+  error, even though as shipped the envelope marks it `retryable: true`. Branch on `error.type` from the response body, never on the
   message text.
 
 A graph that checkpoints (as the chat example does) resumes from its last
@@ -145,7 +148,7 @@ rebuilt when TLS errors appear.
 
 ---
 
-*How this works: design book pages Runtime, Base Images (the ABI and the
-on-ramp rungs), Gateways, LLM, Request Handling (formats, adapters, and
-what is never translated), Gateways, API, Errors (the envelope), and
+*How this works: design book pages Runtime, Reference base images (the ABI and the
+on-ramp rungs), Gateways, LLM, Request handling (formats, adapters, and
+what is never translated), Gateways, API, Error reference (the envelope), and
 Operations, Deployment (the tiered on-ramp).*
