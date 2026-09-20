@@ -7,11 +7,21 @@ exceed what it grants.
 
 ## A standard class
 
-The chart installs a class named `standard` that allows any image, allows no
-ModelProvider, and does not enable persistence, so an agent under it runs
-with no model access and no volume. Either replace it with your own policy
-or disable it (`--set standardAgentClass.enabled=false`) and ship classes
-under your own names. The sample from
+The chart installs a class named `standard` that allows any image, storage up
+to 50Gi, and hibernation, and that names no ModelProvider, so an agent under
+it gets a volume but no model access. Name your providers on it with a chart
+value, alongside the rest of your install values:
+
+```bash
+helm upgrade kaalm oci://ghcr.io/win07xp/charts/kaalm -n kaalm-system \
+  --set standardAgentClass.allowedProviders={anthropic-shared}
+```
+
+The class reports `Ready=False` with `InvalidReference` while it names a
+provider that does not exist yet, so create the ModelProvider first. Either
+replace the class with your own policy or disable it
+(`--set standardAgentClass.enabled=false`) and ship classes under your own
+names. The sample from
 `config/samples/kaalm_v1beta1_agentclass.yaml` is a complete policy:
 
 ```yaml

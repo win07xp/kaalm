@@ -142,6 +142,12 @@ trustManager:
 # keep so an uninstall does not orphan running Agents.
 standardAgentClass:
   enabled: true
+  # ModelProviders an Agent or AgentTask of this class may name in
+  # spec.providers. Empty allows none, because the chart installs no
+  # ModelProvider and a class naming one that does not exist reports
+  # Ready=False with InvalidReference. Set it to the names you create:
+  # --set standardAgentClass.allowedProviders={anthropic-shared}
+  allowedProviders: []
 
 # The optional operator console (docs/src/console/overview.md): read-only
 # fleet visibility plus one governed test-chat action. Off by default; a

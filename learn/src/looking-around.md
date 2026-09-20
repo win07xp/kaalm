@@ -55,9 +55,11 @@ run, which model providers they may use, whether they are allowed to use
 storage, whether they may sleep. A platform team writes classes; the people
 running agents pick one.
 
-You will write your own class in the next chapter rather than use `standard`,
-because `standard` is deliberately conservative: it does not permit storage or
-sleeping, and the two features are the interesting part of this book.
+You will write your own class in the next chapter rather than use `standard`.
+Yours sets its sleep timers in seconds instead of the 30 minutes `standard`
+uses, so you can watch an agent fall asleep and wake up in one sitting, and it
+lets an agent run code you hand it as configuration, which is how you give the
+agent your own behavior later.
 
 ## Describing things
 

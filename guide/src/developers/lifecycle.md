@@ -79,7 +79,7 @@ class's grace period applies, and finishing in-flight work in that window is
 the image's job. Only then is the resource released. The PVC's fate is the
 class's `pvcRetention` policy: `Delete`, the default, removes it with the
 agent; `Retain` (the sample class's choice) keeps it for a successor agent or
-post-mortem. The chart's `standard` class enables no persistence at all. This
+post-mortem. The chart's `standard` class ships the `Delete` default. This
 policy is Kaalm's own and is independent of the PV reclaim policy underneath.
 
 ---

@@ -4,7 +4,7 @@ These scenarios are concrete enough to double as acceptance criteria: if the sys
 
 ## S1: Install Kaalm and offer a standard agent class
 
-Priya installs the Kaalm operator into her cluster with the Helm chart. The chart installs an `AgentClass` named `standard` for general-purpose agents: the cluster's default container runtime (no `runtimeClassName` set) and resource defaults of 500m CPU and 1Gi memory requested, 1 CPU and 2Gi as limits. She edits it to restrict `spec.image.allowedImages` to the company's internal registry and to list the `anthropic-shared` ModelProvider in `spec.allowedProviders`, because as shipped the class lists no providers and an empty list allows none. She publishes internal docs pointing developers to this AgentClass.
+Priya installs the Kaalm operator into her cluster with the Helm chart. The chart installs an `AgentClass` named `standard` for general-purpose agents: the cluster's default container runtime (no `runtimeClassName` set), resource defaults of 500m CPU and 1Gi memory requested with 1 CPU and 2Gi as limits, and persistence and hibernation allowed so the class's lifecycle timings apply to the agents on it. The one thing the chart cannot decide for her is which ModelProvider the class admits, because it installs none, so she names hers at install time (`--set standardAgentClass.allowedProviders={anthropic-shared}`); an empty list allows none. She edits the class to restrict `spec.image.allowedImages` to the company's internal registry, then publishes internal docs pointing developers to this AgentClass.
 
 ## S2: Offer a sandboxed class for code-execution agents
 

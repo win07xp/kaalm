@@ -67,10 +67,10 @@ standard                    28s
 ```
 
 A Ready condition on the class means the controller has reconciled it; the
-empty `AGENTS` and `TASKS` columns fill in as workloads use the class. As
-shipped, the class allows any image but lists no ModelProvider and no
-ToolProvider and enables no persistence, so an Agent that names a provider
-under it goes `Degraded` until the platform team gives the class a policy
+empty `AGENTS` and `TASKS` columns fill in as workloads use the class. The
+class allows any image, storage, and hibernation, but it lists no
+ModelProvider and no ToolProvider, so an Agent that names a provider under it
+goes `Degraded` until the platform team names one
 ([Offering agent classes](../platform/agent-classes.md)). From here:
 
 - Platform engineer: continue to [Offering agent classes](../platform/agent-classes.md).

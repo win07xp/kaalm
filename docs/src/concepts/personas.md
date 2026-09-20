@@ -10,7 +10,7 @@ Consider an engineering organization where every developer has their own persist
 
 The platform team has full visibility into LLM spend per namespace. Idle agents hibernate overnight and wake when the first message arrives. The platform can serve hundreds of these agents on a moderately sized cluster because a hibernated agent consumes no compute.
 
-This scenario, not an individual team's single production agent, is the central design driver for Kaalm's two-tier model, its [hibernation lifecycle](../controller/hibernation-and-wake.md#hibernation-mechanics), and its channel integration. As shipped, the chart's `standard` class sets the lifecycle timings but does not allow hibernation or persistence, so the class for this scenario is one the platform team writes (#243).
+This scenario, not an individual team's single production agent, is the central design driver for Kaalm's two-tier model, its [hibernation lifecycle](../controller/hibernation-and-wake.md#hibernation-mechanics), and its channel integration. The chart's `standard` class carries the grants this scenario needs, hibernation and persistence along with the lifecycle timings that drive them, so a default install runs it once Priya has created her ModelProvider and named it on the class.
 
 ## Priya, the platform engineer
 
