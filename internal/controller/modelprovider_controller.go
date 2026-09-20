@@ -489,7 +489,48 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload)).
 		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.providersForSecret)).
 		Complete(r)
+}
+
+// providersWithFallback re-enqueues every provider that declares a fallback
+// when any provider changes. The fallback tree is validated transitively, so
+// a provider created or fixed after its parent must wake the whole chain.
+func (r *ModelProviderReconciler) providersWithFallback(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list kaalmv1beta1.ModelProviderList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		mp := &list.Items[i]
+		if len(mp.Spec.Fallback) == 0 || mp.Name == obj.GetName() {
+			continue
+		}
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: mp.Name}})
+	}
+	return reqs
+}
+
+// providersForSecret re-enqueues the providers whose credentialsRef names a
+// changed Secret in the operator namespace, so a credential created or
+// rotated after the provider takes effect without another event.
+func (r *ModelProviderReconciler) providersForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != r.OperatorNamespace {
+		return nil
+	}
+	var list kaalmv1beta1.ModelProviderList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		if list.Items[i].Spec.CredentialsRef.Name == obj.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name}})
+		}
+	}
+	return reqs
 }
 
 // providerForBudgetCM re-enqueues the ModelProvider owning an
