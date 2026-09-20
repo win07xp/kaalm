@@ -10,7 +10,51 @@ permissions:
   contents: read
 
 jobs:
+  # Decides whether the change touches anything the code jobs test. A change
+  # confined to the three books, hack/docs, or Markdown files skips build-test,
+  # lint, chart, and e2e; a skipped job counts as passed for a required check.
+  # The rule fails safe: any path not listed as docs counts as code, and so
+  # does a push whose previous commit is unknown. books always runs, because
+  # docs-check also verifies the code paths the books cite.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # On a pull request HEAD is the merge commit, so its first parent is
+          # the base branch and the diff is exactly what the PR changes.
+          if [ "$EVENT" = "pull_request" ]; then
+            base="HEAD^1"
+          else
+            base="$BEFORE"
+          fi
+          if ! files=$(git diff --name-only "$base" HEAD 2>/dev/null); then
+            echo "cannot diff against '$base'; running every job"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r f; do
+            case "$f" in
+              "") ;;
+              docs/*|guide/*|learn/*|hack/docs/*|*.md) ;;
+              *) code=true; echo "code path: $f" ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "code=$code"
+
   build-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -56,6 +100,8 @@ jobs:
         run: make go-agent-smoke GO_AGENT_IMG=kaalm-agent-go:ci
 
   lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -79,6 +125,8 @@ jobs:
           working-directory: examples/starter-go
 
   chart:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -106,6 +154,8 @@ jobs:
         run: make books
 
   e2e:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
