@@ -75,6 +75,10 @@ type AgentReconciler struct {
 	// OperatorNamespace hosts the gateway and controller (kaalm-system).
 	// Agents in this namespace are rejected to protect SAN integrity.
 	OperatorNamespace string
+	// SecretReader reads Secrets in user namespaces straight from the
+	// apiserver: the manager's cache holds the operator namespace's Secrets
+	// only. nil falls back to the embedded client.
+	SecretReader client.Reader
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
@@ -424,9 +428,16 @@ func (r *AgentReconciler) readyGates(
 			return false, ctrl.Result{}, err
 		}
 	}
+	// Rule 23 reads Secrets in the Agent's namespace, where the operator
+	// holds no standing read: the scoped Role comes first.
+	if err := ensurePullSecretAccess(ctx, r.Client, r.Scheme(), agent, agentPullSecretRoleName(agent.Name),
+		r.OperatorNamespace, eff.ImagePullSecrets); err != nil {
+		return false, ctrl.Result{}, err
+	}
 	for _, ref := range eff.ImagePullSecrets {
 		var sec corev1.Secret
-		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}, &sec)
+		err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
+			types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}, &sec)
 		if apierrors.IsNotFound(err) {
 			r.setReady(agent, false, kaalmv1beta1.ReasonImagePullSecretMissing,
 				fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, agent.Namespace))

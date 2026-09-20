@@ -210,11 +210,11 @@ func desiredCompletionRoleBinding(task *kaalmv1beta1.AgentTask, operatorNamespac
 		ObjectMeta: metav1.ObjectMeta{Name: taskCompletionRoleName(task.Name), Namespace: task.Namespace},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
+			Kind:     kindRole,
 			Name:     taskCompletionRoleName(task.Name),
 		},
 		Subjects: []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
+			Kind:      rbacv1.ServiceAccountKind,
 			Name:      gatewayServiceAccount,
 			Namespace: operatorNamespace,
 		}},

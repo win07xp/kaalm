@@ -31,14 +31,6 @@
   - list
   - watch
 - apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - apiextensions.k8s.io
   resourceNames:
   - agentchannels.kaalm.io
@@ -141,10 +133,23 @@
   - rbac.authorization.k8s.io
   resources:
   - rolebindings
-  - roles
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - bind
+  - create
+  - delete
+  - escalate
   - get
   - list
   - patch

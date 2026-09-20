@@ -18,12 +18,15 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -284,6 +287,63 @@ func TestAgent_ImagePullSecretMissing(t *testing.T) {
 		t.Fatalf("create secret: %v", err)
 	}
 	expectAgentReadyReason(t, "pull-agent", "CertificateNotReady")
+}
+
+// The rule 23 read runs under a Role scoped to the class's Secret names: the
+// operator holds no standing Secret read outside its own namespace. The Role
+// follows the class, and goes away when the class names no pull Secret.
+func TestAgent_PullSecretRoleScopedAndRemoved(t *testing.T) {
+	mkWorkloadClass(t, "wc-pullrole", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "zz-creds"}, {Name: "aa-creds"}}
+	})
+	mkWorkloadAgent(t, "pullrole-agent", "wc-pullrole", nil)
+	key := types.NamespacedName{Namespace: "default", Name: agentPullSecretRoleName("pullrole-agent")}
+
+	eventually(t, func() error {
+		var role rbacv1.Role
+		if err := testClient.Get(ctxT(), key, &role); err != nil {
+			return err
+		}
+		want := []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"secrets"},
+			ResourceNames: []string{"aa-creds", "zz-creds"}, Verbs: []string{"get"},
+		}}
+		if !equality.Semantic.DeepEqual(role.Rules, want) {
+			return fmt.Errorf("role rules = %+v", role.Rules)
+		}
+		if len(role.OwnerReferences) != 1 || role.OwnerReferences[0].Name != "pullrole-agent" {
+			return fmt.Errorf("role owner = %+v", role.OwnerReferences)
+		}
+		var rb rbacv1.RoleBinding
+		if err := testClient.Get(ctxT(), key, &rb); err != nil {
+			return err
+		}
+		if len(rb.Subjects) != 1 || rb.Subjects[0].Name != controllerServiceAccount ||
+			rb.Subjects[0].Namespace != testSystemNamespace {
+			return fmt.Errorf("binding subjects = %+v", rb.Subjects)
+		}
+		return nil
+	})
+
+	var class kaalmv1beta1.AgentClass
+	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-pullrole"}, &class); err != nil {
+		t.Fatalf("get class: %v", err)
+	}
+	class.Spec.Image.ImagePullSecrets = nil
+	if err := testClient.Update(ctxT(), &class); err != nil {
+		t.Fatalf("update class: %v", err)
+	}
+	eventually(t, func() error {
+		var role rbacv1.Role
+		if err := testClient.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("role still present: %v", err)
+		}
+		var rb rbacv1.RoleBinding
+		if err := testClient.Get(ctxT(), key, &rb); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("binding still present: %v", err)
+		}
+		return nil
+	})
 }
 
 func TestAgent_ExistingClaimNotFound(t *testing.T) {

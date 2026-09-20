@@ -58,6 +58,10 @@ type AgentTaskReconciler struct {
 	client.Client
 	Recorder          record.EventRecorder
 	OperatorNamespace string
+	// SecretReader reads Secrets in user namespaces straight from the
+	// apiserver: the manager's cache holds the operator namespace's Secrets
+	// only. nil falls back to the embedded client.
+	SecretReader client.Reader
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
@@ -68,6 +72,7 @@ type AgentTaskReconciler struct {
 // +kubebuilder:rbac:groups=kaalm.io,resources=agenttasks/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=escalate;bind
 
 // Reconcile runs one pass of the AgentTask state machine.
 func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -141,9 +146,16 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			// Terminal: AgentTask has no Degraded phase.
 			return ctrl.Result{}, r.settle(ctx, &task, kaalmv1beta1.TaskFailed, reason, msg)
 		}
+		// Rule 23 reads Secrets in the task's namespace, where the operator
+		// holds no standing read: the scoped Role comes first.
+		if err := ensurePullSecretAccess(ctx, r.Client, r.Scheme(), &task, taskPullSecretRoleName(task.Name),
+			r.OperatorNamespace, eff.ImagePullSecrets); err != nil {
+			return ctrl.Result{}, err
+		}
 		for _, ref := range eff.ImagePullSecrets {
 			var sec corev1.Secret
-			err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: ref.Name}, &sec)
+			err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
+				types.NamespacedName{Namespace: task.Namespace, Name: ref.Name}, &sec)
 			if apierrors.IsNotFound(err) {
 				r.setTaskReady(&task, false, kaalmv1beta1.ReasonImagePullSecretMissing,
 					fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, task.Namespace))

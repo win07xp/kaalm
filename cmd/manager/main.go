@@ -30,13 +30,16 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -223,8 +226,20 @@ func main() {
 		setupLog.Info("pprof listener enabled; debug only", "addr", pprofAddr)
 		profiling.EnableSampling()
 	}
+	operatorNamespace := os.Getenv("POD_NAMESPACE")
+	if operatorNamespace == "" {
+		operatorNamespace = "kaalm-system"
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
+		Scheme: scheme,
+		// The Secret informer covers the operator namespace only, which is
+		// all the controller's RBAC lets it list: provider credentials live
+		// there. A Secret in a user namespace is read live, through a Role
+		// scoped to its name, and never held in memory.
+		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
+			&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},
+		}},
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
@@ -264,11 +279,6 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to create discovery client")
 		os.Exit(1)
-	}
-
-	operatorNamespace := os.Getenv("POD_NAMESPACE")
-	if operatorNamespace == "" {
-		operatorNamespace = "kaalm-system"
 	}
 
 	if err := (&controller.AgentClassReconciler{
@@ -343,6 +353,7 @@ func main() {
 		MaxConcurrentReconciles: maxConcurrentReconciles,
 		Recorder:                mgr.GetEventRecorderFor("agent-controller"),
 		OperatorNamespace:       operatorNamespace,
+		SecretReader:            mgr.GetAPIReader(),
 		Activity:                activityClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Agent")
@@ -353,6 +364,7 @@ func main() {
 		MaxConcurrentReconciles: maxConcurrentReconciles,
 		Recorder:                mgr.GetEventRecorderFor("agenttask-controller"),
 		OperatorNamespace:       operatorNamespace,
+		SecretReader:            mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 		os.Exit(1)
@@ -369,6 +381,7 @@ func main() {
 		MaxConcurrentReconciles: maxConcurrentReconciles,
 		Recorder:                mgr.GetEventRecorderFor("agentchannel-controller"),
 		OperatorNamespace:       operatorNamespace,
+		SecretReader:            mgr.GetAPIReader(),
 		Health:                  channelHealthClient,
 		CallbackPolicy:          managerCallbackPolicy,
 	}).SetupWithManager(mgr); err != nil {

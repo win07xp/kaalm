@@ -108,9 +108,10 @@ scale proof, the Agent Sandbox decision, and the docs audit. Where it stands:
   to [#244](https://github.com/win07xp/kaalm/issues/244): fields the schema
   accepts and the code never applies, status the design specifies and no
   reconciler writes, and gateway answers that differ from the wire contract.
-  #192, #193, #194, and #197 are in this milestone; the rest are triaged
-  into v1.0.0 or v1.1.0 as the audit closes. Until each is fixed, its page
-  describes the shipped behavior and cites the issue.
+  The triage put 27 of them in this milestone, listed on
+  [#51](https://github.com/win07xp/kaalm/issues/51), and the rest in
+  v1.1.0. Until each is fixed, its page describes the shipped behavior and
+  cites the issue.
 - **Release checklist** ([#143](https://github.com/win07xp/kaalm/issues/143)):
   the last item. The API stays at `v1beta1` for this release; graduation to
   `v1` moves to the watchlist, pulled by real usage.
