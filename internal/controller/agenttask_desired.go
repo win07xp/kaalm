@@ -241,6 +241,7 @@ func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operato
 	env := []corev1.EnvVar{
 		{Name: "KAALM_HEALTH_PORT", Value: fmt.Sprintf("%d", eff.HealthPort)},
 		{Name: "KAALM_GATEWAY_ENDPOINT", Value: gatewayEndpoint(operatorNamespace)},
+		{Name: "KAALM_OPERATOR_NAMESPACE", Value: operatorNamespace},
 		{Name: "KAALM_CA_CERT", Value: tlsMountPath + "/ca.crt"},
 		{Name: "KAALM_TLS_CERT", Value: tlsMountPath + "/tls.crt"},
 		{Name: "KAALM_TLS_KEY", Value: tlsMountPath + "/tls.key"},

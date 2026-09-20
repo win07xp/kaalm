@@ -9,6 +9,7 @@ rebuilds both SSL contexts on the ``..data`` swap (runtime contract item 4).
 
 from __future__ import annotations
 
+import os
 import ssl
 import threading
 from pathlib import Path
@@ -17,10 +18,10 @@ from typing import Callable
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-GATEWAY_SANS = {
-    "kaalm-gateway.kaalm-system.svc.cluster.local",
-    "kaalm-gateway.kaalm-system.svc",
-}
+GATEWAY_SERVICE_NAME = "kaalm-gateway"
+# The chart's default release namespace, used when the controller injected no
+# operator namespace.
+DEFAULT_OPERATOR_NAMESPACE = "kaalm-system"
 
 
 class CertReloader:
@@ -106,13 +107,28 @@ class _DataSwapHandler(FileSystemEventHandler):
             self._on_swap()
 
 
-def peer_san_matches_gateway(transport_extra_ssl_object) -> bool:
+def gateway_sans() -> set[str]:
+    """Return the gateway Service DNS names, both forms.
+
+    The operator namespace arrives as ``$KAALM_OPERATOR_NAMESPACE``, so an
+    install outside the default release namespace still accepts the gateway's
+    deliveries. Both names are on the gateway's certificate, so either one
+    identifies it.
+    """
+    namespace = os.environ.get("KAALM_OPERATOR_NAMESPACE") or DEFAULT_OPERATOR_NAMESPACE
+    return {
+        f"{GATEWAY_SERVICE_NAME}.{namespace}.svc.cluster.local",
+        f"{GATEWAY_SERVICE_NAME}.{namespace}.svc",
+    }
+
+
+def peer_san_matches_gateway(transport_extra_ssl_object, sans: set[str]) -> bool:
     """Return True when the peer cert names the gateway Service DNS."""
     cert = transport_extra_ssl_object.getpeercert() if transport_extra_ssl_object else None
     if not cert:
         return False
     for typ, value in cert.get("subjectAltName", ()):
-        if typ == "DNS" and value in GATEWAY_SANS:
+        if typ == "DNS" and value in sans:
             return True
     return False
 
