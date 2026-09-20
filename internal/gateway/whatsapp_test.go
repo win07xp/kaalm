@@ -191,14 +191,14 @@ func TestWhatsApp_VerificationHandshake(t *testing.T) {
 	if _, ok := healthReason(h.userHarness, h.channel.Spec.WhatsApp.Path); ok {
 		t.Error("a handshake must not be a health observation")
 	}
-	if status, _ := h.verify(t, "subscribe", "wrong", "x"); status != 403 {
-		t.Errorf("wrong token = %d, want 403", status)
+	if status, _ := h.verify(t, "subscribe", "wrong", "x"); status != 401 {
+		t.Errorf("wrong token = %d, want 401", status)
 	}
 	if reason, _ := healthReason(h.userHarness, h.channel.Spec.WhatsApp.Path); reason != healthReasonAuthFailed {
 		t.Errorf("health after wrong token = %q", reason)
 	}
-	if status, _ := h.verify(t, "unsubscribe", "verify-me", "x"); status != 403 {
-		t.Errorf("wrong mode = %d, want 403", status)
+	if status, _ := h.verify(t, "unsubscribe", "verify-me", "x"); status != 401 {
+		t.Errorf("wrong mode = %d, want 401", status)
 	}
 }
 

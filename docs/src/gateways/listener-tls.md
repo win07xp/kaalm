@@ -63,7 +63,7 @@ The handshake decides nothing on its own. The path-to-regime mapping, not the TL
 
 ![Activity diagram of the controller-only and console-only regimes. After the handshake, no client certificate answers 401, and a SAN that is not the path's component identity answers 403 access_denied. Otherwise the request reaches the handler with no source-IP cross-check.](../diagrams/per-path-auth-internal.svg)
 
-**Any other path** answers `400 invalid_request` before any credential is examined. The message names the path, which reveals that it is unregistered; issue #236 tracks it.
+**Any other path** answers `400 invalid_request` before any credential is examined. The message is constant and never echoes the path.
 
 Two points the figures leave implicit:
 

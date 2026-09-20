@@ -28,7 +28,7 @@ The gateway serves two TLS listeners. Which listener a path lives on decides who
 | `:8080` | `/channels/{namespace}/{channel-path}` | External callers through the Ingress | Per AgentChannel |
 | `:8080` | `/v1/channels/responses/{requestId}` | The webhook caller polling for a late reply | The originating AgentChannel's auth |
 
-Any other path on `:8443` answers `400 invalid_request` with the message `unrecognized path {path}`. Any other path on `:8080` answers `401 unauthorized` with the message `unknown path`. The `:8443` message reveals that a path is unregistered, which the `:8080` contract avoids on purpose; the difference is tracked in issue #236.
+Any other path on `:8443` answers `400 invalid_request` with the constant message `unrecognized path`; the paths on that listener are this fixed API, so the answer reveals nothing about a tenant. Any other path on `:8080` answers the same `401 unauthorized` as a failed credential, because channel paths on that listener belong to tenants ([User Gateway error responses](errors.md#user-gateway-error-responses)).
 
 The kubelet probe endpoints, `/healthz` and `/readyz`, are on the separate health port, not on either listener ([Ports](../overview.md#ports)).
 

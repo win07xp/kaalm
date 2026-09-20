@@ -22,7 +22,7 @@ partition "route (shared with webhook channels)" {
 partition "verify" {
   if (WhatsApp verification GET?) then (yes)
     if (hub.verify_token matches?) then (no)
-      :**403**;
+      :**401**;
       kill
     else (yes)
       :**200** hub.challenge;

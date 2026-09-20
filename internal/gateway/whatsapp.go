@@ -164,7 +164,7 @@ func (w *whatsAppAdapter) Handle(
 	case http.MethodPost:
 		return w.handleEvent(ctx, rw, r, channel, body)
 	}
-	unauthorized(rw, "unknown path")
+	unauthorizedUser(rw)
 	return inboundResult{}
 }
 
@@ -177,13 +177,13 @@ func (w *whatsAppAdapter) handleVerification(
 	token, err := w.s.Store.SecretValue(ctx, channel.Namespace, channel.Spec.WhatsApp.CredentialsRef.Name,
 		whatsAppKeyVerifyToken)
 	if err != nil {
-		forbidden(rw, errUnauthorized, "verification failed")
+		unauthorizedUser(rw)
 		return inboundResult{authFailed: "whatsapp verifyToken unavailable: " + err.Error()}
 	}
 	if q.Get("hub.mode") != "subscribe" ||
 		subtle.ConstantTimeCompare([]byte(q.Get("hub.verify_token")), []byte(token)) != 1 {
-		forbidden(rw, errUnauthorized, "verification failed")
-		return inboundResult{authFailed: "whatsapp verification token rejected: 403 Forbidden"}
+		unauthorizedUser(rw)
+		return inboundResult{authFailed: "whatsapp verification token rejected: 401 Unauthorized"}
 	}
 	rw.Header().Set("Content-Type", "text/plain")
 	rw.WriteHeader(http.StatusOK)
@@ -200,7 +200,7 @@ func (w *whatsAppAdapter) handleEvent(
 	secret, err := w.s.Store.SecretValue(ctx, channel.Namespace, channel.Spec.WhatsApp.CredentialsRef.Name,
 		whatsAppKeyAppSecret)
 	if err != nil {
-		unauthorized(rw, "auth failed or path not registered")
+		unauthorizedUser(rw)
 		return inboundResult{authFailed: "whatsapp appSecret unavailable: " + err.Error()}
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -209,7 +209,7 @@ func (w *whatsAppAdapter) handleEvent(
 	cfg := &kaalmv1beta1.ChannelHMAC{Header: whatsAppSignatureHeader, Algorithm: "sha256",
 		SignaturePrefix: &prefix, Encoding: "hex"}
 	if !verifyHMACHeader(r.Header.Get(whatsAppSignatureHeader), cfg, mac.Sum(nil)) {
-		unauthorized(rw, "auth failed or path not registered")
+		unauthorizedUser(rw)
 		return inboundResult{authFailed: "whatsapp signature rejected: 401 Unauthorized"}
 	}
 	var event whatsAppEvent

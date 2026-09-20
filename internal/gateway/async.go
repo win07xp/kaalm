@@ -481,7 +481,7 @@ func (s *Server) dialCallbackOnce(
 // TTL, and the Retry-After ladder on 202.
 func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		unauthorized(w, "unknown path")
+		unauthorizedUser(w)
 		return
 	}
 	requestID := strings.TrimPrefix(r.URL.Path, "/v1/channels/responses/")
@@ -499,7 +499,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	// must not reveal which webhook paths (and tenant namespaces) exist.
 	channel, ok := s.Store.ChannelByPath(r.Context(), channelPath)
 	if !ok {
-		unauthorized(w, "auth failed")
+		unauthorizedUser(w)
 		return
 	}
 	// Platform channels (discord/whatsapp) have no polling record and a nil
@@ -509,7 +509,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.authenticatePoll(r.Context(), channel, r, requestID) {
-		unauthorized(w, "auth failed")
+		unauthorizedUser(w)
 		return
 	}
 
