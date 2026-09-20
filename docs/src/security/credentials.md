@@ -69,7 +69,7 @@ egress:
       - { port: 53, protocol: TCP }
 ```
 
-The namespace selector names the operator's namespace, `kaalm-system` on a default install. A `spec.network.egress.allowedCIDRs` entry on the class appends an egress rule to that CIDR on every port, and `spec.network.allowSameNamespaceIngress` appends an ingress rule from every Pod in the namespace ([Network policy](model.md#network-policy)).
+The namespace selector names the operator's namespace, `kaalm-system` on a default install. A `spec.network.egress.allowedCIDRs` entry on the class appends an egress rule to that CIDR on every port, and `spec.network.allowSameNamespaceIngress` appends an ingress rule from the namespace's other agent Pods on the agent's health port ([Network policy](model.md#network-policy)).
 
 Enforcement is between Pods, so standard Kubernetes NetworkPolicy is enough and no service mesh or L7 CNI is required. Both gateway listeners serve TLS with the same `kaalm-gateway-tls` certificate ([TLS on the cluster listener](../gateways/listener-tls.md)), and external webhook traffic reaches the User listener through an Ingress configured for an HTTPS backend ([TLS and Ingress](../gateways/user/overview.md#tls-and-ingress)).
 

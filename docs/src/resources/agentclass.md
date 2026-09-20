@@ -90,9 +90,9 @@ spec:
         - "api.github.com"
     # Accepted by the schema and never applied as shipped (#226).
     allowHostNetwork: false
-    # When true, an Agent's NetworkPolicy admits every Pod in the Agent's
-    # namespace on every port. Agents only; a task's policy admits no
-    # ingress. Default false: only the gateway reaches the agent.
+    # When true, an Agent's NetworkPolicy admits the namespace's other
+    # agent Pods on the agent's health port. Agents only; a task's policy
+    # admits no ingress. Default false: only the gateway reaches the agent.
     allowSameNamespaceIngress: false
 
   # Applied verbatim to every workload Pod and container.
