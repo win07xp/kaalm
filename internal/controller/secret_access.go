@@ -37,6 +37,9 @@ const (
 	// subject of every Role the reconcilers mint for their own Secret reads.
 	controllerServiceAccount = "kaalm-controller"
 
+	// kindRole is the RoleRef kind of every RoleBinding the reconcilers mint.
+	kindRole = "Role"
+
 	// A Role the reconciler created a moment ago can be missing from the
 	// apiserver's authorizer for a few hundred milliseconds. A Forbidden read
 	// is retried inside the pass that long before it is reported.
@@ -144,9 +147,9 @@ func ensurePullSecretAccess(
 	}
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: key.Namespace},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: roleName},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: kindRole, Name: roleName},
 		Subjects: []rbacv1.Subject{{
-			Kind: "ServiceAccount", Name: controllerServiceAccount, Namespace: operatorNamespace,
+			Kind: rbacv1.ServiceAccountKind, Name: controllerServiceAccount, Namespace: operatorNamespace,
 		}},
 	}
 	if err := controllerutil.SetControllerReference(owner, rb, scheme); err != nil {

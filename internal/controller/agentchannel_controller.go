@@ -325,9 +325,9 @@ func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, chann
 			ObjectMeta: metav1.ObjectMeta{
 				Name: channelRoleName(channel.Name) + "-" + strings.TrimPrefix(sa, "kaalm-"), Namespace: channel.Namespace,
 			},
-			RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: channelRoleName(channel.Name)},
+			RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: kindRole, Name: channelRoleName(channel.Name)},
 			Subjects: []rbacv1.Subject{{
-				Kind: "ServiceAccount", Name: sa, Namespace: r.OperatorNamespace,
+				Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: r.OperatorNamespace,
 			}},
 		}
 		if err := controllerutil.SetControllerReference(channel, rb, r.Scheme()); err != nil {
