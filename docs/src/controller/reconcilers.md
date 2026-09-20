@@ -153,6 +153,7 @@ There is no per-Agent configuration ConfigMap. Non-sensitive config is delivered
 | `KAALM_CA_CERT` | always | the path of the Kaalm CA bundle projected into the Pod |
 | `KAALM_TLS_CERT`, `KAALM_TLS_KEY` | always | the paths of the agent's certificate and key from step 7 |
 | `KAALM_HANDLER_PATH` | when `spec.handler` is set | `/opt/kaalm/handler`, where the handler ConfigMap is mounted read-only; absent otherwise, which is how a base image knows to serve its default handler |
+| `KAALM_MEMORY_DIR` | when `spec.persistence.enabled` is set | `spec.persistence.mountPath`, the directory the PVC is mounted at (default `/var/agent/memory`), so state the runtime writes lands on the volume under any mount path; absent otherwise, and the runtime keeps its own default |
 
 The handler mount sits outside `/var/run/kaalm/`, which belongs to the projected TLS volume and its rotation watch. The controller also injects liveness and readiness probes with `httpGet.scheme: HTTPS` on `GET /livez` and `GET /readyz` at `KAALM_HEALTH_PORT`, the paths pinned by [The runtime contract](../runtime/contract.md) item 1; Kubernetes httpGet probes do not verify TLS certificates, so the probe needs no CA.
 

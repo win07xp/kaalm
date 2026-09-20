@@ -406,6 +406,77 @@ func TestDesiredPod_HandlerMount(t *testing.T) {
 	}
 }
 
+func TestDesiredPod_MemoryDir(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+
+	env := func(pod *corev1.Pod) map[string]string {
+		m := map[string]string{}
+		for _, e := range pod.Spec.Containers[0].Env {
+			m[e.Name] = e.Value
+		}
+		return m
+	}
+
+	// A custom mountPath: the runtimes must be pointed at the mounted volume,
+	// or hibernation loses everything the handler stored there.
+	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, PersistenceOn: true, MountPath: "/data"}
+	pod := desiredPod(agent, eff, "kaalm-system")
+	if got := env(pod)["KAALM_MEMORY_DIR"]; got != "/data" {
+		t.Errorf("KAALM_MEMORY_DIR = %q, want %q", got, "/data")
+	}
+	var mount *corev1.VolumeMount
+	for i, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == "agent-memory" {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil || mount.MountPath != "/data" {
+		t.Fatalf("memory mount missing or wrong: %+v", pod.Spec.Containers[0].VolumeMounts)
+	}
+
+	// An unset mountPath resolves to the same default both runtimes already
+	// use, so the variable names the directory the volume is mounted at.
+	eff.MountPath = ""
+	pod = desiredPod(agent, eff, "kaalm-system")
+	if got := env(pod)["KAALM_MEMORY_DIR"]; got != defaultMemoryMountPath {
+		t.Errorf("KAALM_MEMORY_DIR = %q, want %q", got, defaultMemoryMountPath)
+	}
+
+	// Without persistence there is no volume to name, and the runtime's own
+	// default applies.
+	pod = desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-system")
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == "KAALM_MEMORY_DIR" {
+			t.Error("KAALM_MEMORY_DIR injected on an Agent without persistence")
+		}
+	}
+
+	// An Agent's own spec.env still wins: injected values are appended first.
+	eff.Env = []corev1.EnvVar{{Name: "KAALM_MEMORY_DIR", Value: "/elsewhere"}}
+	pod = desiredPod(agent, eff, "kaalm-system")
+	last := ""
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == "KAALM_MEMORY_DIR" {
+			last = e.Value
+		}
+	}
+	if last != "/elsewhere" {
+		t.Errorf("spec.env override lost: last KAALM_MEMORY_DIR = %q", last)
+	}
+}
+
+func TestPodSpecHash_MemoryDirUnchanged(t *testing.T) {
+	// The injected variable is derived, not hashed: adding it must not restart
+	// the Pod of an Agent whose spec did not change.
+	base := effectiveAgentSpec{Image: "img:v1"}
+	withPVC := base
+	withPVC.PersistenceOn = true
+	withPVC.MountPath = "/data"
+	if podSpecHash(withPVC) != podSpecHash(base) {
+		t.Error("persistence mount path leaked into the drift hash")
+	}
+}
+
 func TestPodSpecHash_HandlerRepoint(t *testing.T) {
 	base := effectiveAgentSpec{Image: "img:v1"}
 	withV1 := base

@@ -87,9 +87,8 @@ different combination:
   checkpointer on the agent's PVC, keyed by the envelope's `sessionId`.
   Graph state survives hibernation, which the framework alone cannot
   offer. Needs `spec.persistence.enabled: true`; the volume is mounted at
-  `/var/agent/memory` by default. Keep the default `mountPath`: as shipped
-  the runtime is not told about a custom one, so `kaalm.memory` would fall
-  back to in-process state.
+  `/var/agent/memory` by default, and the controller injects
+  `$KAALM_MEMORY_DIR` with that path, so a custom `mountPath` works too.
 - **`examples/langgraph-tools/`**: a tool-calling agent whose MCP tools
   arrive through the gateway's broker at `/v1/mcp/{toolProvider}`, so the
   tool credential never exists in the pod and the tool list is already

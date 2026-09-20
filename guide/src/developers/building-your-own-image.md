@@ -21,6 +21,7 @@ Environment:
 | `KAALM_TLS_CERT` / `KAALM_TLS_KEY` | Your per-agent certificate and key, mounted at `/var/run/kaalm/` |
 | `KAALM_CA_CERT` | The cluster CA bundle, same mount |
 | `KAALM_HANDLER_PATH` | Only when `Agent.spec.handler` is set: the directory the handler ConfigMap is mounted at (`/opt/kaalm/handler`). Its absence is how a base image knows to serve its built-in default; a `FROM` build that bakes a handler sets it itself |
+| `KAALM_MEMORY_DIR` | Only when `Agent.spec.persistence.enabled` is set: the directory the PVC is mounted at (`spec.persistence.mountPath`, default `/var/agent/memory`). Write anything that must outlive the Pod here |
 
 The certificate is your identity: the gateway authenticates you by its SAN,
 and it doubles as your serving certificate. Your `spec.env` entries are
