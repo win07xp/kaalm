@@ -213,13 +213,14 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Rate limit exceeded | `429 rate_limited`, `Retry-After: 1` |
 | Oversized request or response | `413 request_too_large` or `413 response_too_large` |
 | Session id owned by another caller | `403 access_denied`; the audit record names the mismatch |
-| Credential Secret unreadable | `503 tool_unavailable` |
-| Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, `Retry-After: 1` |
-| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`. The health probe sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid`; as shipped no Warning event is emitted on the ToolProvider for it |
-| Tool call exceeds the upstream timeout | `504 tool_timeout` |
+| Credential Secret unreadable | `503 tool_unavailable`, retryable |
+| Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, retryable, `Retry-After: 1` |
+| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable. The health probe sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid`; as shipped no Warning event is emitted on the ToolProvider for it |
+| `tools/list` response the broker cannot parse | `503 tool_unavailable`, not retryable |
+| Tool call exceeds the upstream timeout | `504 tool_timeout`, retryable |
 | Other protocol-level 4xx from the server | relayed verbatim (an expired session's 404, for example), so MCP session semantics survive the broker |
 
-The rows are in the [error schema](api/errors.md#llm-gateway-error-responses) with the rest of the cluster listener's error types.
+The rows are in the [error schema](api/errors.md#llm-gateway-error-responses) with the rest of the cluster listener's error types. `retryable` follows the cause, not the status: the two `503` rows marked not retryable repeat until an operator fixes the credential or the tool server.
 
 ## Relationship to direct egress
 

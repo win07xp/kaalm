@@ -16,7 +16,7 @@ R -> S : 1. retries+1, currentPodUID=""
 group gate closed
   R -> OP : 2. delete
   OP ->> G : late /v1/task/complete
-  G -->> OP : 403 StalePodCompletion
+  G -->> OP : 409 stale_pod
   R -> CM : 3. data: {}
   R -> NP : 4. create
   R -> S : 5. currentPodUID = new UID

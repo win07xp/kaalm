@@ -51,7 +51,7 @@ async def complete_task(
     client: httpx.AsyncClient, gateway: str, status: str, message: str, artifacts: dict[str, str]
 ) -> None:
     """POST /v1/task/complete per the runtime contract: retry only the
-    retryable rejection (403 StalePodCompletion) on a bounded schedule;
+    retryable rejection (409 stale_pod) on a bounded schedule;
     403 TaskAlreadyCompleted is terminal; anything else non-200 is an error."""
     body = {"status": status, "message": message, "artifacts": artifacts}
     for delay in COMPLETE_RETRY_DELAYS:
@@ -60,7 +60,7 @@ async def complete_task(
         resp = await client.post(gateway + "/v1/task/complete", json=body)
         if resp.status_code == 200:
             return
-        if resp.status_code == 403 and "StalePodCompletion" in resp.text:
+        if resp.status_code == 409 and '"stale_pod"' in resp.text:
             continue
         if resp.status_code == 403 and "TaskAlreadyCompleted" in resp.text:
             return

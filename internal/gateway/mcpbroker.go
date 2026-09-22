@@ -331,38 +331,41 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	// error status onto the span (early ones hit the noop span, harmlessly).
 	tctx := r.Context()
 
-	deny := func(status int, errType, message string, retryAfter int, method, tool string) {
+	// retryable is set per cause, as the LLM proxy does, never derived from
+	// the status: a 503 for an unusable upstream answer is final, a 504
+	// timeout is not.
+	deny := func(status int, errType, message string, retryable bool, retryAfter int, method, tool string) {
 		spanError(tctx, errType)
 		s.mcpResult(c, tp, providerName, method, tool, status, errType, message, start, reqBytes, 0, forwarded)
 		writeError(w, status, errorBody{Type: errType, Message: message,
-			Provider: providerName, Retryable: retryAfter > 0 || status == http.StatusServiceUnavailable}, retryAfter)
+			Provider: providerName, Retryable: retryable}, retryAfter)
 	}
 
 	if r.Method != http.MethodPost {
-		deny(http.StatusMethodNotAllowed, errInvalidRequest, "MCP broker accepts POST only", 0, "", "")
+		deny(http.StatusMethodNotAllowed, errInvalidRequest, "MCP broker accepts POST only", false, 0, "", "")
 		return
 	}
 	if providerName == "" || strings.Contains(providerName, "/") {
-		deny(http.StatusBadRequest, errInvalidRequest, "path must be /v1/mcp/{toolProvider}", 0, "", "")
+		deny(http.StatusBadRequest, errInvalidRequest, "path must be /v1/mcp/{toolProvider}", false, 0, "", "")
 		return
 	}
 	resolved, ok := s.Store.ToolProviderByName(r.Context(), providerName)
 	if !ok {
 		deny(http.StatusBadRequest, errInvalidRequest,
-			fmt.Sprintf("unknown tool provider %q", providerName), 0, "", "")
+			fmt.Sprintf("unknown tool provider %q", providerName), false, 0, "", "")
 		return
 	}
 	tp = resolved
 
 	filter, denial := s.authorizeToolRoute(r.Context(), c, tp)
 	if denial != nil {
-		deny(denial.status, denial.errType, denial.message, 0, "", "")
+		deny(denial.status, denial.errType, denial.message, false, 0, "", "")
 		return
 	}
 
 	if !s.RateLimiter.AllowTool(tp, c.Namespace) {
 		deny(http.StatusTooManyRequests, errRateLimited,
-			fmt.Sprintf("rate limit exceeded for namespace %s on tool provider %s", c.Namespace, tp.Name), 1, "", "")
+			fmt.Sprintf("rate limit exceeded for namespace %s on tool provider %s", c.Namespace, tp.Name), true, 1, "", "")
 		return
 	}
 
@@ -371,28 +374,28 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			deny(http.StatusRequestEntityTooLarge, errRequestTooLarge,
-				fmt.Sprintf("request body exceeds %d bytes", s.mcpMaxBodyBytes()), 0, "", "")
+				fmt.Sprintf("request body exceeds %d bytes", s.mcpMaxBodyBytes()), false, 0, "", "")
 			return
 		}
-		deny(http.StatusBadRequest, errInvalidRequest, "reading request body: "+err.Error(), 0, "", "")
+		deny(http.StatusBadRequest, errInvalidRequest, "reading request body: "+err.Error(), false, 0, "", "")
 		return
 	}
 	reqBytes = int64(len(body))
 	bodyLog("mcp request", body)
 	if isJSONBatch(body) {
-		deny(http.StatusBadRequest, errInvalidRequest, "JSON-RPC batch requests are not supported", 0, "", "")
+		deny(http.StatusBadRequest, errInvalidRequest, "JSON-RPC batch requests are not supported", false, 0, "", "")
 		return
 	}
 	var msg mcpRequest
 	if err := json.Unmarshal(body, &msg); err != nil {
-		deny(http.StatusBadRequest, errInvalidRequest, "request body is not a JSON-RPC message", 0, "", "")
+		deny(http.StatusBadRequest, errInvalidRequest, "request body is not a JSON-RPC message", false, 0, "", "")
 		return
 	}
 
 	if !mcpAllowedMethod(msg.Method) {
 		deny(http.StatusForbidden, errToolDenied,
 			fmt.Sprintf("method %q is not brokered in this version; the tool plane governs the tool surface", msg.Method),
-			0, msg.Method, "")
+			false, 0, msg.Method, "")
 		return
 	}
 
@@ -415,7 +418,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 	if msg.Method == methodToolsCall && !filter.permits(toolName) {
 		deny(http.StatusForbidden, errToolDenied,
-			fmt.Sprintf("tool %q is not granted to this workload", toolName), 0, msg.Method, toolName)
+			fmt.Sprintf("tool %q is not granted to this workload", toolName), false, 0, msg.Method, toolName)
 		return
 	}
 
@@ -441,7 +444,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		raw, ok := unwrapSessionID(s.Config.SessionKey, wrapped, identity)
 		if !ok {
 			deny(http.StatusForbidden, errAccessDenied,
-				"session id is not owned by this caller", 0, msg.Method, toolName)
+				"session id is not owned by this caller", false, 0, msg.Method, toolName)
 			return
 		}
 		upstreamSession = raw
@@ -449,9 +452,11 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 	credential, err := s.Store.ToolCredential(r.Context(), tp)
 	if err != nil {
+		// Retryable: the proxy treats a credential read failure as a
+		// connect-class failure, and the Secret read can be transient.
 		slog.Warn("mcp credential unavailable", "provider", tp.Name, "error", err)
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
-			"tool provider credential is unavailable", 0, msg.Method, toolName)
+			"tool provider credential is unavailable", true, 0, msg.Method, toolName)
 		return
 	}
 
@@ -462,7 +467,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	upReq, err := http.NewRequestWithContext(fctx, http.MethodPost, tp.Spec.Endpoint, bytes.NewReader(body))
 	if err != nil {
 		endForward(err)
-		deny(http.StatusBadRequest, errInvalidRequest, "building upstream request: "+err.Error(), 0, msg.Method, toolName)
+		deny(http.StatusBadRequest, errInvalidRequest, "building upstream request: "+err.Error(), false, 0, msg.Method, toolName)
 		return
 	}
 	copyMCPHeaders(upReq, r, upstreamSession, credential, modernEra)
@@ -474,27 +479,27 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
 			deny(http.StatusGatewayTimeout, errToolTimeout,
-				fmt.Sprintf("tool provider %q did not answer within the upstream timeout", tp.Name), 0, msg.Method, toolName)
+				fmt.Sprintf("tool provider %q did not answer within the upstream timeout", tp.Name), true, 0, msg.Method, toolName)
 		default:
 			deny(http.StatusServiceUnavailable, errToolUnavailable,
-				fmt.Sprintf("tool provider %q is unreachable: %v", tp.Name, err), 1, msg.Method, toolName)
+				fmt.Sprintf("tool provider %q is unreachable: %v", tp.Name, err), true, 1, msg.Method, toolName)
 		}
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	// The gateway's credential being rejected is an operator problem, not
-	// the caller's: surface unavailability, and let the ToolProvider health
-	// probe flip the resource's conditions independently.
+	// the caller's: surface unavailability, not retryable, and let the
+	// ToolProvider health probe flip the resource's conditions independently.
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		slog.Warn("tool server rejected the gateway credential", "provider", tp.Name, "status", resp.StatusCode)
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
-			fmt.Sprintf("tool provider %q rejected the gateway credential", tp.Name), 0, msg.Method, toolName)
+			fmt.Sprintf("tool provider %q rejected the gateway credential", tp.Name), false, 0, msg.Method, toolName)
 		return
 	}
 	if resp.StatusCode >= 500 {
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
-			fmt.Sprintf("tool provider %q returned HTTP %d", tp.Name, resp.StatusCode), 1, msg.Method, toolName)
+			fmt.Sprintf("tool provider %q returned HTTP %d", tp.Name, resp.StatusCode), true, 1, msg.Method, toolName)
 		return
 	}
 
@@ -531,7 +536,7 @@ func (s *Server) relayFilteredToolsList(
 		io.LimitReader(resp.Body, s.mcpMaxBodyBytes()), msg.ID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
-			Message: "tool provider returned an unparseable tools/list response", Provider: providerName, Retryable: true}, 0)
+			Message: "tool provider returned an unparseable tools/list response", Provider: providerName}, 0)
 		return 0, http.StatusServiceUnavailable, errToolUnavailable
 	}
 	if parsed.Error == nil && parsed.Result != nil {

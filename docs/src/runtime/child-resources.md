@@ -103,7 +103,7 @@ What differs from an Agent:
 
 When [`completion.condition: agentReported`](../controller/task-lifecycle.md), the controller also provisions a per-task ConfigMap, pre-created with `data: {}`, where the gateway writes the completion payload, and a per-task Role and RoleBinding that grant the gateway ServiceAccount name-scoped `update` and `patch` on that one ConfigMap. The ConfigMap is a completion channel, not configuration delivery.
 
-For an `agentReported` task, the reconciler stamps `status.currentPodUID` with the Pod's UID on every Pod creation, initial and retry, and clears it during the retry-reset window; a task in `containerExit` mode never has the field set. The gateway reads the field from its cluster-wide AgentTask watch and rejects a completion from any other Pod at `/v1/task/complete` with `403 access_denied` and a `StalePodCompletion` message. The reset and restamp order is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
+For an `agentReported` task, the reconciler stamps `status.currentPodUID` with the Pod's UID on every Pod creation, initial and retry, and clears it during the retry-reset window; a task in `containerExit` mode never has the field set. The gateway reads the field from its cluster-wide AgentTask watch and rejects a completion from any other Pod at `/v1/task/complete` with `409 stale_pod` and a `StalePodCompletion` message. The reset and restamp order is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 
 ## Async response ConfigMaps are swept by label, not owned
 

@@ -19,6 +19,7 @@ package gateway
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -172,15 +173,21 @@ func TestTaskComplete_Gates(t *testing.T) {
 		t.Errorf("terminal task = %d", resp.StatusCode)
 	}
 
-	// Stale UID: StalePodCompletion, retryable.
+	// Stale UID: 409 stale_pod, retryable, message prefix StalePodCompletion.
 	seedTask(h, "stale-task", func(task *kaalmv1beta1.AgentTask) {
 		task.Status.CurrentPodUID = "uid-other"
 		task.Spec.Artifacts = nil
 	})
 	cert = h.ca.issue(t, "stale-task.team-a.task.kaalm.io")
 	resp = postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": "success"}, nil)
-	if resp.StatusCode != 403 || !bodyContains(t, resp, "StalePodCompletion") {
-		t.Errorf("stale pod = %d", resp.StatusCode)
+	var stale struct {
+		Error errorBody `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&stale)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict || stale.Error.Type != errStalePod || !stale.Error.Retryable ||
+		!strings.HasPrefix(stale.Error.Message, "StalePodCompletion: ") {
+		t.Errorf("stale pod = %d %+v, want 409 stale_pod retryable", resp.StatusCode, stale.Error)
 	}
 
 	// Artifact validation: success missing a declared artifact is 400.
@@ -320,7 +327,8 @@ func TestTaskComplete_NoTaskBacksCaller(t *testing.T) {
 
 // TestTaskComplete_ForbiddenReasonPrefix pins the wire form of every 403 on
 // /v1/task/complete: error.message starts with the reason code, so callers
-// tell the four reasons apart by prefix (task-complete.md, 403 Forbidden).
+// tell the three reasons apart by prefix (task-complete.md, 403 Forbidden).
+// The stale-Pod case is a 409 and is pinned in TestTaskComplete_Gates.
 func TestTaskComplete_ForbiddenReasonPrefix(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	h.server.Completions = newFakeCompletions()
@@ -341,9 +349,6 @@ func TestTaskComplete_ForbiddenReasonPrefix(t *testing.T) {
 		{"exitCode task", func() {
 			seedTask(h, "exit-task", func(task *kaalmv1beta1.AgentTask) { task.Spec.Completion.Condition = "exitCode" })
 		}, func() tls.Certificate { return h.ca.issue(t, "exit-task.team-a.task.kaalm.io") }, "TaskNotAgentReported"},
-		{"stale pod", func() {
-			seedTask(h, "stale-task", func(task *kaalmv1beta1.AgentTask) { task.Status.CurrentPodUID = "uid-other" })
-		}, func() tls.Certificate { return h.ca.issue(t, "stale-task.team-a.task.kaalm.io") }, "StalePodCompletion"},
 		{"terminal task", func() {
 			seedTask(h, "done-task", func(task *kaalmv1beta1.AgentTask) { task.Status.Phase = kaalmv1beta1.TaskFailed })
 		}, func() tls.Certificate { return h.ca.issue(t, "done-task.team-a.task.kaalm.io") }, "TaskAlreadyCompleted"},
