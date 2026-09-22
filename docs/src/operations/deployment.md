@@ -41,6 +41,25 @@ The floor is operational, not correctness-driven, on both components:
 
 With `console.enabled`, the chart adds a third, optional Deployment, `kaalm-console`, outside these settings: one replica, no PodDisruptionBudget, no floor. See the `console.enabled` note under [Configuration reference](#configuration-reference).
 
+### The operator's own NetworkPolicy
+
+With `networkPolicy.enabled` (the default) the chart ships default-deny ingress for its Pods in the release namespace, one policy per component, and leaves egress open. Each allowed port admits only its callers:
+
+| Component | Port | Admitted from |
+|---|---|---|
+| Controller | `9443` activator | The gateway Pods |
+| Controller | `9444` conversion webhook | Any source: the API server is not a Pod, and the listener authenticates nothing and converts only what it is sent |
+| Controller | `8081` probes | Any source (kubelet) |
+| Controller | `8080` metrics | `networkPolicy.metricsFrom` |
+| Gateway | `8443` cluster listener | Every namespace: agent Pods, the controller, and the console, each authenticated by mTLS or bearer token |
+| Gateway | `8080` User listener | `networkPolicy.userListenerFrom`, any source when empty |
+| Gateway | `gateway.healthPort` probes | Any source (kubelet) |
+| Gateway | `9090` metrics | `networkPolicy.metricsFrom` |
+| Console | `8443` | `networkPolicy.userListenerFrom`, any source when empty |
+| Console | `console.healthPort` probes | Any source (kubelet) |
+
+The pprof ports are not listed: they are reached through `kubectl port-forward`, which the kubelet serves and NetworkPolicy does not govern. Like every NetworkPolicy the objects are inert on a CNI that does not enforce them ([Network policy prerequisite](#network-policy-prerequisite)).
+
 ### Configuration reference
 
 This table is the canonical list of Kaalm's Helm values. Every tunable named elsewhere in this book resolves to a row here.
@@ -57,6 +76,9 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.upstreamCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
 | `gateway.trustClusterCAForCallbacks` | `false` | Also trust the cluster CA for `AgentChannel.spec.webhook.callbackUrl` TLS, so async responses can be delivered to in-cluster or self-hosted receivers served with a `kaalm-ca-issuer` certificate. Public receivers need only the system roots. |
 | `gateway.callbackUrl.allowlist` | `[]` | List of DNS-name suffixes or CIDR blocks whose `AgentChannel.spec.webhook.callbackUrl` targets are permitted despite the deny-internal default. Loopback, link-local and the cloud-metadata IPs stay refused even when listed. |
+| `networkPolicy.enabled` | `true` | Ship the NetworkPolicy objects for the operator's own Pods in the release namespace. See [The operator's own NetworkPolicy](#the-operators-own-networkpolicy). |
+| `networkPolicy.metricsFrom` | one peer: `namespaceSelector` for `kubernetes.io/metadata.name: monitoring` | NetworkPolicy peers admitted to the metrics ports, controller `:8080` and gateway `:9090`. Point it at the namespace or Pods of your Prometheus. |
+| `networkPolicy.userListenerFrom` | `[]` | NetworkPolicy peers admitted to the gateway User listener `:8080` and the console `:8443`. Empty admits any source. |
 | `controller.networkPolicy.dnsSelector` | `{ namespaceLabels: { "kubernetes.io/metadata.name": "kube-system" }, podLabels: { "k8s-app": "kube-dns" } }` | Selectors for the DNS egress rule on every synthesized Agent and AgentTask NetworkPolicy, passed to the controller as `--dns-namespace-labels` and `--dns-pod-labels`. |
 | `controller.trustClusterCAForProbes` | `false` | Also trust the cluster CA (`kaalm-ca`, already mounted) for ModelProvider and ToolProvider health probes, added to the system roots. The probe-side mirror of `gateway.trustClusterCAForUpstream`: enable both so an in-cluster provider under a `kaalm-ca-issuer` certificate is both forwarded to and probed `Healthy`. |
 | `controller.probeCA.configMap` | `""` | Name of an operator-supplied ConfigMap of additional CA certificates to trust for health probes, mirroring `gateway.upstreamCA`. Composes with `trustClusterCAForProbes` into one additive pool; the controller re-reads it when it rotates. |
@@ -141,7 +163,7 @@ The chart installs a Secret named `kaalm-gateway-session-key` holding a random k
 
 ### Metrics
 
-Prometheus metrics are served on dedicated plain-HTTP ports: controller `:8080/metrics` and gateway `:9090/metrics`, both unauthenticated. The chart ships no `ServiceMonitor` or `PodMonitor` and no NetworkPolicy for `kaalm-system`, so scrape integration and a policy that admits only the Prometheus Pods are the platform team's ([Metrics](observability.md#metrics), [Recommendations for deployment](../security/model.md#recommendations-for-deployment)). Three Grafana dashboards ship as JSON in `config/grafana/` ([Dashboards](observability.md#dashboards)).
+Prometheus metrics are served on dedicated plain-HTTP ports: controller `:8080/metrics` and gateway `:9090/metrics`, both unauthenticated. The chart ships no `ServiceMonitor` or `PodMonitor`, so scrape integration is the platform team's; the chart's NetworkPolicy admits the two ports only from `networkPolicy.metricsFrom` ([The operator's own NetworkPolicy](#the-operators-own-networkpolicy), [Metrics](observability.md#metrics)). Three Grafana dashboards ship as JSON in `config/grafana/` ([Dashboards](observability.md#dashboards)).
 
 ### Sample resources
 
