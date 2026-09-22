@@ -293,7 +293,12 @@ func (s *Server) recordChannelFailure(healthPath, reason, message string) {
 	s.ChannelHealth.RecordFailure(healthPath, reason, message)
 }
 
+// wakeTimeout prefers the controller's effective value, which carries the
+// class default and cap (rule 9), then the Agent's own value, then 120s.
 func (s *Server) wakeTimeout(agent *kaalmv1beta1.Agent) time.Duration {
+	if e := agent.Status.EffectiveWakeTimeout; e != nil && e.Duration > 0 {
+		return e.Duration
+	}
 	if d := agent.Spec.Lifecycle.WakeTimeout.Duration; d > 0 {
 		return d
 	}

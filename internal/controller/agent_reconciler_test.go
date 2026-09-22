@@ -479,6 +479,36 @@ func TestAgent_ImageNotAllowedDegrades(t *testing.T) {
 	expectAgentReadyReason(t, "img-agent", kaalmv1beta1.ReasonClassConstraintViolation)
 }
 
+// Rule 9: the effective wakeTimeout lands in status, defaulted from the class
+// when the Agent leaves it unset and clamped to the class cap when it asks for
+// more.
+func TestAgent_EffectiveWakeTimeout(t *testing.T) {
+	mkWorkloadClass(t, "wc-wake", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Lifecycle.DefaultWakeTimeout = metav1.Duration{Duration: 2 * time.Minute}
+		ac.Spec.Lifecycle.MaxWakeTimeout = metav1.Duration{Duration: 5 * time.Minute}
+	})
+	mkWorkloadAgent(t, "wake-default", "wc-wake", nil)
+	mkWorkloadAgent(t, "wake-over-cap", "wc-wake", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: time.Hour}
+	})
+	for name, want := range map[string]time.Duration{
+		"wake-default":  2 * time.Minute,
+		"wake-over-cap": 5 * time.Minute,
+	} {
+		eventually(t, func() error {
+			got := getWorkloadAgent(t, name).Status.EffectiveWakeTimeout
+			if got == nil || got.Duration != want {
+				return fmt.Errorf("%s effectiveWakeTimeout = %v, want %v", name, got, want)
+			}
+			return nil
+		})
+	}
+	// The clamp never rewrites the stored spec.
+	if got := getWorkloadAgent(t, "wake-over-cap").Spec.Lifecycle.WakeTimeout.Duration; got != time.Hour {
+		t.Errorf("spec wakeTimeout = %v, want it left at 1h", got)
+	}
+}
+
 func TestAgent_ProviderNamespaceDeniedDegrades(t *testing.T) {
 	mkSecret(t, "prov-ns-key")
 	mkProvider(t, "prov-ns", func(mp *kaalmv1beta1.ModelProvider) {

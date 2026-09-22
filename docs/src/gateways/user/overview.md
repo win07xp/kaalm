@@ -77,7 +77,7 @@ The background pipeline has no sync deadline. As shipped it runs under a fixed 1
 
 ### 7. Activator check
 
-If the Agent's phase is `Hibernated`, the gateway calls the controller's activator over mTLS, then polls a TCP connect to the Agent Service every two seconds until it succeeds or the Agent's `spec.lifecycle.wakeTimeout` elapses (2 minutes when unset). In sync mode the caller waits through this. An unreachable activator is `controller_unavailable`; an elapsed timeout is `wake_timeout`. The wake sequence and its failure arms are on [The activator](activation-and-activity.md#the-activator).
+If the Agent's phase is `Hibernated`, the gateway calls the controller's activator over mTLS, then polls a TCP connect to the Agent Service every two seconds until it succeeds or the Agent's effective `wakeTimeout` elapses (the class default and cap apply, and 2 minutes when neither the Agent nor the class sets it). In sync mode the caller waits through this. An unreachable activator is `controller_unavailable`; an elapsed timeout is `wake_timeout`. The wake sequence and its failure arms are on [The activator](activation-and-activity.md#the-activator).
 
 ### 8. Message delivery
 

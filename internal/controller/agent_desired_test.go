@@ -18,6 +18,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -168,6 +169,31 @@ func TestDeriveEffectiveSpec_ClassDefaults(t *testing.T) {
 	}
 	if eff.PVCSizeGi != 10 {
 		t.Errorf("size not clamped to class max: %d", eff.PVCSizeGi)
+	}
+}
+
+// Rule 9: wakeTimeout defaults from the class and is clamped to its cap, the
+// same way idleTimeout (rule 8) and hibernationDelay (rule 10) are.
+func TestDeriveEffectiveSpec_WakeTimeout(t *testing.T) {
+	class := &kaalmv1beta1.AgentClass{
+		Spec: kaalmv1beta1.AgentClassSpec{
+			Lifecycle: kaalmv1beta1.AgentClassLifecycle{
+				DefaultWakeTimeout: metav1.Duration{Duration: 2 * time.Minute},
+				MaxWakeTimeout:     metav1.Duration{Duration: 5 * time.Minute},
+			},
+		},
+	}
+	agent := &kaalmv1beta1.Agent{}
+	if got := deriveEffectiveSpec(agent, class).WakeTimeout; got != 2*time.Minute {
+		t.Errorf("unset wakeTimeout = %v, want the class default 2m", got)
+	}
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 3 * time.Minute}
+	if got := deriveEffectiveSpec(agent, class).WakeTimeout; got != 3*time.Minute {
+		t.Errorf("in-cap wakeTimeout = %v, want 3m", got)
+	}
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: time.Hour}
+	if got := deriveEffectiveSpec(agent, class).WakeTimeout; got != 5*time.Minute {
+		t.Errorf("over-cap wakeTimeout = %v, want the class cap 5m", got)
 	}
 }
 

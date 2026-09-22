@@ -121,6 +121,7 @@ type effectiveAgentSpec struct {
 	// Lifecycle knobs, defaulted from the class and capped by it.
 	IdleTimeout        time.Duration
 	HibernationDelay   time.Duration
+	WakeTimeout        time.Duration
 	HibernationEnabled bool
 	ActivitySource     string
 }
@@ -192,6 +193,7 @@ func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentCla
 	lc, clc := agent.Spec.Lifecycle, class.Spec.Lifecycle
 	eff.IdleTimeout = pick(lc.IdleTimeout.Duration, clc.DefaultIdleTimeout.Duration, clc.MaxIdleTimeout.Duration)
 	eff.HibernationDelay = pick(lc.HibernationDelay.Duration, clc.DefaultHibernationDelay.Duration, clc.MaxHibernationDelay.Duration)
+	eff.WakeTimeout = pick(lc.WakeTimeout.Duration, clc.DefaultWakeTimeout.Duration, clc.MaxWakeTimeout.Duration)
 	eff.HibernationEnabled = lc.HibernationEnabled
 	eff.ActivitySource = lc.ActivitySource
 	if eff.ActivitySource == "" {

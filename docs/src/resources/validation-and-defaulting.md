@@ -36,7 +36,7 @@ Rule numbers are stable identifiers. Other pages cite them by number, so the num
 | 6 | Resource limits within the class cap | Agent and AgentTask reconcilers | Clamped to the cap, never rejected |
 | 7 | Volume size within the class cap | Agent and AgentTask reconcilers | Clamped |
 | 8 | Idle timeout within the class cap | AgentReconciler | Clamped |
-| 9 | Wake timeout within the class cap | AgentReconciler | Clamped; not enforced as shipped (#204) |
+| 9 | Wake timeout within the class cap | AgentReconciler | Clamped |
 | 10 | Hibernation delay within the class cap | AgentReconciler | Clamped |
 | 11 | Fallback chains terminate | ModelProviderReconciler | `Ready=False`, `FallbackIneligible` |
 | 12 | Fallback stays within translatable formats | ModelProviderReconciler; the gateway per candidate | `Ready=False`, `FallbackIneligible` |
@@ -132,7 +132,7 @@ Resource limits, volume size, and the lifecycle timeouts are bounded by the clas
 
 **Rule 8: Idle timeout is capped by the class.** `lifecycle.idleTimeout` above `AgentClass.spec.lifecycle.maxIdleTimeout` is lowered to it.
 
-**Rule 9: Wake timeout is capped by the class.** `lifecycle.wakeTimeout` must not exceed `AgentClass.spec.lifecycle.maxWakeTimeout`. As shipped the reconciler does not enforce this rule, and the gateway uses the Agent's own value (#204).
+**Rule 9: Wake timeout is capped by the class.** `lifecycle.wakeTimeout` above `AgentClass.spec.lifecycle.maxWakeTimeout` is lowered to it. The reconciler writes the result to `status.effectiveWakeTimeout`, which the gateway reads.
 
 **Rule 10: Hibernation delay is capped by the class.** `lifecycle.hibernationDelay` above `AgentClass.spec.lifecycle.maxHibernationDelay` is lowered to it.
 
@@ -248,6 +248,6 @@ A default on a field inside an optional block fires only when the block is prese
 | `persistence.sizeGi` | `AgentClass.spec.persistence.defaultSizeGi` | The workload omits `sizeGi` and sets no `existingClaim` |
 | `lifecycle.idleTimeout` | `AgentClass.spec.lifecycle.defaultIdleTimeout` | The Agent omits it |
 | `lifecycle.hibernationDelay` | `AgentClass.spec.lifecycle.defaultHibernationDelay` | The Agent omits it |
-| `lifecycle.wakeTimeout` | `AgentClass.spec.lifecycle.defaultWakeTimeout` | Not applied as shipped; the gateway uses 120 seconds when the Agent leaves it unset (#204) |
+| `lifecycle.wakeTimeout` | `AgentClass.spec.lifecycle.defaultWakeTimeout` | The Agent omits it; with no class default either, the gateway uses 120 seconds |
 
 Fixed values with no class source: the health port is 8080, the Service port defaults to 8080, an Agent's memory mounts at `/var/agent/memory`, and a task's workspace at `/var/task/workspace`. An AgentTask's `completion.timeout` and `ttlSecondsAfterFinished` have no default from either source; unset, they are unbounded ([AgentTask](agenttask.md#timeout-and-retention-are-unbounded-by-default)).

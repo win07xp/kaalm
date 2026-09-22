@@ -155,6 +155,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	eff := deriveEffectiveSpec(&agent, &class)
+	// Rule 9: the gateway reads the class-resolved wakeTimeout from status.
+	// Every path below persists status, so the value lands on this pass.
+	agent.Status.EffectiveWakeTimeout = nil
+	if eff.WakeTimeout > 0 {
+		agent.Status.EffectiveWakeTimeout = &metav1.Duration{Duration: eff.WakeTimeout}
+	}
 
 	// ProvidersReady mirrors the Ready state of every referenced
 	// ModelProvider. A status condition only: it never moves the phase, and

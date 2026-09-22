@@ -492,6 +492,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              effectiveWakeTimeout:
+                description: |-
+                  EffectiveWakeTimeout is spec.lifecycle.wakeTimeout after the class
+                  default and cap (rule 9). The gateway bounds a wake with it.
+                type: string
               endpoint:
                 description: Endpoint is the in-cluster HTTPS URL for the agent, when
                   the Service exists.
@@ -993,6 +998,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              effectiveWakeTimeout:
+                description: |-
+                  EffectiveWakeTimeout is spec.lifecycle.wakeTimeout after the class
+                  default and cap (rule 9). The gateway bounds a wake with it.
+                type: string
               endpoint:
                 description: Endpoint is the in-cluster HTTPS URL for the agent, when
                   the Service exists.
