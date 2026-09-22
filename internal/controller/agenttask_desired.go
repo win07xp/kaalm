@@ -89,8 +89,8 @@ func deriveEffectiveTaskSpec(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.A
 		RuntimeClassName: class.Spec.Runtime.RuntimeClassName,
 		PullPolicy:       class.Spec.Image.PullPolicy,
 		ImagePullSecrets: class.Spec.Image.ImagePullSecrets,
-		PodSecurity:      class.Spec.Security.PodSecurityContext,
-		ContainerSec:     class.Spec.Security.ContainerSecurityContext,
+		PodSecurity:      restrictedPodSecurity(class.Spec.Security.PodSecurityContext),
+		ContainerSec:     restrictedContainerSecurity(class.Spec.Security.ContainerSecurityContext),
 		AutomountToken:   class.Spec.Security.AutomountServiceAccountToken,
 		TerminationGrace: class.Spec.Lifecycle.TerminationGracePeriodSeconds,
 		PodLabels:        class.Spec.PodMetadata.Labels,
@@ -285,6 +285,12 @@ func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operato
 			},
 		})
 		mounts = append(mounts, corev1.VolumeMount{Name: "task-workspace", MountPath: mountPath})
+	}
+
+	if readOnlyRoot(eff.ContainerSec) {
+		v, m := tmpVolume()
+		volumes = append(volumes, v)
+		mounts = append(mounts, m)
 	}
 
 	return &corev1.Pod{

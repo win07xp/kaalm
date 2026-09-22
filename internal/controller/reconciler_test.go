@@ -1055,3 +1055,45 @@ func TestCostSanity_RisingEdgeOnly(t *testing.T) {
 		t.Fatalf("a new rising edge emitted %d events, want 1", n)
 	}
 }
+
+// A class that relaxes the restricted baseline reports SecurityBaseline=False
+// naming the field; one that declares nothing or only tightens reports True.
+func TestAgentClass_SecurityBaselineCondition(t *testing.T) {
+	mkClass(t, "ac-baseline-ok")
+	expectCondition(t, "ac-baseline-ok", kaalmv1beta1.ConditionSecurityBaseline,
+		metav1.ConditionTrue, kaalmv1beta1.ReasonRestrictedBaseline)
+
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-baseline-relaxed"},
+		Spec: kaalmv1beta1.AgentClassSpec{Security: kaalmv1beta1.AgentClassSecurity{
+			ContainerSecurityContext: &corev1.SecurityContext{ReadOnlyRootFilesystem: boolPtr(false)},
+		}}}
+	if err := testClient.Create(ctxT(), ac); err != nil {
+		t.Fatalf("create class: %v", err)
+	}
+	expectCondition(t, "ac-baseline-relaxed", kaalmv1beta1.ConditionSecurityBaseline,
+		metav1.ConditionFalse, kaalmv1beta1.ReasonBelowRestrictedBaseline)
+	var got kaalmv1beta1.AgentClass
+	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-baseline-relaxed"}, &got)
+	c := condition(got.Status.Conditions, kaalmv1beta1.ConditionSecurityBaseline)
+	if c == nil || !strings.Contains(c.Message, "readOnlyRootFilesystem is false") {
+		t.Errorf("message does not name the relaxed field: %+v", c)
+	}
+}
+
+func expectCondition(t *testing.T, className, condType string, want metav1.ConditionStatus, reason string) {
+	t.Helper()
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
+			return err
+		}
+		c := condition(ac.Status.Conditions, condType)
+		if c == nil {
+			return errString("no " + condType + " condition yet")
+		}
+		if c.Status != want || c.Reason != reason {
+			return errString(condType + "=" + string(c.Status) + "/" + c.Reason)
+		}
+		return nil
+	})
+}

@@ -112,6 +112,23 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		fqdnCond.Reason = "NoHostsRequested"
 	}
 
+	// The restricted baseline is the default; a class that declares less is
+	// allowed, but never silently: the condition records it and the Warning
+	// fires when it first appears.
+	baseline := metav1.Condition{
+		Type: kaalmv1beta1.ConditionSecurityBaseline, Status: metav1.ConditionTrue,
+		Reason: kaalmv1beta1.ReasonRestrictedBaseline, Message: "workload Pods meet the restricted Pod Security Standard",
+	}
+	if deviations := securityBaselineDeviations(ac.Spec.Security); len(deviations) > 0 {
+		baseline.Status = metav1.ConditionFalse
+		baseline.Reason = kaalmv1beta1.ReasonBelowRestrictedBaseline
+		baseline.Message = strings.Join(deviations, "; ")
+		if !apimeta.IsStatusConditionFalse(ac.Status.Conditions, kaalmv1beta1.ConditionSecurityBaseline) {
+			r.Recorder.Event(&ac, corev1.EventTypeWarning, kaalmv1beta1.ReasonBelowRestrictedBaseline,
+				"security block is below the restricted Pod Security Standard: "+baseline.Message)
+		}
+	}
+
 	// Count users.
 	agents, tasks, err := r.countUsers(ctx, ac.Name)
 	if err != nil {
@@ -123,6 +140,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	ac.Status.AgentsInUse = agents
 	ac.Status.TasksInUse = tasks
 	apimeta.SetStatusCondition(&ac.Status.Conditions, fqdnCond)
+	apimeta.SetStatusCondition(&ac.Status.Conditions, baseline)
 	if len(problems) == 0 {
 		apimeta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionReady,

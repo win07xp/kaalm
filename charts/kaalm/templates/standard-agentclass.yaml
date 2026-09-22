@@ -45,6 +45,16 @@ spec:
     defaultSizeGi: 5
     maxSizeGi: 50
     pvcRetention: Delete
+  # The restricted Pod Security Standard, written out although it is also
+  # the controller's default, so the rendered object shows what runs.
+  security:
+    podSecurityContext:
+      runAsNonRoot: true
+      seccompProfile: { type: RuntimeDefault }
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: ["ALL"] }
   {{- with .Values.standardAgentClass.allowedProviders }}
   allowedProviders:
     {{- range . }}

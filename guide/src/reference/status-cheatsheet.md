@@ -146,7 +146,9 @@ before deleting one.
 Conditions: `Ready` (`AllReferencesResolved`; `InvalidCIDR` when an
 `allowedCIDRs` entry does not parse; otherwise `InvalidReference` when a
 listed provider or tool provider does not exist or an `allowedHosts` entry is
-not a DNS name) and `FQDNPolicySupported`
+not a DNS name), `SecurityBaseline` (`RestrictedBaseline`, or
+`BelowRestrictedBaseline` naming each `security` field the class relaxes
+below the restricted Pod Security Standard), and `FQDNPolicySupported`
 (whether the CNI supports the FQDN egress rules the class asks for; reason
 `NoHostsRequested` when the class names no `allowedHosts`,
 `FQDNPolicySupported` when it does and the CNI can carry them out,
