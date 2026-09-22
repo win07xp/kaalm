@@ -105,8 +105,8 @@ gateway:
   agentDeliveryConnectTimeout: 1s
   # Total sync-mode wall-clock budget (wake + delivery retries + processing).
   syncDeliveryDeadline: 30s
-  # Per-attempt upstream LLM-provider bound, connect to first byte, also the
-  # mid-stream idle-bytes bound.
+  # Per-attempt upstream LLM-provider bound (the gateway's --upstream-timeout).
+  # It covers the whole call through the last response byte, streams included.
   providerFirstByteTimeout: 120s
   # Per-attempt read of an agent's /v1/message response.
   agentReadTimeout: 10s

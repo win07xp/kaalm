@@ -52,6 +52,7 @@ spec:
             - --max-message-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxMessageBodyBytes }}
             - --max-response-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxResponseBodyBytes }}
             - --sync-delivery-deadline={{ .Values.gateway.syncDeliveryDeadline }}
+            - --upstream-timeout={{ .Values.gateway.providerFirstByteTimeout }}
             - --agent-read-timeout={{ .Values.gateway.agentReadTimeout }}
             - --callback-read-timeout={{ .Values.gateway.callbackReadTimeout }}
             - --agent-connect-timeout={{ .Values.gateway.agentDeliveryConnectTimeout }}
