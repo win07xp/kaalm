@@ -91,7 +91,7 @@ func TestDesiredCompletionRole_Scoping(t *testing.T) {
 func TestDesiredTaskNetworkPolicy_NoIngress(t *testing.T) {
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
 	class := &kaalmv1beta1.AgentClass{}
-	np := desiredTaskNetworkPolicy(task, class, "kaalm-system")
+	np := desiredTaskNetworkPolicy(task, class, "kaalm-system", DNSSelector{})
 	if np.Spec.Ingress == nil || len(np.Spec.Ingress) != 0 {
 		t.Errorf("task policy must declare an explicit empty ingress list, got %v", np.Spec.Ingress)
 	}
@@ -226,7 +226,7 @@ func TestDesiredTaskNetworkPolicy_AllowedCIDRs(t *testing.T) {
 			Egress: kaalmv1beta1.AgentClassEgress{AllowedCIDRs: []string{"203.0.113.0/24"}},
 		},
 	}}
-	np := desiredTaskNetworkPolicy(task, class, "kaalm-system")
+	np := desiredTaskNetworkPolicy(task, class, "kaalm-system", DNSSelector{})
 	// gateway + DNS + one CIDR rule.
 	if len(np.Spec.Egress) != 3 {
 		t.Fatalf("want 3 egress rules, got %d", len(np.Spec.Egress))

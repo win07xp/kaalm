@@ -59,6 +59,8 @@ type AgentTaskReconciler struct {
 	client.Client
 	Recorder          record.EventRecorder
 	OperatorNamespace string
+	// DNS selects the peers of the DNS egress rule on every task NetworkPolicy.
+	DNS DNSSelector
 	// SecretReader reads Secrets in user namespaces straight from the
 	// apiserver: the manager's cache holds the operator namespace's Secrets
 	// only. nil falls back to the embedded client.
@@ -593,7 +595,7 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 			return err
 		}
 	}
-	if err := create(desiredTaskNetworkPolicy(task, class, r.OperatorNamespace)); err != nil {
+	if err := create(desiredTaskNetworkPolicy(task, class, r.OperatorNamespace, r.DNS)); err != nil {
 		return err
 	}
 	if isAgentReported(task) {

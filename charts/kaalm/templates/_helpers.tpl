@@ -30,3 +30,15 @@ suffix) into a byte count for the gateway's int64 flags.
 {{- $v | int64 -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+kaalm.labelList renders a label map as a comma-separated key=value list, in
+key order, for controller flags that take one.
+*/}}
+{{- define "kaalm.labelList" -}}
+{{- $pairs := list -}}
+{{- range $k, $v := . -}}
+{{- $pairs = append $pairs (printf "%s=%s" $k $v) -}}
+{{- end -}}
+{{- join "," $pairs -}}
+{{- end -}}

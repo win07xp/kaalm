@@ -340,7 +340,7 @@ func TestDesiredNetworkPolicy_Rules(t *testing.T) {
 			},
 		},
 	}
-	np := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 8080}, "kaalm-system")
+	np := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 8080}, "kaalm-system", DNSSelector{})
 	// gateway egress + DNS + one CIDR
 	if len(np.Spec.Egress) != 3 {
 		t.Fatalf("want 3 egress rules, got %d", len(np.Spec.Egress))
@@ -364,7 +364,7 @@ func TestDesiredNetworkPolicy_SameNamespaceIngressScoped(t *testing.T) {
 			Network: kaalmv1beta1.AgentClassNetwork{AllowSameNamespaceIngress: true},
 		},
 	}
-	np := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 9443}, "kaalm-system")
+	np := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 9443}, "kaalm-system", DNSSelector{})
 	if len(np.Spec.Ingress) != 2 {
 		t.Fatalf("want gateway + same-namespace ingress, got %d rules", len(np.Spec.Ingress))
 	}

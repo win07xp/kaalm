@@ -58,6 +58,8 @@ spec:
             - --health-probe-bind-address=:8081
             - --metrics-bind-address=:8080
             - --metrics-secure=false
+            - --dns-namespace-labels={{ include "kaalm.labelList" .Values.controller.networkPolicy.dnsSelector.namespaceLabels }}
+            - --dns-pod-labels={{ include "kaalm.labelList" .Values.controller.networkPolicy.dnsSelector.podLabels }}
             - --controller-tls-cert=/var/run/kaalm/tls.crt
             - --controller-tls-key=/var/run/kaalm/tls.key
             - --controller-tls-ca=/var/run/kaalm/ca.crt
