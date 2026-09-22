@@ -307,6 +307,83 @@ func TestStartRetriesUntilContextEnds(t *testing.T) {
 	}
 }
 
+// TestMigrateAttemptsEveryKind proves one failing kind does not stop the
+// pass: the other five are migrated and trimmed, the failed kind keeps both
+// stored versions, and the error names it.
+func TestMigrateAttemptsEveryKind(t *testing.T) {
+	const failing = "toolproviders.kaalm.io"
+	var objs []client.Object
+	for _, k := range kinds {
+		crd := &apiextensionsv1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: k.crdName},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Group: kaalmv1beta1.GroupVersion.Group,
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{Name: "v1alpha1", Served: true},
+					{Name: StorageVersion, Served: true, Storage: true},
+				},
+			},
+			Status: apiextensionsv1.CustomResourceDefinitionStatus{StoredVersions: []string{"v1alpha1", StorageVersion}},
+		}
+		objs = append(objs, crd)
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(objs...).
+		WithStatusSubresource(&apiextensionsv1.CustomResourceDefinition{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if list.GetObjectKind().GroupVersionKind().Kind == "ToolProviderList" {
+					return errors.New("list refused")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	err := (&Migrator{Reader: c, Client: c}).Migrate(context.Background())
+	if err == nil || !strings.Contains(err.Error(), failing) {
+		t.Fatalf("Migrate: err = %v, want an error naming %s", err, failing)
+	}
+	for _, k := range kinds {
+		var crd apiextensionsv1.CustomResourceDefinition
+		if err := c.Get(context.Background(), client.ObjectKey{Name: k.crdName}, &crd); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{StorageVersion}
+		if k.crdName == failing {
+			want = []string{"v1alpha1", StorageVersion}
+		}
+		if !slices.Equal(crd.Status.StoredVersions, want) {
+			t.Errorf("%s storedVersions = %v, want %v", k.crdName, crd.Status.StoredVersions, want)
+		}
+	}
+}
+
+// TestStartRerunsWhileLeading proves a clean pass does not end the
+// migrator: it runs the pass again every ResyncInterval until ctx ends.
+func TestStartRerunsWhileLeading(t *testing.T) {
+	var objs []client.Object
+	for _, k := range kinds {
+		objs = append(objs, &apiextensionsv1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: k.crdName},
+			Status:     apiextensionsv1.CustomResourceDefinitionStatus{StoredVersions: []string{StorageVersion}},
+		})
+	}
+	var gets atomic.Int32
+	c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(objs...).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			gets.Add(1)
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+	m := &Migrator{Reader: c, Client: c, ResyncInterval: 10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start returned %v, want nil on context end", err)
+	}
+	if passes := gets.Load() / int32(len(kinds)); passes < 3 {
+		t.Fatalf("Start ran %d clean passes in 200ms with a 10ms resync, want several", passes)
+	}
+}
+
 func storedVersions(t *testing.T, crdName string) []string {
 	t.Helper()
 	var crd apiextensionsv1.CustomResourceDefinition

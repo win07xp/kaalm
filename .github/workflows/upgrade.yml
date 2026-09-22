@@ -2,6 +2,11 @@
 # v1alpha1 workloads, upgrade to this build, assert nothing was recreated
 # and nothing was lost.
 #
+# Two previous releases, one job each: the Makefile's PREV_CHART_VERSION
+# (the latest release, bumped by release readiness) and 0.5.0, the last
+# release before the v0.6.0 API graduation. Only the second crosses the
+# graduation: the conversion window and the storage migration.
+#
 # Deliberately not part of ci.yml (decided 2026-08-22 on #114): most PRs
 # cannot affect the upgrade path, so this runs only when a PR touches the
 # API, the shipped CRDs, the storage migrator, the spec itself, or this
@@ -25,7 +30,17 @@ permissions:
 
 jobs:
   e2e-upgrade:
+    name: e2e-upgrade (from ${{ matrix.from }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # An empty prev keeps the Makefile's PREV_CHART_VERSION.
+          - from: latest release
+            prev: ""
+          - from: pre-graduation 0.5.0
+            prev: "0.5.0"
     steps:
       - uses: actions/checkout@v5
 
@@ -49,7 +64,9 @@ jobs:
         uses: azure/setup-helm@v5
 
       - name: Run the upgrade e2e
-        run: make e2e-upgrade
+        env:
+          PREV: ${{ matrix.prev }}
+        run: make e2e-upgrade ${PREV:+PREV_CHART_VERSION=$PREV}
 
       - name: Dump diagnostics on failure
         if: failure()
