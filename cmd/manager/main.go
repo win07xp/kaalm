@@ -92,6 +92,7 @@ func main() {
 	var probeCA string
 	var activatorAddr string
 	var callbackAllowlist string
+	var certLifetime controller.CertLifetime
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -129,6 +130,10 @@ func main() {
 		"Comma-separated DNS-name suffixes and CIDR blocks whose AgentChannel.callbackUrl targets are permitted "+
 			"despite the deny-internal default; loopback and cloud metadata stay blocked regardless. "+
 			"Must match the gateway's --callback-url-allowlist.")
+	flag.DurationVar(&certLifetime.Duration, "cert-duration", controller.DefaultCertDuration,
+		"The spec.duration of each Agent and AgentTask Certificate.")
+	flag.DurationVar(&certLifetime.RenewBefore, "cert-renew-before", controller.DefaultCertRenewBefore,
+		"The spec.renewBefore of each Agent and AgentTask Certificate. Must be shorter than --cert-duration.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -136,6 +141,11 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if err := certLifetime.Validate(); err != nil {
+		setupLog.Error(err, "invalid --cert-duration or --cert-renew-before")
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -355,6 +365,7 @@ func main() {
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            mgr.GetAPIReader(),
 		Activity:                activityClient,
+		CertLifetime:            certLifetime,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Agent")
 		os.Exit(1)
@@ -365,6 +376,7 @@ func main() {
 		Recorder:                mgr.GetEventRecorderFor("agenttask-controller"),
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            mgr.GetAPIReader(),
+		CertLifetime:            certLifetime,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 		os.Exit(1)

@@ -123,7 +123,7 @@ The Certificate is named `{agentName}-tls` in the Agent's namespace, owned by th
 | `spec.issuerRef` | `{ name: "kaalm-ca-issuer", kind: "ClusterIssuer" }` |
 | `spec.secretName` | `{agentName}-tls`, the output Secret cert-manager creates in the Agent's namespace |
 | `spec.dnsNames` | `{agentName}.{namespace}.svc.cluster.local`, `{agentName}.{namespace}.svc`, `{agentName}.{namespace}` |
-| `spec.duration`, `spec.renewBefore` | `2160h` (90 days), `720h` (30 days), chart defaults |
+| `spec.duration`, `spec.renewBefore` | `2160h` (90 days), `720h` (30 days) by default, from the chart values `controller.certificate.duration` and `controller.certificate.renewBefore` |
 | `spec.usages` | `server auth`, `client auth`: the same cert is the agent's serving cert and its mTLS client cert |
 
 A `ClusterIssuer` is used because cert-manager does not resolve a namespaced `Issuer` across namespaces; the chart installs `kaalm-ca-issuer` sourcing from the `kaalm-ca` Secret in cert-manager's cluster resource namespace (chart value `certManager.clusterResourceNamespace`, default `cert-manager`). Pod creation is gated on `Certificate.status.conditions[type=Ready]` so the Pod never hangs on its projected Secret mount. Rotation is transparent: cert-manager renews per `renewBefore`, kubelet propagates the new Secret contents into the projected volume, and the agent reloads through the file-watch pattern ([Starter templates](../runtime/starter-templates.md)). The trust chain is under [In-cluster TLS](../security/tls.md#in-cluster-tls).

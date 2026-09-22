@@ -71,6 +71,7 @@ type effectiveTaskSpec struct {
 	ImagePullSecrets []corev1.LocalObjectReference
 	PodSecurity      *corev1.PodSecurityContext
 	ContainerSec     *corev1.SecurityContext
+	AutomountToken   bool
 	TerminationGrace *int64
 	PodLabels        map[string]string
 	PodAnnotations   map[string]string
@@ -90,6 +91,7 @@ func deriveEffectiveTaskSpec(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.A
 		ImagePullSecrets: class.Spec.Image.ImagePullSecrets,
 		PodSecurity:      class.Spec.Security.PodSecurityContext,
 		ContainerSec:     class.Spec.Security.ContainerSecurityContext,
+		AutomountToken:   class.Spec.Security.AutomountServiceAccountToken,
 		TerminationGrace: class.Spec.Lifecycle.TerminationGracePeriodSeconds,
 		PodLabels:        class.Spec.PodMetadata.Labels,
 		PodAnnotations:   class.Spec.PodMetadata.Annotations,
@@ -139,7 +141,8 @@ func isAgentReported(task *kaalmv1beta1.AgentTask) bool {
 // desiredTaskCertificate is the per-task client certificate: a single SAN in
 // the non-Service task shape and client auth only, since tasks have no inbound
 // listener. See docs/src/security/tls.md.
-func desiredTaskCertificate(task *kaalmv1beta1.AgentTask) *cmapi.Certificate {
+func desiredTaskCertificate(task *kaalmv1beta1.AgentTask, lifetime CertLifetime) *cmapi.Certificate {
+	duration, renewBefore := lifetime.resolve()
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: taskCertificateName(task.Name), Namespace: task.Namespace},
 		Spec: cmapi.CertificateSpec{
@@ -148,8 +151,8 @@ func desiredTaskCertificate(task *kaalmv1beta1.AgentTask) *cmapi.Certificate {
 			DNSNames: []string{
 				fmt.Sprintf("%s.%s.%s", task.Name, task.Namespace, kaalmv1beta1.TaskSANSuffix),
 			},
-			Duration:    &metav1.Duration{Duration: certDuration},
-			RenewBefore: &metav1.Duration{Duration: certRenewBefore},
+			Duration:    &metav1.Duration{Duration: duration},
+			RenewBefore: &metav1.Duration{Duration: renewBefore},
 			Usages:      []cmapi.KeyUsage{cmapi.UsageClientAuth},
 		},
 	}
@@ -294,6 +297,7 @@ func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operato
 		Spec: corev1.PodSpec{
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			ServiceAccountName:            taskServiceAccountName(task.Name),
+			AutomountServiceAccountToken:  &eff.AutomountToken,
 			RuntimeClassName:              eff.RuntimeClassName,
 			ImagePullSecrets:              eff.ImagePullSecrets,
 			SecurityContext:               eff.PodSecurity,

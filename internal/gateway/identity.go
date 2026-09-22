@@ -52,7 +52,7 @@ var (
 
 // ParseWorkloadSAN scans the certificate's DNS SAN list for exactly one entry
 // in a recognized shape and enforces the exact label count (5 for
-// {name}.{ns}.svc.cluster.local, 4 for {name}.{ns}.task.kaalm.io). Short-form
+// {name}.{ns}.svc.cluster.local and 5 for {name}.{ns}.task.kaalm.io). Short-form
 // Service SANs match no recognized suffix and are ignored. This label-count
 // rule is defense in depth against dotted-name spoofing; see
 // docs/src/gateways/llm/workload-identity.md.

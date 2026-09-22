@@ -85,6 +85,9 @@ type AgentReconciler struct {
 	// Activity fetches per-namespace gateway activity for idle detection.
 	// nil disables idle and hibernation transitions (no data, no evidence).
 	Activity ActivityClient
+	// CertLifetime sets the duration and renewBefore of each Agent's
+	// Certificate. The zero value takes the defaults.
+	CertLifetime CertLifetime
 	// Clock is injectable for tests; nil means time.Now.
 	Clock func() time.Time
 }
@@ -623,7 +626,7 @@ func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1b
 		if !apierrors.IsNotFound(err) {
 			return false, err
 		}
-		desired := desiredCertificate(agent)
+		desired := desiredCertificate(agent, r.CertLifetime)
 		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 			return false, err
 		}

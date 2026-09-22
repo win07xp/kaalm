@@ -140,8 +140,8 @@ Kaalm rotates workload certificates on disk mid-pod-lifetime. The `kaalm`
 client factories exist so this never becomes your problem; a client built
 by hand from `$KAALM_TLS_CERT` files snapshots its SSL context and an
 agent that neither hibernates nor restarts for most of the certificate's
-90-day duration would eventually present a stale certificate. If you must
-build your own client (as the task example does), that is fine precisely
+lifetime (90 days by default) would eventually present a stale
+certificate. If you must build your own client (as the task example does), that is fine precisely
 when the pod is short-lived; long-lived hand-built clients should be
 rebuilt when TLS errors appear.
 

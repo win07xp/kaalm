@@ -105,6 +105,10 @@ spec:
       allowPrivilegeEscalation: false
       readOnlyRootFilesystem: true
       capabilities: { drop: ["ALL"] }
+    # Mounts the workload ServiceAccount token into every Pod of the class.
+    # Default false: the mTLS certificate is the only credential. Set it only
+    # when a Role bound to the workload's ServiceAccount must reach the API.
+    automountServiceAccountToken: false
 
   lifecycle:
     # Default and clamp for Agent.spec.lifecycle.idleTimeout; rule 8.
@@ -175,6 +179,10 @@ The field governs the PVC Kaalm provisions for an Agent. Under `Retain`, the Age
 ### `allowHandlerMounts` guards the image review boundary, not code execution
 
 Anyone who can create an Agent can already run arbitrary code: any image matching `allowedImages`. What a mounted handler ([`Agent.spec.handler`](agent.md), consumed by the [reference base images](../runtime/base-images.md)) adds is code that bypasses image review: the platform team approved `kaalm-agent-python`, not the handler source injected into it. The field therefore defaults to `false`, and enabling it is the class-level statement that ConfigMap authorship in a namespace is an acceptable code provenance for that category of workload. Classes for production fleets built from reviewed images leave it off; a starter or development class turns it on. Enforcement is rule 30, with the same recoverable `Degraded` handling as the persistence and hibernation gates, including on class drift. What the grant means in RBAC terms is stated once in the [threat model](../security/threat-model.md#workload-isolation).
+
+### `automountServiceAccountToken` is the opt-in for API access
+
+Each Agent and AgentTask runs as a ServiceAccount of its own with no RoleBinding, and by default its Pod does not mount that ServiceAccount's token. Setting `security.automountServiceAccountToken: true` mounts the token into every Pod of the class, so a Role and RoleBinding that a developer or platform team binds to the workload's ServiceAccount give the agent Kubernetes API access. The gateway still rejects the token from a Kaalm-managed Pod, so the opt-in adds an API server credential and nothing at the gateway. The field is outside the Pod spec hash, so a change reaches a running Agent when its Pod is next replaced. See [Agent Pod ServiceAccount](../security/rbac.md#agent-pod-serviceaccount).
 
 ### Image pattern glob semantics
 

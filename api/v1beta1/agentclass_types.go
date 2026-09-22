@@ -162,6 +162,13 @@ type AgentClassSecurity struct {
 	// ContainerSecurityContext is applied to workload containers.
 	// +optional
 	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
+	// AutomountServiceAccountToken mounts the workload ServiceAccount token
+	// into Agent and AgentTask Pods of this class. Off by default: the mTLS
+	// certificate is the only credential, and the ServiceAccount has no
+	// RoleBinding. Set it when a Role bound to that ServiceAccount must give
+	// the agent Kubernetes API access.
+	// +optional
+	AutomountServiceAccountToken bool `json:"automountServiceAccountToken,omitempty"`
 }
 
 // AgentClassLifecycle sets lifecycle defaults and ceilings. Timeouts are

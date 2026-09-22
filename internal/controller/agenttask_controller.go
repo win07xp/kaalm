@@ -65,6 +65,9 @@ type AgentTaskReconciler struct {
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
+	// CertLifetime sets the duration and renewBefore of each AgentTask's
+	// Certificate. The zero value takes the defaults.
+	CertLifetime CertLifetime
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agenttasks,verbs=get;list;watch;update;patch;delete
@@ -606,7 +609,7 @@ func (r *AgentTaskReconciler) ensureTaskCertificate(ctx context.Context, task *k
 		if !apierrors.IsNotFound(err) {
 			return false, err
 		}
-		desired := desiredTaskCertificate(task)
+		desired := desiredTaskCertificate(task, r.CertLifetime)
 		if err := controllerutil.SetControllerReference(task, desired, r.Scheme()); err != nil {
 			return false, err
 		}

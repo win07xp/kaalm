@@ -18,6 +18,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -248,9 +249,64 @@ func TestDesiredPods_InjectOperatorNamespace(t *testing.T) {
 	}
 }
 
+// Workload Pods get no ServiceAccount token unless their class sets
+// security.automountServiceAccountToken, the opt-in for API access through a
+// Role bound to the workload's ServiceAccount.
+func TestDesiredPods_NoServiceAccountToken(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
+		Spec: kaalmv1beta1.AgentSpec{Image: "img:v1"}}
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"},
+		Spec: kaalmv1beta1.AgentTaskSpec{Image: "img:v1"}}
+	for _, optIn := range []bool{false, true} {
+		class := &kaalmv1beta1.AgentClass{}
+		class.Spec.Security.AutomountServiceAccountToken = optIn
+		pods := map[string]*corev1.Pod{
+			"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops"),
+			"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops"),
+		}
+		for kind, pod := range pods {
+			if a := pod.Spec.AutomountServiceAccountToken; a == nil || *a != optIn {
+				t.Errorf("class opt-in %v: %s pod automountServiceAccountToken = %v, want %v", optIn, kind, a, optIn)
+			}
+		}
+	}
+}
+
+// A zero CertLifetime takes the defaults; set fields pass through.
+func TestCertLifetime_Resolve(t *testing.T) {
+	d, rb := CertLifetime{}.resolve()
+	if d != DefaultCertDuration || rb != DefaultCertRenewBefore {
+		t.Errorf("zero lifetime = %v/%v, want %v/%v", d, rb, DefaultCertDuration, DefaultCertRenewBefore)
+	}
+	d, rb = CertLifetime{Duration: 24 * time.Hour, RenewBefore: 8 * time.Hour}.resolve()
+	if d != 24*time.Hour || rb != 8*time.Hour {
+		t.Errorf("set lifetime = %v/%v, want 24h/8h", d, rb)
+	}
+}
+
+func TestCertLifetime_Validate(t *testing.T) {
+	cases := []struct {
+		name    string
+		l       CertLifetime
+		wantErr bool
+	}{
+		{"defaults", CertLifetime{Duration: DefaultCertDuration, RenewBefore: DefaultCertRenewBefore}, false},
+		{"short", CertLifetime{Duration: 24 * time.Hour, RenewBefore: 8 * time.Hour}, false},
+		{"renew equals duration", CertLifetime{Duration: 8 * time.Hour, RenewBefore: 8 * time.Hour}, true},
+		{"renew exceeds duration", CertLifetime{Duration: time.Hour, RenewBefore: 2 * time.Hour}, true},
+		{"zero duration", CertLifetime{RenewBefore: time.Hour}, true},
+		{"zero renewBefore", CertLifetime{Duration: time.Hour}, true},
+	}
+	for _, tc := range cases {
+		if err := tc.l.Validate(); (err != nil) != tc.wantErr {
+			t.Errorf("%s: Validate() = %v, wantErr %v", tc.name, err, tc.wantErr)
+		}
+	}
+}
+
 func TestDesiredCertificate_Shape(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
-	cert := desiredCertificate(agent)
+	cert := desiredCertificate(agent, CertLifetime{})
 	if cert.Name != "sup-tls" || cert.Spec.SecretName != "sup-tls" {
 		t.Errorf("cert naming wrong: %s / %s", cert.Name, cert.Spec.SecretName)
 	}
@@ -268,6 +324,9 @@ func TestDesiredCertificate_Shape(t *testing.T) {
 	}
 	if len(cert.Spec.Usages) != 2 {
 		t.Errorf("want server auth + client auth, got %v", cert.Spec.Usages)
+	}
+	if cert.Spec.Duration.Duration != DefaultCertDuration || cert.Spec.RenewBefore.Duration != DefaultCertRenewBefore {
+		t.Errorf("lifetime = %v/%v, want the defaults", cert.Spec.Duration, cert.Spec.RenewBefore)
 	}
 }
 
