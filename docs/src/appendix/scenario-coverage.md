@@ -15,7 +15,10 @@ Coverage is one of three kinds:
   This is the strongest kind: it exercises the kubelet, real garbage
   collection, cert-manager, and kube-router that the lighter kinds cannot.
   `make e2e` recreates the cluster, builds and imports the images, installs
-  the chart, and runs the suite; CI runs it on every PR.
+  the chart, and runs the suite; CI runs it on every PR. `make e2e-cilium`
+  recreates the cluster with Cilium in place of flannel and runs the FQDN
+  egress spec, which flannel cannot enforce; CI runs it when the FQDN policy
+  path changes.
 
 The e2e column is the acceptance surface: every scenario names the spec that proves it on a cluster, and every spec passes. S1 to S20 and S22 to S24 run in `test/e2e/` (build tag `e2e`) against the locally built chart and images. S21 runs in `test/upgrade/` (build tag `upgrade`, `make e2e-upgrade`), which starts from the previous released chart; its CI workflow runs on release tags and on pull requests that touch the API, the CRDs, the migrator, or the suite itself. The LLM scenarios run against an in-cluster mock provider that speaks both the Anthropic and the OpenAI formats, and the channel scenarios against a mock of each platform's API.
 
