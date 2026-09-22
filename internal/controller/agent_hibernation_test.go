@@ -222,6 +222,103 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 	}
 }
 
+// TestAgent_WakeDuringHibernating pins that a wake requested while the Pod is
+// still terminating is kept, not ignored: the Agent settles Hibernated and
+// then resumes (#207).
+func TestAgent_WakeDuringHibernating(t *testing.T) {
+	mkWorkloadClass(t, "wc-hibrace", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+		ac.Spec.Lifecycle.HibernationAllowed = true
+	})
+	provisionRunningAgentWithLifecycle(t, "hib-race", "wc-hibrace", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Persistence.Enabled = true
+		ag.Spec.Lifecycle.HibernationEnabled = true
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
+		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
+	})
+
+	// A finalizer keeps the Pod terminating once deleted, which holds the
+	// Agent in Hibernating.
+	eventually(t, func() error {
+		pod := agentPod(t, "hib-race")
+		if pod == nil {
+			return errString("no pod")
+		}
+		pod.Finalizers = append(pod.Finalizers, holdFinalizer)
+		return testClient.Update(ctxT(), pod)
+	})
+
+	// Stale activity drives Idle then Hibernating.
+	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "hib-race", 2*time.Hour)}, 1)
+	touchAgent(t, "hib-race")
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, "hib-race")
+		if ag.Status.Phase != kaalmv1beta1.AgentHibernating {
+			return errString(fmt.Sprintf("phase=%s want Hibernating", ag.Status.Phase))
+		}
+		if len(terminatingPods(t, "hib-race")) == 0 {
+			return errString("pod not yet terminating")
+		}
+		return nil
+	})
+
+	// The activator writes the wake annotation in this window.
+	eventually(t, func() error {
+		got := getWorkloadAgent(t, "hib-race")
+		if got.Annotations == nil {
+			got.Annotations = map[string]string{}
+		}
+		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationTrue
+		return testClient.Update(ctxT(), got)
+	})
+	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "hib-race", 0)}, 1)
+
+	// While the Pod terminates, the wake must survive reconcile passes.
+	for i := 0; i < 3; i++ {
+		touchAgent(t, "hib-race")
+		time.Sleep(300 * time.Millisecond)
+		got := getWorkloadAgent(t, "hib-race")
+		if got.Annotations[kaalmv1beta1.AnnotationWake] != kaalmv1beta1.AnnotationTrue {
+			t.Fatalf("pass %d: wake annotation dropped while Hibernating (phase=%s)", i, got.Status.Phase)
+		}
+		if got.Status.Phase != kaalmv1beta1.AgentHibernating {
+			t.Fatalf("pass %d: phase=%s want Hibernating while the Pod terminates", i, got.Status.Phase)
+		}
+	}
+
+	// Finish the termination: the Agent settles Hibernated, then resumes.
+	eventually(t, func() error {
+		for _, pod := range terminatingPods(t, "hib-race") {
+			pod.Finalizers = nil
+			if err := testClient.Update(ctxT(), &pod); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	eventually(t, func() error {
+		if agentPod(t, "hib-race") == nil {
+			return errString("no recreated pod yet")
+		}
+		return nil
+	})
+	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "hib-race", 0)}, 1)
+	markPodReady(t, agentPod(t, "hib-race"))
+	// The one-second idleTimeout may already have moved the woken agent to
+	// Idle; both are pod-bearing phases reached only through Resuming.
+	eventually(t, func() error {
+		got := getWorkloadAgent(t, "hib-race")
+		if got.Status.Phase != kaalmv1beta1.AgentRunning && got.Status.Phase != kaalmv1beta1.AgentIdle {
+			return errString(fmt.Sprintf("phase=%s want Running or Idle after the wake", got.Status.Phase))
+		}
+		if _, still := got.Annotations[kaalmv1beta1.AnnotationWake]; still {
+			return errString("wake annotation must be removed after the wake commits")
+		}
+		return nil
+	})
+}
+
 // TestAgent_WakeIsActivity pins the wake floor. The gateway records the
 // message that woke an agent only once delivery succeeds, after the Pod is
 // Ready, so the first Running pass after a wake can see only the record that
@@ -411,4 +508,24 @@ func listAgentPods(name string) []client.ListOption {
 		client.InNamespace("default"),
 		client.MatchingLabels(map[string]string{"kaalm.io/agent": name}),
 	}
+}
+
+// holdFinalizer keeps a deleted Pod terminating so a test can act inside
+// the Hibernating window.
+const holdFinalizer = "test.kaalm.io/hold"
+
+// terminatingPods lists the agent's Pods that carry a deletionTimestamp.
+func terminatingPods(t *testing.T, name string) []corev1.Pod {
+	t.Helper()
+	var pods corev1.PodList
+	if err := testClient.List(ctxT(), &pods, listAgentPods(name)...); err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	var out []corev1.Pod
+	for i := range pods.Items {
+		if !pods.Items[i].DeletionTimestamp.IsZero() {
+			out = append(out, pods.Items[i])
+		}
+	}
+	return out
 }

@@ -134,8 +134,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Step 9: wake-annotation handling, with phase-dependent removal so a
-	// failed reconcile cannot silently drop the wake.
-	if agent.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue {
+	// failed reconcile cannot silently drop the wake. A wake that lands while
+	// Hibernating stays on the Agent: driveHibernating finishes the Pod
+	// deletion, settles Hibernated, and requeues so this step then commits
+	// Resuming.
+	if agent.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue &&
+		agent.Status.Phase != kaalmv1beta1.AgentHibernating {
 		return r.handleWake(ctx, &agent)
 	}
 
@@ -250,6 +254,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 // is removed, so an apiserver failure between the two leaves the wake intent
 // observable; on any other phase the annotation is removed immediately, with
 // a WakeIgnored warning except in Resuming (a benign idempotent re-attempt).
+// Reconcile never calls it while Hibernating: that wake waits for Hibernated.
 func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
 	if agent.Status.Phase == kaalmv1beta1.AgentHibernated {
 		r.setPhase(agent, kaalmv1beta1.AgentResuming)
@@ -312,7 +317,11 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated,
 		"hibernated: Pod deleted, state retained")
 	hibernationsTotal.WithLabelValues(agent.Namespace).Inc()
-	return ctrl.Result{}, r.Status().Update(ctx, agent)
+	if err := r.Status().Update(ctx, agent); err != nil {
+		return ctrl.Result{}, err
+	}
+	// A wake requested while Hibernating is honored now that the Pod is gone.
+	return ctrl.Result{Requeue: agent.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue}, nil
 }
 
 // evaluateActivity reads the gateway activity data and drives Running <->

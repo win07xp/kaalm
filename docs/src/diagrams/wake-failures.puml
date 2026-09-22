@@ -5,7 +5,7 @@
 !include _style.puml
 
 start
-:message for a Hibernated Agent;
+:message for a Hibernated\nor Hibernating Agent;
 
 partition "wake" {
   if (activator configured\nand reachable, 202?) then (no)

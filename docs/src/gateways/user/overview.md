@@ -77,7 +77,7 @@ The background pipeline has no sync deadline. As shipped it runs under a fixed 1
 
 ### 7. Activator check
 
-If the Agent's phase is `Hibernated`, the gateway calls the controller's activator over mTLS, then polls a TCP connect to the Agent Service every two seconds until it succeeds or the Agent's effective `wakeTimeout` elapses (the class default and cap apply, and 2 minutes when neither the Agent nor the class sets it). In sync mode the caller waits through this. An unreachable activator is `controller_unavailable`; an elapsed timeout is `wake_timeout`. The wake sequence and its failure arms are on [The activator](activation-and-activity.md#the-activator).
+If the Agent's phase is `Hibernated` or `Hibernating`, the gateway calls the controller's activator over mTLS, then polls a TCP connect to the Agent Service every two seconds until it succeeds or the Agent's effective `wakeTimeout` elapses (the class default and cap apply, and 2 minutes when neither the Agent nor the class sets it). In sync mode the caller waits through this. An unreachable activator is `controller_unavailable`; an elapsed timeout is `wake_timeout`. The wake sequence and its failure arms are on [The activator](activation-and-activity.md#the-activator).
 
 ### 8. Message delivery
 
@@ -85,7 +85,7 @@ The gateway posts the normalized envelope to `POST /v1/message` on the Agent's C
 
 A failed attempt (a connection error, a non-2xx response, or a 200 with a malformed envelope) is retried on the bounded schedule specified under [The bounded retry schedule](../api/async-responses.md#the-bounded-retry-schedule): 1s, 5s, 25s, four attempts in all, each bounded by `gateway.agentReadTimeout`. An oversized reply is not retried and is `response_too_large`. On exhaustion the outcome is `delivery_failed`, returned inline in sync mode and delivered as an error payload in async mode. The outcome is recorded for [channel health](platform-adapters.md) in either mode.
 
-![Sequence diagram of delivery and response after intake. The webhook caller POSTs to the User Gateway on :8080, which runs the intake checks. In async mode the gateway creates the placeholder ConfigMap and answers 202 with requestId and channelPath. If the Agent is Hibernated the gateway POSTs /v1/activate/{namespace}/{name} to the controller activator on :9443 and polls the Agent Service for reachability up to wakeTimeout. The gateway POSTs /v1/message to the Agent Service with up to four attempts and receives the response envelope. In sync mode it answers 200 within syncDeliveryDeadline; in async mode with a callbackUrl it sends a signed POST with up to four attempts; otherwise it patches the ConfigMap with the payload.](../../diagrams/user-webhook-flow.svg)
+![Sequence diagram of delivery and response after intake. The webhook caller POSTs to the User Gateway on :8080, which runs the intake checks. In async mode the gateway creates the placeholder ConfigMap and answers 202 with requestId and channelPath. If the Agent is Hibernated or Hibernating the gateway POSTs /v1/activate/{namespace}/{name} to the controller activator on :9443 and polls the Agent Service for reachability up to wakeTimeout. The gateway POSTs /v1/message to the Agent Service with up to four attempts and receives the response envelope. In sync mode it answers 200 within syncDeliveryDeadline; in async mode with a callbackUrl it sends a signed POST with up to four attempts; otherwise it patches the ConfigMap with the payload.](../../diagrams/user-webhook-flow.svg)
 
 ### 9. Response (sync mode, default)
 

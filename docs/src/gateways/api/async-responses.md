@@ -160,7 +160,7 @@ When the agent never replies, the gateway delivers an error payload instead of a
 | `error.type` | `message` | `retryable` | Fires when | Sync-mode form |
 |---|---|---|---|---|
 | `delivery_failed` | `Failed to deliver message to agent after 4 attempts` | `false` | The initial attempt and all 3 retries of `POST /v1/message` fail | `502`, but usually pre-empted by `504 sync_deadline_exceeded` (see [Sync-mode reachability](#sync-mode-reachability)) |
-| `wake_timeout` | `Agent did not become ready within wakeTimeout (120s)` | `false` | The agent is `Hibernated` and does not become Ready within `wakeTimeout` | `504`, but pre-empted by `504 sync_deadline_exceeded` under defaults |
+| `wake_timeout` | `Agent did not become ready within wakeTimeout (120s)` | `false` | The agent is `Hibernated` or `Hibernating` and does not become Ready within `wakeTimeout` | `504`, but pre-empted by `504 sync_deadline_exceeded` under defaults |
 | `controller_unavailable` | `Controller activator endpoint unreachable; wake could not be triggered` | `true` | A message arrives for a `Hibernated` agent and the gateway cannot reach the controller's activator endpoint | `504` with `Retry-After: 5` |
 | `response_too_large` | `Agent response body exceeded gateway.maxResponseBodyBytes (900 KiB); externalize large outputs and reference by URL` | `false` | The agent's response body exceeds `gateway.maxResponseBodyBytes` (default 900 KiB) | `413` |
 
