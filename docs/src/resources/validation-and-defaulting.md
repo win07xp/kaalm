@@ -46,13 +46,13 @@ Rule numbers are stable identifiers. Other pages cite them by number, so the num
 | 16 | The channel path is not under `/v1/` | CRD CEL | Rejected at apply |
 | 17 | An exit-code task declares no artifacts | CRD CEL | Rejected at apply |
 | 18 | `degradeTo` names a catalog model | ModelProviderReconciler | `Ready=False`, `InvalidDegradeTarget` |
-| 19 | Egress CIDRs are well-formed | AgentClassReconciler | `Ready=False`, `InvalidReference`, message names the entry |
+| 19 | Egress CIDRs are well-formed | AgentClassReconciler | `Ready=False`, `InvalidCIDR`, message names the entry |
 | 20 | Egress hosts are DNS names, and the class reports FQDN support | AgentClassReconciler | Malformed: `Ready=False`, `InvalidReference`; unsupported: Warning `FQDNPolicyUnsupported`, Ready unaffected |
 | 21 | Agent and AgentTask names are DNS labels | CRD CEL | Rejected at apply |
 | 22 | `callbackUrl` is HTTPS and not internal | AgentChannelReconciler; the gateway on every delivery | `Ready=False`, `InvalidCallbackUrl` |
 | 23 | Image pull Secrets exist in the workload's namespace | Agent and AgentTask reconcilers | `Ready=False`, `ImagePullSecretMissing` |
 | 24 | Persistence is allowed by the class | Agent and AgentTask reconcilers | Agent `Degraded`, AgentTask `Failed`, `PersistenceNotAllowed` |
-| 25 | `callbackUrl` has `callbackAuth`, whose Secret resolves | CRD CEL; AgentChannelReconciler | Rejected at apply; `Ready=False`, `CredentialsMissing` |
+| 25 | `callbackUrl` has `callbackAuth`, whose Secret resolves | CRD CEL; AgentChannelReconciler | Rejected at apply; `Ready=False`, `CallbackAuthMissing` or `CallbackAuthInvalid` |
 | 26 | Hibernation is allowed by the class | AgentReconciler | `Degraded`, `HibernationNotAllowed` |
 | 27 | `existingClaim` excludes `sizeGi`, and the claim exists | CRD CEL; AgentReconciler | Rejected at apply; `Ready=False`, `ExistingClaimNotFound` |
 | 28 | No workloads in the system namespace | Agent, AgentTask, and AgentChannel reconcilers | `Ready=False`, `SystemNamespaceForbidden` |
@@ -152,7 +152,7 @@ Resource limits, volume size, and the lifecycle timeouts are bounded by the clas
 
 **Rule 22: Callback URLs must be HTTPS and must not point into internal address space.** `AgentChannel.spec.webhook.callbackUrl`, when set, must use `https://`, and its host must not resolve to loopback, link-local (which covers the cloud metadata address `169.254.169.254`), the unspecified address, RFC 1918 private ranges, unique-local IPv6, shared address space (`100.64.0.0/10`), or benchmarking space (`198.18.0.0/15`). *Reconcile time, `Ready=False, reason=InvalidCallbackUrl`; the gateway re-resolves the host and repeats the check before every delivery attempt, which defeats DNS rebinding ([Callback delivery](../gateways/api/async-responses.md)).* The Helm value `gateway.callbackUrl.allowlist` (DNS-name suffixes and CIDR blocks) opens the deny-internal default for specific targets on both checks; loopback, link-local, and the unspecified address stay refused even when listed. As shipped, a host that does not resolve at reconcile time passes the check, on the reasoning that the gateway re-checks before every dial; issue #242 tracks reporting it.
 
-**Rule 25: A callback URL without callback auth is invalid.** When `spec.webhook.callbackUrl` is set, `spec.webhook.callbackAuth` must be set, and its Secret must exist in the channel's namespace with the configured key. *The presence rule is CRD CEL on the `webhook` block (`!has(self.callbackUrl) || has(self.callbackAuth)`); the Secret check is reconcile time, `Ready=False, reason=CredentialsMissing`, the same as the inbound `auth` check.* Outbound callbacks must be attributable to the gateway so receivers can reject forged POSTs ([Callback authentication](../gateways/api/async-responses.md#callback-authentication)).
+**Rule 25: A callback URL without callback auth is invalid.** When `spec.webhook.callbackUrl` is set, `spec.webhook.callbackAuth` must be set, and its Secret must exist in the channel's namespace with the configured key. *The presence rule is CRD CEL on the `webhook` block (`!has(self.callbackUrl) || has(self.callbackAuth)`); the Secret check is reconcile time: `Ready=False, reason=CallbackAuthMissing` when the Secret or key does not exist or cannot be read, and `Ready=False, reason=CallbackAuthInvalid` when the key is empty or the block names no Secret for its type. The inbound `auth` Secret reports `CredentialsMissing` instead.* Outbound callbacks must be attributable to the gateway so receivers can reject forged POSTs ([Callback authentication](../gateways/api/async-responses.md#callback-authentication)).
 
 **Rule 39: A channel's type and its configuration block must match.** `spec.type` selects exactly one of `spec.webhook`, `spec.discord`, and `spec.whatsapp`; that block must be set and the other two absent. *CRD CEL on the spec, with `type` read as `webhook` when unset: `((has(self.type) ? self.type : 'webhook') == 'webhook') == has(self.webhook)`, and the same for the other two.* The adapter is chosen by `type`; the block is what the adapter reads ([Platform types](agentchannel.md#platform-types)).
 
@@ -178,7 +178,7 @@ These rules concern a single ModelProvider but run at reconcile time: rules 11, 
 
 #### Class egress
 
-**Rule 19: Egress CIDR entries must be well-formed.** Every `AgentClass.spec.network.egress.allowedCIDRs` entry must parse as an IPv4 or IPv6 CIDR block. *Reconcile time; `Ready=False, reason=InvalidReference` on the AgentClass, message naming the entry.*
+**Rule 19: Egress CIDR entries must be well-formed.** Every `AgentClass.spec.network.egress.allowedCIDRs` entry must parse as an IPv4 or IPv6 CIDR block. *Reconcile time; `Ready=False, reason=InvalidCIDR` on the AgentClass, message naming the entry. When the class also has other problems, the message lists them all and the reason stays `InvalidCIDR`.*
 
 **Rule 20: Egress host entries must be valid DNS names, and the class reports whether the CNI could enforce them.** Every `AgentClass.spec.network.egress.allowedHosts` entry must be a valid RFC 1123 DNS name. *Reconcile time. A malformed entry: `Ready=False, reason=InvalidReference`. A well-formed list on a CNI whose probe found no FQDN egress policy type: a `Warning` event, `reason=FQDNPolicyUnsupported`, with `Ready` unaffected; the `FQDNPolicySupported` condition records the probe's answer either way.* The controller synthesizes no FQDN policy from the field on any CNI (#193), so `allowedCIDRs` alone governs egress.
 

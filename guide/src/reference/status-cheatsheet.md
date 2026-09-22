@@ -25,10 +25,13 @@ Phases, in lifecycle order:
 | `Terminating` | Deletion in progress, finalizer running |
 
 Conditions: `Ready` (the roll-up), `GatewayReachable` (the controller's view
-of the gateway; reasons `GatewayReady` and `GatewayUnavailable`), and
+of the gateway; reasons `GatewayReady` and `GatewayUnavailable`),
+`ProvidersReady` (`AllProvidersHealthy` when every referenced provider is
+allowed, exists, and is `Ready`; `ClassConstraintViolation` when one is not
+allowed or does not exist; `ProviderUnhealthy` when one is not `Ready`), and
 `Degraded`, which carries one reason, `BudgetExhausted`, present only while a
-referenced provider reports the namespace budget-blocked; the phase is
-preserved.
+referenced provider reports the namespace budget-blocked. Neither
+`ProvidersReady` nor `Degraded` changes the phase.
 
 `Ready=False` reasons that move the phase to `Degraded` (the message names
 the failed gate): `ClassConstraintViolation` (an image, provider, or tool
@@ -82,9 +85,11 @@ a platform refused the reply).
 `AgentNotFound` (the bound Agent does not exist), `InvalidReference`,
 `AgentServiceDisabled` (the bound Agent has `service.enabled: false`),
 `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`,
-`SystemNamespaceForbidden`, `CredentialsMissing` (the auth, callback-auth, or
-platform credential Secret is absent or lacks a required key), and
-`CredentialsInvalid` (the Discord public key is not a valid Ed25519 key).
+`SystemNamespaceForbidden`, `CredentialsMissing` (the auth or platform
+credential Secret is absent or lacks a required key), `CredentialsInvalid`
+(the Discord public key is not a valid Ed25519 key), `CallbackAuthMissing`
+(the `callbackAuth` Secret or key does not exist), and `CallbackAuthInvalid`
+(the `callbackAuth` key is empty).
 
 ## ModelProvider
 
@@ -134,8 +139,10 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 live usage, which is also your "is anyone still using this class" check
 before deleting one.
 
-Conditions: `Ready` (`AllReferencesResolved`, or `InvalidReference` when a
-listed provider or tool provider does not exist) and `FQDNPolicySupported`
+Conditions: `Ready` (`AllReferencesResolved`; `InvalidCIDR` when an
+`allowedCIDRs` entry does not parse; otherwise `InvalidReference` when a
+listed provider or tool provider does not exist or an `allowedHosts` entry is
+not a DNS name) and `FQDNPolicySupported`
 (whether the CNI supports the FQDN egress rules the class asks for; reason
 `NoHostsRequested` when the class names no `allowedHosts`,
 `FQDNPolicySupported` when it does and the CNI can carry them out,

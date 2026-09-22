@@ -96,6 +96,9 @@ status:
     - type: GatewayReachable
       status: "True"
       reason: GatewayReady
+    - type: ProvidersReady
+      status: "True"
+      reason: AllProvidersHealthy
   endpoint: "https://support-assistant.team-support.svc.cluster.local:8080"
   podName: "support-assistant-7d4b9f"
   pvcName: "support-assistant-memory"
@@ -111,14 +114,13 @@ status:
 | `Ready` | `True` with `reason: PodRunning`. `False` with a reason naming what blocks the Pod: a validation rule's reason (`InvalidReference`, `ImagePullSecretMissing`, `ExistingClaimNotFound`, `HandlerConfigMapNotFound`, `SystemNamespaceForbidden`), `CertificateNotReady`, `PodProvisioning`, `PodNotReady`, `PodDisrupted`, `SpecDrift`, `Hibernated`, `Woken`, or the container's own waiting reason. |
 | `GatewayReachable` | Whether the gateway answered the activity fan-out: `True` with `GatewayReady`, else `False` with `GatewayUnavailable` and idle transitions deferred ([Activity detection](../controller/hibernation-and-wake.md#activity-detection)). |
 | `Degraded` | A recoverable condition, distinct from the phase: `True` with `reason: BudgetExhausted` while a referenced provider's budget is blocked for this namespace ([Error handling](../controller/operations.md#error-handling)). |
+| `ProvidersReady` | Whether every provider in `spec.providers` can serve the Agent. `True` with `reason: AllProvidersHealthy` when each one is in the class `allowedProviders`, exists, and reports `Ready=True`. Otherwise `False` with the reason of the first problem in spec order: `ClassConstraintViolation` for a provider outside the allowlist or missing, `ProviderUnhealthy` for a provider that is not `Ready`. The message lists every problem. The condition never changes the phase. |
 | `endpoint` | The in-cluster HTTPS URL. Set only when the Service is enabled, and not cleared if it is later disabled. |
 | `podName`, `pvcName` | The current Pod, and the PVC Kaalm provisioned. `pvcName` is not set for an `existingClaim`. |
 | `lastActivityTime` | The merged last-activity timestamp the controller read from the gateway. |
 | `phaseTransitionTime` | Set on every phase change, in the same status write. The condition `lastTransitionTime` values move on non-phase events too, so this field is the witness for "when did the phase last change". |
 | `hibernatedAt` | Set on entry to `Hibernated`, cleared on wake. |
 | `preDegradedPhase` | The phase to restore when a class-mismatch `Degraded` clears. |
-
-The constants `ProvidersReady` and `AllProvidersHealthy` exist in the API but no reconciler sets them (#231).
 
 ## Design notes
 

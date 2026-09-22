@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
@@ -441,6 +442,70 @@ func TestChannel_SystemNamespaceForbidden(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// ---- AgentChannel: rule 25 callbackAuth Secret checks ----
+
+func mkCallbackChannel(t *testing.T, name, agentName, cbSecret string) {
+	t.Helper()
+	cbURL := "https://example.com/hook"
+	mkChannel(t, name, agentName, "/channels/default/"+name, func(ch *kaalmv1beta1.AgentChannel) {
+		ch.Spec.Webhook.CallbackURL = &cbURL
+		ch.Spec.Webhook.CallbackAuth = &kaalmv1beta1.ChannelAuth{
+			Type:      "bearer",
+			SecretRef: &kaalmv1beta1.SecretKeyReference{Name: cbSecret, Key: "token"},
+		}
+	})
+}
+
+func TestChannel_CallbackAuthSecretMissing(t *testing.T) {
+	mkWorkloadClass(t, "chc-cbmiss", nil)
+	mkWorkloadAgent(t, "ch-agent-cbmiss", "chc-cbmiss", nil)
+	mkChannelSecret(t, "ch-cbmiss-secret") // inbound Secret only
+	mkCallbackChannel(t, "ch-cbmiss", "ch-agent-cbmiss", "ch-cbmiss-callback")
+	expectChannelReady(t, "ch-cbmiss", metav1.ConditionFalse, kaalmv1beta1.ReasonCallbackAuthMissing)
+}
+
+func TestChannel_CallbackAuthKeyMissing(t *testing.T) {
+	mkWorkloadClass(t, "chc-cbkey", nil)
+	mkWorkloadAgent(t, "ch-agent-cbkey", "chc-cbkey", nil)
+	mkChannelSecret(t, "ch-cbkey-secret")
+	mkPlatformSecret(t, "ch-cbkey-callback", map[string][]byte{"other": []byte("x")})
+	mkCallbackChannel(t, "ch-cbkey", "ch-agent-cbkey", "ch-cbkey-callback")
+	expectChannelReady(t, "ch-cbkey", metav1.ConditionFalse, kaalmv1beta1.ReasonCallbackAuthMissing)
+}
+
+func TestChannel_CallbackAuthKeyEmpty(t *testing.T) {
+	mkWorkloadClass(t, "chc-cbempty", nil)
+	mkWorkloadAgent(t, "ch-agent-cbempty", "chc-cbempty", nil)
+	mkChannelSecret(t, "ch-cbempty-secret")
+	mkPlatformSecret(t, "ch-cbempty-callback", map[string][]byte{"token": {}})
+	mkCallbackChannel(t, "ch-cbempty", "ch-agent-cbempty", "ch-cbempty-callback")
+	expectChannelReady(t, "ch-cbempty", metav1.ConditionFalse, kaalmv1beta1.ReasonCallbackAuthInvalid)
+}
+
+// A callbackAuth block that names no Secret for its type is malformed. CRD
+// CEL rejects it at apply, so this drives validateSecrets directly.
+func TestValidateSecrets_CallbackAuthMalformed(t *testing.T) {
+	inbound := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "in", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("t")},
+	}
+	r := &AgentChannelReconciler{Client: fake.NewClientBuilder().WithObjects(inbound).Build()}
+	cbURL := "https://example.com/hook"
+	ch := &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "default"},
+		Spec: kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{
+			Auth: kaalmv1beta1.ChannelAuth{
+				Type: "bearer", SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "in", Key: "token"},
+			},
+			CallbackURL:  &cbURL,
+			CallbackAuth: &kaalmv1beta1.ChannelAuth{Type: "hmac"},
+		}},
+	}
+	if reason, _ := r.validateSecrets(ctxT(), ch); reason != kaalmv1beta1.ReasonCallbackAuthInvalid {
+		t.Errorf("reason = %q, want %q", reason, kaalmv1beta1.ReasonCallbackAuthInvalid)
+	}
 }
 
 // ---- AgentChannel: HMAC secret missing fails validation ----

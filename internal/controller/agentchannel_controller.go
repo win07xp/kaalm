@@ -381,19 +381,24 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// validateSecrets confirms every referenced Secret and key exists. The shared
-// CredentialsMissing reason is the one stable "channel auth Secret unusable"
-// signal for both directions.
+// validateSecrets confirms every referenced Secret and key exists. The inbound
+// auth Secret reports the shared CredentialsMissing reason; the outbound
+// callbackAuth Secret (rule 25) reports CallbackAuthMissing when the Secret or
+// key is absent and CallbackAuthInvalid when the key is empty or the block
+// names no Secret for its type.
 func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *kaalmv1beta1.AgentChannel) (string, string) {
-	check := func(ref *kaalmv1beta1.SecretKeyReference) (string, string) {
+	check := func(ref *kaalmv1beta1.SecretKeyReference, missing, empty string) (string, string) {
 		var sec corev1.Secret
 		if err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
 			types.NamespacedName{Namespace: channel.Namespace, Name: ref.Name}, &sec); err != nil {
-			return kaalmv1beta1.ReasonCredentialsMissing, secretReadMessage(err, ref.Name, channel.Namespace)
+			return missing, secretReadMessage(err, ref.Name, channel.Namespace)
 		}
-		if v, ok := sec.Data[ref.Key]; !ok || len(v) == 0 {
-			return kaalmv1beta1.ReasonCredentialsMissing,
-				fmt.Sprintf("key %q missing in Secret %q", ref.Key, ref.Name)
+		v, ok := sec.Data[ref.Key]
+		if !ok {
+			return missing, fmt.Sprintf("key %q missing in Secret %q", ref.Key, ref.Name)
+		}
+		if len(v) == 0 {
+			return empty, fmt.Sprintf("key %q is empty in Secret %q", ref.Key, ref.Name)
 		}
 		return "", ""
 	}
@@ -407,23 +412,40 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 	case channel.Spec.Webhook == nil:
 		return "", ""
 	}
-	auths := []*kaalmv1beta1.ChannelAuth{&channel.Spec.Webhook.Auth}
-	if channel.Spec.Webhook.CallbackURL != nil && channel.Spec.Webhook.CallbackAuth != nil {
-		auths = append(auths, channel.Spec.Webhook.CallbackAuth)
-	}
-	for _, auth := range auths {
-		if auth.SecretRef != nil {
-			if reason, msg := check(auth.SecretRef); reason != "" {
-				return reason, msg
-			}
+	inbound := &channel.Spec.Webhook.Auth
+	for _, ref := range authSecretRefs(inbound) {
+		if reason, msg := check(ref, kaalmv1beta1.ReasonCredentialsMissing, kaalmv1beta1.ReasonCredentialsMissing); reason != "" {
+			return reason, msg
 		}
-		if auth.HMAC != nil {
-			if reason, msg := check(&auth.HMAC.SecretRef); reason != "" {
-				return reason, msg
-			}
+	}
+	callback := channel.Spec.Webhook.CallbackAuth
+	if channel.Spec.Webhook.CallbackURL == nil || callback == nil {
+		return "", ""
+	}
+	// CRD CEL requires the ref the type names; the reconciler repeats the
+	// check so a block that slips past it reads as malformed, not as valid.
+	if (callback.Type == "bearer" && callback.SecretRef == nil) || (callback.Type == "hmac" && callback.HMAC == nil) {
+		return kaalmv1beta1.ReasonCallbackAuthInvalid,
+			fmt.Sprintf("callbackAuth type %q names no Secret", callback.Type)
+	}
+	for _, ref := range authSecretRefs(callback) {
+		if reason, msg := check(ref, kaalmv1beta1.ReasonCallbackAuthMissing, kaalmv1beta1.ReasonCallbackAuthInvalid); reason != "" {
+			return reason, "callbackAuth: " + msg
 		}
 	}
 	return "", ""
+}
+
+// authSecretRefs lists the Secret references one auth block carries.
+func authSecretRefs(auth *kaalmv1beta1.ChannelAuth) []*kaalmv1beta1.SecretKeyReference {
+	var refs []*kaalmv1beta1.SecretKeyReference
+	if auth.SecretRef != nil {
+		refs = append(refs, auth.SecretRef)
+	}
+	if auth.HMAC != nil {
+		refs = append(refs, &auth.HMAC.SecretRef)
+	}
+	return refs
 }
 
 // The credential Secret keys the platform adapters read (rule 40). The

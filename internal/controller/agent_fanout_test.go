@@ -55,6 +55,16 @@ func TestProviderChangeMatters(t *testing.T) {
 			m.Status.Conditions = []metav1.Condition{{Type: kaalmv1beta1.ConditionHealthy, Status: metav1.ConditionFalse}}
 			return m
 		}(), false},
+		{"ready status flipping does", withReady(mp(1), metav1.ConditionFalse, "CredentialsMissing"),
+			withReady(mp(1), metav1.ConditionTrue, "CredentialsValid"), true},
+		{"ready reason changing does", withReady(mp(1), metav1.ConditionFalse, "CredentialsMissing"),
+			withReady(mp(1), metav1.ConditionFalse, "CredentialsInvalid"), true},
+		{"ready message alone does not", withReady(mp(1), metav1.ConditionFalse, "CredentialsMissing"),
+			func() *kaalmv1beta1.ModelProvider {
+				m := withReady(mp(1), metav1.ConditionFalse, "CredentialsMissing")
+				m.Status.Conditions[0].Message = "changed"
+				return m
+			}(), false},
 	}
 	p := providerChangeMatters()
 	for _, c := range cases {
@@ -67,4 +77,9 @@ func TestProviderChangeMatters(t *testing.T) {
 	if !p.Create(event.CreateEvent{Object: spent}) || !p.Delete(event.DeleteEvent{Object: spent}) {
 		t.Error("create and delete events must fan out")
 	}
+}
+
+func withReady(m *kaalmv1beta1.ModelProvider, status metav1.ConditionStatus, reason string) *kaalmv1beta1.ModelProvider {
+	m.Status.Conditions = []metav1.Condition{{Type: kaalmv1beta1.ConditionReady, Status: status, Reason: reason}}
+	return m
 }

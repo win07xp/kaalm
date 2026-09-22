@@ -857,6 +857,53 @@ func TestAgent_ProviderMissingDegrades(t *testing.T) {
 	})
 	expectAgentPhase(t, "provmiss-agent", kaalmv1beta1.AgentDegraded)
 	expectAgentReadyReason(t, "provmiss-agent", kaalmv1beta1.ReasonClassConstraintViolation)
+	expectAgentCondition(t, "provmiss-agent", kaalmv1beta1.ConditionProvidersReady,
+		metav1.ConditionFalse, kaalmv1beta1.ReasonClassConstraintViolation)
+}
+
+// ---- Agent: ProvidersReady follows the referenced providers' Ready ----
+
+func TestAgent_ProvidersReadyFollowsProviderReady(t *testing.T) {
+	// The credential Secret does not exist yet, so the provider is not Ready.
+	mkProvider(t, "pr-prov", nil)
+	mkWorkloadClass(t, "wc-pr", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedProviders = []kaalmv1beta1.LocalObjectReference{{Name: "pr-prov"}}
+	})
+	mkWorkloadAgent(t, "pr-agent", "wc-pr", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Providers = []kaalmv1beta1.AgentProviderReference{
+			{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "pr-prov"}},
+		}
+	})
+	expectAgentCondition(t, "pr-agent", kaalmv1beta1.ConditionProvidersReady,
+		metav1.ConditionFalse, kaalmv1beta1.ReasonProviderUnhealthy)
+	// The condition never moves the phase.
+	if ag := getWorkloadAgent(t, "pr-agent"); ag.Status.Phase == kaalmv1beta1.AgentDegraded {
+		t.Errorf("phase = Degraded; ProvidersReady must not change the phase")
+	}
+
+	// The credential appears, the provider turns Ready, and the ModelProvider
+	// watch carries the change to the Agent.
+	mkSecret(t, "pr-prov-key")
+	expectAgentCondition(t, "pr-agent", kaalmv1beta1.ConditionProvidersReady,
+		metav1.ConditionTrue, kaalmv1beta1.ReasonAllProvidersHealthy)
+}
+
+func expectAgentCondition(t *testing.T, name, condType string, want metav1.ConditionStatus, reason string) {
+	t.Helper()
+	eventually(t, func() error {
+		var ag kaalmv1beta1.Agent
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+			return err
+		}
+		c := condition(ag.Status.Conditions, condType)
+		if c == nil {
+			return errString("no " + condType + " condition yet")
+		}
+		if c.Status != want || c.Reason != reason {
+			return errString(condType + "=" + string(c.Status) + "/" + c.Reason + " want " + string(want) + "/" + reason)
+		}
+		return nil
+	})
 }
 
 // ---- Agent: a provider outside the class allowlist degrades ----
