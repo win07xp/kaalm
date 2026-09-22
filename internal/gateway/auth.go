@@ -184,7 +184,12 @@ func (a *Authenticator) AgentReportPaths(requiredKind WorkloadKind, next http.Ha
 			return
 		}
 		if id.Kind != requiredKind {
-			forbidden(w, errAccessDenied, string(id.Kind)+" callers are not accepted on this path")
+			msg := string(id.Kind) + " callers are not accepted on this path"
+			if requiredKind == KindAgentTask {
+				// task-complete.md: every 403 on this path leads with its reason.
+				msg = "NotAgentTaskPod: " + msg
+			}
+			forbidden(w, errAccessDenied, msg)
 			return
 		}
 		if !crossCheck(r, id.Namespace) {

@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"strings"
@@ -314,5 +315,69 @@ func TestTaskComplete_NoTaskBacksCaller(t *testing.T) {
 	resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": CompletionStatusSuccess}, nil)
 	if resp.StatusCode != 403 || !bodyContains(t, resp, "no AgentTask") {
 		t.Errorf("no backing task = %d", resp.StatusCode)
+	}
+}
+
+// TestTaskComplete_ForbiddenReasonPrefix pins the wire form of every 403 on
+// /v1/task/complete: error.message starts with the reason code, so callers
+// tell the four reasons apart by prefix (task-complete.md, 403 Forbidden).
+func TestTaskComplete_ForbiddenReasonPrefix(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	h.server.Completions = newFakeCompletions()
+	agentC := agentCert(t, h.ca)
+
+	cases := []struct {
+		name   string
+		seed   func()
+		cert   func() tls.Certificate
+		reason string
+	}{
+		{"agent SAN", func() {
+			h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
+		}, func() tls.Certificate { return agentC }, "NotAgentTaskPod"},
+		{"no backing task", func() {
+			h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
+		}, func() tls.Certificate { return h.ca.issue(t, "ghost.team-a.task.kaalm.io") }, "NotAgentTaskPod"},
+		{"exitCode task", func() {
+			seedTask(h, "exit-task", func(task *kaalmv1beta1.AgentTask) { task.Spec.Completion.Condition = "exitCode" })
+		}, func() tls.Certificate { return h.ca.issue(t, "exit-task.team-a.task.kaalm.io") }, "TaskNotAgentReported"},
+		{"stale pod", func() {
+			seedTask(h, "stale-task", func(task *kaalmv1beta1.AgentTask) { task.Status.CurrentPodUID = "uid-other" })
+		}, func() tls.Certificate { return h.ca.issue(t, "stale-task.team-a.task.kaalm.io") }, "StalePodCompletion"},
+		{"terminal task", func() {
+			seedTask(h, "done-task", func(task *kaalmv1beta1.AgentTask) { task.Status.Phase = kaalmv1beta1.TaskFailed })
+		}, func() tls.Certificate { return h.ca.issue(t, "done-task.team-a.task.kaalm.io") }, "TaskAlreadyCompleted"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.seed()
+			cert := c.cert()
+			resp := postJSON(t, h.client(&cert), h.url("/v1/task/complete"), map[string]any{"status": CompletionStatusSuccess}, nil)
+			var env struct {
+				Error errorBody `json:"error"`
+			}
+			if err := decodeJSON(resp, &env); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != 403 || env.Error.Type != errAccessDenied {
+				t.Fatalf("got %d %q, want 403 %s", resp.StatusCode, env.Error.Type, errAccessDenied)
+			}
+			if !strings.HasPrefix(env.Error.Message, c.reason+": ") {
+				t.Errorf("message %q lacks the %q prefix", env.Error.Message, c.reason+": ")
+			}
+		})
+	}
+
+	// The heartbeat path shares the kind check and keeps its plain message.
+	taskCert := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
+	resp := postJSON(t, h.client(&taskCert), h.url("/v1/agent/heartbeat"), map[string]any{}, nil)
+	var env struct {
+		Error errorBody `json:"error"`
+	}
+	if err := decodeJSON(resp, &env); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 403 || env.Error.Message != "AgentTask callers are not accepted on this path" {
+		t.Errorf("heartbeat kind check = %d %q", resp.StatusCode, env.Error.Message)
 	}
 }
