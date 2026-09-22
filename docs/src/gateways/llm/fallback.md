@@ -69,7 +69,7 @@ When the chain is exhausted or the cap is reached without a successful response,
 
 | Recorded across the walk | Response | `retryable` |
 |---|---|---|
-| Every candidate was budget-blocked or throttled | `429 budget_exhausted`, `Retry-After` the largest observed | `true` |
+| Every candidate was budget-blocked or throttled | `429 budget_exhausted`, `Retry-After` the largest observed | `false` after a block; `true` when every candidate was throttled |
 | Only budget outcomes, at least one of them failed closed | `503 budget_state_unavailable`, `Retry-After: 1` | `true` |
 | Every attempt failed at the connect layer (connection error, DNS failure, TLS handshake failure) | `503 provider_unavailable` | `false` |
 | Every attempt timed out before the first byte | `504 provider_timeout` | `false` |

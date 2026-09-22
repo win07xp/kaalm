@@ -105,6 +105,9 @@ credential Secret is absent or lacks a required key), `CredentialsInvalid`
   Ready without Healthy means valid config, unreachable provider.
 - `GatewayReachable`: mirrored onto every provider from the controller's
   view of the gateway Pods.
+- `DegradeTargetNotCheapest` (advisory, never affects `Ready`): a degrade
+  policy's `degradeTo` is not the cheapest model in the catalog
+  (`CheaperModelAvailable`); `False` with `DegradeTargetCheapest` once it is.
 - `BoundaryMarginRaised` (hard enforcement only): observed traffic forced the
   gateway to admit more conservatively than the configured
   `boundaryMarginPercent`; a signal to raise the value, not an outage.

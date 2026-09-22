@@ -376,17 +376,39 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 }
 
 // costSanity emits an advisory Warning when a degrade target is not the cheapest
-// model. It never blocks readiness.
+// model. It never blocks readiness. The verdict is kept in the
+// DegradeTargetNotCheapest condition and the event fires on its rising edge,
+// the same way setBoundaryMargin does.
 func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
-	cheapest, ok := cheapestModel(mp)
-	if !ok {
+	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
+	var findings []string
+	if cheapest, ok := cheapestModel(mp); ok {
+		for _, p := range mp.Spec.Budget.Policies {
+			if p.Action == "degrade" && p.DegradeTo != nil && *p.DegradeTo != cheapest {
+				findings = append(findings, fmt.Sprintf("degradeTo %q is not the cheapest model (%q)", *p.DegradeTo, cheapest))
+			}
+		}
+	}
+	if len(findings) > 0 {
+		apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
+			Type:    kaalmv1beta1.ConditionDegradeTargetNotCheapest,
+			Status:  metav1.ConditionTrue,
+			Reason:  kaalmv1beta1.ReasonCheaperModelAvailable,
+			Message: strings.Join(findings, "; "),
+		})
+		if !was {
+			for _, f := range findings {
+				r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest, f)
+			}
+		}
 		return
 	}
-	for _, p := range mp.Spec.Budget.Policies {
-		if p.Action == "degrade" && p.DegradeTo != nil && *p.DegradeTo != cheapest {
-			r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest,
-				fmt.Sprintf("degradeTo %q is not the cheapest model (%q)", *p.DegradeTo, cheapest))
-		}
+	if was || apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest) != nil {
+		apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
+			Type:   kaalmv1beta1.ConditionDegradeTargetNotCheapest,
+			Status: metav1.ConditionFalse,
+			Reason: kaalmv1beta1.ReasonDegradeTargetCheapest,
+		})
 	}
 }
 

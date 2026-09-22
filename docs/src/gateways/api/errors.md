@@ -12,7 +12,7 @@ Every gateway error is a JSON object with a single top-level `error`:
     "type": "budget_exhausted",
     "message": "namespace budget exhausted: team-support on provider anthropic-shared (100% used)",
     "provider": "anthropic-shared",
-    "retryable": true
+    "retryable": false
   }
 }
 ```
@@ -21,7 +21,7 @@ Every gateway error is a JSON object with a single top-level `error`:
 |---|---|---|
 | `type` | always | A stable string naming the failure class. Branch on this field. |
 | `message` | always | Free text for a person. Do not parse it. |
-| `retryable` | always | Whether a retry can succeed. When a `Retry-After` header is present, retry no sooner than it says. |
+| `retryable` | always | Whether a prompt retry can succeed. When a `Retry-After` header is present, retry no sooner than it says. |
 | `provider` | LLM proxy and tool broker only, on errors raised after the provider is known | The ModelProvider or ToolProvider name the caller asked for |
 
 `Retry-After`, when present, is integer seconds, never an HTTP date.
@@ -43,7 +43,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 413 | `request_too_large` | no | | The body exceeds `gateway.maxLLMRequestBodyBytes` (default 4 MiB) on a proxy path, or the broker's own cap |
 | 413 | `response_too_large` | no | | The tool provider's response exceeds the broker's response cap |
 | 429 | `rate_limited` | yes | `1` | The per-namespace bucket for the model or tool provider is empty |
-| 429 | `budget_exhausted` | yes | seconds to the next period | The provider, or the provider and every fallback, is budget-blocked |
+| 429 | `budget_exhausted` | no after a block; yes after throttles only | seconds to the next period, or the throttle's `1` | The provider, or the provider and every fallback, is budget-blocked or throttled |
 | 429 | `budget_throttled` | yes | `1` | Hard enforcement: the boundary admission slot is held by another request |
 | 500 | `internal_unavailable` | yes | | The broker could not re-encode a `tools/list` response |
 | 502 | `provider_error` | no | | The fallback walk ended with a mixed or unclassified failure, or a fallback response could not be translated |
@@ -57,7 +57,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 Notes on the rows:
 
 - **401 and the TLS layer.** A handshake failure produces no HTTP response. The `401` rows are all raised after a successful handshake, by the [per-path middleware](../listener-tls.md#per-path-client-auth-enforcement).
-- **`budget_exhausted`.** Retry no sooner than `Retry-After`, which is usually hours or days. A generic short-backoff retry loop burns against a still-exhausted budget. `budget_throttled` is the opposite case: the slot frees as soon as the in-flight request settles, so a short backoff is correct.
+- **`budget_exhausted`.** `retryable` is `false` after a block: a retry cannot succeed before the period resets or the ceiling is raised, and `Retry-After` gives the seconds to the next period, usually hours or days. When every budget outcome in the [fallback walk](../llm/fallback.md#depth-cap-semantics) was a throttle, not a block, `retryable` is `true` and `Retry-After` says when. A generic short-backoff retry loop burns against a still-exhausted budget. `budget_throttled` is the opposite case: the slot frees as soon as the in-flight request settles, so a short backoff is correct.
 - **`budget_state_unavailable`.** A hard-enforcement replica could not publish its spend or refresh its peer view within the staleness window, and refuses to spend blind. It clears on the first successful exchange ([Hard enforcement](../llm/budgets-and-rate-limits.md#hard-enforcement)).
 - **`provider_error`, `provider_unavailable`, `provider_timeout`.** The gateway has already walked the entire fallback chain, so `retryable` is `false`: escalate to another model or budget rather than retry. The per-attempt bound behind `provider_timeout` is `gateway.providerFirstByteTimeout` ([Failure modes](../llm/operations.md#failure-modes)).
 - **`tool_denied` and `access_denied`.** The namespace and class gates on the broker reuse `access_denied`, exactly as the LLM tenancy chain does. `tool_denied` names a per-tool narrowing miss or a disallowed method, so tool-level policy is auditable on its own.

@@ -32,8 +32,7 @@ goes `Degraded` instead.
   *condition*, reason `BudgetExhausted` (see S10). LLM calls return
   `429 budget_exhausted` and the provider status shows `state: Blocked` for
   the namespace. The condition clears when the budget frees up (period reset,
-  ceiling increase, or spend drop), on the next pass in which the Agent is
-  not in the `Degraded` phase for another reason.
+  ceiling increase, or spend drop).
 
 ## Webhook returns `401`
 

@@ -134,6 +134,8 @@ const (
 	ReasonToolNotInCatalog           = "ToolNotInCatalog"
 	ReasonBoundaryMarginRaised       = "ObservedTrafficExceededMargin"
 	ReasonBoundaryMarginOK           = "MarginSufficient"
+	ReasonCheaperModelAvailable      = "CheaperModelAvailable"
+	ReasonDegradeTargetCheapest      = "DegradeTargetCheapest"
 )
 
 // ConditionBoundaryMarginRaised reports that a hard-enforcement gateway
@@ -141,6 +143,12 @@ const (
 // budget.hard.boundaryMarginPercent configures (rule 34's floor semantics;
 // docs/src/gateways/llm/budgets-and-rate-limits.md).
 const ConditionBoundaryMarginRaised = "BoundaryMarginRaised"
+
+// ConditionDegradeTargetNotCheapest records the cost sanity verdict: True
+// when a degrade policy's target is not the cheapest model in the catalog.
+// It is advisory and never affects Ready; the controller keeps it so the
+// DegradeTargetNotCheapest Warning event fires on the rising edge only.
+const ConditionDegradeTargetNotCheapest = "DegradeTargetNotCheapest"
 
 // Budget policy actions (ModelProvider.spec.budget.policies[].action), the
 // enforcement modes, and the per-namespace enforcement states reported in

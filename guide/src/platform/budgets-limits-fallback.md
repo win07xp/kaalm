@@ -25,7 +25,7 @@ budget:
       action: warn
     - atPercent: 100
       action: degrade
-      degradeTo: claude-opus-4-6
+      degradeTo: claude-sonnet-4-6
 ```
 
 Policies fire as spend crosses their `atPercent`; when several have been
@@ -39,12 +39,11 @@ crossed, the highest one wins. What each action means for the caller and for you
 
 Two validation notes on `degradeTo`: it must name a model in the same
 provider's catalog (`Ready=False, reason=InvalidDegradeTarget` otherwise),
-and if it is not the cheapest model in the catalog the controller emits an
-advisory `DegradeTargetNotCheapest` event, since a "degrade" that escalates
-cost is usually a mistake. As shipped that event repeats on every pass, about
-once a minute, until the target changes. A `degradeTo` that names the model
-being requested, as the sample's does with its single-model catalog, changes
-nothing.
+and if it is not the cheapest model in the catalog the controller sets the
+advisory `DegradeTargetNotCheapest` condition and emits one
+`DegradeTargetNotCheapest` event, since a "degrade" that escalates cost is
+usually a mistake. The condition clears when the target changes. A
+`degradeTo` that names the model being requested changes nothing.
 
 Periods reset at midnight UTC: `monthly` on the first of the month, `weekly`
 on Monday, `daily` every day. `perNamespaceUSD` caps each namespace

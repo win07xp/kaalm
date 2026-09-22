@@ -127,8 +127,8 @@ close. What the framework sees, from softest to hardest:
 - **A blocked or hard-capped budget is a 429** with `budget_exhausted`,
   and it will not clear until the period resets or the cap is raised.
   Retrying inside the graph wastes steps: fail the run and surface the
-  error, even though as shipped the envelope marks it `retryable: true`. Branch on `error.type` from the response body, never on the
-  message text.
+  error; the envelope marks it `retryable: false`. Branch on `error.type`
+  from the response body, never on the message text.
 
 A graph that checkpoints (as the chat example does) resumes from its last
 completed node, which turns a mid-graph budget stop from lost work into a
