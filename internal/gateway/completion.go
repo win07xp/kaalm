@@ -92,7 +92,7 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r.Context())
 	task, ok := s.Store.TaskByName(r.Context(), c.Namespace, c.Workload.Name)
 	if !ok {
-		forbidden(w, errAccessDenied, "no AgentTask backs this caller")
+		forbidden(w, errAccessDenied, "NotAgentTaskPod: no AgentTask backs this caller")
 		return
 	}
 	// (b) exitCode tasks have no completion mailbox.

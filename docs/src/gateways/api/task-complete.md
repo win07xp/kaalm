@@ -94,12 +94,12 @@ Returned when no client certificate is presented, or when the source IP resolves
 
 | Reason | Condition | `error.message` |
 |---|---|---|
-| `NotAgentTaskPod` | The SAN kind is not AgentTask, or no AgentTask with the SAN name exists in the namespace | `Agent callers are not accepted on this path`, or `no AgentTask backs this caller` |
+| `NotAgentTaskPod` | The SAN kind is not AgentTask, or no AgentTask with the SAN name exists in the namespace | `NotAgentTaskPod: Agent callers are not accepted on this path`, or `NotAgentTaskPod: no AgentTask backs this caller` |
 | `TaskNotAgentReported` | The task has `completion.condition: exitCode` | `TaskNotAgentReported: this task completes via container exit` |
 | `StalePodCompletion` | The calling Pod's UID does not match `status.currentPodUID`, or the field is empty | `StalePodCompletion: the calling Pod is not the task's current Pod` |
 | `TaskAlreadyCompleted` | `status.phase` is terminal (`Succeeded`, `Failed`, `TimedOut`) | `TaskAlreadyCompleted: the task has reached a terminal phase` |
 
-Three of the four messages carry the reason as a prefix. The two checks behind `NotAgentTaskPod` return plain messages, so a caller can distinguish that reason only by the absence of a prefix.
+Every message starts with its reason code followed by `: `, so a caller can tell the four reasons apart by the prefix of `error.message`.
 
 `exitCode` tasks have no completion mailbox: the ConfigMap and the per-task Role are provisioned in `agentReported` mode only (see [Child resources](../../runtime/child-resources.md)). `StalePodCompletion` and `TaskAlreadyCompleted` are gates 7 and 6 under [The identity gate](#the-identity-gate).
 
