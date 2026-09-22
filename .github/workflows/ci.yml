@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      fqdn: ${{ steps.filter.outputs.fqdn }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -39,18 +40,27 @@ jobs:
           if ! files=$(git diff --name-only "$base" HEAD 2>/dev/null); then
             echo "cannot diff against '$base'; running every job"
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "fqdn=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           code=false
+          fqdn=false
           while IFS= read -r f; do
             case "$f" in
               "") ;;
               docs/*|guide/*|learn/*|hack/docs/*|*.md) ;;
               *) code=true; echo "code path: $f" ;;
             esac
+            # The Cilium proof is slow and runs only when the FQDN policy
+            # path, its cluster script, or its spec changes.
+            case "$f" in
+              internal/controller/fqdn_policy.go|internal/controller/cni.go|hack/k3d-up.sh|\
+              test/e2e/fqdn_test.go|test/e2e/testdata/fqdn*|.github/workflows/ci.yml) fqdn=true ;;
+            esac
           done <<< "$files"
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "code=$code"
+          echo "fqdn=$fqdn" >> "$GITHUB_OUTPUT"
+          echo "code=$code fqdn=$fqdn"
 
   build-test:
     needs: changes
@@ -191,3 +201,40 @@ jobs:
           kubectl describe pods -n e2e || true
           kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=200 || true
           kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=200 || true
+
+  # FQDN egress proof on Cilium (#193). Not a required check: it runs only
+  # when the FQDN policy path changes.
+  e2e-cilium:
+    needs: changes
+    if: needs.changes.outputs.fqdn == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install k3d
+        run: |
+          sudo curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /usr/local/bin/k3d \
+            https://github.com/k3d-io/k3d/releases/download/v5.7.4/k3d-linux-amd64
+          sudo chmod +x /usr/local/bin/k3d
+          k3d version
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+
+      - name: Run the FQDN spec on Cilium
+        run: make e2e-cilium
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A || true
+          kubectl get ciliumnetworkpolicies -A -o yaml || true
+          kubectl describe pods -n e2e || true
+          kubectl -n kube-system logs ds/cilium -c cilium-agent --tail=200 || true
+          kubectl logs -n kaalm-system -l app.kubernetes.io/component=controller --tail=200 || true
