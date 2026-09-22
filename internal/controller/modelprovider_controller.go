@@ -212,76 +212,92 @@ func (r *ModelProviderReconciler) credential(
 
 // validateFallback walks the fallback tree detecting cycles (rule 11),
 // format incompatibility (rule 12), and model maps naming models that do not
-// exist on either end (rule 41). A crossing into anthropic whose mapped
-// models declare no maxOutputTokens gets a Warning event on the primary: it
-// stays valid, but a request without max_tokens cannot cross it.
+// exist on either end (rule 41). A cycle is a provider that reappears among
+// its own ancestors; a provider reached twice on different branches (a
+// shared backup) is not one, so its edges are checked on every branch but its
+// own fallbacks are walked once, as the gateway's walk skips the repeat. A
+// crossing into anthropic whose mapped models declare no maxOutputTokens gets
+// a Warning event on the primary: it stays valid, but a request without
+// max_tokens cannot cross it.
 func (r *ModelProviderReconciler) validateFallback(
 	ctx context.Context, primary *kaalmv1beta1.ModelProvider,
 ) []string {
-	type edge struct {
-		parent *kaalmv1beta1.ModelProvider
-		ref    kaalmv1beta1.FallbackReference
-	}
 	var problems []string
-	var unsetMax []string
-	visited := map[string]bool{primary.Name: true}
-	var queue []edge
-	for _, ref := range primary.Spec.Fallback {
-		queue = append(queue, edge{parent: primary, ref: ref})
-	}
-	for len(queue) > 0 {
-		e := queue[0]
-		queue = queue[1:]
-		if visited[e.ref.Name] {
-			problems = append(problems, fmt.Sprintf("fallback chain is circular at %q", e.ref.Name))
-			continue
-		}
-		visited[e.ref.Name] = true
-		var child kaalmv1beta1.ModelProvider
-		if err := r.Get(ctx, types.NamespacedName{Name: e.ref.Name}, &child); err != nil {
-			if apierrors.IsNotFound(err) {
-				problems = append(problems, fmt.Sprintf("fallback provider %q does not exist", e.ref.Name))
+	unsetMax := map[string]bool{}
+	// fetched caches each provider read; nil records one that does not exist.
+	fetched := map[string]*kaalmv1beta1.ModelProvider{}
+	onPath := map[string]bool{primary.Name: true}
+	walked := map[string]bool{primary.Name: true}
+	var walk func(parent *kaalmv1beta1.ModelProvider)
+	walk = func(parent *kaalmv1beta1.ModelProvider) {
+		for _, ref := range parent.Spec.Fallback {
+			if onPath[ref.Name] {
+				problems = append(problems, fmt.Sprintf("fallback chain is circular at %q", ref.Name))
+				continue
 			}
-			continue
-		}
-		if !kaalmv1beta1.FallbackFormatCompatible(e.parent.Spec.Type, child.Spec.Type) {
-			problems = append(problems, fmt.Sprintf(
-				"fallback provider %q has type %q, which cannot follow type %q (rule 12)",
-				e.ref.Name, child.Spec.Type, e.parent.Spec.Type))
-		}
-		parentModels := modelSet(e.parent)
-		childModels := modelSet(&child)
-		for key, value := range e.ref.ModelMap {
-			if !parentModels[key] {
-				problems = append(problems, fmt.Sprintf(
-					"modelMap on fallback %q: key %q is not a model of %q", e.ref.Name, key, e.parent.Name))
-			}
-			if !childModels[value] {
-				problems = append(problems, fmt.Sprintf(
-					"modelMap on fallback %q: value %q is not a model of %q", e.ref.Name, value, e.ref.Name))
-			}
-		}
-		if kaalmv1beta1.FallbackCrossesFormat(e.parent.Spec.Type, child.Spec.Type) &&
-			child.Spec.Type == kaalmv1beta1.ProviderTypeAnthropic {
-			for _, m := range e.parent.Spec.Models {
-				target := m.ID
-				if mapped, ok := e.ref.ModelMap[m.ID]; ok {
-					target = mapped
+			if _, seen := fetched[ref.Name]; !seen {
+				var got kaalmv1beta1.ModelProvider
+				if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &got); err != nil {
+					if apierrors.IsNotFound(err) {
+						problems = append(problems, fmt.Sprintf("fallback provider %q does not exist", ref.Name))
+						fetched[ref.Name] = nil
+					}
+					continue
 				}
-				if cm := findModel(&child, target); cm != nil && cm.MaxOutputTokens == nil {
-					unsetMax = append(unsetMax, fmt.Sprintf("%s/%s", child.Name, target))
+				fetched[ref.Name] = &got
+			}
+			child := fetched[ref.Name]
+			if child == nil {
+				continue
+			}
+			if !kaalmv1beta1.FallbackFormatCompatible(parent.Spec.Type, child.Spec.Type) {
+				problems = append(problems, fmt.Sprintf(
+					"fallback provider %q has type %q, which cannot follow type %q (rule 12)",
+					ref.Name, child.Spec.Type, parent.Spec.Type))
+			}
+			parentModels := modelSet(parent)
+			childModels := modelSet(child)
+			for key, value := range ref.ModelMap {
+				if !parentModels[key] {
+					problems = append(problems, fmt.Sprintf(
+						"modelMap on fallback %q: key %q is not a model of %q", ref.Name, key, parent.Name))
+				}
+				if !childModels[value] {
+					problems = append(problems, fmt.Sprintf(
+						"modelMap on fallback %q: value %q is not a model of %q", ref.Name, value, ref.Name))
 				}
 			}
-		}
-		for _, ref := range child.Spec.Fallback {
-			queue = append(queue, edge{parent: child.DeepCopy(), ref: ref})
+			if kaalmv1beta1.FallbackCrossesFormat(parent.Spec.Type, child.Spec.Type) &&
+				child.Spec.Type == kaalmv1beta1.ProviderTypeAnthropic {
+				for _, m := range parent.Spec.Models {
+					target := m.ID
+					if mapped, ok := ref.ModelMap[m.ID]; ok {
+						target = mapped
+					}
+					if cm := findModel(child, target); cm != nil && cm.MaxOutputTokens == nil {
+						unsetMax[fmt.Sprintf("%s/%s", child.Name, target)] = true
+					}
+				}
+			}
+			if walked[ref.Name] {
+				continue
+			}
+			walked[ref.Name] = true
+			onPath[ref.Name] = true
+			walk(child)
+			delete(onPath, ref.Name)
 		}
 	}
+	walk(primary)
 	if len(unsetMax) > 0 && r.Recorder != nil {
-		sort.Strings(unsetMax)
+		names := make([]string, 0, len(unsetMax))
+		for n := range unsetMax {
+			names = append(names, n)
+		}
+		sort.Strings(names)
 		r.Recorder.Event(primary, corev1.EventTypeWarning, kaalmv1beta1.ReasonMaxOutputTokensUnset,
 			"a request without max_tokens cannot cross into these anthropic models until they declare "+
-				"maxOutputTokens: "+strings.Join(unsetMax, ", "))
+				"maxOutputTokens: "+strings.Join(names, ", "))
 	}
 	return problems
 }

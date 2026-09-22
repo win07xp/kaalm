@@ -237,40 +237,37 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 }
 
 // budgetUsageEntries renders per-namespace spend into status entries with the
-// enforcement state derived from the provider's policies.
+// enforcement state derived from the provider's policies. Utilization and the
+// winning policy come from the gateway's own rule: the worse of the
+// per-namespace and cluster-wide ratios, then the highest threshold at or
+// below it.
 func budgetUsageEntries(
 	mp *kaalmv1beta1.ModelProvider, spend map[string]float64, period string,
 ) []kaalmv1beta1.ModelProviderBudgetUsage {
-	ceiling, _ := strconv.ParseFloat(mp.Spec.Budget.PerNamespaceUSD, 64)
+	var clusterSpent float64
 	namespaces := make([]string, 0, len(spend))
-	for ns := range spend {
+	for ns, v := range spend {
 		namespaces = append(namespaces, ns)
+		clusterSpent += v
 	}
 	sort.Strings(namespaces)
 
 	out := make([]kaalmv1beta1.ModelProviderBudgetUsage, 0, len(namespaces))
 	for _, ns := range namespaces {
+		percent := gateway.BudgetUtilization(mp.Spec.Budget, spend[ns], clusterSpent)
 		entry := kaalmv1beta1.ModelProviderBudgetUsage{
-			Namespace: ns,
-			Period:    period,
-			SpentUSD:  strconv.FormatFloat(spend[ns], 'f', 2, 64),
-			State:     kaalmv1beta1.BudgetStateNormal,
+			Namespace:   ns,
+			Period:      period,
+			SpentUSD:    strconv.FormatFloat(spend[ns], 'f', 2, 64),
+			PercentUsed: int32(percent),
+			State:       kaalmv1beta1.BudgetStateNormal,
 		}
-		if ceiling > 0 {
-			percent := spend[ns] / ceiling * 100
-			entry.PercentUsed = int32(percent)
-			for _, p := range mp.Spec.Budget.Policies {
-				if percent < float64(p.AtPercent) {
-					continue
-				}
-				switch p.Action {
-				case kaalmv1beta1.BudgetActionBlock:
-					entry.State = kaalmv1beta1.BudgetStateBlocked
-				case kaalmv1beta1.BudgetActionDegrade:
-					if entry.State != kaalmv1beta1.BudgetStateBlocked {
-						entry.State = kaalmv1beta1.BudgetStateThrottled
-					}
-				}
+		if p := gateway.BudgetPolicyAt(mp.Spec.Budget, percent); p != nil {
+			switch p.Action {
+			case kaalmv1beta1.BudgetActionBlock:
+				entry.State = kaalmv1beta1.BudgetStateBlocked
+			case kaalmv1beta1.BudgetActionDegrade:
+				entry.State = kaalmv1beta1.BudgetStateThrottled
 			}
 		}
 		out = append(out, entry)

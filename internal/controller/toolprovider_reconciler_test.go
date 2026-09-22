@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -24,6 +25,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/mcp"
@@ -348,4 +354,53 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 		}
 		return errString("toolprovider still held after the class dropped it")
 	})
+}
+
+// A pass that changes nothing skips the status write, so the object's
+// resourceVersion holds still.
+func TestToolProvider_UnchangedPassSkipsStatusWrite(t *testing.T) {
+	ctx := context.Background()
+	tp := &kaalmv1beta1.ToolProvider{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tp-quiet", Generation: 1,
+			Finalizers: []string{kaalmv1beta1.ToolProviderFinalizer},
+		},
+		Spec: kaalmv1beta1.ToolProviderSpec{Type: "mcp", Endpoint: "https://mcp.example.com"},
+	}
+	writes := 0
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(tp).WithStatusSubresource(tp).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				writes++
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			},
+		}).Build()
+	r := &ToolProviderReconciler{
+		Client: c, Recorder: record.NewFakeRecorder(10),
+		OperatorNamespace: testOperatorNamespace, Health: newFakeToolHealth(),
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "tp-quiet"}}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	var settled kaalmv1beta1.ToolProvider
+	if err := c.Get(ctx, req.NamespacedName, &settled); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 {
+		t.Fatalf("first pass made %d status writes, want 1", writes)
+	}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	var after kaalmv1beta1.ToolProvider
+	if err := c.Get(ctx, req.NamespacedName, &after); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 || after.ResourceVersion != settled.ResourceVersion {
+		t.Errorf("an unchanged pass rewrote status: writes=%d, resourceVersion %s -> %s",
+			writes, settled.ResourceVersion, after.ResourceVersion)
+	}
 }

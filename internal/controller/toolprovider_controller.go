@@ -22,6 +22,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -207,9 +208,16 @@ func (r *ToolProviderReconciler) setCondition(
 	})
 }
 
+// finish writes status only when it differs from the stored object, so a
+// pass that changes nothing does not bump resourceVersion.
 func (r *ToolProviderReconciler) finish(
 	ctx context.Context, tp *kaalmv1beta1.ToolProvider, res ctrl.Result,
 ) (ctrl.Result, error) {
+	var current kaalmv1beta1.ToolProvider
+	if err := r.Get(ctx, client.ObjectKeyFromObject(tp), &current); err == nil &&
+		equality.Semantic.DeepEqual(current.Status, tp.Status) {
+		return res, nil
+	}
 	return res, r.Status().Update(ctx, tp)
 }
 
