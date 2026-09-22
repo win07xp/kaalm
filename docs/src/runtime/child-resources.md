@@ -16,6 +16,7 @@ The controller provisions six resources for each Agent, all in the Agent's names
 | Service (ClusterIP) | `{name}` | `spec.service.enabled` is `true` (the default) | Agent | Kept, with no endpoints | Deleted |
 | ServiceAccount | `agent-{name}` | Always | Agent | Kept | Deleted |
 | NetworkPolicy | `{name}` | Always | Agent | Kept | Deleted |
+| CiliumNetworkPolicy | `{name}-fqdn` | The class sets `network.egress.allowedHosts` and the CNI supports it | Agent | Kept | Deleted |
 | PVC | `{name}-memory` | `spec.persistence.enabled` is `true` and no `existingClaim` is set | Agent, unless the class sets `pvcRetention: Retain`, which strips the ownerRef | Kept | Deleted, or kept under `Retain` |
 | PVC (pre-existing) | `spec.persistence.existingClaim` | `existingClaim` is set | Nothing: referenced, no ownerRef | Kept | Kept |
 | Certificate | `{name}-tls` | Always | Agent | Kept | Deleted |
@@ -30,6 +31,7 @@ What each child is for:
 - **The Service** exposes the agent's HTTPS endpoint inside the cluster. The gateway delivers channel messages through it with [`POST /v1/message`](../gateways/api/agent-endpoints.md#post-v1message); exposing it outside the cluster is the developer's responsibility. An Agent with the Service disabled is outbound-only and cannot be referenced by an AgentChannel (`Ready=False, reason=AgentServiceDisabled` on the channel).
 - **The ServiceAccount** carries no RoleBindings, and the Pod does not mount its token unless the class sets `security.automountServiceAccountToken`, so by default the agent has no Kubernetes API access ([Agent Pod ServiceAccount](../security/rbac.md#agent-pod-serviceaccount)).
 - **The NetworkPolicy** is synthesized from the AgentClass network policy plus the gateway's egress and ingress rules ([AgentReconciler](../controller/reconcilers.md#agentreconciler), step 8). Why it matters is the next section.
+- **The CiliumNetworkPolicy** carries the class's `allowedHosts`, which standard NetworkPolicy cannot express ([FQDN egress policy](#fqdn-egress-policy)).
 - **The PVC** is mounted into the agent container at `spec.persistence.mountPath`, default `/var/agent/memory` ([Agent spec](../resources/agent.md#spec)), and the controller injects `$KAALM_MEMORY_DIR` with that path. The reference runtimes keep their state file on the volume under any `mountPath` ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
 - **The Certificate** is a per-agent TLS certificate with `server auth` and `client auth` usages, signed by the Kaalm CA `ClusterIssuer` and rotated by cert-manager ([Lifecycle of an Agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)). The same certificate serves the agent's HTTPS listener and is presented on every call to the gateway. The CA bundle reaches the Pod through trust-manager.
 
@@ -53,6 +55,17 @@ The two directions carry different weight:
 - **The egress rule is not layered.** It is the only Kaalm-managed control that stops an agent from calling provider IPs directly.
 
 Three caveats bound the guarantee. The synthesis applies only to Kaalm-managed Pods; the gateway-only tier's egress responsibility is stated under [Adoption tiers](../concepts/tenancy-and-tiers.md#adoption-tiers). Because NetworkPolicy is additive, the guarantee assumes the developer trust tier defined in [Trust model](../security/model.md#trust-model). And CNI enforcement is a hard prerequisite: clusters on default kindnet or default flannel do not enforce NetworkPolicy and are not supported targets ([Recommendation 4](../security/model.md#recommendations-for-deployment)).
+
+### FQDN egress policy
+
+When the class lists `network.egress.allowedHosts` and the CNI is Cilium, the controller writes a `cilium.io/v2` `CiliumNetworkPolicy` named `{name}-fqdn` beside the NetworkPolicy. It selects the same Pod labels as the NetworkPolicy and allows two kinds of egress:
+
+| Rule | Peer | Ports |
+|---|---|---|
+| DNS, through Cilium's DNS proxy with `matchPattern: "*"` | The cluster DNS Pods (`k8s-app: kube-dns` in `kube-system`) | 53, any protocol |
+| `toFQDNs` with one `matchName` per host, sorted | Each host in `allowedHosts` | Any |
+
+Cilium learns the addresses behind a host name only from DNS answers its proxy sees, which is why the policy carries its own DNS rule. Cilium allows the union of this policy and the NetworkPolicy, so the workload keeps its gateway, DNS, and `allowedCIDRs` egress. For an Agent, the controller converges the policy on every pass: it updates the policy when the host list changes and deletes it when the list becomes empty. For an AgentTask, the controller writes the policy when it creates the task's Pod. On a CNI without FQDN support, the controller writes no policy and the class reports `FQDNPolicySupported=False` ([AgentClass](../resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts)).
 
 ### Ownership and deletion
 
@@ -83,6 +96,7 @@ An AgentTask gets a parallel set, shaped by its ephemeral, no-inbound nature: no
 | Pod | `{name}-` plus a suffix | Created in `Provisioning`; the task is `Running` once the Pod is Ready; recreated on each retry | AgentTask | Deleted |
 | ServiceAccount | `task-{name}` | Always | AgentTask | Deleted |
 | NetworkPolicy | `{name}` | Always | AgentTask | Deleted |
+| CiliumNetworkPolicy | `{name}-fqdn` | The class sets `network.egress.allowedHosts` and the CNI supports it | AgentTask | Deleted |
 | PVC | `{name}-workspace` | `spec.persistence.enabled` is `true` | AgentTask | Deleted |
 | Certificate | `{name}-tls` | Always | AgentTask | Deleted |
 | Secret | `{name}-tls` | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Deleted one hop after the Certificate |

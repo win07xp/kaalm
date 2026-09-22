@@ -175,6 +175,31 @@ func (f *fakeToolHealthChecker) Probe(
 		MCPRevision: mcp.ModernRevision}
 }
 
+// fqdnSupportedInTests stands in for the CNI probe on the Agent and
+// AgentTask reconcilers: the suite loads a CiliumNetworkPolicy CRD, so the
+// FQDN policy is synthesized.
+func fqdnSupportedInTests() (bool, error) { return true, nil }
+
+// withoutGroup hides one API group from a discovery client.
+type withoutGroup struct {
+	discovery.DiscoveryInterface
+	group string
+}
+
+func (w withoutGroup) ServerGroups() (*metav1.APIGroupList, error) {
+	list, err := w.DiscoveryInterface.ServerGroups()
+	if list == nil {
+		return nil, err
+	}
+	out := &metav1.APIGroupList{}
+	for _, g := range list.Groups {
+		if g.Name != w.group {
+			out.Groups = append(out.Groups, g)
+		}
+	}
+	return out, err
+}
+
 func TestMain(m *testing.M) {
 	// The scheme holds both API versions so envtest sees every kind as
 	// convertible and installs the conversion webhook into the CRDs, pointed
@@ -237,7 +262,11 @@ func TestMain(m *testing.M) {
 	}
 	fakeHealth = newFakeHealth()
 	if err := (&AgentClassReconciler{
-		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"), Discovery: dc,
+		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
+		// The class sees the real envtest discovery minus cilium.io, so its
+		// FQDNPolicySupported=False path stays covered while the Agent and
+		// AgentTask reconcilers below synthesize policies.
+		FQDNSupport: NewFQDNProbe(withoutGroup{dc, "cilium.io"}).Supported,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}
@@ -260,6 +289,7 @@ func TestMain(m *testing.M) {
 		OperatorNamespace: testSystemNamespace,
 		SecretReader:      mgr.GetAPIReader(),
 		Activity:          fakeActivity,
+		FQDNSupport:       fqdnSupportedInTests,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}
@@ -267,6 +297,7 @@ func TestMain(m *testing.M) {
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
 		SecretReader:      mgr.GetAPIReader(),
+		FQDNSupport:       fqdnSupportedInTests,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}

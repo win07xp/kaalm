@@ -1,0 +1,35 @@
+# FQDN egress caller. The starter image has no shell or curl, so this Pod
+# carries fqdn-agent's Pod labels instead: the agent's NetworkPolicy and its
+# CiliumNetworkPolicy select it exactly as they select the agent Pod. It has
+# no owner reference, so the AgentReconciler never adopts it. The allowed host
+# is retried to cover the first DNS answer reaching Cilium's policy.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fqdn-caller
+  namespace: e2e
+  labels:
+    kaalm.io/agent: fqdn-agent
+    kaalm.io/workload: agent
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          allowed=blocked
+          for i in 1 2 3; do
+            if curl -sS -o /dev/null --max-time 8 https://example.com; then
+              allowed=ok; break
+            fi
+            sleep 1
+          done
+          echo "example.com: $allowed"
+          if curl -sS -o /dev/null --max-time 8 https://example.org; then
+            echo "example.org: ok"
+          else
+            echo "example.org: blocked"
+          fi

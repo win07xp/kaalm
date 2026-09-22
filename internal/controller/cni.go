@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"sync"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/discovery"
 )
@@ -32,8 +34,8 @@ var fqdnCapableGroups = []string{
 }
 
 // ProbeFQDNPolicySupport reports whether the cluster's CNI can enforce FQDN
-// egress policies. It is a one-time discovery check; the result is cached for the
-// process lifetime by the caller (docs/src/controller/reconcilers.md,
+// egress policies. It is a one-time discovery check; FQDNProbe caches the
+// result for the process lifetime (docs/src/controller/reconcilers.md,
 // AgentClassReconciler).
 func ProbeFQDNPolicySupport(dc discovery.DiscoveryInterface) (bool, error) {
 	groups, err := dc.ServerGroups()
@@ -54,4 +56,36 @@ func ProbeFQDNPolicySupport(dc discovery.DiscoveryInterface) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// FQDNProbe caches ProbeFQDNPolicySupport for the process lifetime, so the
+// AgentClass, Agent, and AgentTask reconcilers share one answer. A failed
+// probe is not cached: the next call probes again. Safe for concurrent use.
+type FQDNProbe struct {
+	dc discovery.DiscoveryInterface
+
+	mu        sync.Mutex
+	probed    bool
+	supported bool
+}
+
+// NewFQDNProbe returns a probe that asks dc on first use.
+func NewFQDNProbe(dc discovery.DiscoveryInterface) *FQDNProbe {
+	return &FQDNProbe{dc: dc}
+}
+
+// Supported reports whether the CNI can enforce FQDN egress policies.
+func (p *FQDNProbe) Supported() (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.probed {
+		return p.supported, nil
+	}
+	supported, err := ProbeFQDNPolicySupport(p.dc)
+	if err != nil {
+		return false, err
+	}
+	p.supported = supported
+	p.probed = true
+	return supported, nil
 }
