@@ -461,16 +461,23 @@ type utilization struct {
 
 // utilizationLocked computes both ceiling ratios from own + peers spend.
 func utilizationLocked(budget kaalmv1beta1.ModelProviderBudget, l *providerLedger, namespace string) utilization {
+	return utilizationOf(budget, l.spent(namespace), l.clusterSpent())
+}
+
+// utilizationOf computes both ceiling ratios from a namespace's spend and the
+// provider's cluster-wide spend. An unset or unparsable ceiling is not
+// enforced and contributes nothing.
+func utilizationOf(budget kaalmv1beta1.ModelProviderBudget, nsSpent, clusterSpent float64) utilization {
 	var u utilization
 	if ceiling, err := strconv.ParseFloat(budget.PerNamespaceUSD, 64); err == nil && ceiling > 0 {
 		u.nsUSD = ceiling
-		u.nsPct = l.spent(namespace) / ceiling * 100
+		u.nsPct = nsSpent / ceiling * 100
 		u.worst = u.nsPct
 	}
 	if budget.ClusterUSD != nil {
 		if ceiling, err := strconv.ParseFloat(*budget.ClusterUSD, 64); err == nil && ceiling > 0 {
 			u.clUSD = ceiling
-			u.clPct = l.clusterSpent() / ceiling * 100
+			u.clPct = clusterSpent / ceiling * 100
 			if u.clPct > u.worst {
 				u.worst = u.clPct
 				u.worstIsCluster = true
@@ -480,6 +487,27 @@ func utilizationLocked(budget kaalmv1beta1.ModelProviderBudget, l *providerLedge
 	return u
 }
 
+// BudgetUtilization returns the percent the enforcement decision reads for a
+// namespace: the worse of its spend over perNamespaceUSD and the provider's
+// cluster-wide spend over clusterUSD. The reconciler uses it so
+// status.budgetUsage matches what the gateway admits.
+func BudgetUtilization(budget kaalmv1beta1.ModelProviderBudget, nsSpent, clusterSpent float64) float64 {
+	return utilizationOf(budget, nsSpent, clusterSpent).worst
+}
+
+// BudgetPolicyAt returns the policy the ladder selects at a utilization: the
+// highest-threshold policy at or below percent, or nil when none is crossed.
+func BudgetPolicyAt(budget kaalmv1beta1.ModelProviderBudget, percent float64) *kaalmv1beta1.ModelProviderBudgetPolicy {
+	var winner *kaalmv1beta1.ModelProviderBudgetPolicy
+	for i := range budget.Policies {
+		p := &budget.Policies[i]
+		if percent >= float64(p.AtPercent) && (winner == nil || p.AtPercent > winner.AtPercent) {
+			winner = p
+		}
+	}
+	return winner
+}
+
 // decide applies the policy ladder to a utilization: the highest-threshold
 // policy at or below the worst ratio wins.
 func (b *BudgetLedger) decide(budget kaalmv1beta1.ModelProviderBudget, u utilization) budgetDecision {
@@ -487,13 +515,7 @@ func (b *BudgetLedger) decide(budget kaalmv1beta1.ModelProviderBudget, u utiliza
 	if u.worstIsCluster {
 		d.Ceiling = "cluster"
 	}
-	var winner *kaalmv1beta1.ModelProviderBudgetPolicy
-	for i := range budget.Policies {
-		p := &budget.Policies[i]
-		if u.worst >= float64(p.AtPercent) && (winner == nil || p.AtPercent > winner.AtPercent) {
-			winner = p
-		}
-	}
+	winner := BudgetPolicyAt(budget, u.worst)
 	if winner == nil {
 		return d
 	}

@@ -312,6 +312,24 @@ func TestModelProvider_FallbackCycleIsNotReady(t *testing.T) {
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonFallbackIneligible)
 }
 
+// A shared backup (A -> B, A -> C, B -> D, C -> D) terminates, so rule 11
+// accepts it; only a provider among its own ancestors is a cycle.
+func TestModelProvider_FallbackDiamondIsReady(t *testing.T) {
+	for _, n := range []string{"a", "b", "c", "d"} {
+		mkSecret(t, "mp-dia-"+n+"-key")
+	}
+	mkProvider(t, "mp-dia-d", nil)
+	for _, n := range []string{"b", "c"} {
+		mkProvider(t, "mp-dia-"+n, func(mp *kaalmv1beta1.ModelProvider) {
+			mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-dia-d"}}
+		})
+	}
+	mkProvider(t, "mp-dia-a", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "mp-dia-b"}, {Name: "mp-dia-c"}}
+	})
+	expectReady(t, providerConditions("mp-dia-a"), metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
+}
+
 func TestModelProvider_InvalidDegradeTargetIsNotReady(t *testing.T) {
 	mkSecret(t, "mp-deg-key")
 	mkProvider(t, "mp-deg", func(mp *kaalmv1beta1.ModelProvider) {
