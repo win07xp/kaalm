@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -170,6 +171,13 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if eff.Image == "" {
 			r.setTaskReady(&task, false, kaalmv1beta1.ReasonInvalidReference,
 				"no image: AgentTask.spec.image is empty and the AgentClass sets no defaultImage")
+			return ctrl.Result{}, r.Status().Update(ctx, &task)
+		}
+		// Rule 19: the class is Ready=False, and the NetworkPolicy built from
+		// its entries would fail the apiserver write on every pass.
+		if bad := invalidCIDRs(&class); len(bad) > 0 {
+			r.setTaskReady(&task, false, kaalmv1beta1.ReasonInvalidReference,
+				fmt.Sprintf("AgentClass %q is not usable: %s", class.Name, strings.Join(bad, "; ")))
 			return ctrl.Result{}, r.Status().Update(ctx, &task)
 		}
 	}

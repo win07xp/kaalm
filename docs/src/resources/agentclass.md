@@ -183,9 +183,9 @@ Patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Matc
 - `*` does not cross path separators. `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo:latest` but not `registry.internal.corp/agents/team/foo:latest`. Use a multi-segment pattern for nested paths.
 - Digest references do match. `*` matches any run of non-`/` characters, `@` and `:` included, so `registry.internal.corp/agents/*` matches `registry.internal.corp/agents/foo@sha256:...`. To exclude digests, anchor the tag (`registry.internal.corp/agents/*:v*` works because a hex digest contains no `v`) or list permitted digests explicitly.
 
-### `image.pullPolicy` is unvalidated
+### `image.pullPolicy` values
 
-The schema accepts any string. A typo is stored and surfaces only when the kubelet rejects the Pod; issue #241 tracks an enum on the field.
+The schema accepts `Always`, `Never`, or `IfNotPresent`, the three Kubernetes pull policies. The apiserver rejects any other value when you create or update the class.
 
 ### Network egress: `allowedCIDRs` and `allowedHosts`
 
@@ -193,7 +193,7 @@ The schema accepts any string. A typo is stored and surfaces only when the kubel
 
 `allowedHosts` cannot be expressed in standard `NetworkPolicy`, and the controller synthesizes no FQDN policy from it on any CNI. What it does: validate the names, probe the cluster's API groups for an FQDN policy type (Cilium's `CiliumNetworkPolicy` or Calico Enterprise's equivalent) the first time a class sets the field, cache the answer for the process lifetime, and report it in `FQDNPolicySupported`, with a `Warning` event when the type is absent. Use `allowedCIDRs` for egress governance. A hostname allowlist is a CNI-native policy the platform team writes beside Kaalm's.
 
-An invalid `allowedCIDRs` entry makes the class `Ready=False`, but the Agent reconciler does not consult the class's `Ready` condition, and the NetworkPolicy write for each Agent then fails with no Agent-visible condition; issue #241 tracks it.
+An invalid `allowedCIDRs` entry makes the class `Ready=False` (rule 19). Every Agent and new AgentTask under the class then reports `Ready=False, reason=InvalidReference` with a message naming the entry, and the reconciler writes no Certificate, NetworkPolicy, or Pod for it. A running Pod keeps running. Fixing the entry lets the workloads converge on their next pass.
 
 ### Provider access gates
 

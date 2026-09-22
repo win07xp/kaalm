@@ -178,7 +178,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Step 5: Ready=False gates that block Pod creation without degrading.
-	gated, gateResult, err := r.readyGates(ctx, &agent, eff)
+	gated, gateResult, err := r.readyGates(ctx, &agent, &class, eff)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -404,14 +404,22 @@ func (r *AgentReconciler) evaluateActivity(
 }
 
 // readyGates evaluates the Ready=False conditions that block Pod creation
-// without degrading: a missing image, a missing existingClaim, missing
-// imagePullSecrets, and a missing handler ConfigMap (rule 31). It sets the
-// condition on the Agent and reports whether the pass is gated; Secrets, PVCs,
-// and handler ConfigMaps are unwatched, so gated results carry a requeue
-// interval.
+// without degrading: a malformed class allowedCIDRs entry (rule 19), a missing
+// image, a missing existingClaim, missing imagePullSecrets, and a missing
+// handler ConfigMap (rule 31). It sets the condition on the Agent and reports
+// whether the pass is gated; Secrets, PVCs, and handler ConfigMaps are
+// unwatched, so gated results carry a requeue interval. Class spec changes are
+// watched, so the class gates carry none.
 func (r *AgentReconciler) readyGates(
-	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) (bool, ctrl.Result, error) {
+	// Rule 19: the class is Ready=False, and the NetworkPolicy built from its
+	// entries would fail the apiserver write on every pass.
+	if bad := invalidCIDRs(class); len(bad) > 0 {
+		r.setReady(agent, false, kaalmv1beta1.ReasonInvalidReference,
+			fmt.Sprintf("AgentClass %q is not usable: %s", class.Name, strings.Join(bad, "; ")))
+		return true, ctrl.Result{}, nil
+	}
 	if eff.Image == "" {
 		r.setReady(agent, false, kaalmv1beta1.ReasonInvalidReference,
 			"no image: Agent.spec.image is empty and the AgentClass sets no defaultImage")

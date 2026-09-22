@@ -140,6 +140,10 @@ spec:
                   pullPolicy:
                     description: PullPolicy is the image pull policy for workload
                       containers.
+                    enum:
+                    - Always
+                    - Never
+                    - IfNotPresent
                     type: string
                 type: object
               lifecycle:
@@ -972,6 +976,10 @@ spec:
                   pullPolicy:
                     description: PullPolicy is the image pull policy for workload
                       containers.
+                    enum:
+                    - Always
+                    - Never
+                    - IfNotPresent
                     type: string
                 type: object
               lifecycle:
