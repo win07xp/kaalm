@@ -241,6 +241,17 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		return ctrl.Result{}, r.Status().Update(ctx, task)
 	}
 
+	// A retry's old Pod may still be terminating. Hold until it is gone: the
+	// identity gate stays closed to it, its terminal state spends no backoff
+	// unit, and the replacement is created only once no task Pod remains.
+	if !pod.DeletionTimestamp.IsZero() {
+		r.setTaskReady(task, false, "PodTerminating", "waiting for the previous task Pod to terminate")
+		if err := r.Status().Update(ctx, task); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
+	}
+
 	// Stamp identity on the observed Pod (re-opens the gate after a retry).
 	if isAgentReported(task) && task.Status.CurrentPodUID != string(pod.UID) {
 		task.Status.CurrentPodUID = string(pod.UID)

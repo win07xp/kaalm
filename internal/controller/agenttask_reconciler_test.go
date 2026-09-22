@@ -807,3 +807,72 @@ func TestPodExitMessage(t *testing.T) {
 		t.Errorf("podExitMessage fallback = %q", got)
 	}
 }
+
+// A retry holds while the old Pod is still terminating: the identity gate
+// stays closed, no backoff unit is spent on the old Pod's terminal state, and
+// the replacement is created once it is gone (#209).
+func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
+	mkWorkloadClass(t, "tc-hold", nil)
+	oldPod := provisionRunningTask(t, "t-hold", "tc-hold", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.BackoffLimit = 1
+	})
+	// A finalizer keeps the old Pod terminating: the apiserver deletes an
+	// unscheduled Pod at once, and kubelet-less envtest never finishes a
+	// scheduled one, so this pins the state the test is about.
+	oldPod.Finalizers = append(oldPod.Finalizers, "kaalm.io/test-hold")
+	if err := testClient.Update(ctxT(), oldPod); err != nil {
+		t.Fatalf("add finalizer: %v", err)
+	}
+	writeMailbox(t, "t-hold", map[string]string{"status": "failure", "message": "boom"})
+
+	eventually(t, func() error {
+		task := getTask(t, "t-hold")
+		if task.Status.Retries != 1 {
+			return errString("retries not incremented")
+		}
+		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Reason != "PodTerminating" {
+			return errString("Ready reason is not PodTerminating yet")
+		}
+		return nil
+	})
+	// The old Pod is terminating (kubelet-less envtest never finishes it), and
+	// several passes later nothing has moved: no re-stamp, no second failure,
+	// no replacement.
+	time.Sleep(2 * time.Second)
+	var got corev1.Pod
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got); err != nil ||
+		got.DeletionTimestamp.IsZero() {
+		t.Fatalf("old pod should still be terminating: %v", err)
+	}
+	task := getTask(t, "t-hold")
+	if task.Status.CurrentPodUID != "" {
+		t.Errorf("identity gate re-opened for the old Pod: currentPodUID=%q", task.Status.CurrentPodUID)
+	}
+	if task.Status.Retries != 1 || task.Status.CompletionTime != nil {
+		t.Errorf("old Pod's terminal state spent a backoff unit: retries=%d completionTime=%v",
+			task.Status.Retries, task.Status.CompletionTime)
+	}
+	if taskPod(t, "t-hold") != nil {
+		t.Error("replacement Pod created while the old one terminates")
+	}
+
+	got.Finalizers = nil
+	if err := testClient.Update(ctxT(), &got); err != nil {
+		t.Fatalf("remove finalizer: %v", err)
+	}
+	eventually(t, func() error {
+		newPod := taskPod(t, "t-hold")
+		if newPod == nil || newPod.Name == oldPod.Name {
+			return errString("no replacement pod yet")
+		}
+		task := getTask(t, "t-hold")
+		if task.Status.CurrentPodUID != string(newPod.UID) {
+			return errString("UID not stamped to the new pod")
+		}
+		if task.Status.Retries != 1 {
+			return errString("retries moved during the hold")
+		}
+		return nil
+	})
+}
