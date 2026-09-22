@@ -228,9 +228,9 @@ The tool plane does not remove the direct-egress exception; it re-ranks it. In o
 | Path | Credential | Metering and audit | Fits when |
 |---|---|---|---|
 | Brokered (`/v1/mcp/*`) | Held by the gateway, injected per call | Rate limits, per-call audit, metrics | The default for MCP tool servers |
-| Direct egress (`allowedCIDRs` / `allowedHosts`) | Held by the agent pod | None beyond IP-level policy | Non-MCP protocols, or tools the platform team deliberately exempts |
+| Direct egress (`allowedCIDRs` / `allowedHosts`) | Held by the agent pod | None beyond IP-level and, on Cilium, host-level policy | Non-MCP protocols, or tools the platform team deliberately exempts |
 
-There is no per-agent MCP egress field, and none is needed: brokered tools need no per-agent egress, and the direct tier is expressed through the class egress fields, an IP-level exception in the egress policy with the governance trade the table states.
+There is no per-agent MCP egress field, and none is needed: brokered tools need no per-agent egress, and the direct tier is expressed through the class egress fields, an IP-level or, on Cilium, host-level exception in the egress policy with the governance trade the table states.
 
 ## Acceptance scenario
 

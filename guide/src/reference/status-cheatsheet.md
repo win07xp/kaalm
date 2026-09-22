@@ -151,7 +151,9 @@ not a DNS name) and `FQDNPolicySupported`
 (whether the CNI supports the FQDN egress rules the class asks for; reason
 `NoHostsRequested` when the class names no `allowedHosts`,
 `FQDNPolicySupported` when it does and the CNI can carry them out,
-`FQDNPolicyUnsupported` when it cannot). A fresh class shows empty `AGENTS` and `TASKS`
+`FQDNPolicyUnsupported` when it cannot and the hosts are ignored). On Cilium,
+each agent and task of the class then has a CiliumNetworkPolicy named
+`NAME-fqdn` that allows those hosts. A fresh class shows empty `AGENTS` and `TASKS`
 columns until something uses it.
 
 ## One-liners

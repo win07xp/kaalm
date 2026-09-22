@@ -188,6 +188,8 @@ Which class fields reach a running agent depends on the field:
 
 - `network.egress.allowedCIDRs` and `network.allowSameNamespaceIngress` are
   applied to the existing NetworkPolicy on the next reconcile.
+- `network.egress.allowedHosts` is applied to the agent's CiliumNetworkPolicy
+  on the next reconcile, on Cilium only.
 - `lifecycle` defaults and ceilings apply on the next activity evaluation.
 - `resources.defaults`, `resources.maxLimits`, and `image.pullPolicy` change
   the desired Pod, so the Pod is replaced on the next reconcile.

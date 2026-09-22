@@ -82,9 +82,9 @@ spec:
       allowedCIDRs:
         - "10.42.0.0/16"
         - "140.82.112.0/20"
-      # DNS names. Validated (rule 20), and the class reports whether the
-      # CNI has an FQDN policy type (FQDNPolicySupported), but the
-      # controller synthesizes no FQDN policy from it on any CNI.
+      # DNS names. Validated (rule 20). On Cilium each workload gets a
+      # CiliumNetworkPolicy that allows these hosts on every port; on other
+      # CNIs the hosts are ignored (FQDNPolicySupported).
       allowedHosts:
         - "mcp.internal.corp"
         - "api.github.com"
@@ -197,7 +197,7 @@ The schema accepts `Always`, `Never`, or `IfNotPresent`, the three Kubernetes pu
 
 `allowedCIDRs` is the portable primitive. Each entry becomes a `NetworkPolicy` egress rule to that `ipBlock`, on every port, which every CNI that implements NetworkPolicy enforces. The full synthesized rule set is on [Child resources](../runtime/child-resources.md#what-the-synthesized-networkpolicy-protects).
 
-`allowedHosts` cannot be expressed in standard `NetworkPolicy`, and the controller synthesizes no FQDN policy from it on any CNI. What it does: validate the names, probe the cluster's API groups for an FQDN policy type (Cilium's `CiliumNetworkPolicy` or Calico Enterprise's equivalent) the first time a class sets the field, cache the answer for the process lifetime, and report it in `FQDNPolicySupported`, with a `Warning` event when the type is absent. Use `allowedCIDRs` for egress governance. A hostname allowlist is a CNI-native policy the platform team writes beside Kaalm's.
+`allowedHosts` cannot be expressed in standard `NetworkPolicy`, so the controller writes it as a second, CNI-specific policy. The controller probes the cluster's API groups for an FQDN policy type (Cilium's `CiliumNetworkPolicy` or Calico Enterprise's equivalent) the first time a reconciler needs the answer, caches the answer for the process lifetime, and reports it in `FQDNPolicySupported`, with a `Warning` event when the type is absent. When the CNI is Cilium, every Agent and AgentTask of the class gets a `CiliumNetworkPolicy` named `{name}-fqdn` with a `toFQDNs` rule for each host on every port, plus the DNS rule Cilium needs to learn the hosts' addresses ([Child resources](../runtime/child-resources.md#fqdn-egress-policy)). Cilium allows the union of this policy and the NetworkPolicy. The controller writes only Cilium's policy type: on a CNI without it, including Calico Enterprise, `allowedHosts` has no effect and `allowedCIDRs` alone governs egress.
 
 An invalid `allowedCIDRs` entry makes the class `Ready=False` (rule 19). Every Agent and new AgentTask under the class then reports `Ready=False, reason=InvalidReference` with a message naming the entry, and the reconciler writes no Certificate, NetworkPolicy, or Pod for it. A running Pod keeps running. Fixing the entry lets the workloads converge on their next pass.
 

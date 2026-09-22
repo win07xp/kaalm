@@ -563,10 +563,8 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 // desiredNetworkPolicy synthesizes the per-Agent policy from the AgentClass:
 // egress to the gateway and the DNS Pods the DNSSelector picks plus allowedCIDRs, ingress from the gateway on
 // the health port, and optional ingress from the namespace's other agent Pods
-// on that same port. allowedHosts (FQDN rules) are deliberately not synthesized
-// here: they require a CNI-specific policy kind and land in the hardening
-// phase; when unsupported they are ignored and the AgentClassReconciler emits
-// the Warning.
+// on that same port. allowedHosts (FQDN rules) need a CNI-specific policy
+// kind, so desiredFQDNPolicy builds them as a separate CiliumNetworkPolicy.
 func desiredNetworkPolicy(
 	agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec, operatorNamespace string,
 	dns DNSSelector,

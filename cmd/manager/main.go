@@ -312,11 +312,13 @@ func main() {
 		setupLog.Error(err, "unable to create discovery client")
 		os.Exit(1)
 	}
+	// One cached CNI probe shared by the three reconcilers that read it.
+	fqdnProbe := controller.NewFQDNProbe(discoveryClient)
 
 	if err := (&controller.AgentClassReconciler{
-		Client:    mgr.GetClient(),
-		Recorder:  mgr.GetEventRecorderFor("agentclass-controller"),
-		Discovery: discoveryClient,
+		Client:      mgr.GetClient(),
+		Recorder:    mgr.GetEventRecorderFor("agentclass-controller"),
+		FQDNSupport: fqdnProbe.Supported,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentClass")
 		os.Exit(1)
@@ -389,6 +391,7 @@ func main() {
 		Activity:                activityClient,
 		CertLifetime:            certLifetime,
 		DNS:                     dnsSelector,
+		FQDNSupport:             fqdnProbe.Supported,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Agent")
 		os.Exit(1)
@@ -401,6 +404,7 @@ func main() {
 		SecretReader:            mgr.GetAPIReader(),
 		CertLifetime:            certLifetime,
 		DNS:                     dnsSelector,
+		FQDNSupport:             fqdnProbe.Supported,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 		os.Exit(1)

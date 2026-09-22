@@ -72,7 +72,7 @@ For User Gateway metrics, see [User Gateway operations](../user/operations.md#ob
 | Provider API down | Fallback chain walked (same-type or translatable-format providers, up to `maxFallbackDepth` attempts); if all providers in the chain fail, the request fails with a fallback-exhausted error |
 | Budget exhausted | Request blocked (`429 budget_exhausted` with `Retry-After` header) or degraded per policy; Warning event emitted on ModelProvider |
 | `TokenReview` apiserver unreachable (mode 2 only) | Gateway returns `503 Service Unavailable` to the caller for requests that miss the token cache; mTLS requests and cached-token requests are unaffected |
-| CNI does not support FQDN egress policy but AgentClass sets `allowedHosts` | AgentClassReconciler emits a `Warning` event and ignores `allowedHosts`; `allowedCIDRs` alone governs egress. See [AgentClassReconciler](../../controller/reconcilers.md#agentclassreconciler) |
+| CNI does not support FQDN egress policy but AgentClass sets `allowedHosts` | AgentClassReconciler emits a `Warning` event, and no CiliumNetworkPolicy is written, so `allowedHosts` is ignored and `allowedCIDRs` alone governs egress. See [AgentClassReconciler](../../controller/reconcilers.md#agentclassreconciler) |
 
 Details for the rows that need them:
 

@@ -654,8 +654,8 @@ func TestAgentClass_AllowedHostsUnsupportedByCNI(t *testing.T) {
 	if err := testClient.Create(ctxT(), ac); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// The envtest apiserver exposes no Cilium/Calico groups, so FQDN policy is
-	// unsupported; the class stays Ready (allowedHosts is advisory) but the
+	// The class reconciler's discovery hides cilium.io and envtest has no
+	// Calico group, so FQDN policy is unsupported; the class stays Ready (allowedHosts is advisory) but the
 	// FQDNPolicySupported condition is False.
 	expectReady(t, func() []metav1.Condition {
 		var got kaalmv1beta1.AgentClass
