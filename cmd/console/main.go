@@ -47,6 +47,7 @@ func main() {
 		caFile              string
 		gatewayURL          string
 		insecureSkipGateway bool
+		logLevel            slog.Level
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "console listener (pages and read API, TLS)")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health probe listener")
@@ -56,9 +57,10 @@ func main() {
 	flag.StringVar(&gatewayURL, "gateway-url", "",
 		"gateway cluster listener base URL (default derived from POD_NAMESPACE)")
 	flag.BoolVar(&insecureSkipGateway, "insecure-skip-gateway-verify", false, "skip gateway cert verification (dev only)")
+	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	// The console logs through package-level slog like the gateway; the JSON
 	// convention is docs/src/operations/observability.md's.
 	slog.SetDefault(logger)

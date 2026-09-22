@@ -30,7 +30,7 @@ The chart installs the operator Deployment (with RBAC, ServiceAccount, and leade
 | PodDisruptionBudget | `minAvailable: 1` |
 | Rolling update | `maxUnavailable: 1` |
 | Anti-affinity (controller only) | Preferred, `topologyKey: kubernetes.io/hostname`: the scheduler spreads the replicas across nodes when it can, and both can share a node on a single-node cluster |
-| Container resources | None. As shipped neither container declares requests or limits, and the chart has no value for them, so both run as `BestEffort` |
+| Container resources | Requests `cpu: 100m`, `memory: 128Mi`; limit `memory: 512Mi`; no CPU limit, so both run as `Burstable` (`controller.resources`, `gateway.resources`) |
 
 Both Deployments have a **hard floor of 2 replicas**, enforced by a Helm `fail` template guard that aborts rendering when the value drops below 2. An operator cannot accidentally go under it.
 
@@ -64,6 +64,9 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `controller.maxConcurrentReconciles` | `4` | Reconciles the Agent, AgentChannel, and AgentTask controllers may each run at once. controller-runtime serializes per object at any setting; this lets different objects reconcile in parallel. |
 | `controller.certificate.duration` | `2160h` | `spec.duration` of every per-workload Certificate (`{name}-tls` for each Agent and AgentTask), as a Go duration. A leaked certificate stays valid until it expires, so a shorter value narrows that window. Applies to Certificates created after the change. See [Rotation defaults](../security/tls.md#rotation-defaults). |
 | `controller.certificate.renewBefore` | `720h` | `spec.renewBefore` of every per-workload Certificate. Must be shorter than `controller.certificate.duration`, or the controller exits at startup. |
+| `controller.logLevel` | `info` | Controller log level, passed as `--zap-log-level`: `debug`, `info`, or `error`. The chart also passes `--zap-encoder=json`. See [Logging](observability.md#logs). |
+| `controller.client.qps` / `.burst` | `20`, `30` | The controller's Kubernetes API client rate limit per replica: sustained requests per second and the burst above it. Passed as `--client-qps` and `--client-burst`. |
+| `controller.resources` | requests `cpu: 100m`, `memory: 128Mi`; limits `memory: 512Mi` | Resource requests and limits for the controller container, passed verbatim. The default sets no CPU limit. |
 | `controller.pprofPort` | `0` | Port for a `net/http/pprof` listener on the controller, for profiling under load. `0` keeps it off. Unauthenticated and never behind a Service; reach it with a port-forward. See [Profiling](observability.md#profiling). |
 | `gateway.externalHostnames` | `[]` | Additional DNS names appended to the `kaalm-gateway-tls` Certificate's SAN list. |
 | `gateway.channelHealthWindow` | `5m` | Rolling window over which the gateway evaluates `AgentChannel.status.conditions[type=PlatformConnected]`. |
@@ -82,12 +85,16 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.healthPort` | `8081` | Port for the gateway's internal kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). See [Gateway readiness](../gateways/llm/operations.md#gateway-readiness). |
 | `gateway.tracing.otlpEndpoint` | `""` | OTLP/HTTP base URL the gateway exports trace spans to (for example `http://collector.monitoring.svc:4318`). Empty means tracing is off entirely: no tracer installed, no trace context created or forwarded. An `https` endpoint is verified against the gateway's upstream trust pool. See [Tracing](observability.md#tracing). |
 | `gateway.tracing.sampleRatio` | `1.0` | Parent-based head sampling ratio for traces the gateway starts; propagated sampling decisions are honored either way. |
+| `gateway.logLevel` | `info` | Gateway log level, passed as `--log-level`: `debug`, `info`, `warn`, or `error`. See [Logging](observability.md#logs). |
+| `gateway.client.qps` / `.burst` | `100`, `200` | The gateway's Kubernetes API client rate limit per replica, passed as `--client-qps` and `--client-burst`. Higher than the controller's because live reads on the request path (task-completion cross-checks, first-use Secret loads) must not queue behind the limiter. |
+| `gateway.resources` | requests `cpu: 100m`, `memory: 128Mi`; limits `memory: 512Mi` | Resource requests and limits for the gateway container, passed verbatim. The default sets no CPU limit. |
 | `gateway.pprofPort` | `0` | Port for a `net/http/pprof` listener on the gateway, for profiling under load. `0` keeps it off. Unauthenticated and never behind a Service; reach it with a port-forward. See [Profiling](observability.md#profiling). |
 | `standardAgentClass.enabled` | `true` | Templates the sample `standard` AgentClass described under [Sample resources](#sample-resources). Set `false` to ship your own classes only. |
 | `standardAgentClass.allowedProviders` | `[]` | ModelProvider names the `standard` class admits, one string per entry, rendered into `spec.allowedProviders`. Empty allows none ([rule 5](../resources/validation-and-defaulting.md#cross-resource-validation)), so an Agent that names a provider is `Degraded` until you set this. A name with no ModelProvider behind it leaves the class `Ready=False` with `InvalidReference` ([AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler)), so set it once the providers exist. |
 | `console.enabled` | `false` | Installs the optional [operator console](../console/overview.md): the `kaalm-console` Deployment, Service, RBAC, and certificate. Off renders none of them. |
 | `console.image.repository` / `.tag` / `.pullPolicy` | `ghcr.io/win07xp/kaalm-console`, appVersion, `IfNotPresent` | The console image. |
 | `console.healthPort` | `8081` | Port for the console's kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). |
+| `console.logLevel` | `info` | Console log level, passed as `--log-level`: `debug`, `info`, `warn`, or `error`. |
 | `console.resources` | `{}` | Resource requests and limits for the console container, passed verbatim. |
 | `certManager.clusterResourceNamespace` | `"cert-manager"` | Namespace holding the CA `Certificate` and `kaalm-ca` Secret. Must match your cert-manager and trust-manager deployment. See [Certificate lifecycle](#certificate-lifecycle). |
 | `trustManager.bundleSelector` | `{}` | Object with `matchLabels` or `matchExpressions`, passed verbatim as the `kaalm-ca` `Bundle`'s `target.namespaceSelector`. Empty projects into every namespace. A selector must still match `kaalm-system` ([Trust bundle projection](../security/tls.md#trust-bundle-projection)). |

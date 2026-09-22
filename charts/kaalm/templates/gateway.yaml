@@ -61,6 +61,9 @@ spec:
             - --callback-backoff={{ .Values.gateway.callbackRetryBackoff }}
             - --platform-discord-api-base-url={{ .Values.gateway.platforms.discord.apiBaseUrl }}
             - --platform-whatsapp-api-base-url={{ .Values.gateway.platforms.whatsapp.apiBaseUrl }}
+            - --log-level={{ .Values.gateway.logLevel }}
+            - --client-qps={{ .Values.gateway.client.qps }}
+            - --client-burst={{ .Values.gateway.client.burst }}
             {{- if .Values.gateway.tracing.otlpEndpoint }}
             - --otlp-endpoint={{ .Values.gateway.tracing.otlpEndpoint }}
             - --otlp-sample-ratio={{ .Values.gateway.tracing.sampleRatio }}
@@ -123,6 +126,10 @@ spec:
               scheme: HTTPS
             initialDelaySeconds: 5
             periodSeconds: 10
+          {{- with .Values.gateway.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

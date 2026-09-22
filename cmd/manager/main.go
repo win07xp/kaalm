@@ -93,6 +93,8 @@ func main() {
 	var activatorAddr string
 	var callbackAllowlist string
 	var certLifetime controller.CertLifetime
+	var clientQPS float64
+	var clientBurst int
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -134,9 +136,13 @@ func main() {
 		"The spec.duration of each Agent and AgentTask Certificate.")
 	flag.DurationVar(&certLifetime.RenewBefore, "cert-renew-before", controller.DefaultCertRenewBefore,
 		"The spec.renewBefore of each Agent and AgentTask Certificate. Must be shorter than --cert-duration.")
-	opts := zap.Options{
-		Development: true,
-	}
+	flag.Float64Var(&clientQPS, "client-qps", 20,
+		"Sustained requests per second the Kubernetes API client may send.")
+	flag.IntVar(&clientBurst, "client-burst", 30,
+		"Requests the Kubernetes API client may send in a burst above --client-qps.")
+	// Production defaults: JSON at info, matching the gateway and console.
+	// --zap-devel, --zap-encoder, and --zap-log-level override them.
+	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
@@ -241,7 +247,10 @@ func main() {
 		operatorNamespace = "kaalm-system"
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	restCfg := ctrl.GetConfigOrDie()
+	restCfg.QPS = float32(clientQPS)
+	restCfg.Burst = clientBurst
+	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme: scheme,
 		// The Secret informer covers the operator namespace only, which is
 		// all the controller's RBAC lets it list: provider credentials live

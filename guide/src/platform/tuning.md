@@ -12,14 +12,54 @@ workload certificates; everything else is covered on the page that needs it. Set
 of the Agent, AgentChannel, and AgentTask controllers reconciles at once, so
 the default is up to twelve in flight across the three. The controller never
 reconciles one object from two workers, so the value only lets different
-objects proceed in parallel. The controller's API client rate limit is fixed
-in the binary and has no chart value. Raise it on a cluster that
+objects proceed in parallel. Raise it on a cluster that
 creates hundreds of agents in bursts and watches the reconcile queue depth
 climb ([Installing the Grafana dashboards](../observing/dashboards.md) has
 the panel); set it to `1` to serialize everything while chasing a bug.
 
 ```bash
 --set controller.maxConcurrentReconciles=8
+```
+
+## API client rate limits
+
+Each replica talks to the Kubernetes API through a client with a rate limit:
+a sustained rate in requests per second and a burst above it. The controller
+defaults to `20` and `30`; the gateway defaults to `100` and `200`, because
+it reads from the API on the request path. Raise the controller's limit
+together with `controller.maxConcurrentReconciles`, since more workers make
+more requests; the extra workers only queue behind the limiter otherwise.
+
+```bash
+--set controller.client.qps=50
+--set controller.client.burst=100
+--set gateway.client.qps=200
+--set gateway.client.burst=400
+```
+
+## Container resources
+
+Both Deployments request `100m` CPU and `128Mi` memory and set a `512Mi`
+memory limit, with no CPU limit so a burst of work is never throttled.
+`controller.resources` and `gateway.resources` hold those defaults, and the
+chart renders them into the container unchanged. Helm merges a `--set` of one
+field into the defaults, so the other fields keep their values. The
+controller's memory grows with the number of objects its cache holds; raise
+its limit on large fleets.
+
+```bash
+--set controller.resources.limits.memory=1Gi
+```
+
+## Log level
+
+All three components write JSON logs at `info`. Set a level per component
+with `controller.logLevel` (`debug`, `info`, or `error`), `gateway.logLevel`,
+or `console.logLevel` (`debug`, `info`, `warn`, or `error`). Prompt and
+response bodies are never logged at any level.
+
+```bash
+--set controller.logLevel=debug
 ```
 
 ## Profiling under load
@@ -81,6 +121,6 @@ chart upgrades with that in mind on clusters with multi-hour idle timeouts.
 ---
 
 *How this works: design book pages Operations, Deployment (the values
-table and the replica floors), Operations, Observability (the Profiling
-section), and Operations, Load and scale (what the harness measured at
+table and the replica floors), Operations, Observability (the Logs and
+Profiling sections), and Operations, Load and scale (what the harness measured at
 each setting).*

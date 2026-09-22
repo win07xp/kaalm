@@ -73,6 +73,9 @@ func main() {
 		callbackBackoff      string
 		discordAPIBaseURL    string
 		whatsAppAPIBaseURL   string
+		logLevel             slog.Level
+		clientQPS            float64
+		clientBurst          int
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "cluster listener (:8443) address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
@@ -115,9 +118,12 @@ func main() {
 	flag.StringVar(&whatsAppAPIBaseURL, "platform-whatsapp-api-base-url", gateway.DefaultWhatsAppAPIBaseURL,
 		"base URL the WhatsApp adapter replies through, including the Graph API version "+
 			"(gateway.platforms.whatsapp.apiBaseUrl)")
+	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
+	flag.Float64Var(&clientQPS, "client-qps", 100, "Kubernetes API client sustained requests per second")
+	flag.IntVar(&clientBurst, "client-burst", 200, "Kubernetes API client burst above --client-qps")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	// Install it as the process default: the gateway packages log through
 	// package-level slog (including the broker's per-call audit record), and
 	// without this they would fall back to Go's plain text logger, breaking
@@ -139,9 +145,9 @@ func main() {
 	// client, not a proxy's. The gateway's live reads (task-completion
 	// cross-checks, first-use Secret loads) must never queue behind a bucket
 	// that small: at 20 QPS a per-request GET capped every replica at 20
-	// requests per second (#170).
-	restCfg.QPS = 100
-	restCfg.Burst = 200
+	// requests per second (#170). The defaults are 100 and 200.
+	restCfg.QPS = float32(clientQPS)
+	restCfg.Burst = clientBurst
 	// Secrets are never read through the shared informer cache. The gateway
 	// holds only get/watch on Secrets in kaalm-system plus dynamic
 	// resourceNames-scoped grants on individual channel Secrets (no
