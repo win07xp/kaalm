@@ -59,15 +59,15 @@ The handshake decides nothing on its own. The path-to-regime mapping, not the TL
 
 ![Activity diagram of the agent-report regime. After the handshake, no client certificate answers 401, a SAN that does not parse answers 403 invalid_cert, a SAN kind that does not match the path answers 403 access_denied, and a source IP outside the SAN namespace answers 401. Otherwise the request reaches the handler.](../diagrams/per-path-auth-agent-report.svg)
 
-**Controller only and console only** (`/v1/activity`, `/v1/channels/health`; `/v1/test-chat`, `/v1/spend`). A client certificate is required, and its SAN must be the Service DNS of the component the path serves. There is no source-IP cross-check on these paths: the SAN names a `kaalm-system` Service, not a tenant namespace, and the gateway's Pod cache covers tenant workloads.
+**Controller only and console only** (`/v1/activity`, `/v1/channels/health`; `/v1/test-chat`, `/v1/spend`). A client certificate is required, its SAN must be the Service DNS of the component the path serves, and the source IP must resolve to a Pod in the operator namespace. The SAN names a `kaalm-system` Service, not a tenant namespace, so the cross-check runs against `kaalm-system`: a stolen controller or console certificate presented from a tenant Pod is rejected.
 
-![Activity diagram of the controller-only and console-only regimes. After the handshake, no client certificate answers 401, and a SAN that is not the path's component identity answers 403 access_denied. Otherwise the request reaches the handler with no source-IP cross-check.](../diagrams/per-path-auth-internal.svg)
+![Activity diagram of the controller-only and console-only regimes. After the handshake, no client certificate answers 401, and a SAN that is not the path's component identity answers 403 access_denied, and a source IP outside the operator namespace answers 401. Otherwise the request reaches the handler.](../diagrams/per-path-auth-internal.svg)
 
 **Any other path** answers `400 invalid_request` before any credential is examined. The message is constant and never echoes the path.
 
 Two points the figures leave implicit:
 
-- The agent-report, controller-only, and console-only regimes enforce no HTTP method; the handlers accept any method. Issue #237 tracks method enforcement and the missing cross-check.
+- The handlers, not the regimes, check the HTTP method. `/v1/agent/heartbeat` answers `405 invalid_request` to any method other than `POST`, and `/v1/activity` and `/v1/channels/health` to any method other than `GET`, each with an `Allow` header. `/v1/test-chat` and `/v1/spend` answer a wrong method with `400 invalid_request`. `/v1/task/complete` does not check the method.
 - `403 invalid_cert` is distinct from `403 access_denied`: the first means the certificate chains but its SAN is not a shape the gateway recognizes, the second means the SAN is recognized but the path does not accept that identity.
 
 Path-conditional middleware is the only correct way to express this on Go's `crypto/tls`. `RequireAndVerifyClientCert` on the listener would lock out gateway-only-tier callers, because the handshake would fail before the request reached the path router. `NoClientCert` would silently downgrade the mTLS tier: a certificate would be presented but never verified.

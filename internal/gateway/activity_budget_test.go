@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -73,6 +74,8 @@ func TestHeartbeatFeedsActivityEndpoint(t *testing.T) {
 		t.Fatalf("heartbeat status %d", resp.StatusCode)
 	}
 
+	// The controller calls from an operator-namespace Pod.
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kaalm-system"}}
 	got, err := h.client(&controllerCert).Get(h.url("/v1/activity?namespace=team-a"))
 	if err != nil {
 		t.Fatal(err)

@@ -204,7 +204,9 @@ func (a *Authenticator) AgentReportPaths(requiredKind WorkloadKind, next http.Ha
 // ControllerPaths authenticates the controller-only endpoints (/v1/activity,
 // /v1/channels/health): a client cert whose SAN matches the controller
 // Service DNS. Agent and AgentTask certs are valid CA-signed certs but their
-// SANs do not match, so they are rejected 403.
+// SANs do not match, so they are rejected 403. The SAN names an operator
+// namespace Service, so the source IP must resolve to a Pod in the operator
+// namespace.
 func (a *Authenticator) ControllerPaths(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cert := peerCert(r)
@@ -216,6 +218,10 @@ func (a *Authenticator) ControllerPaths(next http.HandlerFunc) http.HandlerFunc 
 			forbidden(w, errAccessDenied, "this path requires the controller identity")
 			return
 		}
+		if !a.crossCheck(r, a.OperatorNamespace) {
+			unauthorized(w, "source IP does not match the operator namespace")
+			return
+		}
 		next(w, r)
 	}
 }
@@ -225,7 +231,8 @@ func (a *Authenticator) ControllerPaths(next http.HandlerFunc) http.HandlerFunc 
 // re-authorize the human behind the request; the console runs TokenReview and
 // SubjectAccessReview before calling, and possession of the console SAN
 // carries that authorization (docs/src/security/rbac.md, Internal Endpoint
-// Authentication).
+// Authentication). The source IP must resolve to a Pod in the operator
+// namespace, as on ControllerPaths.
 func (a *Authenticator) ConsolePaths(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cert := peerCert(r)
@@ -235,6 +242,10 @@ func (a *Authenticator) ConsolePaths(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if !IsConsoleCert(cert, a.OperatorNamespace) {
 			forbidden(w, errAccessDenied, "this path requires the console identity")
+			return
+		}
+		if !a.crossCheck(r, a.OperatorNamespace) {
+			unauthorized(w, "source IP does not match the operator namespace")
 			return
 		}
 		next(w, r)

@@ -144,3 +144,32 @@ func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 		t.Error("second namespace must carry its own bucket")
 	}
 }
+
+func TestAllowHeartbeat_BurstAndRefill(t *testing.T) {
+	// Replica count does not divide the heartbeat cap.
+	rl := NewRateLimiter(func() int { return 4 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+
+	allowed := 0
+	for i := 0; i < 20; i++ {
+		if rl.AllowHeartbeat("team-a", "sup") {
+			allowed++
+		}
+	}
+	if allowed != heartbeatBurst {
+		t.Errorf("allowed %d of 20, want the burst %d", allowed, heartbeatBurst)
+	}
+	// Another agent, and the same name in another namespace, have their own buckets.
+	if !rl.AllowHeartbeat("team-a", "other") || !rl.AllowHeartbeat("team-b", "sup") {
+		t.Error("each agent must have its own bucket")
+	}
+	// Half a second refills one token at 2 per second.
+	now = now.Add(500 * time.Millisecond)
+	if !rl.AllowHeartbeat("team-a", "sup") {
+		t.Error("one token must refill after 500ms")
+	}
+	if rl.AllowHeartbeat("team-a", "sup") {
+		t.Error("only one token must refill after 500ms")
+	}
+}

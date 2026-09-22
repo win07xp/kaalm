@@ -9,7 +9,7 @@ Both are for Pods backed by an Agent resource. AgentTask Pods are rejected on th
 
 ## POST /v1/agent/heartbeat
 
-An Agent container calls this to signal liveness for idle detection. Authentication is mTLS with the Agent's certificate under the [agent-report regime](../listener-tls.md#per-path-client-auth-enforcement): the certificate must be present, its SAN must be an Agent identity, and the source IP must resolve to a Pod in that namespace. Any HTTP method is accepted; issue #237 tracks method enforcement.
+An Agent container calls this to signal liveness for idle detection. Authentication is mTLS with the Agent's certificate under the [agent-report regime](../listener-tls.md#per-path-client-auth-enforcement): the certificate must be present, its SAN must be an Agent identity, and the source IP must resolve to a Pod in that namespace. Any method other than `POST` is rejected with `405`.
 
 The gateway records every heartbeat as the agent's last-activity timestamp in its in-memory activity store, with no API server write. It does not consult the Agent's [`spec.lifecycle.activitySource`](../../resources/agent.md): the controller applies that filter when it merges the per-replica timestamps ([Activity detection](../../controller/hibernation-and-wake.md#activity-detection)), so a heartbeat from an agent set to `gatewayTraffic` is recorded and then ignored. An image that heartbeats on a timer therefore keeps an agent set to `agentHeartbeat` or `both` from ever going idle; the starter templates heartbeat on a timer and are meant for the default `gatewayTraffic` ([The heartbeat toggle and the hibernation footgun](../../runtime/starter-templates.md#the-heartbeat-toggle-and-the-hibernation-footgun)).
 
@@ -24,8 +24,12 @@ The gateway records every heartbeat as the agent's last-activity timestamp in it
 | `401` | `unauthorized` | No client certificate, or the source IP does not resolve to a Pod in the SAN's namespace in the gateway's informer cache |
 | `403` | `invalid_cert` | The certificate's SAN is not an Agent or AgentTask identity |
 | `403` | `access_denied` | The certificate is an AgentTask identity. The message is `AgentTask callers are not accepted on this path`. |
+| `405` | `invalid_request` | The method is not `POST`. The response carries `Allow: POST`. |
+| `429` | `rate_limited` | The Agent is over the heartbeat cap. The response carries `Retry-After: 1`, and `retryable` is `true`. |
 
-Unlike [`/v1/task/complete`](task-complete.md), the cross-check here has no live API-server fallback: heartbeats repeat, so a call dropped during informer lag (a heartbeat in the first hundred milliseconds of a Pod's life can see a `401`) is recovered by the next one. Frequency is the agent's choice; every 30 to 60 seconds is a reasonable default. The gateway applies no rate limit to this path.
+Unlike [`/v1/task/complete`](task-complete.md), the cross-check here has no live API-server fallback: heartbeats repeat, so a call dropped during informer lag (a heartbeat in the first hundred milliseconds of a Pod's life can see a `401`) is recovered by the next one. Frequency is the agent's choice; every 30 to 60 seconds is a reasonable default.
+
+Each gateway replica caps each Agent at two heartbeats per second, with a burst of five. The cap bounds the work one Agent can cause and sits far above any timer-driven rate. A heartbeat over the cap is not recorded.
 
 ## POST /v1/message
 

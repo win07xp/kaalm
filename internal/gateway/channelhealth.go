@@ -158,6 +158,10 @@ func (c *ChannelHealthStore) Snapshot(namespace string) channelHealthResponse {
 // handleChannelsHealth serves GET /v1/channels/health?namespace= (controller
 // SAN enforced by the middleware).
 func (s *Server) handleChannelsHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
 	ns := r.URL.Query().Get("namespace")
 	if ns == "" {
 		badRequest(w, "namespace query parameter is required")

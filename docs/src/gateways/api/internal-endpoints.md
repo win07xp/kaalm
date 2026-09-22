@@ -1,6 +1,6 @@
 # Internal endpoints
 
-Internal means Kaalm's own components only. These four endpoints are mTLS-only, and each requires a specific peer SAN: the controller's for the activity and channel-health endpoints, the console's for test-chat and spend. Agent and AgentTask certificates are rejected with `403 access_denied`, and a request without a certificate with `401 unauthorized` ([Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication)). The gateway does not run the source-IP cross-check on these paths, and the two `GET` endpoints accept any HTTP method; issue #237 tracks both.
+Internal means Kaalm's own components only. These four endpoints are mTLS-only, and each requires a specific peer SAN: the controller's for the activity and channel-health endpoints, the console's for test-chat and spend. Agent and AgentTask certificates are rejected with `403 access_denied`, and a request without a certificate with `401 unauthorized` ([Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication)). The source IP must also resolve to a Pod in the operator namespace, where the controller and the console run; a request from anywhere else is rejected with `401 unauthorized`.
 
 All four are served on the cluster listener, `:8443`, never on the Ingress-fronted user listener ([Why two listeners](../overview.md#why-two-listeners-and-a-separate-health-port)). The controller's own internal endpoint, the activator the gateway calls to wake a hibernated Agent, is on the controller Service and is specified on [The activator](../user/activation-and-activity.md#the-activator).
 
@@ -41,7 +41,7 @@ GET /v1/activity?namespace=team-support
 
 Both sources are always returned. The controller applies `Agent.spec.lifecycle.activitySource` after merging timestamps across replicas. The per-Pod-IP fan-out and the `ServerName` override it needs are on [Activity tracking API](../user/activation-and-activity.md#activity-tracking-api).
 
-**Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing.
+**Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. `405 invalid_request` with `Allow: GET` when the method is not `GET`.
 
 ## GET /v1/channels/health
 
@@ -94,7 +94,7 @@ GET /v1/channels/health?namespace=team-support
 
 The third channel in the example shows `state: "empty"`: this replica has no in-window observation for that path. The controller decides whether the channel is silent (`Unknown` with `reason=NoRecentTraffic`) or observation is incomplete (the existing condition is kept) by comparing `replicaStartedAt` with the window and consulting the other replicas ([Channel health tracking](../user/platform-adapters.md#channel-health-tracking)).
 
-**Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. Only channels whose path is under `/channels/{namespace}/` for the requested namespace are returned.
+**Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. `405 invalid_request` with `Allow: GET` when the method is not `GET`. Only channels whose path is under `/channels/{namespace}/` for the requested namespace are returned.
 
 ## POST /v1/test-chat
 
