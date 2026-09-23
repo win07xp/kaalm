@@ -151,7 +151,27 @@ func TestAgentClass_InvalidCIDRIsNotReady(t *testing.T) {
 		var got kaalmv1beta1.AgentClass
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-badcidr"}, &got)
 		return got.Status.Conditions
-	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidReference)
+	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidCIDR)
+}
+
+// A malformed CIDR sorts first among the problems, so its reason wins over a
+// missing provider's InvalidReference; the message still lists both.
+func TestAgentClass_InvalidCIDRWinsOverMissingProvider(t *testing.T) {
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "ac-badcidr-missing"}}
+	ac.Spec.AllowedProviders = []kaalmv1beta1.LocalObjectReference{{Name: "ac-ghost-prov"}}
+	ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/33"}
+	if err := testClient.Create(ctxT(), ac); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var got kaalmv1beta1.AgentClass
+	expectReady(t, func() []metav1.Condition {
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-badcidr-missing"}, &got)
+		return got.Status.Conditions
+	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidCIDR)
+	msg := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady).Message
+	if !strings.Contains(msg, "10.0.0.0/33") || !strings.Contains(msg, "ac-ghost-prov") {
+		t.Errorf("message does not list both problems: %q", msg)
+	}
 }
 
 func TestAgentClass_CountsUsers(t *testing.T) {

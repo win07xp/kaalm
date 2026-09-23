@@ -151,7 +151,7 @@ status:
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | `True` with `reason: AllReferencesResolved` when every `allowedProviders` and `allowedToolProviders` entry names an existing provider, every `allowedCIDRs` entry parses (rule 19), and every `allowedHosts` entry is a DNS name (rule 20). Otherwise `False` with `reason: InvalidReference` and a message listing every problem, sorted and joined with `; `. Provider health is not consulted. |
+| `Ready` | `True` with `reason: AllReferencesResolved` when every `allowedProviders` and `allowedToolProviders` entry names an existing provider, every `allowedCIDRs` entry parses (rule 19), and every `allowedHosts` entry is a DNS name (rule 20). Otherwise `False` with a message listing every problem, sorted and joined with `; `. The reason is `InvalidCIDR` when an `allowedCIDRs` entry does not parse, which sorts first, and `InvalidReference` for a missing provider or tool provider or a malformed host. Provider health is not consulted. |
 | `FQDNPolicySupported` | Set on every pass: `reason: NoHostsRequested` while `allowedHosts` is empty; otherwise `FQDNPolicySupported` or `FQDNPolicyUnsupported` from the CNI probe described under the design notes. |
 
 `agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. `kubectl get ac` prints both counts.

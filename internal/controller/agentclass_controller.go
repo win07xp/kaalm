@@ -85,7 +85,8 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var problems []string
 	problems = append(problems, r.missingProviders(ctx, &ac)...)
 	problems = append(problems, r.missingToolProviders(ctx, &ac)...)
-	problems = append(problems, invalidCIDRs(&ac)...)
+	badCIDRs := invalidCIDRs(&ac)
+	problems = append(problems, badCIDRs...)
 	problems = append(problems, invalidHosts(&ac)...)
 
 	// FQDN support only matters when allowedHosts is set. When unsupported, warn
@@ -131,10 +132,16 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		})
 	} else {
 		sort.Strings(problems)
+		// The reason names the first problem listed. "allowedCIDR" sorts
+		// before every other problem, so a malformed CIDR (rule 19) wins.
+		reason := kaalmv1beta1.ReasonInvalidReference
+		if len(badCIDRs) > 0 {
+			reason = kaalmv1beta1.ReasonInvalidCIDR
+		}
 		apimeta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  kaalmv1beta1.ReasonInvalidReference,
+			Reason:  reason,
 			Message: strings.Join(problems, "; "),
 		})
 	}

@@ -190,7 +190,7 @@ status:
 | Field | Meaning |
 |---|---|
 | `phase` | `Active`, `Degraded`, `Failed`, or `Terminating`. Unset until the first reconcile, and left unset by rule 28. Reflects the bound Agent: `Degraded` while the Agent is `Degraded` or `Failed`, `Failed` when `agentRef` does not resolve (rule 13). |
-| `Ready` | `True` with `reason: AgentReachable` and the message `channel is valid` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `SystemNamespaceForbidden`, or `InvalidReference` when the per-channel credential Role cannot be written. The gateway routes only `Ready=True` channels. |
+| `Ready` | `True` with `reason: AgentReachable` and the message `channel is valid` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, `SystemNamespaceForbidden`, or `InvalidReference` when the per-channel credential Role cannot be written. The gateway routes only `Ready=True` channels. |
 | `PlatformConnected` | The tri-state in the next section. |
 
 ### The PlatformConnected tri-state

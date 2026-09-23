@@ -156,6 +156,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	eff := deriveEffectiveSpec(&agent, &class)
 
+	// ProvidersReady mirrors the Ready state of every referenced
+	// ModelProvider. A status condition only: it never moves the phase, and
+	// every status write below persists it.
+	r.reconcileProvidersCondition(ctx, &agent, &class)
+
 	// Steps 2 and 5: the Degraded-triggering cross-checks (rules 2, 4, 5, 24,
 	// 26, 29). All outstanding reasons are evaluated together so recovery can
 	// be per-condition.
@@ -624,6 +629,69 @@ func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *k
 	})
 }
 
+// reconcileProvidersCondition sets ProvidersReady. It is True with
+// AllProvidersHealthy when every provider in spec.providers is in the class
+// allowlist, exists, and reports Ready=True. Otherwise it is False with the
+// reason of the first problem in spec order: ClassConstraintViolation for a
+// provider outside the allowlist or missing (the reason Ready carries for the
+// same problem), ProviderUnhealthy for one that is not Ready. Provider Get
+// errors other than NotFound are skipped, as in reconcileBudgetCondition.
+func (r *AgentReconciler) reconcileProvidersCondition(
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass,
+) {
+	var reason string
+	var problems []string
+	add := func(rsn, msg string) {
+		if reason == "" {
+			reason = rsn
+		}
+		problems = append(problems, msg)
+	}
+	for _, p := range agent.Spec.Providers {
+		name := p.ProviderRef.Name
+		allowed := false
+		for _, ap := range class.Spec.AllowedProviders {
+			if ap.Name == name {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			add(kaalmv1beta1.ReasonClassConstraintViolation,
+				fmt.Sprintf("provider %q is not in AgentClass %q allowedProviders", name, class.Name))
+			continue
+		}
+		var mp kaalmv1beta1.ModelProvider
+		if err := r.Get(ctx, types.NamespacedName{Name: name}, &mp); err != nil {
+			if apierrors.IsNotFound(err) {
+				add(kaalmv1beta1.ReasonClassConstraintViolation, fmt.Sprintf("provider %q does not exist", name))
+			}
+			continue
+		}
+		ready := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionReady)
+		switch {
+		case ready == nil:
+			add(kaalmv1beta1.ReasonProviderUnhealthy, fmt.Sprintf("provider %q reports no Ready condition yet", name))
+		case ready.Status != metav1.ConditionTrue:
+			add(kaalmv1beta1.ReasonProviderUnhealthy,
+				fmt.Sprintf("provider %q is not Ready (%s)", name, ready.Reason))
+		}
+	}
+	cond := metav1.Condition{
+		Type:               kaalmv1beta1.ConditionProvidersReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: agent.Generation,
+		Reason:             kaalmv1beta1.ReasonAllProvidersHealthy,
+		Message:            "every referenced provider is Ready",
+	}
+	if reason != "" {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = reason
+		cond.Message = strings.Join(problems, "; ")
+	}
+	apimeta.SetStatusCondition(&agent.Status.Conditions, cond)
+}
+
 func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1beta1.Agent) (bool, error) {
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: agent.Namespace, Name: agentCertificateName(agent.Name)}
@@ -989,10 +1057,10 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // providerChangeMatters admits a ModelProvider update to the Agent fan-out
-// when its spec changed or when the set of namespaces in the Blocked budget
-// state changed, which is all an Agent reads from a provider's status.
-// Spend counters and health conditions change on their own cadence and
-// affect no Agent.
+// when its spec changed, when the set of namespaces in the Blocked budget
+// state changed, or when its Ready status or reason changed, which is all an
+// Agent reads from a provider's status. Spend counters and the Healthy
+// condition change on their own cadence and affect no Agent.
 func providerChangeMatters() predicate.Predicate {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -1001,12 +1069,22 @@ func providerChangeMatters() predicate.Predicate {
 			if !ok1 || !ok2 {
 				return true
 			}
-			if oldMP.Generation != newMP.Generation {
+			if oldMP.Generation != newMP.Generation || readyState(oldMP) != readyState(newMP) {
 				return true
 			}
 			return !equality.Semantic.DeepEqual(blockedNamespaces(oldMP), blockedNamespaces(newMP))
 		},
 	}
+}
+
+// readyState is a provider's Ready status and reason, the part of the
+// condition ProvidersReady reads.
+func readyState(mp *kaalmv1beta1.ModelProvider) string {
+	c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if c == nil {
+		return ""
+	}
+	return string(c.Status) + "/" + c.Reason
 }
 
 // blockedNamespaces returns the namespaces a provider's status reports as
