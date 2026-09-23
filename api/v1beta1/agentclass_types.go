@@ -88,6 +88,7 @@ type AgentClassImage struct {
 	// +optional
 	AllowHandlerMounts bool `json:"allowHandlerMounts,omitempty"`
 	// PullPolicy is the image pull policy for workload containers.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +optional
 	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
 	// ImagePullSecrets are attached to workload Pods and must exist in the

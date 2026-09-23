@@ -39,7 +39,8 @@ granted tool is outside the ToolProvider's declared catalog),
 does not allow handler mounts).
 
 `Ready=False` reasons that hold the Agent without degrading it:
-`InvalidReference` (no image, or the class does not exist),
+`InvalidReference` (no image, the class does not exist, or the class has a
+malformed `allowedCIDRs` entry),
 `ImagePullSecretMissing`, `ExistingClaimNotFound` (the adopted PVC is
 missing), `HandlerConfigMapNotFound`, `CertificateNotReady`, and
 `SystemNamespaceForbidden` (an Agent in `kaalm-system` is never

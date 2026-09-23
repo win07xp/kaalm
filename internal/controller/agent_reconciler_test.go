@@ -25,11 +25,14 @@ import (
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -272,6 +275,74 @@ func TestAgent_SystemNamespaceForbidden(t *testing.T) {
 func TestAgent_MissingClass(t *testing.T) {
 	mkWorkloadAgent(t, "noclass-agent", "does-not-exist", nil)
 	expectAgentReadyReason(t, "noclass-agent", kaalmv1beta1.ReasonInvalidReference)
+}
+
+// An AgentClass with a malformed allowedCIDRs entry (rule 19) gates its
+// Agents with a condition instead of failing the NetworkPolicy write on every
+// pass, and fixing the class recovers them.
+func TestAgent_InvalidClassCIDRGatesAndRecovers(t *testing.T) {
+	mkWorkloadClass(t, "wc-cidr", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Network.Egress.AllowedCIDRs = []string{"not-a-cidr"}
+	})
+	mkWorkloadAgent(t, "cidr-agent", "wc-cidr", nil)
+	expectAgentReadyReason(t, "cidr-agent", kaalmv1beta1.ReasonInvalidReference)
+
+	// A direct pass returns no error: the gate ends it before any child write.
+	r := &AgentReconciler{
+		Client: testClient, Recorder: record.NewFakeRecorder(10),
+		OperatorNamespace: testSystemNamespace, SecretReader: testClient,
+	}
+	res, err := r.Reconcile(ctxT(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "cidr-agent"}})
+	if err != nil {
+		t.Fatalf("reconcile returned an error under an invalid class: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("gate requeues on a timer (%s); the class watch re-enqueues on a fix", res.RequeueAfter)
+	}
+	var np networkingv1.NetworkPolicy
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "cidr-agent"}, &np); !apierrors.IsNotFound(err) {
+		t.Errorf("NetworkPolicy written under an invalid class: err=%v", err)
+	}
+
+	// Fixing the class recovers the Agent and the policy carries the entry.
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-cidr"}, &ac); err != nil {
+			return err
+		}
+		ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/8"}
+		return testClient.Update(ctxT(), &ac)
+	})
+	expectAgentReadyReason(t, "cidr-agent", "CertificateNotReady")
+	markCertReady(t, "cidr-agent")
+	eventually(t, func() error {
+		var np networkingv1.NetworkPolicy
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "cidr-agent"}, &np); err != nil {
+			return err
+		}
+		for _, rule := range np.Spec.Egress {
+			for _, to := range rule.To {
+				if to.IPBlock != nil && to.IPBlock.CIDR == "10.0.0.0/8" {
+					return nil
+				}
+			}
+		}
+		return errString("NetworkPolicy lacks the fixed ipBlock")
+	})
+}
+
+// The schema rejects an image.pullPolicy outside the three Kubernetes values.
+func TestAgentClass_PullPolicyEnumRejected(t *testing.T) {
+	ac := &kaalmv1beta1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "wc-pull-policy"},
+		Spec: kaalmv1beta1.AgentClassSpec{
+			Image: kaalmv1beta1.AgentClassImage{PullPolicy: corev1.PullPolicy("Sometimes")},
+		},
+	}
+	err := testClient.Create(ctxT(), ac)
+	if err == nil || !apierrors.IsInvalid(err) {
+		t.Fatalf("pullPolicy Sometimes: want an Invalid error, got %v", err)
+	}
 }
 
 func TestAgent_ImagePullSecretMissing(t *testing.T) {

@@ -678,6 +678,51 @@ func TestTask_MissingClassIsNotReady(t *testing.T) {
 	})
 }
 
+// A malformed allowedCIDRs entry (rule 19) holds a new task with a
+// non-terminal condition, and fixing the class lets it provision.
+func TestTask_InvalidClassCIDRGatesAndRecovers(t *testing.T) {
+	mkWorkloadClass(t, "tc-cidr", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Network.Egress.AllowedCIDRs = []string{"not-a-cidr"}
+	})
+	mkTask(t, "t-cidr", "tc-cidr", nil)
+	readyReason := func() (string, kaalmv1beta1.AgentTaskPhase, error) {
+		var task kaalmv1beta1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-cidr"}, &task); err != nil {
+			return "", "", err
+		}
+		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil {
+			return "", task.Status.Phase, errString("no Ready condition yet")
+		}
+		return c.Reason, task.Status.Phase, nil
+	}
+	eventually(t, func() error {
+		r, phase, err := readyReason()
+		if err != nil {
+			return err
+		}
+		if r != kaalmv1beta1.ReasonInvalidReference || phase == kaalmv1beta1.TaskFailed {
+			return errString("want non-terminal InvalidReference, got " + r + " in " + string(phase))
+		}
+		return nil
+	})
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tc-cidr"}, &ac); err != nil {
+			return err
+		}
+		ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/8"}
+		return testClient.Update(ctxT(), &ac)
+	})
+	eventually(t, func() error { return markCertReadyErr("t-cidr") })
+	eventually(t, func() error {
+		if pod := taskPod(t, "t-cidr"); pod == nil {
+			return errString("no task Pod yet")
+		}
+		return nil
+	})
+}
+
 func TestTask_EmptyImageIsNotReady(t *testing.T) {
 	mkWorkloadClass(t, "tc-noimg", nil) // no defaultImage
 	mkTask(t, "t-noimg", "tc-noimg", func(task *kaalmv1beta1.AgentTask) {
