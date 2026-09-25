@@ -16,7 +16,7 @@ alt async mode
   gw -> out : 3. create the placeholder ConfigMap
   gw --> caller : 202 {requestId, channelPath}
 end
-opt Agent is Hibernated
+opt Agent is Hibernated or Hibernating
   gw -> ctrl : 4. POST /v1/activate/{namespace}/{name}
   gw -> agent : poll reachability, up to wakeTimeout
 end

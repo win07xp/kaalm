@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +63,81 @@ func TestControllerActivator_Wake(t *testing.T) {
 	dead := &ControllerActivator{BaseURL: "http://127.0.0.1:1", Client: &http.Client{Timeout: time.Second}}
 	if err := dead.Wake(context.Background(), "team-a", "sup"); err == nil {
 		t.Error("unreachable activator must error")
+	}
+}
+
+// TestControllerActivator_WakeRetry pins the single retry (#207): a transport
+// error or a 5xx is retried once on a fresh connection, a 4xx never is, and
+// the retry stays inside the caller's deadline.
+func TestControllerActivator_WakeRetry(t *testing.T) {
+	serve := func(first func(w http.ResponseWriter)) (*httptest.Server, *atomic.Int32) {
+		var n atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if n.Add(1) == 1 {
+				first(w)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		t.Cleanup(srv.Close)
+		return srv, &n
+	}
+
+	// A 5xx on the first attempt: the second is accepted.
+	srv, n := serve(func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) })
+	act := &ControllerActivator{BaseURL: srv.URL, Client: srv.Client()}
+	if err := act.Wake(context.Background(), "team-a", "sup"); err != nil {
+		t.Errorf("Wake after one 503: %v", err)
+	}
+	if got := n.Load(); got != 2 {
+		t.Errorf("attempts after a 503 = %d, want 2", got)
+	}
+
+	// A dropped connection on the first attempt (a replica shutting down):
+	// the retry dials anew and is accepted.
+	srv, n = serve(func(w http.ResponseWriter) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	})
+	act = &ControllerActivator{BaseURL: srv.URL, Client: srv.Client()}
+	if err := act.Wake(context.Background(), "team-a", "sup"); err != nil {
+		t.Errorf("Wake after a dropped connection: %v", err)
+	}
+	if got := n.Load(); got != 2 {
+		t.Errorf("attempts after a dropped connection = %d, want 2", got)
+	}
+
+	// A 4xx is final.
+	srv, n = serve(func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) })
+	act = &ControllerActivator{BaseURL: srv.URL, Client: srv.Client()}
+	if err := act.Wake(context.Background(), "team-a", "sup"); err == nil {
+		t.Error("a 404 must be an error")
+	}
+	if got := n.Load(); got != 1 {
+		t.Errorf("attempts after a 404 = %d, want 1 (no retry)", got)
+	}
+
+	// A hung activator: both attempts together respect the caller deadline.
+	release := make(chan struct{})
+	hung := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer hung.Close()
+	defer close(release)
+	act = &ControllerActivator{BaseURL: hung.URL, Client: hung.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := act.Wake(ctx, "team-a", "sup"); err == nil {
+		t.Error("a hung activator must error")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("Wake took %s, past the 300ms caller deadline", took)
 	}
 }
 
@@ -156,6 +232,28 @@ func TestWakeAndDeliver_Hibernated(t *testing.T) {
 		t.Errorf("activator error = %d, want 504", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
+}
+
+// TestWakeAndDeliver_Hibernating pins that a message arriving while the Pod
+// is being deleted requests a wake instead of failing delivery (#207).
+func TestWakeAndDeliver_Hibernating(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"awake"}`))
+	})
+	h.seedChannel("sync")
+	h.store.agents["team-a/sup"].Status.Phase = kaalmv1beta1.AgentHibernating
+	act := &fakeActivator{}
+	h.server.Activator = act
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	if resp.StatusCode != 200 {
+		t.Errorf("hibernating with activator = %d, want 200", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	if len(act.calls) != 1 || act.calls[0] != "team-a/sup" {
+		t.Errorf("activator calls = %v, want one wake for team-a/sup", act.calls)
+	}
 }
 
 func TestWakeTimeout(t *testing.T) {
