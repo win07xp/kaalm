@@ -82,6 +82,8 @@ type AgentReconciler struct {
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
+	// DNS selects the peers of the DNS egress rule on every Agent NetworkPolicy.
+	DNS DNSSelector
 	// Activity fetches per-namespace gateway activity for idle detection.
 	// nil disables idle and hibernation transitions (no data, no evidence).
 	Activity ActivityClient
@@ -821,7 +823,7 @@ func (r *AgentReconciler) ensurePVC(
 func (r *AgentReconciler) ensureNetworkPolicy(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) error {
-	desired := desiredNetworkPolicy(agent, class, eff, r.OperatorNamespace)
+	desired := desiredNetworkPolicy(agent, class, eff, r.OperatorNamespace, r.DNS)
 	if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 		return err
 	}

@@ -58,6 +58,10 @@ controller:
       memory: 128Mi
     limits:
       memory: 512Mi
+  # Peers of the DNS egress rule on every synthesized workload NetworkPolicy:
+  # the namespaces and Pods agents may reach on port 53. The default matches
+  # kubeadm, EKS, GKE, AKS, k3s, and the upstream CoreDNS chart. Change it when
+  # DNS runs elsewhere; an empty podLabels allows every Pod in the namespaces.
   networkPolicy:
     dnsSelector:
       namespaceLabels:

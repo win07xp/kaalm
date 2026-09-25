@@ -561,7 +561,7 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 }
 
 // desiredNetworkPolicy synthesizes the per-Agent policy from the AgentClass:
-// egress to the gateway and DNS plus allowedCIDRs, ingress from the gateway on
+// egress to the gateway and the DNS Pods the DNSSelector picks plus allowedCIDRs, ingress from the gateway on
 // the health port, and optional ingress from the namespace's other agent Pods
 // on that same port. allowedHosts (FQDN rules) are deliberately not synthesized
 // here: they require a CNI-specific policy kind and land in the hardening
@@ -569,6 +569,7 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 // the Warning.
 func desiredNetworkPolicy(
 	agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec, operatorNamespace string,
+	dns DNSSelector,
 ) *networkingv1.NetworkPolicy {
 	protoTCP := corev1.ProtocolTCP
 	protoUDP := corev1.ProtocolUDP
@@ -584,11 +585,7 @@ func desiredNetworkPolicy(
 			MatchLabels: map[string]string{labelKeyComponent: componentGateway},
 		},
 	}
-	dnsPeer := networkingv1.NetworkPolicyPeer{
-		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{labelKeyNamespaceName: "kube-system"},
-		},
-	}
+	dnsPeer := dns.peer()
 
 	egress := []networkingv1.NetworkPolicyEgressRule{
 		{To: []networkingv1.NetworkPolicyPeer{gatewayPeer}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: &protoTCP, Port: &gwPort}}},

@@ -1,8 +1,9 @@
 # Tuning the controller and gateway
 
 The chart's defaults suit most clusters. The values on this page change how
-the two components behave under load, during debugging, and when they issue
-workload certificates; everything else is covered on the page that needs it. Set them on `helm install` or
+the two components behave under load, during debugging, when they issue
+workload certificates, or on a cluster whose DNS is not where the default
+expects; everything else is covered on the page that needs it. Set them on `helm install` or
 `helm upgrade`, and pass the same values on every upgrade, because
 `helm upgrade` resets anything you leave out.
 
@@ -61,6 +62,32 @@ response bodies are never logged at any level.
 ```bash
 --set controller.logLevel=debug
 ```
+## Where agents find DNS
+
+Every agent and task Pod gets a NetworkPolicy that allows DNS on port 53
+only to the cluster DNS Pods. `controller.networkPolicy.dnsSelector` says
+which Pods those are. The default, `k8s-app: kube-dns` in `kube-system`,
+matches kubeadm, EKS, GKE, AKS, k3s, and the upstream CoreDNS chart. If
+your DNS runs somewhere else, agents cannot resolve names until you point
+the selector at it. Helm merges your labels with the defaults, so a label
+key that differs from the default's needs the default key set to `null`,
+or the rule requires both labels and matches nothing:
+
+```yaml
+controller:
+  networkPolicy:
+    dnsSelector:
+      namespaceLabels:
+        kubernetes.io/metadata.name: dns
+      podLabels:
+        k8s-app: null
+        app: coredns
+```
+
+An empty `podLabels` allows every Pod in the selected namespaces.
+`namespaceLabels` must select at least one label, or the controller
+refuses to start. Agent policies pick up the new value on their next reconcile; a task's
+policy is fixed when the task is created.
 
 ## Profiling under load
 

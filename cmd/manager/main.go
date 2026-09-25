@@ -95,6 +95,7 @@ func main() {
 	var certLifetime controller.CertLifetime
 	var clientQPS float64
 	var clientBurst int
+	var dnsNamespaceLabels, dnsPodLabels string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -140,6 +141,12 @@ func main() {
 		"Sustained requests per second the Kubernetes API client may send.")
 	flag.IntVar(&clientBurst, "client-burst", 30,
 		"Requests the Kubernetes API client may send in a burst above --client-qps.")
+	flag.StringVar(&dnsNamespaceLabels, "dns-namespace-labels", controller.DefaultDNSNamespaceLabels,
+		"Comma-separated key=value labels selecting the namespaces of the cluster DNS Pods, "+
+			"for the DNS egress rule on every workload NetworkPolicy.")
+	flag.StringVar(&dnsPodLabels, "dns-pod-labels", controller.DefaultDNSPodLabels,
+		"Comma-separated key=value labels selecting the cluster DNS Pods within those namespaces. "+
+			"Empty allows every Pod in the selected namespaces.")
 	// Production defaults: JSON at info, matching the gateway and console.
 	// --zap-devel, --zap-encoder, and --zap-log-level override them.
 	opts := zap.Options{}
@@ -150,6 +157,12 @@ func main() {
 
 	if err := certLifetime.Validate(); err != nil {
 		setupLog.Error(err, "invalid --cert-duration or --cert-renew-before")
+		os.Exit(1)
+	}
+
+	dnsSelector, err := controller.ParseDNSSelector(dnsNamespaceLabels, dnsPodLabels)
+	if err != nil {
+		setupLog.Error(err, "invalid DNS selector flags")
 		os.Exit(1)
 	}
 
@@ -375,6 +388,7 @@ func main() {
 		SecretReader:            mgr.GetAPIReader(),
 		Activity:                activityClient,
 		CertLifetime:            certLifetime,
+		DNS:                     dnsSelector,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Agent")
 		os.Exit(1)
@@ -386,6 +400,7 @@ func main() {
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            mgr.GetAPIReader(),
 		CertLifetime:            certLifetime,
+		DNS:                     dnsSelector,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 		os.Exit(1)

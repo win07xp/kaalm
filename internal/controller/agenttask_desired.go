@@ -320,7 +320,7 @@ func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operato
 // tasks have no listener and are not delivery targets. ingress stays an
 // explicit empty list to document deny-all intent.
 func desiredTaskNetworkPolicy(
-	task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, operatorNamespace string,
+	task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, operatorNamespace string, dns DNSSelector,
 ) *networkingv1.NetworkPolicy {
 	protoTCP := corev1.ProtocolTCP
 	protoUDP := corev1.ProtocolUDP
@@ -335,11 +335,7 @@ func desiredTaskNetworkPolicy(
 			MatchLabels: map[string]string{labelKeyComponent: componentGateway},
 		},
 	}
-	dnsPeer := networkingv1.NetworkPolicyPeer{
-		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{labelKeyNamespaceName: "kube-system"},
-		},
-	}
+	dnsPeer := dns.peer()
 
 	egress := []networkingv1.NetworkPolicyEgressRule{
 		{To: []networkingv1.NetworkPolicyPeer{gatewayPeer}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: &protoTCP, Port: &gwPort}}},
