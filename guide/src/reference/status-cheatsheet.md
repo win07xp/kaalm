@@ -48,7 +48,8 @@ malformed `allowedCIDRs` entry),
 missing), `HandlerConfigMapNotFound`, `CertificateNotReady`, and
 `SystemNamespaceForbidden` (an Agent in `kaalm-system` is never
 provisioned). Reasons on `Ready` that report progress: `PodProvisioning`,
-`PodRunning`, `PodDisrupted`, `SpecDrift`, `Hibernated`, and `Woken`. A wake
+`PodRunning`, `PodDisrupted`, `SpecDrift`, `Hibernated`, and `Woken`; an
+AgentTask retry also reports `PodTerminating` while the old Pod drains. A wake
 annotation on an Agent that is not `Hibernated` is refused with event reason
 `WakeIgnored`.
 
