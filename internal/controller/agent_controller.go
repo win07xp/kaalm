@@ -92,6 +92,10 @@ type AgentReconciler struct {
 	CertLifetime CertLifetime
 	// Clock is injectable for tests; nil means time.Now.
 	Clock func() time.Time
+	// FQDNSupport reports whether the CNI can enforce FQDN egress policies;
+	// production passes the FQDNProbe shared with the AgentClassReconciler.
+	// nil means unsupported: no CiliumNetworkPolicy is synthesized.
+	FQDNSupport func() (bool, error)
 }
 
 func (r *AgentReconciler) now() time.Time {
@@ -108,6 +112,9 @@ func (r *AgentReconciler) now() time.Time {
 // +kubebuilder:rbac:groups="",resources=services;serviceaccounts;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
+// The FQDN egress policy (allowedHosts). A rule on an API group the cluster
+// lacks grants nothing and does no harm, so it ships on every CNI.
+// +kubebuilder:rbac:groups=cilium.io,resources=ciliumnetworkpolicies,verbs=get;create;update;patch;delete
 
 // Reconcile runs one pass of the Agent state machine.
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -728,8 +735,8 @@ func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1b
 	return false, nil
 }
 
-// ensureChildren converges the ServiceAccount, Service, PVC, and
-// NetworkPolicy (everything except the Certificate and the Pod).
+// ensureChildren converges the ServiceAccount, Service, PVC, NetworkPolicy,
+// and FQDN policy (everything except the Certificate and the Pod).
 func (r *AgentReconciler) ensureChildren(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) error {
@@ -746,7 +753,20 @@ func (r *AgentReconciler) ensureChildren(
 			return err
 		}
 	}
-	return r.ensureNetworkPolicy(ctx, agent, class, eff)
+	if err := r.ensureNetworkPolicy(ctx, agent, class, eff); err != nil {
+		return err
+	}
+	hosts := class.Spec.Network.Egress.AllowedHosts
+	supported, err := fqdnSupported(r.FQDNSupport)
+	if err != nil {
+		// With no hosts to enforce, a discovery failure must not block the
+		// pass; the probe is retried once a class lists hosts.
+		if len(hosts) > 0 {
+			return err
+		}
+		supported = false
+	}
+	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), agent, agentPodLabels(agent), hosts, r.DNS, supported)
 }
 
 func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalmv1beta1.Agent) error {

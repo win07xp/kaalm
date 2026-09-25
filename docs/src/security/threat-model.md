@@ -10,7 +10,7 @@ Provider credentials stay in `kaalm-system`, and agent Pods reach providers only
 
 | Threat | Mitigation | Decision |
 |---|---|---|
-| A Kaalm-managed agent container calls an LLM provider directly | The synthesized NetworkPolicy denies all egress except the gateway and DNS ([Network policy](model.md#network-policy)), on any CNI that enforces NetworkPolicy. A class `allowedCIDRs` entry reopens exactly that CIDR. | Mitigated |
+| A Kaalm-managed agent container calls an LLM provider directly | The synthesized NetworkPolicy denies all egress except the gateway and DNS ([Network policy](model.md#network-policy)), on any CNI that enforces NetworkPolicy. A class `allowedCIDRs` entry reopens exactly that CIDR, and on Cilium an `allowedHosts` entry reopens exactly that host. | Mitigated |
 | A gateway-only-tier workload calls providers with its own keys | No Agent resource, so no synthesized policy. See [Gateway-only-tier workload calls providers directly](#gateway-only-tier-workload-calls-providers-directly). | Out of scope |
 | A developer writes a permissive NetworkPolicy that widens agent egress | NetworkPolicy is additive. See [Developer authors a permissive NetworkPolicy](#developer-authors-a-permissive-networkpolicy). | Out of scope |
 | A developer embeds provider credentials in the image | Image scanning and registry controls, outside Kaalm. | Out of scope |

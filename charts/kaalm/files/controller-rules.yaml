@@ -69,6 +69,16 @@
   - update
   - watch
 - apiGroups:
+  - cilium.io
+  resources:
+  - ciliumnetworkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+  - update
+- apiGroups:
   - kaalm.io
   resources:
   - agentchannels

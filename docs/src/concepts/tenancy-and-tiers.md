@@ -62,10 +62,10 @@ Gateway rate-limit buckets are keyed on (namespace, model) against the cluster-w
 
 ### NetworkPolicy as the cross-tenant boundary
 
-The synthesized per-Pod NetworkPolicy bounds a Kaalm-managed Pod's egress to the gateway, cluster DNS, and the class's `allowedCIDRs`:
+The synthesized per-Pod NetworkPolicy bounds a Kaalm-managed Pod's egress to the gateway, cluster DNS, and the class's `allowedCIDRs`, and on Cilium a second policy adds the class's `allowedHosts`:
 
 - **LLM and tool traffic is gateway-mediated**, with no direct provider egress. This is what makes the spend and rate-limit controls in the previous section unbypassable for these Pods. The [tool plane](../gateways/tool-plane.md) gives MCP traffic the same treatment.
-- **`allowedCIDRs` is the only direct egress**, governed at the IP level. `allowedHosts` is validated and reported but synthesizes no policy (#193).
+- **`allowedCIDRs` and `allowedHosts` are the only direct egress.** `allowedCIDRs` is governed at the IP level on every CNI. `allowedHosts` is governed by host name, through a CiliumNetworkPolicy, and only on Cilium; elsewhere it is ignored.
 
 The rule set is on [Child resources](../runtime/child-resources.md#what-the-synthesized-networkpolicy-protects). Gateway-only-tier Pods are not Kaalm-managed and inherit no policy ([Adoption tiers](#adoption-tiers)).
 

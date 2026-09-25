@@ -345,6 +345,14 @@ e2e-upgrade: chart-sync ## One-shot S21 upgrade e2e: fresh cluster, install the 
 	$(MAKE) upgrade-images
 	UPGRADE_PREV_VERSION=$(PREV_CHART_VERSION) go test ./test/upgrade/... -tags upgrade -v -timeout 30m
 
+.PHONY: e2e-cilium
+e2e-cilium: ## FQDN egress proof: fresh k3d cluster with Cilium, install the chart, run the FQDN spec (allowedHosts, #193).
+	-k3d cluster delete $(CLUSTER)
+	CNI=cilium hack/k3d-up.sh
+	$(MAKE) e2e-images
+	$(MAKE) e2e-deploy
+	go test ./test/e2e/ -tags e2e -v -timeout 20m -count=1 -ginkgo.focus="FQDN"
+
 .PHONY: e2e
 e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the chart, run the suite.
 	# Always start from a fresh cluster. A long-lived k3d cluster stops

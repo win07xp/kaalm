@@ -29,7 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,12 +45,10 @@ import (
 // docs/src/controller/reconcilers.md (AgentClassReconciler).
 type AgentClassReconciler struct {
 	client.Client
-	Recorder  record.EventRecorder
-	Discovery discovery.DiscoveryInterface
-
-	// fqdn caches the one-time CNI FQDN-policy support probe.
-	fqdnProbed    bool
-	fqdnSupported bool
+	Recorder record.EventRecorder
+	// FQDNSupport reports whether the CNI can enforce FQDN egress policies;
+	// production passes a shared FQDNProbe. nil means unsupported.
+	FQDNSupport func() (bool, error)
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agentclasses,verbs=get;list;watch;update;patch
@@ -90,7 +87,8 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	problems = append(problems, invalidHosts(&ac)...)
 
 	// FQDN support only matters when allowedHosts is set. When unsupported, warn
-	// but do not block: allowedHosts is silently ignored during policy synthesis.
+	// but do not block: the Agent and AgentTask reconcilers then synthesize no
+	// FQDN policy and allowedHosts is ignored.
 	fqdnCond := metav1.Condition{Type: kaalmv1beta1.ConditionFQDNPolicySupported}
 	if len(ac.Spec.Network.Egress.AllowedHosts) > 0 {
 		supported, err := r.fqdnSupport()
@@ -234,16 +232,15 @@ func (r *AgentClassReconciler) countUsers(ctx context.Context, className string)
 }
 
 func (r *AgentClassReconciler) fqdnSupport() (bool, error) {
-	if r.fqdnProbed {
-		return r.fqdnSupported, nil
+	return fqdnSupported(r.FQDNSupport)
+}
+
+// fqdnSupported calls an optional FQDN support function; nil is unsupported.
+func fqdnSupported(fn func() (bool, error)) (bool, error) {
+	if fn == nil {
+		return false, nil
 	}
-	supported, err := ProbeFQDNPolicySupport(r.Discovery)
-	if err != nil {
-		return false, err
-	}
-	r.fqdnSupported = supported
-	r.fqdnProbed = true
-	return supported, nil
+	return fn()
 }
 
 // SetupWithManager wires the reconciler and its cross-resource watches.

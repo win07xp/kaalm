@@ -71,6 +71,10 @@ type AgentTaskReconciler struct {
 	// CertLifetime sets the duration and renewBefore of each AgentTask's
 	// Certificate. The zero value takes the defaults.
 	CertLifetime CertLifetime
+	// FQDNSupport reports whether the CNI can enforce FQDN egress policies;
+	// production passes the FQDNProbe shared with the AgentClassReconciler.
+	// nil means unsupported: no CiliumNetworkPolicy is synthesized.
+	FQDNSupport func() (bool, error)
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agenttasks,verbs=get;list;watch;update;patch;delete
@@ -583,7 +587,7 @@ func (r *AgentTaskReconciler) taskViolation(
 	return "", ""
 }
 
-// ensureTaskChildren converges the SA, PVC, NetworkPolicy, and, for
+// ensureTaskChildren converges the SA, PVC, NetworkPolicy, FQDN policy, and, for
 // agentReported tasks only, the completion mailbox with its scoped RBAC.
 func (r *AgentTaskReconciler) ensureTaskChildren(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
@@ -607,6 +611,19 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 		}
 	}
 	if err := create(desiredTaskNetworkPolicy(task, class, r.OperatorNamespace, r.DNS)); err != nil {
+		return err
+	}
+	hosts := class.Spec.Network.Egress.AllowedHosts
+	supported, err := fqdnSupported(r.FQDNSupport)
+	if err != nil {
+		// As for Agents: no hosts to enforce, so a discovery failure must not
+		// block the pass.
+		if len(hosts) > 0 {
+			return err
+		}
+		supported = false
+	}
+	if err := ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported); err != nil {
 		return err
 	}
 	if isAgentReported(task) {
