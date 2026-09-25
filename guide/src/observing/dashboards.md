@@ -17,7 +17,15 @@ through the Grafana UI and through file provisioning.
 
 The controller serves Prometheus metrics on `:8080/metrics` and the gateway
 on `:9090/metrics`, unauthenticated in-cluster. The chart ships no
-`ServiceMonitor`; scrape integration is yours. The plain Prometheus job the
+`ServiceMonitor`; scrape integration is yours. The chart's NetworkPolicy
+admits the metrics ports only from `networkPolicy.metricsFrom`, which
+defaults to the `monitoring` namespace, so set it to where your Prometheus
+runs:
+
+```bash
+--set-json 'networkPolicy.metricsFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}}}]'
+```
+ The plain Prometheus job the
 verification stack uses, from `hack/dashboards-verify/monitoring.yaml`,
 discovers both components by the chart's component label and the container
 port named `metrics`:

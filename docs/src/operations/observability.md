@@ -37,7 +37,7 @@ This page carries the full metric table, the log conventions and the PII rule, t
 | Controller | `:8080` | `/metrics` | None | controller-runtime's metrics port; the chart passes `--metrics-secure=false`. Every replica serves it, and the phase gauges are computed from each replica's cache |
 | Gateway | `:9090` | `/metrics` | None | Plain HTTP, shared by the LLM and User Gateway paths |
 
-Both endpoints are unauthenticated and plain HTTP, the usual Prometheus scrape arrangement, and they are ClusterIP only. The chart ships no `ServiceMonitor`, `PodMonitor`, or NetworkPolicy for `kaalm-system`, so restrict who can scrape them with a NetworkPolicy whose peer selects the Prometheus Pods ([Metrics](deployment.md#metrics), [Recommendations for deployment](../security/model.md#recommendations-for-deployment)). The console serves no metrics.
+Both endpoints are unauthenticated and plain HTTP, the usual Prometheus scrape arrangement, and they are ClusterIP only. The chart ships no `ServiceMonitor` or `PodMonitor`; its NetworkPolicy admits the two ports only from the `networkPolicy.metricsFrom` peers, so point that value at your Prometheus ([The operator's own NetworkPolicy](deployment.md#the-operators-own-networkpolicy), [Recommendations for deployment](../security/model.md#recommendations-for-deployment)). The console serves no metrics.
 
 ### Aggregated catalog
 

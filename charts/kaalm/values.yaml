@@ -170,6 +170,25 @@ gateway:
     limits:
       memory: 512Mi
 
+# NetworkPolicy for the operator's own Pods: default-deny ingress, with the
+# controller's activator, conversion, and probe ports, the gateway's two
+# listeners and probe port, and the console open to the callers that need
+# them. The metrics ports (controller :8080, gateway :9090) are unauthenticated
+# and label spend by namespace and model, so they open only to metricsFrom.
+# Inert on a CNI that does not enforce NetworkPolicy; set enabled to false to
+# ship no policy at all.
+networkPolicy:
+  enabled: true
+  # NetworkPolicy peers allowed to scrape the metrics ports.
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  # NetworkPolicy peers allowed to reach the gateway User listener (:8080) and
+  # the console (:8443). Empty admits any source; the listeners authenticate
+  # their callers themselves.
+  userListenerFrom: []
+
 certManager:
   # cert-manager's cluster resource namespace. The kaalm-ca Certificate and its
   # Secret MUST live here (not kaalm-system), or issuance fails cluster-wide
