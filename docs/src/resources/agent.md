@@ -71,8 +71,7 @@ spec:
     # "gatewayTraffic" (schema default) | "agentHeartbeat" | "both".
     activitySource: gatewayTraffic
     # How long the gateway waits for the Service to accept a TCP connection
-    # after a wake. As shipped the gateway uses this value as written, or
-    # 120 seconds when unset; no class default or cap applies (#204).
+    # after a wake. Defaults from the class and clamped by it (rule 9).
     wakeTimeout: "2m"
 
   # An omitted block means an enabled Service on port 8080.
@@ -106,6 +105,7 @@ status:
   phaseTransitionTime: "2026-04-05T08:00:00Z"
   hibernatedAt: null
   preDegradedPhase: null
+  effectiveWakeTimeout: "2m0s"
 ```
 
 | Field | Meaning |
@@ -121,6 +121,7 @@ status:
 | `phaseTransitionTime` | Set on every phase change, in the same status write. The condition `lastTransitionTime` values move on non-phase events too, so this field is the witness for "when did the phase last change". |
 | `hibernatedAt` | Set on entry to `Hibernated`, cleared on wake. |
 | `preDegradedPhase` | The phase to restore when a class-mismatch `Degraded` clears. |
+| `effectiveWakeTimeout` | The `wakeTimeout` the gateway applies to a wake: the Agent's own value, or the class `defaultWakeTimeout` when unset, clamped to the class `maxWakeTimeout` (rule 9). Unset when neither the Agent nor the class gives a value, and the gateway then uses 120 seconds. |
 
 ## Design notes
 

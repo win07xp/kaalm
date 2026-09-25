@@ -190,6 +190,10 @@ type AgentStatus struct {
 	// clears.
 	// +optional
 	PreDegradedPhase AgentPhase `json:"preDegradedPhase,omitempty"`
+	// EffectiveWakeTimeout is spec.lifecycle.wakeTimeout after the class
+	// default and cap (rule 9). The gateway bounds a wake with it.
+	// +optional
+	EffectiveWakeTimeout *metav1.Duration `json:"effectiveWakeTimeout,omitempty"`
 }
 
 // +kubebuilder:object:root=true

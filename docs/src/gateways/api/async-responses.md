@@ -97,7 +97,7 @@ In sync mode, `gateway.syncDeliveryDeadline` (Helm value, default 30s) bounds th
 | `502 delivery_failed` | about 31s | about 71s | unreachable: the deadline fires first | reachable, as an error payload |
 | `504 wake_timeout` | 120s | 120s | unreachable: the deadline fires first | reachable, as an error payload |
 
-`502 delivery_failed` becomes reachable in sync mode only when `syncDeliveryDeadline` is raised above the delivery budget. `wakeTimeout` is the Agent's own value, or 120s when unset; as shipped no class default or cap applies (#204; see [AgentClass](../../resources/agentclass.md)). For which channels belong on sync mode, and what a persistent `sync_deadline_exceeded` means, see [Reachability under default config](channel-webhook.md#reachability-under-default-config).
+`502 delivery_failed` becomes reachable in sync mode only when `syncDeliveryDeadline` is raised above the delivery budget. `wakeTimeout` is the Agent's own value or the class default, clamped to the class cap, and 120s when neither sets it (see [AgentClass](../../resources/agentclass.md)). For which channels belong on sync mode, and what a persistent `sync_deadline_exceeded` means, see [Reachability under default config](channel-webhook.md#reachability-under-default-config).
 
 ## Response persistence
 

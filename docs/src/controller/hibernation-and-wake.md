@@ -14,7 +14,7 @@ Three `Agent.spec.lifecycle` durations govern the cycle. Each defaults from the 
 |---|---|---|---|
 | `idleTimeout` | Inactivity before `Running` -> `Idle` | `defaultIdleTimeout` (`30m` in the chart's `standard` class) | `maxIdleTimeout` (`24h`) |
 | `hibernationDelay` | Time spent `Idle` before `Idle` -> `Hibernating` | `defaultHibernationDelay` (`30m`) | `maxHibernationDelay` (`2h`) |
-| `wakeTimeout` | How long the gateway waits for a woken Agent's Service to become reachable | `defaultWakeTimeout` (`2m`); not applied as shipped, the gateway uses 2m when the Agent leaves `wakeTimeout` unset | `maxWakeTimeout` (`5m`); not enforced as shipped |
+| `wakeTimeout` | How long the gateway waits for a woken Agent's Service to become reachable | `defaultWakeTimeout` (`2m`) | `maxWakeTimeout` (`5m`) |
 
 Hibernation only happens at all when `spec.lifecycle.hibernationEnabled` is `true` and the class permits it with `lifecycle.hibernationAllowed`.
 

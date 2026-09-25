@@ -176,6 +176,12 @@ func TestWakeTimeout(t *testing.T) {
 	if got := s.wakeTimeout(withTimeout); got != 42*time.Second {
 		t.Errorf("spec wakeTimeout = %v", got)
 	}
+	// The controller's effective value (class default and cap applied)
+	// wins over the spec.
+	withTimeout.Status.EffectiveWakeTimeout = &metav1.Duration{Duration: 5 * time.Minute}
+	if got := s.wakeTimeout(withTimeout); got != 5*time.Minute {
+		t.Errorf("status effectiveWakeTimeout = %v", got)
+	}
 }
 
 func TestAgentServiceHostPort(t *testing.T) {

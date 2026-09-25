@@ -119,9 +119,7 @@ spec:
     # Default and clamp for hibernationDelay; rule 10.
     defaultHibernationDelay: "30m"
     maxHibernationDelay: "2h"
-    # Accepted by the schema and not applied as shipped: the gateway reads
-    # the Agent's own wakeTimeout and uses 2m when it is unset (rule 9,
-    # #204).
+    # Default and clamp for wakeTimeout; rule 9.
     defaultWakeTimeout: "2m"
     maxWakeTimeout: "5m"
     terminationGracePeriodSeconds: 60
