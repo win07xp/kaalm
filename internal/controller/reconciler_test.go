@@ -26,6 +26,7 @@ import (
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -1001,5 +1002,56 @@ func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
 	case <-rec2.Events:
 		t.Error("no warning expected when degrading to the cheapest model")
 	default:
+	}
+}
+
+// The cost sanity warning fires on the rising edge only: the verdict is kept
+// in the DegradeTargetNotCheapest condition, so a steady misconfiguration
+// does not emit an event on every reconcile pass.
+func TestCostSanity_RisingEdgeOnly(t *testing.T) {
+	rec := record.NewFakeRecorder(8)
+	r := &ModelProviderReconciler{Recorder: rec}
+	to := "pricey"
+	mp := &kaalmv1beta1.ModelProvider{
+		ObjectMeta: metav1.ObjectMeta{Name: "mp"},
+		Spec: kaalmv1beta1.ModelProviderSpec{
+			Models: []kaalmv1beta1.ModelProviderModel{
+				{ID: "cheap", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "1"},
+				{ID: "pricey", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "10"},
+			},
+			Budget: kaalmv1beta1.ModelProviderBudget{
+				Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{
+					{AtPercent: 100, Action: "degrade", DegradeTo: &to},
+				},
+			},
+		},
+	}
+	r.costSanity(mp)
+	r.costSanity(mp)
+	if n := len(rec.Events); n != 1 {
+		t.Fatalf("two passes over the same misconfiguration emitted %d events, want 1", n)
+	}
+	<-rec.Events
+	if !apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest) {
+		t.Fatal("the DegradeTargetNotCheapest condition must be True while the target is not the cheapest")
+	}
+
+	// Fixing the target clears the condition without an event.
+	cheap := "cheap"
+	mp.Spec.Budget.Policies[0].DegradeTo = &cheap
+	r.costSanity(mp)
+	c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
+	if c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("condition after the fix = %+v, want False", c)
+	}
+	if n := len(rec.Events); n != 0 {
+		t.Fatalf("clearing the verdict emitted %d events, want 0", n)
+	}
+
+	// A new misconfiguration is a new rising edge.
+	mp.Spec.Budget.Policies[0].DegradeTo = &to
+	r.costSanity(mp)
+	if n := len(rec.Events); n != 1 {
+		t.Fatalf("a new rising edge emitted %d events, want 1", n)
 	}
 }

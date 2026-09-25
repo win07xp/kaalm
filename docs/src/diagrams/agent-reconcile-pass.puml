@@ -8,7 +8,7 @@
 start
 :Agent reconcile;
 
-partition "1 to 3: wake, guards, degrade gate" {
+partition "1 to 4: wake, guards, budget, degrade gate" {
   if (kaalm.io/wake=true?) then (yes)
     :Hibernated: Resuming;\nelse remove, WakeIgnored;
     kill
@@ -18,7 +18,10 @@ partition "1 to 3: wake, guards, degrade gate" {
   elseif (AgentClass exists?) then (no)
     :Ready=False\nInvalidReference;
     kill
-  elseif (every cross-check\npasses?) then (no)
+  else (yes)
+  endif
+  :Degraded condition\nfrom budget state;
+  if (every cross-check\npasses?) then (no)
     :phase=Degraded;
     kill
   elseif (Degraded, all clear?) then (yes)
@@ -28,8 +31,7 @@ partition "1 to 3: wake, guards, degrade gate" {
   endif
 }
 
-partition "4 to 7: budget, hibernation, gates, Certificate" {
-  :Degraded condition\nfrom budget state;
+partition "5 to 7: hibernation, gates, Certificate" {
   if (Hibernating or\nHibernated?) then (yes)
     :drive or hold,\npass ends;
     kill

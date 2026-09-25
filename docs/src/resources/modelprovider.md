@@ -141,6 +141,7 @@ status:
 | `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), or `HardBudgetUnpriced` (rule 33). |
 | `Healthy` | The periodic upstream probe. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event; `Unknown` with `ProbeSkipped` for `google-vertex`, which has no probe. |
 | `GatewayReachable` | Set on every pass: `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. The same value is mirrored onto every ModelProvider. |
+| `DegradeTargetNotCheapest` | Advisory; never affects `Ready`. `True` with `CheaperModelAvailable` when a degrade policy's `degradeTo` is not the cheapest model in the catalog, `False` with `DegradeTargetCheapest` once it is. The `Warning` event fires on the transition to `True` ([`degradeTo` validation](#degradeto-validation)). |
 | `BoundaryMarginRaised` | Hard enforcement only. `True` when a gateway replica observed traffic that needed a wider boundary margin than `hard.boundaryMarginPercent` configures ([Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). |
 
 `healthCheck.enabled: false` disables the probe (for example for an offline test fixture); `intervalSeconds` (default 60) sets its cadence and `timeoutSeconds` (default 10) bounds each request. `budgetUsage` is per-namespace spend for the current period, and `clusterSpentUSD` is the sum across namespaces.
@@ -187,7 +188,7 @@ Cost fields are decimal strings, not floats, to avoid precision loss. The gatewa
 
 ### `degradeTo` validation
 
-Every `degradeTo` must name a model in the same provider's catalog (rule 18, `Ready=False, reason=InvalidDegradeTarget`). On every pass the reconciler also runs a cost sanity check: it averages each model's input and output prices and, when the degrade target is not the cheapest, emits a `Warning` event with `reason=DegradeTargetNotCheapest` naming the cheaper model. The check is advisory and does not affect `Ready`, since a platform team may prefer a target for latency or capability; it catches the common misconfiguration where a policy labeled "degrade" raises cost at the threshold ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)).
+Every `degradeTo` must name a model in the same provider's catalog (rule 18, `Ready=False, reason=InvalidDegradeTarget`). On every pass the reconciler also runs a cost sanity check: it averages each model's input and output prices and, when the degrade target is not the cheapest, sets the `DegradeTargetNotCheapest` condition and emits a `Warning` event with `reason=DegradeTargetNotCheapest` naming the cheaper model. The event fires once, when the condition turns `True`, not on every pass. The check is advisory and does not affect `Ready`, since a platform team may prefer a target for latency or capability; it catches the common misconfiguration where a policy labeled "degrade" raises cost at the threshold ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)).
 
 ### Deletion
 

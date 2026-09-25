@@ -170,17 +170,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// every status write below persists it.
 	r.reconcileProvidersCondition(ctx, &agent, &class)
 
+	// Step 10 (S10): surface budget exhaustion as a Degraded condition without
+	// a phase transition. Runs before the degrade branch so a Degraded agent
+	// re-evaluates it on every pass; the mutation is persisted by whichever
+	// Status().Update the reconcile path below hits.
+	r.reconcileBudgetCondition(ctx, &agent)
+
 	// Steps 2 and 5: the Degraded-triggering cross-checks (rules 2, 4, 5, 24,
 	// 26, 29). All outstanding reasons are evaluated together so recovery can
 	// be per-condition.
 	if handled, res, err := r.reconcileDegraded(ctx, &agent, &class, eff); handled {
 		return res, err
 	}
-
-	// Step 10 (S10): surface budget exhaustion as a Degraded condition without
-	// a phase transition. Runs for every non-hard-degraded agent; the mutation
-	// is persisted by whichever Status().Update the reconcile path below hits.
-	r.reconcileBudgetCondition(ctx, &agent)
 
 	// Hibernation phases: Hibernating drives the Pod down; Hibernated holds
 	// with no Pod (PVC, Service, Certificate, SA, and NetworkPolicy persist).

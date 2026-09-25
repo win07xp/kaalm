@@ -33,7 +33,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | Agent | the Degraded reason (`ClassConstraintViolation`, `PersistenceNotAllowed`, `HibernationNotAllowed`, `HibernationRequiresPersistence`, `HandlerMountNotAllowed`, `ToolNotInCatalog`) | Warning | the first entry into `Degraded`, once per entry |
 | AgentTask | `TaskSucceeded`; `TaskFailed`, `TimeoutExceeded`, `TimeoutSucceeded`, and the provisioning and class reasons | Normal; Warning | the task settles, or a retry starts (message suffix `retrying (n/limit)`); see [Event reasons](task-lifecycle.md#event-reasons) |
 | ModelProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
-| ModelProvider | `DegradeTargetNotCheapest`, `MaxOutputTokensUnset` | Warning | the cost sanity check; a cross-format fallback into an Anthropic model with no `maxOutputTokens` |
+| ModelProvider | `DegradeTargetNotCheapest`, `MaxOutputTokensUnset` | Warning | the cost sanity check, when its condition first turns `True`; a cross-format fallback into an Anthropic model with no `maxOutputTokens` |
 | ModelProvider | `BoundaryMarginRaised` as shipped (the condition's reason is `ObservedTrafficExceededMargin`) | Warning | a gateway replica first raises the boundary margin flag |
 | ToolProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
 | AgentClass | `FQDNPolicyUnsupported` | Warning | `allowedHosts` is set on a CNI without FQDN egress |

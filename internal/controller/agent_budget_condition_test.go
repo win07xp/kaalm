@@ -164,3 +164,48 @@ func TestAgent_BudgetConditionNotSetWhenWithinBudget(t *testing.T) {
 		t.Fatalf("unexpected Degraded condition on a within-budget agent: %s", c.Reason)
 	}
 }
+
+// A Degraded Agent still re-evaluates the budget condition on each pass, so
+// the BudgetExhausted condition is set and later cleared while the phase stays
+// Degraded for an unrelated reason (here rule 29).
+func TestAgent_BudgetConditionTracksWhileDegraded(t *testing.T) {
+	mkBlockingProvider(t, "s10-deg", "s10-deg-gw-0")
+	setProviderSpend(t, "s10-deg", "s10-deg-gw-0", "250.00")
+	mkClass(t, "s10-deg-class", "s10-deg")
+	ag := &kaalmv1beta1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "s10-deg-agent", Namespace: "default"},
+		Spec: kaalmv1beta1.AgentSpec{
+			AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "s10-deg-class"},
+			Providers: []kaalmv1beta1.AgentProviderReference{
+				{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "s10-deg"}},
+			},
+			// Rule 29: hibernation without persistence degrades the Agent.
+			Lifecycle: kaalmv1beta1.AgentLifecycle{HibernationEnabled: true},
+		},
+	}
+	if err := testClient.Create(ctxT(), ag); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	eventually(t, func() error {
+		if p := agentPhase(t, "s10-deg-agent"); p != kaalmv1beta1.AgentDegraded {
+			return errString("phase=" + string(p) + " want Degraded")
+		}
+		c := agentDegraded(t, "s10-deg-agent")
+		if c == nil || c.Status != metav1.ConditionTrue || c.Reason != kaalmv1beta1.ReasonBudgetExhausted {
+			return errString("no BudgetExhausted condition on the Degraded agent yet")
+		}
+		return nil
+	})
+
+	setProviderSpend(t, "s10-deg", "s10-deg-gw-0", "10.00")
+	eventually(t, func() error {
+		if c := agentDegraded(t, "s10-deg-agent"); c != nil {
+			return errString("stale Degraded condition: " + c.Reason)
+		}
+		if p := agentPhase(t, "s10-deg-agent"); p != kaalmv1beta1.AgentDegraded {
+			return errString("phase=" + string(p) + " want Degraded")
+		}
+		return nil
+	})
+}

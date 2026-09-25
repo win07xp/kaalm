@@ -50,6 +50,9 @@ spec:
     - id: claude-opus-4-6
       costPer1MInputTokens: "15.00"
       costPer1MOutputTokens: "75.00"
+    - id: claude-sonnet-4-6
+      costPer1MInputTokens: "3.00"
+      costPer1MOutputTokens: "15.00"
   allowedNamespaces: ["default"]
 ```
 

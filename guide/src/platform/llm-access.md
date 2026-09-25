@@ -42,6 +42,9 @@ spec:
     - id: claude-opus-4-6
       costPer1MInputTokens: "15.00"
       costPer1MOutputTokens: "75.00"
+    - id: claude-sonnet-4-6
+      costPer1MInputTokens: "3.00"
+      costPer1MOutputTokens: "15.00"
   allowedNamespaces: ["team-*"]
   budget:
     period: monthly
@@ -51,7 +54,7 @@ spec:
         action: warn
       - atPercent: 100
         action: degrade
-        degradeTo: claude-opus-4-6
+        degradeTo: claude-sonnet-4-6
 ```
 
 What each block does:
@@ -64,9 +67,7 @@ What each block does:
 - **`budget`** caps spend per namespace per calendar period, with escalating
   policies as the budget is consumed. Details on policies, rate limits, and
   fallback chains are on [Budgets, limits, and fallback](budgets-limits-fallback.md).
-  As shipped the sample's `degradeTo` names the catalog's only model, so its
-  100 percent policy changes nothing; give the catalog a cheaper model, or make
-  that policy `block`.
+  At 100 percent the sample degrades to the cheaper `claude-sonnet-4-6`.
 - **`endpoint`** must be `https://`; the schema rejects anything else because
   the gateway forwards the credential to this URL.
 

@@ -210,26 +210,32 @@ func TestFallback_BudgetBlockedPrimaryHandledByCaller(t *testing.T) {
 }
 
 func TestExhaustionErrorMapping(t *testing.T) {
-	if st, _, _ := exhaustionError(map[failClass]bool{classConnect: true}, 0, "p"); st != http.StatusServiceUnavailable {
+	if st, _, _ := exhaustionError(map[failClass]bool{classConnect: true}, 0, false, "p"); st != http.StatusServiceUnavailable {
 		t.Errorf("all-connect = %d, want 503", st)
 	}
-	if st, _, _ := exhaustionError(map[failClass]bool{classTimeout: true}, 0, "p"); st != http.StatusGatewayTimeout {
+	if st, _, _ := exhaustionError(map[failClass]bool{classTimeout: true}, 0, false, "p"); st != http.StatusGatewayTimeout {
 		t.Errorf("all-timeout = %d, want 504", st)
 	}
-	if st, _, _ := exhaustionError(map[failClass]bool{classUpstream: true, classConnect: true}, 0, "p"); st != http.StatusBadGateway {
+	if st, _, _ := exhaustionError(map[failClass]bool{classUpstream: true, classConnect: true}, 0, false, "p"); st != http.StatusBadGateway {
 		t.Errorf("mixed = %d, want 502", st)
 	}
 	// A walk exhausted entirely by budget outcomes is a budget error, not 502.
-	if st, body, ra := exhaustionError(map[failClass]bool{classBudget: true}, 77, "p"); st != http.StatusTooManyRequests ||
-		body.Type != errBudgetExhausted || ra != 77 {
-		t.Errorf("budget-only = %d/%s/%d, want 429/budget_exhausted/77", st, body.Type, ra)
+	// After a block no retry succeeds before the period resets.
+	if st, body, ra := exhaustionError(map[failClass]bool{classBudget: true}, 77, true, "p"); st != http.StatusTooManyRequests ||
+		body.Type != errBudgetExhausted || ra != 77 || body.Retryable {
+		t.Errorf("all-blocked = %d/%s/%d/retryable=%v, want 429/budget_exhausted/77/false", st, body.Type, ra, body.Retryable)
 	}
-	if st, body, _ := exhaustionError(map[failClass]bool{classBudget: true, classBudgetUnavailable: true}, 0, "p"); st != http.StatusServiceUnavailable ||
+	// A walk of throttles only frees up after Retry-After, so it is retryable.
+	if st, body, ra := exhaustionError(map[failClass]bool{classBudget: true}, 1, false, "p"); st != http.StatusTooManyRequests ||
+		body.Type != errBudgetExhausted || ra != 1 || !body.Retryable {
+		t.Errorf("all-throttled = %d/%s/%d/retryable=%v, want 429/budget_exhausted/1/true", st, body.Type, ra, body.Retryable)
+	}
+	if st, body, _ := exhaustionError(map[failClass]bool{classBudget: true, classBudgetUnavailable: true}, 0, false, "p"); st != http.StatusServiceUnavailable ||
 		body.Type != errBudgetUnavailable {
 		t.Errorf("budget+unavailable = %d/%s, want 503/budget_state_unavailable", st, body.Type)
 	}
 	// A mixed walk (budget plus upstream failures) keeps the 502 mapping.
-	if st, _, _ := exhaustionError(map[failClass]bool{classBudget: true, classUpstream: true}, 0, "p"); st != http.StatusBadGateway {
+	if st, _, _ := exhaustionError(map[failClass]bool{classBudget: true, classUpstream: true}, 0, false, "p"); st != http.StatusBadGateway {
 		t.Errorf("budget+upstream = %d, want 502", st)
 	}
 }

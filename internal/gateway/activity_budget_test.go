@@ -303,7 +303,18 @@ func TestProxy_BudgetDegradeAndBlock(t *testing.T) {
 	if resp.Header.Get("Retry-After") == "" {
 		t.Error("block must carry Retry-After")
 	}
-	if got := errType(t, resp); got != "budget_exhausted" {
-		t.Errorf("error type %q", got)
+	var envelope struct {
+		Error errorBody `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decoding error envelope: %v", err)
+	}
+	_ = resp.Body.Close()
+	if envelope.Error.Type != errBudgetExhausted {
+		t.Errorf("error type %q", envelope.Error.Type)
+	}
+	// Retrying before the period resets cannot succeed.
+	if envelope.Error.Retryable {
+		t.Error("budget_exhausted must not be retryable")
 	}
 }

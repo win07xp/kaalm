@@ -122,9 +122,12 @@ type walkState struct {
 	maxDepth     int
 	visited      map[string]bool
 	// observed collects failure classes across the walk for the exhaustion
-	// mapping; maxRetryAfter carries the largest budget Retry-After seen.
+	// mapping; maxRetryAfter carries the largest budget Retry-After seen, and
+	// budgetBlocked records whether any budget outcome was a block rather
+	// than a throttle.
 	observed      map[failClass]bool
 	maxRetryAfter int
+	budgetBlocked bool
 	// primarySettle is the pre-flight boundary settle for the primary
 	// candidate (hard enforcement); the walk never re-admits the primary.
 	primarySettle func(costUSD float64)
@@ -245,6 +248,7 @@ func (s *Server) tryWithFallbacks(
 				return forwardResult{class: classBudget}, false
 			case d.Action == kaalmv1beta1.BudgetActionBlock:
 				st.observed[classBudget] = true
+				st.budgetBlocked = true
 				if d.RetryAfter > st.maxRetryAfter {
 					st.maxRetryAfter = d.RetryAfter
 				}
@@ -364,7 +368,9 @@ func (s *Server) staticallyIneligible(provider *kaalmv1beta1.ModelProvider, st *
 // terminal error, per the depth-cap-semantics table. A walk exhausted
 // entirely by budget outcomes is a budget error, never 502: 429 when every
 // outcome was a block or throttle, 503 when fail-closed candidates are why.
-func exhaustionError(observed map[failClass]bool, maxRetryAfter int, providerName string) (int, errorBody, int) {
+// The 429 is retryable only when every budget outcome was a throttle: after a
+// block no retry succeeds before the period resets.
+func exhaustionError(observed map[failClass]bool, maxRetryAfter int, blocked bool, providerName string) (int, errorBody, int) {
 	budgetOnly := len(observed) > 0
 	for class := range observed {
 		if class != classBudget && class != classBudgetUnavailable {
@@ -379,7 +385,7 @@ func exhaustionError(observed map[failClass]bool, maxRetryAfter int, providerNam
 			Message: "budget state could not be verified for the provider and all fallbacks; failing closed"}, 1
 	case budgetOnly:
 		return http.StatusTooManyRequests, errorBody{
-			Type: errBudgetExhausted, Provider: providerName, Retryable: true,
+			Type: errBudgetExhausted, Provider: providerName, Retryable: !blocked,
 			Message: "the provider and all fallbacks are budget-blocked"}, maxRetryAfter
 	case len(observed) == 1 && observed[classConnect]:
 		return http.StatusServiceUnavailable, errorBody{

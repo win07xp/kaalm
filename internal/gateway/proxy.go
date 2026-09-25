@@ -258,7 +258,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return fr
 	})
 	if !ok {
-		status, body, retryAfter := exhaustionError(st.observed, st.maxRetryAfter, providerName)
+		status, body, retryAfter := exhaustionError(st.observed, st.maxRetryAfter, st.budgetBlocked, providerName)
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "error")
 		spanError(ctx, body.Type)
 		writeError(w, status, body, retryAfter)
@@ -459,7 +459,7 @@ func (s *Server) applyBudgetDecision(
 			ceiling = "cluster budget exhausted"
 		}
 		writeError(w, http.StatusTooManyRequests, errorBody{
-			Type: errBudgetExhausted, Provider: providerName, Retryable: true,
+			Type: errBudgetExhausted, Provider: providerName,
 			Message: fmt.Sprintf("%s on provider %s (%d%% used)",
 				ceiling, providerName, decision.Percent)}, decision.RetryAfter)
 		return false
