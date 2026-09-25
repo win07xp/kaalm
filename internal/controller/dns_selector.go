@@ -74,13 +74,35 @@ func parseLabels(s string) (map[string]string, error) {
 	return out, nil
 }
 
-// peer is the NetworkPolicy peer for the DNS egress rule.
-func (d DNSSelector) peer() networkingv1.NetworkPolicyPeer {
-	ns, pods := d.NamespaceLabels, d.PodLabels
+// resolved returns the selector's labels, or the defaults for the zero value.
+func (d DNSSelector) resolved() (ns, pods map[string]string) {
+	ns, pods = d.NamespaceLabels, d.PodLabels
 	if len(ns) == 0 && len(pods) == 0 {
 		ns, _ = parseLabels(DefaultDNSNamespaceLabels)
 		pods, _ = parseLabels(DefaultDNSPodLabels)
 	}
+	return ns, pods
+}
+
+// ciliumEndpointLabels is the same selection in Cilium's endpoint label
+// syntax, for the DNS rule of a CiliumNetworkPolicy: a Pod label key k becomes
+// k8s:k, and a namespace label key k becomes
+// k8s:io.cilium.k8s.namespace.labels.k.
+func (d DNSSelector) ciliumEndpointLabels() map[string]any {
+	ns, pods := d.resolved()
+	out := make(map[string]any, len(ns)+len(pods))
+	for k, v := range ns {
+		out["k8s:io.cilium.k8s.namespace.labels."+k] = v
+	}
+	for k, v := range pods {
+		out["k8s:"+k] = v
+	}
+	return out
+}
+
+// peer is the NetworkPolicy peer for the DNS egress rule.
+func (d DNSSelector) peer() networkingv1.NetworkPolicyPeer {
+	ns, pods := d.resolved()
 	peer := networkingv1.NetworkPolicyPeer{
 		NamespaceSelector: &metav1.LabelSelector{MatchLabels: ns},
 	}

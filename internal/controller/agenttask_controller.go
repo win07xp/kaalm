@@ -623,7 +623,7 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 		}
 		supported = false
 	}
-	if err := ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, supported); err != nil {
+	if err := ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported); err != nil {
 		return err
 	}
 	if isAgentReported(task) {

@@ -31,9 +31,38 @@ import (
 
 // ---- desiredFQDNPolicy ----
 
+// The DNS rule follows the configured DNS selector, in Cilium label syntax.
+func TestDesiredFQDNPolicy_DNSSelector(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a1", Namespace: "team"}}
+	dns, err := ParseDNSSelector("kubernetes.io/metadata.name=dns", "app=coredns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"a.example.com"}, dns)
+	egress, _, _ := unstructured.NestedSlice(u.Object, "spec", "egress")
+	eps := egress[0].(map[string]any)["toEndpoints"].([]any)[0].(map[string]any)["matchLabels"]
+	want := map[string]any{
+		"k8s:io.cilium.k8s.namespace.labels.kubernetes.io/metadata.name": "dns",
+		"k8s:app": "coredns",
+	}
+	if !reflect.DeepEqual(eps, want) {
+		t.Errorf("DNS endpoints = %v, want %v", eps, want)
+	}
+
+	// An empty Pod list selects every Pod in the namespaces.
+	dns, _ = ParseDNSSelector("kubernetes.io/metadata.name=dns", "")
+	u = desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"a.example.com"}, dns)
+	egress, _, _ = unstructured.NestedSlice(u.Object, "spec", "egress")
+	eps = egress[0].(map[string]any)["toEndpoints"].([]any)[0].(map[string]any)["matchLabels"]
+	want = map[string]any{"k8s:io.cilium.k8s.namespace.labels.kubernetes.io/metadata.name": "dns"}
+	if !reflect.DeepEqual(eps, want) {
+		t.Errorf("namespace-only DNS endpoints = %v, want %v", eps, want)
+	}
+}
+
 func TestDesiredFQDNPolicy_Shape(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a1", Namespace: "team"}}
-	u := desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"b.example.com", "a.example.com", "b.example.com"})
+	u := desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"b.example.com", "a.example.com", "b.example.com"}, DNSSelector{})
 
 	if u.GetAPIVersion() != "cilium.io/v2" || u.GetKind() != "CiliumNetworkPolicy" {
 		t.Errorf("gvk = %s %s", u.GetAPIVersion(), u.GetKind())
@@ -53,8 +82,12 @@ func TestDesiredFQDNPolicy_Shape(t *testing.T) {
 	}
 	dns := egress[0].(map[string]any)
 	eps := dns["toEndpoints"].([]any)[0].(map[string]any)["matchLabels"].(map[string]any)
-	if eps["k8s:io.kubernetes.pod.namespace"] != "kube-system" || eps["k8s:k8s-app"] != "kube-dns" {
-		t.Errorf("DNS endpoints = %v", eps)
+	wantEps := map[string]any{
+		"k8s:io.cilium.k8s.namespace.labels.kubernetes.io/metadata.name": "kube-system",
+		"k8s:k8s-app": "kube-dns",
+	}
+	if !reflect.DeepEqual(eps, wantEps) {
+		t.Errorf("DNS endpoints = %v, want the default selector %v", eps, wantEps)
 	}
 	port := dns["toPorts"].([]any)[0].(map[string]any)
 	p0 := port["ports"].([]any)[0].(map[string]any)
@@ -82,7 +115,7 @@ func TestDesiredFQDNPolicy_Shape(t *testing.T) {
 func TestEnsureFQDNPolicy_UnsupportedTouchesNothing(t *testing.T) {
 	// A nil client would panic on any call: unsupported must make none.
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a1", Namespace: "team"}}
-	if err := ensureFQDNPolicy(context.Background(), nil, nil, agent, nil, []string{"x.example.com"}, false); err != nil {
+	if err := ensureFQDNPolicy(context.Background(), nil, nil, agent, nil, []string{"x.example.com"}, DNSSelector{}, false); err != nil {
 		t.Fatal(err)
 	}
 }

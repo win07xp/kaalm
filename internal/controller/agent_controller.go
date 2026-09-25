@@ -766,7 +766,7 @@ func (r *AgentReconciler) ensureChildren(
 		}
 		supported = false
 	}
-	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), agent, agentPodLabels(agent), hosts, supported)
+	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), agent, agentPodLabels(agent), hosts, r.DNS, supported)
 }
 
 func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalmv1beta1.Agent) error {
