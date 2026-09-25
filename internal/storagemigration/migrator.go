@@ -112,6 +112,11 @@ type Migrator struct {
 	// ResyncInterval is the delay between passes after a clean pass. Zero
 	// means ten minutes.
 	ResyncInterval time.Duration
+
+	// reported is set after the first clean pass logs its summary. Later
+	// clean passes log it only when they migrate a kind, so the periodic
+	// resync stays quiet. Start runs passes on one goroutine.
+	reported bool
 }
 
 // NeedLeaderElection makes the manager run the migrator on the leader
@@ -178,9 +183,10 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	if migratedKinds > 0 {
+	if migratedKinds > 0 || !m.reported {
 		log.Info("storage-version migration pass complete", "kindsMigrated", migratedKinds,
 			"kindsAlreadyCurrent", len(kinds)-migratedKinds)
+		m.reported = true
 	}
 	return nil
 }
