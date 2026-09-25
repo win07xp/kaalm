@@ -1073,6 +1073,42 @@ func TestAgentReconciler_NowUsesClock(t *testing.T) {
 	}
 }
 
+// A non-default lifetime (the --cert-duration and --cert-renew-before flags)
+// reaches the Certificate spec the apiserver stores, for both workload kinds.
+// The owners are never stored, so the suite's own reconcilers do not race to
+// create these Certificates with the defaults.
+func TestCertLifetime_ReachesCertificateSpec(t *testing.T) {
+	ctx := ctxT()
+	lifetime := CertLifetime{Duration: 24 * time.Hour, RenewBefore: 8 * time.Hour}
+
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "lifetime-agent", Namespace: "default", UID: "u-agent"}}
+	ar := &AgentReconciler{Client: testClient, OperatorNamespace: testSystemNamespace, CertLifetime: lifetime}
+	if _, err := ar.ensureCertificate(ctx, agent); err != nil {
+		t.Fatalf("ensureCertificate: %v", err)
+	}
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "lifetime-task", Namespace: "default", UID: "u-task"}}
+	tr := &AgentTaskReconciler{Client: testClient, OperatorNamespace: testSystemNamespace, CertLifetime: lifetime}
+	if _, err := tr.ensureTaskCertificate(ctx, task); err != nil {
+		t.Fatalf("ensureTaskCertificate: %v", err)
+	}
+
+	for _, name := range []string{"lifetime-agent-tls", "lifetime-task-tls"} {
+		var cert cmapi.Certificate
+		if err := testClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: name}, &cert); err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		if cert.Spec.Duration == nil || cert.Spec.Duration.Duration != 24*time.Hour {
+			t.Errorf("%s duration = %v, want 24h", name, cert.Spec.Duration)
+		}
+		if cert.Spec.RenewBefore == nil || cert.Spec.RenewBefore.Duration != 8*time.Hour {
+			t.Errorf("%s renewBefore = %v, want 8h", name, cert.Spec.RenewBefore)
+		}
+		if err := testClient.Delete(ctx, &cert); err != nil {
+			t.Errorf("delete %s: %v", name, err)
+		}
+	}
+}
+
 func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 	ctx := context.Background()
 	c := newErrCreateClient(t)

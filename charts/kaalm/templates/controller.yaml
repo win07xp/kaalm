@@ -65,6 +65,8 @@ spec:
             - --webhook-cert-path=/var/run/kaalm
             - --webhook-port=9444
             - --max-concurrent-reconciles={{ .Values.controller.maxConcurrentReconciles }}
+            - --cert-duration={{ .Values.controller.certificate.duration }}
+            - --cert-renew-before={{ .Values.controller.certificate.renewBefore }}
             {{- if .Values.controller.pprofPort }}
             - --pprof-bind-address=:{{ .Values.controller.pprofPort }}
             {{- end }}

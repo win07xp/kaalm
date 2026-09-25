@@ -53,7 +53,9 @@ cert-manager re-issues each leaf within `spec.renewBefore` of its expiry.
 |---|---|---|---|
 | `kaalm-ca` | `43800h` (5y) | `8760h` (1y) | The chart |
 | `kaalm-gateway-tls`, `kaalm-controller-tls`, `kaalm-console-tls` | `2160h` (90d) | `720h` (30d) | The chart |
-| `{name}-tls` per Agent, `{taskName}-tls` per AgentTask | `2160h` (90d) | `720h` (30d) | The reconcilers; as shipped a constant with no chart value |
+| `{name}-tls` per Agent, `{taskName}-tls` per AgentTask | `2160h` (90d) | `720h` (30d) | The reconcilers, from the chart values `controller.certificate.duration` and `controller.certificate.renewBefore` |
+
+The controller refuses to start when `renewBefore` is not shorter than `duration`. A changed lifetime applies to Certificates the reconcilers create after the change; an existing Certificate keeps its lifetime until its workload is re-created.
 
 When cert-manager rewrites a certificate's Secret, kubelet updates the projected volume in every Pod that mounts it, and the consumer reloads from disk. The gateway and controller compare the files' modification times on each new handshake, connection, and dial and re-read when they change ([Reload mechanism](../gateways/listener-tls.md#reload-mechanism)). An agent carries the same obligation under [the runtime contract](../runtime/contract.md), and the [starter templates](../runtime/starter-templates.md) watch the mount directory, because kubelet swaps the whole directory on an update.
 
@@ -84,7 +86,7 @@ No operator code implements renewal or re-key. An operator-managed CA was consid
 
 ### Containment, not revocation
 
-Re-issuing a leaf does nothing to the old one. There is no CRL or OCSP, and Go's `crypto/tls` performs no revocation checking, so a leaked certificate and key stay valid until their `notAfter` regardless of rotation. That is why the mTLS tier's credential surface is one artifact, a namespace-pinned client certificate with a 90-day `notAfter` ([Agent to gateway authentication](rbac.md#agent-to-gateway-authentication)). A known-compromised leaf is invalidated only by the re-key runbook or by waiting out `notAfter`. As shipped the per-workload duration is a constant in the reconcilers, so a shorter bound is not configurable.
+Re-issuing a leaf does nothing to the old one. There is no CRL or OCSP, and Go's `crypto/tls` performs no revocation checking, so a leaked certificate and key stay valid until their `notAfter` regardless of rotation. That is why the mTLS tier's credential surface is one artifact, a namespace-pinned client certificate with a bounded `notAfter`, 90 days by default ([Agent to gateway authentication](rbac.md#agent-to-gateway-authentication)). A known-compromised leaf is invalidated only by the re-key runbook or by waiting out `notAfter`. To shorten that bound, lower `controller.certificate.duration` and `controller.certificate.renewBefore` ([Rotation defaults](#rotation-defaults)).
 
 ### Dependency failure modes
 

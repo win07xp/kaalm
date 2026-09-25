@@ -61,7 +61,7 @@ func TestDesiredTaskPod_Shape(t *testing.T) {
 
 func TestDesiredTaskCertificate_Shape(t *testing.T) {
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
-	cert := desiredTaskCertificate(task)
+	cert := desiredTaskCertificate(task, CertLifetime{})
 	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != "fix-42.team-a.task.kaalm.io" {
 		t.Errorf("task SAN wrong: %v", cert.Spec.DNSNames)
 	}

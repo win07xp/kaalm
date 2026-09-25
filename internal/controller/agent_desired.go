@@ -86,10 +86,46 @@ const (
 	// perpetual drift.
 	annotationPodSpecHash = "kaalm.io/pod-spec-hash"
 
-	certDuration    = 2160 * time.Hour // 90d chart default
-	certRenewBefore = 720 * time.Hour  // 30d
-	agentContainer  = "agent"
+	agentContainer = "agent"
 )
+
+// DefaultCertDuration and DefaultCertRenewBefore are the per-workload
+// Certificate lifetime when the controller flags leave it unset (90d and 30d).
+const (
+	DefaultCertDuration    = 2160 * time.Hour
+	DefaultCertRenewBefore = 720 * time.Hour
+)
+
+// CertLifetime is the duration and renewBefore of every per-workload
+// Certificate, set from --cert-duration and --cert-renew-before. A zero field
+// takes its default.
+type CertLifetime struct {
+	Duration    time.Duration
+	RenewBefore time.Duration
+}
+
+// Validate rejects a lifetime cert-manager cannot honor: both values must be
+// positive and renewBefore must be shorter than duration.
+func (l CertLifetime) Validate() error {
+	if l.Duration <= 0 || l.RenewBefore <= 0 {
+		return fmt.Errorf("certificate duration (%s) and renewBefore (%s) must both be positive", l.Duration, l.RenewBefore)
+	}
+	if l.RenewBefore >= l.Duration {
+		return fmt.Errorf("certificate renewBefore (%s) must be shorter than duration (%s)", l.RenewBefore, l.Duration)
+	}
+	return nil
+}
+
+func (l CertLifetime) resolve() (duration, renewBefore time.Duration) {
+	duration, renewBefore = l.Duration, l.RenewBefore
+	if duration == 0 {
+		duration = DefaultCertDuration
+	}
+	if renewBefore == 0 {
+		renewBefore = DefaultCertRenewBefore
+	}
+	return duration, renewBefore
+}
 
 // effectiveAgentSpec is the Agent spec after merging AgentClass-derived
 // defaults at reconcile time. The stored Agent spec is never mutated: it keeps
@@ -112,6 +148,7 @@ type effectiveAgentSpec struct {
 	ImagePullSecrets []corev1.LocalObjectReference
 	PodSecurity      *corev1.PodSecurityContext
 	ContainerSec     *corev1.SecurityContext
+	AutomountToken   bool
 	TerminationGrace *int64
 	PodLabels        map[string]string
 	PodAnnotations   map[string]string
@@ -143,6 +180,7 @@ func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentCla
 		ImagePullSecrets: class.Spec.Image.ImagePullSecrets,
 		PodSecurity:      class.Spec.Security.PodSecurityContext,
 		ContainerSec:     class.Spec.Security.ContainerSecurityContext,
+		AutomountToken:   class.Spec.Security.AutomountServiceAccountToken,
 		TerminationGrace: class.Spec.Lifecycle.TerminationGracePeriodSeconds,
 		PodLabels:        class.Spec.PodMetadata.Labels,
 		PodAnnotations:   class.Spec.PodMetadata.Annotations,
@@ -302,8 +340,9 @@ func gatewayEndpoint(operatorNamespace string) string {
 // desiredCertificate builds the per-Agent cert-manager Certificate: Service DNS
 // SANs, server+client auth, issued from the kaalm-ca-issuer ClusterIssuer.
 // See docs/src/security/tls.md.
-func desiredCertificate(agent *kaalmv1beta1.Agent) *cmapi.Certificate {
+func desiredCertificate(agent *kaalmv1beta1.Agent, lifetime CertLifetime) *cmapi.Certificate {
 	name, ns := agent.Name, agent.Namespace
+	duration, renewBefore := lifetime.resolve()
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: agentCertificateName(name), Namespace: ns},
 		Spec: cmapi.CertificateSpec{
@@ -314,15 +353,17 @@ func desiredCertificate(agent *kaalmv1beta1.Agent) *cmapi.Certificate {
 				fmt.Sprintf("%s.%s.svc", name, ns),
 				fmt.Sprintf("%s.%s", name, ns),
 			},
-			Duration:    &metav1.Duration{Duration: certDuration},
-			RenewBefore: &metav1.Duration{Duration: certRenewBefore},
+			Duration:    &metav1.Duration{Duration: duration},
+			RenewBefore: &metav1.Duration{Duration: renewBefore},
 			Usages:      []cmapi.KeyUsage{cmapi.UsageServerAuth, cmapi.UsageClientAuth},
 		},
 	}
 }
 
-// desiredServiceAccount is the per-Agent identity with no RoleBindings: the
-// agent has no Kubernetes API access unless explicitly granted.
+// desiredServiceAccount is the per-Agent identity with no RoleBindings. The
+// Pod mounts its token only when the class sets
+// security.automountServiceAccountToken, so by default the agent has no
+// Kubernetes API access.
 func desiredServiceAccount(agent *kaalmv1beta1.Agent) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: agentServiceAccountName(agent.Name), Namespace: agent.Namespace},
@@ -506,6 +547,7 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 		Spec: corev1.PodSpec{
 			RestartPolicy:                 corev1.RestartPolicyAlways,
 			ServiceAccountName:            agentServiceAccountName(agent.Name),
+			AutomountServiceAccountToken:  &eff.AutomountToken,
 			RuntimeClassName:              eff.RuntimeClassName,
 			ImagePullSecrets:              eff.ImagePullSecrets,
 			SecurityContext:               eff.PodSecurity,

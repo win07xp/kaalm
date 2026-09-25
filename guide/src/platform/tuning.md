@@ -1,8 +1,8 @@
 # Tuning the controller and gateway
 
-The chart's defaults suit most clusters. Three groups of values change how
-the two components behave under load or during debugging; everything else is
-covered on the page that needs it. Set them on `helm install` or
+The chart's defaults suit most clusters. The values on this page change how
+the two components behave under load, during debugging, and when they issue
+workload certificates; everything else is covered on the page that needs it. Set them on `helm install` or
 `helm upgrade`, and pass the same values on every upgrade, because
 `helm upgrade` resets anything you leave out.
 
@@ -43,6 +43,26 @@ go tool pprof -http=:8000 http://127.0.0.1:6060/debug/pprof/profile?seconds=30
 
 Heap, goroutine, mutex, and block profiles are under the same
 `/debug/pprof/` prefix. Leave both values at `0` in production.
+
+## Workload certificate lifetime
+
+Every Agent and AgentTask gets its own client certificate, which it presents
+to the gateway. `controller.certificate.duration` (default `2160h`, 90 days)
+sets how long each certificate is valid, and
+`controller.certificate.renewBefore` (default `720h`, 30 days) sets how long
+before expiry cert-manager re-issues it. A leaked certificate stays valid
+until it expires, so shorten both on a cluster where that window matters:
+
+```bash
+--set controller.certificate.duration=24h
+--set controller.certificate.renewBefore=8h
+```
+
+Use Go duration syntax (`h`, `m`, `s`; there is no `d` unit). `renewBefore`
+must be shorter than `duration`, or the controller exits at startup with an
+error naming both values. The new lifetime applies to certificates created
+after the change; an existing workload keeps its certificate's lifetime until
+the workload is re-created.
 
 ## Replicas and rollouts
 

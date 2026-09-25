@@ -29,6 +29,14 @@ controller:
   # lets different objects reconcile in parallel; 1 is the strictly serial
   # setting.
   maxConcurrentReconciles: 4
+  # Lifetime of the per-workload client certificate issued to every Agent and
+  # AgentTask. cert-manager re-issues each one renewBefore ahead of expiry. A
+  # leaked certificate stays valid until it expires, so a shorter duration
+  # bounds that window. Go durations; renewBefore must be shorter than
+  # duration, or the controller exits at startup.
+  certificate:
+    duration: 2160h     # 90d
+    renewBefore: 720h   # 30d
   # Port for a net/http/pprof listener, for profiling under load. 0 keeps it
   # off, which is the production setting: the listener is unauthenticated
   # and is meant to be reached through kubectl port-forward, never a Service.

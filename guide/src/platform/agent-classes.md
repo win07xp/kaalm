@@ -156,6 +156,13 @@ Both fields take the standard Kubernetes `PodSecurityContext` and
 store under `/var/agent/memory`, which is a volume only when persistence is
 on.
 
+Agent and AgentTask Pods do not mount their ServiceAccount token, so they
+have no Kubernetes API access. For a class whose agents need it, such as a
+cluster-operations agent, set `security.automountServiceAccountToken: true`
+and bind a Role to each workload's ServiceAccount (`agent-{name}` for an
+Agent, `task-{name}` for an AgentTask). Leave it off everywhere else: the
+token is a second credential a compromised agent could use.
+
 ## Labels and annotations on every Pod
 
 `podMetadata` adds labels and annotations to every Pod of the class, for
