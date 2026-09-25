@@ -23,7 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -39,23 +38,16 @@ var ciliumPolicyGVK = schema.GroupVersionKind{Group: "cilium.io", Version: "v2",
 // fqdnPolicyName is the name of a workload's FQDN egress policy.
 func fqdnPolicyName(owner string) string { return owner + "-fqdn" }
 
-// dnsEndpointLabels selects the cluster DNS Pods in Cilium's label syntax.
-// Cilium learns the IPs behind a toFQDNs name only from DNS traffic its proxy
-// sees, so the policy must allow DNS to these endpoints with a dns rule. The
-// values are the defaults the NetworkPolicy DNS peer uses; when the DNS
-// selector becomes configurable (#264), wire it in here.
-func dnsEndpointLabels() map[string]any {
-	return map[string]any{
-		"k8s:io.kubernetes.pod.namespace": metav1.NamespaceSystem,
-		"k8s:k8s-app":                     "kube-dns",
-	}
-}
-
 // desiredFQDNPolicy builds the CiliumNetworkPolicy that lets a workload Pod
 // reach the class's allowedHosts: DNS to the cluster resolver through
 // Cilium's DNS proxy, and egress to each host on any port. It adds to the
-// workload's NetworkPolicy; Cilium allows the union of both.
-func desiredFQDNPolicy(owner client.Object, podLabels map[string]string, hosts []string) *unstructured.Unstructured {
+// workload's NetworkPolicy; Cilium allows the union of both. Cilium learns
+// the IPs behind a toFQDNs name only from DNS traffic its proxy sees, so the
+// DNS rule names the same resolver Pods as the NetworkPolicy DNS peer, with a
+// dns rule attached.
+func desiredFQDNPolicy(
+	owner client.Object, podLabels map[string]string, hosts []string, dns DNSSelector,
+) *unstructured.Unstructured {
 	sorted := slices.Clone(hosts)
 	slices.Sort(sorted)
 	sorted = slices.Compact(sorted)
@@ -76,7 +68,7 @@ func desiredFQDNPolicy(owner client.Object, podLabels map[string]string, hosts [
 		"endpointSelector": map[string]any{"matchLabels": selector},
 		"egress": []any{
 			map[string]any{
-				"toEndpoints": []any{map[string]any{"matchLabels": dnsEndpointLabels()}},
+				"toEndpoints": []any{map[string]any{"matchLabels": dns.ciliumEndpointLabels()}},
 				"toPorts": []any{map[string]any{
 					"ports": []any{map[string]any{"port": "53", "protocol": "ANY"}},
 					"rules": map[string]any{"dns": []any{map[string]any{"matchPattern": "*"}}},
@@ -96,7 +88,7 @@ func desiredFQDNPolicy(owner client.Object, podLabels map[string]string, hosts [
 // error is also nothing to do.
 func ensureFQDNPolicy(
 	ctx context.Context, c client.Client, scheme *runtime.Scheme,
-	owner client.Object, podLabels map[string]string, hosts []string, supported bool,
+	owner client.Object, podLabels map[string]string, hosts []string, dns DNSSelector, supported bool,
 ) error {
 	if !supported {
 		return nil
@@ -120,7 +112,7 @@ func ensureFQDNPolicy(
 		return client.IgnoreNotFound(c.Delete(ctx, current))
 	}
 
-	desired := desiredFQDNPolicy(owner, podLabels, hosts)
+	desired := desiredFQDNPolicy(owner, podLabels, hosts, dns)
 	if err := controllerutil.SetControllerReference(owner, desired, scheme); err != nil {
 		return err
 	}

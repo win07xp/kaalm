@@ -62,7 +62,7 @@ When the class lists `network.egress.allowedHosts` and the CNI is Cilium, the co
 
 | Rule | Peer | Ports |
 |---|---|---|
-| DNS, through Cilium's DNS proxy with `matchPattern: "*"` | The cluster DNS Pods (`k8s-app: kube-dns` in `kube-system`) | 53, any protocol |
+| DNS, through Cilium's DNS proxy with `matchPattern: "*"` | The cluster DNS Pods that `controller.networkPolicy.dnsSelector` selects, the same Pods as the NetworkPolicy DNS rule | 53, any protocol |
 | `toFQDNs` with one `matchName` per host, sorted | Each host in `allowedHosts` | Any |
 
 Cilium learns the addresses behind a host name only from DNS answers its proxy sees, which is why the policy carries its own DNS rule. Cilium allows the union of this policy and the NetworkPolicy, so the workload keeps its gateway, DNS, and `allowedCIDRs` egress. For an Agent, the controller converges the policy on every pass: it updates the policy when the host list changes and deletes it when the list becomes empty. For an AgentTask, the controller writes the policy when it creates the task's Pod. On a CNI without FQDN support, the controller writes no policy and the class reports `FQDNPolicySupported=False` ([AgentClass](../resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts)).
