@@ -55,6 +55,7 @@ const (
 	errHeaderMismatch      = "header_mismatch"
 	errToolUnavailable     = "tool_unavailable"
 	errToolTimeout         = "tool_timeout"
+	errStalePod            = "stale_pod"
 )
 
 // writeError emits the envelope with the given status. retryAfter > 0 adds a

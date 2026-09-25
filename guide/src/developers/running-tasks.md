@@ -85,7 +85,7 @@ Artifacts appear as `artifact.ARTIFACT_NAME` keys next to the status. On a
 omits one is rejected with `400 invalid_request` naming the missing artifact,
 and the task stays `Running` until it reports again or times out. A `failure`
 report may carry any subset. The first completion call a Pod makes can also be
-refused with `403 access_denied` and the message prefix `StalePodCompletion`
+refused with `409 Conflict` and `error.type: stale_pod`
 while the gateway's Pod index catches up; the base images retry that on their
 own, and a task image of your own must too (runtime contract item 6).
 

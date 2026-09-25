@@ -24,8 +24,8 @@ func completionAgent(t *testing.T, pki *testPKI, gatewayURL string) *Agent {
 	return &Agent{Gateway: newGateway(gatewayURL, testReloader(t, pki)), isTask: true}
 }
 
-// StalePodCompletion covers reconciler lag and must be retried on the
-// bounded schedule; the first clean 200 ends the attempt loop.
+// A 409 stale_pod (StalePodCompletion) covers reconciler lag and must be
+// retried on the bounded schedule; the first clean 200 ends the attempt loop.
 func TestCompleteTask_RetriesStaleThenSucceeds(t *testing.T) {
 	fastStaleRetries(t)
 	pki := newTestPKI(t)
@@ -36,7 +36,8 @@ func TestCompleteTask_RetriesStaleThenSucceeds(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		lastBody.Store(req)
 		if attempts.Add(1) < 3 {
-			http.Error(w, `{"error":{"type":"StalePodCompletion"}}`, http.StatusForbidden)
+			http.Error(w, `{"error":{"type":"stale_pod","message":"StalePodCompletion: stale","retryable":true}}`,
+				http.StatusConflict)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -71,6 +72,25 @@ func TestCompleteTask_AlreadyCompletedIsTerminal(t *testing.T) {
 	}
 	if attempts.Load() != 1 {
 		t.Errorf("a terminal 403 must not be retried, saw %d attempts", attempts.Load())
+	}
+}
+
+// The contract names only the 409 form; a 403 carrying the old
+// StalePodCompletion text is a plain failure and is not retried.
+func TestCompleteTask_Stale403IsNotRetried(t *testing.T) {
+	fastStaleRetries(t)
+	pki := newTestPKI(t)
+	var attempts atomic.Int32
+	srv := mockGateway(t, pki, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		http.Error(w, `{"error":{"type":"access_denied","message":"StalePodCompletion: stale"}}`, http.StatusForbidden)
+	}))
+
+	if err := completionAgent(t, pki, srv.URL).CompleteTask(context.Background(), "success", "", nil); err == nil {
+		t.Fatal("a 403 must surface as an error")
+	}
+	if attempts.Load() != 1 {
+		t.Errorf("a 403 must not be retried, saw %d attempts", attempts.Load())
 	}
 }
 

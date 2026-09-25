@@ -51,7 +51,7 @@ Numbered as in the design book (runtime contract items 1 to 8):
    traffic. Task images must NOT heartbeat; the gateway rejects it.
 6. **Completion (AgentTasks only).** Report the verdict with
    `POST /v1/task/complete`, including any declared artifacts. Retry a
-   `403` with `reason=StalePodCompletion` a few times with backoff (the
+   `409` with `error.type: stale_pod` a few times with backoff (the
    identity stamp can lag Pod creation by a moment); treat
    `reason=TaskAlreadyCompleted` as final and exit.
 7. **Message deduplication (required if you implement /v1/message).**

@@ -105,7 +105,7 @@ Heartbeats are meaningful only for Agents: idle detection does not apply to one-
 
 This item is optional. An AgentTask in `completion.condition: agentReported` mode reports its result with `POST /v1/task/complete`, with a status and an optional set of artifacts ([Task completion](../gateways/api/task-complete.md)).
 
-The report can race the reconciler's status write that stamps `AgentTask.status.currentPodUID` after Pod creation, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `403 access_denied`, `retryable: true`, and a message beginning `StalePodCompletion:`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
+The report can race the reconciler's status write that stamps `AgentTask.status.currentPodUID` after Pod creation, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `409 Conflict`, `error.type: stale_pod`, `retryable: true`, and a message beginning `StalePodCompletion:`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
 
 `403 access_denied` with a message beginning `TaskAlreadyCompleted:` is final. The task has reached `Succeeded`, `Failed`, or `TimedOut`, and further reports are rejected; the container logs and exits.
 

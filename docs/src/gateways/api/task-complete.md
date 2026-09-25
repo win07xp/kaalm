@@ -30,12 +30,12 @@ Every call passes the gates below in order, and every rejection fires before the
 | 4 | An AgentTask with the SAN name exists in that namespace | `403 access_denied` | `false` |
 | 5 | `completion.condition` is `agentReported` | `403 access_denied`, `TaskNotAgentReported` | `false` |
 | 6 | `status.phase` is not terminal (`Succeeded`, `Failed`, `TimedOut`) | `403 access_denied`, `TaskAlreadyCompleted` | `false` |
-| 7 | The calling Pod's UID equals `status.currentPodUID` | `403 access_denied`, `StalePodCompletion` | `true` |
+| 7 | The calling Pod's UID equals `status.currentPodUID` | `409 stale_pod`, `StalePodCompletion` | `true` |
 | 8 | The body parses and the artifact names pass the per-status rule | `400 invalid_request` | `false` |
 | 9 | Every artifact value is within 4 KiB and the combined payload within 32 KiB | `413 request_too_large` | `false` |
 | 10 | The ConfigMap `Patch` succeeds | `503 internal_unavailable`, `Retry-After: 1` | `true` |
 
-The live `List Pods` in gate 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches gate 7 and at worst receives the retryable `403 StalePodCompletion`. The fallback is scoped to this path alone: heartbeats are periodic and recover on the next tick, and a fleet-wide fallback would turn an informer resync into a live-List stampede.
+The live `List Pods` in gate 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches gate 7 and at worst receives the retryable `409 stale_pod`. The fallback is scoped to this path alone: heartbeats are periodic and recover on the next tick, and a fleet-wide fallback would turn an informer resync into a live-List stampede.
 
 Gate 7 is the identity gate proper. It closes the stale-write race after a `backoffLimit` retry, where an old Pod's delayed completion would otherwise overwrite the new Pod's data, and it is the same rejection a new Pod can receive in the restamp-lag window described under [Race windows](#race-windows), which is why it is retryable. Gate 6 exists because the reconciler does not re-process the mailbox once the phase is terminal; without the gate the agent's write would be silently dropped.
 
@@ -76,7 +76,8 @@ The gateway reads `spec.artifacts` from its AgentTask watch, so the check runs s
 | `200 OK` | (none) | n/a | Success; empty body |
 | `400 Bad Request` | `invalid_request` | `false` | Malformed body or artifact-name rule violation |
 | `401 Unauthorized` | `unauthorized` | `false` | No client certificate, or the source IP resolves to no Pod in the SAN namespace even after the live fallback |
-| `403 Forbidden` | `access_denied` | `false`, except `true` for `StalePodCompletion` | One of four reasons, see [403 Forbidden](#403-forbidden) |
+| `403 Forbidden` | `access_denied` | `false` | One of three reasons, see [403 Forbidden](#403-forbidden) |
+| `409 Conflict` | `stale_pod` | `true` | The calling Pod is not the task's current Pod, see [409 Conflict](#409-conflict) |
 | `413 Payload Too Large` | `request_too_large` | `false` | Per-artifact or combined size cap exceeded |
 | `503 Service Unavailable` | `internal_unavailable` | `true` | The ConfigMap `Patch` itself failed |
 
@@ -96,12 +97,15 @@ Returned when no client certificate is presented, or when the source IP resolves
 |---|---|---|
 | `NotAgentTaskPod` | The SAN kind is not AgentTask, or no AgentTask with the SAN name exists in the namespace | `NotAgentTaskPod: Agent callers are not accepted on this path`, or `NotAgentTaskPod: no AgentTask backs this caller` |
 | `TaskNotAgentReported` | The task has `completion.condition: exitCode` | `TaskNotAgentReported: this task completes via container exit` |
-| `StalePodCompletion` | The calling Pod's UID does not match `status.currentPodUID`, or the field is empty | `StalePodCompletion: the calling Pod is not the task's current Pod` |
 | `TaskAlreadyCompleted` | `status.phase` is terminal (`Succeeded`, `Failed`, `TimedOut`) | `TaskAlreadyCompleted: the task has reached a terminal phase` |
 
-Every message starts with its reason code followed by `: `, so a caller can tell the four reasons apart by the prefix of `error.message`.
+Every message starts with its reason code followed by `: `, so a caller can tell the three reasons apart by the prefix of `error.message`.
 
-`exitCode` tasks have no completion mailbox: the ConfigMap and the per-task Role are provisioned in `agentReported` mode only (see [Child resources](../../runtime/child-resources.md)). `StalePodCompletion` and `TaskAlreadyCompleted` are gates 7 and 6 under [The identity gate](#the-identity-gate).
+`exitCode` tasks have no completion mailbox: the ConfigMap and the per-task Role are provisioned in `agentReported` mode only (see [Child resources](../../runtime/child-resources.md)). `TaskAlreadyCompleted` is gate 6 under [The identity gate](#the-identity-gate).
+
+### 409 Conflict
+
+Returned when the calling Pod's UID does not match `status.currentPodUID`, or the field is empty: gate 7 under [The identity gate](#the-identity-gate). `error.type` is `stale_pod`, `retryable` is `true`, and `error.message` is `StalePodCompletion: the calling Pod is not the task's current Pod`. The call conflicts with the task's current state rather than being refused for good: after a restamp the same Pod's retry can succeed, which is why the code is `409` and not `403`. See [Race windows](#race-windows).
 
 ### 413 Payload Too Large
 
@@ -115,15 +119,15 @@ Returned when the `Patch` against the completion ConfigMap fails after every gat
 
 Re-completion across a `backoffLimit` retry is the supported multi-call path. The reconciler clears `status.currentPodUID`, resets the mailbox to `data: {}`, creates the replacement Pod, and stamps the new UID once it observes the Pod; the order and the figure are under [Retry mechanics](../../controller/task-lifecycle.md#retry-mechanics). Any in-flight call from the old Pod fails gate 7, and the new Pod's call lands on a fresh mailbox under the new UID.
 
-There is a narrow restamp-lag window, typically under 100ms of informer lag against seconds of agent startup, where the new Pod's first call races the UID stamp and receives `403 StalePodCompletion`. This is the transient, retryable form of that code.
+There is a narrow restamp-lag window, typically under 100ms of informer lag against seconds of agent startup, where the new Pod's first call races the UID stamp and receives `409 stale_pod`. This is the transient, retryable form of that code.
 
 ## Retry guidance
 
 - **`retryable: false`** on `400`, `413`, and the `NotAgentTaskPod`, `TaskNotAgentReported`, and `TaskAlreadyCompleted` reasons: a duplicate call from the same Pod hits the same outcome. On `TaskAlreadyCompleted` the task is terminal and further writes are rejected by design; the agent should log and exit.
-- **`retryable: true`** on `StalePodCompletion` and `503 internal_unavailable`: the restamp lag is transient, and so are the conditions behind a `503` (an apiserver flap, a leader election, brief etcd unavailability).
+- **`retryable: true`** on `409 stale_pod` and `503 internal_unavailable`: the restamp lag is transient, and so are the conditions behind a `503` (an apiserver flap, a leader election, brief etcd unavailability).
 
 Agents should retry both retryable cases with bounded backoff per [The runtime contract](../../runtime/contract.md), item 6: 100ms, 500ms, 2s, 3 attempts at most. For `503`, the `Retry-After: 1` floor also applies.
 
 ## Error envelope
 
-Error responses carry the structured `{ "error": { "type", "message", "retryable" } }` envelope, the same envelope as [User Gateway error responses](errors.md#user-gateway-error-responses). `error.type` is `invalid_request` for 400, `unauthorized` for 401, `access_denied` for 403, `request_too_large` for 413, and `internal_unavailable` for 503. `error.message` carries the diagnostic: the offending artifact name or key for 400 and 413, the reason string for 403, and `patching the completion ConfigMap failed` for 503.
+Error responses carry the structured `{ "error": { "type", "message", "retryable" } }` envelope, the same envelope as [User Gateway error responses](errors.md#user-gateway-error-responses). `error.type` is `invalid_request` for 400, `unauthorized` for 401, `access_denied` for 403, `stale_pod` for 409, `request_too_large` for 413, and `internal_unavailable` for 503. `error.message` carries the diagnostic: the offending artifact name or key for 400 and 413, the reason string for 403 and 409, and `patching the completion ConfigMap failed` for 503.

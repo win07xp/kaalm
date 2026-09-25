@@ -30,7 +30,7 @@ Two responses on the `:8443` listener are not in this envelope. A JSON-RPC heade
 
 ## LLM Gateway error responses
 
-The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{toolProvider}`. The enforcement points that produce them are in [Request flow](../llm/request-handling.md#request-flow), [Budgets and rate limits](../llm/budgets-and-rate-limits.md), [Fallback logic](../llm/fallback.md), and [The tool plane](../tool-plane.md).
+The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{toolProvider}`, plus the `409` that [`POST /v1/task/complete`](task-complete.md) raises; that page lists the rest of its codes. The enforcement points that produce them are in [Request flow](../llm/request-handling.md#request-flow), [Budgets and rate limits](../llm/budgets-and-rate-limits.md), [Fallback logic](../llm/fallback.md), and [The tool plane](../tool-plane.md).
 
 | Status | `error.type` | `retryable` | `Retry-After` | Raised when |
 |---|---|---|---|---|
@@ -40,6 +40,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 403 | `access_denied` | no | | The tenancy chain denies the provider ([Multi-tenancy](../../concepts/tenancy-and-tiers.md#multi-tenancy)); on the broker, the workload is not found, a namespace or class gate denies the ToolProvider, or the caller sends a session id another caller owns |
 | 403 | `tool_denied` | no | | The tool is outside the workload's grant, or the JSON-RPC method is outside the broker's allowlist |
 | 405 | `invalid_request` | no | | A method other than `POST` on `/v1/mcp/{toolProvider}` |
+| 409 | `stale_pod` | yes | | `POST /v1/task/complete`: the calling Pod is not the task's current Pod ([409 Conflict](task-complete.md#409-conflict)) |
 | 413 | `request_too_large` | no | | The body exceeds `gateway.maxLLMRequestBodyBytes` (default 4 MiB) on a proxy path, or the broker's own cap |
 | 413 | `response_too_large` | no | | The tool provider's response exceeds the broker's response cap |
 | 429 | `rate_limited` | yes | `1` | The per-namespace bucket for the model or tool provider is empty |
@@ -50,9 +51,11 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 503 | `internal_unavailable` | yes | `1` | `TokenReview` failed for a bearer token that missed the cache |
 | 503 | `provider_unavailable` | no | | Every attempt in the fallback walk failed to connect |
 | 503 | `budget_state_unavailable` | yes | `1` | Hard enforcement: the replica cannot verify budget state and fails closed |
-| 503 | `tool_unavailable` | yes | | The tool server is unreachable, its credential is unavailable, or its response is unusable |
+| 503 | `tool_unavailable` | yes | `1` | The tool server is unreachable, redirects, or answers with a `5xx` |
+| 503 | `tool_unavailable` | yes | | The credential Secret is unreadable, or reading the tool server's response failed |
+| 503 | `tool_unavailable` | no | | The tool server rejects the gateway credential, or returns an unparseable `tools/list` response |
 | 504 | `provider_timeout` | no | | Every attempt in the fallback walk timed out |
-| 504 | `tool_timeout` | no | | The brokered call exceeded the upstream timeout |
+| 504 | `tool_timeout` | yes | | The brokered call exceeded the upstream timeout |
 
 Notes on the rows:
 
@@ -61,7 +64,7 @@ Notes on the rows:
 - **`budget_state_unavailable`.** A hard-enforcement replica could not publish its spend or refresh its peer view within the staleness window, and refuses to spend blind. It clears on the first successful exchange ([Hard enforcement](../llm/budgets-and-rate-limits.md#hard-enforcement)).
 - **`provider_error`, `provider_unavailable`, `provider_timeout`.** The gateway has already walked the entire fallback chain, so `retryable` is `false`: escalate to another model or budget rather than retry. The per-attempt bound behind `provider_timeout` is `gateway.providerFirstByteTimeout` ([Failure modes](../llm/operations.md#failure-modes)).
 - **`tool_denied` and `access_denied`.** The namespace and class gates on the broker reuse `access_denied`, exactly as the LLM tenancy chain does. `tool_denied` names a per-tool narrowing miss or a disallowed method, so tool-level policy is auditable on its own.
-- **`retryable` on the broker.** The broker sets `retryable` to `true` on every `503`, on every response with a `Retry-After`, and on its `500`, and `false` otherwise. The rule is by status rather than by cause, so a `503` for an unusable upstream response is marked retryable; issue #232 tracks it.
+- **`retryable` on the broker.** The broker sets `retryable` per cause, as the proxy does, so two `503 tool_unavailable` answers can differ. A failure that a later call can clear is retryable: an unreachable or `5xx` tool server, an unreadable credential Secret, a broken response read, and a `504 tool_timeout`. A failure that repeats until an operator acts is not: a rejected gateway credential, or a `tools/list` response the broker cannot parse.
 - **`provider`.** The proxy sets it once the model name is parsed, so it is absent on the `401`, `403 invalid_cert`, `413`, and `503 internal_unavailable` rows and on the not-JSON and unqualified-model `400` rows. On fallback-exhausted errors it carries the provider the caller asked for, not the last fallback attempted. The broker sets it on every error it raises.
 
 ## User Gateway error responses
