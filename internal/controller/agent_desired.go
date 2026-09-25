@@ -179,8 +179,8 @@ func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentCla
 		RuntimeClassName: class.Spec.Runtime.RuntimeClassName,
 		PullPolicy:       class.Spec.Image.PullPolicy,
 		ImagePullSecrets: class.Spec.Image.ImagePullSecrets,
-		PodSecurity:      class.Spec.Security.PodSecurityContext,
-		ContainerSec:     class.Spec.Security.ContainerSecurityContext,
+		PodSecurity:      restrictedPodSecurity(class.Spec.Security.PodSecurityContext),
+		ContainerSec:     restrictedContainerSecurity(class.Spec.Security.ContainerSecurityContext),
 		AutomountToken:   class.Spec.Security.AutomountServiceAccountToken,
 		TerminationGrace: class.Spec.Lifecycle.TerminationGracePeriodSeconds,
 		PodLabels:        class.Spec.PodMetadata.Labels,
@@ -510,6 +510,12 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 			},
 		})
 		mounts = append(mounts, corev1.VolumeMount{Name: handlerVolumeName, MountPath: handlerMountPath, ReadOnly: true})
+	}
+
+	if readOnlyRoot(eff.ContainerSec) {
+		v, m := tmpVolume()
+		volumes = append(volumes, v)
+		mounts = append(mounts, m)
 	}
 
 	probe := func(probePath string) *corev1.Probe {

@@ -133,9 +133,14 @@ Pod Kaalm creates uses host networking.
 
 ## Pod security defaults
 
-The class's `security` block is applied to every Pod and container created
-under it from then on; see [Changing a class later](#changing-a-class-later)
-for existing Pods. Nothing is set by default; a hardened class looks like this:
+Every Pod Kaalm creates meets the `restricted` Pod Security Standard by
+default: it runs as non-root with the runtime default seccomp profile, cannot
+escalate privileges, drops every capability, and has a read-only root with an
+`emptyDir` at `/tmp`. The class's `security` block is merged over that
+baseline field by field for every Pod created under it from then on; see
+[Changing a class later](#changing-a-class-later) for existing Pods. Declare
+only what you change. The chart's `standard` class writes the baseline out,
+and a class that also pins the UID looks like this:
 
 ```yaml
 spec:
@@ -151,10 +156,13 @@ spec:
 ```
 
 Both fields take the standard Kubernetes `PodSecurityContext` and
-`SecurityContext` fields. Check the images your teams run before setting
-`readOnlyRootFilesystem`: the reference base images write their memory
-store under `/var/agent/memory`, which is a volume only when persistence is
-on.
+`SecurityContext` fields. Relaxing one is allowed but never silent: the
+class reports `SecurityBaseline=False` naming the field, with a `Warning`
+event the first time. Check the images your teams run before relying on
+the read-only root: the reference base images write their memory store
+under `/var/agent/memory`, which is a volume only when persistence is on,
+and temp files under `/tmp`, which is always writable. An image that
+writes elsewhere needs `readOnlyRootFilesystem: false`.
 
 Agent and AgentTask Pods do not mount their ServiceAccount token, so they
 have no Kubernetes API access. For a class whose agents need it, such as a

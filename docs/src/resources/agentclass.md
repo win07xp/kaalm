@@ -95,7 +95,8 @@ spec:
     # admits no ingress. Default false: only the gateway reaches the agent.
     allowSameNamespaceIngress: false
 
-  # Applied verbatim to every workload Pod and container.
+  # Merged over the restricted baseline: a set field wins, an unset field
+  # takes the baseline value. This block is the baseline plus runAsUser.
   security:
     podSecurityContext:
       runAsNonRoot: true
@@ -147,6 +148,9 @@ status:
     - type: FQDNPolicySupported
       status: "False"
       reason: NoHostsRequested
+    - type: SecurityBaseline
+      status: "True"
+      reason: RestrictedBaseline
   agentsInUse: 14
   tasksInUse: 2
 ```
@@ -155,6 +159,7 @@ status:
 |---|---|
 | `Ready` | `True` with `reason: AllReferencesResolved` when every `allowedProviders` and `allowedToolProviders` entry names an existing provider, every `allowedCIDRs` entry parses (rule 19), and every `allowedHosts` entry is a DNS name (rule 20). Otherwise `False` with a message listing every problem, sorted and joined with `; `. The reason is `InvalidCIDR` when an `allowedCIDRs` entry does not parse, which sorts first, and `InvalidReference` for a missing provider or tool provider or a malformed host. Provider health is not consulted. |
 | `FQDNPolicySupported` | Set on every pass: `reason: NoHostsRequested` while `allowedHosts` is empty; otherwise `FQDNPolicySupported` or `FQDNPolicyUnsupported` from the CNI probe described under the design notes. |
+| `SecurityBaseline` | Set on every pass: `True, reason: RestrictedBaseline` when no declared `security` field falls below the restricted Pod Security Standard; otherwise `False, reason: BelowRestrictedBaseline` with a message naming each relaxed field, and a `Warning` event of the same reason when the relaxation first appears. An unset field is never a deviation: it takes the baseline value. |
 
 `agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. `kubectl get ac` prints both counts.
 
@@ -192,6 +197,10 @@ Patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Matc
 ### `image.pullPolicy` values
 
 The schema accepts `Always`, `Never`, or `IfNotPresent`, the three Kubernetes pull policies. The apiserver rejects any other value when you create or update the class.
+
+### `security` starts from the restricted baseline
+
+The controller applies the `restricted` Pod Security Standard to every workload Pod and merges the class's `security` block over it field by field ([Pod Security Standards](../security/model.md#pod-security-standards)). A class therefore declares only what it changes: `runAsUser` to pin a UID, or `readOnlyRootFilesystem: false` for an image that writes outside `/tmp` and its volumes. Relaxing a field is allowed, and the `SecurityBaseline` condition and its `Warning` make it visible. A read-only root gets an `emptyDir` at `/tmp`. The block is outside the Pod spec hash, so a change reaches a running Agent when its Pod is next replaced.
 
 ### Network egress: `allowedCIDRs` and `allowedHosts`
 
