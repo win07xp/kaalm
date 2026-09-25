@@ -41,6 +41,23 @@ controller:
   # off, which is the production setting: the listener is unauthenticated
   # and is meant to be reached through kubectl port-forward, never a Service.
   pprofPort: 0
+  # Log level for the JSON logs: debug, info, or error. Passed as
+  # --zap-log-level; a number above 0 also works and raises verbosity further.
+  logLevel: info
+  # Kubernetes API client rate limit: sustained requests per second and the
+  # burst above it. The defaults are controller-runtime's.
+  client:
+    qps: 20
+    burst: 30
+  # Container resources, rendered verbatim. No CPU limit by default, so a
+  # reconcile burst is never throttled; the memory limit bounds the informer
+  # cache.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
   networkPolicy:
     dnsSelector:
       namespaceLabels:
@@ -132,6 +149,22 @@ gateway:
   # Port for a net/http/pprof listener, for profiling under load. 0 keeps it
   # off, which is the production setting; see controller.pprofPort.
   pprofPort: 0
+  # Log level for the JSON logs: debug, info, warn, or error.
+  logLevel: info
+  # Kubernetes API client rate limit: sustained requests per second and the
+  # burst above it. Sized for a proxy's live reads (task-completion
+  # cross-checks, first-use Secret loads), not a reconciler's.
+  client:
+    qps: 100
+    burst: 200
+  # Container resources, rendered verbatim. No CPU limit by default, so
+  # request bursts are never throttled.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
 
 certManager:
   # cert-manager's cluster resource namespace. The kaalm-ca Certificate and its
@@ -170,4 +203,6 @@ console:
     pullPolicy: IfNotPresent
   # Dedicated health/readiness port (kubelet probes).
   healthPort: 8081
+  # Log level for the JSON logs: debug, info, warn, or error.
+  logLevel: info
   resources: {}

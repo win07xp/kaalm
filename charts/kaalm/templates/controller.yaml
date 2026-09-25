@@ -67,6 +67,10 @@ spec:
             - --max-concurrent-reconciles={{ .Values.controller.maxConcurrentReconciles }}
             - --cert-duration={{ .Values.controller.certificate.duration }}
             - --cert-renew-before={{ .Values.controller.certificate.renewBefore }}
+            - --zap-encoder=json
+            - --zap-log-level={{ .Values.controller.logLevel }}
+            - --client-qps={{ .Values.controller.client.qps }}
+            - --client-burst={{ .Values.controller.client.burst }}
             {{- if .Values.controller.pprofPort }}
             - --pprof-bind-address=:{{ .Values.controller.pprofPort }}
             {{- end }}
@@ -111,6 +115,10 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
+          {{- with .Values.controller.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

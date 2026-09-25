@@ -182,7 +182,7 @@ The baseline is one developer machine. The numbers that transfer are the per-uni
 - **The CNI.** k3d's flannel enforces NetworkPolicy through kube-router, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which lands inside wake latency. Cilium and Calico program policies differently and typically faster.
 - **Storage.** The local-path provisioner backs the churn fleet's PVCs and provisions each volume through a helper Pod. A CSI driver changes both the provisioning latency and the hibernate-and-wake cost.
 - **The apiserver.** k3s runs a single embedded apiserver on SQLite-backed storage. The controller's reconcile latency and the hold phase's callback records are apiserver-bound at scale; a multi-member etcd behaves differently under the same write rate.
-- **The knobs.** `controller.maxConcurrentReconciles` (default 4) and the two replica counts are the only chart values that change throughput ([Configuration reference](deployment.md#configuration-reference)). As shipped the API client rate limits are fixed in the binaries: controller-runtime's 20 requests per second with a burst of 30 per controller replica, and 100 per second with a burst of 200 per gateway replica.
+- **The knobs.** `controller.maxConcurrentReconciles` (default 4), the two replica counts, and the API client rate limits are the chart values that change throughput ([Configuration reference](deployment.md#configuration-reference)). The rate limits are per replica: `controller.client.qps` and `controller.client.burst` default to controller-runtime's 20 requests per second with a burst of 30, and `gateway.client.qps` and `gateway.client.burst` default to 100 per second with a burst of 200.
 
 ## See also
 

@@ -112,6 +112,7 @@ spec:
             - --tls-cert=/var/run/kaalm/tls.crt
             - --tls-key=/var/run/kaalm/tls.key
             - --tls-ca=/var/run/kaalm/ca.crt
+            - --log-level={{ .Values.console.logLevel }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
