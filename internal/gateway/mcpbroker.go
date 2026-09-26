@@ -481,8 +481,15 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 			deny(http.StatusGatewayTimeout, errToolTimeout,
 				fmt.Sprintf("tool provider %q did not answer within the upstream timeout", tp.Name), true, 0, msg.Method, toolName)
 		default:
-			deny(http.StatusServiceUnavailable, errToolUnavailable,
-				fmt.Sprintf("tool provider %q is unreachable: %v", tp.Name, err), true, 1, msg.Method, toolName)
+			// The transport error names the tool server's URL and address,
+			// which are platform tier: it goes to the audit log, and the
+			// caller gets a fixed message.
+			spanError(tctx, errToolUnavailable)
+			s.mcpResult(c, tp, providerName, msg.Method, toolName, http.StatusServiceUnavailable, errToolUnavailable,
+				fmt.Sprintf("tool provider %q is unreachable: %v", tp.Name, err), start, reqBytes, 0, forwarded)
+			writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
+				Message:  fmt.Sprintf("tool provider %q is unreachable", tp.Name),
+				Provider: providerName, Retryable: true}, 1)
 		}
 		return
 	}

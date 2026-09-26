@@ -542,7 +542,8 @@ func TestDiscord_PipelineErrorTravelsAsReplyText(t *testing.T) {
 		<-h.agentHits
 	}
 	got := h.fake.next(t)
-	if c, _ := got.Body["content"].(string); !strings.HasPrefix(c, errDeliveryFailed+": ") {
+	// A fixed message: the person in the chat is outside the cluster.
+	if c, _ := got.Body["content"].(string); c != errDeliveryFailed+": the agent could not be reached or returned an error" {
 		t.Errorf("error reply = %q", c)
 	}
 	if reason, ok := healthReason(h.userHarness, h.channel.Spec.Discord.Path); ok || reason != healthReasonDispatchFailed {

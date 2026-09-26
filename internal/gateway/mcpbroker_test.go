@@ -379,7 +379,12 @@ func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 		h.upstream.Close() // reachable address, refused connection
 		cert := agentCert(t, h.ca)
 		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
-		expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+		msg := expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+		// The tool server's address is platform tier: the caller gets a
+		// fixed message, and the transport error stays in the audit log.
+		if want := `tool provider "search" is unreachable`; msg != want {
+			t.Errorf("message = %q, want %q", msg, want)
+		}
 	})
 
 	t.Run("upstream 500", func(t *testing.T) {
