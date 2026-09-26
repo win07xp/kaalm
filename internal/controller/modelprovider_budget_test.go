@@ -258,3 +258,39 @@ func TestModelProvider_BudgetRequeueWithoutProbe(t *testing.T) {
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 }
+
+// A namespace under its own ceiling but inside a provider over the cluster
+// ceiling reports the cluster ratio and the state the gateway enforces.
+func TestBudgetUsageEntries_ClusterCeilingWins(t *testing.T) {
+	cluster := "10.00"
+	mp := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
+		Budget: kaalmv1beta1.ModelProviderBudget{
+			Period:          "monthly",
+			PerNamespaceUSD: "100.00",
+			ClusterUSD:      &cluster,
+			Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{
+				{AtPercent: 80, Action: kaalmv1beta1.BudgetActionWarn},
+				{AtPercent: 100, Action: kaalmv1beta1.BudgetActionBlock},
+			},
+		},
+	}}
+	spend := map[string]float64{"team-a": 6, "team-b": 5}
+	got := budgetUsageEntries(mp, spend, "2026-09")
+	if len(got) != 2 {
+		t.Fatalf("entries = %d, want 2", len(got))
+	}
+	for _, e := range got {
+		if e.State != kaalmv1beta1.BudgetStateBlocked || e.PercentUsed != 110 {
+			t.Errorf("%s: state=%s percentUsed=%d, want Blocked 110 (cluster ceiling)",
+				e.Namespace, e.State, e.PercentUsed)
+		}
+	}
+
+	// Without clusterUSD only the per-namespace ratio counts.
+	mp.Spec.Budget.ClusterUSD = nil
+	for _, e := range budgetUsageEntries(mp, spend, "2026-09") {
+		if e.State != kaalmv1beta1.BudgetStateNormal {
+			t.Errorf("%s: state=%s, want Normal without clusterUSD", e.Namespace, e.State)
+		}
+	}
+}

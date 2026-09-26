@@ -162,7 +162,7 @@ Resource limits, volume size, and the lifecycle timeouts are bounded by the clas
 
 These rules concern a single ModelProvider but run at reconcile time: rules 11, 12, and 41 must follow references to other providers, and rules 18 and 33 must match the gateway's model lookup and price parsing exactly ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)).
 
-**Rule 11: Fallback chains must terminate.** `ModelProvider.spec.fallback` chains must not be circular. *Reconcile time, walking the full tree; `Ready=False, reason=FallbackIneligible`.* As shipped a provider reached twice through different branches is also reported as circular ([Fallback trees](modelprovider.md#fallback-trees)).
+**Rule 11: Fallback chains must terminate.** `ModelProvider.spec.fallback` chains must not be circular. *Reconcile time, walking the full tree; `Ready=False, reason=FallbackIneligible`.* A chain is circular when a provider appears among its own ancestors; a provider reached through two different branches is not circular ([Fallback trees](modelprovider.md#fallback-trees)).
 
 **Rule 12: Fallback stays within formats the gateway can translate.** Each `spec.fallback[]` entry must have the same `spec.type` as the provider naming it, or a type the gateway translates to: `anthropic` and `openai` or `openai-compatible` may reference each other in either direction; `google-vertex` may reference only `google-vertex` and be referenced only by it. *Reconcile time, in the same walk as rule 11, `Ready=False, reason=FallbackIneligible`; the gateway repeats the check per candidate.* See [Crossing formats](../gateways/llm/fallback.md#crossing-formats).
 

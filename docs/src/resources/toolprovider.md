@@ -81,7 +81,7 @@ status:
 | `Ready` | Whether the credential resolves. `True` with `reason: CredentialsValid`, and the message `provider is valid (no credential configured)` when there is no `credentialsRef`. `False` with `CredentialsMissing` when the Secret or key is absent or empty, or `CredentialsInvalid` when the server answers the probe with a 401 or 403. |
 | `Healthy` | The periodic probe. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event on a network or protocol failure, which does not affect `Ready`. |
 
-`healthCheck.enabled: false` disables the probe; `intervalSeconds` (default 60) sets its cadence and `timeoutSeconds` (default 10) bounds each probe sequence. As shipped the reconciler writes status on every pass, whether or not anything changed; issue #240 tracks it.
+`healthCheck.enabled: false` disables the probe; `intervalSeconds` (default 60) sets its cadence and `timeoutSeconds` (default 10) bounds each probe sequence. The reconciler writes status only when it changes, so a pass that finds nothing new leaves the object untouched.
 
 ## Design notes
 
