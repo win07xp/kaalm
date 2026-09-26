@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -292,9 +293,12 @@ func TestHandlePoll_PlatformChannelUnauthorized(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		if resp.StatusCode != 401 {
-			t.Errorf("discord poll = %d, want 401", resp.StatusCode)
+		// The body must match an unknown path's, or the answer reveals that
+		// a platform channel exists at the path.
+		if resp.StatusCode != 401 || !strings.Contains(string(body), "auth failed or path not registered") {
+			t.Errorf("discord poll = %d %s, want 401 with the uniform body", resp.StatusCode, body)
 		}
 	})
 	t.Run("whatsapp", func(t *testing.T) {
@@ -304,9 +308,12 @@ func TestHandlePoll_PlatformChannelUnauthorized(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		if resp.StatusCode != 401 {
-			t.Errorf("whatsapp poll = %d, want 401", resp.StatusCode)
+		// The body must match an unknown path's, or the answer reveals that
+		// a platform channel exists at the path.
+		if resp.StatusCode != 401 || !strings.Contains(string(body), "auth failed or path not registered") {
+			t.Errorf("whatsapp poll = %d %s, want 401 with the uniform body", resp.StatusCode, body)
 		}
 	})
 }

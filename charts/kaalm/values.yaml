@@ -179,7 +179,8 @@ gateway:
 # ship no policy at all.
 networkPolicy:
   enabled: true
-  # NetworkPolicy peers allowed to scrape the metrics ports.
+  # NetworkPolicy peers allowed to scrape the metrics ports. An empty list
+  # closes the metrics ports to every source.
   metricsFrom:
     - namespaceSelector:
         matchLabels:

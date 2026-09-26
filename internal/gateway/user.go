@@ -543,7 +543,15 @@ func (s *Server) agentHTTPClient() (*http.Client, error) {
 		transport.MaxIdleConns = agentMaxIdleConns
 		transport.TLSClientConfig = nil
 		transport.DialTLSContext = s.dialAgentTLS(loader)
-		s.agentClient = &http.Client{Transport: transport}
+		// Every dial goes to the agent's own Service: no proxy, and no
+		// redirect. The agent runs tenant code, and a followed redirect would
+		// carry the gateway's client certificate and the message body to
+		// wherever its Location names, another tenant's agent included.
+		transport.Proxy = nil
+		s.agentClient = &http.Client{
+			Transport:     transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
+		}
 	})
 	return s.agentClient, s.agentClientErr
 }

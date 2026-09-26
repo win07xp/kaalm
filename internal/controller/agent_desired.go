@@ -104,11 +104,16 @@ type CertLifetime struct {
 	RenewBefore time.Duration
 }
 
-// Validate rejects a lifetime cert-manager cannot honor: both values must be
-// positive and renewBefore must be shorter than duration.
+// Validate rejects a lifetime cert-manager cannot honor, so a bad value
+// fails controller startup instead of every Certificate write: duration at
+// least cert-manager's one-hour minimum, renewBefore at least its
+// five-minute minimum, and renewBefore shorter than duration.
 func (l CertLifetime) Validate() error {
-	if l.Duration <= 0 || l.RenewBefore <= 0 {
-		return fmt.Errorf("certificate duration (%s) and renewBefore (%s) must both be positive", l.Duration, l.RenewBefore)
+	if l.Duration < cmapi.MinimumCertificateDuration {
+		return fmt.Errorf("certificate duration (%s) must be at least %s", l.Duration, cmapi.MinimumCertificateDuration)
+	}
+	if l.RenewBefore < cmapi.MinimumRenewBefore {
+		return fmt.Errorf("certificate renewBefore (%s) must be at least %s", l.RenewBefore, cmapi.MinimumRenewBefore)
 	}
 	if l.RenewBefore >= l.Duration {
 		return fmt.Errorf("certificate renewBefore (%s) must be shorter than duration (%s)", l.RenewBefore, l.Duration)

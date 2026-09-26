@@ -67,7 +67,15 @@ func (h *MCPToolHealthChecker) Probe(
 	}
 	cl := h.Client
 	if cl == nil {
-		cl = &http.Client{Timeout: timeout}
+		cl = &http.Client{
+			Timeout: timeout,
+			// As for model provider probes: a redirect is never followed. The
+			// probe carries the tool credential, and a redirecting endpoint is
+			// not a healthy one; the broker refuses redirects too.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errors.New("tool provider health probes do not follow redirects")
+			},
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

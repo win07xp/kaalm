@@ -399,7 +399,7 @@ func TestWhatsApp_PipelineErrorTravelsAsReplyText(t *testing.T) {
 	}
 	got := h.fake.next(t)
 	text, _ := got.Body["text"].(map[string]any)
-	if b, _ := text["body"].(string); !strings.HasPrefix(b, errDeliveryFailed+": ") {
+	if b, _ := text["body"].(string); b != errDeliveryFailed+": the agent could not be reached or returned an error" {
 		t.Errorf("error reply = %q", b)
 	}
 }

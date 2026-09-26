@@ -38,12 +38,15 @@ spec:
     - ports:
         - protocol: TCP
           port: 8081
-    # Metrics, from the scrape sources only.
+    {{- if .Values.networkPolicy.metricsFrom }}
+    # Metrics, from the scrape sources only. An empty list renders no rule,
+    # which closes the port: an empty from would admit every source.
     - from:
         {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}
       ports:
         - protocol: TCP
           port: 8080
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -80,12 +83,15 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.gateway.healthPort }}
-    # Metrics, from the scrape sources only.
+    {{- if .Values.networkPolicy.metricsFrom }}
+    # Metrics, from the scrape sources only. An empty list renders no rule,
+    # which closes the port: an empty from would admit every source.
     - from:
         {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}
       ports:
         - protocol: TCP
           port: 9090
+    {{- end }}
 {{- if .Values.console.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

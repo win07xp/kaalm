@@ -20,9 +20,11 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -155,7 +157,7 @@ func (s *Server) runPlatformPipeline(
 			if errType == errResponseTooLarge {
 				s.Metrics.ResponseTooLarge(agent.Namespace, "async")
 			}
-			text = errType + ": " + err.Error()
+			text = errType + ": " + platformErrorMessage(errType, err)
 			break
 		}
 		var reply ResponseEnvelope
@@ -168,6 +170,36 @@ func (s *Server) runPlatformPipeline(
 	outcome := adapter.SendReply(ctx, channel, m, text)
 	s.Metrics.ChannelCallback(channel.Namespace, outcome)
 	s.Metrics.ChannelCallbackDuration(channel.Namespace, time.Since(start).Seconds())
+}
+
+// withoutRequestURL drops the request URL from a transport error. A
+// Discord reply URL carries the interaction token, and this error lands in
+// channel health (copied to the AgentChannel condition) and a Warning
+// Event.
+func withoutRequestURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s request failed: %w", ue.Op, ue.Err)
+	}
+	return err
+}
+
+// platformErrorMessage is the text a platform user sees for a failed
+// pipeline. The person on the other side is outside the cluster, so the
+// message is fixed per type: a transport error would carry Service names
+// and Pod IPs. The detail stays in channel health and the gateway log.
+func platformErrorMessage(errType string, err error) string {
+	switch errType {
+	case errControllerDown:
+		return "controller activator endpoint unreachable; wake could not be triggered"
+	case errWakeTimeout:
+		// Built by wakeAndDeliver from the effective wakeTimeout only.
+		return err.Error()
+	case errResponseTooLarge:
+		return "the agent's response exceeded the gateway's size limit"
+	default:
+		return "the agent could not be reached or returned an error"
+	}
 }
 
 // ---- reply delivery (shared by every platform adapter) ----
@@ -252,7 +284,7 @@ func (s *Server) sendPlatformRequest(
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			last.err = err
+			last.err = withoutRequestURL(err)
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))

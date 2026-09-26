@@ -912,3 +912,32 @@ func TestUserListener_RejectionsAreIdentical(t *testing.T) {
 		}
 	}
 }
+
+// An agent runs tenant code, so a redirect it answers with is never
+// followed: following it would send the message and the gateway's client
+// certificate to wherever Location names, another tenant's agent included,
+// and hand that agent's reply back to the caller.
+func TestWebhook_AgentRedirectNotFollowed(t *testing.T) {
+	var victimHits atomic.Int32
+	victim := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		victimHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"reply from another tenant's agent"}`))
+	}))
+	t.Cleanup(victim.Close)
+
+	h := newUserHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, victim.URL+"/v1/message", http.StatusTemporaryRedirect)
+	})
+	h.seedChannel("sync")
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{"text":"hi"}`))
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if n := victimHits.Load(); n != 0 {
+		t.Fatalf("the redirect target received %d requests, want 0", n)
+	}
+	if resp.StatusCode == http.StatusOK || strings.Contains(string(body), "another tenant") {
+		t.Fatalf("redirect answer = %d %s, want a delivery failure", resp.StatusCode, body)
+	}
+}

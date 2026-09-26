@@ -116,6 +116,6 @@ Because the derivation is a pure function of `channelId` and `userId`, the id is
 
 ### What the gateway does with the answer
 
-`200 OK` with a JSON envelope whose `content` is a string is a delivery. Anything else, a non-2xx status, a connection error, an unparseable body, or a `200` with a missing or non-string `content`, is one failed attempt, and the schedule above continues. After the fourth failure the message is `delivery_failed`.
+`200 OK` with a JSON envelope whose `content` is a string is a delivery. Anything else, a non-2xx status, a connection error, an unparseable body, or a `200` with a missing or non-string `content`, is one failed attempt, and the schedule above continues. A `3xx` is a non-2xx status like any other: the gateway never follows a redirect from an agent, because following one would carry its client certificate and the message to another address. After the fourth failure the message is `delivery_failed`.
 
 In sync mode the webhook caller then receives `502 delivery_failed`, though under default settings `504 sync_deadline_exceeded` fires first ([Reachability under default config](channel-webhook.md#reachability-under-default-config)). In async mode the same payload is sent by callback or stored for polling, and a platform channel sends it as the reply text. Each outcome is recorded as a channel-health observation.

@@ -17,7 +17,9 @@ limitations under the License.
 package gateway
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -99,5 +101,37 @@ func TestReplyRefused_BoundsEventDetail(t *testing.T) {
 	}
 	if len(obs[0].lastError) > 1024 {
 		t.Errorf("health detail is %d bytes; the platform body was not truncated", len(obs[0].lastError))
+	}
+}
+
+// A platform reply never carries transport detail: the activator's error
+// names the controller Service and a Pod IP.
+func TestPlatformErrorMessage_NoTransportDetail(t *testing.T) {
+	leak := errors.New(`Post "https://kaalm-controller.kaalm-system.svc.cluster.local:9443/v1/activate/team-a/a": dial tcp 10.42.0.7:9443: connect: connection refused`)
+	for _, errType := range []string{errControllerDown, errResponseTooLarge, errDeliveryFailed} {
+		if got := platformErrorMessage(errType, leak); strings.Contains(got, "10.42.0.7") || strings.Contains(got, "svc.cluster.local") {
+			t.Errorf("%s message leaks transport detail: %q", errType, got)
+		}
+	}
+	wake := errors.New("agent did not become ready within wakeTimeout (2m0s)")
+	if got := platformErrorMessage(errWakeTimeout, wake); got != wake.Error() {
+		t.Errorf("wake_timeout message = %q, want the wakeTimeout text", got)
+	}
+}
+
+// A failed reply's error never carries the request URL: a Discord reply URL
+// holds the interaction token, and the error is written to channel health
+// and an Event.
+func TestWithoutRequestURL_DropsTheToken(t *testing.T) {
+	_, err := http.Get("https://127.0.0.1:1/api/v10/webhooks/app/SECRET-INTERACTION-TOKEN/messages/@original")
+	if err == nil {
+		t.Skip("port 1 answered")
+	}
+	got := withoutRequestURL(err).Error()
+	if strings.Contains(got, "SECRET-INTERACTION-TOKEN") || strings.Contains(got, "/webhooks/") {
+		t.Errorf("error keeps the URL: %q", got)
+	}
+	if !strings.Contains(got, "Get request failed") {
+		t.Errorf("error lost its operation: %q", got)
 	}
 }

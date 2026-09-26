@@ -85,9 +85,10 @@ controller:
 ```
 
 An empty `podLabels` allows every Pod in the selected namespaces.
-`namespaceLabels` must select at least one label, or the controller
-refuses to start. Agent policies pick up the new value on their next reconcile; a task's
-policy is fixed when the task is created.
+`namespaceLabels` must select at least one label, and every key and value
+must be valid label syntax, or the controller refuses to start. Agent
+policies pick up the new value on their next reconcile; a task's policy is
+fixed when the task is created.
 
 ## Profiling under load
 
@@ -125,9 +126,10 @@ until it expires, so shorten both on a cluster where that window matters:
 --set controller.certificate.renewBefore=8h
 ```
 
-Use Go duration syntax (`h`, `m`, `s`; there is no `d` unit). `renewBefore`
-must be shorter than `duration`, or the controller exits at startup with an
-error naming both values. The new lifetime applies to certificates created
+Use Go duration syntax (`h`, `m`, `s`; there is no `d` unit). `duration`
+must be at least `1h` and `renewBefore` at least `5m`, the minimums
+cert-manager accepts, and `renewBefore` must be shorter than `duration`.
+Otherwise the controller exits at startup with an error naming the value. The new lifetime applies to certificates created
 after the change; an existing workload keeps its certificate's lifetime until
 the workload is re-created.
 

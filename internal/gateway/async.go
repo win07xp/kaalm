@@ -391,6 +391,9 @@ func (s *Server) callbackHTTPClient() *http.Client {
 		transport.MaxIdleConns = agentMaxIdleConns
 		transport.TLSClientConfig = nil
 		transport.DialTLSContext = s.dialCallbackTLS
+		// A proxy would dial the host itself: it bypasses the pinned,
+		// range-checked address and the callback CA bundle.
+		transport.Proxy = nil
 		s.callbackClient = &http.Client{
 			Transport: transport,
 			// The pinned dial already keeps a redirect from leaving the
@@ -505,7 +508,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	// Platform channels (discord/whatsapp) have no polling record and a nil
 	// spec.webhook (rule 39). Answer 401 before authenticatePoll touches it.
 	if !webhookPollChannel(channel) {
-		unauthorized(w, "auth failed")
+		unauthorizedUser(w)
 		return
 	}
 	if !s.authenticatePoll(r.Context(), channel, r, requestID) {

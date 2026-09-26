@@ -22,6 +22,7 @@ import (
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // DefaultDNSNamespaceLabels and DefaultDNSPodLabels select the cluster DNS
@@ -68,6 +69,14 @@ func parseLabels(s string) (map[string]string, error) {
 		k, v, ok := strings.Cut(pair, "=")
 		if !ok || k == "" {
 			return nil, fmt.Errorf("%q is not key=value", pair)
+		}
+		// Checked here so a bad value fails startup, not every NetworkPolicy
+		// write the apiserver would reject.
+		if errs := validation.IsQualifiedName(k); len(errs) > 0 {
+			return nil, fmt.Errorf("label key %q: %s", k, strings.Join(errs, "; "))
+		}
+		if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
+			return nil, fmt.Errorf("label value %q: %s", v, strings.Join(errs, "; "))
 		}
 		out[k] = v
 	}
