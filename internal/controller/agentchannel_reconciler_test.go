@@ -1009,3 +1009,39 @@ func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
 		t.Errorf("an unchanged pass rewrote the channel: resourceVersion %s -> %s", settled.ResourceVersion, after.ResourceVersion)
 	}
 }
+
+// A Role with the channel's credential Role name that the channel does not
+// control is neither rewritten nor adopted: the channel reports
+// ChildConflict, and deleting the Role lets it recover.
+func TestChannel_UnownedCredentialRoleIsChildConflict(t *testing.T) {
+	mkWorkloadClass(t, "chc-own-role", nil)
+	mkWorkloadAgent(t, "ch-agent-own-role", "chc-own-role", nil)
+	mkChannelSecret(t, "ch-own-role-secret")
+	roleName := "kaalm-channel-ch-own-role-creds"
+	foreign := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: "default"},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"},
+		}},
+	}
+	if err := testClient.Create(ctxT(), foreign); err != nil {
+		t.Fatal(err)
+	}
+	mkChannel(t, "ch-own-role", "ch-agent-own-role", "/channels/default/ch-own-role", func(ch *kaalmv1beta1.AgentChannel) {
+		ch.Spec.Webhook.Auth.SecretRef = &kaalmv1beta1.SecretKeyReference{Name: "ch-own-role-secret", Key: "token"}
+	})
+	expectChannelReady(t, "ch-own-role", metav1.ConditionFalse, kaalmv1beta1.ReasonChildConflict)
+
+	var role rbacv1.Role
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: roleName}, &role); err != nil {
+		t.Fatal(err)
+	}
+	if len(role.Rules) != 1 || role.Rules[0].Resources[0] != "configmaps" || metav1.GetControllerOf(&role) != nil {
+		t.Fatalf("the foreign Role was rewritten or adopted: %+v", role)
+	}
+
+	if err := testClient.Delete(ctxT(), &role); err != nil {
+		t.Fatal(err)
+	}
+	expectChannelReady(t, "ch-own-role", metav1.ConditionTrue, "")
+}

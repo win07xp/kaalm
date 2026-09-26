@@ -95,8 +95,10 @@ a platform refused the reply).
 `SystemNamespaceForbidden`, `CredentialsMissing` (the auth or platform
 credential Secret is absent or lacks a required key), `CredentialsInvalid`
 (the Discord public key is not a valid Ed25519 key), `CallbackAuthMissing`
-(the `callbackAuth` Secret or key does not exist), and `CallbackAuthInvalid`
-(the `callbackAuth` key is empty).
+(the `callbackAuth` Secret or key does not exist), `CallbackAuthInvalid`
+(the `callbackAuth` key is empty), and `ChildConflict` (a Role or RoleBinding
+with the channel's credential Role name exists and the channel does not own
+it).
 
 ## ModelProvider
 
