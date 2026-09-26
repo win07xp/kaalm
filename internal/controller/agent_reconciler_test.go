@@ -496,7 +496,13 @@ func TestAgent_EffectiveWakeTimeout(t *testing.T) {
 		"wake-over-cap": 5 * time.Minute,
 	} {
 		eventually(t, func() error {
-			got := getWorkloadAgent(t, name).Status.EffectiveWakeTimeout
+			// Read through the cache with a retry: right after Create the
+			// cache may not hold the Agent yet.
+			var ag kaalmv1beta1.Agent
+			if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+				return err
+			}
+			got := ag.Status.EffectiveWakeTimeout
 			if got == nil || got.Duration != want {
 				return fmt.Errorf("%s effectiveWakeTimeout = %v, want %v", name, got, want)
 			}
