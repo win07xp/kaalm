@@ -67,6 +67,7 @@ const (
 const (
 	ConditionReady               = "Ready"
 	ConditionFQDNPolicySupported = "FQDNPolicySupported" // AgentClass
+	ConditionSecurityBaseline    = "SecurityBaseline"    // AgentClass
 	ConditionHealthy             = "Healthy"             // ModelProvider
 	ConditionGatewayReachable    = "GatewayReachable"    // ModelProvider, Agent
 	ConditionProvidersReady      = "ProvidersReady"      // Agent
@@ -126,6 +127,8 @@ const (
 	ReasonProviderUnhealthy          = "ProviderUnhealthy"
 	ReasonBudgetExhausted            = "BudgetExhausted"
 	ReasonInvalidReference           = "InvalidReference"
+	ReasonRestrictedBaseline         = "RestrictedBaseline"
+	ReasonBelowRestrictedBaseline    = "BelowRestrictedBaseline"
 	ReasonHibernated                 = "Hibernated"
 	ReasonWoken                      = "Woken"
 	ReasonTaskSucceeded              = "TaskSucceeded"

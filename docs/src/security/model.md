@@ -32,7 +32,15 @@ Platform teams create one AgentClass per isolation tier (`standard` with the fie
 
 ### Pod Security Standards
 
-The Pod and container security contexts of every Kaalm-created Pod are exactly what its AgentClass declares in `spec.security.podSecurityContext` and `spec.security.containerSecurityContext`. The controller applies no defaults of its own, and the chart's `standard` class declares none, so a Pod under that class runs with the cluster's defaults. A class that must satisfy the `restricted` Pod Security Standard declares the block shown on [AgentClass](../resources/agentclass.md#spec). Pod Security Admission on the workload namespaces enforces the standard on the namespace, outside the class; as shipped, Kaalm emits no warning for a class that declares less.
+Every Kaalm-created Pod complies with the `restricted` Pod Security Standard by default:
+
+- `runAsNonRoot: true`
+- `seccompProfile: RuntimeDefault`
+- `allowPrivilegeEscalation: false`
+- `readOnlyRootFilesystem: true`. Writable storage comes from the PVC when persistence is enabled, and the controller mounts an `emptyDir` at `/tmp` in every Agent and AgentTask Pod whose root is read-only, so images that write temp files work without a PVC.
+- All Linux capabilities dropped
+
+The class's `spec.security.podSecurityContext` and `spec.security.containerSecurityContext` are merged over that baseline field by field: a field the class sets wins, a field it leaves unset takes the baseline value. The chart's `standard` class writes the baseline out so the rendered object shows what runs. A class can relax any field, but never silently: the AgentClass reconciler sets `SecurityBaseline=False, reason=BelowRestrictedBaseline` naming each relaxed field and emits a `Warning` event when the relaxation first appears ([AgentClass](../resources/agentclass.md#security-starts-from-the-restricted-baseline)). Pod Security Admission on the workload namespaces enforces the standard on the namespace, outside the class.
 
 ### Network policy
 

@@ -94,3 +94,17 @@ func TestStandardAgentClass_AllowedProvidersComeFromValues(t *testing.T) {
 		}
 	}
 }
+
+// The standard class writes the restricted baseline out, so the rendered
+// object shows what runs (#194).
+func TestStandardAgentClass_DeclaresRestrictedBaseline(t *testing.T) {
+	ac := renderStandardClass(t)
+	ps, cs := ac.Spec.Security.PodSecurityContext, ac.Spec.Security.ContainerSecurityContext
+	if ps == nil || ps.RunAsNonRoot == nil || !*ps.RunAsNonRoot || ps.SeccompProfile == nil {
+		t.Errorf("podSecurityContext is not the restricted baseline: %+v", ps)
+	}
+	if cs == nil || cs.ReadOnlyRootFilesystem == nil || !*cs.ReadOnlyRootFilesystem ||
+		cs.AllowPrivilegeEscalation == nil || *cs.AllowPrivilegeEscalation || cs.Capabilities == nil {
+		t.Errorf("containerSecurityContext is not the restricted baseline: %+v", cs)
+	}
+}
