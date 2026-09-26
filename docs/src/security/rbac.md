@@ -132,7 +132,7 @@ Workloads in the gateway-only tier have no Agent resource. They mount a projecte
 
 ### Source-IP cross-check
 
-In both modes the gateway resolves the source IP to a Pod through its informer and requires that Pod to be in the namespace the credential named ([Source-IP cross-check](../gateways/llm/workload-identity.md#source-ip-cross-check-both-modes)). A credential presented from a different Pod fails with `401`. `POST /v1/task/complete` retries the resolution with a live Pod list before failing, so informer lag on a new Pod surfaces as the retryable `403 StalePodCompletion` rather than a terminal `401`.
+In both modes the gateway resolves the source IP to a Pod through its informer and requires that Pod to be in the namespace the credential named ([Source-IP cross-check](../gateways/llm/workload-identity.md#source-ip-cross-check-both-modes)). A credential presented from a different Pod fails with `401`. `POST /v1/task/complete` retries the resolution with a live Pod list before failing, so informer lag on a new Pod surfaces as the retryable `409 stale_pod` rather than a terminal `401`.
 
 ### Client cert presentation
 

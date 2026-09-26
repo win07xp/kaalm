@@ -111,8 +111,8 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 	// (c) the identity gate: the calling Pod's UID must match
 	// status.currentPodUID. Resolved from the source IP, with the live
 	// namespace-narrowed fallback on an informer miss (task-complete.md,
-	// cross-check step 2; #148); retryable because the benign informer-lag
-	// race on currentPodUID itself shares this rejection.
+	// cross-check step 2; #148). A 409 and retryable, because the benign
+	// informer-lag race on currentPodUID itself shares this rejection.
 	if !s.Config.DisableSourceIPCheck {
 		ip := sourceIP(r)
 		pod, found := s.Store.PodByIP(r.Context(), ip)
@@ -120,8 +120,8 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 			pod, found = s.Store.PodByIPLive(r.Context(), c.Namespace, ip)
 		}
 		if !found || task.Status.CurrentPodUID == "" || string(pod.UID) != task.Status.CurrentPodUID {
-			writeError(w, http.StatusForbidden, errorBody{
-				Type: errAccessDenied, Retryable: true,
+			writeError(w, http.StatusConflict, errorBody{
+				Type: errStalePod, Retryable: true,
 				Message: "StalePodCompletion: the calling Pod is not the task's current Pod"}, 0)
 			return
 		}

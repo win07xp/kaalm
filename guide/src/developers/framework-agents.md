@@ -107,7 +107,7 @@ the handler mount is deliberately not its extension point. The
 reads its goal from its own `spec.env` (Kaalm injects no goal variables),
 runs the graph, and reports through `POST /v1/task/complete` with
 `status: "success"` and the artifacts declared in `spec.artifacts`,
-retrying only the retryable rejection (`StalePodCompletion`, on 100ms,
+retrying only the retryable rejection (`409 stale_pod`, on 100ms,
 500ms, 2s) and treating `TaskAlreadyCompleted` as done. See
 [Running tasks](running-tasks.md) for the task lifecycle itself.
 

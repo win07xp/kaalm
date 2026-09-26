@@ -33,7 +33,7 @@ partition "handler: admission" {
     :**403** TaskAlreadyCompleted;
     kill
   elseif (Pod UID = status.currentPodUID?) then (no)
-    :**403** StalePodCompletion\nretryable;
+    :**409** stale_pod\nretryable;
     kill
   else (yes)
   endif

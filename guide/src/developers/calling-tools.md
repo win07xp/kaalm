@@ -95,8 +95,8 @@ never on the message:
 | 403 | `tool_denied` | no | The named tool is outside your grant, or the method is off the broker's allowlist |
 | 413 | `request_too_large`, `response_too_large` | no | The request or the server's response exceeded the broker's body cap |
 | 429 | `rate_limited` | after `Retry-After` | Your namespace hit the provider's `requestsPerMinute` ceiling |
-| 503 | `tool_unavailable` | yes | The tool server is unreachable, refusing, or rejected the injected credential; a platform problem, not yours |
-| 504 | `tool_timeout` | no | The call exceeded the broker's upstream timeout |
+| 503 | `tool_unavailable` | per `error.retryable` | The tool server is unreachable, refusing, rejected the injected credential, or sent a `tools/list` answer the broker cannot parse; a platform problem, not yours. The first two are retryable; the last two are not |
+| 504 | `tool_timeout` | yes | The call exceeded the broker's upstream timeout |
 
 A protocol-level 4xx from the tool server itself relays verbatim (an
 expired upstream session's 404, for example), so normal MCP session

@@ -66,8 +66,9 @@ reasons as the Agent's Degraded, but terminal here).
 Conditions: `Ready` (provisioning gate) and `Completed` (terminal verdict,
 reason `TaskSucceeded`, `TaskFailed`, `TimeoutExceeded`, or
 `TimeoutSucceeded`). A completion call from the wrong Pod is refused with
-`403 access_denied` and the message prefix `StalePodCompletion` (retryable
-by the task) or `TaskAlreadyCompleted` (final); neither is a condition.
+`409 stale_pod` (retryable by the task), and one against a finished task
+with `403 access_denied` and the message prefix `TaskAlreadyCompleted`
+(final); neither is a condition.
 
 ## AgentChannel
 

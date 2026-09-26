@@ -20,7 +20,7 @@ all gateway calls, per-path client-cert verification on `POST /v1/message`
 certificate rotation via the `..data` directory watch, `messageId`
 deduplication persisted across hibernation, the Agent-mode heartbeat loop
 with task-mode detection from the cert SAN, and the `CompleteTask` helper
-with the bounded `StalePodCompletion` retry.
+with the bounded `409 stale_pod` retry.
 
 ## What you change
 

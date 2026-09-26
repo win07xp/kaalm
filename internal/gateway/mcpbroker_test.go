@@ -445,6 +445,97 @@ func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 	})
 }
 
+// retryable is set per cause, not by status: two 503s can disagree, and a
+// 504 timeout is retryable although it carries no Retry-After.
+func TestMCPBroker_RetryablePerCause(t *testing.T) {
+	okResult := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
+	}
+	toolsList := map[string]any{"jsonrpc": "2.0", "id": 7, "method": "tools/list"}
+	cases := []struct {
+		name       string
+		upstream   http.HandlerFunc
+		setup      func(t *testing.T, h *harness, cl *http.Client)
+		path       string
+		body       map[string]any
+		status     int
+		errType    string
+		retryable  bool
+		retryAfter string
+	}{
+		{name: "unknown provider", upstream: okResult, path: "/v1/mcp/nope",
+			status: http.StatusBadRequest, errType: errInvalidRequest},
+		{name: "tool not granted", upstream: okResult, body: mcpCall("fetch_page"),
+			status: http.StatusForbidden, errType: errToolDenied},
+		{name: "rate limited", upstream: okResult,
+			setup: func(t *testing.T, h *harness, cl *http.Client) {
+				h.store.toolProviders["search"].Spec.RateLimits = kaalmv1beta1.ToolProviderRateLimits{RequestsPerMinute: 1}
+				first := postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+				_ = first.Body.Close()
+			},
+			status: http.StatusTooManyRequests, errType: errRateLimited, retryable: true, retryAfter: "1"},
+		{name: "credential unreadable", upstream: okResult,
+			setup:  func(_ *testing.T, h *harness, _ *http.Client) { delete(h.store.toolCreds, "search") },
+			status: http.StatusServiceUnavailable, errType: errToolUnavailable, retryable: true},
+		{name: "refused connection", upstream: okResult,
+			setup:  func(_ *testing.T, h *harness, _ *http.Client) { h.upstream.Close() },
+			status: http.StatusServiceUnavailable, errType: errToolUnavailable, retryable: true, retryAfter: "1"},
+		{name: "upstream 5xx", upstream: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+		}, status: http.StatusServiceUnavailable, errType: errToolUnavailable, retryable: true, retryAfter: "1"},
+		{name: "upstream rejects the gateway credential", upstream: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		}, status: http.StatusServiceUnavailable, errType: errToolUnavailable},
+		{name: "unparseable tools/list", upstream: func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `not json`)
+		}, body: toolsList, status: http.StatusServiceUnavailable, errType: errToolUnavailable},
+		{name: "timeout", upstream: func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			<-r.Context().Done()
+		}, setup: func(_ *testing.T, h *harness, _ *http.Client) {
+			h.server.Config.MCPUpstreamTimeout = 100 * time.Millisecond
+		}, status: http.StatusGatewayTimeout, errType: errToolTimeout, retryable: true},
+		{name: "request too large", upstream: okResult,
+			setup:  func(_ *testing.T, h *harness, _ *http.Client) { h.server.Config.MCPMaxBodyBytes = 16 },
+			status: http.StatusRequestEntityTooLarge, errType: errRequestTooLarge},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, tc.upstream)
+			h.seedToolRoute()
+			cert := agentCert(t, h.ca)
+			cl := h.client(&cert)
+			if tc.setup != nil {
+				tc.setup(t, h, cl)
+			}
+			path, body := tc.path, tc.body
+			if path == "" {
+				path = "/v1/mcp/search"
+			}
+			if body == nil {
+				body = mcpCall("web_search")
+			}
+			resp := postJSON(t, cl, h.url(path), body, nil)
+			defer func() { _ = resp.Body.Close() }()
+			var envelope struct {
+				Error errorBody `json:"error"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&envelope)
+			if resp.StatusCode != tc.status || envelope.Error.Type != tc.errType {
+				t.Fatalf("got %d %q, want %d %q", resp.StatusCode, envelope.Error.Type, tc.status, tc.errType)
+			}
+			if envelope.Error.Retryable != tc.retryable {
+				t.Errorf("retryable = %v, want %v", envelope.Error.Retryable, tc.retryable)
+			}
+			if got := resp.Header.Get("Retry-After"); got != tc.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, tc.retryAfter)
+			}
+		})
+	}
+}
+
 func TestMCPBroker_SizeCaps(t *testing.T) {
 	t.Run("request too large", func(t *testing.T) {
 		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})

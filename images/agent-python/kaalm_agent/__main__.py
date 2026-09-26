@@ -97,7 +97,7 @@ class Agent:
         return not self.is_task
 
     async def complete_task(self, status: str, message: str, artifacts: dict[str, str] | None = None) -> None:
-        """Report AgentTask completion, retrying StalePodCompletion.
+        """Report AgentTask completion, retrying the 409 stale_pod rejection.
 
         Bounded backoff of 100ms, 500ms, 2s (contract item 6); a
         TaskAlreadyCompleted 403 is terminal.
@@ -110,7 +110,7 @@ class Agent:
             text = reply.data if isinstance(reply.data, str) else json.dumps(reply.data)
             if reply.status == 200:
                 return
-            if reply.status == 403 and "StalePodCompletion" in text:
+            if reply.status == 409 and '"stale_pod"' in text:
                 continue
             if reply.status == 403 and "TaskAlreadyCompleted" in text:
                 log.info("task already completed; exiting")

@@ -143,7 +143,7 @@ This payload-based design has no race, needs no `pods/exec` RBAC, and keeps the 
 The gateway and the reconciler coordinate completion through two mechanisms:
 
 - The per-task `{taskName}-completion` ConfigMap is the data channel. The gateway writes the completion payload; the reconciler watches it ([The completion mailbox](../runtime/child-resources.md#the-completion-mailbox)).
-- `status.currentPodUID` is the identity gate. The reconciler stamps it on every Pod creation of an `agentReported` task and clears it during the retry-reset window; the gateway rejects a report from any other Pod with `403 access_denied` and a `StalePodCompletion` message, and a report against a settled task with `TaskAlreadyCompleted`.
+- `status.currentPodUID` is the identity gate. The reconciler stamps it on every Pod creation of an `agentReported` task and clears it during the retry-reset window; the gateway rejects a report from any other Pod with `409 stale_pod` and a `StalePodCompletion` message, and a report against a settled task with `403 access_denied` and `TaskAlreadyCompleted`.
 
 The wire-level contract is on [Task completion](../gateways/api/task-complete.md), and the clear, reset, create, and restamp order on [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 

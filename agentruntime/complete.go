@@ -19,9 +19,9 @@ type completionRequest struct {
 	Artifacts map[string]string `json:"artifacts,omitempty"`
 }
 
-// staleRetrySchedule is the bounded backoff for StalePodCompletion, which
-// covers the brief reconciler lag between Pod creation and currentPodUID being
-// stamped. Distinct from (and much tighter than) the gateway's delivery
+// staleRetrySchedule is the bounded backoff for the 409 stale_pod rejection
+// (message prefix StalePodCompletion), which covers the brief reconciler lag
+// between Pod creation and currentPodUID being stamped. Distinct from (and much tighter than) the gateway's delivery
 // retries. A package variable so tests can compress it.
 var staleRetrySchedule = []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
 
@@ -30,7 +30,7 @@ var staleRetrySchedule = []time.Duration{100 * time.Millisecond, 500 * time.Mill
 var ErrTaskAlreadyCompleted = errors.New("task already completed")
 
 // CompleteTask reports completion for an AgentTask (contract item 6),
-// retrying StalePodCompletion on a bounded schedule and returning
+// retrying the 409 stale_pod rejection on a bounded schedule and returning
 // ErrTaskAlreadyCompleted on the terminal 403. Only meaningful in task mode;
 // resident Agents never call it.
 func (a *Agent) CompleteTask(ctx context.Context, status, message string, artifacts map[string]string) error {
@@ -57,7 +57,7 @@ func (a *Agent) CompleteTask(ctx context.Context, status, message string, artifa
 		switch {
 		case resp.StatusCode == http.StatusOK:
 			return nil
-		case resp.StatusCode == http.StatusForbidden && strings.Contains(string(respBody), "StalePodCompletion"):
+		case resp.StatusCode == http.StatusConflict && strings.Contains(string(respBody), `"stale_pod"`):
 			lastErr = fmt.Errorf("stale pod completion; retrying")
 			continue
 		case resp.StatusCode == http.StatusForbidden && strings.Contains(string(respBody), "TaskAlreadyCompleted"):

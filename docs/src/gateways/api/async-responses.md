@@ -83,7 +83,7 @@ An agent-delivery attempt counts as failed on a connection error, a non-2xx resp
 
 The agent-delivery pipeline reuses the same `messageId` across its attempts, so an agent that started work on an earlier attempt can receive the same message again. Agents deduplicate on `messageId`; see [The runtime contract](../../runtime/contract.md). A caller-side resubmission is different and gets a fresh `messageId`.
 
-[`POST /v1/task/complete`](task-complete.md) uses a separate, tighter schedule for `StalePodCompletion` (100ms, 500ms, 2s; 3 attempts). It is not this schedule.
+[`POST /v1/task/complete`](task-complete.md) uses a separate, tighter schedule for `409 stale_pod` (100ms, 500ms, 2s; 3 attempts). It is not this schedule.
 
 ### Sync-mode reachability
 
