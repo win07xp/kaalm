@@ -55,7 +55,7 @@ type ModelProviderSpec struct {
 	// Fallback names providers tried when this one fails. Each may declare its
 	// own fallback, forming a tree walked depth-first. Must be acyclic (rule
 	// 11) and stay within formats the gateway can translate (rule 12): the
-	// same type, or since v0.7.0 anthropic against openai / openai-compatible.
+	// same type, or anthropic against openai / openai-compatible.
 	// +optional
 	Fallback []FallbackReference `json:"fallback,omitempty"`
 	// HealthCheck configures the periodic upstream liveness probe. A nil block
@@ -66,7 +66,7 @@ type ModelProviderSpec struct {
 }
 
 // FallbackReference is one edge of the fallback tree: the provider tried
-// next, and since v0.7.0 the model map an edge that crosses formats needs.
+// next, and the model map an edge that crosses formats needs.
 // Wire-compatible with the {name} reference it replaces.
 type FallbackReference struct {
 	// Name of the fallback ModelProvider.
@@ -96,8 +96,8 @@ type ModelProviderModel struct {
 	// CostPer1MOutputTokens is USD per million output tokens, as a decimal string.
 	// +optional
 	CostPer1MOutputTokens string `json:"costPer1MOutputTokens,omitempty"`
-	// MaxOutputTokens is the model's declared output ceiling. Since v0.7.0 the
-	// gateway supplies it as max_tokens when a request crossing into an
+	// MaxOutputTokens is the model's declared output ceiling. The gateway
+	// supplies it as max_tokens when a request crossing into an
 	// anthropic provider omits one (Anthropic requires the field); a request
 	// carrying more is capped to it.
 	// +kubebuilder:validation:Minimum=1

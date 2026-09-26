@@ -5,17 +5,19 @@ type. You declare an agent; Kaalm runs it, gives it its own identity and
 storage, routes its model calls through a gateway that holds the credentials,
 and puts it to sleep when nobody is talking to it.
 
-**Status: v0.6.0.** Installs with one Helm command, upgrades in place with
+**Status: v1.0.0.** Installs with one Helm command, upgrades in place with
 two, and your first agent needs no image build: mount a handler file into a
-published base image. The API is graduated: `kaalm.io/v1beta1` is the stored
-version, `v1alpha1` manifests keep working with a deprecation warning, and
-the controller migrates storage on its own after an upgrade. The gateway
-holds every credential and brokers, meters, and audits both LLM and MCP tool
-calls (speaking both the stateless MCP 2026-07-28 revision and the earlier
-handshake era). An optional console puts the fleet, its spend, and a
-test-chat panel on one screen; Grafana dashboards and OpenTelemetry tracing
-cover the rest. All twenty-four acceptance scenarios are proven on a real
-cluster.
+published base image. The API is `kaalm.io/v1beta1`, and from v1.0.0 it only
+changes in ways that keep existing manifests working; `v1alpha1` manifests
+still apply with a deprecation warning. The gateway holds every credential
+and brokers, meters, and audits both LLM and MCP tool calls. Agents run with
+secure defaults: the restricted Pod Security Standard, no Kubernetes API
+token, and a NetworkPolicy that lets them reach the gateway, DNS, and only
+the destinations their class allows. An optional console puts the fleet, its
+spend, and a test-chat panel on one screen; Grafana dashboards and
+OpenTelemetry tracing cover the rest. All twenty-four acceptance scenarios
+are proven on a real cluster, the listeners have been through an
+authorization and SSRF audit, and a load test ran 400 agents on one machine.
 
 ## What it looks like
 
@@ -43,15 +45,20 @@ with opt-in hard enforcement that turns the block threshold into a guarantee.
 
 ## Install
 
-Kaalm expects cert-manager and trust-manager already in the cluster; the chart
-installs neither. With those in place:
+Kaalm expects three things already in the cluster, and the chart installs
+none of them: cert-manager, trust-manager, and a CNI that enforces
+NetworkPolicy. With those in place:
 
 ```bash
 helm install kaalm oci://ghcr.io/win07xp/charts/kaalm \
-  --version 0.6.0 \
+  --version 1.0.0 \
   --namespace kaalm-system --create-namespace \
-  --set certManager.clusterResourceNamespace=cert-manager
+  --set certManager.clusterResourceNamespace=cert-manager \
+  --wait
 ```
+
+The [installation guide](guide/src/getting-started/installation.md) covers
+the prerequisites and what the chart creates.
 
 To try it on a throwaway cluster on your laptop, follow the tutorial below
 instead; it sets up everything from scratch.

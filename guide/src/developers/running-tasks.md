@@ -18,7 +18,7 @@ metadata:
 spec:
   agentClassRef:
     name: standard
-  image: ghcr.io/win07xp/kaalm-agent-go:0.7.0
+  image: ghcr.io/win07xp/kaalm-agent-go:1.0.0
   env:
     - name: KAALM_TASK_AUTOCOMPLETE
       value: success

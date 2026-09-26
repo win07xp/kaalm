@@ -157,9 +157,9 @@ spec:
                 x-kubernetes-list-type: map
               type:
                 description: |-
-                  Type selects the tool protocol. v0.4.0 supports exactly "mcp"
-                  (MCP streamable HTTP); the slot exists so a future protocol is an
-                  addition, not a reshape.
+                  Type selects the tool protocol. The one supported value is "mcp"
+                  (MCP streamable HTTP); the field exists so another protocol can be
+                  added without reshaping the resource.
                 enum:
                 - mcp
                 type: string
@@ -374,9 +374,9 @@ spec:
                 x-kubernetes-list-type: map
               type:
                 description: |-
-                  Type selects the tool protocol. v0.4.0 supports exactly "mcp"
-                  (MCP streamable HTTP); the slot exists so a future protocol is an
-                  addition, not a reshape.
+                  Type selects the tool protocol. The one supported value is "mcp"
+                  (MCP streamable HTTP); the field exists so another protocol can be
+                  added without reshaping the resource.
                 enum:
                 - mcp
                 type: string

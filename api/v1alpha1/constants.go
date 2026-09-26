@@ -76,8 +76,8 @@ const (
 	ConditionPlatformConnected   = "PlatformConnected"   // AgentChannel, tri-state
 )
 
-// AgentChannel platform types (spec.type). Since v0.7.0, discord and whatsapp
-// name the platform adapters; webhook is the generic receiver.
+// AgentChannel platform types (spec.type). discord and whatsapp name the
+// platform adapters; webhook is the generic receiver.
 const (
 	ChannelTypeWebhook  = "webhook"
 	ChannelTypeDiscord  = "discord"

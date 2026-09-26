@@ -26,9 +26,9 @@ import (
 // calls the way it proxies LLM calls. See docs/src/resources/toolprovider.md
 // and docs/src/gateways/tool-plane.md.
 type ToolProviderSpec struct {
-	// Type selects the tool protocol. v0.4.0 supports exactly "mcp"
-	// (MCP streamable HTTP); the slot exists so a future protocol is an
-	// addition, not a reshape.
+	// Type selects the tool protocol. The one supported value is "mcp"
+	// (MCP streamable HTTP); the field exists so another protocol can be
+	// added without reshaping the resource.
 	// +kubebuilder:validation:Enum=mcp
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`

@@ -8,14 +8,16 @@ details. Build with `make books` (which runs `make docs-check` first);
 ## Status
 
 Written against Kaalm 0.3.0 and re-walked for every release since, most
-recently against the published 0.7.0 artifacts on 2026-08-31 with zero
-drift. Every command and every block of output came from one run, in order,
-on a fresh k3d cluster. A re-walk is two passes: pre-release against locally
+recently for 1.0.0: pass one against locally built 1.0.0 artifacts on
+2026-09-26, with no command or output drift. That pass replaced the
+sleep-and-wake watch block, which had shown a single row, with the real
+four-row stream. Every command and every block of output came from one run,
+in order, on a fresh k3d cluster. A re-walk is two passes: pre-release against locally
 built artifacts, then confirmation against the published ones after the tag.
-The walk history (what each pass caught) is in issues #77, #99, #115, and
-#130.
+The walk history (what each pass caught) is in issues #77, #99, #115,
+#130, and #143.
 
-The install is pinned to `--version 0.7.0` on purpose: the pin is what makes
+The install is pinned to `--version 1.0.0` on purpose: the pin is what makes
 the later chapters' output true. When the pin moves, re-walk the whole book
 rather than editing the version string.
 

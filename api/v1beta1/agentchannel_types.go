@@ -20,8 +20,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// AgentChannelSpec binds an inbound channel (a generic webhook, or since
-// v0.7.0 a Discord or WhatsApp platform adapter) to an Agent. See
+// AgentChannelSpec binds an inbound channel (a generic webhook, or a
+// Discord or WhatsApp platform adapter) to an Agent. See
 // docs/src/resources/agentchannel.md. Rule 39: the type selects exactly one
 // configuration block, and that block must be the one set.
 // +kubebuilder:validation:XValidation:rule="((has(self.type) ? self.type : 'webhook') == 'webhook') == has(self.webhook) && ((has(self.type) ? self.type : 'webhook') == 'discord') == has(self.discord) && ((has(self.type) ? self.type : 'webhook') == 'whatsapp') == has(self.whatsapp)",message="exactly the block matching spec.type must be set (webhook, discord, or whatsapp)"
@@ -31,7 +31,7 @@ type AgentChannelSpec struct {
 	// +kubebuilder:validation:Required
 	AgentRef LocalObjectReference `json:"agentRef"`
 	// Type selects the channel platform: the generic webhook, or one of the
-	// platform adapters (since v0.7.0).
+	// platform adapters.
 	// +kubebuilder:validation:Enum=webhook;discord;whatsapp
 	// +kubebuilder:default=webhook
 	// +optional

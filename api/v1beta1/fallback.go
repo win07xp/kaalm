@@ -34,7 +34,7 @@ func ProviderFormat(providerType string) string {
 }
 
 // FallbackFormatCompatible is rule 12 (docs/src/resources/validation-and-defaulting.md):
-// an edge may join providers of the same type, or since v0.7.0 anthropic
+// an edge may join providers of the same type, or anthropic
 // and openai / openai-compatible in either direction, the pair the gateway
 // translates between. google-vertex stays same-type.
 func FallbackFormatCompatible(parent, child string) bool {

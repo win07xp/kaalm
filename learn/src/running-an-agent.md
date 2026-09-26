@@ -43,7 +43,7 @@ metadata:
 spec:
   agentClassRef:
     name: tutorial
-  image: ghcr.io/win07xp/kaalm-agent-python:0.7.0
+  image: ghcr.io/win07xp/kaalm-agent-python:1.0.0
   persistence:
     enabled: true
   lifecycle:
@@ -115,7 +115,7 @@ kubectl get pvc
 
 ```
 NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-helper-memory   Bound    pvc-5babc3ae-fbec-4fa9-856d-1e6ee45113e5   1Gi        RWO            local-path     <unset>                 7s
+helper-memory   Bound    pvc-9a8cd3cc-2433-4e43-932a-2cfa844ebba4   1Gi        RWO            local-path     <unset>                 7s
 ```
 
 `Bound` means real disk is attached and ready. Note the name: `helper-memory`,
