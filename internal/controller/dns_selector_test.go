@@ -36,7 +36,11 @@ func TestParseDNSSelector(t *testing.T) {
 	if err != nil || len(sel.NamespaceLabels) != 2 || len(sel.PodLabels) != 0 {
 		t.Errorf("two namespace labels and no pod labels: %+v, %v", sel, err)
 	}
-	for _, bad := range [][2]string{{"", "k8s-app=kube-dns"}, {"novalue", ""}, {"a=1", "=x"}} {
+	for _, bad := range [][2]string{
+		{"", "k8s-app=kube-dns"}, {"novalue", ""}, {"a=1", "=x"},
+		// Label syntax the apiserver would reject on every NetworkPolicy write.
+		{"kubernetes.io/metadata.name=kube system", ""}, {"bad key=x", ""}, {"a=1", "k8s-app=-dns"},
+	} {
 		if _, err := ParseDNSSelector(bad[0], bad[1]); err == nil {
 			t.Errorf("ParseDNSSelector(%q, %q) accepted", bad[0], bad[1])
 		}

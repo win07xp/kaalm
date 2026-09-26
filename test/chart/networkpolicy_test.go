@@ -131,3 +131,15 @@ func TestNetworkPolicy_Values(t *testing.T) {
 		t.Errorf("networkPolicy.enabled=false still renders %d policies", len(nps))
 	}
 }
+
+// An empty metricsFrom closes the metrics ports. Rendering the rule with an
+// empty from would admit every source, the opposite of what clearing the
+// list means.
+func TestNetworkPolicy_EmptyMetricsFromCloses(t *testing.T) {
+	nps := renderNetworkPolicies(t, "--set-json", "networkPolicy.metricsFrom=[]")
+	for name, port := range map[string]int32{"kaalm-controller": 8080, "kaalm-gateway": 9090} {
+		if r := ruleForPort(nps[name], port); r != nil {
+			t.Errorf("%s metrics port %d still has a rule with an empty metricsFrom: %+v", name, port, r)
+		}
+	}
+}

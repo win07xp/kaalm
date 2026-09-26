@@ -321,6 +321,11 @@ func TestCertLifetime_Validate(t *testing.T) {
 		{"renew exceeds duration", CertLifetime{Duration: time.Hour, RenewBefore: 2 * time.Hour}, true},
 		{"zero duration", CertLifetime{RenewBefore: time.Hour}, true},
 		{"zero renewBefore", CertLifetime{Duration: time.Hour}, true},
+		// cert-manager's minimums: below either, every Certificate write
+		// would fail, so startup refuses the value instead.
+		{"minimums", CertLifetime{Duration: time.Hour, RenewBefore: 5 * time.Minute}, false},
+		{"duration under an hour", CertLifetime{Duration: 30 * time.Minute, RenewBefore: 5 * time.Minute}, true},
+		{"renewBefore under five minutes", CertLifetime{Duration: time.Hour, RenewBefore: time.Minute}, true},
 	}
 	for _, tc := range cases {
 		if err := tc.l.Validate(); (err != nil) != tc.wantErr {

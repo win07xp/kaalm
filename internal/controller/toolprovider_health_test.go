@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,5 +161,28 @@ func TestMCPToolHealthChecker_TimeoutHonored(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("probe took %v, want the 1s healthCheck.timeoutSeconds to bound it", elapsed)
+	}
+}
+
+// The default probe client refuses redirects: the probe carries the tool
+// credential, and a followed redirect would send it, and a POST from the
+// controller, wherever Location names.
+func TestMCPToolHealthChecker_RedirectNotFollowed(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+	}))
+	defer target.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/admin", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+
+	res := (&MCPToolHealthChecker{}).Probe(context.Background(), tpForEndpoint(srv.URL, nil), "tool-credential")
+	if n := targetHits.Load(); n != 0 {
+		t.Fatalf("the redirect target received %d requests, want 0", n)
+	}
+	if res.Healthy {
+		t.Fatalf("probe = %+v, want a redirecting endpoint to be unhealthy", res)
 	}
 }
