@@ -84,7 +84,7 @@ Budgets are guardrails by default, not hard caps; a provider that needs a cap op
 | A denied caller probes which providers and models exist | Authorization ordering protects the model catalog; provider existence is distinguishable. See [What a denied caller learns](#what-a-denied-caller-learns). | Accepted |
 | Fallback routes a request to a provider outside the class `allowedProviders` | A fallback edge is the platform team's routing decision. See [Fallback edges and allowedProviders](#fallback-edges-and-allowedproviders). | Accepted |
 | Upstream error text leaks platform detail to a caller | Only non-fallbackable 4xx answers relay verbatim; everything else reduces to a classified envelope. See [What flows back from a failed provider call](#what-flows-back-from-a-failed-provider-call). | Mitigated |
-| A Pod with network reach scrapes the gateway metrics port | The port is unauthenticated and labels requests, tokens, and spend by provider, model, and namespace. As shipped the chart ships no NetworkPolicy for `kaalm-system` ([Recommendations for deployment](model.md#recommendations-for-deployment)). | As shipped |
+| A Pod with network reach scrapes the gateway metrics port | The port is unauthenticated and labels requests, tokens, and spend by provider, model, and namespace. The chart's `kaalm-system` NetworkPolicy admits the metrics ports only from the `networkPolicy.metricsFrom` peers, and every other port only from its callers ([The operator's own NetworkPolicy](../operations/deployment.md#the-operators-own-networkpolicy)). Inert on a CNI without enforcement, as every NetworkPolicy is. | Mitigated |
 
 #### Gateway-only tenant uses a provider AgentClass would have denied
 

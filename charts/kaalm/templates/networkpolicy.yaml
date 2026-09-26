@@ -1,0 +1,120 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+Default-deny ingress for the operator's own Pods. Every allowed port is listed
+here; a rule with no "from" admits any source. Egress is left open: the
+components reach the API server, cert-manager, LLM providers, and platforms.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kaalm-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kaalm
+      app.kubernetes.io/component: controller
+  policyTypes:
+    - Ingress
+  ingress:
+    # Activator: the gateway wakes hibernated Agents through it.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kaalm
+              app.kubernetes.io/component: gateway
+      ports:
+        - protocol: TCP
+          port: 9443
+    # Conversion webhook: the API server is not a Pod, so any source. The
+    # listener authenticates nothing and converts only what it is sent.
+    - ports:
+        - protocol: TCP
+          port: 9444
+    # Kubelet probes.
+    - ports:
+        - protocol: TCP
+          port: 8081
+    # Metrics, from the scrape sources only.
+    - from:
+        {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kaalm-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kaalm
+      app.kubernetes.io/component: gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    # Cluster listener: agent Pods in every namespace, the controller, and
+    # the console. Every caller authenticates with mTLS or a bearer token.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8443
+    # User listener: the Ingress controller or LoadBalancer in front of it.
+    - ports:
+        - protocol: TCP
+          port: 8080
+      {{- with .Values.networkPolicy.userListenerFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    # Kubelet probes.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.healthPort }}
+    # Metrics, from the scrape sources only.
+    - from:
+        {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 9090
+{{- if .Values.console.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kaalm-console
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kaalm
+      app.kubernetes.io/component: console
+  policyTypes:
+    - Ingress
+  ingress:
+    # The console UI, behind the same front door as the User listener.
+    - ports:
+        - protocol: TCP
+          port: 8443
+      {{- with .Values.networkPolicy.userListenerFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    # Kubelet probes.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.console.healthPort }}
+{{- end }}
+{{- end }}

@@ -167,3 +167,29 @@ metadata:
 spec:
   selector: {app: grafana}
   ports: [{name: http, port: 3000, targetPort: 3000}]
+---
+# The chart's NetworkPolicy admits the metrics ports only from
+# networkPolicy.metricsFrom (the monitoring namespace by default). This
+# verification stack lives in kaalm-monitoring, so it brings its own allow
+# rule, as any Prometheus outside the default namespace would.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kaalm-monitoring-scrape
+  namespace: kaalm-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kaalm
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kaalm-monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
