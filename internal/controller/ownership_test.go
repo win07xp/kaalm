@@ -27,6 +27,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -277,5 +278,58 @@ func TestTask_UnownedNetworkPolicyIsChildConflict(t *testing.T) {
 	})
 	if ref := metav1.GetControllerOf(getPolicy(t, name)); ref == nil || ref.Kind != "AgentTask" {
 		t.Errorf("the recreated policy must be controlled by the AgentTask, got %+v", ref)
+	}
+}
+
+// A PVC with no controller, as pvcRetention: Retain leaves it, is reused by
+// a new Agent of the same name, as before the ownership checks. A PVC that
+// another object controls is a conflict.
+func TestAgent_RetainedPVCReusedOthersConflict(t *testing.T) {
+	mkWorkloadClass(t, "wc-own-pvc", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+	})
+	pvc := func(name string, owner *metav1.OwnerReference) {
+		t.Helper()
+		obj := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: agentPVCName(name), Namespace: "default"},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+				},
+			},
+		}
+		if owner != nil {
+			obj.OwnerReferences = []metav1.OwnerReference{*owner}
+		}
+		if err := testClient.Create(ctxT(), obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withPVC := func(ag *kaalmv1beta1.Agent) { ag.Spec.Persistence.Enabled = true }
+
+	// Retained: no owner at all. The Agent proceeds to its Pod.
+	pvc("own-pvc-retained", nil)
+	mkWorkloadAgent(t, "own-pvc-retained", "wc-own-pvc", withPVC)
+	markCertReady(t, "own-pvc-retained")
+	eventually(t, func() error {
+		if agentPod(t, "own-pvc-retained") == nil {
+			return errString("no pod for the Agent reusing a retained PVC")
+		}
+		return nil
+	})
+
+	// Controlled by something else: a conflict, and no Pod.
+	isController := true
+	pvc("own-pvc-foreign", &metav1.OwnerReference{
+		APIVersion: "v1", Kind: "ConfigMap", Name: "someone-else",
+		UID: types.UID("00000000-0000-0000-0000-00000000f00d"), Controller: &isController,
+	})
+	mkWorkloadAgent(t, "own-pvc-foreign", "wc-own-pvc", withPVC)
+	markCertReady(t, "own-pvc-foreign")
+	expectAgentReadyReason(t, "own-pvc-foreign", kaalmv1beta1.ReasonChildConflict)
+	if pod := agentPod(t, "own-pvc-foreign"); pod != nil {
+		t.Fatalf("an Agent whose PVC is controlled by another object must not get a Pod, found %s", pod.Name)
 	}
 }

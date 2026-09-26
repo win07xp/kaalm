@@ -861,6 +861,13 @@ func (r *AgentReconciler) ensurePVC(
 	}
 	var current corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current); err == nil {
+		// A PVC with no controller is memory a deleted Agent of the same name
+		// left under pvcRetention: Retain, and it is reused as it was left.
+		// Mounting it grants nothing existingClaim does not; a PVC another
+		// object controls is still a conflict.
+		if metav1.GetControllerOf(&current) == nil {
+			return nil
+		}
 		return requireControlled(r.Scheme(), agent, &current)
 	} else if !apierrors.IsNotFound(err) {
 		return err
