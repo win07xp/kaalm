@@ -548,33 +548,45 @@ func TestAuthMatrix(t *testing.T) {
 	agentC := agentCert(t, h.ca)
 	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
 
+	// sys marks a case whose source IP resolves to an operator-namespace
+	// Pod, as the controller and console call from; every other case
+	// resolves to the team-a Pod.
 	cases := []struct {
 		name       string
 		cert       *tls.Certificate
 		path       string
 		wantStatus int
+		sys        bool
 	}{
-		{"no cert no token on LLM path", nil, "/v1/chat/completions", 401},
-		{"unrecognized SAN on LLM path", &gatewayShapedCert, "/v1/chat/completions", 403},
-		{"agent cert on task-complete", &agentC, "/v1/task/complete", 403},
-		{"task cert on heartbeat", &taskCert, "/v1/agent/heartbeat", 403},
-		{"agent cert on controller path", &agentC, "/v1/activity", 403},
-		{"no cert on controller path", nil, "/v1/activity", 401},
-		// 400 = past auth into the handler (missing namespace param).
-		{"controller cert on activity passes auth", &controllerCert, "/v1/activity", 400},
-		{"controller cert on channels-health passes auth", &controllerCert, "/v1/channels/health", 400},
+		{"no cert no token on LLM path", nil, "/v1/chat/completions", 401, false},
+		{"unrecognized SAN on LLM path", &gatewayShapedCert, "/v1/chat/completions", 403, false},
+		{"agent cert on task-complete", &agentC, "/v1/task/complete", 403, false},
+		{"task cert on heartbeat", &taskCert, "/v1/agent/heartbeat", 403, false},
+		{"agent cert on controller path", &agentC, "/v1/activity", 403, false},
+		{"no cert on controller path", nil, "/v1/activity", 401, false},
+		// 405 = past auth into the handler (POST on a GET path).
+		{"controller cert on activity passes auth", &controllerCert, "/v1/activity", 405, true},
+		{"controller cert on channels-health passes auth", &controllerCert, "/v1/channels/health", 405, true},
+		// 401 = the source IP is a tenant Pod, not an operator-namespace Pod.
+		{"controller cert from a tenant Pod", &controllerCert, "/v1/activity", 401, false},
+		{"console cert from a tenant Pod", &consoleCert, "/v1/test-chat", 401, false},
 		// 400 = past auth into the handler (empty request body).
-		{"console cert on test-chat passes auth", &consoleCert, "/v1/test-chat", 400},
-		{"controller cert on test-chat", &controllerCert, "/v1/test-chat", 403},
-		{"console cert on controller path", &consoleCert, "/v1/activity", 403},
-		{"agent cert on test-chat", &agentC, "/v1/test-chat", 403},
-		{"no cert on test-chat", nil, "/v1/test-chat", 401},
-		{"task cert on task-complete reaches handler", &taskCert, "/v1/task/complete", 403},
-		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 200},
-		{"unknown path", &agentC, "/v2/other", 400},
+		{"console cert on test-chat passes auth", &consoleCert, "/v1/test-chat", 400, true},
+		{"controller cert on test-chat", &controllerCert, "/v1/test-chat", 403, true},
+		{"console cert on controller path", &consoleCert, "/v1/activity", 403, true},
+		{"agent cert on test-chat", &agentC, "/v1/test-chat", 403, false},
+		{"no cert on test-chat", nil, "/v1/test-chat", 401, false},
+		{"task cert on task-complete reaches handler", &taskCert, "/v1/task/complete", 403, false},
+		{"agent cert on heartbeat passes auth", &agentC, "/v1/agent/heartbeat", 200, false},
+		{"unknown path", &agentC, "/v2/other", 400, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			ns := "team-a"
+			if c.sys {
+				ns = "kaalm-system"
+			}
+			h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns}}
 			resp := postJSON(t, h.client(c.cert), h.url(c.path), map[string]any{}, nil)
 			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode != c.wantStatus {

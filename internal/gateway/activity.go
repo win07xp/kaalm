@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -112,6 +113,10 @@ func (s *ActivityStore) Snapshot(ns string) activityResponse {
 // handleActivity serves GET /v1/activity?namespace={ns} (controller-only path;
 // auth enforced by the middleware).
 func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
 	ns := r.URL.Query().Get("namespace")
 	if ns == "" {
 		badRequest(w, "namespace query parameter is required")
@@ -122,10 +127,21 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHeartbeat serves POST /v1/agent/heartbeat. The middleware has already
-// enforced mTLS and the Agent-only kind split; every heartbeat updates the
-// in-memory store regardless of the Agent's activitySource setting.
+// enforced mTLS and the Agent-only kind split; every heartbeat within the
+// per-agent cap updates the in-memory store regardless of the Agent's
+// activitySource setting.
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
 	c := callerFrom(r.Context())
+	if !s.RateLimiter.AllowHeartbeat(c.Namespace, c.Workload.Name) {
+		writeError(w, http.StatusTooManyRequests, errorBody{
+			Type: errRateLimited, Retryable: true,
+			Message: fmt.Sprintf("heartbeat rate limit exceeded for agent %s/%s", c.Namespace, c.Workload.Name)}, 1)
+		return
+	}
 	s.Activity.RecordHeartbeat(c.Namespace, c.Workload.Name)
 	w.WriteHeader(http.StatusOK)
 }

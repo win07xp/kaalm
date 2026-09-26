@@ -15,6 +15,10 @@ if (SAN is the path's component identity?) then (no)
   :**403 access_denied**;
   kill
 endif
-:Handler, no source-IP cross-check;
+if (source IP in the operator namespace?) then (no)
+  :**401 unauthorized**;
+  kill
+endif
+:Handler;
 stop
 @enduml

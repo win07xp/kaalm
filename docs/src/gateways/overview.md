@@ -44,8 +44,8 @@ All paths on `:8443` share one TLS socket. The handshake accepts a client certif
 |---|---|---|
 | Dual mode | `/v1/messages`, `/v1/chat/completions`, `/v1/completions`, `/v1/mcp/*` | mTLS with an Agent or AgentTask SAN, or a `TokenReview`-validated ServiceAccount bearer token (gateway-only tier), then the source-IP cross-check |
 | Agent report | `/v1/agent/heartbeat` (Agent only), `/v1/task/complete` (AgentTask only) | mTLS with an Agent or AgentTask SAN, the kind checked against the path, then the source-IP cross-check. No bearer fallback. |
-| Controller only | `/v1/activity`, `/v1/channels/health` | mTLS with the controller Service SAN. No cross-check. |
-| Console only | `/v1/test-chat`, `/v1/spend` | mTLS with the console Service SAN. No cross-check. |
+| Controller only | `/v1/activity`, `/v1/channels/health` | mTLS with the controller Service SAN, then the source-IP cross-check against the operator namespace |
+| Console only | `/v1/test-chat`, `/v1/spend` | mTLS with the console Service SAN, then the source-IP cross-check against the operator namespace |
 
 Every regime answers `401 unauthorized` when the required credential is absent or fails, `403 invalid_cert` when a certificate is presented whose SAN is not a recognized identity, and `403 access_denied` when the identity is recognized but not the one the path accepts. The branch-by-branch mechanics and the figures are on [Per-path client auth enforcement](listener-tls.md#per-path-client-auth-enforcement); the SAN shapes, the `TokenReview` flow, and the cross-check are on [Workload identity](llm/workload-identity.md).
 

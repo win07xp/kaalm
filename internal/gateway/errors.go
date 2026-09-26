@@ -83,6 +83,13 @@ func forbidden(w http.ResponseWriter, errType, msg string) {
 	writeError(w, http.StatusForbidden, errorBody{Type: errType, Message: msg}, 0)
 }
 
+// methodNotAllowed answers 405 invalid_request with an Allow header naming
+// the one method the path serves.
+func methodNotAllowed(w http.ResponseWriter, allow string) {
+	w.Header().Set("Allow", allow)
+	writeError(w, http.StatusMethodNotAllowed, errorBody{Type: errInvalidRequest, Message: allow + " required"}, 0)
+}
+
 func badRequest(w http.ResponseWriter, msg string) {
 	writeError(w, http.StatusBadRequest, errorBody{Type: errInvalidRequest, Message: msg}, 0)
 }

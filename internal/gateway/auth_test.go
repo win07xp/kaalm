@@ -17,9 +17,11 @@ limitations under the License.
 package gateway
 
 import (
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -139,4 +141,137 @@ func TestDualModePaths_BearerErrorBranches(t *testing.T) {
 		t.Errorf("no credential = %d, want 401", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
+}
+
+// TestInternalPaths_SourceIPCrossCheck: the controller and console SANs name
+// operator-namespace Services, so the source IP must resolve to a Pod in the
+// operator namespace. The SAN alone is not enough (#237).
+func TestInternalPaths_SourceIPCrossCheck(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
+	consoleCert := h.ca.issue(t, "kaalm-console.kaalm-system.svc.cluster.local")
+
+	cases := []struct {
+		name string
+		cert *tls.Certificate
+		path string
+	}{
+		{"controller", &controllerCert, "/v1/activity?namespace=team-a"},
+		{"console", &consoleCert, "/v1/spend?namespace=team-a"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, step := range []struct {
+				pod  *corev1.Pod
+				want int
+			}{
+				{nil, http.StatusUnauthorized},
+				{&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}, http.StatusUnauthorized},
+				{&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kaalm-system"}}, http.StatusOK},
+			} {
+				delete(h.store.podsByIP, "127.0.0.1")
+				if step.pod != nil {
+					h.store.podsByIP["127.0.0.1"] = step.pod
+				}
+				resp, err := h.client(c.cert).Get(h.url(c.path))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resp.StatusCode != step.want {
+					t.Errorf("pod %v: status %d, want %d", step.pod != nil, resp.StatusCode, step.want)
+				}
+				if step.want == http.StatusUnauthorized {
+					if got := errType(t, resp); got != errUnauthorized {
+						t.Errorf("error type %q, want %q", got, errUnauthorized)
+					}
+				} else {
+					_ = resp.Body.Close()
+				}
+			}
+		})
+	}
+}
+
+// TestInternalPaths_MethodEnforced: a wrong method on the heartbeat, activity,
+// and channel-health paths is 405 invalid_request with an Allow header (#237).
+func TestInternalPaths_MethodEnforced(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	h.seedRoute()
+	agentC := agentCert(t, h.ca)
+	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
+
+	cases := []struct {
+		path   string
+		cert   *tls.Certificate
+		podNS  string
+		method string
+		allow  string
+	}{
+		{"/v1/agent/heartbeat", &agentC, "team-a", http.MethodGet, http.MethodPost},
+		{"/v1/agent/heartbeat", &agentC, "team-a", http.MethodPut, http.MethodPost},
+		{"/v1/activity?namespace=team-a", &controllerCert, "kaalm-system", http.MethodPost, http.MethodGet},
+		{"/v1/activity?namespace=team-a", &controllerCert, "kaalm-system", http.MethodDelete, http.MethodGet},
+		{"/v1/channels/health?namespace=team-a", &controllerCert, "kaalm-system", http.MethodPost, http.MethodGet},
+		{"/v1/channels/health?namespace=team-a", &controllerCert, "kaalm-system", http.MethodPut, http.MethodGet},
+	}
+	for _, c := range cases {
+		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: c.podNS}}
+			req, err := http.NewRequest(c.method, h.url(c.path), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := h.client(c.cert).Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Errorf("status %d, want 405", resp.StatusCode)
+			}
+			if got := resp.Header.Get("Allow"); got != c.allow {
+				t.Errorf("Allow %q, want %q", got, c.allow)
+			}
+			if got := errType(t, resp); got != errInvalidRequest {
+				t.Errorf("error type %q, want %q", got, errInvalidRequest)
+			}
+		})
+	}
+}
+
+// TestHeartbeat_RateCapped: past the per-agent burst the heartbeat answers
+// 429 rate_limited with Retry-After; another agent has its own bucket (#237).
+func TestHeartbeat_RateCapped(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
+	h.seedRoute()
+	now := time.Now()
+	h.server.RateLimiter.now = func() time.Time { return now }
+	agentC := agentCert(t, h.ca)
+
+	heartbeat := func(cert *tls.Certificate) *http.Response {
+		return postJSON(t, h.client(cert), h.url("/v1/agent/heartbeat"), map[string]any{}, nil)
+	}
+	for i := 0; i < heartbeatBurst; i++ {
+		resp := heartbeat(&agentC)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("heartbeat %d within the burst: status %d", i, resp.StatusCode)
+		}
+	}
+	resp := heartbeat(&agentC)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("heartbeat over the cap: status %d, want 429", resp.StatusCode)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("429 must carry Retry-After")
+	}
+	if got := errType(t, resp); got != errRateLimited {
+		t.Errorf("error type %q, want %q", got, errRateLimited)
+	}
+
+	other := h.ca.issue(t, "other.team-a.svc.cluster.local")
+	resp = heartbeat(&other)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("another agent's heartbeat: status %d, want 200", resp.StatusCode)
+	}
 }

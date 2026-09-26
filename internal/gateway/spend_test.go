@@ -234,6 +234,8 @@ func TestSpendEndpoint_EndToEnd(t *testing.T) {
 	}
 
 	consoleCert := h.ca.issue(t, "kaalm-console.kaalm-system.svc.cluster.local")
+	// The console calls from an operator-namespace Pod.
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kaalm-system"}}
 	c := h.client(&consoleCert)
 	get, err := c.Get(h.url("/v1/spend?namespace=team-a"))
 	if err != nil {

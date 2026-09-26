@@ -67,6 +67,22 @@ func (r *RateLimiter) AllowTool(tp *kaalmv1beta1.ToolProvider, namespace string)
 	return r.allow(tp.Spec.RateLimits.RequestsPerMinute, "mcp:"+namespace+"/"+tp.Name)
 }
 
+// The heartbeat cap: each replica allows each Agent heartbeatPerMinute
+// heartbeats (2 per second) with a burst of heartbeatBurst. The cap is per
+// replica, not divided by the replica count: it bounds the work one agent can
+// cause, and a timer-driven heartbeat sits far below it.
+const (
+	heartbeatPerMinute = 120
+	heartbeatBurst     = 5
+)
+
+// AllowHeartbeat is the /v1/agent/heartbeat analog, keyed per (namespace,
+// Agent) under a prefix no namespace name can produce, so heartbeat buckets
+// never collide with model or tool buckets.
+func (r *RateLimiter) AllowHeartbeat(namespace, agent string) bool {
+	return r.take("hb:"+namespace+"/"+agent, heartbeatPerMinute, heartbeatBurst)
+}
+
 func (r *RateLimiter) allow(limit int32, key string) bool {
 	if limit <= 0 {
 		return true
@@ -76,25 +92,30 @@ func (r *RateLimiter) allow(limit int32, key string) bool {
 		replicas = 1
 	}
 	perReplica := float64(limit) / float64(replicas)
+	return r.take(key, perReplica, perReplica)
+}
 
+// take consumes one token from key's bucket, which refills at perMinute and
+// holds at most burst tokens.
+func (r *RateLimiter) take(key string, perMinute, burst float64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
 	b := r.buckets[key]
 	if b == nil {
-		b = &tokenBucket{tokens: perReplica, lastRefill: now, perMinute: perReplica}
+		b = &tokenBucket{tokens: burst, lastRefill: now, perMinute: perMinute}
 		r.buckets[key] = b
 	}
 
-	// Refill proportional to elapsed time, capped at the per-replica ceiling.
+	// Refill proportional to elapsed time, capped at the burst.
 	elapsed := now.Sub(b.lastRefill).Minutes()
 	if elapsed > 0 {
-		b.tokens += elapsed * perReplica
+		b.tokens += elapsed * perMinute
 		b.lastRefill = now
 	}
-	b.perMinute = perReplica
-	if b.tokens > perReplica {
-		b.tokens = perReplica
+	b.perMinute = perMinute
+	if b.tokens > burst {
+		b.tokens = burst
 	}
 
 	if b.tokens >= 1 {

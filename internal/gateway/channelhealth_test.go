@@ -20,6 +20,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestChannelsHealthEndpoint(t *testing.T) {
@@ -29,6 +32,7 @@ func TestChannelsHealthEndpoint(t *testing.T) {
 	h.server.ChannelHealth.RecordSuccess("/channels/team-a/ok")
 
 	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
+	h.store.podsByIP["127.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kaalm-system"}}
 	resp, err := h.client(&controllerCert).Get(h.url("/v1/channels/health?namespace=team-a"))
 	if err != nil {
 		t.Fatal(err)
