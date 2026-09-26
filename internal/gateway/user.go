@@ -52,22 +52,47 @@ type ControllerActivator struct {
 	Client  *http.Client
 }
 
-// Wake posts the activation request. Any non-202 is an error.
+// activatorAttemptTimeout bounds one activator POST. A caller context with
+// less time left shortens it.
+const activatorAttemptTimeout = 10 * time.Second
+
+// Wake posts the activation request. Any non-202 is an error. A transport
+// error or a 5xx is retried once on a fresh connection, so a POST that lands
+// on a controller replica shutting down does not fail the wake; a 4xx is
+// never retried. Both attempts stay inside ctx's deadline.
 func (c *ControllerActivator) Wake(ctx context.Context, namespace, name string) error {
 	url := fmt.Sprintf("%s/v1/activate/%s/%s", strings.TrimSuffix(c.BaseURL, "/"), namespace, name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	if err != nil {
+	retry, err := c.wakeOnce(ctx, url, false)
+	if err == nil || !retry || ctx.Err() != nil {
 		return err
 	}
+	// Drop pooled connections so the retry dials anew instead of reusing the
+	// one to the failing replica.
+	c.Client.CloseIdleConnections()
+	_, err = c.wakeOnce(ctx, url, true)
+	return err
+}
+
+// wakeOnce issues one activator POST and reports whether a failure is
+// retryable (a transport error or a 5xx). fresh closes the connection after
+// the request so it is never pooled.
+func (c *ControllerActivator) wakeOnce(ctx context.Context, url string, fresh bool) (bool, error) {
+	actx, cancel := context.WithTimeout(ctx, activatorAttemptTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(actx, http.MethodPost, url, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Close = fresh
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		return err
+		return true, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("activator returned %d", resp.StatusCode)
+		return resp.StatusCode >= 500, fmt.Errorf("activator returned %d", resp.StatusCode)
 	}
-	return nil
+	return false, nil
 }
 
 // UserHandler builds the :8080 mux: webhook intake under /channels/ and the
@@ -219,7 +244,7 @@ func (s *Server) writeSyncError(w http.ResponseWriter, ctx context.Context, name
 	}
 }
 
-// wakeAndDeliver wakes a hibernated agent when needed, then runs the bounded
+// wakeAndDeliver wakes a hibernated or hibernating agent when needed, then runs the bounded
 // delivery pipeline. Returns the raw agent response body on success.
 // healthPath is the channel webhook path for channel-health recording; the
 // test-chat path passes "" so /console/... traffic never enters a channel
@@ -239,7 +264,9 @@ func (s *Server) wakeAndDeliver(
 		s.Metrics.ChannelMessageDuration(env.ChannelType, time.Since(start).Seconds())
 	}()
 
-	if agent.Status.Phase == kaalmv1beta1.AgentHibernated {
+	// Hibernating counts too: its Pod is going away, and the controller keeps
+	// a wake requested in that window until the Agent settles Hibernated.
+	if agent.Status.Phase == kaalmv1beta1.AgentHibernated || agent.Status.Phase == kaalmv1beta1.AgentHibernating {
 		if s.Activator == nil {
 			s.recordChannelFailure(healthPath, healthReasonAgentNotReady,
 				"agent hibernated and no activator configured")

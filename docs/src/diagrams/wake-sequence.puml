@@ -10,7 +10,7 @@ participant "apiserver" as api #FFD580
 participant "Controller\nleader" as leader #87CEEB
 participant "Agent\nService" as agent
 
-gw -> gw : 1. cached Agent phase is Hibernated
+gw -> gw : 1. cached Agent phase is Hibernated or Hibernating
 gw -> ctrl : 2. POST /v1/activate/{namespace}/{name}, mTLS
 ctrl -> api : 3. patch kaalm.io/wake=true
 ctrl --> gw : 4. 202 Accepted

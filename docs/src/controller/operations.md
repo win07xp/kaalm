@@ -28,7 +28,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 |---|---|---|---|
 | Agent | `PhaseChanged` | Normal | `Running` to `Idle`, `Idle` to `Hibernating`, and recovery from `Degraded`, each with a message naming the cause. As shipped no other phase change emits an event |
 | Agent | `Hibernated`, `Woken` | Normal | the Pod is gone after hibernation; a wake annotation is honored |
-| Agent | `WakeIgnored` | Warning | a wake annotation on a non-`Hibernated` Agent, except in `Resuming` |
+| Agent | `WakeIgnored` | Warning | a wake annotation on a non-`Hibernated` Agent, except in `Hibernating` (kept until `Hibernated`) and `Resuming` |
 | Agent | `PodDisrupted`, `SpecDrift` | Warning, Normal | a terminal Pod is replaced; a spec hash change replaces the Pod |
 | Agent | the Degraded reason (`ClassConstraintViolation`, `PersistenceNotAllowed`, `HibernationNotAllowed`, `HibernationRequiresPersistence`, `HandlerMountNotAllowed`, `ToolNotInCatalog`) | Warning | the first entry into `Degraded`, once per entry |
 | AgentTask | `TaskSucceeded`; `TaskFailed`, `TimeoutExceeded`, `TimeoutSucceeded`, and the provisioning and class reasons | Normal; Warning | the task settles, or a retry starts (message suffix `retrying (n/limit)`); see [Event reasons](task-lifecycle.md#event-reasons) |

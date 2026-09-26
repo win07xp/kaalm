@@ -47,15 +47,16 @@ arrives by callback or polling after the agent is up. If the wake itself
 exceeds `wakeTimeout`, async callers receive a `wake_timeout` error payload
 instead of silence.
 
-If the Agent is `Hibernated`, you can wake it by hand, the same way the
-gateway does:
+If the Agent is `Hibernated` or `Hibernating`, you can wake it by hand, the
+same way the gateway does:
 
 ```bash
 kubectl annotate agent support-assistant kaalm.io/wake=true --overwrite
 ```
 
-In any other phase the annotation is removed and a `WakeIgnored` event
-records it.
+A `Hibernating` Agent keeps the annotation, finishes hibernating, and then
+wakes. In any other phase the annotation is removed and a `WakeIgnored`
+event records it.
 
 ## Promoting a task to a persistent agent
 
