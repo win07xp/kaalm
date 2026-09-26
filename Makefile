@@ -329,7 +329,8 @@ dashboards-verify: ## Verify config/grafana against the live e2e cluster (run af
 	hack/dashboards-verify.sh
 
 # The released chart the upgrade e2e starts from. Release readiness (#115)
-# bumps this to the newly released version after each release.
+# bumps this to the newly released version after each release. The upgrade
+# workflow also runs from 0.5.0, the last release before the graduation.
 PREV_CHART_VERSION ?= 0.7.0
 
 .PHONY: upgrade-images

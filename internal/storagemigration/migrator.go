@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package storagemigration holds the controller's storage-version migrator:
-// the one-shot pass at controller start that rewrites every Kaalm custom
+// the pass at controller start, repeated while the controller leads, that rewrites every Kaalm custom
 // resource at the v1beta1 storage version and trims each CRD's
 // status.storedVersions to ["v1beta1"], as the API Versioning and
 // Deprecation chapter of the design book specifies.
@@ -23,6 +23,7 @@ package storagemigration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -46,6 +47,7 @@ const (
 	defaultPageSize   = 500
 	initialBackoff    = time.Second
 	defaultMaxBackoff = 5 * time.Minute
+	defaultResync     = 10 * time.Minute
 )
 
 // entry is one CRD the migrator owns.
@@ -86,9 +88,11 @@ func init() {
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,resourceNames=agentclasses.kaalm.io;modelproviders.kaalm.io;toolproviders.kaalm.io;agents.kaalm.io;agenttasks.kaalm.io;agentchannels.kaalm.io,verbs=get
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions/status,resourceNames=agentclasses.kaalm.io;modelproviders.kaalm.io;toolproviders.kaalm.io;agents.kaalm.io;agenttasks.kaalm.io;agentchannels.kaalm.io,verbs=patch
 
-// Migrator is a manager Runnable that runs one migration pass when the
-// controller becomes leader and retries it until it succeeds. It needs no
-// state between runs: a CRD already at ["v1beta1"] is skipped, and an
+// Migrator is a manager Runnable that runs a migration pass when the
+// controller becomes leader, retries it until it succeeds, and then runs it
+// again on a slow timer for as long as the controller leads, so a CRD that
+// gains a second stored version later is migrated without a leader change.
+// It needs no state between runs: a CRD already at ["v1beta1"] is skipped, and an
 // object already stored at v1beta1 is a no-op write.
 //
 // The client's scheme must know apiextensions.k8s.io/v1; the Kaalm kinds
@@ -105,63 +109,85 @@ type Migrator struct {
 	// MaxBackoff caps the retry delay between failed passes. Zero means
 	// five minutes.
 	MaxBackoff time.Duration
+	// ResyncInterval is the delay between passes after a clean pass. Zero
+	// means ten minutes.
+	ResyncInterval time.Duration
+
+	// reported is set after the first clean pass logs its summary. Later
+	// clean passes log it only when they migrate a kind, so the periodic
+	// resync stays quiet. Start runs passes on one goroutine.
+	reported bool
 }
 
 // NeedLeaderElection makes the manager run the migrator on the leader
 // only: it is a write burst, and one writer is enough.
 func (m *Migrator) NeedLeaderElection() bool { return true }
 
-// Start runs Migrate until it succeeds or ctx ends, with exponential
-// backoff between attempts. It returns nil in both cases: a migration that
-// cannot complete must not stop the controller from reconciling, so a
-// failure is a logged, retried condition rather than a manager error.
+// Start runs Migrate until ctx ends: with exponential backoff after a
+// failed pass, and every ResyncInterval after a clean one. A pass over
+// migrated CRDs costs six CRD gets. It returns nil when ctx ends: a
+// migration that cannot complete must not stop the controller from
+// reconciling, so a failure is a logged, retried condition rather than a
+// manager error.
 func (m *Migrator) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("storage-migrator")
 	maxBackoff := m.MaxBackoff
 	if maxBackoff <= 0 {
 		maxBackoff = defaultMaxBackoff
 	}
-	backoff := initialBackoff
-	if backoff > maxBackoff {
-		backoff = maxBackoff
+	resync := m.ResyncInterval
+	if resync <= 0 {
+		resync = defaultResync
 	}
+	firstBackoff := min(initialBackoff, maxBackoff)
+	backoff := firstBackoff
 	for {
 		err := m.Migrate(ctx)
-		if err == nil {
-			return nil
-		}
 		if ctx.Err() != nil {
 			return nil
 		}
-		log.Error(err, "storage-version migration failed, retrying", "retryIn", backoff.String())
+		wait := resync
+		if err != nil {
+			log.Error(err, "storage-version migration failed, retrying", "retryIn", backoff.String())
+			wait = backoff
+			backoff = min(backoff*2, maxBackoff)
+		} else {
+			backoff = firstBackoff
+		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
+		case <-time.After(wait):
 		}
 	}
 }
 
-// Migrate runs one pass over the six CRDs and returns the first error. A
-// pass is idempotent, so the caller may simply run it again.
+// Migrate runs one pass over the six CRDs. A kind that fails does not stop
+// the pass: every kind is attempted, only the kinds that complete have their
+// storedVersions trimmed, and the errors are joined, each naming its CRD. A
+// pass is idempotent, so the caller may run it again.
 func (m *Migrator) Migrate(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("storage-migrator")
 	migratedKinds := 0
+	var errs []error
 	for _, k := range kinds {
 		did, err := m.migrateKind(ctx, log, k)
 		if err != nil {
-			return fmt.Errorf("%s: %w", k.crdName, err)
+			errs = append(errs, fmt.Errorf("%s: %w", k.crdName, err))
+			continue
 		}
 		if did {
 			migratedKinds++
 		}
 	}
-	log.Info("storage-version migration pass complete", "kindsMigrated", migratedKinds,
-		"kindsAlreadyCurrent", len(kinds)-migratedKinds)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if migratedKinds > 0 || !m.reported {
+		log.Info("storage-version migration pass complete", "kindsMigrated", migratedKinds,
+			"kindsAlreadyCurrent", len(kinds)-migratedKinds)
+		m.reported = true
+	}
 	return nil
 }
 

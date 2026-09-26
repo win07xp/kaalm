@@ -28,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -304,6 +306,119 @@ func TestStartRetriesUntilContextEnds(t *testing.T) {
 	}
 	if got := gets.Load(); got < 3 {
 		t.Fatalf("Start retried %d times in 200ms with a 10ms cap, want several", got)
+	}
+}
+
+// TestMigrateAttemptsEveryKind proves one failing kind does not stop the
+// pass: the other five are migrated and trimmed, the failed kind keeps both
+// stored versions, and the error names it.
+func TestMigrateAttemptsEveryKind(t *testing.T) {
+	const failing = "toolproviders.kaalm.io"
+	var objs []client.Object
+	for _, k := range kinds {
+		crd := &apiextensionsv1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: k.crdName},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Group: kaalmv1beta1.GroupVersion.Group,
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{Name: "v1alpha1", Served: true},
+					{Name: StorageVersion, Served: true, Storage: true},
+				},
+			},
+			Status: apiextensionsv1.CustomResourceDefinitionStatus{StoredVersions: []string{"v1alpha1", StorageVersion}},
+		}
+		objs = append(objs, crd)
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(objs...).
+		WithStatusSubresource(&apiextensionsv1.CustomResourceDefinition{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if list.GetObjectKind().GroupVersionKind().Kind == "ToolProviderList" {
+					return errors.New("list refused")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	err := (&Migrator{Reader: c, Client: c}).Migrate(context.Background())
+	if err == nil || !strings.Contains(err.Error(), failing) {
+		t.Fatalf("Migrate: err = %v, want an error naming %s", err, failing)
+	}
+	for _, k := range kinds {
+		var crd apiextensionsv1.CustomResourceDefinition
+		if err := c.Get(context.Background(), client.ObjectKey{Name: k.crdName}, &crd); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{StorageVersion}
+		if k.crdName == failing {
+			want = []string{"v1alpha1", StorageVersion}
+		}
+		if !slices.Equal(crd.Status.StoredVersions, want) {
+			t.Errorf("%s storedVersions = %v, want %v", k.crdName, crd.Status.StoredVersions, want)
+		}
+	}
+}
+
+// TestStartRerunsWhileLeading proves a clean pass does not end the
+// migrator: it runs the pass again every ResyncInterval until ctx ends.
+func TestStartRerunsWhileLeading(t *testing.T) {
+	var objs []client.Object
+	for _, k := range kinds {
+		objs = append(objs, &apiextensionsv1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: k.crdName},
+			Status:     apiextensionsv1.CustomResourceDefinitionStatus{StoredVersions: []string{StorageVersion}},
+		})
+	}
+	var gets atomic.Int32
+	c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(objs...).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			gets.Add(1)
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+	m := &Migrator{Reader: c, Client: c, ResyncInterval: 10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start returned %v, want nil on context end", err)
+	}
+	if passes := gets.Load() / int32(len(kinds)); passes < 3 {
+		t.Fatalf("Start ran %d clean passes in 200ms with a 10ms resync, want several", passes)
+	}
+}
+
+// TestSummaryLoggedOnFirstPassOnly proves the summary line appears after the
+// first clean pass even when nothing moved, which is the startup
+// confirmation operators and the e2e suite read, and that later no-op
+// passes stay quiet.
+func TestSummaryLoggedOnFirstPassOnly(t *testing.T) {
+	var objs []client.Object
+	for _, k := range kinds {
+		objs = append(objs, &apiextensionsv1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: k.crdName},
+			Status:     apiextensionsv1.CustomResourceDefinitionStatus{StoredVersions: []string{StorageVersion}},
+		})
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(objs...).Build()
+	var summaries int
+	var current any
+	ctx := logr.NewContext(context.Background(), funcr.New(func(_, args string) {
+		if strings.Contains(args, "storage-version migration pass complete") {
+			summaries++
+			current = args
+		}
+	}, funcr.Options{}))
+
+	m := &Migrator{Reader: c, Client: c}
+	for range 3 {
+		if err := m.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if summaries != 1 {
+		t.Fatalf("three no-op passes logged %d summaries, want 1 (the first)", summaries)
+	}
+	if !strings.Contains(current.(string), `"kindsAlreadyCurrent"=6`) {
+		t.Errorf("summary = %v, want kindsAlreadyCurrent 6", current)
 	}
 }
 

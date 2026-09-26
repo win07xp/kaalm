@@ -218,7 +218,8 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		marker := `"kindsAlreadyCurrent":\s*6`
 		if prevPredatesGraduation() {
 			By("the migrator's log names the kinds it moved")
-			marker = `"crd": "agents.kaalm.io", "objects": [1-9]`
+			// \s* matches both the JSON encoder and the console one.
+			marker = `"crd":\s*"agents.kaalm.io",\s*"objects":\s*[1-9]`
 		} else {
 			By("the migrator found everything already current")
 		}
