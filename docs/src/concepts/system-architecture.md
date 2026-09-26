@@ -105,7 +105,7 @@ An AgentClass selects the workload backend with [`spec.runtime.backend`](../reso
 
 ### MCP
 
-Kaalm does not mandate MCP, but MCP is the tool protocol it brokers. The gateway's [tool plane](../gateways/tool-plane.md) carries tool traffic with credential injection, tenancy gates, and per-call audit. Direct egress is the supported alternative: an agent container may connect to an MCP server itself, and what Kaalm governs then is egress, through the class's [`network.egress.allowedCIDRs`](../resources/agentclass.md#spec). `allowedHosts` is validated and reported but synthesizes no policy (#193). Kaalm brokers access to tool servers; it does not run them.
+Kaalm does not mandate MCP, but MCP is the tool protocol it brokers. The gateway's [tool plane](../gateways/tool-plane.md) carries tool traffic with credential injection, tenancy gates, and per-call audit. Direct egress is the supported alternative: an agent container may connect to an MCP server itself, and what Kaalm governs then is egress, through the class's [`network.egress.allowedCIDRs`](../resources/agentclass.md#spec). On a Cilium cluster, the class's `allowedHosts` also opens egress to named hosts. Kaalm brokers access to tool servers; it does not run them.
 
 ### LLM providers
 

@@ -56,10 +56,13 @@ trust-manager have delivered their certificates and the CA bundle, and
 
 The repository automates a local k3d cluster with cert-manager and
 trust-manager installed. k3d's flannel enforces basic NetworkPolicies, which
-is enough for the agent-to-gateway rule, but not hostname egress:
+is enough for the agent-to-gateway rule, but not hostname egress
+(`allowedHosts`), which needs Cilium. `CNI=cilium` installs Cilium in place
+of flannel:
 
 ```bash
-make k3d-up   # k3d cluster + cert-manager + trust-manager
+make k3d-up              # k3d cluster + cert-manager + trust-manager
+CNI=cilium make k3d-up   # the same with Cilium, for allowedHosts
 ```
 
 The cluster is named `kaalm-dev`; set `CLUSTER=CLUSTER_NAME` to pick
