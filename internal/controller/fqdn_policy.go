@@ -82,7 +82,8 @@ func desiredFQDNPolicy(
 
 // ensureFQDNPolicy converges the owner's CiliumNetworkPolicy. With support and
 // hosts it creates or updates the policy; with support and no hosts it deletes
-// any policy left from an earlier spec. Without support it does nothing: the
+// any policy left from an earlier spec. A policy of that name the owner does
+// not control is a ChildConflictError, never updated or deleted. Without support it does nothing: the
 // kind may not exist, so even a read would fail. A cluster whose FQDN-capable
 // CNI is not Cilium has no CiliumNetworkPolicy kind either, so a no-match
 // error is also nothing to do.
@@ -104,6 +105,13 @@ func ensureFQDNPolicy(
 		return err
 	}
 	found := err == nil
+	// Act only on a policy this workload controls: the name is predictable,
+	// so an object someone else created under it is never updated or deleted.
+	if found {
+		if err := requireControlled(scheme, owner, current); err != nil {
+			return err
+		}
+	}
 
 	if len(hosts) == 0 {
 		if !found {
@@ -117,7 +125,7 @@ func ensureFQDNPolicy(
 		return err
 	}
 	if !found {
-		return c.Create(ctx, desired)
+		return createControlled(ctx, c, owner, desired)
 	}
 	if equality.Semantic.DeepEqual(current.Object["spec"], desired.Object["spec"]) {
 		return nil

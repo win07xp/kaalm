@@ -154,8 +154,15 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		r.reducePhase(&channel, &agent)
 		// Re-check on the same cadence as a healthy channel: the reconciler
 		// watches no Secrets (its Secret access is scoped per channel), so a
-		// credential fixed in place is only ever noticed by a later pass.
-		return ctrl.Result{RequeueAfter: time.Minute}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
+		// credential fixed in place is only ever noticed by a later pass. A
+		// child conflict re-checks sooner, on the workloads' cadence: the
+		// conflicting object carries no owner reference, so its removal
+		// raises no watch event.
+		requeue := time.Minute
+		if reason == kaalmv1beta1.ReasonChildConflict {
+			requeue = gateRequeue
+		}
+		return ctrl.Result{RequeueAfter: requeue}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
 	}
 	r.setChannelReady(&channel, true, kaalmv1beta1.ReasonAgentReachable, "channel is valid")
 
@@ -222,6 +229,9 @@ func (r *AgentChannelReconciler) validateChannel(
 	// Step 3: the scoped Role must exist BEFORE any Secret read: it is what
 	// grants the reconciler (and the gateway) access to exactly these Secrets.
 	if err := r.ensureCredentialRole(ctx, channel); err != nil {
+		if _, ok := asChildConflict(err); ok {
+			return kaalmv1beta1.ReasonChildConflict, err.Error()
+		}
 		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential Role failed: " + err.Error()
 	}
 	if reason, msg := r.validateSecrets(ctx, channel); reason != "" {
@@ -308,9 +318,11 @@ func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, chann
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
-		if err := r.Create(ctx, role); err != nil {
+		if err := createControlled(ctx, r.Client, channel, role); err != nil {
 			return err
 		}
+	} else if err := requireControlled(r.Scheme(), channel, &current); err != nil {
+		return err
 	} else if len(current.Rules) != 1 || !equalStrings(current.Rules[0].ResourceNames, names) {
 		// Secret refs changed: shrink or grow the grant so no stale access
 		// is retained.
@@ -340,11 +352,13 @@ func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, chann
 		err := r.Get(ctx, types.NamespacedName{Namespace: rb.Namespace, Name: rb.Name}, &currentRB)
 		switch {
 		case apierrors.IsNotFound(err):
-			if err := r.Create(ctx, rb); err != nil && !apierrors.IsAlreadyExists(err) {
+			if err := createControlled(ctx, r.Client, channel, rb); err != nil {
 				return err
 			}
 		case err != nil:
 			return err
+		case requireControlled(r.Scheme(), channel, &currentRB) != nil:
+			return requireControlled(r.Scheme(), channel, &currentRB)
 		case currentRB.RoleRef != rb.RoleRef || !equality.Semantic.DeepEqual(currentRB.Subjects, rb.Subjects):
 			currentRB.RoleRef = rb.RoleRef
 			currentRB.Subjects = rb.Subjects
