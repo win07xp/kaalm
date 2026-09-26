@@ -45,7 +45,10 @@ does not allow handler mounts).
 `InvalidReference` (no image, the class does not exist, or the class has a
 malformed `allowedCIDRs` entry),
 `ImagePullSecretMissing`, `ExistingClaimNotFound` (the adopted PVC is
-missing), `HandlerConfigMapNotFound`, `CertificateNotReady`, and
+missing), `HandlerConfigMapNotFound`, `CertificateNotReady`,
+`ChildConflict` (an object the Agent does not own already has the name of
+one of its children, such as its NetworkPolicy; the message names it, and
+deleting it lets the Agent continue), and
 `SystemNamespaceForbidden` (an Agent in `kaalm-system` is never
 provisioned). Reasons on `Ready` that report progress: `PodProvisioning`,
 `PodRunning`, `PodDisrupted`, `SpecDrift`, `Hibernated`, and `Woken`; an
@@ -63,7 +66,8 @@ delete. There is no Degraded: a task that cannot run fails, including a
 task whose provider or tool grant fails a gate at provisioning (same
 reasons as the Agent's Degraded, but terminal here).
 
-Conditions: `Ready` (provisioning gate) and `Completed` (terminal verdict,
+Conditions: `Ready` (provisioning gate; `ChildConflict` holds a task
+without a Pod, as it holds an Agent) and `Completed` (terminal verdict,
 reason `TaskSucceeded`, `TaskFailed`, `TimeoutExceeded`, or
 `TimeoutSucceeded`). A completion call from the wrong Pod is refused with
 `409 stale_pod` (retryable by the task), and one against a finished task

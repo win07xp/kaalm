@@ -160,7 +160,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// holds no standing read: the scoped Role comes first.
 		if err := ensurePullSecretAccess(ctx, r.Client, r.Scheme(), &task, taskPullSecretRoleName(task.Name),
 			r.OperatorNamespace, eff.ImagePullSecrets); err != nil {
-			return ctrl.Result{}, err
+			return r.childConflict(ctx, &task, err)
 		}
 		for _, ref := range eff.ImagePullSecrets {
 			var sec corev1.Secret
@@ -196,7 +196,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Failed phase with a live retry has already transitioned to Provisioning.
 	res, err := r.drive(ctx, &task, &class, eff, pod)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.childConflict(ctx, &task, err)
 	}
 	logger.V(1).Info("reconciled AgentTask", "phase", task.Status.Phase)
 	return res, nil
@@ -479,6 +479,9 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 		var cm corev1.ConfigMap
 		key := types.NamespacedName{Namespace: task.Namespace, Name: taskCompletionCMName(task.Name)}
 		if err := r.Get(ctx, key, &cm); err == nil {
+			if err := requireControlled(r.Scheme(), task, &cm); err != nil {
+				return err
+			}
 			if len(cm.Data) > 0 {
 				cm.Data = map[string]string{}
 				if err := r.Update(ctx, &cm); err != nil {
@@ -592,15 +595,14 @@ func (r *AgentTaskReconciler) taskViolation(
 func (r *AgentTaskReconciler) ensureTaskChildren(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
 ) error {
+	// A name taken by an object the task does not control is a
+	// ChildConflictError: adopting it would run the Pod under a policy or
+	// grant Kaalm did not write.
 	create := func(obj client.Object) error {
 		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
 			return err
 		}
-		err := r.Create(ctx, obj)
-		if apierrors.IsAlreadyExists(err) {
-			return nil
-		}
-		return err
+		return createControlled(ctx, r.Client, task, obj)
 	}
 	if err := create(desiredTaskServiceAccount(task)); err != nil {
 		return err
@@ -651,10 +653,10 @@ func (r *AgentTaskReconciler) ensureTaskCertificate(ctx context.Context, task *k
 		if err := controllerutil.SetControllerReference(task, desired, r.Scheme()); err != nil {
 			return false, err
 		}
-		if err := r.Create(ctx, desired); err != nil {
-			return false, err
-		}
-		return false, nil
+		return false, createControlled(ctx, r.Client, task, desired)
+	}
+	if err := requireControlled(r.Scheme(), task, &cert); err != nil {
+		return false, err
 	}
 	for _, c := range cert.Status.Conditions {
 		if c.Type == cmapi.CertificateConditionReady && c.Status == cmmeta.ConditionTrue {
@@ -671,6 +673,9 @@ func (r *AgentTaskReconciler) readMailbox(ctx context.Context, task *kaalmv1beta
 		if apierrors.IsNotFound(err) {
 			return completionPayload{}, nil
 		}
+		return completionPayload{}, err
+	}
+	if err := requireControlled(r.Scheme(), task, &cm); err != nil {
 		return completionPayload{}, err
 	}
 	return parseCompletion(cm.Data), nil
@@ -694,6 +699,30 @@ func (r *AgentTaskReconciler) ownedTaskPod(ctx context.Context, task *kaalmv1bet
 		candidate = p
 	}
 	return candidate, nil
+}
+
+// childConflict turns a ChildConflictError into Ready=False ChildConflict, a
+// Warning event, and a slow requeue, and passes any other error through. The
+// phase is left as it is: the task waits, without a Pod, until the
+// conflicting object is gone. The object is not watched (it has no owner
+// reference), so the requeue is what notices its removal.
+func (r *AgentTaskReconciler) childConflict(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, err error,
+) (ctrl.Result, error) {
+	cc, ok := asChildConflict(err)
+	if !ok {
+		return ctrl.Result{}, err
+	}
+	msg := cc.Error()
+	if prev := apimeta.FindStatusCondition(task.Status.Conditions, kaalmv1beta1.ConditionReady); prev == nil ||
+		prev.Reason != kaalmv1beta1.ReasonChildConflict || prev.Message != msg {
+		r.Recorder.Event(task, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
+		r.setTaskReady(task, false, kaalmv1beta1.ReasonChildConflict, msg)
+		if err := r.Status().Update(ctx, task); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
 // runningRequeue schedules the next pass at the timeout deadline, when one is

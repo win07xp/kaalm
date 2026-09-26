@@ -87,7 +87,8 @@ func getSecretLive(ctx context.Context, reader client.Reader, key types.Namespac
 // confirm rule 23 for one workload: get on exactly the Secrets the class
 // names, bound to the operator's ServiceAccount, owned by the workload. With
 // no names the pair is removed, so a class edit that drops its pull Secrets
-// leaves no grant behind.
+// leaves no grant behind. A Role or RoleBinding of that name the workload does
+// not control is a ChildConflictError, never updated or deleted.
 func ensurePullSecretAccess(
 	ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object,
 	roleName, operatorNamespace string, refs []corev1.LocalObjectReference,
@@ -105,15 +106,32 @@ func ensurePullSecretAccess(
 		return err
 	}
 	found := err == nil
-	if len(names) == 0 {
-		if !found {
-			return nil
+	if found {
+		if err := requireControlled(scheme, owner, &current); err != nil {
+			return err
 		}
+	}
+	var currentRB rbacv1.RoleBinding
+	rbErr := c.Get(ctx, key, &currentRB)
+	if rbErr != nil && !apierrors.IsNotFound(rbErr) {
+		return rbErr
+	}
+	rbFound := rbErr == nil
+	if rbFound {
+		if err := requireControlled(scheme, owner, &currentRB); err != nil {
+			return err
+		}
+	}
+	if len(names) == 0 {
 		// The RoleBinding goes first: a binding to a missing Role grants
 		// nothing, a Role with no binding is only clutter.
-		rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: key.Namespace}}
-		if err := c.Delete(ctx, rb); err != nil && !apierrors.IsNotFound(err) {
-			return err
+		if rbFound {
+			if err := c.Delete(ctx, &currentRB); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+		}
+		if !found {
+			return nil
 		}
 		return client.IgnoreNotFound(c.Delete(ctx, &current))
 	}
@@ -129,7 +147,7 @@ func ensurePullSecretAccess(
 		if err := controllerutil.SetControllerReference(owner, role, scheme); err != nil {
 			return err
 		}
-		if err := c.Create(ctx, role); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := createControlled(ctx, c, owner, role); err != nil {
 			return err
 		}
 	} else if !equality.Semantic.DeepEqual(current.Rules, rules) {
@@ -139,11 +157,8 @@ func ensurePullSecretAccess(
 		}
 	}
 
-	var currentRB rbacv1.RoleBinding
-	if err := c.Get(ctx, key, &currentRB); err == nil {
+	if rbFound {
 		return nil
-	} else if !apierrors.IsNotFound(err) {
-		return err
 	}
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: key.Namespace},
@@ -155,8 +170,5 @@ func ensurePullSecretAccess(
 	if err := controllerutil.SetControllerReference(owner, rb, scheme); err != nil {
 		return err
 	}
-	if err := c.Create(ctx, rb); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
+	return createControlled(ctx, c, owner, rb)
 }

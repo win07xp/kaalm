@@ -57,9 +57,10 @@ const (
 )
 
 // gateRequeue is the retry interval for Ready=False gates that depend on
-// unwatched resources (imagePullSecrets and existingClaim PVCs): without it a
-// Secret created after the gate fired would never be observed. A variable so
-// tests can shorten it.
+// unwatched resources (imagePullSecrets, existingClaim PVCs, and a child name
+// taken by an object the workload does not own): without it a Secret created
+// after the gate fired would never be observed. A variable so tests can
+// shorten it.
 var gateRequeue = 30 * time.Second
 
 // AgentReconciler owns the full child-resource tree for a persistent agent:
@@ -208,7 +209,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Step 5: Ready=False gates that block Pod creation without degrading.
 	gated, gateResult, err := r.readyGates(ctx, &agent, &class, eff)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.childConflict(ctx, &agent, statusBefore, err)
 	}
 	if gated {
 		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
@@ -220,7 +221,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Step 4: ensure the Certificate and gate Pod creation on its readiness.
 	certReady, err := r.ensureCertificate(ctx, &agent)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.childConflict(ctx, &agent, statusBefore, err)
 	}
 	if !certReady {
 		if agent.Status.Phase == kaalmv1beta1.AgentPending {
@@ -235,7 +236,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// Step 6: converge the non-Pod children.
 	if err := r.ensureChildren(ctx, &agent, &class, eff); err != nil {
-		return ctrl.Result{}, err
+		return r.childConflict(ctx, &agent, statusBefore, err)
 	}
 
 	// Steps 3, 6, 7: converge the Pod and derive the phase from it.
@@ -256,6 +257,32 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	logger.V(1).Info("reconciled Agent", "phase", agent.Status.Phase)
 	return res, nil
+}
+
+// childConflict turns a ChildConflictError into Ready=False ChildConflict, a
+// Warning event, and a slow requeue, and passes any other error through. The
+// conflict is not a reconcile error: nothing the controller retries can clear
+// it, so backoff retries would only fill the log. The pass ends before the Pod
+// is converged, so no Pod is created, and a running Pod is left alone. The
+// conflicting object is not watched (it has no owner reference), so the
+// requeue is what notices its removal.
+func (r *AgentReconciler) childConflict(
+	ctx context.Context, agent *kaalmv1beta1.Agent, before *kaalmv1beta1.AgentStatus, err error,
+) (ctrl.Result, error) {
+	cc, ok := asChildConflict(err)
+	if !ok {
+		return ctrl.Result{}, err
+	}
+	msg := cc.Error()
+	if prev := apimeta.FindStatusCondition(before.Conditions, kaalmv1beta1.ConditionReady); prev == nil ||
+		prev.Reason != kaalmv1beta1.ReasonChildConflict || prev.Message != msg {
+		r.Recorder.Event(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
+	}
+	r.setReady(agent, false, kaalmv1beta1.ReasonChildConflict, msg)
+	if err := r.updateStatusIfChanged(ctx, agent, before); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
 // handleWake implements the phase-dependent wake-annotation protocol: on a
@@ -731,10 +758,10 @@ func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1b
 		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 			return false, err
 		}
-		if err := r.Create(ctx, desired); err != nil {
-			return false, err
-		}
-		return false, nil
+		return false, createControlled(ctx, r.Client, agent, desired)
+	}
+	if err := requireControlled(r.Scheme(), agent, &cert); err != nil {
+		return false, err
 	}
 	for _, c := range cert.Status.Conditions {
 		if c.Type == cmapi.CertificateConditionReady && c.Status == cmmeta.ConditionTrue {
@@ -789,15 +816,12 @@ func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalm
 	var current corev1.ServiceAccount
 	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current)
 	if err == nil {
-		return nil
+		return requireControlled(r.Scheme(), agent, &current)
 	}
 	if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
+	return createControlled(ctx, r.Client, agent, desired)
 }
 
 func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec) error {
@@ -811,9 +835,11 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1beta1
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
-		if err := r.Create(ctx, desired); err != nil {
+		if err := createControlled(ctx, r.Client, agent, desired); err != nil {
 			return err
 		}
+	} else if err := requireControlled(r.Scheme(), agent, &current); err != nil {
+		return err
 	} else if len(current.Spec.Ports) != 1 ||
 		current.Spec.Ports[0].Port != desired.Spec.Ports[0].Port ||
 		current.Spec.Ports[0].TargetPort != desired.Spec.Ports[0].TargetPort {
@@ -835,18 +861,15 @@ func (r *AgentReconciler) ensurePVC(
 	}
 	var current corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current); err == nil {
-		return nil
+		return requireControlled(r.Scheme(), agent, &current)
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	err := r.Create(ctx, desired)
-	if apierrors.IsAlreadyExists(err) {
-		err = nil
+	if err := createControlled(ctx, r.Client, agent, desired); err != nil {
+		return err
 	}
-	if err == nil {
-		agent.Status.PVCName = desired.Name
-	}
-	return err
+	agent.Status.PVCName = desired.Name
+	return nil
 }
 
 func (r *AgentReconciler) ensureNetworkPolicy(
@@ -862,7 +885,10 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
-		return r.Create(ctx, desired)
+		return createControlled(ctx, r.Client, agent, desired)
+	}
+	if err := requireControlled(r.Scheme(), agent, &current); err != nil {
+		return err
 	}
 	if equality.Semantic.DeepEqual(current.Spec, desired.Spec) {
 		return nil

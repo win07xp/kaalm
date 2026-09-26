@@ -139,6 +139,7 @@ const (
 	ReasonBoundaryMarginOK           = "MarginSufficient"
 	ReasonCheaperModelAvailable      = "CheaperModelAvailable"
 	ReasonDegradeTargetCheapest      = "DegradeTargetCheapest"
+	ReasonChildConflict              = "ChildConflict"
 )
 
 // ConditionBoundaryMarginRaised reports that a hard-enforcement gateway
