@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import ssl
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -35,6 +36,7 @@ class CertReloader:
         self._lock = threading.Lock()
         self._server_ctx: ssl.SSLContext | None = None
         self._client_ctx: ssl.SSLContext | None = None
+        self._not_after: float | None = None
         # Bumped on every successful reload. Long-lived HTTP sessions snapshot
         # an SSL context at connector creation; comparing generations lets the
         # gateway client rebuild its session after a rotation instead of
@@ -57,10 +59,27 @@ class CertReloader:
         client_ctx.load_cert_chain(self._cert_file, self._key_file)
         client_ctx.load_verify_locations(self._ca_file)
 
+        not_after = ssl.cert_time_to_seconds(
+            ssl._ssl._test_decode_cert(self._cert_file)["notAfter"]  # type: ignore[attr-defined]
+        )
+
         with self._lock:
             self._server_ctx = server_ctx
             self._client_ctx = client_ctx
+            self._not_after = not_after
             self.generation += 1
+
+    def usable(self, now: float | None = None) -> bool:
+        """Return True when a certificate is loaded and not past its NotAfter.
+
+        An expired certificate fails every gateway handshake, so it cannot
+        carry a message (runtime contract item 1).
+        """
+        with self._lock:
+            not_after = self._not_after
+        if not_after is None:
+            return False
+        return (time.time() if now is None else now) < not_after
 
     @property
     def server_context(self) -> ssl.SSLContext:

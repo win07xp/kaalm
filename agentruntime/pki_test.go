@@ -62,6 +62,13 @@ func newTestPKI(t *testing.T) *testPKI {
 // both client and server use, with 127.0.0.1 included for local dialing.
 func (p *testPKI) issue(t *testing.T, cn string, dnsSANs ...string) (certPEM, keyPEM []byte) {
 	t.Helper()
+	return p.issueUntil(t, cn, time.Now().Add(time.Hour), dnsSANs...)
+}
+
+// issueUntil is issue with an explicit NotAfter, so a test can mint an
+// expired leaf.
+func (p *testPKI) issueUntil(t *testing.T, cn string, notAfter time.Time, dnsSANs ...string) (certPEM, keyPEM []byte) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +80,8 @@ func (p *testPKI) issue(t *testing.T, cn string, dnsSANs ...string) (certPEM, ke
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
+		NotBefore:    notAfter.Add(-2 * time.Hour),
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		DNSNames:     dnsSANs,

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -58,6 +59,24 @@ func (r *certReloader) certificate() *tls.Certificate {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.cert
+}
+
+// usableAt reports whether the reloader holds a certificate that is loaded
+// and not past its NotAfter at now. An expired certificate fails every
+// gateway handshake, so it cannot carry a message (runtime contract item 1).
+func (r *certReloader) usableAt(now time.Time) bool {
+	cert := r.certificate()
+	if cert == nil || len(cert.Certificate) == 0 {
+		return false
+	}
+	leaf := cert.Leaf
+	if leaf == nil {
+		var err error
+		if leaf, err = x509.ParseCertificate(cert.Certificate[0]); err != nil {
+			return false
+		}
+	}
+	return now.Before(leaf.NotAfter)
 }
 
 func (r *certReloader) pool() *x509.CertPool {
