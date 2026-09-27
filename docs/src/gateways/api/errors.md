@@ -26,7 +26,7 @@ Every gateway error is a JSON object with a single top-level `error`:
 
 `Retry-After`, when present, is integer seconds, never an HTTP date.
 
-Two responses on the `:8443` listener are not in this envelope. A JSON-RPC header mismatch on the tool broker is a JSON-RPC error object with code `-32020` and HTTP status `400` ([The tool plane](../tool-plane.md)). Upstream provider errors relayed through the LLM proxy are the provider's own body.
+Two responses on the `:8443` listener are not in this envelope. A JSON-RPC header mismatch on the tool broker is a JSON-RPC error object with code `-32020` and HTTP status `400` ([The tool plane](../tool-plane.md)). Upstream provider errors relayed through the LLM proxy are the provider's own body. A stream that fails after it starts ends with an [error event](#mid-stream-error-event) instead of an error response.
 
 ## LLM Gateway error responses
 
@@ -66,6 +66,30 @@ Notes on the rows:
 - **`tool_denied` and `access_denied`.** The namespace and class gates on the broker reuse `access_denied`, exactly as the LLM tenancy chain does. `tool_denied` names a per-tool narrowing miss or a disallowed method, so tool-level policy is auditable on its own.
 - **`retryable` on the broker.** The broker sets `retryable` per cause, as the proxy does, so two `503 tool_unavailable` answers can differ. A failure that a later call can clear is retryable: an unreachable or `5xx` tool server, an unreadable credential Secret, a broken response read, and a `504 tool_timeout`. A failure that repeats until an operator acts is not: a rejected gateway credential, or a `tools/list` response the broker cannot parse.
 - **`provider`.** The proxy sets it once the model name is parsed, so it is absent on the `401`, `403 invalid_cert`, `413`, and `503 internal_unavailable` rows and on the not-JSON and unqualified-model `400` rows. On fallback-exhausted errors it carries the provider the caller asked for, not the last fallback attempted. The broker sets it on every error it raises.
+
+### Mid-stream error event
+
+A streaming response has already sent its `200` status when a failure mid-stream happens, so the gateway reports the failure inside the stream. It writes one error event, flushes it, and ends the stream. The event replaces the stream's normal ending: no `message_stop` for an Anthropic-format caller, and no `[DONE]` for an OpenAI-format caller. The gateway never falls back after the first byte ([Streaming responses](../llm/request-handling.md#streaming-responses)).
+
+The event is in the caller's format, even when a fallback provider of another format is serving the stream. For an Anthropic-format caller:
+
+```text
+event: error
+data: {"type":"error","error":{"type":"provider_timeout","message":"the provider sent no data within the upstream timeout; the response is truncated"}}
+```
+
+For an OpenAI-format caller:
+
+```text
+data: {"error":{"type":"provider_error","message":"the provider stream failed before it completed; the response is truncated","provider":"openai-shared"}}
+```
+
+| `error.type` | Raised when |
+|---|---|
+| `provider_timeout` | The provider sent nothing for one `gateway.providerFirstByteTimeout` in the middle of the stream |
+| `provider_error` | Reading the provider's stream failed for any other reason, such as a dropped connection |
+
+The event carries no `retryable` field. The agent has partial output, so whether to retry the whole request is its own decision. Usage that arrived before the failure is settled as spend.
 
 ## User Gateway error responses
 

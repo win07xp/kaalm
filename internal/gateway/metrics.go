@@ -46,6 +46,7 @@ type Metrics struct {
 	budgetThreshld  *prometheus.CounterVec
 	budgetBoundary  *prometheus.CounterVec
 	llmServerTools  *prometheus.CounterVec
+	llmUsageMissing *prometheus.CounterVec
 	toolCalls       *prometheus.CounterVec
 	toolDuration    *prometheus.HistogramVec
 	channelMsgs     *prometheus.CounterVec
@@ -87,6 +88,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		llmServerTools: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_llm_server_tool_use_total", Help: "Provider-side tool calls extracted from response usage.",
 		}, []string{labelProvider, labelNamespace, labelTool}),
+		llmUsageMissing: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "kaalm_llm_usage_missing_total", Help: "Successful LLM responses that carried no usage and settled at zero spend.",
+		}, []string{labelProvider, labelModel}),
 		toolCalls: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kaalm_tool_calls_total", Help: "Brokered MCP calls by outcome.",
 		}, []string{labelProvider, labelNamespace, labelTool, labelStatus}),
@@ -162,6 +166,15 @@ func (m *Metrics) ServerToolUse(provider, namespace, tool string, count int64) {
 		return
 	}
 	m.llmServerTools.WithLabelValues(provider, namespace, tool).Add(float64(count))
+}
+
+// UsageMissing counts one 2xx LLM response, streamed or not, that carried no
+// usage and so settled at zero spend.
+func (m *Metrics) UsageMissing(provider, model string) {
+	if m == nil {
+		return
+	}
+	m.llmUsageMissing.WithLabelValues(provider, model).Inc()
 }
 
 // ToolCall counts one brokered MCP call. status is "ok", a wire error type,

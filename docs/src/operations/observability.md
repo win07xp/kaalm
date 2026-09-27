@@ -62,6 +62,7 @@ The Kaalm-specific metrics across all three components. The dashboard test under
 | LLM Gateway | `kaalm_budget_threshold_events_total` | counter | `provider`, `namespace`, `action` |
 | LLM Gateway | `kaalm_llm_budget_boundary_events_total` | counter | `provider`, `namespace`, `event` |
 | LLM Gateway | `kaalm_llm_server_tool_use_total` | counter | `provider`, `namespace`, `tool` |
+| LLM Gateway | `kaalm_llm_usage_missing_total` | counter | `provider`, `model` |
 | Tool broker | `kaalm_tool_calls_total` | counter | `provider`, `namespace`, `tool`, `status` |
 | Tool broker | `kaalm_tool_call_duration_seconds` | histogram | `provider`, `tool` |
 | User Gateway | `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` |

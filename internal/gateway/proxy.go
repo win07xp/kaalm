@@ -317,13 +317,17 @@ func (s *Server) writeWalkResult(
 		if crossing {
 			translator = llmtranslate.NewStream(res.format, inboundFormat, *modelID)
 		}
-		s.relayStream(w, res.resp, servingAdapter, translator, namespace, workload, res.chosen, *modelID, res.settle)
+		s.relayStream(w, res.resp, servingAdapter, translator, formatForType(adapter.formatName()),
+			namespace, workload, res.chosen, *modelID, res.settle)
 		return
 	}
 	if usage, ok := servingAdapter.extractUsage(res.body); ok {
 		s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle)
-	} else if res.settle != nil {
-		res.settle(0)
+	} else {
+		s.usageMissing(namespace, res.provider, *modelID)
+		if res.settle != nil {
+			res.settle(0)
+		}
 	}
 	bodyLog("llm response", res.body)
 	copyDownstreamHeaders(w.Header(), res.resp.Header)
@@ -385,6 +389,10 @@ func (s *Server) candidateRequest(
 
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
+// The attempt runs under an attemptWatchdog: UpstreamTimeout bounds the wait
+// for response headers, then each gap between body reads. A buffered body
+// releases the watchdog once read; a streaming 2xx hands it to the relay
+// through the wrapped body, whose Close releases it.
 func (s *Server) forwardOnce(
 	ctx context.Context, r *http.Request, provider *kaalmv1beta1.ModelProvider,
 	outBody []byte, inboundPath string, adapter, typeAdapter providerAdapter, modelID string,
@@ -394,8 +402,10 @@ func (s *Server) forwardOnce(
 		return forwardResult{fallilable: true, class: classConnect, err: err}
 	}
 	upstreamURL := strings.TrimSuffix(provider.Spec.Endpoint, "/") + adapter.upstreamPath(inboundPath, modelID)
-	upReq, err := http.NewRequestWithContext(ctx, r.Method, upstreamURL, bytes.NewReader(outBody))
+	actx, dog := newAttemptWatchdog(ctx, s.Config.UpstreamTimeout)
+	upReq, err := http.NewRequestWithContext(actx, r.Method, upstreamURL, bytes.NewReader(outBody))
 	if err != nil {
+		dog.release()
 		return forwardResult{fallilable: true, class: classConnect, err: err}
 	}
 	copyForwardedHeaders(upReq.Header, r.Header)
@@ -405,22 +415,31 @@ func (s *Server) forwardOnce(
 	resp, err := s.upstream().Do(upReq)
 	if err != nil {
 		class := classConnect
-		if errors.Is(err, os.ErrDeadlineExceeded) || strings.Contains(err.Error(), "context deadline exceeded") {
+		if dog.idle() || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
 			class = classTimeout
 		}
+		dog.release()
 		return forwardResult{fallilable: true, class: class, err: err}
 	}
+	dog.kick()
+	resp.Body = dog.watch(resp.Body)
 
 	fallback, class := isFallbackable(resp.StatusCode)
 	fr := forwardResult{resp: resp, fallilable: fallback, class: class, provider: provider.Name, chosen: provider}
-	if isSSE(resp) {
+	if isSSE(resp) && class == classNone {
 		// A streaming 2xx: relay begins after the walk; no body buffering.
 		return fr
 	}
+	// Every other response is buffered, so an attempt the walk abandons
+	// holds no connection and no timer.
 	body, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if err != nil {
-		return forwardResult{fallilable: true, class: classConnect, err: err}
+		class := classConnect
+		if errors.Is(err, errUpstreamIdle) {
+			class = classTimeout
+		}
+		return forwardResult{fallilable: true, class: class, err: err}
 	}
 	// Re-wrap the buffered body so downstream reads still work.
 	resp.Body = io.NopCloser(bytes.NewReader(body))
@@ -538,11 +557,15 @@ func isSSE(resp *http.Response) bool {
 
 // relayStream forwards SSE chunks as they arrive with no buffering, folding
 // usage out of the events the adapter recognizes. Spend is recorded after the
-// stream completes; a stream ending without usage counts as zero spend.
+// stream ends. A stream that ends without usage settles at zero spend and is
+// reported by usageMissing. When the upstream read fails after the status is
+// sent (the idle bound passed, or the connection broke), the relay ends the
+// stream with one error event in the caller's format, so the agent can tell a
+// truncated stream from a complete one.
 func (s *Server) relayStream(
 	w http.ResponseWriter, resp *http.Response, adapter providerAdapter, translator llmtranslate.Stream,
-	namespace, workload string, provider *kaalmv1beta1.ModelProvider, modelID string,
-	settle func(float64),
+	callerFormat llmtranslate.Format, namespace, workload string, provider *kaalmv1beta1.ModelProvider,
+	modelID string, settle func(float64),
 ) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -556,7 +579,10 @@ func (s *Server) relayStream(
 	defer func() {
 		if !usage.isZero() {
 			s.settleUsage(provider, namespace, workload, modelID, usage, settle)
-		} else if settle != nil {
+			return
+		}
+		s.usageMissing(namespace, provider.Name, modelID)
+		if settle != nil {
 			settle(0)
 		}
 	}()
@@ -591,6 +617,19 @@ func (s *Server) relayStream(
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		// The status is already sent, so the truncation is signaled in the
+		// body. No fallback after the first byte, and no translator Finish:
+		// its closing events would make the stream look complete.
+		slog.Warn("SSE relay read error", "namespace", namespace,
+			"provider", provider.Name, "model", modelID, "err", err)
+		for _, out := range streamErrorEvent(callerFormat, provider.Name, err) {
+			if !writeLine(out) {
+				return
+			}
+		}
+		return
+	}
 	if translator != nil {
 		for _, out := range translator.Finish() {
 			if !writeLine(out) {
@@ -598,11 +637,44 @@ func (s *Server) relayStream(
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		// The response headers and status are already flushed, so we cannot
-		// signal the truncation downstream; log it and record whatever usage
-		// was accumulated before the read failed.
-		slog.Warn("SSE relay read error", "namespace", namespace,
-			"provider", provider.Name, "model", modelID, "err", err)
+}
+
+// anthropicErrorEvent is the Anthropic SSE event name, and data type, of a
+// stream error.
+const anthropicErrorEvent = "error"
+
+// streamErrorEvent renders the event that ends a truncated stream, in the
+// caller's format: an Anthropic "error" event, or an OpenAI-style data line
+// carrying the gateway error envelope. The type is provider_timeout when the
+// idle bound ended the stream, otherwise provider_error.
+func streamErrorEvent(callerFormat llmtranslate.Format, provider string, cause error) [][]byte {
+	errType, message := errProviderError, "the provider stream failed before it completed; the response is truncated"
+	if errors.Is(cause, errUpstreamIdle) {
+		errType, message = errProviderTimeout, "the provider sent no data within the upstream timeout; the response is truncated"
 	}
+	type eventError struct {
+		Type     string `json:"type"`
+		Message  string `json:"message"`
+		Provider string `json:"provider,omitempty"`
+	}
+	if callerFormat == llmtranslate.FormatAnthropic {
+		data, _ := json.Marshal(struct {
+			Type  string     `json:"type"`
+			Error eventError `json:"error"`
+		}{Type: anthropicErrorEvent, Error: eventError{Type: errType, Message: message}})
+		return [][]byte{[]byte("event: " + anthropicErrorEvent), append([]byte("data: "), data...), {}}
+	}
+	data, _ := json.Marshal(struct {
+		Error eventError `json:"error"`
+	}{Error: eventError{Type: errType, Message: message, Provider: provider}})
+	return [][]byte{append([]byte("data: "), data...), {}}
+}
+
+// usageMissing reports a 2xx response that settles at zero spend because it
+// carried no usage. Under hard enforcement such a response is invisible to
+// the budget, so it is logged and counted.
+func (s *Server) usageMissing(namespace, provider, modelID string) {
+	slog.Warn("LLM response carried no usage; settled at zero spend",
+		"namespace", namespace, "provider", provider, "model", modelID)
+	s.Metrics.UsageMissing(provider, modelID)
 }

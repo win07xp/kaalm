@@ -135,7 +135,10 @@ gateway:
   # Total sync-mode wall-clock budget (wake + delivery retries + processing).
   syncDeliveryDeadline: 30s
   # Per-attempt upstream LLM-provider bound (the gateway's --upstream-timeout).
-  # It covers the whole call through the last response byte, streams included.
+  # It sets two bounds: the wait for the first response byte, then the
+  # mid-stream idle-bytes bound between response body reads. A stream that
+  # keeps sending bytes runs to completion. Brokered MCP calls use it as a
+  # whole-call bound.
   providerFirstByteTimeout: 120s
   # Per-attempt read of an agent's /v1/message response.
   agentReadTimeout: 10s

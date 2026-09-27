@@ -175,7 +175,7 @@ MCP revision **2026-07-28** makes the protocol stateless. Kaalm is dual-era for 
 
 ### Limits and SSRF protection
 
-Request and response bodies are capped, and each call carries an upstream timeout. As shipped both reuse the LLM proxy's values: the cap is `gateway.maxLLMRequestBodyBytes`, and the timeout is `gateway.providerFirstByteTimeout`, which bounds the whole call as described under [Request handling](llm/request-handling.md).
+Request and response bodies are capped, and each call carries an upstream timeout. Both reuse the LLM proxy's values: the cap is `gateway.maxLLMRequestBodyBytes`, and the timeout is `gateway.providerFirstByteTimeout`. On the broker the timeout is one deadline for each call, response included.
 
 ToolProvider endpoints are operator-declared configuration, exactly as ModelProvider endpoints are, so they get the trust provider endpoints get rather than the full [callback policy](../resources/validation-and-defaulting.md) that user-supplied callback URLs receive. The schema requires `https://`, and the broker never follows redirects, which closes the confused-deputy path a compromised tool server could otherwise open.
 

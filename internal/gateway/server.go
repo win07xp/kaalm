@@ -55,7 +55,11 @@ type Config struct {
 	// Replicas returns the live gateway replica count for rate-limit
 	// division; nil means a single replica.
 	Replicas func() int
-	// UpstreamTimeout bounds each upstream provider call.
+	// UpstreamTimeout bounds each upstream provider attempt by inactivity:
+	// the wait from sending the request to the first response byte, then
+	// each gap between response body reads. A response that keeps sending
+	// bytes is never cut. Brokered MCP calls use it as a whole-call bound
+	// when MCPUpstreamTimeout is zero.
 	UpstreamTimeout time.Duration
 	// UpstreamCAFiles are upstream trust bundles, merged and added to the system
 	// roots and reloaded when any mtime changes so a rotated kaalm-upstream-ca
@@ -450,8 +454,11 @@ func (s *Server) upstream() *http.Client {
 				return dialer.DialContext(ctx, network, addr)
 			}
 		}
+		// No client Timeout: it would bound the whole call through the last
+		// body byte and cut long streams. forwardOnce bounds each attempt by
+		// inactivity instead (attemptWatchdog).
 		s.upstreamClient = &http.Client{
-			Timeout: s.Config.UpstreamTimeout, Transport: transport,
+			Transport: transport,
 			// A refused redirect surfaces as a connect-class failure, so the
 			// fallback walk continues past it (#153).
 			CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
