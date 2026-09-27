@@ -122,3 +122,24 @@ func TestWatchedBody_ReadsRestartTheBound(t *testing.T) {
 		t.Error("Close did not release the attempt context")
 	}
 }
+
+// eofAfterCancelReader returns io.EOF once ctx is done, the way an upstream
+// that answers the gateway's cancel by finishing its response cleanly looks
+// to the relay.
+type eofAfterCancelReader struct{ ctx context.Context }
+
+func (r eofAfterCancelReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, io.EOF
+}
+
+func (eofAfterCancelReader) Close() error { return nil }
+
+func TestWatchedBody_CleanEndAfterTheStallIsStillIdle(t *testing.T) {
+	ctx, dog := newAttemptWatchdog(context.Background(), 40*time.Millisecond)
+	body := dog.watch(eofAfterCancelReader{ctx: ctx})
+	defer func() { _ = body.Close() }()
+	if _, err := io.ReadAll(body); !errors.Is(err, errUpstreamIdle) {
+		t.Errorf("end of body after the bound passed = %v, want errUpstreamIdle", err)
+	}
+}
