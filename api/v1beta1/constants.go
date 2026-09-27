@@ -118,6 +118,7 @@ const (
 	ReasonInvalidCallbackURL         = "InvalidCallbackUrl"
 	ReasonCallbackAuthMissing        = "CallbackAuthMissing"
 	ReasonCallbackAuthInvalid        = "CallbackAuthInvalid"
+	ReasonCallbackHostUnresolved     = "CallbackHostUnresolved"
 	ReasonAgentReachable             = "AgentReachable"
 	ReasonWebhookReady               = "WebhookReady"
 	ReasonNoRecentTraffic            = "NoRecentTraffic"
