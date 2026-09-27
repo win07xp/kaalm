@@ -5,18 +5,6 @@ The design book is the spec: it documents exactly how the system works. Start at
 checks are listed in the docstring of `hack/docs/check.py`);
 `mdbook serve docs` for live preview.
 
-## Layout of src/
-
-- `concepts/` - vision, core concepts, personas, system architecture, tenancy and tiers
-- `resources/` - one page per CRD, plus the cross-resource validation rules
-- `runtime/` - the runtime contract, reference base images, starter templates, child resources
-- `gateways/` - gateway overview, `api/` (HTTP wire contract), `llm/`, `user/`
-- `controller/` - operator structure, reconcilers, lifecycles, finalizers
-- `console/` - the optional operator console (read API, authn, test-chat)
-- `security/` - trust model, RBAC, credentials, TLS, threat model
-- `operations/` - deployment (Helm), API versioning and deprecation, observability
-- `appendix/` - the acceptance scenarios (S1 to S24), the scenario-coverage map, and the lifecycle index
-
 ## Single-sourced facts
 
 These live on exactly one canonical page and are linked from everywhere else.

@@ -7,9 +7,6 @@ type. Latest release v1.0.0 (2026-09-27); next milestone v1.1.0. Status
 lives in `docs/src/ROADMAP.md` and the GitHub milestone, not here.
 
 - API group: `kaalm.io` | Versions: `v1beta1` (the storage version and the contract) and `v1alpha1` (deprecated, served, converted by the controller)
-- Stack: Go, controller-runtime (kubebuilder), Helm
-- Components: operator controller + gateway (+ optional console), all in `kaalm-system` namespace
-- 6 CRDs: AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentChannel
 
 ## Documentation
 
@@ -32,13 +29,9 @@ Prose rules for every book, README, and release note:
 ## Build Commands
 
 ```bash
-go build ./...                          # build (root module; go.work spans agentruntime + starter-go too)
-go test ./...                           # unit tests
-make runtime-test                       # agentruntime module + Go starter tests (-race)
-go test ./internal/controller/... -run TestName  # single test
+make runtime-test                       # agentruntime module + Go starter tests (-race); go.work spans agentruntime + starter-go
 make cover-check                        # coverage gate (>=85% union coverage, same as CI)
 make e2e                                # full k3d e2e suite
-go run ./cmd/manager/main.go            # run locally
 ```
 
 ## Conventions
