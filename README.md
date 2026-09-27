@@ -5,19 +5,20 @@ type. You declare an agent; Kaalm runs it, gives it its own identity and
 storage, routes its model calls through a gateway that holds the credentials,
 and puts it to sleep when nobody is talking to it.
 
-**Status: v1.0.0.** Installs with one Helm command, upgrades in place with
-two, and your first agent needs no image build: mount a handler file into a
-published base image. The API is `kaalm.io/v1beta1`, and from v1.0.0 it only
-changes in ways that keep existing manifests working; `v1alpha1` manifests
-still apply with a deprecation warning. The gateway holds every credential
-and brokers, meters, and audits both LLM and MCP tool calls. Agents run with
-secure defaults: the restricted Pod Security Standard, no Kubernetes API
-token, and a NetworkPolicy that lets them reach the gateway, DNS, and only
-the destinations their class allows. An optional console puts the fleet, its
-spend, and a test-chat panel on one screen; Grafana dashboards and
-OpenTelemetry tracing cover the rest. All twenty-four acceptance scenarios
-are proven on a real cluster, the listeners have been through an
-authorization and SSRF audit, and a load test ran 400 agents on one machine.
+- **No image build for your first agent.** Mount a handler file into a
+  published base image, or bring your own image.
+- **Credentials stay out of agent code.** Model and MCP tool calls go through
+  a gateway that holds the keys, checks what each agent may use, and records
+  what it cost against a per-namespace budget.
+- **Agents sleep when idle.** A quiet agent is shut down and its storage kept;
+  the next message wakes it with its memory intact.
+- **Channels built in.** Reach an agent through a webhook, Discord, or
+  WhatsApp.
+- **Safe defaults.** Agents run as non-root with no Kubernetes API access and
+  a network policy that allows only the gateway, DNS, and the destinations
+  their class permits.
+- **A stable API.** `kaalm.io/v1beta1` changes only in ways that keep your
+  manifests working.
 
 ## What it looks like
 
@@ -38,10 +39,7 @@ spec:
 
 That is a running container with its own TLS identity, a volume that outlives
 it, a service, a network policy restricting who may reach it, and hibernation
-when it goes idle. Your code never sees a provider API key: it calls the
-gateway, and the gateway injects the credential, checks the agent is allowed
-that provider, and records what it cost. Budgets are soft limits by default,
-with opt-in hard enforcement that turns the block threshold into a guarantee.
+when it goes idle.
 
 ## Install
 
