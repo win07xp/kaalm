@@ -39,6 +39,7 @@ import (
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/gateway"
 	"github.com/win07xp/kaalm/internal/profiling"
+	"github.com/win07xp/kaalm/internal/secretwatch"
 	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
@@ -153,7 +154,7 @@ func main() {
 	// resourceNames-scoped grants on individual channel Secrets (no
 	// cluster-wide list), so a cached Secret informer would issue a forbidden
 	// cluster-scoped LIST and the read would hang waiting for a sync that
-	// never lands. Secret reads go through gateway.SecretWatcher instead: one
+	// never lands. Secret reads go through secretwatch.Watcher instead: one
 	// GET-backed, name-filtered watch per referenced Secret. See
 	// docs/src/security/rbac.md (gateway Secret access).
 	cl, err := cluster.New(restCfg, func(o *cluster.Options) {
@@ -303,7 +304,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	store.Secrets = gateway.NewSecretWatcher(ctx, clientset)
+	store.Secrets = secretwatch.New(ctx, clientset)
 
 	go func() {
 		if err := cl.Start(ctx); err != nil {

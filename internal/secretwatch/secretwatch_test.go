@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package gateway
+package secretwatch
 
 import (
 	"context"
@@ -29,8 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
-
-	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func secretObj(ns, name, value string) *corev1.Secret {
@@ -52,11 +50,11 @@ func eventually(t *testing.T, timeout time.Duration, fn func() bool) {
 	}
 }
 
-func TestSecretWatcherServesAndFollowsRotation(t *testing.T) {
+func TestWatcherServesAndFollowsRotation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset(secretObj("kaalm-system", "openai-key", "v1"))
-	w := NewSecretWatcher(ctx, cs)
+	w := New(ctx, cs)
 
 	sec, err := w.Get(ctx, "kaalm-system", "openai-key")
 	if err != nil {
@@ -85,11 +83,11 @@ func TestSecretWatcherServesAndFollowsRotation(t *testing.T) {
 	}
 }
 
-func TestSecretWatcherReportsAbsentSecretAndSeesItAppear(t *testing.T) {
+func TestWatcherReportsAbsentSecretAndSeesItAppear(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset()
-	w := NewSecretWatcher(ctx, cs)
+	w := New(ctx, cs)
 
 	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsNotFound(err) {
 		t.Fatalf("absent Secret: err = %v, want NotFound", err)
@@ -103,7 +101,7 @@ func TestSecretWatcherReportsAbsentSecretAndSeesItAppear(t *testing.T) {
 	})
 }
 
-func TestSecretWatcherFallsBackToLiveReadWhenSyncFails(t *testing.T) {
+func TestWatcherFallsBackToLiveReadWhenSyncFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset()
@@ -111,7 +109,7 @@ func TestSecretWatcherFallsBackToLiveReadWhenSyncFails(t *testing.T) {
 	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, forbidden
 	})
-	w := NewSecretWatcher(ctx, cs)
+	w := New(ctx, cs)
 	w.SyncTimeout = 100 * time.Millisecond
 
 	_, err := w.Get(ctx, "team-a", "hook")
@@ -120,11 +118,11 @@ func TestSecretWatcherFallsBackToLiveReadWhenSyncFails(t *testing.T) {
 	}
 }
 
-func TestSecretWatcherStopsIdleInformers(t *testing.T) {
+func TestWatcherStopsIdleInformers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset(secretObj("team-a", "hook", "x"))
-	w := NewSecretWatcher(ctx, cs)
+	w := New(ctx, cs)
 	w.IdleTTL = 0
 	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 		t.Fatal(err)
@@ -149,38 +147,5 @@ func TestSecretWatcherStopsIdleInformers(t *testing.T) {
 	// The next read starts a fresh informer transparently.
 	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
 		t.Fatalf("read after eviction: %v", err)
-	}
-}
-
-func TestKubeStoreReadsSecretsThroughTheWatcher(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cs := fake.NewSimpleClientset(
-		secretObj("kaalm-system", "openai-key", "sk-live"),
-		secretObj("kaalm-system", "tool-key", "tool-live"),
-		secretObj("team-a", "hook", "hook-live"),
-	)
-	store := &KubeStore{
-		Reader:            kubeClientWith(t),
-		OperatorNamespace: "kaalm-system",
-		Secrets:           NewSecretWatcher(ctx, cs),
-	}
-	provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
-		CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "openai-key", Key: "token"},
-	}}
-	if got, err := store.Credential(ctx, provider); err != nil || got != "sk-live" {
-		t.Fatalf("Credential = %q, %v", got, err)
-	}
-	tool := &kaalmv1beta1.ToolProvider{Spec: kaalmv1beta1.ToolProviderSpec{
-		CredentialsRef: &kaalmv1beta1.SecretKeyReference{Name: "tool-key", Key: "token"},
-	}}
-	if got, err := store.ToolCredential(ctx, tool); err != nil || got != "tool-live" {
-		t.Fatalf("ToolCredential = %q, %v", got, err)
-	}
-	if got, err := store.SecretValue(ctx, "team-a", "hook", "token"); err != nil || got != "hook-live" {
-		t.Fatalf("SecretValue = %q, %v", got, err)
-	}
-	if _, err := store.SecretValue(ctx, "team-a", "hook", "missing"); err == nil {
-		t.Fatal("missing key must error")
 	}
 }

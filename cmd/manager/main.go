@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -55,6 +56,7 @@ import (
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/controller"
 	"github.com/win07xp/kaalm/internal/profiling"
+	"github.com/win07xp/kaalm/internal/secretwatch"
 	"github.com/win07xp/kaalm/internal/storagemigration"
 	// +kubebuilder:scaffold:imports
 )
@@ -267,8 +269,8 @@ func main() {
 		Scheme: scheme,
 		// The Secret informer covers the operator namespace only, which is
 		// all the controller's RBAC lets it list: provider credentials live
-		// there. A Secret in a user namespace is read live, through a Role
-		// scoped to its name, and never held in memory.
+		// there. A Secret in a user namespace is served by secretSource
+		// below, through a Role scoped to its name.
 		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
 			&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},
 		}},
@@ -296,6 +298,24 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+
+	// One signal context serves the manager and the Secret watcher, so the
+	// watcher's informers stop when the manager does.
+	ctx := ctrl.SetupSignalHandler()
+	// Secrets in user namespaces (rule 23 pull Secrets, channel credentials)
+	// are served from one GET-backed, name-filtered watch per referenced
+	// Secret. The controller holds get and watch on each through a
+	// resourceNames-scoped Role and never list, so a namespace informer is
+	// out of reach; a live read per validation pass throttled the client at
+	// a few hundred channels. The clientset uses the manager's rest config,
+	// so --client-qps and --client-burst apply to it, in a token bucket of
+	// its own.
+	clientset, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build the Secret watcher's clientset")
+		os.Exit(1)
+	}
+	secretSource := secretwatch.NewReader(secretwatch.New(ctx, clientset))
 
 	if err := controller.SetupIndexers(context.Background(), mgr); err != nil {
 		setupLog.Error(err, "unable to set up field indexers")
@@ -387,7 +407,7 @@ func main() {
 		MaxConcurrentReconciles: maxConcurrentReconciles,
 		Recorder:                mgr.GetEventRecorderFor("agent-controller"),
 		OperatorNamespace:       operatorNamespace,
-		SecretReader:            mgr.GetAPIReader(),
+		SecretReader:            secretSource,
 		Activity:                activityClient,
 		CertLifetime:            certLifetime,
 		DNS:                     dnsSelector,
@@ -401,7 +421,7 @@ func main() {
 		MaxConcurrentReconciles: maxConcurrentReconciles,
 		Recorder:                mgr.GetEventRecorderFor("agenttask-controller"),
 		OperatorNamespace:       operatorNamespace,
-		SecretReader:            mgr.GetAPIReader(),
+		SecretReader:            secretSource,
 		CertLifetime:            certLifetime,
 		DNS:                     dnsSelector,
 		FQDNSupport:             fqdnProbe.Supported,
@@ -421,7 +441,7 @@ func main() {
 		MaxConcurrentReconciles: maxConcurrentReconciles,
 		Recorder:                mgr.GetEventRecorderFor("agentchannel-controller"),
 		OperatorNamespace:       operatorNamespace,
-		SecretReader:            mgr.GetAPIReader(),
+		SecretReader:            secretSource,
 		Health:                  channelHealthClient,
 		CallbackPolicy:          managerCallbackPolicy,
 	}).SetupWithManager(mgr); err != nil {
@@ -498,7 +518,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

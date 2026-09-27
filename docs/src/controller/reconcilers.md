@@ -209,7 +209,7 @@ The reconciler creates no Pods. It validates the channel, scopes credential acce
 6. **Phase.** Reduce the Agent's phase into `status.phase`; see [Channel phase reduction](#channel-phase-reduction).
 7. **Prune.** Delete this channel's expired async records; see [Async ConfigMap pruning](#async-configmap-pruning).
 
-Status is written only when the pass changed it, and every pass requeues in one minute. The reconciler watches no Secrets, since its Secret access is scoped per channel, so a credential fixed in place is noticed by a later pass, not by an event. The gateway's side of a channel, from intake to delivery, is under [Request flow](../gateways/user/overview.md#request-flow).
+Status is written only when the pass changed it, and every pass requeues in one minute. Secret events do not enqueue a channel: the reconciler reads each referenced Secret from its own single-object watch ([Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)), which keeps the value current without a GET on every pass, so a credential fixed in place is noticed by the next pass. The gateway's side of a channel, from intake to delivery, is under [Request flow](../gateways/user/overview.md#request-flow).
 
 ### Per-channel credential Role
 

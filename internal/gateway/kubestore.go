@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/secretwatch"
 )
 
 // PodIPIndex is the cache index mapping status.podIP to Pods. Registered by
@@ -45,7 +46,7 @@ type KubeStore struct {
 	// Secrets through Reader instead, which in production is the uncached
 	// path: the cache is disabled for Secrets (cmd/gateway), so each read is
 	// a live GET behind the client's rate limiter (#170).
-	Secrets *SecretWatcher
+	Secrets *secretwatch.Watcher
 }
 
 // secret reads one Secret, through the watcher when there is one.
@@ -125,7 +126,7 @@ func (k *KubeStore) ToolCredential(ctx context.Context, provider *kaalmv1beta1.T
 }
 
 // Credential reads the provider's credential Secret key from the operator
-// namespace. With a SecretWatcher the read is served from the Secret's own
+// namespace. With a secretwatch.Watcher the read is served from the Secret's own
 // watch, so a rotation is visible on the next request without a GET.
 func (k *KubeStore) Credential(ctx context.Context, provider *kaalmv1beta1.ModelProvider) (string, error) {
 	ref := provider.Spec.CredentialsRef

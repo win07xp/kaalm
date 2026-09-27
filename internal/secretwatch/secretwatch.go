@@ -14,7 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package gateway
+// Package secretwatch serves Secret reads from one GET-backed, name-filtered
+// watch per referenced Secret. The gateway and the controller share it: both
+// hold get and watch on individual Secrets but never list.
+package secretwatch
 
 import (
 	"context"
@@ -32,18 +35,18 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// SecretWatcher serves Secret reads from single-object informers. The gateway
-// holds get and watch on Secrets (the operator namespace outright, channel
-// Secrets through the reconciler's resourceNames-scoped grants) but never
-// list, so an ordinary informer would hang on a forbidden LIST. Each
+// Watcher serves Secret reads from single-object informers. The gateway and
+// the controller hold get and watch on Secrets (the operator namespace
+// outright, user-namespace Secrets through resourceNames-scoped grants) but
+// never list, so an ordinary informer would hang on a forbidden LIST. Each
 // referenced Secret therefore gets its own list-watch whose "list" is a GET
 // wrapped as a one-item list and whose watch is filtered to metadata.name. A
 // read is then a cache hit and a rotation lands on the watch event, which is
 // the contract docs/src/security/credentials.md describes. Without a watcher
-// KubeStore reads live, one GET per request through the client's rate
-// limiter, which is what capped every replica at 20 requests per second
-// (#170).
-type SecretWatcher struct {
+// every read is a live GET through the client's rate limiter, which is what
+// capped every gateway replica at 20 requests per second (#170) and
+// throttled the controller's per-minute channel validation.
+type Watcher struct {
 	client kubernetes.Interface
 	ctx    context.Context
 
@@ -66,9 +69,9 @@ type secretInformer struct {
 	lastUsed time.Time
 }
 
-// NewSecretWatcher builds a watcher whose informers stop when ctx ends.
-func NewSecretWatcher(ctx context.Context, client kubernetes.Interface) *SecretWatcher {
-	w := &SecretWatcher{
+// New builds a watcher whose informers stop when ctx ends.
+func New(ctx context.Context, client kubernetes.Interface) *Watcher {
+	w := &Watcher{
 		client:      client,
 		ctx:         ctx,
 		SyncTimeout: 2 * time.Second,
@@ -83,7 +86,7 @@ func NewSecretWatcher(ctx context.Context, client kubernetes.Interface) *SecretW
 // first use. If the informer has not completed its initial GET within
 // SyncTimeout the read goes live, so the caller sees the same error a direct
 // read would.
-func (w *SecretWatcher) Get(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
+func (w *Watcher) Get(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
 	entry := w.entryFor(namespace, name)
 	if !waitSynced(ctx, entry.informer, w.SyncTimeout) {
 		return w.client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -102,7 +105,7 @@ func (w *SecretWatcher) Get(ctx context.Context, namespace, name string) (*corev
 	return sec, nil
 }
 
-func (w *SecretWatcher) entryFor(namespace, name string) *secretInformer {
+func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	key := types.NamespacedName{Namespace: namespace, Name: name}
@@ -156,7 +159,7 @@ func waitSynced(ctx context.Context, inf cache.SharedInformer, timeout time.Dura
 
 // janitor stops informers idle past IdleTTL and every informer when the
 // watcher's context ends.
-func (w *SecretWatcher) janitor() {
+func (w *Watcher) janitor() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for {

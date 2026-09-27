@@ -86,9 +86,10 @@ type AgentChannelReconciler struct {
 	client.Client
 	Recorder          record.EventRecorder
 	OperatorNamespace string
-	// SecretReader reads Secrets in user namespaces straight from the
-	// apiserver: the manager's cache holds the operator namespace's Secrets
-	// only. nil falls back to the embedded client.
+	// SecretReader reads Secrets in user namespaces, which the manager's
+	// cache does not hold. In production it is a secretwatch.Reader: one
+	// name-filtered watch per referenced Secret, so repeated reads are cache
+	// hits. nil falls back to the embedded client.
 	SecretReader client.Reader
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
