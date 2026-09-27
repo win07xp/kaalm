@@ -6,9 +6,9 @@ Two kinds of change reach an Agent's provisioned child resources: edits to the A
 
 When a developer edits an Agent's spec, the controller detects drift by hash comparison. It hashes the Pod spec it would derive from the current Agent spec and class, and compares the result with the hash stamped as the `kaalm.io/pod-spec-hash` annotation on the existing Pod at creation time, the Deployment `pod-template-hash` idiom. The comparison is never made against the live Pod object: the apiserver defaults and injects fields on admission (`serviceAccountName`, `nodeName`, tolerations, `imagePullPolicy`), so a deep-equal against the live object would report drift on every pass and recreate the Pod in a loop.
 
-The hash covers the image, command, args, env, resources, the provider names, and the handler ConfigMap name (never its content). Kaalm replaces the Pod on any change to these, for a clean process restart, even where Kubernetes would allow an in-place change such as an image or, on clusters with in-place Pod resize, resources. On a hash mismatch the Agent transitions to `Provisioning`, the Pod is deleted with its `terminationGracePeriodSeconds`, and a new Pod is created from the new spec. The PVC, Service, Certificate, ServiceAccount, and NetworkPolicy are preserved.
+The hash covers the image, command, args, env, resources, the provider names, and the handler ConfigMap name (never its content). It also covers every Pod input the AgentClass controls, as derived for the Pod: the Pod and container security contexts with the `restricted` baseline merged in, `automountServiceAccountToken`, `runtimeClassName`, the image pull policy and pull Secrets, the termination grace period, and the `podMetadata` labels and annotations. The controller's own labels and the two hash annotations are left out, because the controller sets them on every Pod whatever the class says. Kaalm replaces the Pod on any change to these, for a clean process restart, even where Kubernetes would allow an in-place change such as an image or, on clusters with in-place Pod resize, resources. On a hash mismatch the Agent transitions to `Provisioning`, the Pod is deleted with its `terminationGracePeriodSeconds`, and a new Pod is created from the new spec. The PVC, Service, Certificate, ServiceAccount, and NetworkPolicy are preserved.
 
-Fields outside the hash are never applied to a live Pod: the reconciler creates, deletes, and reads Pods, and never patches one. A change to such a field takes effect when the Pod is next replaced for another reason. The Service and the NetworkPolicy are converged in place, so a `spec.service.port` change or a class egress change reaches a running Agent without a restart.
+Fields outside the hash are never applied to a live Pod: the reconciler creates, deletes, and reads Pods, and patches only the hash annotations (see [Upgrades that change the hash](#upgrades-that-change-the-hash)). A change to such a field takes effect when the Pod is next replaced for another reason. The Service and the NetworkPolicy are converged in place, so a `spec.service.port` change or a class egress change reaches a running Agent without a restart.
 
 ### Effect by phase
 
@@ -20,6 +20,12 @@ Fields outside the hash are never applied to a live Pod: the reconciler creates,
 | `Degraded` | The cross-checks re-run on every pass, so aligning the Agent or class spec is the way out of `Degraded`; see [Degraded](agent-lifecycle.md#degraded). |
 
 A spec edit's effect is guaranteed visible only after `status.phase` next settles at `Running`, `Hibernated`, or, for class recovery, the restored `preDegradedPhase`.
+
+### Upgrades that change the hash
+
+Each Pod also carries `kaalm.io/pod-spec-hash-version`, the version of the formula that produced its hash; a Pod without it was stamped by version 1. Upgrading to a release that changes the formula replaces no running Pod. For a Pod stamped by an older formula, the reconciler recomputes the hash with that formula. If it matches, the Pod is current under the rules it was created with, and the reconciler patches the two annotations to the current formula in place. If it does not match, the Pod has drifted and is replaced as usual.
+
+Because of the re-stamp, an AgentClass edit made before the upgrade to a field that version 1 does not hash (`security`, `runtime.runtimeClassName`, the pull settings, the termination grace period, or `podMetadata`) does not reach a running Pod at upgrade time. It takes effect at the Pod's next replacement. An edit made after the upgrade replaces the Pod as bucket 1 describes.
 
 ## AgentClass change handling
 
@@ -33,7 +39,7 @@ The exclusion test runs first, so bucket membership follows what the change does
 
 ### Bucket 1: recreate-and-clamp (default)
 
-A class change that reaches the Pod spec hash replaces the Pod: `maxLimits` lowered (the Agent's `resources.limits` are clamped to it), `defaultImage` changed for an Agent with no image of its own, or `defaultResources` changed for an Agent with none. The reconciler transitions the Agent to `Provisioning`, deletes the Pod gracefully, and creates a new one from the clamped spec; a `Hibernated` Agent applies the change on its next wake. Agents must tolerate restart.
+A class change that reaches the Pod spec hash replaces the Pod: `maxLimits` lowered (the Agent's `resources.limits` are clamped to it), `defaultImage` changed for an Agent with no image of its own, `defaultResources` changed for an Agent with none, or any change to `security`, `runtime.runtimeClassName`, `image.pullPolicy`, `image.imagePullSecrets`, `lifecycle.terminationGracePeriodSeconds`, or `podMetadata`. The reconciler transitions the Agent to `Provisioning`, deletes the Pod gracefully, and creates a new one from the clamped spec; a `Hibernated` Agent applies the change on its next wake. Agents must tolerate restart.
 
 Class fields outside the hash reach a running Agent by other routes or not at all:
 
@@ -41,7 +47,6 @@ Class fields outside the hash reach a running Agent by other routes or not at al
 |---|---|
 | `network.egress.allowedCIDRs`, `allowSameNamespaceIngress` | the NetworkPolicy is updated in place; no restart |
 | `image.allowedImages` narrowed but still admitting the image | none |
-| `security`, `runtime.runtimeClassName`, `image.pullPolicy`, `image.imagePullSecrets`, `lifecycle.terminationGracePeriodSeconds`, `podMetadata` | as shipped, none until the Pod is next replaced for another reason: these fields are derived into a new Pod but not hashed |
 | `lifecycle` defaults and caps | applied on the next activity evaluation; no restart |
 
 ### Bucket 2: degrade-when-irreconcilable
@@ -75,4 +80,4 @@ A retry spends its `status.retries` increment before the check runs and does not
 
 ### Bulk impact
 
-Tightening a class with many Agents re-enqueues every one of them at once, and the restarts run concurrently up to `controller.maxConcurrentReconciles` (default 4). There is no ordering, pacing, or max-unavailable bound. Platform teams that need a staged rollout split the tightening across classes (`standard-v2`, say) and migrate Agents incrementally rather than editing an in-use class.
+Tightening a class with many Agents re-enqueues every one of them at once, and the restarts run concurrently up to `controller.maxConcurrentReconciles` (default 4). A class edit that changes the Pod spec hash therefore replaces every running Pod of that class at once; Kaalm does not cap how many Pods it replaces together ([#295](https://github.com/win07xp/kaalm/issues/295)). Hibernated Agents have no Pod, so they pick up the edit on their next wake. There is no ordering, pacing, or max-unavailable bound. Platform teams that need a staged rollout split the tightening across classes (`standard-v2`, say) and migrate Agents incrementally rather than editing an in-use class.

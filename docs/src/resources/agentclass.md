@@ -185,7 +185,7 @@ Anyone who can create an Agent can already run arbitrary code: any image matchin
 
 ### `automountServiceAccountToken` is the opt-in for API access
 
-Each Agent and AgentTask runs as a ServiceAccount of its own with no RoleBinding, and by default its Pod does not mount that ServiceAccount's token. Setting `security.automountServiceAccountToken: true` mounts the token into every Pod of the class, so a Role and RoleBinding that a developer or platform team binds to the workload's ServiceAccount give the agent Kubernetes API access. The gateway still rejects the token from a Kaalm-managed Pod, so the opt-in adds an API server credential and nothing at the gateway. The field is outside the Pod spec hash, so a change reaches a running Agent when its Pod is next replaced. See [Agent Pod ServiceAccount](../security/rbac.md#agent-pod-serviceaccount).
+Each Agent and AgentTask runs as a ServiceAccount of its own with no RoleBinding, and by default its Pod does not mount that ServiceAccount's token. Setting `security.automountServiceAccountToken: true` mounts the token into every Pod of the class, so a Role and RoleBinding that a developer or platform team binds to the workload's ServiceAccount give the agent Kubernetes API access. The gateway still rejects the token from a Kaalm-managed Pod, so the opt-in adds an API server credential and nothing at the gateway. The field is part of the Pod spec hash, so a change replaces every running Agent Pod of the class ([Change propagation](../controller/change-propagation.md#bucket-1-recreate-and-clamp-default)). See [Agent Pod ServiceAccount](../security/rbac.md#agent-pod-serviceaccount).
 
 ### Image pattern glob semantics
 
@@ -200,7 +200,7 @@ The schema accepts `Always`, `Never`, or `IfNotPresent`, the three Kubernetes pu
 
 ### `security` starts from the restricted baseline
 
-The controller applies the `restricted` Pod Security Standard to every workload Pod and merges the class's `security` block over it field by field ([Pod Security Standards](../security/model.md#pod-security-standards)). A class therefore declares only what it changes: `runAsUser` to pin a UID, or `readOnlyRootFilesystem: false` for an image that writes outside `/tmp` and its volumes. Relaxing a field is allowed, and the `SecurityBaseline` condition and its `Warning` make it visible. A read-only root gets an `emptyDir` at `/tmp`. The block is outside the Pod spec hash, so a change reaches a running Agent when its Pod is next replaced.
+The controller applies the `restricted` Pod Security Standard to every workload Pod and merges the class's `security` block over it field by field ([Pod Security Standards](../security/model.md#pod-security-standards)). A class therefore declares only what it changes: `runAsUser` to pin a UID, or `readOnlyRootFilesystem: false` for an image that writes outside `/tmp` and its volumes. Relaxing a field is allowed, and the `SecurityBaseline` condition and its `Warning` make it visible. A read-only root gets an `emptyDir` at `/tmp`. The block is part of the Pod spec hash, so a change replaces every running Agent Pod of the class.
 
 ### Network egress: `allowedCIDRs` and `allowedHosts`
 

@@ -110,7 +110,7 @@ func (r *AgentReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete;patch
 // +kubebuilder:rbac:groups="",resources=services;serviceaccounts;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
@@ -963,6 +963,13 @@ func (r *AgentReconciler) convergePod(
 		}
 	}
 
+	// A Pod stamped by an older hash formula that is current under that
+	// formula is not drift: re-stamp it in place so an upgrade that changes
+	// the formula replaces no Pod.
+	if err := r.restampLegacyHash(ctx, pod, eff); err != nil {
+		return err
+	}
+
 	// Spec drift: compare the stamped hash against the re-derived one, never
 	// the live Pod object.
 	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
@@ -996,6 +1003,28 @@ func podPendingPhase(agent *kaalmv1beta1.Agent) kaalmv1beta1.AgentPhase {
 		return kaalmv1beta1.AgentResuming
 	}
 	return kaalmv1beta1.AgentProvisioning
+}
+
+// restampLegacyHash re-stamps a Pod whose hash came from formula 1 (no
+// hash-version annotation) and still matches that formula: it merge-patches
+// only the two annotations, so the Pod keeps running. A formula-1 Pod whose
+// hash does not match is real drift and is left for the caller to replace.
+func (r *AgentReconciler) restampLegacyHash(ctx context.Context, pod *corev1.Pod, eff effectiveAgentSpec) error {
+	if _, ok := pod.Annotations[annotationPodSpecHashVersion]; ok {
+		return nil
+	}
+	if pod.Annotations[annotationPodSpecHash] != podSpecHashV1(eff) {
+		return nil
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	pod.Annotations[annotationPodSpecHash] = podSpecHash(eff)
+	pod.Annotations[annotationPodSpecHashVersion] = podSpecHashVersion
+	if err := r.Patch(ctx, pod, patch); err != nil {
+		return err
+	}
+	log.FromContext(ctx).Info("re-stamped Pod spec hash for the current formula; Pod kept",
+		"pod", pod.Name, "hashVersion", podSpecHashVersion)
+	return nil
 }
 
 // ownedPod returns the Agent's live Pod, preferring a non-terminating one when

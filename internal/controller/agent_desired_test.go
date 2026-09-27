@@ -62,6 +62,136 @@ func TestPodSpecHash_StableAndSensitive(t *testing.T) {
 	}
 }
 
+// classDerivedBase is an effective spec as deriveEffectiveSpec builds it from
+// a class with every Pod input set, so each case below changes one of them.
+func classDerivedBase() effectiveAgentSpec {
+	rc := "gvisor"
+	grace := int64(30)
+	return effectiveAgentSpec{
+		Image:            "registry/agents/a:v1",
+		RuntimeClassName: &rc,
+		PullPolicy:       corev1.PullIfNotPresent,
+		ImagePullSecrets: []corev1.LocalObjectReference{{Name: "pull-a"}, {Name: "pull-b"}},
+		PodSecurity:      restrictedPodSecurity(nil),
+		ContainerSec:     restrictedContainerSecurity(nil),
+		TerminationGrace: &grace,
+		PodLabels:        map[string]string{"cost-center": "platform"},
+		PodAnnotations:   map[string]string{"prometheus.io/scrape": "false"},
+	}
+}
+
+func TestPodSpecHash_ClassPodInputsChangeHash(t *testing.T) {
+	h1 := podSpecHash(classDerivedBase())
+	other := "kata"
+	grace := int64(5)
+	uid := int64(1000)
+	cases := []struct {
+		name   string
+		mutate func(*effectiveAgentSpec)
+	}{
+		{"pod security context", func(e *effectiveAgentSpec) { e.PodSecurity.RunAsUser = &uid }},
+		{"container security context", func(e *effectiveAgentSpec) { e.ContainerSec.ReadOnlyRootFilesystem = boolPtr(false) }},
+		{"runtimeClassName set", func(e *effectiveAgentSpec) { e.RuntimeClassName = &other }},
+		{"runtimeClassName cleared", func(e *effectiveAgentSpec) { e.RuntimeClassName = nil }},
+		{"image pull policy", func(e *effectiveAgentSpec) { e.PullPolicy = corev1.PullAlways }},
+		{"image pull Secrets", func(e *effectiveAgentSpec) {
+			e.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "pull-a"}}
+		}},
+		{"automount token", func(e *effectiveAgentSpec) { e.AutomountToken = true }},
+		{"termination grace", func(e *effectiveAgentSpec) { e.TerminationGrace = &grace }},
+		{"pod labels", func(e *effectiveAgentSpec) { e.PodLabels = map[string]string{"cost-center": "search"} }},
+		{"pod annotations", func(e *effectiveAgentSpec) { e.PodAnnotations = nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eff := classDerivedBase()
+			tc.mutate(&eff)
+			if podSpecHash(eff) == h1 {
+				t.Errorf("hash unchanged after a %s change", tc.name)
+			}
+		})
+	}
+}
+
+func TestPodSpecHash_ClassPodInputsOrderAndOwnKeys(t *testing.T) {
+	h1 := podSpecHash(classDerivedBase())
+	cases := []struct {
+		name   string
+		mutate func(*effectiveAgentSpec)
+	}{
+		{"pull Secret order", func(e *effectiveAgentSpec) {
+			e.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "pull-b"}, {Name: "pull-a"}}
+		}},
+		// The controller overwrites its own keys on the Pod, so a class value
+		// for one of them never reaches the Pod and must not roll it.
+		{"agent identity label", func(e *effectiveAgentSpec) { e.PodLabels["kaalm.io/agent"] = "spoof" }},
+		{"workload label", func(e *effectiveAgentSpec) { e.PodLabels[labelKeyWorkload] = "spoof" }},
+		{"pod-spec-hash annotation", func(e *effectiveAgentSpec) { e.PodAnnotations[annotationPodSpecHash] = "spoof" }},
+		{"pod-spec-hash-version annotation", func(e *effectiveAgentSpec) {
+			e.PodAnnotations[annotationPodSpecHashVersion] = "spoof"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eff := classDerivedBase()
+			tc.mutate(&eff)
+			if podSpecHash(eff) != h1 {
+				t.Errorf("hash changed after a %s change", tc.name)
+			}
+		})
+	}
+}
+
+func TestPodSpecHashV1_MatchesV100Stamp(t *testing.T) {
+	// The expected value is what v1.0.0's podSpecHash returned for this spec.
+	// podSpecHashV1 must keep reproducing it, or every Pod created before the
+	// formula changed would look drifted and be replaced on upgrade.
+	rc := "gvisor"
+	grace := int64(30)
+	eff := effectiveAgentSpec{
+		Image:   "registry.test/agents/demo:v1",
+		Command: []string{"/agent"},
+		Args:    []string{"--serve"},
+		Env:     []corev1.EnvVar{{Name: "X", Value: "1"}},
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+		},
+		Providers:        []string{"b", "a"},
+		HandlerConfigMap: "greeter-v1",
+		RuntimeClassName: &rc,
+		PullPolicy:       corev1.PullAlways,
+		TerminationGrace: &grace,
+		PodLabels:        map[string]string{"team": "search"},
+	}
+	if got, want := podSpecHashV1(eff), "4c14a4e2cc05fb0d"; got != want {
+		t.Errorf("podSpecHashV1 = %s, want the v1.0.0 stamp %s", got, want)
+	}
+	if podSpecHash(eff) == podSpecHashV1(eff) {
+		t.Error("current formula must differ from v1 for a spec with class Pod inputs")
+	}
+}
+
+func TestDesiredPod_StampsHashVersion(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
+	eff := classDerivedBase()
+	eff.PodAnnotations[annotationPodSpecHashVersion] = "1"
+	pod := desiredPod(agent, eff, "kaalm-system")
+	if got := pod.Annotations[annotationPodSpecHashVersion]; got != podSpecHashVersion {
+		t.Errorf("hash version annotation = %q, want %q", got, podSpecHashVersion)
+	}
+}
+
+func TestPodSpecHash_StampedHashIgnoresOwnAnnotation(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
+	eff := classDerivedBase()
+	pod := desiredPod(agent, eff, "kaalm-system")
+	// Re-deriving from the same spec must match what desiredPod stamped, so a
+	// steady-state Agent never sees drift.
+	if got := pod.Annotations[annotationPodSpecHash]; got != podSpecHash(eff) {
+		t.Errorf("stamped hash %s, re-derived %s", got, podSpecHash(eff))
+	}
+}
+
 func TestClampResources(t *testing.T) {
 	maxLimits := corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("1"),
