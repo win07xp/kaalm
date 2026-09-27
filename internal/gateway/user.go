@@ -284,10 +284,11 @@ func (s *Server) wakeAndDeliver(
 			waited := time.Since(wakeStart)
 			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", waited.Seconds())
 			if ctx.Err() != nil {
-				// The caller's deadline ended the wait first: name what
-				// actually elapsed, not the full wakeTimeout.
+				// The caller's context ended the wait first (a sync deadline,
+				// a disconnect, or the pipeline bound): name what actually
+				// elapsed, not the full wakeTimeout.
 				return nil, errWakeTimeout, fmt.Errorf(
-					"agent did not become ready: the pipeline deadline ended the wait after %s of the %s wakeTimeout",
+					"agent did not become ready: the wait ended after %s, before the %s wakeTimeout elapsed",
 					waited.Round(time.Second), s.wakeTimeout(agent))
 			}
 			return nil, errWakeTimeout, fmt.Errorf(
