@@ -189,8 +189,8 @@ status:
 
 | Field | Meaning |
 |---|---|
-| `phase` | `Active`, `Degraded`, `Failed`, or `Terminating`. Unset until the first reconcile, and left unset by rule 28. Reflects the bound Agent: `Degraded` while the Agent is `Degraded` or `Failed`, `Failed` when `agentRef` does not resolve (rule 13). |
-| `Ready` | `True` with `reason: AgentReachable` and the message `channel is valid` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, `SystemNamespaceForbidden`, or `InvalidReference` when the per-channel credential Role cannot be written. The gateway routes only `Ready=True` channels. |
+| `phase` | `Active`, `Degraded`, `Failed`, or `Terminating`. Unset until the first reconcile. Reflects the bound Agent: `Degraded` while the Agent is `Degraded` or `Failed`, `Failed` when `agentRef` does not resolve (rule 13) or the channel is in the operator namespace (rule 28). |
+| `Ready` | `True` with `reason: AgentReachable` and the message `channel is valid` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, `SystemNamespaceForbidden`, or `InvalidReference` when the per-channel credential Role cannot be written. The gateway routes only `Ready=True` channels. A `callbackUrl` host that does not resolve leaves the channel `Ready=True` and raises a `Warning` event, `reason=CallbackHostUnresolved` ([rule 22](validation-and-defaulting.md#cross-resource-validation)). |
 | `PlatformConnected` | The tri-state in the next section. |
 
 ### The PlatformConnected tri-state

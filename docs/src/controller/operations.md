@@ -36,6 +36,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | ModelProvider | `DegradeTargetNotCheapest`, `MaxOutputTokensUnset` | Warning | the cost sanity check, when its condition first turns `True`; a cross-format fallback into an Anthropic model with no `maxOutputTokens` |
 | ModelProvider | `BoundaryMarginRaised` as shipped (the condition's reason is `ObservedTrafficExceededMargin`) | Warning | a gateway replica first raises the boundary margin flag |
 | ToolProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
+| AgentChannel | `CallbackHostUnresolved` | Warning | the `callbackUrl` host does not resolve at reconcile time; the channel stays `Ready=True` ([rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)). Emitted when the unresolved host first appears or changes, not on every pass |
 | AgentClass | `FQDNPolicyUnsupported` | Warning | `allowedHosts` is set on a CNI without FQDN egress, so the hosts are ignored |
 
 Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals the design calls for are not Events as shipped: budget exhaustion and reconcile-time validation failures (`InvalidReference`, `CredentialsMissing`, and the other `Ready=False` reasons) are conditions only, and `FallbackIneligible` is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).

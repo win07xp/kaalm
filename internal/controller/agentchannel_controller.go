@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -102,6 +103,16 @@ type AgentChannelReconciler struct {
 	// gateway.callbackUrl.allowlist and must match the gateway's, since the
 	// gateway repeats the check pre-dial.
 	CallbackPolicy callbackpolicy.Policy
+	// LookupIP resolves the callbackUrl host for rule 22. nil means
+	// net.DefaultResolver. Tests inject a fake.
+	LookupIP func(ctx context.Context, host string) ([]net.IP, error)
+
+	// unresolvedMu guards unresolvedHosts: per channel UID, the callback host
+	// the last CallbackHostUnresolved Warning named. The Warning fires only
+	// when this changes, so a channel that re-validates every minute raises
+	// one event, not one per pass, and makes no event write per pass.
+	unresolvedMu    sync.Mutex
+	unresolvedHosts map[types.UID]string
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agentchannels,verbs=get;list;watch;update;patch
@@ -131,6 +142,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// The system-namespace guard runs first, as on the workload reconcilers.
 	if channel.Namespace == r.OperatorNamespace {
+		channel.Status.Phase = kaalmv1beta1.ChannelFailed
 		r.setChannelReady(&channel, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("AgentChannels may not live in the operator namespace %q", r.OperatorNamespace))
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
@@ -151,6 +163,9 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Steps 2 and 3 validation chain; the first failure reports and stops.
 	if reason, msg := r.validateChannel(ctx, &channel, &agent); reason != "" {
+		// A failing channel is not Ready, so the unresolved-host Warning has
+		// nothing to add; clear it so it fires afresh once the channel passes.
+		r.forgetCallbackResolution(&channel)
 		r.setChannelReady(&channel, false, reason, msg)
 		r.reducePhase(&channel, &agent)
 		// Re-check on the same cadence as a healthy channel: the reconciler
@@ -242,12 +257,58 @@ func (r *AgentChannelReconciler) validateChannel(
 	// address space (reconcile-time half; the gateway re-checks pre-dial).
 	// Webhook channels only: a platform channel replies through the
 	// operator-set platform API base URL and has no callbackUrl.
+	unresolved := ""
 	if channel.Spec.Webhook != nil && channel.Spec.Webhook.CallbackURL != nil {
-		if reason, msg := validateCallbackURL(*channel.Spec.Webhook.CallbackURL, r.CallbackPolicy); reason != "" {
+		reason, msg, host := validateCallbackURL(ctx, *channel.Spec.Webhook.CallbackURL, r.CallbackPolicy, r.lookupIP)
+		if reason != "" {
 			return reason, msg
 		}
+		unresolved = host
 	}
+	r.noteCallbackResolution(channel, unresolved)
 	return "", ""
+}
+
+// lookupIP resolves a callback host through the injected resolver, or the
+// default one.
+func (r *AgentChannelReconciler) lookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	if r.LookupIP != nil {
+		return r.LookupIP(ctx, host)
+	}
+	return net.DefaultResolver.LookupIP(ctx, "ip", host)
+}
+
+// noteCallbackResolution records whether the channel's callback host resolved
+// on this pass (host is empty when it did, or when there is no callbackUrl)
+// and emits the CallbackHostUnresolved Warning when the unresolved host
+// changes. The channel stays Ready: a DNS blip must not take a working channel
+// down, and the gateway re-checks the host before every dial.
+func (r *AgentChannelReconciler) noteCallbackResolution(channel *kaalmv1beta1.AgentChannel, host string) {
+	r.unresolvedMu.Lock()
+	last, seen := r.unresolvedHosts[channel.UID]
+	switch {
+	case host == "":
+		delete(r.unresolvedHosts, channel.UID)
+	case !seen || last != host:
+		if r.unresolvedHosts == nil {
+			r.unresolvedHosts = map[types.UID]string{}
+		}
+		r.unresolvedHosts[channel.UID] = host
+	}
+	r.unresolvedMu.Unlock()
+	if host == "" || (seen && last == host) || r.Recorder == nil {
+		return
+	}
+	r.Recorder.Event(channel, corev1.EventTypeWarning, kaalmv1beta1.ReasonCallbackHostUnresolved,
+		fmt.Sprintf("callbackUrl host %q does not resolve; the channel stays Ready and the gateway "+
+			"checks the host again before every callback delivery", host))
+}
+
+// forgetCallbackResolution drops a deleted channel's entry.
+func (r *AgentChannelReconciler) forgetCallbackResolution(channel *kaalmv1beta1.AgentChannel) {
+	r.unresolvedMu.Lock()
+	delete(r.unresolvedHosts, channel.UID)
+	r.unresolvedMu.Unlock()
 }
 
 // channelType names the block the spec's type selects, for messages.
@@ -528,26 +589,28 @@ func validateDiscordPublicKey(data map[string][]byte) string {
 
 // validateCallbackURL is the reconcile-time half of rule 22. The target policy
 // itself lives in internal/callbackpolicy, shared with the gateway's pre-dial
-// re-check so the two halves cannot drift.
-func validateCallbackURL(raw string, policy callbackpolicy.Policy) (string, string) {
+// re-check so the two halves cannot drift. A host that does not resolve passes
+// the check and comes back as unresolved, for the caller to warn about.
+func validateCallbackURL(
+	ctx context.Context, raw string, policy callbackpolicy.Policy,
+	lookup func(context.Context, string) ([]net.IP, error),
+) (reason, msg, unresolved string) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != schemeHTTPS || parsed.Hostname() == "" {
-		return kaalmv1beta1.ReasonInvalidCallbackURL, "callbackUrl must be a valid https URL"
+		return kaalmv1beta1.ReasonInvalidCallbackURL, "callbackUrl must be a valid https URL", ""
 	}
 	host := parsed.Hostname()
-	ips, err := net.LookupIP(host)
+	ips, err := lookup(ctx, host)
 	if err != nil {
-		// Unresolvable now is not a hard failure; the gateway re-checks
-		// before every dial.
-		return "", ""
+		return "", "", host
 	}
 	for _, ip := range ips {
 		if !policy.Allowed(host, ip) {
 			return kaalmv1beta1.ReasonInvalidCallbackURL,
-				fmt.Sprintf("callbackUrl host resolves to blocked address %s", ip)
+				fmt.Sprintf("callbackUrl host resolves to blocked address %s", ip), ""
 		}
 	}
-	return "", ""
+	return "", "", ""
 }
 
 // reduceChannelHealth applies the 4-rule reduction into PlatformConnected.
@@ -692,6 +755,7 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 	}
 
 	// Step 6: release.
+	r.forgetCallbackResolution(channel)
 	controllerutil.RemoveFinalizer(channel, kaalmv1beta1.ChannelFinalizer)
 	return ctrl.Result{}, r.Update(ctx, channel)
 }

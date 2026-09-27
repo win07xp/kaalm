@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -199,6 +203,83 @@ func TestChannel_InvalidCallbackURL(t *testing.T) {
 		}
 	})
 	expectChannelReady(t, "ch-cb", metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidCallbackURL)
+}
+
+// Rule 22: a callback host that does not resolve at reconcile time leaves
+// the channel Ready (the gateway re-checks before every dial) and raises one
+// CallbackHostUnresolved Warning naming the host, not one per pass.
+func TestChannel_UnresolvableCallbackHostWarns(t *testing.T) {
+	mkWorkloadClass(t, "chc-nxcb", nil)
+	mkWorkloadAgent(t, "ch-agent-nxcb", "chc-nxcb", nil)
+	mkChannelSecret(t, "ch-nxcb-secret")
+	cbURL := "https://kaalm-callback-typo.invalid/hook" // .invalid never resolves (RFC 6761)
+	mkChannel(t, "ch-nxcb", "ch-agent-nxcb", "/channels/default/ch-nxcb", func(ch *kaalmv1beta1.AgentChannel) {
+		ch.Spec.Webhook.CallbackURL = &cbURL
+		ch.Spec.Webhook.CallbackAuth = &kaalmv1beta1.ChannelAuth{
+			Type:      "bearer",
+			SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "ch-nxcb-secret", Key: "token"},
+		}
+	})
+	expectChannelReady(t, "ch-nxcb", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	unresolvedEvents := func() ([]corev1.Event, error) {
+		var events corev1.EventList
+		if err := testClient.List(ctxT(), &events, client.InNamespace("default")); err != nil {
+			return nil, err
+		}
+		var out []corev1.Event
+		for _, ev := range events.Items {
+			if ev.InvolvedObject.Name == "ch-nxcb" && ev.Reason == kaalmv1beta1.ReasonCallbackHostUnresolved {
+				out = append(out, ev)
+			}
+		}
+		return out, nil
+	}
+	eventually(t, func() error {
+		evs, err := unresolvedEvents()
+		if err != nil {
+			return err
+		}
+		if len(evs) == 0 {
+			return errString("no CallbackHostUnresolved event yet")
+		}
+		if evs[0].Type != corev1.EventTypeWarning || !strings.Contains(evs[0].Message, "kaalm-callback-typo.invalid") {
+			return errString(fmt.Sprintf("event %s %q, want a Warning naming the host", evs[0].Type, evs[0].Message))
+		}
+		return nil
+	})
+
+	// More passes through the Agent watch must not repeat the Warning.
+	var agent kaalmv1beta1.Agent
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if agent.Labels == nil {
+			agent.Labels = map[string]string{}
+		}
+		agent.Labels["touch"] = fmt.Sprint(i)
+		if err := testClient.Update(ctxT(), &agent); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Second)
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(time.Second)
+	evs, err := unresolvedEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Count > 1 {
+		count := int32(0)
+		if len(evs) > 0 {
+			count = evs[0].Count
+		}
+		t.Errorf("repeat passes re-emitted the Warning: %d events, count %d", len(evs), count)
+	}
+	expectChannelReady(t, "ch-nxcb", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
 }
 
 func TestChannel_DegradedWhenAgentDegraded(t *testing.T) {
@@ -440,6 +521,9 @@ func TestChannel_SystemNamespaceForbidden(t *testing.T) {
 		if c == nil || c.Reason != kaalmv1beta1.ReasonSystemNamespaceForbidden {
 			return errString("SystemNamespaceForbidden not set")
 		}
+		if got.Status.Phase != kaalmv1beta1.ChannelFailed {
+			return errString("phase=" + string(got.Status.Phase) + ", want Failed (rule 28)")
+		}
 		return nil
 	})
 }
@@ -576,14 +660,15 @@ func TestValidateCallbackURL(t *testing.T) {
 		{"empty host", "https://", callbackpolicy.Policy{}, true},
 		{"loopback literal", "https://127.0.0.1/hook", callbackpolicy.Policy{}, true},
 		{"public literal ok", "https://8.8.8.8/hook", callbackpolicy.Policy{}, false},
-		{"unresolvable deferred", "https://nonexistent.invalid/hook", callbackpolicy.Policy{}, false},
+		{"unresolvable passes", "https://nonexistent.invalid/hook", callbackpolicy.Policy{}, false},
+		{"resolved name blocked", "https://internal.example/hook", callbackpolicy.Policy{}, true},
 		{"private blocked by default", "https://10.1.2.3/hook", callbackpolicy.Policy{}, true},
 		{"private allowed when allowlisted", "https://10.1.2.3/hook", allowPrivate, false},
 		{"loopback blocked even when allowlisted", "https://127.0.0.1/hook", allowPrivate, true},
 		{"metadata blocked even when allowlisted", "https://169.254.169.254/hook", allowPrivate, true},
 	}
 	for _, c := range cases {
-		reason, _ := validateCallbackURL(c.url, c.allowlist)
+		reason, _, _ := validateCallbackURL(context.Background(), c.url, c.allowlist, fakeLookupIP)
 		bad := reason != ""
 		if bad != c.wantBad {
 			t.Errorf("%s: validateCallbackURL(%q) bad=%v, want %v (reason=%q)", c.name, c.url, bad, c.wantBad, reason)
@@ -591,6 +676,86 @@ func TestValidateCallbackURL(t *testing.T) {
 		if bad && reason != kaalmv1beta1.ReasonInvalidCallbackURL {
 			t.Errorf("%s: reason=%q, want InvalidCallbackURL", c.name, reason)
 		}
+	}
+}
+
+// fakeLookupIP answers IP literals as themselves, maps internal.example to a
+// private address, and fails every other name, so rule 22 tests never touch
+// real DNS.
+func fakeLookupIP(_ context.Context, host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	if host == "internal.example" {
+		return []net.IP{net.ParseIP("10.0.0.7")}, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// Rule 22 reports the host it could not resolve, so the reconciler can warn
+// about it without failing the channel.
+func TestValidateCallbackURL_ReportsUnresolvedHost(t *testing.T) {
+	ctx := context.Background()
+	reason, _, unresolved := validateCallbackURL(ctx, "https://nonexistent.invalid/hook", callbackpolicy.Policy{}, fakeLookupIP)
+	if reason != "" || unresolved != "nonexistent.invalid" {
+		t.Errorf("unresolvable host: reason=%q unresolved=%q, want clean with the host", reason, unresolved)
+	}
+	reason, _, unresolved = validateCallbackURL(ctx, "https://8.8.8.8/hook", callbackpolicy.Policy{}, fakeLookupIP)
+	if reason != "" || unresolved != "" {
+		t.Errorf("resolvable host: reason=%q unresolved=%q, want both empty", reason, unresolved)
+	}
+}
+
+// The CallbackHostUnresolved Warning fires when a channel's callback host
+// first fails to resolve, not on every one-minute pass. It fires again after
+// the host resolves and fails again, or when callbackUrl names a new host.
+func TestChannel_CallbackHostUnresolvedWarnsOnChange(t *testing.T) {
+	rec := record.NewFakeRecorder(10)
+	r := &AgentChannelReconciler{Recorder: rec}
+	ch := &kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "default", UID: "uid-1"}}
+
+	drain := func() []string {
+		var got []string
+		for {
+			select {
+			case e := <-rec.Events:
+				got = append(got, e)
+			default:
+				return got
+			}
+		}
+	}
+
+	r.noteCallbackResolution(ch, "typo.invalid")
+	r.noteCallbackResolution(ch, "typo.invalid")
+	r.noteCallbackResolution(ch, "typo.invalid")
+	got := drain()
+	if len(got) != 1 {
+		t.Fatalf("three passes on the same unresolved host emitted %d events, want 1: %v", len(got), got)
+	}
+	if !strings.HasPrefix(got[0], "Warning "+kaalmv1beta1.ReasonCallbackHostUnresolved) ||
+		!strings.Contains(got[0], "typo.invalid") {
+		t.Errorf("event = %q, want a CallbackHostUnresolved Warning naming the host", got[0])
+	}
+
+	r.noteCallbackResolution(ch, "other.invalid")
+	if got := drain(); len(got) != 1 || !strings.Contains(got[0], "other.invalid") {
+		t.Errorf("a new unresolved host must warn again: %v", got)
+	}
+
+	r.noteCallbackResolution(ch, "") // resolves now
+	if got := drain(); len(got) != 0 {
+		t.Errorf("a resolving host emits nothing: %v", got)
+	}
+	r.noteCallbackResolution(ch, "other.invalid")
+	if got := drain(); len(got) != 1 {
+		t.Errorf("failing again after resolving must warn again: %v", got)
+	}
+
+	r.forgetCallbackResolution(ch)
+	r.noteCallbackResolution(ch, "other.invalid")
+	if got := drain(); len(got) != 1 {
+		t.Errorf("a forgotten channel warns afresh: %v", got)
 	}
 }
 

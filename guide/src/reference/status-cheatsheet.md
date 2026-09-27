@@ -79,8 +79,9 @@ with `403 access_denied` and the message prefix `TaskAlreadyCompleted`
 `kubectl get agentchannels` columns: `Agent`, `Phase`, `Connected`, `Age`.
 
 Phases: `Active` and `Degraded` mirror the bound Agent's phase; `Failed`
-means the bound Agent does not exist; `Terminating` is the delete path; the
-phase is unset until the first reconcile. `Connected` shows the
+means the bound Agent does not exist or the channel is in `kaalm-system`;
+`Terminating` is the delete path; the phase is unset until the first
+reconcile. `Connected` shows the
 `PlatformConnected` condition, the gateway's view of recent deliveries:
 `True` with `WebhookReady`, `Unknown` with `NoRecentTraffic`, or `False`
 with the reason of the most recent failure: `WebhookAuthFailed` (signature or
@@ -99,6 +100,11 @@ credential Secret is absent or lacks a required key), `CredentialsInvalid`
 (the `callbackAuth` key is empty), and `ChildConflict` (a Role or RoleBinding
 with the channel's credential Role name exists and the channel does not own
 it).
+
+A `callbackUrl` host that does not resolve leaves the channel `Ready=True`,
+because the gateway checks the host again before every delivery. The
+controller emits a `Warning` event with reason `CallbackHostUnresolved` that
+names the host, so `kubectl describe agentchannel` shows the typo.
 
 ## ModelProvider
 
