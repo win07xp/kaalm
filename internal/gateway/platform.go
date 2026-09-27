@@ -57,6 +57,9 @@ type platformAdapter interface {
 	// text) for one message through the platform API. Returns the callback
 	// outcome vocabulary (delivered | rejected | exhausted).
 	SendReply(ctx context.Context, channel *kaalmv1beta1.AgentChannel, msg platformMessage, text string) string
+	// ReplyRequests is the most platform API requests SendReply makes for
+	// text, each on its own retry schedule; the pipeline bound counts them.
+	ReplyRequests(text string) int
 }
 
 // platformMessage is one envelope plus the adapter-private context its reply
@@ -81,10 +84,6 @@ type inboundResult struct {
 	// are not health observations.
 	rejected int
 }
-
-// platformPipelineTimeout bounds one message's wake, delivery, and reply,
-// the same budget the async webhook pipeline runs under.
-const platformPipelineTimeout = 10 * time.Minute
 
 // platformAdapterFor returns the adapter for a platform channel, or false for
 // a webhook channel or a type with no adapter yet.
@@ -149,11 +148,17 @@ func (s *Server) handlePlatform(
 // runPlatformPipeline wakes, delivers, and replies for one message. An error
 // anywhere in the pipeline travels back as reply text, because the platform
 // has already been answered and the person is waiting in the chat.
+//
+// The run is bounded by backgroundPipelineBound from its start. The reply's
+// request count depends on the text, so wake and delivery run under the bound
+// without a reply leg, and the reply runs under the bound that adds one
+// callback schedule per reply request.
 func (s *Server) runPlatformPipeline(
 	traceCtx context.Context, channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent,
 	adapter platformAdapter, m platformMessage,
 ) {
-	ctx, cancel := context.WithTimeout(traceCtx, platformPipelineTimeout)
+	start := time.Now()
+	ctx, cancel := context.WithDeadline(traceCtx, start.Add(s.backgroundPipelineBound(agent, 0)))
 	defer cancel()
 
 	var text string
@@ -175,10 +180,13 @@ func (s *Server) runPlatformPipeline(
 		}
 	}
 
-	start := time.Now()
-	outcome := adapter.SendReply(ctx, channel, m, text)
+	replyCtx, cancelReply := context.WithDeadline(traceCtx,
+		start.Add(s.backgroundPipelineBound(agent, adapter.ReplyRequests(text))))
+	defer cancelReply()
+	replyStart := time.Now()
+	outcome := adapter.SendReply(replyCtx, channel, m, text)
 	s.Metrics.ChannelCallback(channel.Namespace, outcome)
-	s.Metrics.ChannelCallbackDuration(channel.Namespace, time.Since(start).Seconds())
+	s.Metrics.ChannelCallbackDuration(channel.Namespace, time.Since(replyStart).Seconds())
 }
 
 // withoutRequestURL drops the request URL from a transport error. A
@@ -238,8 +246,10 @@ func classifyReplyStatus(status int) replyBucket {
 }
 
 // platformClient is the HTTP client platform replies use: the callback trust
-// pool (system roots plus whatever the operator added) and the per-attempt
-// read timeout. The base URL is operator-set, so no deny-range check applies.
+// pool (system roots plus whatever the operator added) and the callback
+// per-attempt read timeout (gateway.callbackReadTimeout), since replies run
+// on the callback schedule. The base URL is operator-set, so no deny-range
+// check applies.
 func (s *Server) platformClient() (*http.Client, error) {
 	pool, err := s.callbackCAPool()
 	if err != nil {
@@ -247,7 +257,7 @@ func (s *Server) platformClient() (*http.Client, error) {
 	}
 	return &http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}},
-		Timeout:   s.Config.AgentReadTimeout,
+		Timeout:   s.callbackReadTimeout(),
 		// Refused like every outbound leg (#153); the reply schedule treats
 		// it as a transport failure and retries, then reports exhaustion.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },

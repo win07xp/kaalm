@@ -473,6 +473,15 @@ func (d *discordAdapter) SendReply(
 	return callbackDelivered
 }
 
+// ReplyRequests counts one request per chunk, plus the first chunk's
+// follow-up webhook request, which a 404 replaces with the bot-token path.
+func (d *discordAdapter) ReplyRequests(text string) int {
+	if text == "" {
+		text = discordEmptyReply
+	}
+	return len(splitChunks(text, discordChunkLimit)) + 1
+}
+
 // sendViaBot posts the reply as channel messages with the bot token, one per
 // chunk, each mentioning the user. Without a bot token the reply is refused.
 func (d *discordAdapter) sendViaBot(

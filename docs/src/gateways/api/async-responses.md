@@ -87,17 +87,28 @@ The agent-delivery pipeline reuses the same `messageId` across its attempts, so 
 
 ### Sync-mode reachability
 
-In sync mode, `gateway.syncDeliveryDeadline` (Helm value, default 30s) bounds the caller-facing wall-clock. The clock starts at inbound webhook acceptance and includes activator wake time, delivery retries, and agent processing. When elapsed time would exceed the deadline, the gateway short-circuits the in-progress request, even mid-retry, with `504` carrying `error.type: sync_deadline_exceeded` and `retryable: true`. Async mode applies no deadline: the full retry budget runs, and callback and polling are receiver-driven.
+In sync mode, `gateway.syncDeliveryDeadline` (Helm value, default 30s) bounds the caller-facing wall-clock. The clock starts at inbound webhook acceptance and includes activator wake time, delivery retries, and agent processing. When elapsed time would exceed the deadline, the gateway short-circuits the in-progress request, even mid-retry, with `504` carrying `error.type: sync_deadline_exceeded` and `retryable: true`. Async mode applies no sync deadline: the full wake and retry budgets run under the [async pipeline bound](#async-pipeline-bound), and callback and polling are receiver-driven.
 
 ![Timing diagram with three lanes on one axis from inbound webhook acceptance. The sync deadline lane fires 504 sync_deadline_exceeded at 30 seconds. The agent delivery lane can produce 502 delivery_failed between 31 and 71 seconds. The wake lane produces 504 wake_timeout at 120 seconds. The two later outcomes are grey because the deadline fires first.](../../diagrams/sync-reachability-timeline.svg)
 
 | Outcome | Earliest | Latest | Sync mode under defaults | Async mode |
 |---|---|---|---|---|
-| `504 sync_deadline_exceeded` | 30s | 30s | fires | never (no deadline) |
+| `504 sync_deadline_exceeded` | 30s | 30s | fires | never (no sync deadline) |
 | `502 delivery_failed` | about 31s | about 71s | unreachable: the deadline fires first | reachable, as an error payload |
 | `504 wake_timeout` | 120s | 120s | unreachable: the deadline fires first | reachable, as an error payload |
 
 `502 delivery_failed` becomes reachable in sync mode only when `syncDeliveryDeadline` is raised above the delivery budget. `wakeTimeout` is the Agent's own value or the class default, clamped to the class cap, and 120s when neither sets it (see [AgentClass](../../resources/agentclass.md)). For which channels belong on sync mode, and what a persistent `sync_deadline_exceeded` means, see [Reachability under default config](channel-webhook.md#reachability-under-default-config).
+
+### Async pipeline bound
+
+The background pipeline of an async webhook message, and of a platform channel message, runs under one wall-clock bound that the gateway derives from the budgets the run contains. Because the bound is their sum, it never cuts a stage short, whatever the Agent's `wakeTimeout`. The bound adds up these parts:
+
+- **Wake.** 20s for the activator call (two attempts of 10s each), the Agent's effective `wakeTimeout`, and one more readiness check (`gateway.agentDeliveryConnectTimeout` plus the 2s poll interval), which the last check before the timeout can overrun.
+- **Delivery.** One full agent-delivery schedule, with every attempt at `gateway.agentReadTimeout`.
+- **Response.** For an async webhook, two full callback schedules with every attempt at `gateway.callbackReadTimeout`: one for the callback and one for the polling-record `Patch`, which reuses the schedule. For a platform channel, one full callback schedule per platform API request the reply makes: one per chunk, plus one for Discord's switch to a channel message.
+- **Margin.** A fixed 30s for Secret reads and the DNS lookup before each callback attempt.
+
+Under defaults an async webhook run is bounded at about 6.5 minutes: 20s, 120s, and 3s of wake, 71s of delivery, 142s of response, and 30s of margin. A 30-minute `wakeTimeout` raises the bound by the extra 28 minutes.
 
 ## Response persistence
 
@@ -168,7 +179,7 @@ The sync-mode status codes and envelope are specified in [User Gateway error res
 
 **`delivery_failed`** is not retryable because the gateway has already made 4 attempts over about 31s to 71s. A failure that survives that budget is usually structural: a broken image, an agent crash loop, repeated 5xx, or a misconfigured per-Agent NetworkPolicy on the message path. Investigate `AgentChannel.status.conditions[type=PlatformConnected]` and the Agent Pod status rather than retrying at the caller.
 
-**`wake_timeout`** is not retryable because exceeding `wakeTimeout` usually means a Pod-startup problem that repeats on retry: an image pull failure, an init container crash, OOM, or a bad spec. Tenants with transient timeouts should raise `wakeTimeout` instead of retrying.
+**`wake_timeout`** is not retryable because exceeding `wakeTimeout` usually means a Pod-startup problem that repeats on retry: an image pull failure, an init container crash, OOM, or a bad spec. Tenants with transient timeouts should raise `wakeTimeout` instead of retrying. If the pipeline's deadline ends the wait before `wakeTimeout` elapses, the message names the time waited and the `wakeTimeout` it fell short of instead of claiming the full `wakeTimeout` passed.
 
 **`controller_unavailable`** is retryable because the wake never reached the controller and the agent is still `Hibernated`, so a fresh attempt starts clean once the controller recovers. The triggers are a connection error, a 5xx after retry, or an mTLS handshake or SAN authorization failure. The `Retry-After: 5` on the sync form is fixed at 5 seconds, sized to typical controller restart and probe intervals; see [Failure modes](../user/operations.md#failure-modes). The mTLS and SAN cases count as transient because at runtime they arise from a peer mid-reload of a rotated leaf certificate. Persistent ones are deployment-time problems: both certificates come from the same `kaalm-ca-issuer`, and the chart install fails fast if the issuer is missing. See [Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication) and [In-cluster TLS](../../security/tls.md#in-cluster-tls).
 

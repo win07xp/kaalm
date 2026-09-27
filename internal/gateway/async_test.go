@@ -129,3 +129,43 @@ func TestHandleAsyncAccept_PendingCap(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 }
+
+// deadlineActivator records the pipeline deadline the wake runs under, then
+// fails so the pipeline ends at once.
+type deadlineActivator struct {
+	deadline time.Time
+	bounded  bool
+}
+
+func (d *deadlineActivator) Wake(ctx context.Context, _, _ string) error {
+	d.deadline, d.bounded = ctx.Deadline()
+	return errors.New("activator down")
+}
+
+func TestRunAsyncPipeline_BoundCoversLargeWakeTimeout(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	channel := h.seedChannel("async")
+	agent := h.store.agents["team-a/sup"]
+	agent.Status.Phase = kaalmv1beta1.AgentHibernated
+	// Far above the old fixed 10-minute ceiling. The activator fails at once,
+	// so nothing waits this long.
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: 20 * time.Minute}
+	act := &deadlineActivator{}
+	h.server.Activator = act
+
+	start := time.Now()
+	h.server.runAsyncPipeline(context.Background(), "req-large-wake", channel, agent, MessageEnvelope{})
+
+	if !act.bounded {
+		t.Fatal("the async pipeline runs without a deadline")
+	}
+	// The callback schedule and the polling-record patch follow the wake and
+	// the delivery, so both count toward the bound.
+	want := h.server.backgroundPipelineBound(agent, asyncResponseRequests)
+	if got := act.deadline.Sub(start); got < want-time.Second || got > want+time.Second {
+		t.Errorf("pipeline bound = %s, want %s derived from the 20m wakeTimeout", got, want)
+	}
+	if got := act.deadline.Sub(start); got <= 20*time.Minute {
+		t.Errorf("pipeline bound %s cuts off the 20m wakeTimeout", got)
+	}
+}

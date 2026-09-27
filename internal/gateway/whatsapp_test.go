@@ -418,3 +418,17 @@ func TestClassifyWhatsAppReply(t *testing.T) {
 		t.Error("the shared table must still apply")
 	}
 }
+
+func TestWhatsAppReplyRequests(t *testing.T) {
+	w := &whatsAppAdapter{}
+	cases := map[string]int{
+		"":   1, // the empty-reply text is one chunk
+		"hi": 1,
+		strings.Repeat("a", whatsAppChunkLimit+1): 2,
+	}
+	for text, want := range cases {
+		if got := w.ReplyRequests(text); got != want {
+			t.Errorf("ReplyRequests(%d runes) = %d, want %d", len(text), got, want)
+		}
+	}
+}
