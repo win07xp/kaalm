@@ -9,11 +9,13 @@ details. Build with `make books` (which runs `make docs-check` first);
 
 Written against Kaalm 0.3.0 and re-walked for every release since, most
 recently for 1.0.0: pass one against locally built 1.0.0 artifacts on
-2026-09-26, with no command or output drift. That pass replaced the
+2026-09-26, and pass two against the published 1.0.0 artifacts on
+2026-09-27, both with no command or output drift. Pass one replaced the
 sleep-and-wake watch block, which had shown a single row, with the real
 four-row stream. Every command and every block of output came from one run,
-in order, on a fresh k3d cluster. A re-walk is two passes: pre-release against locally
-built artifacts, then confirmation against the published ones after the tag.
+in order, on a fresh k3d cluster. A re-walk is two passes: pre-release
+against locally built artifacts, then confirmation against the published
+ones after the tag.
 The walk history (what each pass caught) is in issues #77, #99, #115,
 #130, and #143.
 
