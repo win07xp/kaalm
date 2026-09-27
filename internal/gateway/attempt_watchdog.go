@@ -71,7 +71,7 @@ func (w *attemptWatchdog) idle() bool {
 }
 
 // watch wraps an upstream response body: each read that returns bytes
-// restarts the bound, a read that fails because the bound passed wraps
+// restarts the bound, a read that ends the body after the bound passed wraps
 // errUpstreamIdle, and Close releases the watchdog.
 func (w *attemptWatchdog) watch(body io.ReadCloser) io.ReadCloser {
 	return &watchedBody{ReadCloser: body, dog: w}
@@ -87,7 +87,15 @@ func (b *watchedBody) Read(p []byte) (int, error) {
 	if n > 0 {
 		b.dog.kick()
 	}
-	if err != nil && !errors.Is(err, io.EOF) && b.dog.idle() {
+	// Once the bound has passed, any end of the body is the stall, io.EOF
+	// included: an upstream can answer the cancel by finishing its response
+	// cleanly, and a clean end here would make a truncated stream look
+	// complete.
+	switch {
+	case err == nil || !b.dog.idle():
+	case errors.Is(err, io.EOF):
+		err = errUpstreamIdle
+	default:
 		err = fmt.Errorf("%w: %w", errUpstreamIdle, err)
 	}
 	return n, err
