@@ -908,6 +908,9 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // convergePod implements Pod convergence: create when missing, replace when
 // terminal (involuntary disruption) or when the spec hash drifts, mark the
 // Agent Failed on a persistent crash loop, and derive Running from readiness.
+// Until the Pod is Ready, a woken Agent stays Resuming and any other Agent is
+// Provisioning (podPendingPhase). A Pod-creation error returns without a phase
+// change, so the pass requeues with Ready=False.
 func (r *AgentReconciler) convergePod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec,
 ) error {
@@ -924,7 +927,7 @@ func (r *AgentReconciler) convergePod(
 		if err := r.Create(ctx, desired); err != nil {
 			return err
 		}
-		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
+		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodProvisioning", "agent Pod created, waiting for readiness")
 		agent.Status.PodName = desired.Name
 		return nil
@@ -933,7 +936,7 @@ func (r *AgentReconciler) convergePod(
 	// A Pod already being deleted is a replacement in progress: wait for the
 	// owned-Pod watch to fire when it is gone.
 	if !pod.DeletionTimestamp.IsZero() {
-		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
+		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodProvisioning", "previous Pod terminating")
 		return nil
 	}
@@ -943,7 +946,7 @@ func (r *AgentReconciler) convergePod(
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 		r.Recorder.Event(agent, corev1.EventTypeWarning, "PodDisrupted",
 			fmt.Sprintf("Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase))
-		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
+		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodDisrupted", "replacing a terminal Pod")
 		return r.Delete(ctx, pod)
 	}
@@ -965,7 +968,7 @@ func (r *AgentReconciler) convergePod(
 	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
 		r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift",
 			"derived Pod spec changed; replacing the Pod")
-		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
+		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "SpecDrift", "replacing Pod for updated spec")
 		return r.Delete(ctx, pod)
 	}
@@ -979,10 +982,20 @@ func (r *AgentReconciler) convergePod(
 		}
 		r.setReady(agent, true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")
 	} else {
-		r.setPhase(agent, kaalmv1beta1.AgentProvisioning)
+		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodNotReady", "agent Pod is not ready")
 	}
 	return nil
+}
+
+// podPendingPhase is the phase an Agent holds while it waits for a Pod to be
+// created, replaced, or become Ready. A woken Agent stays Resuming until its
+// Pod is Ready; every other Agent is Provisioning.
+func podPendingPhase(agent *kaalmv1beta1.Agent) kaalmv1beta1.AgentPhase {
+	if agent.Status.Phase == kaalmv1beta1.AgentResuming {
+		return kaalmv1beta1.AgentResuming
+	}
+	return kaalmv1beta1.AgentProvisioning
 }
 
 // ownedPod returns the Agent's live Pod, preferring a non-terminating one when

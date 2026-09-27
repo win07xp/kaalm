@@ -24,7 +24,7 @@ Idle --> Running : activity observed
 Idle --> Hibernating : hibernationDelay elapsed
 Hibernating --> Hibernated : Pod gone
 Hibernated --> Resuming : wake annotation
-Resuming --> Provisioning : Pod created
+Resuming --> Running : Pod Ready
 Running --> Provisioning : spec drift,\nPod disruption
 Idle --> Provisioning : spec drift,\nPod disruption
 
