@@ -63,7 +63,7 @@ new surface:
 - **The Agent Sandbox decision**
   ([#141](https://github.com/win07xp/kaalm/issues/141)): v1 runs agents as
   plain Pods and documents the RuntimeClass alternative for code-executing
-  agents; the `agentSandbox` backend is the v1.1.0 theme.
+  agents; the `agentSandbox` backend is planned for v1.2.0.
 - **A docs audit and its follow-ups.** Every page of the three books was
   checked against the code and rewritten to one style
   ([#142](https://github.com/win07xp/kaalm/issues/142)), with
@@ -83,17 +83,24 @@ images, and installs only from source.
 
 ## Next
 
-The next milestone is **v1.1.0**, the isolation milestone: the
-`agentSandbox` runtime backend
-([#167](https://github.com/win07xp/kaalm/issues/167)), gated on upstream
-shipping identity association and its first stable series earning a track
-record; the verified microVM path, Kata first
-([#168](https://github.com/win07xp/kaalm/issues/168)); and the tool-plane
+The next milestone is **v1.1.0**, a fix release. It closes the gaps the
+docs audit filed between the books and the code; until each is fixed, its
+page describes the shipped behavior and cites the issue. It also verifies
+and documents the microVM path, Kata first
+([#168](https://github.com/win07xp/kaalm/issues/168)), adds the tool-plane
 and streaming phases of the load harness
-([#175](https://github.com/win07xp/kaalm/issues/175)). It also carries the
-docs-audit follow-ups triaged past v1.0.0, listed on the
-[milestone](https://github.com/win07xp/kaalm/milestone/8); until each is
-fixed, its page describes the shipped behavior and cites the issue.
+([#175](https://github.com/win07xp/kaalm/issues/175)), and carries the
+tooling and test issues. The full list is on the
+[milestone](https://github.com/win07xp/kaalm/milestone/8).
+
+The milestone after it is **v1.2.0**, the isolation milestone: the
+`agentSandbox` runtime backend
+([#167](https://github.com/win07xp/kaalm/issues/167)). It starts when the
+upstream conditions the issue lists hold. One of them is a quarter of
+stable releases on upstream's v1beta1 line, so the start is no earlier than
+late November 2026. Hostname egress on Calico Enterprise
+([#273](https://github.com/win07xp/kaalm/issues/273)) is on the same
+[milestone](https://github.com/win07xp/kaalm/milestone/9).
 
 ## Beyond
 
@@ -120,10 +127,6 @@ they are likely to matter:
   or rejecting an undeclared server tool in a request body, and in-process
   tool observability at the LLM gateway. Each is designed far enough to
   name in [The tool plane](gateways/tool-plane.md) and not built.
-- **Persona RBAC in the chart.** The four roles the
-  [security model](security/rbac.md#roles-for-people) specifies ship as
-  prose; a values-gated set is
-  [#244](https://github.com/win07xp/kaalm/issues/244).
 - **A `v1` API version.** v1.0.0 keeps `v1beta1` as its API. A `v1`
   arrives when real usage asks for a change `v1beta1` cannot absorb
   additively, under the
