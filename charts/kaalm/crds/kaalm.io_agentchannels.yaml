@@ -67,8 +67,8 @@ spec:
             type: object
           spec:
             description: |-
-              AgentChannelSpec binds an inbound channel (a generic webhook, or since
-              v0.7.0 a Discord or WhatsApp platform adapter) to an Agent. See
+              AgentChannelSpec binds an inbound channel (a generic webhook, or a
+              Discord or WhatsApp platform adapter) to an Agent. See
               docs/src/resources/agentchannel.md. Rule 39: the type selects exactly one
               configuration block, and that block must be the one set.
             properties:
@@ -150,7 +150,7 @@ spec:
                 default: webhook
                 description: |-
                   Type selects the channel platform: the generic webhook, or one of the
-                  platform adapters (since v0.7.0).
+                  platform adapters.
                 enum:
                 - webhook
                 - discord
@@ -548,8 +548,8 @@ spec:
             type: object
           spec:
             description: |-
-              AgentChannelSpec binds an inbound channel (a generic webhook, or since
-              v0.7.0 a Discord or WhatsApp platform adapter) to an Agent. See
+              AgentChannelSpec binds an inbound channel (a generic webhook, or a
+              Discord or WhatsApp platform adapter) to an Agent. See
               docs/src/resources/agentchannel.md. Rule 39: the type selects exactly one
               configuration block, and that block must be the one set.
             properties:
@@ -631,7 +631,7 @@ spec:
                 default: webhook
                 description: |-
                   Type selects the channel platform: the generic webhook, or one of the
-                  platform adapters (since v0.7.0).
+                  platform adapters.
                 enum:
                 - webhook
                 - discord

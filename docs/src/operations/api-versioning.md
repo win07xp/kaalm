@@ -11,6 +11,8 @@ This page covers the two versions and what each promises, what the `v1beta1` sch
 | `v1beta1` | yes | yes | no | The compatibility contract in [Deprecation policy](#deprecation-policy): additive changes only within the version; anything breaking arrives as a new version with conversion both ways. |
 | `v1alpha1` | yes | no | yes, since v0.6.0 | Every object written at `v1alpha1` is stored at `v1beta1` and read back at either; every field round-trips. Served through v1.0.0; removal is announced a release ahead. |
 
+Kaalm v1.0.0 ships `v1beta1` as its API, and there is no `v1` version. The `v1beta1` schema at v1.0.0 is the baseline the [Deprecation policy](#deprecation-policy) measures every later change against: a field, rule, or enum value present at v1.0.0 keeps its meaning for as long as `v1beta1` is served.
+
 Kubernetes orders the versions of a group by stability, so `v1beta1` is the group's preferred version as soon as it is served: `kubectl get agents`, `kubectl get -o yaml`, and `kubectl explain agent` all answer at `v1beta1` without anyone changing a manifest. A manifest that says `apiVersion: kaalm.io/v1alpha1` still applies, and the apiserver stores the result at `v1beta1`. Because the `v1alpha1` entry in each CRD carries `deprecated: true` with a `deprecationWarning`, every request at that version prints a warning through `kubectl` (and any client that surfaces apiserver warnings):
 
 ```text

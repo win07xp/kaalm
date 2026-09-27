@@ -196,11 +196,11 @@ spec:
                   Fallback names providers tried when this one fails. Each may declare its
                   own fallback, forming a tree walked depth-first. Must be acyclic (rule
                   11) and stay within formats the gateway can translate (rule 12): the
-                  same type, or since v0.7.0 anthropic against openai / openai-compatible.
+                  same type, or anthropic against openai / openai-compatible.
                 items:
                   description: |-
                     FallbackReference is one edge of the fallback tree: the provider tried
-                    next, and since v0.7.0 the model map an edge that crosses formats needs.
+                    next, and the model map an edge that crosses formats needs.
                     Wire-compatible with the {name} reference it replaces.
                   properties:
                     modelMap:
@@ -264,8 +264,8 @@ spec:
                       type: string
                     maxOutputTokens:
                       description: |-
-                        MaxOutputTokens is the model's declared output ceiling. Since v0.7.0 the
-                        gateway supplies it as max_tokens when a request crossing into an
+                        MaxOutputTokens is the model's declared output ceiling. The gateway
+                        supplies it as max_tokens when a request crossing into an
                         anthropic provider omits one (Anthropic requires the field); a request
                         carrying more is capped to it.
                       format: int64
@@ -576,11 +576,11 @@ spec:
                   Fallback names providers tried when this one fails. Each may declare its
                   own fallback, forming a tree walked depth-first. Must be acyclic (rule
                   11) and stay within formats the gateway can translate (rule 12): the
-                  same type, or since v0.7.0 anthropic against openai / openai-compatible.
+                  same type, or anthropic against openai / openai-compatible.
                 items:
                   description: |-
                     FallbackReference is one edge of the fallback tree: the provider tried
-                    next, and since v0.7.0 the model map an edge that crosses formats needs.
+                    next, and the model map an edge that crosses formats needs.
                     Wire-compatible with the {name} reference it replaces.
                   properties:
                     modelMap:
@@ -644,8 +644,8 @@ spec:
                       type: string
                     maxOutputTokens:
                       description: |-
-                        MaxOutputTokens is the model's declared output ceiling. Since v0.7.0 the
-                        gateway supplies it as max_tokens when a request crossing into an
+                        MaxOutputTokens is the model's declared output ceiling. The gateway
+                        supplies it as max_tokens when a request crossing into an
                         anthropic provider omits one (Anthropic requires the field); a request
                         carrying more is capped to it.
                       format: int64

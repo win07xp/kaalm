@@ -3,9 +3,8 @@
 ## Project Overview
 
 **Kaalm**, a Kubernetes-native operator making AI agents a first-class workload
-type. Latest release v0.7.0 (2026-08-31); current milestone v1.0.0
-(tracking issue #51). Status lives in `docs/src/ROADMAP.md` and the GitHub
-milestone, not here.
+type. Latest release v1.0.0 (2026-09-27); next milestone v1.1.0. Status
+lives in `docs/src/ROADMAP.md` and the GitHub milestone, not here.
 
 - API group: `kaalm.io` | Versions: `v1beta1` (the storage version and the contract) and `v1alpha1` (deprecated, served, converted by the controller)
 - Stack: Go, controller-runtime (kubebuilder), Helm

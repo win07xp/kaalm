@@ -109,7 +109,7 @@ gateway:
   callbackUrl:
     allowlist: []
   # Where the platform channel adapters (AgentChannel spec.type discord and
-  # whatsapp, since v0.7.0) send replies. Operator-set and trusted like a
+  # whatsapp) send replies. Operator-set and trusted like a
   # ModelProvider endpoint: not subject to the callbackUrl deny ranges, and
   # http:// is accepted, so an e2e mock can stand in. The WhatsApp value
   # carries the Graph API version segment; change it to move versions.

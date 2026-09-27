@@ -25,9 +25,15 @@ there for the 30-second hibernation delay, passes through `Hibernating` in a
 second or two, and settles at `Hibernated`. Press Ctrl-C when it settles:
 
 ```
-NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   3m18s
+NAME     PHASE     READY   CLASS      AGE
+helper   Running   True    tutorial   3m18s
+helper   Idle      True    tutorial   3m46s
+helper   Hibernating   True    tutorial   4m16s
+helper   Hibernated    False   tutorial   4m17s
 ```
+
+The columns shift on the later rows because `-w` prints each change as it
+arrives instead of re-aligning the table.
 
 > **What counts as activity?** Kaalm watches the traffic an agent sends and
 > receives through the gateway: the messages delivered to it and the model
@@ -57,7 +63,7 @@ kubectl get agents
 
 ```
 NAME     PHASE        READY   CLASS      AGE
-helper   Hibernated   False   tutorial   3m18s
+helper   Hibernated   False   tutorial   4m29s
 ```
 
 And so does its storage:
@@ -68,7 +74,7 @@ kubectl get pvc
 
 ```
 NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-helper-memory   Bound    pvc-5babc3ae-fbec-4fa9-856d-1e6ee45113e5   1Gi        RWO            local-path     <unset>                 3m17s
+helper-memory   Bound    pvc-9a8cd3cc-2433-4e43-932a-2cfa844ebba4   1Gi        RWO            local-path     <unset>                 4m29s
 ```
 
 That is hibernation in one screen: the expensive part (a running program) is
@@ -116,7 +122,7 @@ kubectl get agents
 
 ```
 NAME     PHASE     READY   CLASS      AGE
-helper   Running   True    tutorial   3m26s
+helper   Running   True    tutorial   4m31s
 ```
 
 Awake again, ready to go quiet and repeat the cycle.
