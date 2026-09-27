@@ -20,9 +20,9 @@ Every request carries:
 | `X-Signature-Timestamp` | Unix seconds, as a decimal string |
 | `Content-Type` | `application/json` |
 
-**Verification.** The gateway loads the channel's `publicKey`, checks `Ed25519.Verify(publicKey, timestamp || body, signature)` over the raw body bytes, and rejects a timestamp more than 300s from its own clock. A failed check, or a `publicKey` that is missing or not a 32-byte hex string, answers `401` with the [User Gateway error envelope](errors.md#user-gateway-error-responses) and records a `WebhookAuthFailed` health observation.
+**Verification.** The gateway loads the channel's `publicKey`, checks `Ed25519.Verify(publicKey, timestamp || body, signature)` over the raw body bytes, and rejects a timestamp more than 300s from its own clock. A failed check, or a `publicKey` that is missing or not a 32-byte hex string, answers `401` with the [User Gateway error envelope](errors.md#user-gateway-error-responses) and records a `WebhookAuthFailed` health observation, except for the save-time probe that the next paragraph describes.
 
-Discord's save-time check sends one valid `PING` and one request with an invalid signature and requires the `401` on the second, so the rejection is part of the contract. As shipped, that probe's `401` also counts as a health failure, so a newly registered channel reports `WebhookAuthFailed` for one health window; issue #228 tracks it.
+Discord's save-time check sends one valid `PING` and one `PING` with an invalid signature and requires the `401` on the second, so the rejection is part of the contract. A `PING` that fails the check is that probe: it gets the same `401`, but it is not a health observation, so saving the URL leaves `PlatformConnected` unchanged. A wrong `publicKey` also fails the valid `PING`, so Discord refuses to save the URL and the probe never hides a misconfigured channel. Any other interaction that fails the check, and a body that is not JSON, records `WebhookAuthFailed`.
 
 **Body.** The interaction object. The fields the adapter reads:
 

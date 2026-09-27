@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -72,6 +73,10 @@ type inboundResult struct {
 	// authFailed, when non-empty, is recorded on channel health as
 	// WebhookAuthFailed with this detail.
 	authFailed string
+	// verificationProbe marks an auth failure the platform causes on purpose
+	// to test the endpoint (Discord's badly signed PING). The adapter still
+	// refuses it, but it is logged instead of recorded on channel health.
+	verificationProbe bool
 	// rejected counts scope refusals and dropped events for the metric; they
 	// are not health observations.
 	rejected int
@@ -107,7 +112,11 @@ func (s *Server) handlePlatform(
 ) {
 	res := adapter.Handle(r.Context(), w, r, channel, body)
 	path := channel.Spec.Path()
-	if res.authFailed != "" {
+	switch {
+	case res.verificationProbe:
+		slog.Info("platform verification probe refused", "channelType", adapter.Type(),
+			"namespace", channel.Namespace, "channel", channel.Name, "detail", res.authFailed)
+	case res.authFailed != "":
 		s.ChannelHealth.RecordFailure(path, healthReasonAuthFailed, res.authFailed)
 	}
 	for i := 0; i < res.rejected; i++ {
