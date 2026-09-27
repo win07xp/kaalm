@@ -202,8 +202,8 @@ Which class fields reach a running agent depends on the field:
   `image.imagePullSecrets`, `security`, `podMetadata`,
   `runtime.runtimeClassName`, and `lifecycle.terminationGracePeriodSeconds`
   change the desired Pod, so the Pod is replaced on the next reconcile. One
-  edit replaces every running agent Pod of the class at once, so change a
-  shared class when the restarts are acceptable. Hibernated agents pick up the
+  edit replaces every running agent Pod of the class at once, so edit a shared
+  class only when those restarts are acceptable. Hibernated agents pick up the
   change on their next wake.
 
 Tightening `allowedImages` or `allowedProviders` does not stop a running
