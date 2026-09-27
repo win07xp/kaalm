@@ -145,12 +145,12 @@ type AgentTaskStatus struct {
 	AgentReportedStatus string `json:"agentReportedStatus,omitempty"`
 	// +optional
 	AgentReportedMessage string `json:"agentReportedMessage,omitempty"`
-	// ClassBounds holds the class's task bounds as they were when the current
-	// Pod was created, or when the task settled before any Pod existed. The
-	// task's own timeout and TTL are derived within
-	// them on every pass, so an edit to the task applies at once and an
-	// edit to the class does not reach it. Nil means the task predates the
-	// field; its own values then apply unbounded.
+	// ClassBounds records the class's task bounds when the current Pod is
+	// created, or when the task settles before any Pod exists. On every
+	// pass, the effective timeout and TTL are derived from the task's own
+	// values within these bounds, so an edit to the task applies at once and
+	// a later edit to the class doesn't reach the task. Nil means the task was
+	// created before this field existed, and its own values apply unbounded.
 	// +optional
 	ClassBounds *AgentTaskClassBounds `json:"classBounds,omitempty"`
 }

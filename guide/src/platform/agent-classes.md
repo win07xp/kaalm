@@ -7,11 +7,11 @@ exceed what it grants.
 
 ## A standard class
 
-The chart installs a class named `standard` that allows any image, storage up
-to 50Gi, and hibernation, stops a task that sets no timeout after one hour,
-and names no ModelProvider, so an agent under it gets a volume but no model
-access. Name your providers on it with a chart
-value, alongside the rest of your install values:
+The chart installs a class named `standard`. It allows any image, storage up
+to 50Gi, and hibernation, and it stops a task that sets no timeout after one
+hour. It names no ModelProvider, so an agent under it gets a volume but no
+model access. Name your providers on it with a chart value, alongside the rest
+of your install values:
 
 ```bash
 helm upgrade kaalm oci://ghcr.io/win07xp/charts/kaalm -n kaalm-system \
@@ -59,12 +59,12 @@ The decisions that matter:
   `pvcRetention` decides whether state survives agent deletion.
 - **`lifecycle`** sets idle-timeout defaults and whether hibernation is
   allowed at all; agents can tighten these within the class maximums. It also
-  bounds tasks: `defaultTaskTimeout` and `maxTaskTimeout` for
-  `completion.timeout`, and `defaultTTLSecondsAfterFinished` and
-  `maxTTLSecondsAfterFinished` for how long a finished task is kept. A maximum
-  lowers a value a task sets but supplies none, so set the default to bound
-  every task. A default TTL deletes each finished task's record, results
-  included, once it expires.
+  sets a default and a maximum for a task's `completion.timeout`
+  (`defaultTaskTimeout`, `maxTaskTimeout`) and `ttlSecondsAfterFinished`
+  (`defaultTTLSecondsAfterFinished`, `maxTTLSecondsAfterFinished`). A maximum
+  never supplies a value, so to bound every task, set the default too. A
+  default TTL deletes each finished task's record, results included, when it
+  expires.
 
 Apply and verify:
 
@@ -205,10 +205,9 @@ Which class fields reach a running agent depends on the field:
 - `network.egress.allowedHosts` is applied to the agent's CiliumNetworkPolicy
   on the next reconcile, on Cilium only.
 - `lifecycle` defaults and ceilings apply on the next activity evaluation.
-  The task timeout and TTL bounds reach only tasks whose Pod is created after
-  the edit, including a retry's new Pod: a task copies them to
-  `status.classBounds` when its Pod is created. Task owners can still change
-  their own timeout and TTL within the copied bounds.
+  The task timeout and TTL bounds are different: a task records them when
+  its Pod is created, so an edit reaches only tasks whose Pod, including a
+  retry's Pod, is created after it.
 - `resources.defaults`, `resources.maxLimits`, `image.pullPolicy`,
   `image.imagePullSecrets`, `security`, `podMetadata`,
   `runtime.runtimeClassName`, and `lifecycle.terminationGracePeriodSeconds`

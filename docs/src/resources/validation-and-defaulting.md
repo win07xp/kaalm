@@ -138,11 +138,11 @@ Resource limits, volume size, the Agent lifecycle timeouts, and the task timeout
 
 **Rule 10: Hibernation delay is capped by the class.** `lifecycle.hibernationDelay` above `AgentClass.spec.lifecycle.maxHibernationDelay` is lowered to it.
 
-**Rule 42: Task timeout is capped by the class.** `AgentTask.spec.completion.timeout` above `AgentClass.spec.lifecycle.maxTaskTimeout` is lowered to it. The class bounds are those copied to `status.classBounds` when the task's Pod was created ([AgentTask](agenttask.md#the-class-bounds-timeout-and-retention)). The task's timeout, the requeue at its deadline, and the `TimeoutExceeded` message all use the clamped value.
+**Rule 42: Task timeout is capped by the class.** `AgentTask.spec.completion.timeout` above `AgentClass.spec.lifecycle.maxTaskTimeout` is lowered to it. The cap comes from the class bounds the task recorded in `status.classBounds`, not from the live class ([The class bounds timeout and retention](agenttask.md#the-class-bounds-timeout-and-retention)). The timeout check, the requeue at the deadline, and the `TimeoutExceeded` message all use the lowered value.
 
-**Rule 43: Task retention is capped by the class.** `AgentTask.spec.ttlSecondsAfterFinished` above `AgentClass.spec.lifecycle.maxTTLSecondsAfterFinished` is lowered to it, with the same `status.classBounds` snapshot as rule 42. Zero is a real value: the task is deleted as soon as it settles.
+**Rule 43: Task retention is capped by the class.** `AgentTask.spec.ttlSecondsAfterFinished` above `AgentClass.spec.lifecycle.maxTTLSecondsAfterFinished` is lowered to it, using the same recorded bounds as rule 42. A value of zero deletes the task as soon as it settles.
 
-A cap bounds a value and never supplies one. A value the workload leaves unset, under a class with a max and no default, stays unset; rules 8 to 10 behave the same way. To bound every task, set the default as well as the max.
+Like rules 8 to 10, rules 42 and 43 never supply a value: under a class with a max and no default, a value the workload leaves unset stays unset.
 
 #### Names and namespaces
 
@@ -260,4 +260,4 @@ A default on a field inside an optional block fires only when the block is prese
 | `completion.timeout` | `AgentClass.spec.lifecycle.defaultTaskTimeout` | The AgentTask omits it; with no class default either, the task has no timeout |
 | `ttlSecondsAfterFinished` | `AgentClass.spec.lifecycle.defaultTTLSecondsAfterFinished` | The AgentTask omits it; with no class default either, the task is kept after it settles |
 
-Fixed values with no class source: the health port is 8080, the Service port defaults to 8080, an Agent's memory mounts at `/var/agent/memory`, and a task's workspace at `/var/task/workspace`. An AgentTask's `completion.timeout` and `ttlSecondsAfterFinished` have no schema default; the class supplies and caps them ([AgentTask](agenttask.md#the-class-bounds-timeout-and-retention)).
+Fixed values with no class source: the health port is 8080, the Service port defaults to 8080, an Agent's memory mounts at `/var/agent/memory`, and a task's workspace at `/var/task/workspace`.

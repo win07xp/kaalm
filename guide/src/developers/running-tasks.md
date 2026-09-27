@@ -46,12 +46,11 @@ has the same fields.
   Use this for agents that behave like batch jobs. Artifacts cannot be
   declared in this mode; there is nobody to report them.
 
-`completion.timeout` bounds the run either way. Leave it unset and the
-class's `defaultTaskTimeout` applies: the chart's `standard` class stops a
-task after one hour. A value above the class's `maxTaskTimeout` is lowered to
-it. A task that runs out of time settles `TimedOut` under the default
-`onTimeout: Fail`, or `Succeeded` under `onTimeout: Succeed`; neither is
-retried.
+`completion.timeout` bounds the run either way. If you leave it unset, the
+class's default timeout applies; under the chart's `standard` class, that's
+one hour. The class can also cap the timeout you set. A task that runs out of
+time settles `TimedOut` under the default `onTimeout: Fail`, or `Succeeded`
+under `onTimeout: Succeed`; neither is retried.
 
 ## Watching and reading results
 
@@ -96,15 +95,13 @@ own, and a task image of your own must too (runtime contract item 6).
 
 - `ttlSecondsAfterFinished` deletes the AgentTask itself once the TTL has
   passed since completion, and with it the Pod, the mailbox, and the task's
-  PVC, the same way a Job's TTL works. Read the result before then, or leave
-  the field unset to keep the record. Unset, the class's
-  `defaultTTLSecondsAfterFinished` applies if it sets one, and the class's
-  `maxTTLSecondsAfterFinished` caps any value; the `standard` class sets
-  neither. You can change the TTL on a finished task, for example to keep it
-  longer, and the change applies at once within the class bounds the task
-  recorded in `status.classBounds` when its Pod was created. The Pod is not
-  stopped at completion:
-  a container that keeps running after it reports stays up until the TTL.
+  PVC, the same way a Job's TTL works. Read the result before then. If you
+  leave the field unset, the class's default TTL applies, and the class can
+  cap the value you set. The `standard` class sets neither, so a task with no
+  TTL keeps its record. To keep a finished task longer, raise its TTL; the
+  change applies at once, up to the class cap in force when the task's Pod
+  was created. The Pod is not stopped at completion: a container that keeps
+  running after it reports stays up until the TTL.
 - A crashed task Pod is retried only when `completion.backoffLimit` is above
   zero; the default is no retries. Class-gate failures (image not allowed,
   provider denied) settle `Failed` without retries, and
