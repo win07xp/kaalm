@@ -48,15 +48,15 @@ partition "5 to 7: hibernation, gates, Certificate" {
 partition "8 to 11: children, Pod, activity, status" {
   :SA, Service, PVC,\nNetworkPolicy;
   if (Pod?) then (none)
-    :create, Provisioning;
+    :create, Provisioning\n(Resuming if woken);
   elseif (terminal or\nspec drift?) then (yes)
-    :delete, Provisioning;
+    :delete, Provisioning\n(Resuming if woken);
   elseif (crash loop or\nImagePullBackOff?) then (yes)
     :phase=Failed;
   elseif (Ready?) then (yes)
     :Running, or Idle stays;
   else (no)
-    :Provisioning;
+    :Provisioning\n(Resuming if woken);
   endif
   :Running or Idle:\nevaluate activity;
   :write status if changed;

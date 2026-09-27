@@ -9,11 +9,10 @@ actually tears down.
 A healthy persistent agent moves through `Pending`, `Provisioning`, and
 `Running`. It goes `Idle` after `idleTimeout` with no activity, then through
 `Hibernating` to `Hibernated` after `hibernationDelay` elapses. It comes back
-through `Resuming` and `Provisioning` to `Running` when a message arrives or
-you wake it. The full status vocabulary is on the
+through `Resuming` to `Running` when a message arrives or you wake it. The full status vocabulary is on the
 [Status cheatsheet](../reference/status-cheatsheet.md).
 
-![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Provisioning when the Pod is created. Running and Idle return to Provisioning on spec drift or Pod disruption. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
+![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Running on Pod Ready. Running and Idle return to Provisioning on spec drift or Pod disruption. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
 
 `Degraded` means the Agent's spec does not match its class, or a provider
 or tool grant it names has been revoked; the Pod keeps running and the phase
@@ -37,7 +36,7 @@ Hibernation and wake page states both timers and their class ceilings.
 
 Any message through the agent's channel wakes it: the gateway holds the
 message, triggers the wake, polls the agent's Service until it accepts a
-connection (`Resuming`, then `Provisioning`, then `Running`), then delivers. Conversation memory is intact because it lives on the PVC.
+connection (`Resuming`, then `Running`), then delivers. Conversation memory is intact because it lives on the PVC.
 
 The timing caveat that matters: under default settings, a sync-mode channel
 times out (`504 sync_deadline_exceeded` at 30 seconds) before a cold wake

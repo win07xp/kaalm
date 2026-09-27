@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -404,6 +405,90 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 	}
 	if agentPod(t, "wake-act") == nil {
 		t.Error("Idle is a pod-bearing phase; the woken Pod must survive")
+	}
+}
+
+// TestAgent_WakeHoldsResumingUntilReady pins the wake phase sequence:
+// Hibernated, then Resuming for as long as the recreated Pod is not Ready,
+// then Running. A woken Agent never shows Provisioning (#206).
+func TestAgent_WakeHoldsResumingUntilReady(t *testing.T) {
+	mkWorkloadClass(t, "wc-resume", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+		ac.Spec.Lifecycle.HibernationAllowed = true
+	})
+	provisionRunningAgentWithLifecycle(t, "resume", "wc-resume", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Persistence.Enabled = true
+		ag.Spec.Lifecycle.HibernationEnabled = true
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
+		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
+	})
+
+	// Stale activity drives Idle, Hibernating, and Hibernated.
+	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "resume", 2*time.Hour)}, 1)
+	touchAgent(t, "resume")
+	eventually(t, func() error {
+		for _, pod := range terminatingPods(t, "resume") {
+			forceDeletePod(t, &pod)
+		}
+		if ag := getWorkloadAgent(t, "resume"); ag.Status.Phase != kaalmv1beta1.AgentHibernated {
+			return errString(fmt.Sprintf("phase=%s want Hibernated", ag.Status.Phase))
+		}
+		return nil
+	})
+
+	// Wake, with fresh activity and a long idleTimeout so the woken agent
+	// cannot re-idle while the test holds its Pod not Ready.
+	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "resume", 0)}, 1)
+	eventually(t, func() error {
+		got := getWorkloadAgent(t, "resume")
+		if got.Annotations == nil {
+			got.Annotations = map[string]string{}
+		}
+		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationTrue
+		got.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Hour}
+		return testClient.Update(ctxT(), got)
+	})
+	eventually(t, func() error {
+		if agentPod(t, "resume") == nil {
+			return errString("no recreated pod yet")
+		}
+		return nil
+	})
+
+	// The recreated Pod is not Ready: every pass keeps Resuming.
+	for i := 0; i < 3; i++ {
+		touchAgent(t, "resume")
+		time.Sleep(300 * time.Millisecond)
+		got := getWorkloadAgent(t, "resume")
+		if got.Status.Phase != kaalmv1beta1.AgentResuming {
+			t.Fatalf("pass %d: phase=%s want Resuming while the woken Pod is not Ready", i, got.Status.Phase)
+		}
+		if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady); c == nil ||
+			c.Status != metav1.ConditionFalse {
+			t.Fatalf("pass %d: Ready=%+v want False while Resuming", i, c)
+		}
+	}
+
+	markPodReady(t, agentPod(t, "resume"))
+	expectAgentPhase(t, "resume", kaalmv1beta1.AgentRunning)
+}
+
+// TestAgent_WakePodCreateErrorKeepsResuming pins the wake-failure behavior: a
+// Pod-creation error during a wake returns the error for a requeue and leaves
+// the Agent in Resuming. It never sets Failed or Provisioning (#206).
+func TestAgent_WakePodCreateErrorKeepsResuming(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "woken", Namespace: "default"},
+		Status:     kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentResuming},
+	}
+	r := &AgentReconciler{Client: newErrCreateClient(t), OperatorNamespace: "kaalm-system"}
+	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080}
+	if err := r.convergePod(context.Background(), agent, eff); err == nil {
+		t.Fatal("convergePod must surface the Pod-creation error so the pass requeues")
+	}
+	if agent.Status.Phase != kaalmv1beta1.AgentResuming {
+		t.Errorf("phase=%s want Resuming after a Pod-creation error", agent.Status.Phase)
 	}
 }
 

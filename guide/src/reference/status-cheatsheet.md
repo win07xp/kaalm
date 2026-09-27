@@ -7,7 +7,7 @@ by resource. Conditions listed are the ones the controller actually sets.
 
 `kubectl get agents` columns: `Phase`, `Ready`, `Class`, `Age`.
 
-![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Provisioning when the Pod is created. Running and Idle return to Provisioning on spec drift or Pod disruption. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
+![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Running on Pod Ready. Running and Idle return to Provisioning on spec drift or Pod disruption. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
 
 Phases, in lifecycle order:
 
@@ -19,7 +19,7 @@ Phases, in lifecycle order:
 | `Idle` | No activity for `idleTimeout`; still running |
 | `Hibernating` | Pod being torn down, PVC retained |
 | `Hibernated` | No Pod; storage and identity parked |
-| `Resuming` | Waking: Pod recreating after a wake trigger |
+| `Resuming` | Waking: Pod recreating after a wake trigger, until it is Ready |
 | `Degraded` | The spec fails a class gate (image, provider or tool grant revoked, deleted, or narrowed); the Pod keeps running |
 | `Failed` | Crash-looping, or the image cannot be pulled |
 | `Terminating` | Deletion in progress, finalizer running |
