@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -451,5 +452,77 @@ func TestIntegration_LegacyCompletionsNeverCross(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadGateway || backupHit {
 		t.Errorf("legacy completions must not cross: status %d backupHit %v", resp.StatusCode, backupHit)
+	}
+}
+
+func TestIntegration_PreHeaderStallFallsBackAsATimeout(t *testing.T) {
+	// The primary holds its headers past the bound: the attempt is a
+	// timeout and the walk moves to the backup.
+	h := newHarness(t, func(_ http.ResponseWriter, r *http.Request) { stall(r) })
+	h.seedRoute()
+	h.server.Recorder = &recordingRecorder{}
+	h.server.Config.UpstreamTimeout = streamTimeout
+	h.addBackupProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"from-backup","usage":{"prompt_tokens":3,"completion_tokens":1}}`))
+	})
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
+	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
+		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "backup"}})
+	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
+		kaalmv1beta1.LocalObjectReference{Name: "backup"})
+
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d, want the backup's 200", resp.StatusCode)
+	}
+	if u := h.spend.Total("team-a", "backup", "m1"); u.InputTokens != 3 {
+		t.Errorf("backup usage not recorded: %+v", u)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.llmFallback.WithLabelValues("prov", "backup", "success")); got != 1 {
+		t.Errorf("fallback success count = %v, want 1", got)
+	}
+}
+
+func TestIntegration_PreHeaderStallWithNoFallbackIs504(t *testing.T) {
+	h := newHarness(t, func(_ http.ResponseWriter, r *http.Request) { stall(r) })
+	h.seedRoute()
+	h.server.Config.UpstreamTimeout = streamTimeout
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("status %d, want 504", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderTimeout {
+		t.Errorf("error type %q", got)
+	}
+}
+
+func TestIntegration_CrossFormatStreamFailureUsesTheCallersShape(t *testing.T) {
+	// The OpenAI backup drops the connection mid-stream; the Anthropic caller
+	// gets an Anthropic error event, not a translated message_stop.
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(w, `data: {"id":"c","object":"chat.completion.chunk","model":"gpt-5-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"Co"},"finish_reason":null}]}`)
+		panic(http.ErrAbortHandler)
+	})
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64, "stream": true,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	text := string(raw)
+	if resp.StatusCode != 200 || !strings.Contains(text, `"text":"Co"`) {
+		t.Fatalf("status %d, partial stream not relayed:\n%s", resp.StatusCode, text)
+	}
+	want := "event: error\n" + `data: {"type":"error","error":{"type":"provider_error","message":`
+	if !strings.Contains(text, want) {
+		t.Errorf("cross-format failure lacks the Anthropic error event:\n%s", text)
+	}
+	if strings.Contains(text, "message_stop") || strings.Contains(text, "[DONE]") {
+		t.Errorf("a truncated stream must not look complete:\n%s", text)
 	}
 }

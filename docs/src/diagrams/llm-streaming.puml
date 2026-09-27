@@ -29,8 +29,8 @@ alt stream completes
   prov --> gw : message_stop
   gw --> agent : relay
   gw -> gw : settle spend
-else upstream fails mid-stream
-  gw --> agent : stream ends
+else upstream fails or goes idle mid-stream
+  gw --> agent : error event, stream ends
   gw -> gw : settle the usage so far
 end
 @enduml

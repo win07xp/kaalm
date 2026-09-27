@@ -6,7 +6,7 @@ Three Grafana dashboards ship with the repository as JSON in
 | File | Scope | Variables |
 |---|---|---|
 | `kaalm-namespace.json` | One tenant namespace: agents, tasks, and channels by phase, spend and budget utilization per provider, LLM and channel traffic, wakes, tool calls, async delivery | `datasource`, `namespace` |
-| `kaalm-provider.json` | One ModelProvider: request rate, error ratio, latency by model, tokens, fallbacks, budget utilization and spend by namespace, policy actions | `datasource`, `provider` |
+| `kaalm-provider.json` | One ModelProvider: request rate, error ratio, latency by model, tokens, fallbacks, budget utilization and spend by namespace, policy actions, responses without usage | `datasource`, `provider` |
 | `kaalm-cluster.json` | The whole cluster: scrape targets, controller leader and reconcile health, fleet totals, hibernations and wakes, LLM and tool traffic, spend by provider | `datasource`, `job` |
 
 Each file is self-contained and imports unchanged. The data source is a

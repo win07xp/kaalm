@@ -18,11 +18,13 @@ package gateway
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -128,6 +130,11 @@ func TestMetrics_CountersAndHistogram(t *testing.T) {
 		t.Errorf("responseTooLarge = %v, want 1", got)
 	}
 
+	m.UsageMissing("prov", "m1")
+	if got := testutil.ToFloat64(m.llmUsageMissing.WithLabelValues("prov", "m1")); got != 1 {
+		t.Errorf("usageMissing = %v, want 1", got)
+	}
+
 	m.AsyncPatchFailed("team-a")
 	if got := testutil.ToFloat64(m.patchFailed.WithLabelValues("team-a")); got != 1 {
 		t.Errorf("asyncPatchFailed = %v, want 1", got)
@@ -154,6 +161,7 @@ func TestMetrics_NilReceiverNoOps(t *testing.T) {
 	m.ChannelCallbackDuration("ns", 0.1)
 	m.ResponseTooLarge("ns", "async")
 	m.AsyncPatchFailed("ns")
+	m.UsageMissing("p", "m")
 }
 
 // TestGatewayCatalog_EveryDocumentedMetricIsRegistered pins the observability
@@ -236,5 +244,56 @@ func TestProxy_ObservesRequestDuration(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(m.llmRequests.WithLabelValues("prov", "m1", "team-a", "ok")); got != 1 {
 		t.Errorf("requests ok = %v, want 1", got)
+	}
+}
+
+// TestProxy_CountsResponsesWithoutUsage pins kaalm_llm_usage_missing_total: a
+// 2xx that settles at zero because it carried no usage counts, streamed or
+// not; an error response never does.
+func TestProxy_CountsResponsesWithoutUsage(t *testing.T) {
+	cases := []struct {
+		name   string
+		stream bool
+		status int
+		ctype  string
+		body   string
+		want   float64
+	}{
+		{"buffered 2xx", false, 200, "application/json", `{"id":"r"}`, 1},
+		{"streamed 2xx", true, 200, "text/event-stream", "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n", 1},
+		{"buffered 2xx with usage", false, 200, "application/json", `{"usage":{"prompt_tokens":1,"completion_tokens":1}}`, 0},
+		{"4xx", false, 400, "application/json", `{"error":{"message":"bad"}}`, 0},
+		{"5xx", false, 500, "application/json", `{"error":{"message":"down"}}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.ctype)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			h.seedRoute()
+			m := NewMetrics(prometheus.NewRegistry())
+			h.server.Metrics = m
+			cert := agentCert(t, h.ca)
+			resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"),
+				map[string]any{"model": "prov/m1", "stream": tc.stream}, nil)
+			_, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.status && tc.status != 500 {
+				t.Fatalf("status %d, want %d", resp.StatusCode, tc.status)
+			}
+			// The streamed case settles after its last flush; poll briefly.
+			var got float64
+			for i := 0; i < 50; i++ {
+				if got = testutil.ToFloat64(m.llmUsageMissing.WithLabelValues("prov", "m1")); got == tc.want && (tc.want > 0 || i > 5) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if got != tc.want {
+				t.Errorf("usage-missing count = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

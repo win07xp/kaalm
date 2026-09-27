@@ -663,6 +663,161 @@ func TestProxy_StreamingRelay(t *testing.T) {
 	}
 }
 
+// streamTimeout is the UpstreamTimeout the stream-bound tests run under: long
+// enough that a steady 50ms chunk cadence never trips it, short enough that a
+// stall ends the test quickly.
+const streamTimeout = 200 * time.Millisecond
+
+// writeSSE writes SSE lines, each followed by a blank line, and flushes.
+func writeSSE(w http.ResponseWriter, lines ...string) {
+	for _, line := range lines {
+		_, _ = w.Write([]byte(line + "\n\n"))
+	}
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// stall blocks an upstream handler until the gateway gives up on the
+// attempt (the connection closes) or a safety bound passes.
+func stall(r *http.Request) {
+	select {
+	case <-r.Context().Done():
+	case <-time.After(5 * time.Second):
+	}
+}
+
+// waitUsage polls for recorded spend: the relay settles after its last
+// flush, so the client can finish reading first.
+func waitUsage(t *testing.T, h *harness, provider, model string) Usage {
+	t.Helper()
+	var u Usage
+	for i := 0; i < 100; i++ {
+		if u = h.spend.Total("team-a", provider, model); !u.isZero() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return u
+}
+
+func TestProxy_StreamOutlivesTheUpstreamTimeout(t *testing.T) {
+	// Ten chunks 50ms apart run 500ms, past a 200ms bound: the bound is idle
+	// time between chunks, not the length of the call.
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i := 0; i < 10; i++ {
+			writeSSE(w, `data: {"choices":[{"delta":{"content":"x"}}]}`)
+			time.Sleep(50 * time.Millisecond)
+		}
+		writeSSE(w, `data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":10}}`, `data: [DONE]`)
+	})
+	h.seedRoute()
+	h.server.Config.UpstreamTimeout = streamTimeout
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"),
+		map[string]any{"model": "prov/m1", "stream": true}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	text := string(raw)
+	if resp.StatusCode != 200 || !strings.Contains(text, "[DONE]") || strings.Contains(text, `"error"`) {
+		t.Fatalf("status %d, stream cut or errored:\n%s", resp.StatusCode, text)
+	}
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 4 || u.OutputTokens != 10 {
+		t.Errorf("usage not settled: %+v", u)
+	}
+}
+
+func TestProxy_StreamStallEndsWithAnOpenAIErrorEvent(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(w, `data: {"choices":[{"delta":{"content":"hel"}}]}`,
+			`data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1}}`)
+		stall(r)
+	})
+	h.seedRoute()
+	h.server.Config.UpstreamTimeout = streamTimeout
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"),
+		map[string]any{"model": "prov/m1", "stream": true}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	text := string(raw)
+	if resp.StatusCode != 200 || !strings.Contains(text, `"content":"hel"`) {
+		t.Fatalf("status %d, partial stream not relayed:\n%s", resp.StatusCode, text)
+	}
+	if strings.Contains(text, "[DONE]") {
+		t.Errorf("a truncated stream must not end with [DONE]:\n%s", text)
+	}
+	want := `data: {"error":{"type":"provider_timeout",`
+	if !strings.Contains(text, want) || !strings.Contains(text, `"provider":"prov"`) || !strings.HasSuffix(text, "}}\n\n") {
+		t.Errorf("stream does not end with the OpenAI error event %q:\n%s", want, text)
+	}
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 9 || u.OutputTokens != 1 {
+		t.Errorf("partial usage not settled: %+v", u)
+	}
+}
+
+func TestProxy_StreamStallEndsWithAnAnthropicErrorEvent(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(w, "event: message_start\n"+`data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}`)
+		stall(r)
+	})
+	h.seedRoute()
+	h.store.providers["prov"].Spec.Type = "anthropic"
+	h.server.Config.UpstreamTimeout = streamTimeout
+	cert := agentCert(t, h.ca)
+
+	resp := postJSON(t, h.client(&cert), h.url("/v1/messages"),
+		map[string]any{"model": "prov/m1", "stream": true, "max_tokens": 16}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	text := string(raw)
+	want := "event: error\n" + `data: {"type":"error","error":{"type":"provider_timeout","message":`
+	if resp.StatusCode != 200 || !strings.Contains(text, want) || !strings.HasSuffix(text, "}}\n\n") {
+		t.Errorf("status %d, stream does not end with the Anthropic error event:\n%s", resp.StatusCode, text)
+	}
+	if u := waitUsage(t, h, "prov", "m1"); u.InputTokens != 7 {
+		t.Errorf("partial usage not settled: %+v", u)
+	}
+}
+
+func TestProxy_BufferedBodyStallIsBounded(t *testing.T) {
+	// Headers arrive, then the JSON body stops: the timer bounds the read and
+	// the attempt fails as a timeout (no fallback here, so 504).
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp-1",`))
+		w.(http.Flusher).Flush()
+		stall(r)
+	})
+	h.seedRoute()
+	h.server.Config.UpstreamTimeout = streamTimeout
+	cert := agentCert(t, h.ca)
+
+	start := time.Now()
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("stalled body = %d, want 504", resp.StatusCode)
+	}
+	if got := errType(t, resp); got != errProviderTimeout {
+		t.Errorf("error type %q", got)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("stalled body took %v, want about one %v bound", took, streamTimeout)
+	}
+}
+
+func TestUpstreamClientHasNoWholeCallTimeout(t *testing.T) {
+	s := &Server{Config: Config{UpstreamTimeout: time.Second}}
+	if got := s.upstream().Timeout; got != 0 {
+		t.Errorf("upstream client Timeout = %v; a whole-call bound cuts long streams", got)
+	}
+}
+
 func TestProxy_BodyCap(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	h.seedRoute()

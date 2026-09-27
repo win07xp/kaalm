@@ -20,7 +20,7 @@ Not every upstream error is a fallback signal. A malformed prompt sent to provid
 
 Notes on individual rows:
 
-- **Timeout before any response bytes.** The per-attempt bound is `gateway.providerFirstByteTimeout` (default `120s`; see [Deployment](../../operations/deployment.md#helm-chart-contents)). As shipped it bounds the whole upstream call, from connect through the last response byte, so a timeout after the first byte is a mid-stream failure and does not fall back.
+- **Timeout before any response bytes.** The per-attempt bound is `gateway.providerFirstByteTimeout` (default `120s`; see [Deployment](../../operations/deployment.md#helm-chart-contents)). It bounds the wait for the first response byte; after that, the same value bounds each gap between response bytes. A timeout after the first byte of a stream is a mid-stream failure: it ends the stream with an error event and does not fall back. A non-streaming response that stalls after its headers is still a timeout before any bytes reach the caller, so it falls back.
 - **Upstream `429`.** This is distinct from the gateway's own `429 rate_limited`, which is returned to the caller without fallback.
 - **Upstream `401` or `403`.** If a later health probe still sees 401 or 403, the reconciler sets `Ready=False, reason=CredentialsInvalid` on that provider. The event tells the platform team that rotation or re-issuance is needed while the fallback keeps traffic serving.
 
@@ -63,7 +63,7 @@ A budget outcome costs a slot because budget state is runtime state, and slot-bo
 
 `maxFallbackDepth` (default `3`, the Helm value `gateway.maxFallbackDepth`, passed to the gateway as `--max-fallback-depth`) bounds the **total number of providers attempted per request, including the primary**, not the nesting depth of the tree. With the default, the gateway tries at most the primary plus two others before giving up, however the tree is nested. The [ModelProvider](../../resources/modelprovider.md#fallback-trees) page draws a tree with the cut.
 
-This is the latency guarantee: each attempt is bounded by `gateway.providerFirstByteTimeout` (default `120s`), so no request waits more than `maxFallbackDepth × providerFirstByteTimeout` before a terminal error. As shipped the bound covers the whole upstream call, so it also ends a stream that runs longer than it; see [Streaming responses](request-handling.md#streaming-responses).
+This is the latency guarantee: each attempt is bounded by `gateway.providerFirstByteTimeout` (default `120s`), so no request waits more than `maxFallbackDepth × providerFirstByteTimeout` for its first response byte before a terminal error. Once a stream starts, the same value bounds each gap between chunks rather than the stream's length: a stream that keeps sending runs to completion, and a stalled stream ends with an error event; see [Streaming responses](request-handling.md#streaming-responses).
 
 When the chain is exhausted or the cap is reached without a successful response, the gateway returns an error whose type reflects the failure classes recorded across the walk:
 
@@ -72,7 +72,7 @@ When the chain is exhausted or the cap is reached without a successful response,
 | Every candidate was budget-blocked or throttled | `429 budget_exhausted`, `Retry-After` the largest observed | `false` after a block; `true` when every candidate was throttled |
 | Only budget outcomes, at least one of them failed closed | `503 budget_state_unavailable`, `Retry-After: 1` | `true` |
 | Every attempt failed at the connect layer (connection error, DNS failure, TLS handshake failure) | `503 provider_unavailable` | `false` |
-| Every attempt timed out before the first byte | `504 provider_timeout` | `false` |
+| Every attempt timed out before its response reached the caller | `504 provider_timeout` | `false` |
 | Any other mix, including any upstream error response (`5xx`, upstream `429`, `401`, `403`) | `502 provider_error` | `false` |
 
 The three `provider_*` errors are not retryable because the gateway has already retried through the whole chain, and they carry the originally requested provider in `error.provider`; see [LLM Gateway error responses](../api/errors.md#llm-gateway-error-responses). A walk exhausted by budget outcomes is a budget error and never a `502`, because the caller needs the retry time and the operator's provider-error alerts should not fire for a policy outcome; see [Interaction with fallback](budgets-and-rate-limits.md#interaction-with-fallback).
