@@ -86,6 +86,13 @@ const (
 	// perpetual drift.
 	annotationPodSpecHash = "kaalm.io/pod-spec-hash"
 
+	// annotationPodSpecHashVersion names the formula that produced
+	// annotationPodSpecHash. A Pod without it was stamped by formula 1.
+	annotationPodSpecHashVersion = "kaalm.io/pod-spec-hash-version"
+
+	// podSpecHashVersion is the formula podSpecHash implements.
+	podSpecHashVersion = "2"
+
 	agentContainer = "agent"
 )
 
@@ -298,11 +305,72 @@ func namespaceAllowed(ns string, allowed []string) bool {
 }
 
 // hashableSpec is the replacement-triggering subset of the derived Pod spec:
-// image, resources, command, args, env, provider wiring, and handler-mount
-// wiring (the ConfigMap name, never its content). Only these fields
-// participate in drift detection. Handler carries omitempty so the hash of
-// every pre-existing handler-less Agent is unchanged by the field's addition.
+// image, resources, command, args, env, provider wiring, handler-mount wiring
+// (the ConfigMap name, never its content), and every Pod input the AgentClass
+// controls. The class inputs are the derived values (the restricted security
+// baseline already merged in), so a change to the baseline itself also rolls
+// Pods. Only these fields participate in drift detection.
 type hashableSpec struct {
+	Image     string                      `json:"image"`
+	Command   []string                    `json:"command,omitempty"`
+	Args      []string                    `json:"args,omitempty"`
+	Env       []corev1.EnvVar             `json:"env,omitempty"`
+	Resources corev1.ResourceRequirements `json:"resources"`
+	Providers []string                    `json:"providers,omitempty"`
+	Handler   string                      `json:"handler,omitempty"`
+
+	RuntimeClassName *string                       `json:"runtimeClassName,omitempty"`
+	PullPolicy       corev1.PullPolicy             `json:"pullPolicy,omitempty"`
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	PodSecurity      *corev1.PodSecurityContext    `json:"podSecurity,omitempty"`
+	ContainerSec     *corev1.SecurityContext       `json:"containerSecurity,omitempty"`
+	AutomountToken   bool                          `json:"automountToken"`
+	TerminationGrace *int64                        `json:"terminationGrace,omitempty"`
+	// encoding/json writes map keys in sorted order, so the maps hash
+	// deterministically.
+	PodLabels      map[string]string `json:"podLabels,omitempty"`
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
+}
+
+// podSpecHash returns the drift-detection hash for an effective spec.
+func podSpecHash(eff effectiveAgentSpec) string {
+	providers := append([]string(nil), eff.Providers...)
+	sort.Strings(providers)
+	pullSecrets := append([]corev1.LocalObjectReference(nil), eff.ImagePullSecrets...)
+	sort.Slice(pullSecrets, func(i, j int) bool { return pullSecrets[i].Name < pullSecrets[j].Name })
+	h := hashableSpec{
+		Image:            eff.Image,
+		Command:          eff.Command,
+		Args:             eff.Args,
+		Env:              eff.Env,
+		Resources:        eff.Resources,
+		Providers:        providers,
+		Handler:          eff.HandlerConfigMap,
+		RuntimeClassName: eff.RuntimeClassName,
+		PullPolicy:       eff.PullPolicy,
+		ImagePullSecrets: pullSecrets,
+		PodSecurity:      eff.PodSecurity,
+		ContainerSec:     eff.ContainerSec,
+		AutomountToken:   eff.AutomountToken,
+		TerminationGrace: eff.TerminationGrace,
+		PodLabels:        withoutKeys(eff.PodLabels, agentPodLabelKeys...),
+		PodAnnotations:   withoutKeys(eff.PodAnnotations, annotationPodSpecHash, annotationPodSpecHashVersion),
+	}
+	raw, err := json.Marshal(h)
+	if err != nil {
+		// hashableSpec is plain data; Marshal cannot fail on it.
+		panic(err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:8])
+}
+
+// hashableSpecV1 and podSpecHashV1 freeze hash formula 1, which v1.0.0
+// stamped on every agent Pod. They exist only to re-stamp Pods created before
+// the formula changed, so an upgrade does not replace them. Remove them once
+// no supported upgrade path starts from a release that stamped v1 hashes.
+// Do not edit: the output must stay byte-for-byte what v1.0.0 produced.
+type hashableSpecV1 struct {
 	Image     string                      `json:"image"`
 	Command   []string                    `json:"command,omitempty"`
 	Args      []string                    `json:"args,omitempty"`
@@ -312,11 +380,10 @@ type hashableSpec struct {
 	Handler   string                      `json:"handler,omitempty"`
 }
 
-// podSpecHash returns the drift-detection hash for an effective spec.
-func podSpecHash(eff effectiveAgentSpec) string {
+func podSpecHashV1(eff effectiveAgentSpec) string {
 	providers := append([]string(nil), eff.Providers...)
 	sort.Strings(providers)
-	h := hashableSpec{
+	h := hashableSpecV1{
 		Image:     eff.Image,
 		Command:   eff.Command,
 		Args:      eff.Args,
@@ -327,11 +394,24 @@ func podSpecHash(eff effectiveAgentSpec) string {
 	}
 	raw, err := json.Marshal(h)
 	if err != nil {
-		// hashableSpec is plain data; Marshal cannot fail on it.
 		panic(err)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:8])
+}
+
+// withoutKeys copies m minus the given keys. desiredPod overwrites those keys
+// with the controller's own values, so a class value for one never reaches the
+// Pod and must not change the hash.
+func withoutKeys(m map[string]string, drop ...string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	for _, k := range drop {
+		delete(out, k)
+	}
+	return out
 }
 
 func agentCertificateName(agentName string) string { return agentName + "-tls" }
@@ -416,9 +496,15 @@ func desiredPVC(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff e
 	}
 }
 
+// labelKeyAgent names the Agent a Pod belongs to.
+const labelKeyAgent = "kaalm.io/agent"
+
+// agentPodLabelKeys are the label keys agentPodLabels sets on every agent Pod.
+var agentPodLabelKeys = []string{labelKeyAgent, labelKeyWorkload}
+
 func agentPodLabels(agent *kaalmv1beta1.Agent) map[string]string {
 	return map[string]string{
-		"kaalm.io/agent": agent.Name,
+		labelKeyAgent:    agent.Name,
 		labelKeyWorkload: workloadAgent,
 	}
 }
@@ -439,6 +525,7 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 		annotations[k] = v
 	}
 	annotations[annotationPodSpecHash] = podSpecHash(eff)
+	annotations[annotationPodSpecHashVersion] = podSpecHashVersion
 
 	// Resolved once: the same path names the volume mount and the memory
 	// directory the runtime is told about.

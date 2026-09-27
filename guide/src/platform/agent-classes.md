@@ -187,8 +187,7 @@ spec:
 
 Kaalm's own labels (`kaalm.io/agent` or `kaalm.io/task`, and
 `kaalm.io/workload`) are added after yours and cannot be overridden. A
-`podMetadata` change reaches an existing Pod only when that Pod is next
-replaced for another reason.
+`podMetadata` change replaces every running agent Pod of the class.
 
 ## Changing a class later
 
@@ -199,11 +198,13 @@ Which class fields reach a running agent depends on the field:
 - `network.egress.allowedHosts` is applied to the agent's CiliumNetworkPolicy
   on the next reconcile, on Cilium only.
 - `lifecycle` defaults and ceilings apply on the next activity evaluation.
-- `resources.defaults`, `resources.maxLimits`, and `image.pullPolicy` change
-  the desired Pod, so the Pod is replaced on the next reconcile.
-- `security`, `podMetadata`, `runtime.runtimeClassName`,
-  `image.imagePullSecrets`, and `lifecycle.terminationGracePeriodSeconds` reach
-  a Pod only when it is next replaced for another reason.
+- `resources.defaults`, `resources.maxLimits`, `image.pullPolicy`,
+  `image.imagePullSecrets`, `security`, `podMetadata`,
+  `runtime.runtimeClassName`, and `lifecycle.terminationGracePeriodSeconds`
+  change the desired Pod, so the Pod is replaced on the next reconcile. One
+  edit replaces every running agent Pod of the class at once, so edit a shared
+  class only when those restarts are acceptable. Hibernated agents pick up the
+  change on their next wake.
 
 Tightening `allowedImages` or `allowedProviders` does not stop a running
 agent: the Agent goes `Degraded` with `ClassConstraintViolation` at once, its

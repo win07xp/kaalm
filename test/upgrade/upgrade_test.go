@@ -179,6 +179,15 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID),
 			"the upgrade must not replace running agent Pods")
 
+		By("the keeper Pod was re-stamped in place with the current hash version")
+		Eventually(func() string {
+			out, _ := utils.Kubectl("get", "pod", keeperPodName, "-n", ns,
+				"-o", `jsonpath={.metadata.annotations.kaalm\.io/pod-spec-hash-version}`)
+			return lastLine(out)
+		}, "60s", "2s").Should(Equal("2"),
+			"the upgrade must re-stamp a v1-hashed Pod instead of replacing it")
+		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID))
+
 		By("the marker is still on the volume")
 		out, err := utils.Kubectl("exec", "-n", ns, keeperPodName, "--",
 			"cat", "/var/agent/memory/upgrade-marker")

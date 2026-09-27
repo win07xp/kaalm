@@ -26,6 +26,7 @@ import (
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	nodev1 "k8s.io/api/node/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -761,6 +762,159 @@ func TestAgent_HandlerRepointReplacesPod(t *testing.T) {
 		}
 		return errString("replacement pod does not mount greeter-v2")
 	})
+}
+
+// expectPodReplaced finishes the graceful deletion of oldPod (envtest has no
+// kubelet) and returns the Agent's replacement Pod once it carries a new hash.
+func expectPodReplaced(t *testing.T, agentName string, oldPod *corev1.Pod) *corev1.Pod {
+	t.Helper()
+	oldHash := oldPod.Annotations[annotationPodSpecHash]
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if got.DeletionTimestamp.IsZero() {
+			return errString("old pod not yet marked for deletion")
+		}
+		forceDeletePod(t, &got)
+		return nil
+	})
+	var pod *corev1.Pod
+	eventually(t, func() error {
+		pod = agentPod(t, agentName)
+		if pod == nil {
+			return errString("no replacement pod yet")
+		}
+		if pod.Name == oldPod.Name || pod.Annotations[annotationPodSpecHash] == oldHash {
+			return errString("pod not replaced")
+		}
+		return nil
+	})
+	return pod
+}
+
+func updateWorkloadClass(t *testing.T, name string, mutate func(*kaalmv1beta1.AgentClass)) {
+	t.Helper()
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &ac); err != nil {
+			return err
+		}
+		mutate(&ac)
+		return testClient.Update(ctxT(), &ac)
+	})
+}
+
+func TestAgent_ClassSecurityAndRuntimeChangeReplacesPod(t *testing.T) {
+	// The apiserver's RuntimeClass admission rejects a Pod naming a
+	// RuntimeClass that does not exist.
+	rc := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: "gvisor-drift"}, Handler: "runsc"}
+	if err := testClient.Create(ctxT(), rc); err != nil {
+		t.Fatalf("create runtimeclass: %v", err)
+	}
+	mkWorkloadClass(t, "wc-class-drift", nil)
+	pod := provisionRunningAgent(t, "class-drift-agent", "wc-class-drift")
+
+	// A runtime switch on the class replaces the running Pod.
+	updateWorkloadClass(t, "wc-class-drift", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Runtime.RuntimeClassName = &rc.Name
+	})
+	pod = expectPodReplaced(t, "class-drift-agent", pod)
+	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != rc.Name {
+		t.Fatalf("replacement runtimeClassName = %v, want %s", pod.Spec.RuntimeClassName, rc.Name)
+	}
+	markPodReady(t, pod)
+	expectAgentPhase(t, "class-drift-agent", kaalmv1beta1.AgentRunning)
+
+	// Tightening the class security block replaces it again.
+	uid := int64(10001)
+	updateWorkloadClass(t, "wc-class-drift", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Security.ContainerSecurityContext = &corev1.SecurityContext{RunAsUser: &uid}
+	})
+	pod = expectPodReplaced(t, "class-drift-agent", pod)
+	sc := pod.Spec.Containers[0].SecurityContext
+	if sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != uid {
+		t.Fatalf("replacement container securityContext = %+v, want runAsUser %d", sc, uid)
+	}
+}
+
+// stampAsV1 rewrites a live Pod's annotations the way a v1.0.0 controller
+// stamped them: the given hash and no hash-version annotation.
+func stampAsV1(t *testing.T, pod *corev1.Pod, hash string) {
+	t.Helper()
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q,%q:null}}}`,
+		annotationPodSpecHash, hash, annotationPodSpecHashVersion)
+	if err := testClient.Patch(ctxT(), pod, client.RawPatch(types.MergePatchType, []byte(patch))); err != nil {
+		t.Fatalf("stamp pod as v1: %v", err)
+	}
+}
+
+func effectiveSpecFor(t *testing.T, agentName, className string) effectiveAgentSpec {
+	t.Helper()
+	var ac kaalmv1beta1.AgentClass
+	if err := testClient.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
+		t.Fatalf("get class: %v", err)
+	}
+	return deriveEffectiveSpec(getWorkloadAgent(t, agentName), &ac)
+}
+
+func TestAgent_V1HashMatchRestampsInPlace(t *testing.T) {
+	mkWorkloadClass(t, "wc-restamp", nil)
+	pod := provisionRunningAgent(t, "restamp-agent", "wc-restamp")
+	eff := effectiveSpecFor(t, "restamp-agent", "wc-restamp")
+	stampAsV1(t, pod, podSpecHashV1(eff))
+
+	// The Pod is current under the formula it was made with, so the upgrade
+	// re-stamps it rather than replacing it.
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		if apierrors.IsNotFound(err) || err == nil && !got.DeletionTimestamp.IsZero() {
+			t.Fatal("a v1 Pod with a matching v1 hash was deleted")
+		}
+		if err != nil {
+			return err
+		}
+		if got.UID != pod.UID {
+			return errString("pod UID changed")
+		}
+		if got.Annotations[annotationPodSpecHashVersion] != podSpecHashVersion {
+			return errString("hash version not re-stamped yet")
+		}
+		if got.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
+			return errString("hash not re-stamped yet")
+		}
+		return nil
+	})
+	expectAgentPhase(t, "restamp-agent", kaalmv1beta1.AgentRunning)
+}
+
+func TestAgent_V1HashMismatchReplacesPod(t *testing.T) {
+	mkWorkloadClass(t, "wc-v1drift", nil)
+	pod := provisionRunningAgent(t, "v1drift-agent", "wc-v1drift")
+	stampAsV1(t, pod, "0000000000000000")
+	pod.Annotations[annotationPodSpecHash] = "0000000000000000"
+	expectPodReplaced(t, "v1drift-agent", pod)
+}
+
+func TestAgent_CurrentVersionSkipsV1Fallback(t *testing.T) {
+	mkWorkloadClass(t, "wc-curver", nil)
+	pod := provisionRunningAgent(t, "curver-agent", "wc-curver")
+	eff := effectiveSpecFor(t, "curver-agent", "wc-curver")
+	// A current-version Pod is compared with the current formula only, so a
+	// hash that matches formula 1 is still drift.
+	v1 := podSpecHashV1(eff)
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annotationPodSpecHash, v1)
+	if err := testClient.Patch(ctxT(), pod, client.RawPatch(types.MergePatchType, []byte(patch))); err != nil {
+		t.Fatalf("patch pod: %v", err)
+	}
+	pod.Annotations[annotationPodSpecHash] = v1
+	expectPodReplaced(t, "curver-agent", pod)
 }
 
 func TestAgent_InvoluntaryDisruptionReprovisions(t *testing.T) {
