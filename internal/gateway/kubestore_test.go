@@ -23,11 +23,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/secretwatch"
 )
 
 // gatewayScheme builds a scheme carrying the core and kaalm types.
@@ -292,5 +294,46 @@ func TestKubeStore_PodByIPLive(t *testing.T) {
 	}
 	if _, ok := k.PodByIPLive(ctx, "team-a", "10.0.0.250"); ok {
 		t.Error("unknown IP must miss")
+	}
+}
+
+// secretObj builds a Secret with one "token" key.
+func secretObj(ns, name, value string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Data:       map[string][]byte{"token": []byte(value)},
+	}
+}
+
+func TestKubeStoreReadsSecretsThroughTheWatcher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cs := kubefake.NewSimpleClientset(
+		secretObj("kaalm-system", "openai-key", "sk-live"),
+		secretObj("kaalm-system", "tool-key", "tool-live"),
+		secretObj("team-a", "hook", "hook-live"),
+	)
+	store := &KubeStore{
+		Reader:            kubeClientWith(t),
+		OperatorNamespace: "kaalm-system",
+		Secrets:           secretwatch.New(ctx, cs),
+	}
+	provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
+		CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "openai-key", Key: "token"},
+	}}
+	if got, err := store.Credential(ctx, provider); err != nil || got != "sk-live" {
+		t.Fatalf("Credential = %q, %v", got, err)
+	}
+	tool := &kaalmv1beta1.ToolProvider{Spec: kaalmv1beta1.ToolProviderSpec{
+		CredentialsRef: &kaalmv1beta1.SecretKeyReference{Name: "tool-key", Key: "token"},
+	}}
+	if got, err := store.ToolCredential(ctx, tool); err != nil || got != "tool-live" {
+		t.Fatalf("ToolCredential = %q, %v", got, err)
+	}
+	if got, err := store.SecretValue(ctx, "team-a", "hook", "token"); err != nil || got != "hook-live" {
+		t.Fatalf("SecretValue = %q, %v", got, err)
+	}
+	if _, err := store.SecretValue(ctx, "team-a", "hook", "missing"); err == nil {
+		t.Fatal("missing key must error")
 	}
 }

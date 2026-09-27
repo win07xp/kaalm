@@ -20,7 +20,7 @@ rectangle "**Role** kaalm-channel-{name}-creds in the AgentChannel's namespace" 
   rectangle "Secrets named by the channel: get, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 rectangle "**Role** kaalm-agent-{name}-pullsecrets or kaalm-task-{name}-pullsecrets in the workload's namespace" as nspull #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "Pull Secrets named by the class: get" as pullsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "Pull Secrets named by the class: get, watch" as pullsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 OPSA -[#0D47A1,bold]-> leases : RoleBinding
 OPSA -[#0D47A1,bold]-> syssec : RoleBinding

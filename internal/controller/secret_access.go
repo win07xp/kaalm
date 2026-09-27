@@ -57,8 +57,9 @@ func taskPullSecretRoleName(taskName string) string {
 
 // liveSecretReader picks the reader for a Secret outside the operator
 // namespace. The manager's cache holds Secrets of the operator namespace only,
-// so these reads go to the apiserver; reader is nil in tests that build a
-// reconciler around one client.
+// so in production reader is the secretwatch reader: one name-filtered watch
+// per referenced Secret. reader is nil in tests that build a reconciler around
+// one client.
 func liveSecretReader(reader client.Reader, fallback client.Reader) client.Reader {
 	if reader != nil {
 		return reader
@@ -67,7 +68,9 @@ func liveSecretReader(reader client.Reader, fallback client.Reader) client.Reade
 }
 
 // getSecretLive reads one Secret in a user namespace, retrying a Forbidden
-// answer while the Role that grants the read reaches the authorizer.
+// answer while the Role that grants the read reaches the authorizer. With the
+// secretwatch reader a synced read is a cache hit; an unsynced one goes to
+// the apiserver, so a Forbidden still reaches this retry.
 func getSecretLive(ctx context.Context, reader client.Reader, key types.NamespacedName, sec *corev1.Secret) error {
 	var err error
 	for attempt := 0; attempt < secretReadAttempts; attempt++ {
@@ -84,8 +87,8 @@ func getSecretLive(ctx context.Context, reader client.Reader, key types.Namespac
 }
 
 // ensurePullSecretAccess keeps the Role and RoleBinding that let the operator
-// confirm rule 23 for one workload: get on exactly the Secrets the class
-// names, bound to the operator's ServiceAccount, owned by the workload. With
+// confirm rule 23 for one workload: get and watch on exactly the Secrets the
+// class names (watch lets the controller's per-Secret watch sync), bound to the operator's ServiceAccount, owned by the workload. With
 // no names the pair is removed, so a class edit that drops its pull Secrets
 // leaves no grant behind. A Role or RoleBinding of that name the workload does
 // not control is a ChildConflictError, never updated or deleted.
@@ -140,7 +143,7 @@ func ensurePullSecretAccess(
 		APIGroups:     []string{""},
 		Resources:     []string{"secrets"},
 		ResourceNames: names,
-		Verbs:         []string{"get"},
+		Verbs:         []string{"get", "watch"},
 	}}
 	if !found {
 		role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: key.Namespace}, Rules: rules}

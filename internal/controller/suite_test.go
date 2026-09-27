@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,6 +42,7 @@ import (
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/mcp"
+	"github.com/win07xp/kaalm/internal/secretwatch"
 )
 
 const (
@@ -260,6 +262,13 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	// User-namespace Secret reads go through the production path: one
+	// name-filtered watch per referenced Secret.
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		panic(err)
+	}
+	secretSource := secretwatch.NewReader(secretwatch.New(ctx, clientset))
 	fakeHealth = newFakeHealth()
 	if err := (&AgentClassReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
@@ -287,7 +296,7 @@ func TestMain(m *testing.M) {
 	if err := (&AgentReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
-		SecretReader:      mgr.GetAPIReader(),
+		SecretReader:      secretSource,
 		Activity:          fakeActivity,
 		FQDNSupport:       fqdnSupportedInTests,
 	}).SetupWithManager(mgr); err != nil {
@@ -296,7 +305,7 @@ func TestMain(m *testing.M) {
 	if err := (&AgentTaskReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
-		SecretReader:      mgr.GetAPIReader(),
+		SecretReader:      secretSource,
 		FQDNSupport:       fqdnSupportedInTests,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
@@ -305,7 +314,7 @@ func TestMain(m *testing.M) {
 	if err := (&AgentChannelReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
-		SecretReader:      mgr.GetAPIReader(),
+		SecretReader:      secretSource,
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}

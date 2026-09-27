@@ -377,7 +377,7 @@ func TestAgent_PullSecretRoleScopedAndRemoved(t *testing.T) {
 		}
 		want := []rbacv1.PolicyRule{{
 			APIGroups: []string{""}, Resources: []string{"secrets"},
-			ResourceNames: []string{"aa-creds", "zz-creds"}, Verbs: []string{"get"},
+			ResourceNames: []string{"aa-creds", "zz-creds"}, Verbs: []string{"get", "watch"},
 		}}
 		if !equality.Semantic.DeepEqual(role.Rules, want) {
 			return fmt.Errorf("role rules = %+v", role.Rules)
