@@ -35,7 +35,7 @@ type spendResponse struct {
 // The console SAN check has already run (ConsolePaths).
 func (s *Server) handleSpend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		badRequest(w, "GET required")
+		methodNotAllowed(w, http.MethodGet)
 		return
 	}
 	namespace := r.URL.Query().Get("namespace")

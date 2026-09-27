@@ -192,13 +192,16 @@ func TestInternalPaths_SourceIPCrossCheck(t *testing.T) {
 	}
 }
 
-// TestInternalPaths_MethodEnforced: a wrong method on the heartbeat, activity,
-// and channel-health paths is 405 invalid_request with an Allow header (#237).
+// TestInternalPaths_MethodEnforced: a wrong method on every mTLS path
+// (heartbeat, task completion, activity, channel health, test chat, and
+// spend) is 405 invalid_request with an Allow header (#237, #274).
 func TestInternalPaths_MethodEnforced(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	h.seedRoute()
 	agentC := agentCert(t, h.ca)
 	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
+	consoleCert := h.ca.issue(t, "kaalm-console.kaalm-system.svc.cluster.local")
+	taskCert := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
 
 	cases := []struct {
 		path   string
@@ -213,6 +216,12 @@ func TestInternalPaths_MethodEnforced(t *testing.T) {
 		{"/v1/activity?namespace=team-a", &controllerCert, "kaalm-system", http.MethodDelete, http.MethodGet},
 		{"/v1/channels/health?namespace=team-a", &controllerCert, "kaalm-system", http.MethodPost, http.MethodGet},
 		{"/v1/channels/health?namespace=team-a", &controllerCert, "kaalm-system", http.MethodPut, http.MethodGet},
+		{"/v1/task/complete", &taskCert, "team-a", http.MethodGet, http.MethodPost},
+		{"/v1/task/complete", &taskCert, "team-a", http.MethodPut, http.MethodPost},
+		{"/v1/test-chat", &consoleCert, "kaalm-system", http.MethodGet, http.MethodPost},
+		{"/v1/test-chat", &consoleCert, "kaalm-system", http.MethodPut, http.MethodPost},
+		{"/v1/spend?namespace=team-a", &consoleCert, "kaalm-system", http.MethodPost, http.MethodGet},
+		{"/v1/spend?namespace=team-a", &consoleCert, "kaalm-system", http.MethodDelete, http.MethodGet},
 	}
 	for _, c := range cases {
 		t.Run(c.method+" "+c.path, func(t *testing.T) {

@@ -85,10 +85,15 @@ type taskCompleteRequest struct {
 }
 
 // handleTaskComplete implements POST /v1/task/complete. The middleware has
-// already enforced mTLS and the AgentTask kind; this handler runs the mode,
-// terminal-phase, and identity gates in order, then validates and patches.
+// already enforced mTLS and the AgentTask kind; this handler rejects any
+// method but POST with 405, runs the mode, terminal-phase, and identity
+// gates in order, then validates and patches.
 // See docs/src/gateways/api/task-complete.md.
 func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
 	c := callerFrom(r.Context())
 	task, ok := s.Store.TaskByName(r.Context(), c.Namespace, c.Workload.Name)
 	if !ok {

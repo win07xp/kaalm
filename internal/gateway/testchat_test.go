@@ -153,8 +153,8 @@ func TestTestChat_Validation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/test-chat", nil)
 	rec := httptest.NewRecorder()
 	h.server.handleTestChat(rec, req)
-	if rec.Code != 400 {
-		t.Errorf("GET status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
+		t.Errorf("GET status = %d Allow = %q, want 405 with Allow POST", rec.Code, rec.Header().Get("Allow"))
 	}
 }
 

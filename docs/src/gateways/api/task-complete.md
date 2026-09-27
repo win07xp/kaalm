@@ -77,6 +77,7 @@ The gateway reads `spec.artifacts` from its AgentTask watch, so the check runs s
 | `400 Bad Request` | `invalid_request` | `false` | Malformed body or artifact-name rule violation |
 | `401 Unauthorized` | `unauthorized` | `false` | No client certificate, or the source IP resolves to no Pod in the SAN namespace even after the live fallback |
 | `403 Forbidden` | `access_denied` | `false` | One of three reasons, see [403 Forbidden](#403-forbidden) |
+| `405 Method Not Allowed` | `invalid_request` | `false` | The method is not `POST`. The response carries `Allow: POST`. |
 | `409 Conflict` | `stale_pod` | `true` | The calling Pod is not the task's current Pod, see [409 Conflict](#409-conflict) |
 | `413 Payload Too Large` | `request_too_large` | `false` | Per-artifact or combined size cap exceeded |
 | `503 Service Unavailable` | `internal_unavailable` | `true` | The ConfigMap `Patch` itself failed |
