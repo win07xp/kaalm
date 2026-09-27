@@ -100,13 +100,10 @@ https://bots.example.com/channels/team-support/support-discord
 ```
 
 When you save, Discord sends a verification `PING` and a deliberately
-badly-signed request; the gateway answers the first with `PONG` and the second
-with `401`, and Discord accepts the URL. Save only after the channel is
+badly signed one; the gateway answers the first with `PONG` and the second
+with `401`, and Discord accepts the URL. The badly signed `PING` does not
+count against the channel's health. Save only after the channel is
 `Active`: an unregistered path answers `401` to everything and the save fails.
-As shipped the badly-signed probe is recorded as a `WebhookAuthFailed`
-failure, so `PlatformConnected` reads `False` for up to the health window
-(five minutes by default) after a successful save; the first real command
-clears it.
 
 ## Try it
 
@@ -145,8 +142,7 @@ reply is dropped and the channel's `PlatformConnected` condition reports
 
 - `WebhookAuthFailed`: Discord's signatures do not verify. The `publicKey` in
   the Secret does not match the application, or the interactions URL points
-  at a different channel. Within five minutes of saving the URL, it is the
-  save-time probe, not a misconfiguration.
+  at a different channel.
 - `CallbackRejected`: Discord refused the reply. The message names the HTTP
   status; a `404` means the reply token had expired (see
   [Slow agents](#slow-agents)).

@@ -93,7 +93,7 @@ Each replica keeps a list of in-window observations per registered channel path,
 | `CallbackInvalid` | failure | a webhook `callbackUrl` failed the pre-dial check, or its `callbackAuth` Secret could not be read |
 | `CallbackRejected` | failure | a callback POST was terminally refused (`401`, `403`, `404`, `405`, `410`, `415`), or a platform reply was terminally refused or exhausted its retries |
 
-Not recorded: a verification handshake that passes (it proves the URL, not delivery), a scope refusal (the platform sent something the channel is configured not to accept), a queued-but-undelivered message, and a callback attempt that is still being retried. Only the delivered `2xx` is a success, so a channel whose messages are accepted but never reach the agent reports `DispatchFailed`, not success. `CallbackInvalid` cannot occur for a platform channel: its reply destination is operator-set and never re-checked against the deny ranges.
+Not recorded: a verification handshake that passes (it proves the URL, not delivery), Discord's save-time verification probe (a badly signed `PING` that the gateway still answers `401`, because a channel with the wrong public key already fails the valid `PING` and Discord refuses to save the URL), a scope refusal (the platform sent something the channel is configured not to accept), a queued-but-undelivered message, and a callback attempt that is still being retried. Only the delivered `2xx` is a success, so a channel whose messages are accepted but never reach the agent reports `DispatchFailed`, not success. `CallbackInvalid` cannot occur for a platform channel: its reply destination is operator-set and never re-checked against the deny ranges.
 
 From its list, each replica reports one state per channel:
 

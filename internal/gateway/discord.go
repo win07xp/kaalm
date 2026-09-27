@@ -196,6 +196,16 @@ func (d *discordAdapter) Handle(
 	if !verifyDiscordSignature(pub, r.Header.Get("X-Signature-Ed25519"), r.Header.Get("X-Signature-Timestamp"),
 		body, time.Now()) {
 		unauthorizedUser(w)
+		if isDiscordPing(body) {
+			// Discord sends a badly signed PING when an operator saves the
+			// Interactions Endpoint URL, and requires the 401. A wrong public
+			// key also fails the valid PING, so Discord refuses to save the URL:
+			// this request is never the sign of a misconfigured channel.
+			return inboundResult{
+				authFailed:        "discord verification probe refused: 401 Unauthorized",
+				verificationProbe: true,
+			}
+		}
 		return inboundResult{authFailed: "discord signature or timestamp rejected: 401 Unauthorized"}
 	}
 	var in discordInteraction
@@ -227,6 +237,14 @@ func (d *discordAdapter) Handle(
 		badRequest(w, fmt.Sprintf("unknown interaction type %d", in.Type))
 	}
 	return inboundResult{}
+}
+
+// isDiscordPing reports whether body parses as a PING interaction.
+func isDiscordPing(body []byte) bool {
+	var in struct {
+		Type int `json:"type"`
+	}
+	return json.Unmarshal(body, &in) == nil && in.Type == discordInteractionPing
 }
 
 // publicKey loads and decodes the channel's Ed25519 public key through the

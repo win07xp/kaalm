@@ -218,7 +218,7 @@ func TestDiscord_PingPong(t *testing.T) {
 
 func TestDiscord_SignatureAndTimestampPosture(t *testing.T) {
 	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-	body := []byte(`{"type":1}`)
+	body := []byte(`{"type":2}`)
 
 	_, other, _ := ed25519.GenerateKey(nil)
 	if resp := h.send(t, body, other, ""); resp.StatusCode != 401 {
@@ -245,6 +245,49 @@ func TestDiscord_SignatureAndTimestampPosture(t *testing.T) {
 	h.store.secrets["team-a/disc-creds/publicKey"] = "zz"
 	if resp := h.send(t, body, nil, ""); resp.StatusCode != 401 {
 		t.Errorf("bad key material = %d, want 401", resp.StatusCode)
+	}
+}
+
+// Saving the Interactions Endpoint URL makes Discord send a deliberately
+// badly signed PING. The adapter refuses it, but it is not a health
+// observation.
+func TestDiscord_BadSignaturePingIsTheVerificationProbe(t *testing.T) {
+	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	_, other, _ := ed25519.GenerateKey(nil)
+	resp := h.send(t, []byte(`{"id":"1","application_id":"2","type":1,"token":"t"}`), other, "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("bad-signature PING = %d, want 401", resp.StatusCode)
+	}
+	if reason, ok := healthReason(h.userHarness, h.channel.Spec.Discord.Path); ok || reason != "" {
+		t.Errorf("verification probe recorded a health observation: reason %q", reason)
+	}
+}
+
+func TestDiscord_BadSignatureCommandIsAnAuthFailure(t *testing.T) {
+	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	_, other, _ := ed25519.GenerateKey(nil)
+	body := discordCommand("123456789012345678", "555", "777", "hi")
+	resp := h.send(t, body, other, "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("bad-signature command = %d, want 401", resp.StatusCode)
+	}
+	if reason, _ := healthReason(h.userHarness, h.channel.Spec.Discord.Path); reason != healthReasonAuthFailed {
+		t.Errorf("health reason after bad-signature command = %q, want %q", reason, healthReasonAuthFailed)
+	}
+}
+
+func TestDiscord_BadSignatureNonJSONIsAnAuthFailure(t *testing.T) {
+	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	_, other, _ := ed25519.GenerateKey(nil)
+	resp := h.send(t, []byte(`not json {"type":1}`), other, "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("bad-signature non-JSON = %d, want 401", resp.StatusCode)
+	}
+	if reason, _ := healthReason(h.userHarness, h.channel.Spec.Discord.Path); reason != healthReasonAuthFailed {
+		t.Errorf("health reason after bad-signature non-JSON = %q, want %q", reason, healthReasonAuthFailed)
 	}
 }
 

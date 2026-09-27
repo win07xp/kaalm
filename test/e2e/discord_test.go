@@ -137,15 +137,34 @@ var _ = Describe("Discord channel (S22)", Ordered, func() {
 		}
 	})
 
-	It("answers the verification PING with PONG and rejects a badly signed one", func() {
+	It("answers the verification PING with PONG and does not count the save-time probe against the channel", func() {
 		ping := json.RawMessage(`{"id":"1","application_id":"1230000000000000000","type":1,"token":"t"}`)
 
-		By("a badly signed request is 401, the way Discord's save-time check requires")
+		By("a badly signed PING is 401, the way Discord's save-time check requires")
 		bad := send(discordSend{Path: "/channels/e2e/s22-channel", Interaction: ping, BadSignature: true})
 		Expect(bad.Status).To(Equal(401))
 
+		By("a valid PING gets PONG")
+		ok := send(discordSend{Path: "/channels/e2e/s22-channel", Interaction: ping})
+		Expect(ok.Status).To(Equal(200))
+		Expect(string(ok.Body)).To(MatchJSON(`{"type":1}`))
+
+		By("the save-time probe does not mark PlatformConnected WebhookAuthFailed")
+		Consistently(func() string {
+			status, reason := platformConnected()
+			return status + "/" + reason
+		}, "90s", "5s").ShouldNot(Equal("False/WebhookAuthFailed"))
+	})
+
+	It("rejects a badly signed interaction and reports it on PlatformConnected", func() {
+		command := s22Command("123456789012345678", "hi")
+
+		By("a badly signed command is 401")
+		bad := send(discordSend{Path: "/channels/e2e/s22-channel", Interaction: command, BadSignature: true})
+		Expect(bad.Status).To(Equal(401))
+
 		By("a stale timestamp is 401 too")
-		stale := send(discordSend{Path: "/channels/e2e/s22-channel", Interaction: ping, TimestampOffsetSeconds: -900})
+		stale := send(discordSend{Path: "/channels/e2e/s22-channel", Interaction: command, TimestampOffsetSeconds: -900})
 		Expect(stale.Status).To(Equal(401))
 
 		By("the auth failures show on PlatformConnected before any success")
@@ -153,11 +172,6 @@ var _ = Describe("Discord channel (S22)", Ordered, func() {
 			status, reason := platformConnected()
 			return status + "/" + reason
 		}, "150s", "5s").Should(Equal("False/WebhookAuthFailed"))
-
-		By("a valid PING gets PONG")
-		ok := send(discordSend{Path: "/channels/e2e/s22-channel", Interaction: ping})
-		Expect(ok.Status).To(Equal(200))
-		Expect(string(ok.Body)).To(MatchJSON(`{"type":1}`))
 	})
 
 	It("acknowledges a slash command at once and delivers the reply through the follow-up webhook", func() {
