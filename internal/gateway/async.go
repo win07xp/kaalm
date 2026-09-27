@@ -232,14 +232,16 @@ const (
 )
 
 // runAsyncPipeline executes wake, delivery, and response dispatch after the
-// 202. The full retry budget runs without a wall-clock deadline.
+// 202. No sync deadline applies: the run is bounded by
+// backgroundPipelineBound, which covers the Agent's full wakeTimeout and
+// every retry schedule the run contains.
 func (s *Server) runAsyncPipeline(
 	traceCtx context.Context, requestID string,
 	channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent, env MessageEnvelope,
 ) {
 	// traceCtx carries only the accept span's identity (Tracing.Detach), so
 	// the delivery spans stay connected without the caller's cancellation.
-	ctx, cancel := context.WithTimeout(traceCtx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(traceCtx, s.backgroundPipelineBound(agent, asyncResponseRequests))
 	defer cancel()
 
 	respBody, errType, err := s.wakeAndDeliver(ctx, channel.Spec.Path(), agent, env)

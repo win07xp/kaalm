@@ -332,6 +332,14 @@ func classifyWhatsAppReply(status int, body []byte) replyBucket {
 	return classifyReplyStatus(status)
 }
 
+// ReplyRequests counts one request per chunk.
+func (w *whatsAppAdapter) ReplyRequests(text string) int {
+	if text == "" {
+		text = whatsAppEmptyReply
+	}
+	return len(splitChunks(text, whatsAppChunkLimit))
+}
+
 // SendReply posts one text message per chunk, in order, as the channel's
 // business number.
 func (w *whatsAppAdapter) SendReply(

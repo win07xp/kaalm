@@ -131,7 +131,7 @@ spec:
 - **Identity.** `userId` is the invoking user's id (`member.user.id` in a guild, `user.id` in a DM). With `session.enabled`, one person talking to the same channel from two Discord channels shares one session; the Discord channel id is in `metadata.channelId`.
 - **Content.** The string value of the option named by `contentOption`, or the empty string when the command has no such option. Every option is in `metadata.options` by name, so a multi-option command remains usable.
 - **Scoping.** With `guildId` set, interactions from other guilds and from DMs are refused; with `allowedChannelIds` set, interactions from other channels are refused. A refusal is an immediate ephemeral message, with no envelope and no health observation.
-- **Replies** go through the interaction's follow-up webhook, whose token is valid for 15 minutes. With `botToken` in the Secret, the adapter switches to a channel message that mentions the user when the token has expired or the webhook answers `404`; without it, that case is a terminal failure. The async pipeline is bounded at ten minutes (#205), so in practice the switch is reached through the `404`.
+- **Replies** go through the interaction's follow-up webhook, whose token is valid for 15 minutes. With `botToken` in the Secret, the adapter switches to a channel message that mentions the user when the token has expired or the webhook answers `404`; without it, that case is a terminal failure. The token expires before the reply only when the wake and delivery take longer than 15 minutes, which a large `wakeTimeout` allows.
 - **Attachments.** Options of the attachment type become references carrying the CDN URL Discord supplies. The gateway does not fetch them.
 
 ### WhatsApp

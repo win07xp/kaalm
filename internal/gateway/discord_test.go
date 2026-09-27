@@ -644,3 +644,20 @@ func TestClassifyReplyStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscordReplyRequests(t *testing.T) {
+	d := &discordAdapter{}
+	// One request per chunk, plus the first chunk's follow-up webhook
+	// request that a 404 turns into the bot-token path.
+	cases := map[string]int{
+		"":                                       2, // the empty-reply text is one chunk
+		"hi":                                     2,
+		strings.Repeat("a", discordChunkLimit+1): 3,
+		strings.Repeat("a", 3*discordChunkLimit): 4,
+	}
+	for text, want := range cases {
+		if got := d.ReplyRequests(text); got != want {
+			t.Errorf("ReplyRequests(%d runes) = %d, want %d", len(text), got, want)
+		}
+	}
+}

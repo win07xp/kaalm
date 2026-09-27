@@ -941,3 +941,28 @@ func TestWebhook_AgentRedirectNotFollowed(t *testing.T) {
 		t.Fatalf("redirect answer = %d %s, want a delivery failure", resp.StatusCode, body)
 	}
 }
+
+func TestWakeAndDeliver_PipelineDeadlineBeforeWakeTimeout(t *testing.T) {
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h.seedChannel("async")
+	agent := h.store.agents["team-a/sup"]
+	agent.Status.Phase = kaalmv1beta1.AgentHibernated
+	agent.Spec.Lifecycle.WakeTimeout = metav1.Duration{Duration: time.Hour}
+	h.server.Activator = &fakeActivator{}
+	h.server.Config.AgentServicePortOverride = 1 // nothing listens on :1
+	h.server.Config.AgentConnectTimeout = 20 * time.Millisecond
+
+	// The caller's deadline ends long before the hour-long wakeTimeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, errType, err := h.server.wakeAndDeliver(ctx, "/channels/team-a/support", agent, MessageEnvelope{})
+	if errType != errWakeTimeout || err == nil {
+		t.Fatalf("wakeAndDeliver = %q, %v; want %q", errType, err, errWakeTimeout)
+	}
+	if strings.Contains(err.Error(), "within wakeTimeout") {
+		t.Errorf("message %q claims the full wakeTimeout elapsed", err)
+	}
+	if !strings.Contains(err.Error(), "1h0m0s") {
+		t.Errorf("message %q does not name the wakeTimeout it fell short of", err)
+	}
+}

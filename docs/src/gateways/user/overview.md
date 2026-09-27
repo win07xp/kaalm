@@ -73,7 +73,7 @@ The namespace is a fixed UUID published as part of the Kaalm API, identical acro
 
 When `spec.webhook.responseMode` is `async`, the gateway answers `202 Accepted` here, with `requestId` and `channelPath` in the body, and runs steps 7 to 10 in the background. The mode and the `channelPath` come from the resolved channel, so this is the earliest point the `202` can be sent. Two checks precede it, and both answer `503 internal_unavailable` with `Retry-After: 5`: the channel's live records must be below [`maxPendingAsyncResponses`](../../resources/agentchannel.md) (default 100), and the empty placeholder ConfigMap `kaalm-async-{requestId}` must be created in `kaalm-system`. A returned `202` therefore always means a queryable polling record exists. The `202` body, the record, the poll endpoint, its authentication, the channel-match assertion, and the 1-hour TTL are specified under [The 202 contract](../api/async-responses.md#the-202-contract) and [Polling fallback](../api/async-responses.md#polling-fallback).
 
-The background pipeline has no sync deadline. As shipped it runs under a fixed 10-minute ceiling, larger than the default budgets it contains: a 2-minute wake, then up to 71 seconds each of delivery retries and callback retries. A `wakeTimeout` large enough to reach the ceiling is cut off there and reported as `wake_timeout`.
+The background pipeline has no sync deadline. It runs under a bound that the gateway derives from the wake, delivery, and callback budgets, so the wake always gets its full `wakeTimeout`. See [Async pipeline bound](../api/async-responses.md#async-pipeline-bound).
 
 ### 7. Activator check
 

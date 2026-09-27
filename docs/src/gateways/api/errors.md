@@ -115,7 +115,7 @@ Notes on the rows:
 - **`502 delivery_failed`.** With an Agent present, the gateway made the initial attempt and three retries at 1s, 5s, and 25s, and each failed with a connection error, a non-2xx status, or a `200` with an unusable envelope. With no Agent, no attempt is made and the message is `referenced Agent not found`.
 - **`503` on async accept.** Both triggers run before the `202`, so a `202` always implies a polling record exists. The pending cap is `spec.webhook.maxPendingAsyncResponses` (default 100).
 - **`504 controller_unavailable`.** Wake-on-demand needs the controller's activator. The gateway answers this both when the activator call fails and when no activator endpoint is configured.
-- **`504 sync_deadline_exceeded`.** Sync-only: async mode has no wall-clock budget. Under default settings this fires before `wake_timeout` or `delivery_failed` can ([Sync-mode reachability](async-responses.md#sync-mode-reachability)).
+- **`504 sync_deadline_exceeded`.** Sync-only: async mode has no sync deadline. Under default settings this fires before `wake_timeout` or `delivery_failed` can ([Sync-mode reachability](async-responses.md#sync-mode-reachability)).
 
 The polling endpoint additionally answers `404` with type `invalid_request` for a malformed `requestId`, `400` for a missing `channelPath`, and an empty-body `404` for an unknown, expired, or foreign record ([Polling fallback](async-responses.md#polling-fallback)).
 

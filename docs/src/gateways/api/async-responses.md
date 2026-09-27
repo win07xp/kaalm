@@ -87,17 +87,37 @@ The agent-delivery pipeline reuses the same `messageId` across its attempts, so 
 
 ### Sync-mode reachability
 
-In sync mode, `gateway.syncDeliveryDeadline` (Helm value, default 30s) bounds the caller-facing wall-clock. The clock starts at inbound webhook acceptance and includes activator wake time, delivery retries, and agent processing. When elapsed time would exceed the deadline, the gateway short-circuits the in-progress request, even mid-retry, with `504` carrying `error.type: sync_deadline_exceeded` and `retryable: true`. Async mode applies no deadline: the full retry budget runs, and callback and polling are receiver-driven.
+In sync mode, `gateway.syncDeliveryDeadline` (Helm value, default 30s) bounds the caller-facing wall-clock. The clock starts at inbound webhook acceptance and includes activator wake time, delivery retries, and agent processing. When elapsed time would exceed the deadline, the gateway short-circuits the in-progress request, even mid-retry, with `504` carrying `error.type: sync_deadline_exceeded` and `retryable: true`. Async mode applies no sync deadline: the full wake and retry budgets run under the [async pipeline bound](#async-pipeline-bound), and callback and polling are receiver-driven.
 
 ![Timing diagram with three lanes on one axis from inbound webhook acceptance. The sync deadline lane fires 504 sync_deadline_exceeded at 30 seconds. The agent delivery lane can produce 502 delivery_failed between 31 and 71 seconds. The wake lane produces 504 wake_timeout at 120 seconds. The two later outcomes are grey because the deadline fires first.](../../diagrams/sync-reachability-timeline.svg)
 
 | Outcome | Earliest | Latest | Sync mode under defaults | Async mode |
 |---|---|---|---|---|
-| `504 sync_deadline_exceeded` | 30s | 30s | fires | never (no deadline) |
+| `504 sync_deadline_exceeded` | 30s | 30s | fires | never (no sync deadline) |
 | `502 delivery_failed` | about 31s | about 71s | unreachable: the deadline fires first | reachable, as an error payload |
 | `504 wake_timeout` | 120s | 120s | unreachable: the deadline fires first | reachable, as an error payload |
 
 `502 delivery_failed` becomes reachable in sync mode only when `syncDeliveryDeadline` is raised above the delivery budget. `wakeTimeout` is the Agent's own value or the class default, clamped to the class cap, and 120s when neither sets it (see [AgentClass](../../resources/agentclass.md)). For which channels belong on sync mode, and what a persistent `sync_deadline_exceeded` means, see [Reachability under default config](channel-webhook.md#reachability-under-default-config).
+
+### Async pipeline bound
+
+The background pipeline of an async webhook message or a platform channel message runs under one wall-clock bound. The gateway sets the bound to the sum of the budgets the run contains, so the bound never cuts a stage short, whatever the Agent's `wakeTimeout`. The sum has four parts:
+
+- **Wake.** The activator call, the Agent's effective `wakeTimeout`, and one extra readiness check. The activator call takes up to 20s: two attempts of 10s each. The extra check is `gateway.agentDeliveryConnectTimeout` plus the 2s poll interval, because the last check before the timeout can run past it.
+- **Delivery.** One full agent-delivery schedule, with every attempt at `gateway.agentReadTimeout`.
+- **Response.** Full callback schedules, with every attempt at `gateway.callbackReadTimeout`. An async webhook counts two schedules: one for the callback and one for the polling-record `Patch`, which uses the same schedule. A platform channel counts one schedule per platform API request the reply makes: one per chunk, plus one for Discord's switch to a channel message.
+- **Margin.** A fixed 30s for Secret reads and the DNS lookup before each callback attempt.
+
+Under defaults, an async webhook run is bounded at 386s, about 6.5 minutes:
+
+| Part | Default |
+|---|---|
+| Wake | 143s: 20s activator call, 120s `wakeTimeout`, 3s extra readiness check |
+| Delivery | 71s |
+| Response | 142s: two callback schedules of 71s |
+| Margin | 30s |
+
+A larger `wakeTimeout` raises the bound by the same amount. For example, a 30-minute `wakeTimeout` adds 28 minutes.
 
 ## Response persistence
 
@@ -168,7 +188,7 @@ The sync-mode status codes and envelope are specified in [User Gateway error res
 
 **`delivery_failed`** is not retryable because the gateway has already made 4 attempts over about 31s to 71s. A failure that survives that budget is usually structural: a broken image, an agent crash loop, repeated 5xx, or a misconfigured per-Agent NetworkPolicy on the message path. Investigate `AgentChannel.status.conditions[type=PlatformConnected]` and the Agent Pod status rather than retrying at the caller.
 
-**`wake_timeout`** is not retryable because exceeding `wakeTimeout` usually means a Pod-startup problem that repeats on retry: an image pull failure, an init container crash, OOM, or a bad spec. Tenants with transient timeouts should raise `wakeTimeout` instead of retrying.
+**`wake_timeout`** is not retryable because exceeding `wakeTimeout` usually means a Pod-startup problem that repeats on retry: an image pull failure, an init container crash, OOM, or a bad spec. Tenants with transient timeouts should raise `wakeTimeout` instead of retrying. When a deadline or a client disconnect ends the wait early, the error message gives the time waited and the `wakeTimeout`, and doesn't claim the full `wakeTimeout` elapsed.
 
 **`controller_unavailable`** is retryable because the wake never reached the controller and the agent is still `Hibernated`, so a fresh attempt starts clean once the controller recovers. The triggers are a connection error, a 5xx after retry, or an mTLS handshake or SAN authorization failure. The `Retry-After: 5` on the sync form is fixed at 5 seconds, sized to typical controller restart and probe intervals; see [Failure modes](../user/operations.md#failure-modes). The mTLS and SAN cases count as transient because at runtime they arise from a peer mid-reload of a rotated leaf certificate. Persistent ones are deployment-time problems: both certificates come from the same `kaalm-ca-issuer`, and the chart install fails fast if the issuer is missing. See [Internal endpoint authentication](../../security/rbac.md#internal-endpoint-authentication) and [In-cluster TLS](../../security/tls.md#in-cluster-tls).
 

@@ -281,7 +281,16 @@ func (s *Server) wakeAndDeliver(
 			return nil, errControllerDown, err
 		}
 		if err := s.waitAgentReachable(ctx, agent); err != nil {
-			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", time.Since(wakeStart).Seconds())
+			waited := time.Since(wakeStart)
+			s.Metrics.ChannelWakeDuration(agent.Namespace, "wake_timeout", waited.Seconds())
+			if ctx.Err() != nil {
+				// The caller's context ended the wait first (a sync deadline,
+				// a disconnect, or the pipeline bound): name what actually
+				// elapsed, not the full wakeTimeout.
+				return nil, errWakeTimeout, fmt.Errorf(
+					"agent did not become ready: the wait ended after %s, before the %s wakeTimeout elapsed",
+					waited.Round(time.Second), s.wakeTimeout(agent))
+			}
 			return nil, errWakeTimeout, fmt.Errorf(
 				"agent did not become ready within wakeTimeout (%s)", s.wakeTimeout(agent))
 		}
@@ -350,7 +359,7 @@ func (s *Server) waitAgentReachable(ctx context.Context, agent *kaalmv1beta1.Age
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(wakePollInterval):
 		}
 	}
 	return fmt.Errorf("wake timeout")

@@ -59,7 +59,7 @@ The `401` body is the same on every branch: the message is `auth failed or path 
 
 `gateway.syncDeliveryDeadline` (default 30s) is shorter than the delivery retry budget (1s, 5s, and 25s between four attempts) and the default `wakeTimeout` (120s). Under defaults, a sync caller therefore sees `504 sync_deadline_exceeded` before `502 delivery_failed` or `504 wake_timeout` can fire. The arithmetic is drawn on one time axis in [Sync-mode reachability](async-responses.md#sync-mode-reachability).
 
-This is the intended positioning. Sync mode suits a `Running` agent that replies within seconds. A channel that backs a hibernated agent, a slow-starting image, or long processing belongs in `responseMode: async`, where no wall-clock bound applies and `delivery_failed` and `wake_timeout` arrive as [error payloads](async-responses.md#error-payloads) with their causes.
+This is the intended positioning. Sync mode suits a `Running` agent that replies within seconds. A channel that backs a hibernated agent, a slow-starting image, or long processing belongs in `responseMode: async`, where no sync deadline applies and `delivery_failed` and `wake_timeout` arrive as [error payloads](async-responses.md#error-payloads) with their causes.
 
 `retryable: true` on `sync_deadline_exceeded` covers transient slowness. When it persists, the agent has a structural problem (crash loop, broken image, slow startup): switch the channel to async mode to see the diagnosable type, and read `status.conditions[type=PlatformConnected]` for the cause.
 
