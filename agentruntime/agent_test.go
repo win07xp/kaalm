@@ -154,6 +154,75 @@ func TestServe_MTLSMatrixAndEchoDefault(t *testing.T) {
 	}
 }
 
+// newMountedAgent builds an Agent via New() from a mount holding the given
+// leaf, without serving it.
+func newMountedAgent(t *testing.T, pki *testPKI, certPEM, keyPEM []byte) (a *Agent, mount string) {
+	t.Helper()
+	mount = t.TempDir()
+	writeMount(t, mount, certPEM, keyPEM, pki.caPEM)
+	setMountEnv(t, mount)
+	t.Setenv("KAALM_MEMORY_DIR", t.TempDir())
+	a, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a, mount
+}
+
+func probeReadyz(h http.HandlerFunc) (int, string) {
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	return rec.Code, rec.Body.String()
+}
+
+// Contract item 1: /readyz answers 200 only when the container can accept a
+// message, which takes a loaded handler and a usable certificate.
+func TestReadyz_ReadyWithHandlerAndCertificate(t *testing.T) {
+	pki := newTestPKI(t)
+	certPEM, keyPEM := pki.issue(t, "workload", agentSANs...)
+	a, _ := newMountedAgent(t, pki, certPEM, keyPEM)
+	if code, body := probeReadyz(a.readyz(echoHandler)); code != http.StatusOK || body != "ok" {
+		t.Fatalf("readyz = %d %q, want 200 ok", code, body)
+	}
+}
+
+func TestReadyz_NotReadyBeforeHandlerLoads(t *testing.T) {
+	pki := newTestPKI(t)
+	certPEM, keyPEM := pki.issue(t, "workload", agentSANs...)
+	a, _ := newMountedAgent(t, pki, certPEM, keyPEM)
+	if code, _ := probeReadyz(a.readyz(nil)); code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz without a handler = %d, want 503", code)
+	}
+}
+
+func TestReadyz_NotReadyBeforeCertificateLoads(t *testing.T) {
+	a := &Agent{reloader: &certReloader{}}
+	if code, _ := probeReadyz(a.readyz(echoHandler)); code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz without a certificate = %d, want 503", code)
+	}
+}
+
+// An expired certificate fails every gateway handshake, so the container
+// cannot accept a message; a rotation to a fresh one restores readiness.
+func TestReadyz_NotReadyWithExpiredCertificateUntilRotation(t *testing.T) {
+	pki := newTestPKI(t)
+	certPEM, keyPEM := pki.issueUntil(t, "workload", time.Now().Add(-time.Minute), agentSANs...)
+	a, mount := newMountedAgent(t, pki, certPEM, keyPEM)
+	ready := a.readyz(echoHandler)
+	if code, _ := probeReadyz(ready); code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz with an expired certificate = %d, want 503", code)
+	}
+
+	certPEM, keyPEM = pki.issue(t, "workload", agentSANs...)
+	writeMount(t, mount, certPEM, keyPEM, pki.caPEM)
+	if err := a.reloader.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := probeReadyz(ready); code != http.StatusOK {
+		t.Fatalf("readyz after rotating to a fresh certificate = %d, want 200", code)
+	}
+}
+
 func TestServe_DedupByMessageID(t *testing.T) {
 	pki := newTestPKI(t)
 	var calls atomic.Int32

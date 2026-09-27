@@ -63,6 +63,13 @@ class Agent:
             self.store.remember(message_id, reply)
         return reply
 
+    async def handle_readyz(self, _: web.Request) -> web.Response:
+        """Readiness (contract item 1): 200 only when the container can accept
+        a message, which takes a loaded handler and a usable certificate."""
+        if self.handler is None or self.reloader is None or not self.reloader.usable():
+            return web.Response(status=503, text="not ready")
+        return web.Response(text="ok")
+
     async def handle_v1_message(self, request: web.Request) -> web.Response:
         # Per-path mTLS enforcement (contract item 4).
         ssl_object = request.transport.get_extra_info("ssl_object") if request.transport else None
@@ -155,7 +162,7 @@ async def main() -> None:
 
     app = web.Application()
     app.router.add_get("/livez", lambda _: web.Response(text="ok"))
-    app.router.add_get("/readyz", lambda _: web.Response(text="ok"))
+    app.router.add_get("/readyz", agent.handle_readyz)
     app.router.add_post("/v1/message", agent.handle_v1_message)
 
     runner = web.AppRunner(app)

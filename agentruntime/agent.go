@@ -106,7 +106,7 @@ func (a *Agent) serve(ctx context.Context, ln net.Listener, h Handler) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/readyz", a.readyz(h))
 	mux.HandleFunc("/v1/message", a.messageHandler(h))
 
 	server := &http.Server{
@@ -141,6 +141,19 @@ func (a *Agent) serve(ctx context.Context, ln net.Listener, h Handler) error {
 		_ = server.Shutdown(shutdownCtx)
 		log.Print("shut down cleanly")
 		return nil
+	}
+}
+
+// readyz answers the readiness probe (contract item 1): 200 only when the
+// container can accept a message, which takes a loaded handler and a
+// certificate that is loaded and not expired. Otherwise 503.
+func (a *Agent) readyz(h Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if h == nil || !a.reloader.usableAt(time.Now()) {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
 	}
 }
 

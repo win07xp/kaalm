@@ -33,8 +33,10 @@ appended after these, so do not shadow the `KAALM_` names.
 Numbered as in the design book (runtime contract items 1 to 8):
 
 1. **Health endpoints (required).** Serve `GET /readyz` and `GET /livez`
-   over TLS on `$KAALM_HEALTH_PORT`, returning 200 when healthy. The
-   controller's injected probes target exactly these paths.
+   over TLS on `$KAALM_HEALTH_PORT`. `/readyz` returns 200 when the
+   container can accept a message and 503 otherwise; `/livez` returns 200
+   when the process is healthy. The controller's injected probes target
+   exactly these paths.
 2. **Graceful SIGTERM (required).** Finish in-flight work and exit within
    the grace period.
 3. **Gateway communication (required in practice).** Talk to
