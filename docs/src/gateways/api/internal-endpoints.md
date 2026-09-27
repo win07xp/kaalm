@@ -124,8 +124,9 @@ The gateway builds a [`POST /v1/message` envelope](agent-endpoints.md#request-bo
 
 | Status | `error.type` | Raised when |
 |---|---|---|
-| `400` | `invalid_request` | The method is not `POST`, the body is not JSON, or any of the four fields is missing or empty |
+| `400` | `invalid_request` | The body is not JSON, or any of the four fields is missing or empty |
 | `404` | `invalid_request` | The named Agent does not exist |
+| `405` | `invalid_request` | The method is not `POST`. The response carries `Allow: POST`. |
 | `413` | `request_too_large` | The body exceeds `gateway.maxMessageBodyBytes`, the same cap as channel intake |
 | `413` | `response_too_large` | The reply exceeds `gateway.maxResponseBodyBytes` |
 | `502` | `delivery_failed` | Every delivery attempt failed |
@@ -164,4 +165,4 @@ GET /v1/spend?namespace=team-support
 | `period` | string | The provider's current budget period key |
 | `workloads` | map | USD as decimal strings per workload: `agent/{name}` and `task/{name}` from the attested certificate SAN, and `(unattributed)` for gateway-only-tier callers. The rows sum to the namespace figure in `ModelProvider.status.budgetUsage`, to within one publish and one reconcile interval. |
 
-**Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing or the method is not `GET`.
+**Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. `405 invalid_request` with `Allow: GET` when the method is not `GET`.

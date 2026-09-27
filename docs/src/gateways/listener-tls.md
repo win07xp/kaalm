@@ -67,7 +67,7 @@ The handshake decides nothing on its own. The path-to-regime mapping, not the TL
 
 Two points the figures leave implicit:
 
-- The handlers, not the regimes, check the HTTP method. `/v1/agent/heartbeat` answers `405 invalid_request` to any method other than `POST`, and `/v1/activity` and `/v1/channels/health` to any method other than `GET`, each with an `Allow` header. `/v1/test-chat` and `/v1/spend` answer a wrong method with `400 invalid_request`. `/v1/task/complete` does not check the method.
+- The handlers, not the regimes, check the HTTP method. `/v1/agent/heartbeat`, `/v1/task/complete`, and `/v1/test-chat` answer `405 invalid_request` to any method other than `POST`, and `/v1/activity`, `/v1/channels/health`, and `/v1/spend` to any method other than `GET`, each with an `Allow` header.
 - `403 invalid_cert` is distinct from `403 access_denied`: the first means the certificate chains but its SAN is not a shape the gateway recognizes, the second means the SAN is recognized but the path does not accept that identity.
 
 Path-conditional middleware is the only correct way to express this on Go's `crypto/tls`. `RequireAndVerifyClientCert` on the listener would lock out gateway-only-tier callers, because the handshake would fail before the request reached the path router. `NoClientCert` would silently downgrade the mTLS tier: a certificate would be presented but never verified.

@@ -47,7 +47,7 @@ type testChatRequest struct {
 // authenticated identity, the target, the outcome, and the duration.
 func (s *Server) handleTestChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		badRequest(w, "POST required")
+		methodNotAllowed(w, http.MethodPost)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.Config.MaxMessageBodyBytes))
