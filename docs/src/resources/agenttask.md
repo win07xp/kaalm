@@ -56,8 +56,8 @@ spec:
     # /v1/task/complete. "exitCode": the task is complete when the
     # container exits.
     condition: agentReported
-    # Bounds running time, measured from status.startTime. Unset means no
-    # bound: the task runs until it reports or exits.
+    # Bounds running time, measured from status.startTime. Unset takes the
+    # class defaultTaskTimeout; clamped to the class maxTaskTimeout (rule 42).
     timeout: "1h"
     # "Fail" (schema default) settles a timeout as TimedOut, exempt from
     # backoffLimit. "Succeed" settles it as Succeeded with any partial
@@ -72,8 +72,9 @@ spec:
     - name: pr-url
     - name: summary
 
-  # Seconds to keep the resource after it settles. Unset means it is never
-  # cleaned up.
+  # Seconds to keep the resource after it settles. Unset takes the class
+  # defaultTTLSecondsAfterFinished; clamped to the class
+  # maxTTLSecondsAfterFinished (rule 43).
   ttlSecondsAfterFinished: 3600
 ```
 
@@ -95,6 +96,8 @@ status:
   podName: "fix-issue-342-xk9p2"
   currentPodUID: "9d3e2c1b-4a5f-6d7e-8c9b-1a2f3e4d5c6b"
   retries: 0
+  classBounds:
+    defaultTaskTimeout: "1h0m0s"
   artifactValues:
     pr-url: "https://github.com/acme/widgets/pull/587"
     summary: "Fixed null pointer in WidgetService.get(). Added regression test."
@@ -106,13 +109,14 @@ status:
 |---|---|
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
 | `Completed` | `True` with `reason: TaskSucceeded` or `TaskFailed` once the task settles; the message is the agent's reported message, the container's exit summary, or the validation failure. |
-| `startTime` | Stamped on the transition to `Running` (Pod Ready), in the same status write. `spec.completion.timeout` measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
+| `startTime` | Stamped on the transition to `Running` (Pod Ready), in the same status write. The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
 | `completionTime` | Stamped when the task settles. |
 | `podName` | The current Pod. |
 | `currentPodUID` | For an `agentReported` task, the UID of the Pod allowed to report completion, stamped on every Pod creation and cleared during a retry reset. Never set for an `exitCode` task. |
 | `retries` | Incremented at the start of each `backoffLimit` retry cycle and compared with the limit to decide whether `Failed` is terminal ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). |
 | `artifactValues` | The values the container reported, keyed by declared name. |
 | `agentReportedStatus`, `agentReportedMessage` | The `status` (`success` or `failure`) and `message` from the completion report. |
+| `classBounds` | The class's `defaultTaskTimeout`, `maxTaskTimeout`, `defaultTTLSecondsAfterFinished`, and `maxTTLSecondsAfterFinished` as they were when the current Pod was created, or when the task settled before any Pod existed, under the same names. The effective timeout and TTL are derived within them on every pass (rules 42 and 43). Unset on a task created before the field existed; the task's own values then apply unbounded. |
 
 ## Design notes
 
@@ -128,9 +132,13 @@ status:
 
 **There is no webhook condition and no retry on timeout.** The schema enums bound `condition` to `agentReported` and `exitCode` and `onTimeout` to `Fail` and `Succeed`.
 
-### Timeout and retention are unbounded by default
+### The class bounds timeout and retention
 
-`completion.timeout` has no default. Unset, the task runs until it reports or exits; an `agentReported` task whose container never reports holds its Pod, PVC, and certificate indefinitely. `ttlSecondsAfterFinished` has no default either: unset, a settled task and its children are never removed. As shipped, no AgentClass field bounds or defaults either value, unlike the idle and hibernation timings for Agents; issue #239 tracks it. Set both on every task.
+The reconciler derives the effective `completion.timeout` and `ttlSecondsAfterFinished` the same way it derives an Agent's lifecycle timings: the task's own value wins, the class `lifecycle.defaultTaskTimeout` and `lifecycle.defaultTTLSecondsAfterFinished` apply when the task omits it, and a value above `lifecycle.maxTaskTimeout` or `lifecycle.maxTTLSecondsAfterFinished` is clamped to the cap (rules 42 and 43). The stored spec is not changed, and a clamp sets no condition or event.
+
+When neither the task nor its class gives a value, the value is unbounded. With no timeout, the task runs until it reports or exits, so an `agentReported` task whose container never reports holds its Pod, PVC, and certificate indefinitely. With no TTL, a settled task and its children are never removed. The chart's `standard` class sets `defaultTaskTimeout: 1h0m0s` and no TTL, because a TTL deletes the whole task record, status and artifact values included.
+
+The class's task bounds are part of the snapshot the task takes when its Pod is created: the reconciler copies them to `status.classBounds`, and a retry's new Pod copies them again from the class as it then stands. A task that settles before any Pod exists, such as one failing the pre-Pod class check, gets them in its settling write instead, so the class default TTL still cleans it up ([AgentTask handling](../controller/change-propagation.md#agenttask-handling-no-degraded-phase)). A later class edit does not reach the task. The task's own `completion.timeout` and `ttlSecondsAfterFinished` can still be edited, and an edit applies on the next pass within those bounds. For example, raising `ttlSecondsAfterFinished` on a settled task buys time to snapshot its PVC ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)), up to the recorded `maxTTLSecondsAfterFinished`. A task with no `classBounds`, because it was created before the field existed, uses its own values with no bounds.
 
 ### Artifact collection
 

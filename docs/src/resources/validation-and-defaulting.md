@@ -69,8 +69,10 @@ Rule numbers are stable identifiers. Other pages cite them by number, so the num
 | 39 | The channel type matches its configuration block | CRD CEL | Rejected at apply |
 | 40 | Platform credentials resolve with the required keys | AgentChannelReconciler | `Ready=False`, `CredentialsMissing` or `CredentialsInvalid` |
 | 41 | A model map names real models on both ends | ModelProviderReconciler | `Ready=False`, `InvalidModelMap` |
+| 42 | Task timeout within the class cap | AgentTaskReconciler | Clamped |
+| 43 | Task retention within the class cap | AgentTaskReconciler | Clamped |
 
-Two families behave differently from the rest. The class-mismatch family (rules 2 to 5, 24, 26, 29, 30, and 35 to 38) is recoverable on an Agent and terminal on an AgentTask, and a change to an AgentClass or ModelProvider can trigger any of its rules on a workload that was fine a moment ago ([Change propagation](../controller/change-propagation.md#agentclass-change-handling)). The cap family (rules 6 to 10) never rejects: the effective value is the smaller of what the workload asked for and the class cap.
+Two families behave differently from the rest. The class-mismatch family (rules 2 to 5, 24, 26, 29, 30, and 35 to 38) is recoverable on an Agent and terminal on an AgentTask, and a change to an AgentClass or ModelProvider can trigger any of its rules on a workload that was fine a moment ago ([Change propagation](../controller/change-propagation.md#agentclass-change-handling)). The cap family (rules 6 to 10, 42, and 43) never rejects: the effective value is the smaller of what the workload asked for and the class cap.
 
 Two reconcile-time outcomes carry no number. A failure to write the per-channel credential Role sets `Ready=False, reason=InvalidReference` on the AgentChannel. The two ModelProvider advisory checks, `DegradeTargetNotCheapest` and `MaxOutputTokensUnset`, emit a `Warning` event and leave `Ready` unaffected ([ModelProvider](modelprovider.md#degradeto-validation)).
 
@@ -124,7 +126,7 @@ Each of these compares a workload's opt-in against its AgentClass, so none can b
 
 #### Class caps
 
-Resource limits, volume size, and the lifecycle timeouts are bounded by the class, and a workload that asks for more is not rejected: the effective value is clamped to the cap at reconcile time (the `resources.limits` clamp is drawn in [Change propagation](../controller/change-propagation.md#agentclass-change-handling)).
+Resource limits, volume size, the Agent lifecycle timeouts, and the task timeout and retention are bounded by the class, and a workload that asks for more is not rejected: the effective value is clamped to the cap at reconcile time (the `resources.limits` clamp is drawn in [Change propagation](../controller/change-propagation.md#agentclass-change-handling)).
 
 **Rule 6: Resource limits are capped by the class.** A limit above `AgentClass.spec.resources.maxLimits` is lowered to the cap, a request above it likewise, and a resource named in `maxLimits` with no limit of its own is given the cap.
 
@@ -135,6 +137,12 @@ Resource limits, volume size, and the lifecycle timeouts are bounded by the clas
 **Rule 9: Wake timeout is capped by the class.** `lifecycle.wakeTimeout` above `AgentClass.spec.lifecycle.maxWakeTimeout` is lowered to it. The reconciler writes the result to `status.effectiveWakeTimeout`, which the gateway reads.
 
 **Rule 10: Hibernation delay is capped by the class.** `lifecycle.hibernationDelay` above `AgentClass.spec.lifecycle.maxHibernationDelay` is lowered to it.
+
+**Rule 42: Task timeout is capped by the class.** `AgentTask.spec.completion.timeout` above `AgentClass.spec.lifecycle.maxTaskTimeout` is lowered to it. The class bounds are those copied to `status.classBounds` when the task's Pod was created ([AgentTask](agenttask.md#the-class-bounds-timeout-and-retention)). The task's timeout, the requeue at its deadline, and the `TimeoutExceeded` message all use the clamped value.
+
+**Rule 43: Task retention is capped by the class.** `AgentTask.spec.ttlSecondsAfterFinished` above `AgentClass.spec.lifecycle.maxTTLSecondsAfterFinished` is lowered to it, with the same `status.classBounds` snapshot as rule 42. Zero is a real value: the task is deleted as soon as it settles.
+
+A cap bounds a value and never supplies one. A value the workload leaves unset, under a class with a max and no default, stays unset; rules 8 to 10 behave the same way. To bound every task, set the default as well as the max.
 
 #### Names and namespaces
 
@@ -249,5 +257,7 @@ A default on a field inside an optional block fires only when the block is prese
 | `lifecycle.idleTimeout` | `AgentClass.spec.lifecycle.defaultIdleTimeout` | The Agent omits it |
 | `lifecycle.hibernationDelay` | `AgentClass.spec.lifecycle.defaultHibernationDelay` | The Agent omits it |
 | `lifecycle.wakeTimeout` | `AgentClass.spec.lifecycle.defaultWakeTimeout` | The Agent omits it; with no class default either, the gateway uses 120 seconds |
+| `completion.timeout` | `AgentClass.spec.lifecycle.defaultTaskTimeout` | The AgentTask omits it; with no class default either, the task has no timeout |
+| `ttlSecondsAfterFinished` | `AgentClass.spec.lifecycle.defaultTTLSecondsAfterFinished` | The AgentTask omits it; with no class default either, the task is kept after it settles |
 
-Fixed values with no class source: the health port is 8080, the Service port defaults to 8080, an Agent's memory mounts at `/var/agent/memory`, and a task's workspace at `/var/task/workspace`. An AgentTask's `completion.timeout` and `ttlSecondsAfterFinished` have no default from either source; unset, they are unbounded ([AgentTask](agenttask.md#timeout-and-retention-are-unbounded-by-default)).
+Fixed values with no class source: the health port is 8080, the Service port defaults to 8080, an Agent's memory mounts at `/var/agent/memory`, and a task's workspace at `/var/task/workspace`. An AgentTask's `completion.timeout` and `ttlSecondsAfterFinished` have no schema default; the class supplies and caps them ([AgentTask](agenttask.md#the-class-bounds-timeout-and-retention)).

@@ -79,6 +79,8 @@ AgentTask has no `Degraded` phase. Where an Agent would degrade, the task settle
 | no Pod yet (`Pending`, or `Provisioning` before creation), or retrying from `Failed` | the pre-Pod class check runs against the new class; a violation settles the task `Failed` at once, whatever `backoffLimit` remains |
 | terminal (`Succeeded`, `Failed`, `TimedOut`) | none; the task proceeds to TTL cleanup |
 
+The class's task bounds are part of that snapshot: the reconciler copies `defaultTaskTimeout`, `maxTaskTimeout`, `defaultTTLSecondsAfterFinished`, and `maxTTLSecondsAfterFinished` to `status.classBounds` when it creates the Pod, or in the settling write of a task that settles before any Pod exists, and a retry's new Pod copies them again from the class as it then stands. The task's own `completion.timeout` and `ttlSecondsAfterFinished` can still be edited and apply within those bounds. A task with no `classBounds`, because it was created before the field existed, uses its own values with no bounds, so an upgrade changes no running or finished task.
+
 A retry spends its `status.retries` increment before the check runs and does not get it back. To retry against a class you have since aligned, delete and recreate the task; a `kubectl apply` of the same spec does not reset `status.retries`, since status is controller-owned and apply patches only `spec`. Only an AgentClass change re-enqueues tasks; a ModelProvider or ToolProvider change is picked up at the task's next pass.
 
 ### Bulk impact

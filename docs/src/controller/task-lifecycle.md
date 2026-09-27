@@ -24,13 +24,13 @@ The other lifecycles in the system are indexed on [Lifecycles at a glance](../ap
 | `Completing` | `Failed` | The payload reports failure, its artifact names fail the re-check, the container exited non-zero, or the Pod is gone with no payload. Retryable. |
 | `Completing` | `TimedOut` | The timeout has elapsed and the mailbox is empty, with `onTimeout: Fail` (the default). With `onTimeout: Succeed` the task settles `Succeeded`. Not retried. |
 | `Failed` | `Provisioning` | `status.retries` is below `backoffLimit`. See [Retry mechanics](#retry-mechanics). A `Failed` task with no `completionTime` on a later pass is a retry interrupted by a controller restart and resumes here too. |
-| any terminal | `Terminating` | `ttlSecondsAfterFinished` has elapsed since `completionTime`, or deletion was requested. A task with no TTL is kept. |
+| any terminal | `Terminating` | The effective `ttlSecondsAfterFinished` has elapsed since `completionTime`, or deletion was requested. A task with no TTL of its own and no class default is kept. |
 
 A terminal `Failed` carries `completionTime`; a transient `Failed` written mid-retry does not, which is how the two are told apart.
 
 ### The clock starts at Ready
 
-`spec.completion.timeout` measures from `status.startTime`, stamped when the Pod reports Ready, so scheduling and image-pull time never count against the task's budget. A retry clears `startTime`, so each attempt gets the full timeout. A task stuck before Ready is bounded by the fixed five-minute provisioning deadline instead.
+The effective timeout, `spec.completion.timeout` or else the class `defaultTaskTimeout`, capped by the class `maxTaskTimeout` ([AgentTask](../resources/agenttask.md#the-class-bounds-timeout-and-retention)), measures from `status.startTime`, stamped when the Pod reports Ready, so scheduling and image-pull time never count against the task's budget. A retry clears `startTime`, so each attempt gets the full timeout. A task stuck before Ready is bounded by the fixed five-minute provisioning deadline instead.
 
 ### Completion beats disruption
 
@@ -40,7 +40,7 @@ The Pod can vanish mid-run: evicted, deleted out of band, or its node lost. Befo
 
 `Completing` is brief, but it is not a pass-through. On entering it the reconciler re-reads the mailbox, the Pod, and the clock, in that precedence: a payload settles the task by its status, then a terminal container by its exit code, then an elapsed timeout by `onTimeout`, and a Pod gone with none of these is a retryable disruption. A timeout-triggered transition therefore still settles by payload when the completion landed in the meantime, and `onTimeout` decides only when the mailbox is empty.
 
-`TimedOut` is distinct from `Failed` so that timeouts are attributable and exempt from retries: a timeout means the budget was too small, and retrying with the same timeout would time out again. Raise `spec.completion.timeout` and re-apply the task instead.
+`TimedOut` is distinct from `Failed` so that timeouts are attributable and exempt from retries: a timeout means the budget was too small, and retrying with the same timeout would time out again. Raise `spec.completion.timeout`, within the class `maxTaskTimeout`, and re-apply the task instead.
 
 ## Completion detection
 
@@ -50,7 +50,7 @@ How the operator learns a task is done depends on `spec.completion.condition`.
 
 The agent container calls [POST /v1/task/complete](../gateways/api/task-complete.md). The gateway writes the payload (status, message, and artifact key-values) into the pre-existing `{taskName}-completion` ConfigMap in the task's namespace, and the reconciler, watching that ConfigMap, moves the task to `Completing` once a payload is present. A ConfigMap rather than a Pod annotation keeps the completion data across Pod crashes and evictions between the agent's call and the reconciler's next pass, which is what makes the precedence rule above possible.
 
-The reconciler stamps `status.currentPodUID` from the Create response in the same pass that creates the Pod, so the identity gate at `/v1/task/complete` is open before the container starts. A stamp lost to a failed status write is repaired on the next pass from the observed Pod. The gate's two rejections, `409 stale_pod` (message prefix `StalePodCompletion`) and `403 TaskAlreadyCompleted`, are specified on the wire page. `exitCode` tasks carry no `currentPodUID`.
+The reconciler stamps `status.currentPodUID` from the Create response in the same pass that creates the Pod, so the identity gate at `/v1/task/complete` is open before the container starts. The same write copies the class's task bounds to `status.classBounds`, within which the timeout check and TTL cleanup derive the task's current timeout and TTL. A stamp lost to a failed status write is repaired on the next pass from the observed Pod, detected by a `podName` that does not match it. The gate's two rejections, `409 stale_pod` (message prefix `StalePodCompletion`) and `403 TaskAlreadyCompleted`, are specified on the wire page. `exitCode` tasks carry no `currentPodUID`.
 
 ### exitCode
 
@@ -62,7 +62,7 @@ In `agentReported` mode the artifact values travel in the completion payload. Th
 
 ## Retry mechanics
 
-When the task fails and `status.retries` is below `backoffLimit`, one status write increments `status.retries`, clears `status.currentPodUID`, `status.startTime`, and the previous attempt's artifact and report fields, sets a transient `Failed` phase, and emits a `Warning` event naming the failure and the attempt count. The reconciler then deletes the old Pod, resets the `{taskName}-completion` ConfigMap to `data: {}` (an update rather than a delete, so the ownerRef and the gateway's name-scoped Role stay valid), and sets `Provisioning`. The next pass creates the new Pod and stamps `currentPodUID` from the Create response in the same write. The PVC is retained, so the retry runs with the same scratch storage.
+When the task fails and `status.retries` is below `backoffLimit`, one status write increments `status.retries`, clears `status.currentPodUID`, `status.startTime`, and the previous attempt's artifact and report fields, sets a transient `Failed` phase, and emits a `Warning` event naming the failure and the attempt count. The reconciler then deletes the old Pod, resets the `{taskName}-completion` ConfigMap to `data: {}` (an update rather than a delete, so the ownerRef and the gateway's name-scoped Role stay valid), and sets `Provisioning`. The next pass creates the new Pod and stamps `currentPodUID` from the Create response in the same write, together with `status.classBounds` copied from the class as it then stands. The PVC is retained, so the retry runs with the same scratch storage.
 
 ![Sequence diagram of an AgentTask retry. The reconciler increments retries and clears currentPodUID in one status write, which closes the gate. Inside the closed gate it deletes the old Pod, whose late completion call receives 409 stale_pod from the gateway, resets the completion ConfigMap to an empty data map, creates the new Pod, and stamps currentPodUID with the new UID. The new Pod's completion call is then accepted and the gateway writes the result.](../diagrams/task-retry-race.svg)
 
@@ -79,6 +79,6 @@ A retry re-runs the pre-Pod class check against the class as it now stands. A vi
 | `TimeoutExceeded`, `TimeoutSucceeded` | Warning, Normal | the task settles `TimedOut`, or `Succeeded` under `onTimeout: Succeed` |
 | `PodStartFailed`, `ProvisioningDeadlineExceeded`, `InvalidImageName`, `ErrImageNeverPull` | Warning | a provisioning failure settles or retries |
 | `PodDisrupted` | Warning | the Pod was lost mid-run or before completion settled |
-| `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog` | Warning | the pre-Pod class check settles the task `Failed` |
+| `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog` | Warning | the pre-Pod class check settles the task `Failed`; a task that never had a Pod also gets `status.classBounds` in that write |
 
 A retry emits the failure's reason with the message suffix `retrying (n/limit)`; the settled event fires once, when the terminal phase is written.

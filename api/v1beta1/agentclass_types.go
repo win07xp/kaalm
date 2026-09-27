@@ -50,7 +50,7 @@ type AgentClassSpec struct {
 	// Security sets the Pod and container security contexts applied to workloads.
 	// +optional
 	Security AgentClassSecurity `json:"security,omitempty"`
-	// Lifecycle sets idle, hibernation, and wake defaults and ceilings.
+	// Lifecycle sets idle, hibernation, wake, and task defaults and ceilings.
 	// +optional
 	Lifecycle AgentClassLifecycle `json:"lifecycle,omitempty"`
 	// PodMetadata is merged onto every workload Pod's labels and annotations.
@@ -190,6 +190,23 @@ type AgentClassLifecycle struct {
 	DefaultWakeTimeout metav1.Duration `json:"defaultWakeTimeout,omitempty"`
 	// +optional
 	MaxWakeTimeout metav1.Duration `json:"maxWakeTimeout,omitempty"`
+	// DefaultTaskTimeout applies to an AgentTask that sets no
+	// completion.timeout. Unset leaves such a task without a timeout.
+	// +optional
+	DefaultTaskTimeout metav1.Duration `json:"defaultTaskTimeout,omitempty"`
+	// MaxTaskTimeout caps an AgentTask's effective completion.timeout.
+	// +optional
+	MaxTaskTimeout metav1.Duration `json:"maxTaskTimeout,omitempty"`
+	// DefaultTTLSecondsAfterFinished applies to an AgentTask that sets no
+	// ttlSecondsAfterFinished. Unset keeps such a task after it finishes.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	DefaultTTLSecondsAfterFinished *int32 `json:"defaultTTLSecondsAfterFinished,omitempty"`
+	// MaxTTLSecondsAfterFinished caps an AgentTask's effective
+	// ttlSecondsAfterFinished.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxTTLSecondsAfterFinished *int32 `json:"maxTTLSecondsAfterFinished,omitempty"`
 	// TerminationGracePeriodSeconds is applied to workload Pods.
 	// +optional
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`

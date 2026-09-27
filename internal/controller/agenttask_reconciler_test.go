@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -428,6 +431,28 @@ func TestTask_TimeoutOnTimeoutSucceed(t *testing.T) {
 	expectTaskPhase(t, "t-tos", kaalmv1beta1.TaskSucceeded)
 }
 
+func TestTask_ClassDefaultTimeoutTimesOut(t *testing.T) {
+	mkWorkloadClass(t, "tc-cto", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Second}
+	})
+	provisionRunningTask(t, "t-cto", "tc-cto", nil)
+	expectTaskPhase(t, "t-cto", kaalmv1beta1.TaskTimedOut)
+	c := condition(getTask(t, "t-cto").Status.Conditions, kaalmv1beta1.ConditionCompleted)
+	if c == nil || c.Reason != "TimeoutExceeded" || !strings.Contains(c.Message, "1s") {
+		t.Errorf("Completed should name the class default timeout: %+v", c)
+	}
+}
+
+func TestTask_TimeoutClampedToClassMax(t *testing.T) {
+	mkWorkloadClass(t, "tc-mto", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.MaxTaskTimeout = metav1.Duration{Duration: time.Second}
+	})
+	provisionRunningTask(t, "t-mto", "tc-mto", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.Timeout = metav1.Duration{Duration: time.Hour}
+	})
+	expectTaskPhase(t, "t-mto", kaalmv1beta1.TaskTimedOut)
+}
+
 // ---- TTL ----
 
 func TestTask_TTLDeletesFinishedTask(t *testing.T) {
@@ -444,11 +469,16 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 		t.Fatalf("update pod status: %v", err)
 	}
 	expectTaskPhase(t, "t-ttl", kaalmv1beta1.TaskSucceeded)
+	expectTaskTTLDeleted(t, "t-ttl")
+}
 
-	// TTL fires and the finalizer needs the Pod's termination finished.
+// expectTaskTTLDeleted waits for the TTL to delete the task. The finalizer
+// needs the Pod's termination finished, which envtest never does on its own.
+func expectTaskTTLDeleted(t *testing.T, name string) {
+	t.Helper()
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-ttl"}, &got)
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -457,7 +487,7 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 		}
 		var pods corev1.PodList
 		if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
-			client.MatchingLabels(map[string]string{"kaalm.io/task": "t-ttl"})); err != nil {
+			client.MatchingLabels(map[string]string{"kaalm.io/task": name})); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -467,6 +497,347 @@ func TestTask_TTLDeletesFinishedTask(t *testing.T) {
 		}
 		return errString("task not yet TTL-deleted")
 	})
+}
+
+func TestTask_ClassDefaultTTLDeletesFinishedTask(t *testing.T) {
+	ttl := int32(3)
+	mkWorkloadClass(t, "tc-cttl", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = &ttl
+	})
+	pod := provisionRunningTask(t, "t-cttl", "tc-cttl", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.Condition = completionExitCode
+	})
+	pod.Status.Phase = corev1.PodSucceeded
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-cttl", kaalmv1beta1.TaskSucceeded)
+	expectTaskTTLDeleted(t, "t-cttl")
+}
+
+// ---- Class snapshot of the effective timeout and TTL ----
+
+// editClass applies mutate to the named class, retrying on conflict.
+func editClass(t *testing.T, name string, mutate func(*kaalmv1beta1.AgentClass)) {
+	t.Helper()
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &ac); err != nil {
+			return err
+		}
+		mutate(&ac)
+		return testClient.Update(ctxT(), &ac)
+	})
+}
+
+// holdTaskPhase asserts the task stays in phase for d, giving a class edit
+// time to reach the reconciler.
+func holdTaskPhase(t *testing.T, name string, phase kaalmv1beta1.AgentTaskPhase, d time.Duration) {
+	t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		var got kaalmv1beta1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
+			t.Fatalf("task %s: %v", name, err)
+		}
+		if got.Status.Phase != phase {
+			t.Fatalf("task %s left %s for %s", name, phase, got.Status.Phase)
+		}
+	}
+}
+
+func TestTask_StampsClassBoundsAtPodCreation(t *testing.T) {
+	ttl, maxTTL := int32(600), int32(300)
+	mkWorkloadClass(t, "tc-stamp", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Hour}
+		c.Spec.Lifecycle.MaxTaskTimeout = metav1.Duration{Duration: 2 * time.Hour}
+		c.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = &ttl
+		c.Spec.Lifecycle.MaxTTLSecondsAfterFinished = &maxTTL
+	})
+	provisionRunningTask(t, "t-stamp", "tc-stamp", nil)
+	b := getTask(t, "t-stamp").Status.ClassBounds
+	if b == nil || b.DefaultTaskTimeout.Duration != time.Hour || b.MaxTaskTimeout.Duration != 2*time.Hour ||
+		b.DefaultTTLSecondsAfterFinished == nil || *b.DefaultTTLSecondsAfterFinished != 600 ||
+		b.MaxTTLSecondsAfterFinished == nil || *b.MaxTTLSecondsAfterFinished != 300 {
+		t.Errorf("classBounds = %+v, want the class's four task bounds", b)
+	}
+}
+
+func TestTask_ClassTimeoutEditSkipsRunningTask(t *testing.T) {
+	mkWorkloadClass(t, "tc-snapto", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Hour}
+	})
+	provisionRunningTask(t, "t-snapto", "tc-snapto", nil)
+	expectTaskPhase(t, "t-snapto", kaalmv1beta1.TaskRunning)
+	editClass(t, "tc-snapto", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Second}
+		c.Spec.Lifecycle.MaxTaskTimeout = metav1.Duration{Duration: time.Second}
+	})
+	holdTaskPhase(t, "t-snapto", kaalmv1beta1.TaskRunning, 3*time.Second)
+	if b := getTask(t, "t-snapto").Status.ClassBounds; b == nil || b.DefaultTaskTimeout.Duration != time.Hour {
+		t.Errorf("classBounds = %+v, want the 1h snapshot", b)
+	}
+}
+
+// The owner's own edit applies at once, within the bounds captured at Pod
+// creation.
+func TestTask_OwnerTimeoutEditAppliesToRunningTask(t *testing.T) {
+	mkWorkloadClass(t, "tc-ownto", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Hour}
+	})
+	provisionRunningTask(t, "t-ownto", "tc-ownto", nil)
+	eventually(t, func() error {
+		task := getTask(t, "t-ownto")
+		task.Spec.Completion.Timeout = metav1.Duration{Duration: time.Second}
+		return testClient.Update(ctxT(), task)
+	})
+	expectTaskPhase(t, "t-ownto", kaalmv1beta1.TaskTimedOut)
+}
+
+func TestTask_ClassTTLEditSkipsFinishedTask(t *testing.T) {
+	mkWorkloadClass(t, "tc-snapttl", nil)
+	pod := provisionRunningTask(t, "t-snapttl", "tc-snapttl", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.Condition = completionExitCode
+	})
+	pod.Status.Phase = corev1.PodSucceeded
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	expectTaskPhase(t, "t-snapttl", kaalmv1beta1.TaskSucceeded)
+	ttl := int32(0)
+	editClass(t, "tc-snapttl", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = &ttl
+	})
+	holdTaskPhase(t, "t-snapttl", kaalmv1beta1.TaskSucceeded, 3*time.Second)
+}
+
+func TestTask_RetryRestampsFromEditedClass(t *testing.T) {
+	mkWorkloadClass(t, "tc-restamp", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Hour}
+	})
+	oldPod := provisionRunningTask(t, "t-restamp", "tc-restamp", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.BackoffLimit = 1
+	})
+	editClass(t, "tc-restamp", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: 2 * time.Hour}
+	})
+	writeMailbox(t, "t-restamp", map[string]string{"status": "failure", "message": "boom"})
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			forceDeletePod(t, &got)
+		}
+		return errString("old pod still present")
+	})
+	eventually(t, func() error {
+		newPod := taskPod(t, "t-restamp")
+		if newPod == nil || newPod.Name == oldPod.Name {
+			return errString("no replacement pod yet")
+		}
+		if b := getTask(t, "t-restamp").Status.ClassBounds; b == nil || b.DefaultTaskTimeout.Duration != 2*time.Hour {
+			return errString("classBounds not re-stamped to the 2h default")
+		}
+		return nil
+	})
+}
+
+// A task that settles before any Pod exists records the class bounds in the
+// settling write, so the class default TTL still cleans it up.
+func TestTask_PrePodFailureStampsBoundsAndExpires(t *testing.T) {
+	ttl := int32(2)
+	mkWorkloadClass(t, "tc-prepod", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = &ttl
+	})
+	mkTask(t, "t-prepod", "tc-prepod", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Image = "evil.example/not-allowed:v1"
+	})
+	eventually(t, func() error {
+		var got kaalmv1beta1.AgentTask
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-prepod"}, &got)
+		if apierrors.IsNotFound(err) {
+			return nil // already expired; the stamp is checked by the deletion
+		}
+		if err != nil {
+			return err
+		}
+		if got.Status.Phase != kaalmv1beta1.TaskFailed {
+			return errString("not yet Failed")
+		}
+		if b := got.Status.ClassBounds; b == nil || b.DefaultTTLSecondsAfterFinished == nil ||
+			*b.DefaultTTLSecondsAfterFinished != 2 {
+			t.Fatalf("classBounds = %+v, want the class's 2s default TTL", b)
+		}
+		return nil
+	})
+	expectTaskTTLDeleted(t, "t-prepod")
+}
+
+// A task that settled before classBounds existed is never settled again, so
+// it stays unstamped and a class default TTL never reaches it.
+func TestTask_PreUpgradeSettledTaskIsKept(t *testing.T) {
+	mkTask(t, "t-preupg", "tc-preupg", nil) // class absent: InvalidReference, no Pod
+	eventually(t, func() error {
+		var got kaalmv1beta1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-preupg"}, &got); err != nil {
+			return err
+		}
+		done := metav1.NewTime(time.Now().Add(-time.Hour))
+		got.Status.Phase = kaalmv1beta1.TaskFailed
+		got.Status.CompletionTime = &done
+		got.Status.ClassBounds = nil
+		return testClient.Status().Update(ctxT(), &got)
+	})
+	ttl := int32(0)
+	mkWorkloadClass(t, "tc-preupg", func(c *kaalmv1beta1.AgentClass) {
+		c.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = &ttl
+	})
+	holdTaskPhase(t, "t-preupg", kaalmv1beta1.TaskFailed, 3*time.Second)
+	if b := getTask(t, "t-preupg").Status.ClassBounds; b != nil {
+		t.Errorf("a pre-upgrade settled task must stay unstamped, got %+v", b)
+	}
+}
+
+// The timeout is derived every pass from the current spec and the stamped
+// bounds; nil bounds (a task that predates them) leave the spec unbounded.
+func TestTimedOut_SpecWithinStampedBounds(t *testing.T) {
+	started := metav1.NewTime(time.Now().Add(-time.Minute))
+	task := &kaalmv1beta1.AgentTask{Status: kaalmv1beta1.AgentTaskStatus{StartTime: &started}}
+	if timedOut(task) || runningRequeue(task).RequeueAfter != 0 {
+		t.Error("nil bounds and no spec timeout: must not time out or requeue")
+	}
+	task.Spec.Completion.Timeout = metav1.Duration{Duration: time.Second}
+	if !timedOut(task) {
+		t.Error("nil bounds: the spec timeout must apply")
+	}
+	task.Spec.Completion.Timeout = metav1.Duration{Duration: 5 * time.Hour}
+	if timedOut(task) || runningRequeue(task).RequeueAfter < 4*time.Hour {
+		t.Error("nil bounds: the spec timeout must apply unclamped")
+	}
+
+	task.Status.ClassBounds = &kaalmv1beta1.AgentTaskClassBounds{
+		DefaultTaskTimeout: metav1.Duration{Duration: 30 * time.Second},
+		MaxTaskTimeout:     metav1.Duration{Duration: 2 * time.Minute},
+	}
+	// The owner raised the timeout to 5h: clamped to the stamped 2m max.
+	if timedOut(task) {
+		t.Error("a minute into a 2m clamped timeout must not time out")
+	}
+	if got := runningRequeue(task).RequeueAfter; got > time.Minute+time.Second {
+		t.Errorf("requeue %v must follow the clamped 2m timeout", got)
+	}
+	// With no spec value, the stamped default applies.
+	task.Spec.Completion.Timeout = metav1.Duration{}
+	if !timedOut(task) {
+		t.Error("a minute past the stamped 30s default must time out")
+	}
+}
+
+func TestHandleTTL_SpecWithinStampedBounds(t *testing.T) {
+	ctx := context.Background()
+	i32 := func(v int32) *int32 { return &v }
+	settled := func(name string, spec *int32, b *kaalmv1beta1.AgentTaskClassBounds) *kaalmv1beta1.AgentTask {
+		done := metav1.NewTime(time.Now().Add(-time.Minute))
+		return &kaalmv1beta1.AgentTask{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: kaalmv1beta1.AgentTaskSpec{
+				AgentClassRef:           kaalmv1beta1.LocalObjectReference{Name: "ttl-now"},
+				TTLSecondsAfterFinished: spec,
+			},
+			Status: kaalmv1beta1.AgentTaskStatus{
+				Phase: kaalmv1beta1.TaskSucceeded, CompletionTime: &done, ClassBounds: b,
+			},
+		}
+	}
+	// The class now sets a zero TTL; no task may read it.
+	class := &kaalmv1beta1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "ttl-now"},
+		Spec: kaalmv1beta1.AgentClassSpec{Lifecycle: kaalmv1beta1.AgentClassLifecycle{
+			DefaultTTLSecondsAfterFinished: i32(0),
+		}},
+	}
+	stampedDefault := &kaalmv1beta1.AgentTaskClassBounds{DefaultTTLSecondsAfterFinished: i32(30)}
+	stampedMax := &kaalmv1beta1.AgentTaskClassBounds{MaxTTLSecondsAfterFinished: i32(30)}
+	kept := settled("kept", nil, nil)
+	ownSpec := settled("own-spec", i32(30), nil)
+	byDefault := settled("by-default", nil, stampedDefault)
+	raised := settled("raised", i32(3600), stampedDefault)
+	clamped := settled("clamped", i32(3600), stampedMax)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(class, kept, ownSpec, byDefault, raised, clamped).
+		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
+	r := &AgentTaskReconciler{Client: c}
+	exists := func(task *kaalmv1beta1.AgentTask) bool {
+		return c.Get(ctx, client.ObjectKeyFromObject(task), &kaalmv1beta1.AgentTask{}) == nil
+	}
+
+	if res, err := r.handleTTL(ctx, kept); err != nil || res.RequeueAfter != 0 || !exists(kept) {
+		t.Errorf("nil bounds, no spec TTL: want kept with no requeue, got %+v, %v", res, err)
+	}
+	if _, err := r.handleTTL(ctx, ownSpec); err != nil || exists(ownSpec) {
+		t.Errorf("nil bounds: the spec TTL of 30s, a minute past, must delete the task (err %v)", err)
+	}
+	if _, err := r.handleTTL(ctx, byDefault); err != nil || exists(byDefault) {
+		t.Errorf("no spec TTL: the stamped 30s default must delete the task (err %v)", err)
+	}
+	// The owner raised the TTL on a finished task, the S9 escape hatch.
+	if res, err := r.handleTTL(ctx, raised); err != nil || res.RequeueAfter <= 0 || !exists(raised) {
+		t.Errorf("an owner-raised TTL must win over the stamped default: got %+v, %v", res, err)
+	}
+	if _, err := r.handleTTL(ctx, clamped); err != nil || exists(clamped) {
+		t.Errorf("an owner-raised TTL above the stamped 30s max must be clamped (err %v)", err)
+	}
+}
+
+// A status write lost after the Pod's creation leaves podName behind; the
+// next pass repairs the snapshot from the observed Pod. A Pod created before
+// the snapshot fields existed has a matching podName and stays unstamped.
+func TestDriveProvisioning_RepairsLostSnapshotOnly(t *testing.T) {
+	ctx := context.Background()
+	eff := effectiveTaskSpec{}
+	class := &kaalmv1beta1.AgentClass{Spec: kaalmv1beta1.AgentClassSpec{Lifecycle: kaalmv1beta1.AgentClassLifecycle{
+		DefaultTaskTimeout: metav1.Duration{Duration: time.Hour},
+	}}}
+	for _, tc := range []struct {
+		name, recorded string
+		wantStamp      bool
+	}{
+		{"lost-write", "", true},
+		{"pre-upgrade", "p-pre-upgrade", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &kaalmv1beta1.AgentTask{
+				ObjectMeta: metav1.ObjectMeta{Name: "t-" + tc.name, Namespace: "default"},
+				Spec: kaalmv1beta1.AgentTaskSpec{
+					Completion: kaalmv1beta1.AgentTaskCompletion{Condition: completionExitCode},
+				},
+				Status: kaalmv1beta1.AgentTaskStatus{Phase: kaalmv1beta1.TaskProvisioning, PodName: tc.recorded},
+			}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+				Name: "p-" + tc.name, Namespace: "default", CreationTimestamp: metav1.Now(),
+			}}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task, pod).
+				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
+			r := &AgentTaskReconciler{Client: c}
+			if _, err := r.driveProvisioning(ctx, task, class, eff, pod); err != nil {
+				t.Fatalf("driveProvisioning: %v", err)
+			}
+			var got kaalmv1beta1.AgentTask
+			if err := c.Get(ctx, client.ObjectKeyFromObject(task), &got); err != nil {
+				t.Fatal(err)
+			}
+			stamped := got.Status.ClassBounds != nil
+			if stamped != tc.wantStamp || got.Status.PodName != pod.Name {
+				t.Errorf("classBounds=%+v podName=%q, want stamped=%v podName=%q",
+					got.Status.ClassBounds, got.Status.PodName, tc.wantStamp, pod.Name)
+			}
+		})
+	}
 }
 
 // ---- AgentTask pre-Pod violations (taskViolation) ----

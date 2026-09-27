@@ -18,6 +18,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -194,6 +195,88 @@ func TestDeriveEffectiveTaskSpec_ClassDefaults(t *testing.T) {
 	}
 	if eff.PVCSizeGi != 5 {
 		t.Errorf("class default size not applied: %d", eff.PVCSizeGi)
+	}
+}
+
+func TestEffectiveTaskTimeout_WithinBounds(t *testing.T) {
+	class := &kaalmv1beta1.AgentClass{}
+	task := &kaalmv1beta1.AgentTask{}
+	if got := effectiveTaskTimeout(task, classTaskBounds(class)); got != 0 {
+		t.Errorf("all unset: timeout = %v, want 0 (unbounded)", got)
+	}
+	// A cap bounds a value; it does not supply one, as for the Agent timings.
+	class.Spec.Lifecycle.MaxTaskTimeout = metav1.Duration{Duration: 2 * time.Hour}
+	if got := effectiveTaskTimeout(task, classTaskBounds(class)); got != 0 {
+		t.Errorf("cap only: timeout = %v, want 0 (unbounded)", got)
+	}
+	class.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Hour}
+	if got := effectiveTaskTimeout(task, classTaskBounds(class)); got != time.Hour {
+		t.Errorf("unset timeout = %v, want the class default 1h", got)
+	}
+	task.Spec.Completion.Timeout = metav1.Duration{Duration: 90 * time.Minute}
+	if got := effectiveTaskTimeout(task, classTaskBounds(class)); got != 90*time.Minute {
+		t.Errorf("in-cap timeout = %v, want the task's own 1h30m", got)
+	}
+	task.Spec.Completion.Timeout = metav1.Duration{Duration: 5 * time.Hour}
+	if got := effectiveTaskTimeout(task, classTaskBounds(class)); got != 2*time.Hour {
+		t.Errorf("over-cap timeout = %v, want the class cap 2h", got)
+	}
+	if got := effectiveTaskTimeout(task, nil); got != 5*time.Hour {
+		t.Errorf("nil bounds: timeout = %v, want the task's own 5h", got)
+	}
+}
+
+func TestEffectiveTaskTTL_WithinBounds(t *testing.T) {
+	i32 := func(v int32) *int32 { return &v }
+	class := &kaalmv1beta1.AgentClass{}
+	task := &kaalmv1beta1.AgentTask{}
+	if got := effectiveTaskTTL(task, classTaskBounds(class)); got != nil {
+		t.Errorf("all unset: ttl = %d, want unset (kept after it finishes)", *got)
+	}
+	// A cap bounds a value; it does not supply one.
+	class.Spec.Lifecycle.MaxTTLSecondsAfterFinished = i32(3600)
+	if got := effectiveTaskTTL(task, classTaskBounds(class)); got != nil {
+		t.Errorf("cap only: ttl = %d, want unset", *got)
+	}
+	class.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = i32(600)
+	if got := effectiveTaskTTL(task, classTaskBounds(class)); got == nil || *got != 600 {
+		t.Errorf("unset ttl = %v, want the class default 600", got)
+	}
+	task.Spec.TTLSecondsAfterFinished = i32(0)
+	if got := effectiveTaskTTL(task, classTaskBounds(class)); got == nil || *got != 0 {
+		t.Errorf("ttl 0 = %v, want the task's own 0", got)
+	}
+	task.Spec.TTLSecondsAfterFinished = i32(86400)
+	if got := effectiveTaskTTL(task, classTaskBounds(class)); got == nil || *got != 3600 {
+		t.Errorf("over-cap ttl = %v, want the class cap 3600", got)
+	}
+	// The derived value is a copy: clamping never writes through to the class.
+	if *class.Spec.Lifecycle.MaxTTLSecondsAfterFinished != 3600 || *task.Spec.TTLSecondsAfterFinished != 86400 {
+		t.Error("derivation mutated its inputs")
+	}
+	// Nil bounds (a task that predates classBounds): the task's own value,
+	// unbounded.
+	if got := effectiveTaskTTL(task, nil); got == nil || *got != 86400 {
+		t.Errorf("nil bounds: ttl = %v, want the task's own 86400", got)
+	}
+}
+
+// The snapshot is a copy of the class's task bounds: a later class edit
+// must not reach it through a shared pointer.
+func TestClassTaskBounds_CopiesTheClass(t *testing.T) {
+	ttl, maxTTL := int32(60), int32(600)
+	class := &kaalmv1beta1.AgentClass{Spec: kaalmv1beta1.AgentClassSpec{Lifecycle: kaalmv1beta1.AgentClassLifecycle{
+		DefaultTaskTimeout:             metav1.Duration{Duration: time.Hour},
+		MaxTaskTimeout:                 metav1.Duration{Duration: 2 * time.Hour},
+		DefaultTTLSecondsAfterFinished: &ttl,
+		MaxTTLSecondsAfterFinished:     &maxTTL,
+	}}}
+	b := classTaskBounds(class)
+	ttl, maxTTL = 1, 2
+	class.Spec.Lifecycle.DefaultTaskTimeout.Duration = time.Second
+	if b.DefaultTaskTimeout.Duration != time.Hour || b.MaxTaskTimeout.Duration != 2*time.Hour ||
+		*b.DefaultTTLSecondsAfterFinished != 60 || *b.MaxTTLSecondsAfterFinished != 600 {
+		t.Errorf("bounds follow the class after the snapshot: %+v", b)
 	}
 }
 

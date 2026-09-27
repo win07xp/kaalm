@@ -398,6 +398,26 @@ spec:
                   type: string
                 description: ArtifactValues holds the collected agentReported outputs.
                 type: object
+              classBounds:
+                description: |-
+                  ClassBounds holds the class's task bounds as they were when the current
+                  Pod was created, or when the task settled before any Pod existed. The
+                  task's own timeout and TTL are derived within
+                  them on every pass, so an edit to the task applies at once and an
+                  edit to the class does not reach it. Nil means the task predates the
+                  field; its own values then apply unbounded.
+                properties:
+                  defaultTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  defaultTaskTimeout:
+                    type: string
+                  maxTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  maxTaskTimeout:
+                    type: string
+                type: object
               completionTime:
                 format: date-time
                 type: string
@@ -858,6 +878,26 @@ spec:
                 additionalProperties:
                   type: string
                 description: ArtifactValues holds the collected agentReported outputs.
+                type: object
+              classBounds:
+                description: |-
+                  ClassBounds holds the class's task bounds as they were when the current
+                  Pod was created, or when the task settled before any Pod existed. The
+                  task's own timeout and TTL are derived within
+                  them on every pass, so an edit to the task applies at once and an
+                  edit to the class does not reach it. Nil means the task predates the
+                  field; its own values then apply unbounded.
+                properties:
+                  defaultTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  defaultTaskTimeout:
+                    type: string
+                  maxTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  maxTaskTimeout:
+                    type: string
                 type: object
               completionTime:
                 format: date-time

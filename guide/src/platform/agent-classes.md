@@ -8,8 +8,9 @@ exceed what it grants.
 ## A standard class
 
 The chart installs a class named `standard` that allows any image, storage up
-to 50Gi, and hibernation, and that names no ModelProvider, so an agent under
-it gets a volume but no model access. Name your providers on it with a chart
+to 50Gi, and hibernation, stops a task that sets no timeout after one hour,
+and names no ModelProvider, so an agent under it gets a volume but no model
+access. Name your providers on it with a chart
 value, alongside the rest of your install values:
 
 ```bash
@@ -57,7 +58,13 @@ The decisions that matter:
 - **`persistence`** sets the default and ceiling for agent PVCs, and
   `pvcRetention` decides whether state survives agent deletion.
 - **`lifecycle`** sets idle-timeout defaults and whether hibernation is
-  allowed at all; agents can tighten these within the class maximums.
+  allowed at all; agents can tighten these within the class maximums. It also
+  bounds tasks: `defaultTaskTimeout` and `maxTaskTimeout` for
+  `completion.timeout`, and `defaultTTLSecondsAfterFinished` and
+  `maxTTLSecondsAfterFinished` for how long a finished task is kept. A maximum
+  lowers a value a task sets but supplies none, so set the default to bound
+  every task. A default TTL deletes each finished task's record, results
+  included, once it expires.
 
 Apply and verify:
 
@@ -198,6 +205,10 @@ Which class fields reach a running agent depends on the field:
 - `network.egress.allowedHosts` is applied to the agent's CiliumNetworkPolicy
   on the next reconcile, on Cilium only.
 - `lifecycle` defaults and ceilings apply on the next activity evaluation.
+  The task timeout and TTL bounds reach only tasks whose Pod is created after
+  the edit, including a retry's new Pod: a task copies them to
+  `status.classBounds` when its Pod is created. Task owners can still change
+  their own timeout and TTL within the copied bounds.
 - `resources.defaults`, `resources.maxLimits`, `image.pullPolicy`,
   `image.imagePullSecrets`, `security`, `podMetadata`,
   `runtime.runtimeClassName`, and `lifecycle.terminationGracePeriodSeconds`

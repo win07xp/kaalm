@@ -231,25 +231,47 @@ func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentCla
 	}
 
 	// Lifecycle: agent values default from the class and are capped by it.
-	pick := func(v, def, max time.Duration) time.Duration {
-		if v == 0 {
-			v = def
-		}
-		if max > 0 && v > max {
-			v = max
-		}
-		return v
-	}
 	lc, clc := agent.Spec.Lifecycle, class.Spec.Lifecycle
-	eff.IdleTimeout = pick(lc.IdleTimeout.Duration, clc.DefaultIdleTimeout.Duration, clc.MaxIdleTimeout.Duration)
-	eff.HibernationDelay = pick(lc.HibernationDelay.Duration, clc.DefaultHibernationDelay.Duration, clc.MaxHibernationDelay.Duration)
-	eff.WakeTimeout = pick(lc.WakeTimeout.Duration, clc.DefaultWakeTimeout.Duration, clc.MaxWakeTimeout.Duration)
+	eff.IdleTimeout = pickDuration(lc.IdleTimeout.Duration, clc.DefaultIdleTimeout.Duration, clc.MaxIdleTimeout.Duration)
+	eff.HibernationDelay = pickDuration(lc.HibernationDelay.Duration,
+		clc.DefaultHibernationDelay.Duration, clc.MaxHibernationDelay.Duration)
+	eff.WakeTimeout = pickDuration(lc.WakeTimeout.Duration, clc.DefaultWakeTimeout.Duration, clc.MaxWakeTimeout.Duration)
 	eff.HibernationEnabled = lc.HibernationEnabled
 	eff.ActivitySource = lc.ActivitySource
 	if eff.ActivitySource == "" {
 		eff.ActivitySource = "gatewayTraffic"
 	}
 	return eff
+}
+
+// pickDuration derives a class-bounded lifecycle duration (rules 8 to 10
+// and 42): the workload's own value, else the class default, clamped to the
+// class max. Zero means unset at every position, so a max alone supplies no
+// value.
+func pickDuration(v, def, max time.Duration) time.Duration {
+	if v == 0 {
+		v = def
+	}
+	if max > 0 && v > max {
+		v = max
+	}
+	return v
+}
+
+// pickSeconds is pickDuration for an optional count of seconds, where zero
+// is a real value and nil means unset (rule 43).
+func pickSeconds(v, def, max *int32) *int32 {
+	if v == nil {
+		v = def
+	}
+	if v == nil {
+		return nil
+	}
+	out := *v
+	if max != nil && out > *max {
+		out = *max
+	}
+	return &out
 }
 
 // clampResources caps limits (and any requests above the cap) at maxLimits.

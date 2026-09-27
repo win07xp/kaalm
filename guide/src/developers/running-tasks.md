@@ -46,9 +46,12 @@ has the same fields.
   Use this for agents that behave like batch jobs. Artifacts cannot be
   declared in this mode; there is nobody to report them.
 
-`completion.timeout` bounds the run either way. A task that runs out of time
-settles `TimedOut` under the default `onTimeout: Fail`, or `Succeeded` under
-`onTimeout: Succeed`; neither is retried.
+`completion.timeout` bounds the run either way. Leave it unset and the
+class's `defaultTaskTimeout` applies: the chart's `standard` class stops a
+task after one hour. A value above the class's `maxTaskTimeout` is lowered to
+it. A task that runs out of time settles `TimedOut` under the default
+`onTimeout: Fail`, or `Succeeded` under `onTimeout: Succeed`; neither is
+retried.
 
 ## Watching and reading results
 
@@ -94,7 +97,13 @@ own, and a task image of your own must too (runtime contract item 6).
 - `ttlSecondsAfterFinished` deletes the AgentTask itself once the TTL has
   passed since completion, and with it the Pod, the mailbox, and the task's
   PVC, the same way a Job's TTL works. Read the result before then, or leave
-  the field unset to keep the record. The Pod is not stopped at completion:
+  the field unset to keep the record. Unset, the class's
+  `defaultTTLSecondsAfterFinished` applies if it sets one, and the class's
+  `maxTTLSecondsAfterFinished` caps any value; the `standard` class sets
+  neither. You can change the TTL on a finished task, for example to keep it
+  longer, and the change applies at once within the class bounds the task
+  recorded in `status.classBounds` when its Pod was created. The Pod is not
+  stopped at completion:
   a container that keeps running after it reports stays up until the TTL.
 - A crashed task Pod is retried only when `completion.backoffLimit` is above
   zero; the default is no retries. Class-gate failures (image not allowed,
