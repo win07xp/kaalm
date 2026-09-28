@@ -5,7 +5,7 @@ You send it a message, it thinks, it answers. You can also hand it a job and
 walk away while it works.
 
 Writing that program is the small part. A few dozen lines will call a model and
-print a reply. The hard part starts when you want to actually run it, and keep
+print a reply. The hard part starts when you want to run it, and keep
 running it, for real people.
 
 ## Why running one is more than running a script
@@ -40,7 +40,7 @@ and Kaalm keeps reality matching that description.
 In return it handles the list above: it issues each agent its own identity, it
 gives it a volume that outlives the program, it puts a gateway in front of the
 model providers so the credential never reaches your code, it tracks spend
-and holds it to a budget, it exposes a front door with authentication, and it puts idle agents to
+and holds it to a budget, it exposes the agent at a URL that checks who is calling, and it puts idle agents to
 sleep and wakes them when a message arrives.
 
 None of that requires you to learn Kubernetes first. It does run *on*

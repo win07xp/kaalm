@@ -2,7 +2,7 @@
 
 ModelProvider is a cluster-scoped resource that defines a managed LLM provider. It holds a reference to a Secret with credentials, a model catalog, budgets, a request rate limit, a fallback list, and the namespace tenancy gate. The gateway enforces the catalog, the budgets, the rate limit, and the fallback walk on every request it routes; the controller validates the spec, probes the upstream, and folds spend into status.
 
-Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, and only the namespaces listed in `spec.allowedNamespaces` may do so. `allowedNamespaces` is the one tenancy gate every caller faces, in both adoption tiers ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
+Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, and only the namespaces listed in `spec.allowedNamespaces` may do so. `allowedNamespaces` is the tenancy check that applies to every caller, in both adoption tiers ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
 
 ## Spec
 
@@ -148,7 +148,7 @@ status:
 
 Each `budgetUsage` entry's `state` is a per-namespace state machine over the current period:
 
-![Per-namespace budget state for one ModelProvider and one period. The period opening enters Normal. Normal moves to Throttled when spend crosses a degrade policy's atPercent. Normal or Throttled move to Blocked when spend crosses a block policy's atPercent. A period rollover, or a spec edit that raises the ceiling or changes the policies, moves Throttled or Blocked back to Normal.](../diagrams/budget-namespace-states.svg)
+![Per-namespace budget state for one ModelProvider and one period. The period opening enters Normal. Normal moves to Throttled when spend reaches a degrade policy's atPercent. Normal or Throttled move to Blocked when spend reaches a block policy's atPercent. A period rollover, or a spec edit that raises the ceiling or changes the policies, moves Throttled or Blocked back to Normal.](../diagrams/budget-namespace-states.svg)
 
 The state is derived from `percentUsed` and the highest policy threshold at or below it. `percentUsed` is the worse of two ratios: the namespace's spend against `perNamespaceUSD`, and the provider's cluster-wide spend against `clusterUSD`. An unset ceiling adds no ratio. This is the same rule the gateway's admission decision applies, so a namespace under its own ceiling that the cluster ceiling blocks reports `state: Blocked`. The state is `Throttled` for a degrade policy, `Blocked` for a block policy, `Normal` when no threshold is crossed or no policies exist. Warn policies record a metric and a log line and change no state. Spend is monotonic within a period, so only the rollover or a spec edit moves a namespace back; the reconciler recomputes the state from the current spec on every pass. The field is display truth: enforcement reads each gateway replica's live counter plus its peers' partials ([Budget state management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management)). Hard enforcement changes nothing in this state machine: the boundary region is a transient gateway admission mode, not a namespace state.
 
@@ -188,7 +188,7 @@ Cost fields are decimal strings, not floats, to avoid precision loss. The gatewa
 
 ### `degradeTo` validation
 
-Every `degradeTo` must name a model in the same provider's catalog (rule 18, `Ready=False, reason=InvalidDegradeTarget`). On every pass the reconciler also runs a cost sanity check: it averages each model's input and output prices and, when the degrade target is not the cheapest, sets the `DegradeTargetNotCheapest` condition and emits a `Warning` event with `reason=DegradeTargetNotCheapest` naming the cheaper model. The event fires once, when the condition turns `True`, not on every pass. The check is advisory and does not affect `Ready`, since a platform team may prefer a target for latency or capability; it catches the common misconfiguration where a policy labeled "degrade" raises cost at the threshold ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)).
+Every `degradeTo` must name a model in the same provider's catalog (rule 18, `Ready=False, reason=InvalidDegradeTarget`). On every pass the reconciler also runs a cost check: it averages each model's input and output prices and, when the degrade target is not the cheapest, sets the `DegradeTargetNotCheapest` condition and emits a `Warning` event with `reason=DegradeTargetNotCheapest` naming the cheaper model. The event fires once, when the condition turns `True`, not on every pass. The check is advisory and does not affect `Ready`, since a platform team may prefer a target for latency or capability; it catches the misconfiguration where a policy labeled "degrade" raises cost at the threshold ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)).
 
 ### Deletion
 

@@ -37,7 +37,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 400 | `invalid_request` | no | | The body is not JSON, `model` is not `{providerRef}/{modelId}`, the provider type is not built into this gateway, or the broker request is not a single JSON-RPC message on `/v1/mcp/{toolProvider}` |
 | 401 | `unauthorized` | no | | No client certificate and no bearer token, a bearer token from a Kaalm-managed Pod, a token `TokenReview` rejects, or a source IP outside the authenticated namespace |
 | 403 | `invalid_cert` | no | | A client certificate whose SAN is not an Agent or AgentTask identity |
-| 403 | `access_denied` | no | | The tenancy chain denies the provider ([Multi-tenancy](../../concepts/tenancy-and-tiers.md#multi-tenancy)); on the broker, the workload is not found, a namespace or class gate denies the ToolProvider, or the caller sends a session id another caller owns |
+| 403 | `access_denied` | no | | The tenancy chain denies the provider ([Multi-tenancy](../../concepts/tenancy-and-tiers.md#multi-tenancy)); on the broker, the workload is not found, a namespace or class gate denies the ToolProvider, or the caller sends a session id bound to another caller |
 | 403 | `tool_denied` | no | | The tool is outside the workload's grant, or the JSON-RPC method is outside the broker's allowlist |
 | 405 | `invalid_request` | no | | A method other than `POST` on `/v1/mcp/{toolProvider}`, or the wrong method on an internal mTLS path ([Listener TLS](../listener-tls.md)); the response carries `Allow` |
 | 409 | `stale_pod` | yes | | `POST /v1/task/complete`: the calling Pod is not the task's current Pod ([409 Conflict](task-complete.md#409-conflict)) |

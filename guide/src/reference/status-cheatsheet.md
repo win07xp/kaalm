@@ -1,7 +1,7 @@
 # Status cheatsheet
 
 Everything Kaalm tells you through `kubectl get` and `describe`, resource
-by resource. Conditions listed are the ones the controller actually sets.
+by resource. Conditions listed are the ones the controller sets.
 
 ## Agent
 

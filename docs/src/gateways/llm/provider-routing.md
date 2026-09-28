@@ -34,13 +34,13 @@ Existing workloads that authenticate with a projected ServiceAccount bearer toke
 
 Provider credentials are stored as Secrets in `kaalm-system` and referenced by ModelProvider. The gateway reads these Secrets directly at startup and watches them for rotation. Credentials never leave `kaalm-system`: there is no per-agent or per-namespace credential copying. The full storage-to-rotation lifecycle, including who else can read the Secret, is in [Lifecycle of an LLM API key](../../security/credentials.md#lifecycle-of-an-llm-api-key).
 
-The credential's shape is adapter-specific: for Anthropic, OpenAI, and OpenAI-compatible providers, the referenced Secret holds a static API key that the adapter injects as the provider's auth header. The reserved `google-vertex` type is not served: it would need OAuth2 access tokens minted from a GCP service-account key rather than a static key (see [the type's status](request-handling.md#the-google-vertex-type-is-reserved)).
+The credential type is adapter-specific: for Anthropic, OpenAI, and OpenAI-compatible providers, the referenced Secret holds a static API key that the adapter injects as the provider's auth header. The reserved `google-vertex` type is not served: it would need OAuth2 access tokens minted from a GCP service-account key rather than a static key (see [the type's status](request-handling.md#the-google-vertex-type-is-reserved)).
 
 When a credential Secret is updated, the gateway's Secret watcher picks up the change and refreshes the in-memory credential without a restart.
 
 ## Provider adapters
 
-The gateway supports multiple upstream provider types through a small adapter interface. Each adapter carries the per-provider knowledge the shared proxy depends on:
+The gateway supports multiple upstream provider types through an adapter interface. Each adapter carries the per-provider knowledge the shared proxy depends on:
 
 ```go
 type providerAdapter interface {
@@ -63,7 +63,7 @@ In detail:
 - **Usage extraction**: `extractUsage` and `accumulateStreamUsage` know where each provider puts token counts (`usage.input_tokens` / `usage.output_tokens` for Anthropic, `usage.prompt_tokens` / `usage.completion_tokens` for OpenAI, `usageMetadata.promptTokenCount` / `usageMetadata.candidatesTokenCount` for Google Vertex), for both buffered and streamed responses. See [Streaming responses](request-handling.md#streaming-responses).
 - **Request fixups**: the OpenAI adapter injects `stream_options: {"include_usage": true}` into streaming requests when absent, and the Vertex adapter appends `?alt=sse` to `:streamGenerateContent` requests when absent and rewrites the URL path's `{model}` segment to the raw model ID. Both fixups exist so usage data is observable, see [Streaming responses](request-handling.md#streaming-responses).
 
-Provider health probes are not an adapter concern: the [ModelProviderReconciler](../../controller/reconcilers.md#modelproviderreconciler) runs them, using the same credential material as live traffic. The adapter interface is deliberately narrow. Format translation for a fallback edge that crosses formats lives outside the adapters ([Crossing formats](fallback.md#crossing-formats)), so an adapter never converts one provider's request shape into another's.
+Provider health probes are not an adapter concern: the [ModelProviderReconciler](../../controller/reconcilers.md#modelproviderreconciler) runs them, using the same credential material as live traffic. The adapter interface has only the six methods in the preceding definition. Format translation for a fallback edge that crosses formats lives outside the adapters ([Crossing formats](fallback.md#crossing-formats)), so an adapter never converts one provider's request format into another's.
 
 ## Upstream TLS configuration
 

@@ -34,7 +34,7 @@ Seven endpoints are for Kaalm's own components. Every one requires a client cert
 | `POST /v1/test-chat`, `GET /v1/spend` | Gateway `:8443` | Console |
 | `POST /v1/activate/{namespace}/{agentName}` | Controller `:9443` | Gateway |
 
-One per-path middleware admits the Agent and AgentTask SAN family on the two report paths and checks the kind against the path, so an Agent calling `/v1/task/complete` is rejected with `403` before the handler runs. The path-to-regime table is [The :8443 listener profile](../gateways/overview.md#the-8443-listener-profile); the SAN shapes are on [Workload identity](../gateways/llm/workload-identity.md); the endpoints themselves are on [Internal endpoints](../gateways/api/internal-endpoints.md) and [The activator](../gateways/user/activation-and-activity.md#the-activator).
+One per-path middleware admits both SAN shapes, Agent and AgentTask, on the two report paths and checks the kind against the path, so an Agent calling `/v1/task/complete` is rejected with `403` before the handler runs. The path-to-regime table is [The :8443 listener profile](../gateways/overview.md#the-8443-listener-profile); the SAN shapes are on [Workload identity](../gateways/llm/workload-identity.md); the endpoints themselves are on [Internal endpoints](../gateways/api/internal-endpoints.md) and [The activator](../gateways/user/activation-and-activity.md#the-activator).
 
 ## Deployment model
 

@@ -11,9 +11,9 @@ state "Blocked" as Blocked
 
 [*] --> Normal : period opens
 
-Normal --> Throttled : spend crosses a degrade policy's atPercent
-Normal --> Blocked : spend crosses a block policy's atPercent
-Throttled --> Blocked : spend crosses a block policy's atPercent
+Normal --> Throttled : spend reaches a degrade policy's atPercent
+Normal --> Blocked : spend reaches a block policy's atPercent
+Throttled --> Blocked : spend reaches a block policy's atPercent
 
 Blocked --> Normal : period rollover, or a spec edit
 Throttled --> Normal : period rollover, or a spec edit

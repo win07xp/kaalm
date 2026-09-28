@@ -35,9 +35,9 @@ Every call passes the gates below in order, and every rejection fires before the
 | 9 | Every artifact value is within 4 KiB and the combined payload within 32 KiB | `413 request_too_large` | `false` |
 | 10 | The ConfigMap `Patch` succeeds | `503 internal_unavailable`, `Retry-After: 1` | `true` |
 
-The live `List Pods` in gate 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches gate 7 and at worst receives the retryable `409 stale_pod`. The fallback is scoped to this path alone: heartbeats are periodic and recover on the next tick, and a fleet-wide fallback would turn an informer resync into a live-List stampede.
+The live `List Pods` in gate 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches gate 7 and at worst receives the retryable `409 stale_pod`. The fallback is scoped to this path alone: heartbeats are periodic and recover on the next tick, and a fleet-wide fallback would turn an informer resync into a burst of live `List` calls against the apiserver.
 
-Gate 7 is the identity gate proper. It closes the stale-write race after a `backoffLimit` retry, where an old Pod's delayed completion would otherwise overwrite the new Pod's data, and it is the same rejection a new Pod can receive in the restamp-lag window described under [Race windows](#race-windows), which is why it is retryable. Gate 6 exists because the reconciler does not re-process the mailbox once the phase is terminal; without the gate the agent's write would be silently dropped.
+Gate 7 is the identity gate proper. It closes the stale-write race after a `backoffLimit` retry, where an old Pod's delayed completion would otherwise overwrite the new Pod's data, and it is the same rejection a new Pod can receive before the gateway sees its UID, as described under [Race windows](#race-windows), which is why it is retryable. Gate 6 exists because the reconciler does not re-process the mailbox once the phase is terminal; without the gate the agent's write would be silently dropped.
 
 ## Request body
 
@@ -106,7 +106,7 @@ Every message starts with its reason code followed by `: `, so a caller can tell
 
 ### 409 Conflict
 
-Returned when the calling Pod's UID does not match `status.currentPodUID`, or the field is empty: gate 7 under [The identity gate](#the-identity-gate). `error.type` is `stale_pod`, `retryable` is `true`, and `error.message` is `StalePodCompletion: the calling Pod is not the task's current Pod`. The call conflicts with the task's current state rather than being refused for good: after a restamp the same Pod's retry can succeed, which is why the code is `409` and not `403`. See [Race windows](#race-windows).
+Returned when the calling Pod's UID does not match `status.currentPodUID`, or the field is empty: gate 7 under [The identity gate](#the-identity-gate). `error.type` is `stale_pod`, `retryable` is `true`, and `error.message` is `StalePodCompletion: the calling Pod is not the task's current Pod`. The call conflicts with the task's current state rather than being refused for good: once the gateway sees the new UID, the same Pod's retry can succeed, which is why the code is `409` and not `403`. See [Race windows](#race-windows).
 
 ### 413 Payload Too Large
 
@@ -118,14 +118,14 @@ Returned when the `Patch` against the completion ConfigMap fails after every gat
 
 ## Race windows
 
-Re-completion across a `backoffLimit` retry is the supported multi-call path. The reconciler clears `status.currentPodUID`, resets the mailbox to `data: {}`, creates the replacement Pod, and stamps the new UID once it observes the Pod; the order and the figure are under [Retry mechanics](../../controller/task-lifecycle.md#retry-mechanics). Any in-flight call from the old Pod fails gate 7, and the new Pod's call lands on a fresh mailbox under the new UID.
+Re-completion across a `backoffLimit` retry is the supported multi-call path. The reconciler clears `status.currentPodUID`, resets the mailbox to `data: {}`, creates the replacement Pod, and sets `status.currentPodUID` to the new Pod's UID from the Create response; the order and the figure are under [Retry mechanics](../../controller/task-lifecycle.md#retry-mechanics). Any in-flight call from the old Pod fails gate 7, and the new Pod's call lands on a fresh mailbox under the new UID.
 
-There is a narrow restamp-lag window, typically under 100ms of informer lag against seconds of agent startup, where the new Pod's first call races the UID stamp and receives `409 stale_pod`. This is the transient, retryable form of that code.
+The gateway sees the new UID after an informer lag, typically under 100ms, while agent startup takes seconds. A first call from the new Pod inside that lag receives `409 stale_pod`. This is the transient, retryable form of that code.
 
 ## Retry guidance
 
 - **`retryable: false`** on `400`, `413`, and the `NotAgentTaskPod`, `TaskNotAgentReported`, and `TaskAlreadyCompleted` reasons: a duplicate call from the same Pod hits the same outcome. On `TaskAlreadyCompleted` the task is terminal and further writes are rejected by design; the agent should log and exit.
-- **`retryable: true`** on `409 stale_pod` and `503 internal_unavailable`: the restamp lag is transient, and so are the conditions behind a `503` (an apiserver flap, a leader election, brief etcd unavailability).
+- **`retryable: true`** on `409 stale_pod` and `503 internal_unavailable`: the lag before the gateway sees the new UID is transient, and so are the conditions behind a `503` (an apiserver flap, a leader election, brief etcd unavailability).
 
 Agents should retry both retryable cases with bounded backoff per [The runtime contract](../../runtime/contract.md), item 6: 100ms, 500ms, 2s, 3 attempts at most. For `503`, the `Retry-After: 1` floor also applies.
 

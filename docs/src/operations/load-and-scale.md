@@ -158,7 +158,7 @@ Task throughput on this environment is certificate issuance throughput: the run 
 
 ### Soak
 
-A 60-minute hold at the peak fleet with the same settings as the three-minute hold (`make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'`, September 12, 2026, product code `a828022`), sampled once a minute. The soak's result file is not committed, so these figures have no source in the repository; the next soak run is the one to commit as a baseline.
+A 60-minute hold at the peak fleet with the same settings as the three-minute hold (`make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'`, September 12, 2026, product code `a828022`), sampled once a minute. The soak's result file is not committed, so these figures have no source in the repository; the next soak run's result file becomes the committed baseline.
 
 | Measure | Value |
 |---|---|

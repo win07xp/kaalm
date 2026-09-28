@@ -101,7 +101,7 @@ An in-scope command becomes one envelope:
 
 The gateway sends the reply to `gateway.platforms.discord.apiBaseUrl` (default `https://discord.com/api/v10`), split into chunks of at most 2000 characters. A chunk breaks at the last newline in the second half of its window when there is one, so a long reply reads as continued paragraphs. An empty reply is sent as the literal text `(empty reply)`. An error from the delivery pipeline is sent as the text `{error.type}: {error.message}`.
 
-The interaction token authenticates the first two request shapes; no bot token is needed for them.
+The interaction token authenticates the first two of the following requests; no bot token is needed for them.
 
 1. The first chunk replaces the deferred message:
 

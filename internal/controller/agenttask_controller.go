@@ -258,7 +258,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 		r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
 		task.Status.PodName = desired.Name
-		// The class snapshot for this attempt: a retry's new Pod stamps the
+		// The class snapshot for this attempt: a retry's new Pod copies the
 		// bounds again from the class as it then stands.
 		task.Status.ClassBounds = classTaskBounds(class)
 		if isAgentReported(task) {
@@ -278,11 +278,11 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
 	}
 
-	// Stamp identity on the observed Pod (re-opens the gate after a retry). A
-	// podName that does not match means the status write after the Pod's
-	// creation was lost, so the class bounds are stamped with it. A Pod
+	// Repair the observed Pod's identity when the status write after its
+	// creation was lost (re-opens the gate after a retry). A podName that does
+	// not match shows the loss, so the class bounds are written with it. A Pod
 	// created before status.classBounds existed has a matching podName and
-	// stays unstamped.
+	// keeps no bounds.
 	lost := task.Status.PodName != pod.Name
 	if lost || (isAgentReported(task) && task.Status.CurrentPodUID != string(pod.UID)) {
 		if lost {
@@ -461,7 +461,8 @@ func (r *AgentTaskReconciler) failOrRetry(
 
 // retry runs the documented sequence in order: increment retries, clear the
 // UID (gate closes), delete the old Pod, reset the mailbox, transition back to
-// Provisioning. The new Pod's UID is stamped when the informer observes it.
+// Provisioning. The next pass creates the new Pod and writes its UID from
+// the Create response.
 // The clear-before-reset ordering is load-bearing: resetting the mailbox first
 // would let an in-flight stale write land on the fresh mailbox.
 func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string) error {
@@ -542,7 +543,7 @@ func (r *AgentTaskReconciler) settle(
 }
 
 // handleTTL deletes a terminal task once its effective ttlSecondsAfterFinished
-// has elapsed: the current spec within the class bounds stamped at Pod
+// has elapsed: the current spec within the class bounds copied at Pod
 // creation, so a class edit after that never reaches the task.
 func (r *AgentTaskReconciler) handleTTL(ctx context.Context, task *kaalmv1beta1.AgentTask) (ctrl.Result, error) {
 	ttl := taskTTL(task)
@@ -761,7 +762,7 @@ func runningRequeue(task *kaalmv1beta1.AgentTask) ctrl.Result {
 }
 
 // taskTimeout is the effective completion timeout: the current spec within
-// the class bounds stamped when the current Pod was created, so an owner's
+// the class bounds copied when the current Pod was created, so an owner's
 // edit applies at once and a class edit never reaches the task.
 func taskTimeout(task *kaalmv1beta1.AgentTask) time.Duration {
 	return effectiveTaskTimeout(task, task.Status.ClassBounds)
@@ -789,7 +790,7 @@ func podExitMessage(pod *corev1.Pod) string {
 }
 
 // isTerminalTaskPhase covers the phases that only wait for TTL. Failed is
-// terminal too once settle() has stamped completionTime; the crash-interrupted
+// terminal too once settle() has set completionTime; the crash-interrupted
 // retry case is filtered before this check in Reconcile.
 func isTerminalTaskPhase(p kaalmv1beta1.AgentTaskPhase) bool {
 	switch p {

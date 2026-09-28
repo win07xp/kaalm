@@ -2,7 +2,7 @@
 
 This page describes the lifecycle as you observe it: what the phases mean in
 `kubectl get agents -w`, what hibernation looks like, and what deletion
-actually tears down.
+removes.
 
 ## The phase walk
 

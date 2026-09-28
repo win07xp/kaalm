@@ -68,7 +68,7 @@ spec:
           port: 9444
 ```
 
-**The `kaalm-system` rule.** The CRD files are static: Helm applies `crds/` verbatim and never templates it, so both the Service reference and the cainjector annotation name the namespace by hand. The chart already targets `kaalm-system` (every SAN, every `$KAALM_GATEWAY_ENDPOINT`, and every internal RPC in this book assumes it), and the conversion stanza makes that a stated rule rather than a convention: the release namespace is `kaalm-system`. The alternative, the controller stamping `clientConfig` and `caBundle` into the CRDs itself at startup, would keep the chart namespace-agnostic at the cost of operator code in the certificate path and was not taken.
+**The `kaalm-system` rule.** The CRD files are static: Helm applies `crds/` verbatim and never templates it, so both the Service reference and the cainjector annotation name the namespace by hand. The chart already targets `kaalm-system` (every SAN, every `$KAALM_GATEWAY_ENDPOINT`, and every internal RPC in this book assumes it), and the conversion stanza makes that a stated rule rather than a convention: the release namespace is `kaalm-system`. The alternative, the controller writing `clientConfig` and `caBundle` into the CRDs itself at startup, would keep the chart namespace-agnostic at the cost of operator code in the certificate path and was not taken.
 
 ### What depends on the webhook
 
@@ -88,7 +88,7 @@ Trust runs one way. The apiserver verifies the controller against the `caBundle`
 
 The upgrade procedure is the [Rolling upgrade order](deployment.md#rolling-upgrade-order) on the Deployment page, and the graduation is why it is documented that way. From a release before v0.6.0:
 
-1. **Apply the CRDs from the new chart.** `kubectl apply --server-side --force-conflicts -f crds/` adds `v1beta1` to each CRD, makes it the storage version, marks `v1alpha1` deprecated, and adds the conversion stanza. `--force-conflicts` is part of the command, not an escape hatch: Helm is the field manager for every CRD field from the install, and the first server-side apply must take that management over. cainjector fills the `caBundle` immediately, because the `kaalm-controller-tls` Certificate already exists.
+1. **Apply the CRDs from the new chart.** `kubectl apply --server-side --force-conflicts -f crds/` adds `v1beta1` to each CRD, makes it the storage version, marks `v1alpha1` deprecated, and adds the conversion stanza. `--force-conflicts` is a required part of the command, not a workaround: Helm is the field manager for every CRD field from the install, and the first server-side apply must take that management over. cainjector fills the `caBundle` immediately, because the `kaalm-controller-tls` Certificate already exists.
 2. **Upgrade the release.** `helm upgrade` rolls the controller (which now serves the conversion listener and opens the Service port) and the gateway; with `--wait` the command returns when both rollouts are complete.
 
 Nothing else. Agents and tasks keep running, their Pods are not touched by the upgrade (a Pod is replaced only when the desired Pod spec changes, per [Change propagation](../controller/change-propagation.md), which a version change does not do), and the storage migration described next runs on its own.
