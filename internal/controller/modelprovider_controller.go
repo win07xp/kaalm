@@ -90,8 +90,14 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Credentials.
 	credential, credReason, credMsg := r.credential(ctx, &mp)
 	if credReason != kaalmv1beta1.ReasonCredentialsValid {
+		first := readyFalseIsNew(mp.Status.Conditions, credReason)
 		r.setReady(&mp, false, credReason, credMsg)
-		return r.finish(ctx, &mp, ctrl.Result{})
+		res, err := r.finish(ctx, &mp, ctrl.Result{})
+		// On the rising edge only, and after the status write.
+		if err == nil && first {
+			r.Recorder.Event(&mp, corev1.EventTypeWarning, credReason, credMsg)
+		}
+		return res, err
 	}
 
 	// Config validation: fallback tree and degrade targets.
@@ -378,7 +384,7 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 				"budget.hard.boundaryMarginPercent to uphold the hard-enforcement guarantee",
 		})
 		if !was {
-			r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ConditionBoundaryMarginRaised,
+			r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonBoundaryMarginRaised,
 				"observed traffic exceeded the configured boundary margin; size the knob from the overspend-bound formula")
 		}
 		return

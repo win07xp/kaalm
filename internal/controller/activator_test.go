@@ -198,7 +198,12 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "act-agent"}, &ag); err != nil {
 			return err
 		}
-		if ag.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationWakeChannel {
+		// The activator writes the wake and its trigger in one patch.
+		if ag.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue {
+			if ag.Annotations[kaalmv1beta1.AnnotationWakeTrigger] != kaalmv1beta1.AnnotationWakeTriggerChannel {
+				t.Errorf("wake written without %s=%s", kaalmv1beta1.AnnotationWakeTrigger,
+					kaalmv1beta1.AnnotationWakeTriggerChannel)
+			}
 			return nil
 		}
 		var events corev1.EventList

@@ -87,8 +87,14 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		var reason, msg string
 		credential, reason, msg = r.credential(ctx, &tp)
 		if reason != kaalmv1beta1.ReasonCredentialsValid {
+			first := readyFalseIsNew(tp.Status.Conditions, reason)
 			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false, reason, msg)
-			return r.finish(ctx, &tp, ctrl.Result{})
+			res, err := r.finish(ctx, &tp, ctrl.Result{})
+			// On the rising edge only, and after the status write.
+			if err == nil && first {
+				r.Recorder.Event(&tp, corev1.EventTypeWarning, reason, msg)
+			}
+			return res, err
 		}
 		readyMsg = "provider is valid"
 	}

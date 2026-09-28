@@ -160,8 +160,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Hibernating stays on the Agent: driveHibernating finishes the Pod
 	// deletion, settles Hibernated, and requeues so this step then commits
 	// Resuming.
-	if _, wake := wakeTrigger(&agent); wake && agent.Status.Phase != kaalmv1beta1.AgentHibernating {
-		return r.handleWake(ctx, &agent)
+	if handled, res, err := r.reconcileWakeAnnotations(ctx, &agent); handled {
+		return res, err
 	}
 
 	// Step 1: the system namespace is forbidden (SAN-integrity guard).
@@ -301,6 +301,29 @@ func (r *AgentReconciler) childConflict(
 	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
+// reconcileWakeAnnotations runs step 1: a wake request on an Agent that is
+// not Hibernating is handled and ends the pass. A wake-trigger annotation
+// with no wake request is left over (a controller that predates the trigger
+// annotation consumed the wake and kept it); it is removed and the pass ends,
+// so a later manual wake is not counted as a channel wake.
+func (r *AgentReconciler) reconcileWakeAnnotations(
+	ctx context.Context, agent *kaalmv1beta1.Agent,
+) (bool, ctrl.Result, error) {
+	_, wake := wakeTrigger(agent)
+	if wake && agent.Status.Phase != kaalmv1beta1.AgentHibernating {
+		res, err := r.handleWake(ctx, agent)
+		return true, res, err
+	}
+	if _, trigger := agent.Annotations[kaalmv1beta1.AnnotationWakeTrigger]; trigger && !wake {
+		delete(agent.Annotations, kaalmv1beta1.AnnotationWakeTrigger)
+		if err := r.Update(ctx, agent); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		return true, ctrl.Result{Requeue: true}, nil
+	}
+	return false, ctrl.Result{}, nil
+}
+
 // handleWake implements the phase-dependent wake-annotation protocol: on a
 // Hibernated agent the Resuming transition is committed BEFORE the annotation
 // is removed, so an apiserver failure between the two leaves the wake intent
@@ -326,7 +349,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 		}
 		r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonWoken, "waking from hibernation")
 		wakesTotal.WithLabelValues(agent.Namespace, trigger).Inc()
-		delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
+		clearWake(agent)
 		if err := r.Update(ctx, agent); err != nil {
 			// The next reconcile observes the annotation on a Resuming agent
 			// and removes it silently.
@@ -336,7 +359,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 	}
 
 	phase := agent.Status.Phase
-	delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
+	clearWake(agent)
 	if err := r.Update(ctx, agent); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1260,20 +1283,30 @@ func (r *AgentReconciler) setReadyGate(agent *kaalmv1beta1.Agent, reason, msg st
 // Wake triggers, the kaalm_wakes_total trigger label values.
 const (
 	wakeTriggerChannel    = "channel"    // the activator, on a channel message
-	wakeTriggerAnnotation = "annotation" // anyone else who set the annotation to "true"
+	wakeTriggerAnnotation = "annotation" // anyone else who set kaalm.io/wake=true
 )
 
-// wakeTrigger reports whether the Agent carries a wake request and who made
-// it. The activator writes AnnotationWakeChannel; "true" is a manual wake
-// (kubectl annotate). Any other value is not a wake request.
+// wakeTrigger reports whether the Agent carries a wake request
+// (kaalm.io/wake=true) and who made it. The activator writes
+// kaalm.io/wake-trigger=channel in the same patch as the wake; with no
+// trigger annotation the wake is manual (kubectl annotate). The wake value
+// stays "true" for every trigger, so a controller that predates the trigger
+// annotation still honors an activator wake during a rollout.
 func wakeTrigger(agent *kaalmv1beta1.Agent) (string, bool) {
-	switch agent.Annotations[kaalmv1beta1.AnnotationWake] {
-	case kaalmv1beta1.AnnotationWakeChannel:
-		return wakeTriggerChannel, true
-	case kaalmv1beta1.AnnotationTrue:
-		return wakeTriggerAnnotation, true
+	if agent.Annotations[kaalmv1beta1.AnnotationWake] != kaalmv1beta1.AnnotationTrue {
+		return "", false
 	}
-	return "", false
+	if agent.Annotations[kaalmv1beta1.AnnotationWakeTrigger] == kaalmv1beta1.AnnotationWakeTriggerChannel {
+		return wakeTriggerChannel, true
+	}
+	return wakeTriggerAnnotation, true
+}
+
+// clearWake removes the wake request and its trigger together, so a trigger
+// never outlives the wake it labeled.
+func clearWake(agent *kaalmv1beta1.Agent) {
+	delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
+	delete(agent.Annotations, kaalmv1beta1.AnnotationWakeTrigger)
 }
 
 func (r *AgentReconciler) setReady(agent *kaalmv1beta1.Agent, ok bool, reason, msg string) {

@@ -90,3 +90,26 @@ func TestAgentClass_InvalidReferenceEmitsWarning(t *testing.T) {
 	expectEvent(t, "AgentClass", "", "ev-badref-class", kaalmv1beta1.ReasonInvalidReference,
 		corev1.EventTypeWarning, `allowedProvider "ev-no-such-provider" does not exist`)
 }
+
+// A provider whose credential Secret is missing reports it as a Warning, once.
+func TestModelProvider_CredentialsMissingEmitsWarningOnce(t *testing.T) {
+	mkProvider(t, "ev-mp-nocred", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "ev-mp-absent", Key: "token"}
+	})
+	expectEvent(t, "ModelProvider", "", "ev-mp-nocred", kaalmv1beta1.ReasonCredentialsMissing,
+		corev1.EventTypeWarning, "ev-mp-absent")
+	time.Sleep(time.Second)
+	if n := eventCount(objectEvents(t, "ModelProvider", "", "ev-mp-nocred", kaalmv1beta1.ReasonCredentialsMissing)); n != 1 {
+		t.Errorf("CredentialsMissing emitted %d times, want 1", n)
+	}
+}
+
+func TestToolProvider_CredentialsMissingEmitsWarningOnce(t *testing.T) {
+	mkToolProvider(t, "ev-tp-nocred", nil)
+	expectEvent(t, "ToolProvider", "", "ev-tp-nocred", kaalmv1beta1.ReasonCredentialsMissing,
+		corev1.EventTypeWarning, "ev-tp-nocred-key")
+	time.Sleep(time.Second)
+	if n := eventCount(objectEvents(t, "ToolProvider", "", "ev-tp-nocred", kaalmv1beta1.ReasonCredentialsMissing)); n != 1 {
+		t.Errorf("CredentialsMissing emitted %d times, want 1", n)
+	}
+}

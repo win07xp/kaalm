@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -618,61 +619,101 @@ func terminatingPods(t *testing.T, name string) []corev1.Pod {
 	return out
 }
 
-// The wake annotation's value says who asked: the activator writes
-// "channel", and any "true" is a manual wake. Other values are not wakes.
+// kaalm.io/wake=true requests a wake; kaalm.io/wake-trigger=channel, which
+// the activator writes with it, labels it a channel wake. Without the trigger
+// annotation the wake is manual.
 func TestWakeTrigger(t *testing.T) {
 	for _, tc := range []struct {
-		value, trigger string
-		ok             bool
+		name, wake, trigger string
+		want                string
+		ok                  bool
 	}{
-		{kaalmv1beta1.AnnotationWakeChannel, wakeTriggerChannel, true},
-		{kaalmv1beta1.AnnotationTrue, wakeTriggerAnnotation, true},
-		{"yes", "", false},
-		{"", "", false},
+		{"activator", kaalmv1beta1.AnnotationTrue, kaalmv1beta1.AnnotationWakeTriggerChannel, wakeTriggerChannel, true},
+		{"manual", kaalmv1beta1.AnnotationTrue, "", wakeTriggerAnnotation, true},
+		{"unknown trigger", kaalmv1beta1.AnnotationTrue, "other", wakeTriggerAnnotation, true},
+		{"trigger without wake", "", kaalmv1beta1.AnnotationWakeTriggerChannel, "", false},
+		{"not true", "channel", "", "", false},
 	} {
-		ag := &kaalmv1beta1.Agent{}
-		if tc.value != "" {
-			ag.Annotations = map[string]string{kaalmv1beta1.AnnotationWake: tc.value}
+		ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}}}
+		if tc.wake != "" {
+			ag.Annotations[kaalmv1beta1.AnnotationWake] = tc.wake
 		}
-		trigger, ok := wakeTrigger(ag)
-		if trigger != tc.trigger || ok != tc.ok {
-			t.Errorf("value %q: wakeTrigger = (%q, %v), want (%q, %v)", tc.value, trigger, ok, tc.trigger, tc.ok)
+		if tc.trigger != "" {
+			ag.Annotations[kaalmv1beta1.AnnotationWakeTrigger] = tc.trigger
+		}
+		got, ok := wakeTrigger(ag)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("%s: wakeTrigger = (%q, %v), want (%q, %v)", tc.name, got, ok, tc.want, tc.ok)
 		}
 	}
 }
 
-// kaalm_wakes_total counts a wake under the trigger its annotation names.
-func TestHandleWake_CountsByTrigger(t *testing.T) {
-	for _, tc := range []struct{ value, trigger string }{
-		{kaalmv1beta1.AnnotationWakeChannel, wakeTriggerChannel},
-		{kaalmv1beta1.AnnotationTrue, wakeTriggerAnnotation},
+// kaalm_wakes_total counts a wake under its trigger, and consuming the wake
+// removes both annotations, whether it is honored or ignored.
+func TestHandleWake_CountsByTriggerAndClearsBoth(t *testing.T) {
+	for _, tc := range []struct {
+		trigger string
+		want    string
+		phase   kaalmv1beta1.AgentPhase
+	}{
+		{kaalmv1beta1.AnnotationWakeTriggerChannel, wakeTriggerChannel, kaalmv1beta1.AgentHibernated},
+		{"", wakeTriggerAnnotation, kaalmv1beta1.AgentHibernated},
+		{kaalmv1beta1.AnnotationWakeTriggerChannel, wakeTriggerChannel, kaalmv1beta1.AgentRunning},
 	} {
+		name := "wake-" + tc.want + "-" + string(tc.phase)
+		ann := map[string]string{kaalmv1beta1.AnnotationWake: kaalmv1beta1.AnnotationTrue}
+		if tc.trigger != "" {
+			ann[kaalmv1beta1.AnnotationWakeTrigger] = tc.trigger
+		}
 		ag := &kaalmv1beta1.Agent{
-			ObjectMeta: metav1.ObjectMeta{Name: "wake-" + tc.trigger, Namespace: "wake-metric",
-				Annotations: map[string]string{kaalmv1beta1.AnnotationWake: tc.value}},
-			Status: kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentHibernated},
+			ObjectMeta: metav1.ObjectMeta{Name: strings.ToLower(name), Namespace: "wake-metric", Annotations: ann},
+			Status:     kaalmv1beta1.AgentStatus{Phase: tc.phase},
 		}
 		c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 			WithObjects(ag).WithStatusSubresource(ag).Build()
 		r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(8)}
-		before := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.trigger))
+		before := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.want))
 		if _, err := r.handleWake(ctxT(), ag); err != nil {
-			t.Fatalf("%s: handleWake: %v", tc.trigger, err)
+			t.Fatalf("%s: handleWake: %v", name, err)
 		}
-		if got := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.trigger)) - before; got != 1 {
-			t.Errorf("%s: kaalm_wakes_total{trigger=%q} rose by %v, want 1", tc.value, tc.trigger, got)
+		rise := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.want)) - before
+		if tc.phase == kaalmv1beta1.AgentHibernated && rise != 1 {
+			t.Errorf("%s: kaalm_wakes_total{trigger=%q} rose by %v, want 1", name, tc.want, rise)
 		}
-		if ag.Status.Phase != kaalmv1beta1.AgentResuming {
-			t.Errorf("%s: phase = %s, want Resuming", tc.value, ag.Status.Phase)
+		if tc.phase != kaalmv1beta1.AgentHibernated && rise != 0 {
+			t.Errorf("%s: an ignored wake was counted", name)
 		}
-		if _, still := ag.Annotations[kaalmv1beta1.AnnotationWake]; still {
-			t.Errorf("%s: wake annotation not removed", tc.value)
+		var got kaalmv1beta1.Agent
+		if err := c.Get(ctxT(), client.ObjectKeyFromObject(ag), &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{kaalmv1beta1.AnnotationWake, kaalmv1beta1.AnnotationWakeTrigger} {
+			if _, still := got.Annotations[key]; still {
+				t.Errorf("%s: %s not removed", name, key)
+			}
 		}
 	}
 }
 
-// A Hibernated Agent wakes on the activator's value, through the full
-// reconcile path.
+// A trigger annotation with no wake request is left over (an older leader
+// consumed the wake and kept it). The reconciler removes it, so a later
+// manual wake is not counted as a channel wake.
+func TestAgent_StaleWakeTriggerRemoved(t *testing.T) {
+	mkWorkloadAgent(t, "stale-trigger", "stale-trigger-no-class", func(ag *kaalmv1beta1.Agent) {
+		ag.Annotations = map[string]string{
+			kaalmv1beta1.AnnotationWakeTrigger: kaalmv1beta1.AnnotationWakeTriggerChannel,
+		}
+	})
+	eventually(t, func() error {
+		if _, still := getWorkloadAgent(t, "stale-trigger").Annotations[kaalmv1beta1.AnnotationWakeTrigger]; still {
+			return errString("stale wake-trigger annotation not removed")
+		}
+		return nil
+	})
+}
+
+// A Hibernated Agent wakes on the activator's pair of annotations, through
+// the full reconcile path.
 func TestAgent_WakesOnChannelAnnotation(t *testing.T) {
 	mkWorkloadClass(t, "wc-chwake", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
@@ -708,7 +749,8 @@ func TestAgent_WakesOnChannelAnnotation(t *testing.T) {
 		if got.Annotations == nil {
 			got.Annotations = map[string]string{}
 		}
-		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationWakeChannel
+		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationTrue
+		got.Annotations[kaalmv1beta1.AnnotationWakeTrigger] = kaalmv1beta1.AnnotationWakeTriggerChannel
 		return testClient.Update(ctxT(), got)
 	})
 	eventually(t, func() error {
@@ -716,8 +758,10 @@ func TestAgent_WakesOnChannelAnnotation(t *testing.T) {
 		if got.Status.Phase == kaalmv1beta1.AgentHibernated {
 			return errString("still Hibernated")
 		}
-		if _, still := got.Annotations[kaalmv1beta1.AnnotationWake]; still {
-			return errString("wake annotation not consumed")
+		for _, key := range []string{kaalmv1beta1.AnnotationWake, kaalmv1beta1.AnnotationWakeTrigger} {
+			if _, still := got.Annotations[key]; still {
+				return errString(key + " not consumed")
+			}
 		}
 		return nil
 	})
