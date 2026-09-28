@@ -18,7 +18,7 @@ cert-manager and trust-manager are required dependencies. The chart ships the tw
 
 `gateway.externalHostnames` is required when the user listener is exposed through a TLS pass-through Ingress.
 
-**The trust bundle, the `kaalm-ca` ConfigMap.** The gateway never reads the CA Secret. Its trust material arrives as the ConfigMap trust-manager projects, the same bundle agent Pods mount at `/var/run/kaalm/ca.crt` ([Trust bundle projection](../security/tls.md#trust-bundle-projection)). The gateway verifies inbound client certificates against it and verifies the peers it dials against it.
+**The trust bundle, the `kaalm-ca-system` ConfigMap.** The gateway never reads the CA Secret. Its trust material arrives as the ConfigMap the `kaalm-ca-system` Bundle projects into `kaalm-system`, a separate copy of the same CA sources as the `kaalm-ca` ConfigMap agent Pods mount ([Trust bundle projection](../security/tls.md#trust-bundle-projection)). The gateway verifies inbound client certificates against it and verifies the peers it dials against it.
 
 ### Reload mechanism
 

@@ -9,12 +9,13 @@ controller:
     tag: ""            # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
   # Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy.
-  # Trust the cluster CA (kaalm-ca, already mounted at /var/run/kaalm/ca.crt)
-  # for provider health probes, in addition to the public system roots. Enable
-  # this so ModelProviders and ToolProviders whose endpoint is an in-cluster
-  # server with a kaalm-ca-issuer certificate can probe Healthy; it mirrors
-  # gateway.trustClusterCAForUpstream, which governs the same trust for the
-  # forwarding path. Off by default; public providers need only system roots.
+  # Trust the cluster CA (kaalm-ca-system, already mounted at
+  # /var/run/kaalm/ca.crt) for provider health probes, in addition to the
+  # public system roots. Enable this so ModelProviders and ToolProviders
+  # whose endpoint is an in-cluster server with a kaalm-ca-issuer certificate
+  # can probe Healthy; it mirrors gateway.trustClusterCAForUpstream, which
+  # governs the same trust for the forwarding path. Off by default; public
+  # providers need only system roots.
   trustClusterCAForProbes: false
   # An operator-supplied ConfigMap of additional CA certificates to trust for
   # provider health probes, mirroring gateway.upstreamCA. Set configMap to its
@@ -77,11 +78,11 @@ gateway:
     pullPolicy: IfNotPresent
   # Maximum fallback-chain depth for LLM provider routing (KAALM_MAX_FALLBACK_DEPTH).
   maxFallbackDepth: 3
-  # Trust the cluster CA (kaalm-ca, already mounted at /var/run/kaalm/ca.crt) for
-  # upstream provider TLS, in addition to the public system roots. Enable this to
-  # route to in-cluster or self-hosted providers whose endpoint is served with a
-  # cert signed by kaalm-ca-issuer. Off by default; public providers need only
-  # the system roots.
+  # Trust the cluster CA (kaalm-ca-system, already mounted at
+  # /var/run/kaalm/ca.crt) for upstream provider TLS, in addition to the
+  # public system roots. Enable this to route to in-cluster or self-hosted
+  # providers whose endpoint is served with a cert signed by kaalm-ca-issuer.
+  # Off by default; public providers need only the system roots.
   trustClusterCAForUpstream: false
   # An operator-supplied ConfigMap of additional CA certificates to trust for
   # upstream provider TLS (the kaalm-upstream-ca bundle in the design docs). Set
@@ -92,7 +93,7 @@ gateway:
   upstreamCA:
     configMap: ""
     key: ca.crt
-  # Trust the cluster CA (kaalm-ca) for AgentChannel callbackUrl TLS, in addition
+  # Trust the cluster CA (kaalm-ca-system) for AgentChannel callbackUrl TLS, in addition
   # to the public system roots. Enable this to deliver async responses to
   # in-cluster or self-hosted callback receivers served with a kaalm-ca-issuer
   # cert. Off by default; public receivers need only the system roots.
@@ -201,9 +202,27 @@ certManager:
   clusterResourceNamespace: cert-manager
 
 trustManager:
-  # Optional namespaceSelector object passed verbatim into the CA Bundle's
-  # target.namespaceSelector. Empty projects into every non-system namespace.
+  # Optional namespaceSelector object passed verbatim into the workload CA
+  # Bundle's (kaalm-ca) target.namespaceSelector. Empty projects into every
+  # namespace. Narrows the workload Bundle only: the operator reads its own
+  # Bundle, kaalm-ca-system, which always targets the release namespace.
   bundleSelector: {}
+  # Additional trust-manager Bundle sources, rendered verbatim after the
+  # kaalm-ca Secret source into both the kaalm-ca and kaalm-ca-system
+  # Bundles. Used by the CA re-key runbook to keep an old CA certificate
+  # trusted while cert-manager issues a new one, for example:
+  #   extraSources:
+  #     - configMap:
+  #         name: kaalm-ca-old
+  #         key: ca.crt
+  # A Secret source works the same way:
+  #   extraSources:
+  #     - secret:
+  #         name: kaalm-ca-old
+  #         key: ca.crt
+  # trust-manager reads Bundle sources only from its trust namespace, so the
+  # ConfigMap or Secret must live there.
+  extraSources: []
 
 # A default "standard" AgentClass for general-purpose agents. Set false to omit
 # it (platform teams often ship their own). It carries helm.sh/resource-policy:

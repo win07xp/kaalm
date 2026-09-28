@@ -160,7 +160,7 @@ spec:
                     - { key: tls.crt, path: tls.crt }
                     - { key: tls.key, path: tls.key }
               - configMap:
-                  name: kaalm-ca
+                  name: kaalm-ca-system
                   items:
                     - { key: ca.crt, path: ca.crt }
 ---

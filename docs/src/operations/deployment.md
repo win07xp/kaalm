@@ -4,7 +4,7 @@ This page covers how Kaalm is packaged and installed: the Helm chart contents, t
 
 Kaalm has three hard prerequisites, none of which the chart installs for you:
 
-1. **cert-manager**, for TLS lifecycle management. It must run with `--enable-certificate-owner-ref=true`; [In-cluster TLS](../security/tls.md#in-cluster-tls) states why, and as shipped nothing checks the flag.
+1. **cert-manager**, for TLS lifecycle management. It must run with `--enable-certificate-owner-ref=true`; [In-cluster TLS](../security/tls.md#in-cluster-tls) states why. Every `AgentClass`'s `CertificateCleanup` condition ([AgentClass status](../resources/agentclass.md#status)) reports whether the flag is set.
 2. **trust-manager**, to project the Kaalm CA into every namespace.
 3. **A CNI that enforces NetworkPolicy** (see [Network policy prerequisite](#network-policy-prerequisite)).
 
@@ -12,7 +12,7 @@ Kaalm has three hard prerequisites, none of which the chart installs for you:
 
 The chart targets the `kaalm-system` namespace. Install with `--namespace kaalm-system --create-namespace`.
 
-![What the Helm chart installs, by where each object lands: the three prerequisites it does not install; the six CRDs, two ClusterIssuers, two ClusterRoles with bindings, and the standard AgentClass at cluster scope; the two Deployments with PodDisruptionBudgets, two Services, ServiceAccounts, Roles, leaf Certificates, and the session-key Secret in kaalm-system; the console objects when enabled; and the CA Certificate and Bundle in the cluster resource namespace.](../diagrams/helm-install-inventory.svg)
+![What the Helm chart installs, by where each object lands: the three prerequisites it does not install; the six CRDs, two ClusterIssuers, two ClusterRoles with bindings, and the standard AgentClass at cluster scope; the two Deployments with PodDisruptionBudgets, two Services, ServiceAccounts, Roles, leaf Certificates, and the session-key Secret in kaalm-system; the console objects when enabled; and the CA Certificate and the two Bundles in the cluster resource namespace.](../diagrams/helm-install-inventory.svg)
 
 The figure is an inventory. How the cert-manager objects chain together is drawn once, on [Trust chain](../security/tls.md#trust-chain). The leader-election Lease is not in the chart: controller-runtime creates it at runtime.
 
@@ -71,7 +71,7 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `controller.image.repository` / `.tag` / `.pullPolicy` | `ghcr.io/win07xp/kaalm-controller`, appVersion, `IfNotPresent` | The controller image. An empty tag resolves to the chart's `appVersion`. |
 | `gateway.image.repository` / `.tag` / `.pullPolicy` | `ghcr.io/win07xp/kaalm-gateway`, appVersion, `IfNotPresent` | The gateway image. |
 | `gateway.maxFallbackDepth` | `3` | Maximum fallback chain depth for LLM provider routing. Passed to the gateway as its `--max-fallback-depth` flag. See [Fallback logic](../gateways/llm/fallback.md). |
-| `gateway.trustClusterCAForUpstream` | `false` | Also trust the cluster CA (`kaalm-ca`, already mounted) for upstream provider TLS, added to the system roots. Enables in-cluster or self-hosted providers whose HTTPS endpoint is served with a `kaalm-ca-issuer` certificate. Distinct from the operator-supplied `kaalm-upstream-ca` bundle; see [Upstream TLS configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration). |
+| `gateway.trustClusterCAForUpstream` | `false` | Also trust the cluster CA (`kaalm-ca-system`, already mounted) for upstream provider TLS, added to the system roots. Enables in-cluster or self-hosted providers whose HTTPS endpoint is served with a `kaalm-ca-issuer` certificate. Distinct from the operator-supplied `kaalm-upstream-ca` bundle; see [Upstream TLS configuration](../gateways/llm/provider-routing.md#upstream-tls-configuration). |
 | `gateway.upstreamCA.configMap` | `""` | Name of an operator-supplied ConfigMap of additional CA certificates to trust for upstream provider TLS (the `kaalm-upstream-ca` bundle). The chart mounts it and points the gateway at it. Composes with `trustClusterCAForUpstream`: enabling both merges the cluster CA and this bundle into one trust pool. |
 | `gateway.upstreamCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
 | `gateway.trustClusterCAForCallbacks` | `false` | Also trust the cluster CA for `AgentChannel.spec.webhook.callbackUrl` TLS, so async responses can be delivered to in-cluster or self-hosted receivers served with a `kaalm-ca-issuer` certificate. Public receivers need only the system roots. |
@@ -80,7 +80,7 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `networkPolicy.metricsFrom` | one peer: `namespaceSelector` for `kubernetes.io/metadata.name: monitoring` | NetworkPolicy peers admitted to the metrics ports, controller `:8080` and gateway `:9090`. Point it at the namespace or Pods of your Prometheus. An empty list closes both ports. |
 | `networkPolicy.userListenerFrom` | `[]` | NetworkPolicy peers admitted to the gateway User listener `:8080` and the console `:8443`. Empty admits any source. |
 | `controller.networkPolicy.dnsSelector` | `{ namespaceLabels: { "kubernetes.io/metadata.name": "kube-system" }, podLabels: { "k8s-app": "kube-dns" } }` | Selectors for the DNS egress rule on every synthesized Agent and AgentTask NetworkPolicy, passed to the controller as `--dns-namespace-labels` and `--dns-pod-labels`. |
-| `controller.trustClusterCAForProbes` | `false` | Also trust the cluster CA (`kaalm-ca`, already mounted) for ModelProvider and ToolProvider health probes, added to the system roots. The probe-side mirror of `gateway.trustClusterCAForUpstream`: enable both so an in-cluster provider under a `kaalm-ca-issuer` certificate is both forwarded to and probed `Healthy`. |
+| `controller.trustClusterCAForProbes` | `false` | Also trust the cluster CA (`kaalm-ca-system`, already mounted) for ModelProvider and ToolProvider health probes, added to the system roots. The probe-side mirror of `gateway.trustClusterCAForUpstream`: enable both so an in-cluster provider under a `kaalm-ca-issuer` certificate is both forwarded to and probed `Healthy`. |
 | `controller.probeCA.configMap` | `""` | Name of an operator-supplied ConfigMap of additional CA certificates to trust for health probes, mirroring `gateway.upstreamCA`. Composes with `trustClusterCAForProbes` into one additive pool; the controller re-reads it when it rotates. |
 | `controller.probeCA.key` | `ca.crt` | Key within that ConfigMap holding the PEM bundle. |
 | `controller.maxConcurrentReconciles` | `4` | Reconciles the Agent, AgentChannel, and AgentTask controllers may each run at once. controller-runtime serializes per object at any setting; this lets different objects reconcile in parallel. |
@@ -119,7 +119,8 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `console.logLevel` | `info` | Console log level, passed as `--log-level`: `debug`, `info`, `warn`, or `error`. |
 | `console.resources` | `{}` | Resource requests and limits for the console container, passed verbatim. |
 | `certManager.clusterResourceNamespace` | `"cert-manager"` | Namespace holding the CA `Certificate` and `kaalm-ca` Secret. Must match your cert-manager and trust-manager deployment. See [Certificate lifecycle](#certificate-lifecycle). |
-| `trustManager.bundleSelector` | `{}` | Object with `matchLabels` or `matchExpressions`, passed verbatim as the `kaalm-ca` `Bundle`'s `target.namespaceSelector`. Empty projects into every namespace. A selector must still match `kaalm-system` ([Trust bundle projection](../security/tls.md#trust-bundle-projection)). |
+| `trustManager.bundleSelector` | `{}` | Object with `matchLabels` or `matchExpressions`, passed verbatim as the `kaalm-ca` `Bundle`'s `target.namespaceSelector`. Empty projects into every namespace. Narrows the workload Bundle only: the operator's own Bundle, `kaalm-ca-system`, always targets the release namespace, so a selector that excludes it does not cut the controller, gateway, or console off from trust material ([Trust bundle projection](../security/tls.md#trust-bundle-projection)). |
+| `trustManager.extraSources` | `[]` | Additional trust-manager `Bundle` sources, rendered verbatim after the `kaalm-ca` Secret source into both the `kaalm-ca` and `kaalm-ca-system` Bundles. Used by the [CA re-key runbook](../security/tls.md#ca-renewal-and-re-key) to keep an old CA certificate trusted while cert-manager issues a new one. |
 
 The values that need more than a sentence of explanation follow.
 
@@ -191,11 +192,13 @@ cert-manager and trust-manager are required dependencies, and the chart ships on
 | `Certificate` | `kaalm-console-tls` | `kaalm-system`, with `console.enabled` | The console's serving and client certificate |
 | `Certificate` | `{name}-tls`, per Agent and per AgentTask | the workload's namespace | Created by the reconcilers, not the chart ([Lifecycle of an Agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)) |
 | `Bundle` | `kaalm-ca` | cluster-scoped, sources read from the trust namespace | Projects the CA as the `kaalm-ca` ConfigMap into every namespace |
+| `Bundle` | `kaalm-ca-system` | cluster-scoped, sources read from the trust namespace | Projects the same CA sources into the `kaalm-ca-system` ConfigMap, scoped to the release namespace only; the controller, gateway, and console mount it |
 
 ### Chart values that bind the PKI
 
 - `certManager.clusterResourceNamespace` must name the namespace both controllers resolve cluster-scoped Secrets in (cert-manager's `--cluster-resource-namespace` and trust-manager's `--trust-namespace`, both `cert-manager` by default). A mismatch fails issuance cluster-wide with `SecretNotFound` ([Trust chain](../security/tls.md#trust-chain)).
-- `trustManager.bundleSelector` narrows the projection. Empty, the default, projects into every namespace. A selector must still match `kaalm-system`, or the gateway and controller lose their trust material ([Trust bundle projection](../security/tls.md#trust-bundle-projection)).
+- `trustManager.bundleSelector` narrows the `kaalm-ca` Bundle's projection to workload namespaces. Empty, the default, projects into every namespace. It does not affect `kaalm-ca-system`, the operator's own Bundle, which always targets the release namespace ([Trust bundle projection](../security/tls.md#trust-bundle-projection)).
+- `trustManager.extraSources` adds sources to both Bundles, after the `kaalm-ca` Secret source. Empty by default; the [CA re-key runbook](../security/tls.md#ca-renewal-and-re-key) is the main use.
 - `gateway.externalHostnames` extends the gateway certificate's SANs for a TLS pass-through Ingress ([TLS and Ingress](../gateways/user/overview.md#tls-and-ingress)).
 
 ## Network policy prerequisite
@@ -256,7 +259,7 @@ Values whose change has workload-visible effects are the ones to review before a
 | `gateway.channelHealthWindow` | Changes `PlatformConnected` flapping behavior. |
 | The body-size caps | In-flight requests sized between the old and new caps change fate. |
 | `gateway.externalHostnames` | Re-issues `kaalm-gateway-tls`; the gateway re-reads it on the next handshake. |
-| `trustManager.bundleSelector` | A selector that stops matching `kaalm-system` leaves both Deployments without trust material. |
+| `trustManager.bundleSelector` | Narrows which workload namespaces receive the `kaalm-ca` ConfigMap; does not affect the controller, gateway, or console, which read the separate `kaalm-ca-system` Bundle. |
 | `certManager.clusterResourceNamespace` | Moves the CA `Certificate`; issuance fails until the Secret exists in the new namespace. |
 | `standardAgentClass.enabled: false` | The live `standard` AgentClass stays, because of its `keep` policy. |
 | Deleting `kaalm-gateway-session-key` before the upgrade | Rotates the MCP session key and invalidates every open session ([The session-key Secret](#the-session-key-secret)). |

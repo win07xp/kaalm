@@ -102,7 +102,9 @@ spec:
 # trust-manager projects the CA into workload namespaces as the kaalm-ca
 # ConfigMap (mounted at /var/run/kaalm/ca.crt). trust-manager reads Bundle
 # sources only from its trust namespace, which must equal the cluster resource
-# namespace above.
+# namespace above. trustManager.extraSources follow the kaalm-ca source (the
+# CA re-key runbook's second CA). trustManager.bundleSelector narrows this
+# workload Bundle only; the operator reads kaalm-ca-system below.
 apiVersion: trust.cert-manager.io/v1alpha1
 kind: Bundle
 metadata:
@@ -111,9 +113,7 @@ metadata:
     {{- include "kaalm.labels" . | nindent 4 }}
 spec:
   sources:
-    - secret:
-        name: kaalm-ca
-        key: tls.crt
+    {{- include "kaalm.caBundleSources" . | nindent 4 }}
   target:
     configMap:
       key: ca.crt
@@ -121,3 +121,24 @@ spec:
     namespaceSelector:
       {{- toYaml .Values.trustManager.bundleSelector | nindent 6 }}
     {{- end }}
+---
+# The operator's own copy of the CA: the same sources, projected as the
+# kaalm-ca-system ConfigMap into the release namespace only, where the
+# controller, gateway, and console mount it. No value narrows it, so a
+# bundleSelector that leaves out the release namespace cannot cut the
+# operator off from the CA.
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: kaalm-ca-system
+  labels:
+    {{- include "kaalm.labels" . | nindent 4 }}
+spec:
+  sources:
+    {{- include "kaalm.caBundleSources" . | nindent 4 }}
+  target:
+    configMap:
+      key: ca.crt
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}

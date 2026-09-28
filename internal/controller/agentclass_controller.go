@@ -31,10 +31,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -49,6 +51,10 @@ type AgentClassReconciler struct {
 	// FQDNSupport reports whether the CNI can enforce FQDN egress policies;
 	// production passes a shared FQDNProbe. nil means unsupported.
 	FQDNSupport func() (bool, error)
+	// CertCleanup reports whether cert-manager cleans up workload TLS
+	// Secrets; production passes one check shared by every class. nil omits
+	// the CertificateCleanup condition.
+	CertCleanup *CertCleanupCheck
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agentclasses,verbs=get;list;watch;update;patch
@@ -127,6 +133,16 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// A cluster capability shown on each class, like FQDNPolicySupported.
+	var certCleanup *metav1.Condition
+	if r.CertCleanup != nil {
+		c, err := r.CertCleanup.Condition(ctx)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		certCleanup = &c
+	}
+
 	// Count users.
 	usage, err := r.countUsers(ctx, ac.Name)
 	if err != nil {
@@ -141,6 +157,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	ac.Status.AgentsPendingReplacement = usage.pending
 	apimeta.SetStatusCondition(&ac.Status.Conditions, fqdnCond)
 	apimeta.SetStatusCondition(&ac.Status.Conditions, baseline)
+	if certCleanup != nil {
+		apimeta.SetStatusCondition(&ac.Status.Conditions, *certCleanup)
+	}
 	if len(problems) == 0 {
 		apimeta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionReady,
@@ -281,13 +300,36 @@ func fqdnSupported(fn func() (bool, error)) (bool, error) {
 
 // SetupWithManager wires the reconciler and its cross-resource watches.
 func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kaalmv1beta1.AgentClass{}).
 		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider)).
 		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider)).
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
-		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
-		Complete(r)
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload))
+	if r.CertCleanup != nil {
+		// cert-manager adds or removes the ownerReference on the controller
+		// Secret when its flag changes; re-evaluate every class then.
+		key := r.CertCleanup.Secret
+		b = b.Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.allClasses),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetNamespace() == key.Namespace && o.GetName() == key.Name
+			})))
+	}
+	return b.Complete(r)
+}
+
+// allClasses re-enqueues every AgentClass, for a cluster-wide input such as
+// the certificate cleanup check.
+func (r *AgentClassReconciler) allClasses(ctx context.Context, _ client.Object) []reconcile.Request {
+	var classes kaalmv1beta1.AgentClassList
+	if err := r.List(ctx, &classes); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(classes.Items))
+	for _, c := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	}
+	return reqs
 }
 
 // classesForToolProvider re-enqueues every AgentClass whose
