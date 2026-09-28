@@ -18,17 +18,19 @@ package gcpauth
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-
-	"golang.org/x/oauth2/jws"
 )
 
 func testKeyPEM(t *testing.T) (*rsa.PrivateKey, string) {
@@ -42,6 +44,34 @@ func testKeyPEM(t *testing.T) (*rsa.PrivateKey, string) {
 		t.Fatal(err)
 	}
 	return pk, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+}
+
+type assertionClaims struct {
+	Iss   string `json:"iss"`
+	Scope string `json:"scope"`
+}
+
+// verifyRS256 checks a compact JWS signed RS256 by pub and returns its
+// claims.
+func verifyRS256(token string, pub *rsa.PublicKey) (assertionClaims, error) {
+	var claims assertionClaims
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return claims, errors.New("not a compact JWS")
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return claims, err
+	}
+	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, sum[:], sig); err != nil {
+		return claims, err
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return claims, err
+	}
+	return claims, json.Unmarshal(payload, &claims)
 }
 
 func keyJSON(t *testing.T, fields map[string]string) []byte {
@@ -112,13 +142,12 @@ func TestAccessToken(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		assertion := r.Form.Get("assertion")
-		if err := jws.Verify(assertion, &pk.PublicKey); err != nil {
+		claims, err := verifyRS256(r.Form.Get("assertion"), &pk.PublicKey)
+		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		claims, err := jws.Decode(assertion)
-		if err != nil || claims.Scope != CloudPlatformScope || claims.Iss != "sa@proj.iam.gserviceaccount.com" {
+		if claims.Scope != CloudPlatformScope || claims.Iss != "sa@proj.iam.gserviceaccount.com" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
