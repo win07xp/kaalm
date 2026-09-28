@@ -154,8 +154,10 @@ func TestAPI_NamespacesFiltered(t *testing.T) {
 
 func TestAPI_FleetShape(t *testing.T) {
 	h := newAPIHarness(t)
-	got := decode[map[string][]FleetRow](t, h.get(t, "/api/v1/namespaces/team-a/agents", "priya-token"))
-	rows := got["agents"]
+	got := decode[struct {
+		Agents []FleetRow `json:"agents"`
+	}](t, h.get(t, "/api/v1/namespaces/team-a/agents", "priya-token"))
+	rows := got.Agents
 	if len(rows) != 2 || rows[1].Name != "support-assistant" || rows[1].Phase != "Hibernated" {
 		t.Errorf("fleet = %+v", rows)
 	}
@@ -227,5 +229,149 @@ func TestAPI_SessionCookieAuth(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("session-cookie call = %d, want 200", resp.StatusCode)
+	}
+}
+
+// countingReader serves an endless body and counts the bytes read from it.
+type countingReader struct{ n int64 }
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'a'
+	}
+	c.n += int64(len(p))
+	return len(p), nil
+}
+
+func TestAPI_ChatBodyCap(t *testing.T) {
+	h := newAPIHarness(t)
+	h.server.Config.MaxMessageBodyBytes = 64
+	h.chat.lastUID = ""
+
+	body := &countingReader{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/team-a/agents/support-assistant/chat",
+		io.MultiReader(strings.NewReader(`{"content":"`), body))
+	req.Header.Set("Authorization", "Bearer priya-token")
+	rec := httptest.NewRecorder()
+	h.server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized chat = %d, want 413 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "request_too_large") {
+		t.Errorf("413 body = %s, want the request_too_large envelope", rec.Body)
+	}
+	// The cap stops the read: the console never buffers the whole body.
+	if body.n > 4096 {
+		t.Errorf("read %d bytes of an endless body; the cap must stop the read", body.n)
+	}
+	if h.chat.lastUID != "" {
+		t.Error("an oversized chat must not reach the gateway")
+	}
+
+	// A body under the cap still goes through.
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/team-a/agents/support-assistant/chat",
+		strings.NewReader(`{"content":"hi"}`))
+	req.Header.Set("Authorization", "Bearer priya-token")
+	rec = httptest.NewRecorder()
+	h.server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("small chat = %d, want 200", rec.Code)
+	}
+}
+
+func TestNewServer_DefaultsChatBodyCap(t *testing.T) {
+	s := NewServer(Config{}, seededData(t), &fakeReviewer{}, NewGate(&fakeAuthorizer{}), &fakeChat{})
+	if s.Config.MaxMessageBodyBytes != 1<<20 {
+		t.Errorf("default chat body cap = %d, want 1 MiB", s.Config.MaxMessageBodyBytes)
+	}
+}
+
+func TestAPI_NamespacesClusterWideGrantSkipsTheLoop(t *testing.T) {
+	h := newAPIHarness(t)
+	h.authz.allowed["priya/list/agents.kaalm.io/"] = true
+
+	before := h.authz.calls
+	got := decode[map[string][]string](t, h.get(t, "/api/v1/namespaces", "priya-token"))
+	if ns := got["namespaces"]; len(ns) != 2 {
+		t.Errorf("priya sees %v, want both namespaces", ns)
+	}
+	if calls := h.authz.calls - before; calls != 1 {
+		t.Errorf("a cluster-wide grant took %d reviews, want 1", calls)
+	}
+
+	// Without the cluster-wide grant the per-namespace loop still filters.
+	got = decode[map[string][]string](t, h.get(t, "/api/v1/namespaces", "dev-token"))
+	if ns := got["namespaces"]; len(ns) != 1 || ns[0] != "team-a" {
+		t.Errorf("dev sees %v, want team-a only", ns)
+	}
+}
+
+func TestAPI_ListLimit(t *testing.T) {
+	h := newAPIHarness(t)
+	type page struct {
+		Agents    []FleetRow   `json:"agents"`
+		Tasks     []TaskRow    `json:"tasks"`
+		Channels  []ChannelRow `json:"channels"`
+		Total     int          `json:"total"`
+		Truncated bool         `json:"truncated"`
+	}
+
+	got := decode[page](t, h.get(t, "/api/v1/namespaces/team-a/agents", "priya-token"))
+	if len(got.Agents) != 2 || got.Total != 2 || got.Truncated {
+		t.Errorf("default agents = %d of %d, truncated %v", len(got.Agents), got.Total, got.Truncated)
+	}
+
+	got = decode[page](t, h.get(t, "/api/v1/namespaces/team-a/agents?limit=1", "priya-token"))
+	if len(got.Agents) != 1 || got.Total != 2 || !got.Truncated {
+		t.Errorf("limit=1 agents = %d of %d, truncated %v", len(got.Agents), got.Total, got.Truncated)
+	}
+	got = decode[page](t, h.get(t, "/api/v1/namespaces/team-a/tasks?limit=1", "priya-token"))
+	if len(got.Tasks) != 1 || !got.Truncated {
+		t.Errorf("limit=1 tasks = %+v", got)
+	}
+	got = decode[page](t, h.get(t, "/api/v1/namespaces/team-a/channels?limit=1", "priya-token"))
+	if len(got.Channels) != 1 || got.Truncated {
+		t.Errorf("limit=1 channels = %+v", got)
+	}
+
+	// Above the hard maximum the limit clamps rather than fails.
+	resp := h.get(t, "/api/v1/namespaces/team-a/agents?limit=5000", "priya-token")
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("limit above the maximum = %d, want 200", resp.StatusCode)
+	}
+
+	for _, bad := range []string{"0", "-1", "ten"} {
+		resp := h.get(t, "/api/v1/namespaces/team-a/tasks?limit="+bad, "priya-token")
+		_ = resp.Body.Close()
+		if resp.StatusCode != 400 {
+			t.Errorf("limit=%s = %d, want 400", bad, resp.StatusCode)
+		}
+	}
+}
+
+func TestListLimit(t *testing.T) {
+	cases := []struct {
+		raw     string
+		want    int
+		wantErr bool
+	}{
+		{"", defaultListLimit, false},
+		{"1", 1, false},
+		{"1000", maxListLimit, false},
+		{"1001", maxListLimit, false},
+		{"0", 0, true},
+		{"x", 0, true},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, "/?limit="+c.raw, nil)
+		got, err := listLimit(r)
+		if (err != nil) != c.wantErr || (!c.wantErr && got != c.want) {
+			t.Errorf("listLimit(%q) = %d, %v", c.raw, got, err)
+		}
+	}
+	if defaultListLimit != 100 || maxListLimit != 1000 {
+		t.Errorf("limits = %d/%d, the book states 100/1000", defaultListLimit, maxListLimit)
 	}
 }

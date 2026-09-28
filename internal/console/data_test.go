@@ -132,12 +132,15 @@ func seededData(t *testing.T) *Data {
 
 func TestData_FleetMapsAndSorts(t *testing.T) {
 	d := seededData(t)
-	rows, err := d.Fleet(context.Background(), "team-a")
+	rows, total, err := d.Fleet(context.Background(), "team-a", defaultListLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 2 || rows[0].Name != "coder" || rows[1].Name != "support-assistant" {
 		t.Fatalf("fleet = %+v, want coder then support-assistant", rows)
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want 2", total)
 	}
 	sup := rows[1]
 	if sup.Phase != "Hibernated" || sup.Ready || sup.Class != "standard" {
@@ -177,7 +180,7 @@ func TestData_AgentDetail(t *testing.T) {
 
 func TestData_TasksNewestFirstAndNamesOnly(t *testing.T) {
 	d := seededData(t)
-	rows, err := d.Tasks(context.Background(), "team-a")
+	rows, _, err := d.Tasks(context.Background(), "team-a", defaultListLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +203,7 @@ func TestData_TasksNewestFirstAndNamesOnly(t *testing.T) {
 
 func TestData_ChannelsAndConditionTriState(t *testing.T) {
 	d := seededData(t)
-	rows, err := d.Channels(context.Background(), "team-a")
+	rows, _, err := d.Channels(context.Background(), "team-a", defaultListLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,5 +248,64 @@ func TestData_Namespaces(t *testing.T) {
 	}
 	if len(names) != 2 || names[0] != "team-a" || names[1] != "team-b" {
 		t.Errorf("namespaces = %v", names)
+	}
+}
+
+// limitedData seeds three of each listed kind in team-a with distinct
+// creation times: "old", "mid", and "new". The task start times run the
+// other way round, so a limit that followed display order would pick wrong.
+func limitedData(t *testing.T) *Data {
+	t.Helper()
+	at := func(day int) metav1.Time { return metav1.NewTime(time.Date(2026, 9, day, 0, 0, 0, 0, time.UTC)) }
+	var objs []client.Object
+	for i, name := range []string{"old", "mid", "new"} {
+		created := at(10 + i)
+		started := at(20 - i)
+		objs = append(objs,
+			&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", CreationTimestamp: created}},
+			&kaalmv1beta1.AgentTask{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", CreationTimestamp: created},
+				Status:     kaalmv1beta1.AgentTaskStatus{StartTime: &started},
+			},
+			&kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", CreationTimestamp: created}},
+		)
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	return &Data{Reader: c}
+}
+
+func TestData_ListsKeepTheNewestByCreationTime(t *testing.T) {
+	d := limitedData(t)
+	ctx := context.Background()
+
+	fleet, total, err := d.Fleet(ctx, "team-a", 2)
+	if err != nil || total != 3 {
+		t.Fatalf("fleet total = %d, %v", total, err)
+	}
+	// The newest two, still in display order (by name).
+	if len(fleet) != 2 || fleet[0].Name != "mid" || fleet[1].Name != "new" {
+		t.Errorf("fleet = %+v, want mid then new", fleet)
+	}
+
+	tasks, total, err := d.Tasks(ctx, "team-a", 2)
+	if err != nil || total != 3 {
+		t.Fatalf("tasks total = %d, %v", total, err)
+	}
+	// The newest two by creation, shown most recently started first.
+	if len(tasks) != 2 || tasks[0].Name != "mid" || tasks[1].Name != "new" {
+		t.Errorf("tasks = %+v, want mid then new", tasks)
+	}
+
+	channels, total, err := d.Channels(ctx, "team-a", 1)
+	if err != nil || total != 3 {
+		t.Fatalf("channels total = %d, %v", total, err)
+	}
+	if len(channels) != 1 || channels[0].Name != "new" {
+		t.Errorf("channels = %+v, want new only", channels)
+	}
+
+	all, total, _ := d.Fleet(ctx, "team-a", defaultListLimit)
+	if len(all) != 3 || total != 3 {
+		t.Errorf("under the limit every row returns: %d of %d", len(all), total)
 	}
 }
