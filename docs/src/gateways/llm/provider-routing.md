@@ -34,7 +34,7 @@ Existing workloads that authenticate with a projected ServiceAccount bearer toke
 
 Provider credentials are stored as Secrets in `kaalm-system` and referenced by ModelProvider. The gateway reads these Secrets directly at startup and watches them for rotation. Credentials never leave `kaalm-system`: there is no per-agent or per-namespace credential copying. The full storage-to-rotation lifecycle, including who else can read the Secret, is in [Lifecycle of an LLM API key](../../security/credentials.md#lifecycle-of-an-llm-api-key).
 
-The credential type is adapter-specific: for Anthropic, OpenAI, and OpenAI-compatible providers, the referenced Secret holds a static API key that the adapter injects as the provider's auth header. The reserved `google-vertex` type is not served: it would need OAuth2 access tokens minted from a GCP service-account key rather than a static key (see [the type's status](request-handling.md#the-google-vertex-type-is-reserved)).
+The credential type is adapter-specific: for Anthropic, OpenAI, and OpenAI-compatible providers, the referenced Secret holds a static API key that the adapter injects as the provider's auth header. For `google-vertex` the Secret holds a GCP service-account JSON key instead of a static key, and only the controller's liveness probe mints an OAuth2 access token from it; the reserved type itself is still not served, so the gateway never reads that credential (see [the type's status](request-handling.md#the-google-vertex-type-is-reserved) and, for the probe, [The google-vertex probe](../../controller/reconcilers.md#the-google-vertex-probe)).
 
 When a credential Secret is updated, the gateway's Secret watcher picks up the change and refreshes the in-memory credential without a restart.
 

@@ -162,6 +162,10 @@ page draws the traversal). The rules to know:
   warns with `MaxOutputTokensUnset` when it cannot). A request using a feature the other format lacks (extended
   thinking, `response_format`) skips that fallback with a
   `FallbackIneligible` event on your provider.
+- A candidate whose `allowedNamespaces` or `models` can never serve one of
+  your callers is flagged before any request reaches it: the reconciler
+  scans the tree on every pass and sets a `FallbackIneligible` condition and
+  event on the primary. The provider stays `Ready`; the scan is advisory.
 - The gateway-level depth cap (`gateway.maxFallbackDepth`, default 3) bounds
   the *total providers attempted per request, including the primary*, not
   the nesting depth.
@@ -177,5 +181,6 @@ page draws the traversal). The rules to know:
 
 *How this works: design book pages Resources, ModelProvider (fallback trees,
 with the diagram of the depth cap), Gateways, LLM, Budgets and rate limits
-(the ledger and the replica exchange), and Gateways, LLM, Fallback logic (the
-traversal pseudocode).*
+(the ledger and the replica exchange), Gateways, LLM, Fallback logic (the
+traversal pseudocode), and Controller, Reconcilers (the reconcile-time
+fallback eligibility scan).*
