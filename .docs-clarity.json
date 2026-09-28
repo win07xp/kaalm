@@ -1,0 +1,30 @@
+{
+  "_about": "Project exceptions for the docs-clarity scan (~/.claude/skills/docs-clarity). A regex under 'except' marks a hit literal when it matches within 20 characters of the term. Add an entry only for a project term or a literal use that recurs, never to silence a vague word.",
+  "except": {
+    "shape": [
+      "\\bSAN\\b",
+      "both shapes",
+      "the shape (gives|names)"
+    ],
+    "crosses": [
+      "crosses formats",
+      "crosses which boundary"
+    ],
+    "owned": [
+      "owned by the Agent(Task)?\\b",
+      "owned child",
+      "Owned children",
+      "not owned",
+      "ownerRef"
+    ],
+    "owns": [
+      "owns each (Agent|AgentTask) child"
+    ],
+    "first class": [
+      "first-class workload type"
+    ],
+    "first-class": [
+      "first-class workload type"
+    ]
+  }
+}
