@@ -301,7 +301,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 		// the controller's activity read is cached per namespace, so the
 		// first Running pass would otherwise see only the pre-sleep record
 		// and send the agent straight back through Idle to Hibernating.
-		// evaluateActivity floors the gateway's record with this stamp.
+		// evaluateActivity floors the gateway's record with this time.
 		woke := metav1.NewTime(r.now())
 		agent.Status.LastActivityTime = &woke
 		r.setReady(agent, false, kaalmv1beta1.ReasonWoken, "wake requested; recreating the Pod")
@@ -408,7 +408,7 @@ func (r *AgentReconciler) evaluateActivity(
 
 	switch agent.Status.Phase {
 	case kaalmv1beta1.AgentRunning:
-		// A wake stamps LastActivityTime (handleWake). Floor the gateway's
+		// A wake sets LastActivityTime to the wake time (handleWake). Floor the gateway's
 		// record with it, so a woken agent gets a full idleTimeout while the
 		// gateway still reports only the activity that preceded its sleep.
 		marker := *last
@@ -443,7 +443,7 @@ func (r *AgentReconciler) evaluateActivity(
 			return ctrl.Result{Requeue: true}
 		}
 		// Measure the hibernation window from a stable silence marker. The
-		// synthetic path uses LastActivityTime (stamped once at the Idle
+		// synthetic path uses LastActivityTime (set once at the Idle
 		// transition), not the advancing PhaseTransitionTime, so the delay is
 		// counted from when silence began rather than reset on every pass.
 		// The real path floors the gateway's record with LastActivityTime for
@@ -963,14 +963,14 @@ func (r *AgentReconciler) convergePod(
 		}
 	}
 
-	// A Pod stamped by an older hash formula that is current under that
-	// formula is not drift: re-stamp it in place so an upgrade that changes
+	// A Pod hashed by an older formula that is current under that formula
+	// is not drift: rewrite its hash annotations in place so an upgrade that changes
 	// the formula replaces no Pod.
 	if err := r.restampLegacyHash(ctx, pod, eff); err != nil {
 		return err
 	}
 
-	// Spec drift: compare the stamped hash against the re-derived one, never
+	// Spec drift: compare the hash in the Pod's annotation against the re-derived one, never
 	// the live Pod object.
 	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
 		r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift",
@@ -1005,9 +1005,10 @@ func podPendingPhase(agent *kaalmv1beta1.Agent) kaalmv1beta1.AgentPhase {
 	return kaalmv1beta1.AgentProvisioning
 }
 
-// restampLegacyHash re-stamps a Pod whose hash came from formula 1 (no
-// hash-version annotation) and still matches that formula: it merge-patches
-// only the two annotations, so the Pod keeps running. A formula-1 Pod whose
+// restampLegacyHash rewrites the hash annotations of a Pod whose hash came
+// from formula 1 (no hash-version annotation) and still matches that
+// formula: it merge-patches only the two annotations, so the Pod keeps
+// running. A formula-1 Pod whose
 // hash does not match is real drift and is left for the caller to replace.
 func (r *AgentReconciler) restampLegacyHash(ctx context.Context, pod *corev1.Pod, eff effectiveAgentSpec) error {
 	if _, ok := pod.Annotations[annotationPodSpecHashVersion]; ok {
