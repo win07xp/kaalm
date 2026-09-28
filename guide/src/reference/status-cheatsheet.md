@@ -28,10 +28,14 @@ Conditions: `Ready` (the roll-up), `GatewayReachable` (the controller's view
 of the gateway; reasons `GatewayReady` and `GatewayUnavailable`),
 `ProvidersReady` (`AllProvidersHealthy` when every referenced provider is
 allowed, exists, and is `Ready`; `ClassConstraintViolation` when one is not
-allowed or does not exist; `ProviderUnhealthy` when one is not `Ready`), and
+allowed or does not exist; `ProviderUnhealthy` when one is not `Ready`),
 `Degraded`, which carries one reason, `BudgetExhausted`, present only while a
-referenced provider reports the namespace budget-blocked. Neither
-`ProvidersReady` nor `Degraded` changes the phase.
+referenced provider reports the namespace budget-blocked, and `PodUpToDate`
+(`True` with `Current` when the Pod matches the derived spec; `False` with
+`Replacing` while the Agent holds one of the class's `maxUnavailableOnDrift`
+slots, or `ReplacementPending` while it waits for one and its current Pod
+keeps running). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
+changes the phase.
 
 `Ready=False` reasons that move the phase to `Degraded` (the message names
 the failed gate): `ClassConstraintViolation` (an image, provider, or tool
@@ -153,9 +157,11 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 
 ## AgentClass
 
-`kubectl get agentclasses` columns: `Agents`, `Tasks`, `Age`; the counts are
-live usage, which is also your "is anyone still using this class" check
-before deleting one.
+`kubectl get agentclasses` columns: `Agents`, `Tasks`, `Replacing`, `Age`;
+the counts are live usage, which is also your "is anyone still using this
+class" check before deleting one. `Replacing` counts the class's Agents
+holding a `maxUnavailableOnDrift` slot; `status.agentsPendingReplacement`
+counts the rest waiting for one, but has no column of its own.
 
 Conditions: `Ready` (`AllReferencesResolved`; `InvalidCIDR` when an
 `allowedCIDRs` entry does not parse; otherwise `InvalidReference` when a

@@ -74,6 +74,7 @@ const (
 	ConditionDegraded            = "Degraded"            // Agent: recoverable condition, distinct from the Degraded phase
 	ConditionCompleted           = "Completed"           // AgentTask
 	ConditionPlatformConnected   = "PlatformConnected"   // AgentChannel, tri-state
+	ConditionPodUpToDate         = "PodUpToDate"         // Agent: spec-drift replacement progress
 )
 
 // AgentChannel platform types (spec.type). discord and whatsapp name the
@@ -141,6 +142,10 @@ const (
 	ReasonCheaperModelAvailable      = "CheaperModelAvailable"
 	ReasonDegradeTargetCheapest      = "DegradeTargetCheapest"
 	ReasonChildConflict              = "ChildConflict"
+	ReasonPodCurrent                 = "Current"
+	ReasonReplacementPending         = "ReplacementPending"
+	ReasonReplacing                  = "Replacing"
+	ReasonSpecDriftPending           = "SpecDriftPending"
 )
 
 // ConditionBoundaryMarginRaised reports that a hard-enforcement gateway

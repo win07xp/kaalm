@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // ptr returns a pointer to a copy of v, for building fully-populated fixtures.
@@ -341,6 +342,7 @@ func newFullAgentClass() *AgentClass {
 				DefaultTTLSecondsAfterFinished: ptr(int32(600)),
 				MaxTTLSecondsAfterFinished:     ptr(int32(86400)),
 				TerminationGracePeriodSeconds:  ptr(int64(30)),
+				MaxUnavailableOnDrift:          ptr(intstr.FromString("25%")),
 			},
 			PodMetadata: AgentClassPodMetadata{
 				Labels:      map[string]string{"team": "x"},
@@ -786,6 +788,7 @@ func TestNestedTypesDirectDeepCopy(t *testing.T) {
 	classLifecycle := newFullAgentClass().Spec.Lifecycle
 	checkDeepCopy(t, "AgentClassLifecycle/direct", &classLifecycle, (*AgentClassLifecycle).DeepCopy, func(l *AgentClassLifecycle) {
 		*l.TerminationGracePeriodSeconds = 1
+		*l.MaxUnavailableOnDrift = intstr.FromInt32(1)
 	})
 
 	classPodMetadata := newFullAgentClass().Spec.PodMetadata

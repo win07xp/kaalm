@@ -1326,7 +1326,7 @@ func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 		t.Error("ensureCertificate must surface a create error")
 	}
 	// convergePod finds no Pod and fails to create one.
-	if err := ar.convergePod(ctx, agent, eff); err == nil {
+	if _, err := ar.convergePod(ctx, agent, class, eff); err == nil {
 		t.Error("convergePod must surface a create error")
 	}
 

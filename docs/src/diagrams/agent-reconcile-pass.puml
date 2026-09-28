@@ -49,8 +49,10 @@ partition "8 to 11: children, Pod, activity, status" {
   :SA, Service, PVC,\nNetworkPolicy;
   if (Pod?) then (none)
     :create, Provisioning\n(Resuming if woken);
-  elseif (terminal or\nspec drift?) then (yes)
+  elseif (terminal, or spec drift\nwith a free slot?) then (yes)
     :delete, Provisioning\n(Resuming if woken);
+  elseif (spec drift,\nno free slot?) then (yes)
+    :ReplacementPending,\nold Pod keeps running;
   elseif (crash loop or\nImagePullBackOff?) then (yes)
     :phase=Failed;
   elseif (Ready?) then (yes)

@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // AgentClassSpec is a platform-owned policy template that governs how a category
@@ -210,6 +211,15 @@ type AgentClassLifecycle struct {
 	// TerminationGracePeriodSeconds is applied to workload Pods.
 	// +optional
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
+	// MaxUnavailableOnDrift caps how many of the class's Agents may have
+	// their Pod replaced for spec drift at the same time: a count of at least
+	// 1, or a percentage of the class's Agents from 1% to 100%, rounded up.
+	// Unset means 25%.
+	// +kubebuilder:validation:XIntOrString
+	// +kubebuilder:validation:XValidation:rule="type(self) == int ? self >= 1 : self.matches('^([1-9][0-9]?|100)%$')",message="maxUnavailableOnDrift must be an integer of at least 1 or a percentage from 1% to 100% (rule 44)"
+	// +kubebuilder:default="25%"
+	// +optional
+	MaxUnavailableOnDrift *intstr.IntOrString `json:"maxUnavailableOnDrift,omitempty"`
 }
 
 // AgentClassPodMetadata is merged onto workload Pods.
@@ -236,6 +246,14 @@ type AgentClassStatus struct {
 	// TasksInUse counts AgentTasks currently referencing this class.
 	// +optional
 	TasksInUse int32 `json:"tasksInUse,omitempty"`
+	// AgentsReplacing counts the class's Agents whose Pod is being replaced
+	// for spec drift: each holds one of the maxUnavailableOnDrift slots.
+	// +optional
+	AgentsReplacing int32 `json:"agentsReplacing,omitempty"`
+	// AgentsPendingReplacement counts the class's drifted Agents that are
+	// waiting for a slot and still run their old Pod.
+	// +optional
+	AgentsPendingReplacement int32 `json:"agentsPendingReplacement,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -244,6 +262,7 @@ type AgentClassStatus struct {
 // +kubebuilder:resource:scope=Cluster,shortName=ac
 // +kubebuilder:printcolumn:name="Agents",type=integer,JSONPath=`.status.agentsInUse`
 // +kubebuilder:printcolumn:name="Tasks",type=integer,JSONPath=`.status.tasksInUse`
+// +kubebuilder:printcolumn:name="Replacing",type=integer,JSONPath=`.status.agentsReplacing`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // AgentClass is the Schema for the agentclasses API.

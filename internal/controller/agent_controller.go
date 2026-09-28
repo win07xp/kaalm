@@ -98,6 +98,10 @@ type AgentReconciler struct {
 	// production passes the FQDNProbe shared with the AgentClassReconciler.
 	// nil means unsupported: no CiliumNetworkPolicy is synthesized.
 	FQDNSupport func() (bool, error)
+
+	// driftSlots bounds concurrent spec-drift replacements per class
+	// (maxUnavailableOnDrift). The zero value is ready to use.
+	driftSlots driftSlots
 }
 
 func (r *AgentReconciler) now() time.Time {
@@ -241,7 +245,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Steps 3, 6, 7: converge the Pod and derive the phase from it.
-	if err := r.convergePod(ctx, &agent, eff); err != nil {
+	driftWaiting, err := r.convergePod(ctx, &agent, &class, eff)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -251,6 +256,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if (agent.Status.Phase == kaalmv1beta1.AgentRunning || agent.Status.Phase == kaalmv1beta1.AgentIdle) &&
 		eff.IdleTimeout > 0 && r.Activity != nil {
 		res = r.evaluateActivity(ctx, &agent, eff)
+	}
+
+	if driftWaiting {
+		res = withDriftRetry(res)
 	}
 
 	if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
@@ -347,6 +356,10 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 		return ctrl.Result{}, r.Status().Update(ctx, agent)
 	}
 	r.setPhase(agent, kaalmv1beta1.AgentHibernated)
+	// With no Pod there is nothing to replace: an Agent that waited for a
+	// drift slot stops waiting, and its wake creates the Pod from the
+	// current spec.
+	apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1beta1.ConditionPodUpToDate)
 	now := metav1.NewTime(r.now())
 	agent.Status.HibernatedAt = &now
 	agent.Status.PodName = ""
@@ -906,31 +919,33 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 }
 
 // convergePod implements Pod convergence: create when missing, replace when
-// terminal (involuntary disruption) or when the spec hash drifts, mark the
-// Agent Failed on a persistent crash loop, and derive Running from readiness.
-// Until the Pod is Ready, a woken Agent stays Resuming and any other Agent is
-// Provisioning (podPendingPhase). A Pod-creation error returns without a phase
-// change, so the pass requeues with Ready=False.
+// terminal (involuntary disruption) or when the spec hash drifts and the
+// class has a drift slot free, mark the Agent Failed on a persistent crash
+// loop, and derive Running from readiness. Until the Pod is Ready, a woken
+// Agent stays Resuming and any other Agent is Provisioning (podPendingPhase).
+// A Pod-creation error returns without a phase change, so the pass requeues
+// with Ready=False. It reports whether the Agent has drifted and waits for a
+// slot, so the caller can schedule a retry.
 func (r *AgentReconciler) convergePod(
-	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec,
-) error {
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
+) (bool, error) {
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if pod == nil {
 		desired := desiredPod(agent, eff, r.OperatorNamespace)
 		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
-			return err
+			return false, err
 		}
 		if err := r.Create(ctx, desired); err != nil {
-			return err
+			return false, err
 		}
 		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodProvisioning", "agent Pod created, waiting for readiness")
 		agent.Status.PodName = desired.Name
-		return nil
+		return false, nil
 	}
 
 	// A Pod already being deleted is a replacement in progress: wait for the
@@ -938,7 +953,7 @@ func (r *AgentReconciler) convergePod(
 	if !pod.DeletionTimestamp.IsZero() {
 		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodProvisioning", "previous Pod terminating")
-		return nil
+		return false, nil
 	}
 
 	// Involuntary disruption: a terminal Pod is never resurrected by the
@@ -948,7 +963,32 @@ func (r *AgentReconciler) convergePod(
 			fmt.Sprintf("Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase))
 		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodDisrupted", "replacing a terminal Pod")
-		return r.Delete(ctx, pod)
+		return false, r.Delete(ctx, pod)
+	}
+
+	// A Pod hashed by an older formula that is current under that formula
+	// is not drift: rewrite its hash annotations in place so an upgrade that changes
+	// the formula replaces no Pod.
+	if err := r.rewriteLegacyHash(ctx, pod, eff); err != nil {
+		return false, err
+	}
+
+	// Spec drift: compare the hash in the Pod's annotation against the
+	// re-derived one, never the live Pod object. It runs before the crash-loop
+	// check, so a spec change replaces a crash-looping Pod; that is how a
+	// rollout halted by a failed replacement recovers.
+	waiting := false
+	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
+		replace, err := r.admitDriftReplacement(ctx, agent, class)
+		if err != nil {
+			return false, err
+		}
+		if replace {
+			r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift",
+				"derived Pod spec changed; replacing the Pod")
+			return false, r.Delete(ctx, pod)
+		}
+		waiting = true
 	}
 
 	// Persistent crash loop marks the Agent Failed (any -> Failed).
@@ -959,25 +999,8 @@ func (r *AgentReconciler) convergePod(
 			r.setPhase(agent, kaalmv1beta1.AgentFailed)
 			r.setReady(agent, false, cs.State.Waiting.Reason,
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Message))
-			return nil
+			return waiting, nil
 		}
-	}
-
-	// A Pod hashed by an older formula that is current under that formula
-	// is not drift: rewrite its hash annotations in place so an upgrade that changes
-	// the formula replaces no Pod.
-	if err := r.rewriteLegacyHash(ctx, pod, eff); err != nil {
-		return err
-	}
-
-	// Spec drift: compare the hash in the Pod's annotation against the re-derived one, never
-	// the live Pod object.
-	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
-		r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift",
-			"derived Pod spec changed; replacing the Pod")
-		r.setPhase(agent, podPendingPhase(agent))
-		r.setReady(agent, false, "SpecDrift", "replacing Pod for updated spec")
-		return r.Delete(ctx, pod)
 	}
 
 	agent.Status.PodName = pod.Name
@@ -988,11 +1011,67 @@ func (r *AgentReconciler) convergePod(
 			r.setPhase(agent, kaalmv1beta1.AgentRunning)
 		}
 		r.setReady(agent, true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")
+		if !waiting {
+			// A Ready Pod on the current spec frees the drift slot.
+			r.setPodUpToDate(agent, metav1.ConditionTrue, kaalmv1beta1.ReasonPodCurrent,
+				"agent Pod matches the derived spec")
+		}
 	} else {
 		r.setPhase(agent, podPendingPhase(agent))
 		r.setReady(agent, false, "PodNotReady", "agent Pod is not ready")
 	}
-	return nil
+	return waiting, nil
+}
+
+// withDriftRetry makes sure an Agent waiting for a drift slot is retried
+// within driftPendingRequeue. The watch that fires when another Agent of the
+// class leaves Replacing is the normal trigger; this retry is the fallback.
+func withDriftRetry(res ctrl.Result) ctrl.Result {
+	if !res.Requeue && (res.RequeueAfter == 0 || res.RequeueAfter > driftPendingRequeue) {
+		res.RequeueAfter = driftPendingRequeue
+	}
+	return res
+}
+
+// admitDriftReplacement decides whether a drifted Agent replaces its Pod on
+// this pass. An Agent that already holds a drift slot (Replacing) keeps it,
+// so a failed replacement is fixed at once; any other Agent asks the class
+// for a slot (maxUnavailableOnDrift). On a grant it sets Replacing and
+// persists the status before the caller deletes the Pod, so the slot counts
+// even if the controller stops right after the delete. On a refusal it sets
+// ReplacementPending and leaves the Pod running.
+func (r *AgentReconciler) admitDriftReplacement(
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass,
+) (bool, error) {
+	if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacing {
+		granted, err := r.driftSlots.acquire(ctx, r.Client, agent, class, r.now())
+		if err != nil {
+			return false, err
+		}
+		if !granted {
+			if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacementPending {
+				r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonSpecDriftPending,
+					"derived Pod spec changed; waiting for a free maxUnavailableOnDrift slot")
+			}
+			r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacementPending,
+				"derived Pod spec changed; waiting for a free maxUnavailableOnDrift slot, the current Pod keeps running")
+			return false, nil
+		}
+	}
+	r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacing,
+		"replacing the Pod for the updated spec")
+	r.setPhase(agent, podPendingPhase(agent))
+	r.setReady(agent, false, "SpecDrift", "replacing Pod for updated spec")
+	if err := r.Status().Update(ctx, agent); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *AgentReconciler) setPodUpToDate(agent *kaalmv1beta1.Agent, status metav1.ConditionStatus, reason, msg string) {
+	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+		Type: kaalmv1beta1.ConditionPodUpToDate, Status: status, Reason: reason, Message: msg,
+	})
 }
 
 // podPendingPhase is the phase an Agent holds while it waits for a Pod to be
@@ -1171,7 +1250,48 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(providerChangeMatters())).
 		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForToolProvider),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// A freed drift slot re-queues the class's Agents that wait for one.
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.driftWaitersOfClass),
+			builder.WithPredicates(driftSlotFreed())).
 		Complete(r)
+}
+
+// driftSlotFreed admits an Agent event that frees a drift slot: the Agent's
+// PodUpToDate condition leaves Replacing, or a Replacing Agent is deleted.
+func driftSlotFreed() predicate.Predicate {
+	replacing := func(o client.Object) bool {
+		ag, ok := o.(*kaalmv1beta1.Agent)
+		return ok && podUpToDateReason(ag) == kaalmv1beta1.ReasonReplacing
+	}
+	return predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return replacing(e.ObjectOld) && !replacing(e.ObjectNew)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool { return replacing(e.Object) },
+	}
+}
+
+// driftWaitersOfClass maps an Agent to the Agents of its class that wait for
+// a drift slot (ReplacementPending).
+func (r *AgentReconciler) driftWaitersOfClass(ctx context.Context, obj client.Object) []reconcile.Request {
+	ag, ok := obj.(*kaalmv1beta1.Agent)
+	if !ok {
+		return nil
+	}
+	var agents kaalmv1beta1.AgentList
+	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: ag.Spec.AgentClassRef.Name}); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range agents.Items {
+		a := &agents.Items[i]
+		if podUpToDateReason(a) == kaalmv1beta1.ReasonReplacementPending {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(a)})
+		}
+	}
+	return reqs
 }
 
 // providerChangeMatters admits a ModelProvider update to the Agent fan-out

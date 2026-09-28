@@ -35,6 +35,9 @@ spec:
     - jsonPath: .status.tasksInUse
       name: Tasks
       type: integer
+    - jsonPath: .status.agentsReplacing
+      name: Replacing
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -198,6 +201,21 @@ spec:
                   maxTaskTimeout:
                     description: MaxTaskTimeout caps an AgentTask's effective completion.timeout.
                     type: string
+                  maxUnavailableOnDrift:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 25%
+                    description: |-
+                      MaxUnavailableOnDrift caps how many of the class's Agents may have
+                      their Pod replaced for spec drift at the same time: a count of at least
+                      1, or a percentage of the class's Agents from 1% to 100%, rounded up.
+                      Unset means 25%.
+                    x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: maxUnavailableOnDrift must be an integer of at least
+                        1 or a percentage from 1% to 100% (rule 44)
+                      rule: 'type(self) == int ? self >= 1 : self.matches(''^([1-9][0-9]?|100)%$'')'
                   maxWakeTimeout:
                     type: string
                   terminationGracePeriodSeconds:
@@ -820,6 +838,18 @@ spec:
                   class.
                 format: int32
                 type: integer
+              agentsPendingReplacement:
+                description: |-
+                  AgentsPendingReplacement counts the class's drifted Agents that are
+                  waiting for a slot and still run their old Pod.
+                format: int32
+                type: integer
+              agentsReplacing:
+                description: |-
+                  AgentsReplacing counts the class's Agents whose Pod is being replaced
+                  for spec drift: each holds one of the maxUnavailableOnDrift slots.
+                format: int32
+                type: integer
               conditions:
                 description: Conditions report class validity (Ready) and CNI FQDN
                   support.
@@ -902,6 +932,9 @@ spec:
       type: integer
     - jsonPath: .status.tasksInUse
       name: Tasks
+      type: integer
+    - jsonPath: .status.agentsReplacing
+      name: Replacing
       type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -1064,6 +1097,21 @@ spec:
                   maxTaskTimeout:
                     description: MaxTaskTimeout caps an AgentTask's effective completion.timeout.
                     type: string
+                  maxUnavailableOnDrift:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 25%
+                    description: |-
+                      MaxUnavailableOnDrift caps how many of the class's Agents may have
+                      their Pod replaced for spec drift at the same time: a count of at least
+                      1, or a percentage of the class's Agents from 1% to 100%, rounded up.
+                      Unset means 25%.
+                    x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: maxUnavailableOnDrift must be an integer of at least
+                        1 or a percentage from 1% to 100% (rule 44)
+                      rule: 'type(self) == int ? self >= 1 : self.matches(''^([1-9][0-9]?|100)%$'')'
                   maxWakeTimeout:
                     type: string
                   terminationGracePeriodSeconds:
@@ -1684,6 +1732,18 @@ spec:
               agentsInUse:
                 description: AgentsInUse counts Agents currently referencing this
                   class.
+                format: int32
+                type: integer
+              agentsPendingReplacement:
+                description: |-
+                  AgentsPendingReplacement counts the class's drifted Agents that are
+                  waiting for a slot and still run their old Pod.
+                format: int32
+                type: integer
+              agentsReplacing:
+                description: |-
+                  AgentsReplacing counts the class's Agents whose Pod is being replaced
+                  for spec drift: each holds one of the maxUnavailableOnDrift slots.
                 format: int32
                 type: integer
               conditions:
