@@ -44,8 +44,8 @@ all configuration:
 One wire fact to respect: the primary provider must speak your client's
 format. An OpenAI-format client targets a provider of `spec.type` `openai`
 or `openai-compatible`, an Anthropic-format client an `anthropic` provider.
-The one translation the gateway does is on a cross-format fallback, where
-the answer is rewritten back into your client's format.
+The gateway translates only on a cross-format fallback, where it rewrites
+the answer back into your client's format.
 
 What you get: the API key leaves your pods, and the namespace's budgets,
 rate limits, and fallback apply to every call. What it does not: no Agent
@@ -80,7 +80,7 @@ identity. Write the handler as `async def` and use the framework's async
 invocation: the runtime executes sync handlers on a thread without an
 event loop.
 
-Three worked examples live in the repo, each runnable and each proving a
+Three worked examples live in the repository, each runnable and each proving a
 different combination:
 
 - **`examples/langgraph-chat/`**: a conversational graph with a SQLite
@@ -118,7 +118,7 @@ close. What the framework sees, from softest to hardest:
 
 - **Fallback and degrade are invisible to your code.** A failing provider
   is retried down its fallback chain server-side, and a budget `degrade`
-  policy rewrites the model; the reply's `model` field names what actually
+  policy rewrites the model; the reply's `model` field names the model that
   answered.
 - **Throttling and rate limits are a 429** with a `Retry-After` header
   and an error envelope whose `error.type` is `budget_throttled` or
@@ -140,8 +140,8 @@ Kaalm rotates workload certificates on disk mid-pod-lifetime. The `kaalm`
 client factories exist so this never becomes your problem; a client built
 by hand from `$KAALM_TLS_CERT` files snapshots its SSL context and an
 agent that neither hibernates nor restarts for most of the certificate's
-lifetime (90 days by default) would eventually present a stale
-certificate. If you must build your own client (as the task example does), that is fine precisely
+lifetime (90 days by default) would still present the old certificate
+after rotation. If you must build your own client (as the task example does), that is fine precisely
 when the pod is short-lived; long-lived hand-built clients should be
 rebuilt when TLS errors appear.
 

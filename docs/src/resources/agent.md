@@ -147,7 +147,7 @@ An agent that makes no LLM calls (a sub-agent, a coding agent with IDE integrati
 
 ### `activitySource`
 
-An agent may have no meaningful LLM traffic (polling, waiting on webhooks), so `agentHeartbeat` lets it signal liveness itself, and `both` counts either signal. Both values are for images that emit a heartbeat only while real work is in flight. The reference runtimes heartbeat on a timer in Agent mode, which under `agentHeartbeat` or `both` keeps the agent from ever going idle ([The heartbeat toggle and the hibernation footgun](../runtime/starter-templates.md#the-heartbeat-toggle-and-the-hibernation-footgun)).
+An agent may have no meaningful LLM traffic (polling, waiting on webhooks), so `agentHeartbeat` lets it signal liveness itself, and `both` counts either signal. Both values are for images that emit a heartbeat only while real work is in flight. The reference runtimes heartbeat on a timer in Agent mode, which under `agentHeartbeat` or `both` keeps the agent from ever going idle ([The heartbeat toggle and hibernation](../runtime/starter-templates.md#the-heartbeat-toggle-and-hibernation)).
 
 ### Hibernation requires persistence (rule 29)
 

@@ -34,7 +34,7 @@ The `POST /v1/activate/{namespace}/{agentName}` handler runs on every replica, n
 
 Field-level validation uses CEL expressions in the CRD schemas (`x-kubernetes-validations`). Cross-resource validation runs at reconcile time and is surfaced as `Ready=False` conditions with descriptive messages. This removes the availability risk of a webhook server on the apiserver's write path: a wedged admission webhook would block writes to the resources it guards.
 
-The one webhook the controller serves is the CRD conversion webhook, and it is not an admission webhook. It validates and mutates nothing, and it is consulted only when a request's version differs from the stored version, which after storage migration means only clients still sending `v1alpha1`. Kaalm's own components speak the storage version, so a wedged conversion path cannot block the control plane, the gateway, or the console. The availability argument in full is under [What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook).
+The controller serves one webhook, the CRD conversion webhook, which is not an admission webhook. It validates and mutates nothing, and it is consulted only when a request's version differs from the stored version, which after storage migration means only clients still sending `v1alpha1`. Kaalm's own components speak the storage version, so a wedged conversion path cannot block the control plane, the gateway, or the console. The availability argument in full is under [What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook).
 
 ## Controller TLS
 

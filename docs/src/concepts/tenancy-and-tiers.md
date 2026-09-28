@@ -32,7 +32,7 @@ Tenant isolation is layered. No single layer is the boundary; they compose, and 
 
 ### Trust tiers
 
-[Trust model](../security/model.md#trust-model) defines four trust tiers, from cluster admin down to the untrusted agent container. The one that matters here is the agent developer, trusted within namespace guardrails: the synthesized NetworkPolicy depends on that assumption, because a developer who can rewrite the policy can undo it. A platform team that treats developers as untrusted restricts `networkpolicies` create and patch in user namespaces with cluster RBAC.
+[Trust model](../security/model.md#trust-model) defines four trust tiers, from cluster administrator down to the untrusted agent container. The one that matters here is the agent developer, trusted within namespace guardrails: the synthesized NetworkPolicy depends on that assumption, because a developer who can rewrite the policy can undo it. A platform team that treats developers as untrusted restricts `networkpolicies` create and patch in user namespaces with cluster RBAC.
 
 ### RBAC layering
 

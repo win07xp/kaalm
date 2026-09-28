@@ -1,6 +1,6 @@
 # A cluster in one command
 
-Making the cluster really is one command. Kaalm then needs three installs on
+Making the cluster takes one command. Kaalm then needs three installs on
 top of it: two things it depends on, and Kaalm itself. It also needs a
 cluster network that enforces policies, and k3d's comes with that.
 
@@ -63,7 +63,7 @@ leaving credentials behind when you delete an agent.
 
 > **Helm** is the installer, and a **chart** is the package it installs: a
 > bundle of Kubernetes objects with knobs you can set from the command line.
-> `--wait` tells Helm not to return until the things it installed are actually
+> `--wait` tells Helm not to return until the things it installed are
 > running, which is why these commands take a moment.
 
 > **A namespace** is a folder for cluster objects. `--create-namespace` makes

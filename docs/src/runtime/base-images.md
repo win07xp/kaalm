@@ -143,7 +143,7 @@ Running a base image from one minor series against a control plane from another 
 
 ## Relationship to the starter templates
 
-The contract runtime is single-sourced. The image source is the one copy, and the starter templates are thin consumers of it: the Python template is a `FROM kaalm-agent-python` build with its `handler.py`, and the Go template imports the published runtime module. A contract fix lands once and reaches mount-and-run users on the next image pull, `FROM` users on their next rebuild, and template users on their next module update.
+The contract runtime is single-sourced. The image source is the only copy, and the starter templates carry no contract code of their own: the Python template is a `FROM kaalm-agent-python` build with its `handler.py`, and the Go template imports the published runtime module. A contract fix lands once and reaches mount-and-run users on the next image pull, `FROM` users on their next rebuild, and template users on their next module update.
 
 The on-ramp, in order of increasing ownership:
 

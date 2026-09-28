@@ -87,7 +87,7 @@ An AgentClass change reaches existing Agents along one of three paths, depending
 
 ## AgentTask child resources
 
-An AgentTask gets a parallel set, shaped by its ephemeral, no-inbound nature: no Service, a client-auth-only certificate, and, in `agentReported` mode, a completion mailbox. [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) is the authoritative step list.
+An AgentTask gets a similar set, adjusted for a short-lived workload that takes no inbound traffic: no Service, a client-auth-only certificate, and, in `agentReported` mode, a completion mailbox. [AgentTaskReconciler](../controller/reconcilers.md#agenttaskreconciler) is the authoritative step list.
 
 ![An AgentTask with ownerRef edges to a Pod, PVC, ServiceAccount, NetworkPolicy, and a client-auth-only Certificate, plus a completion ConfigMap and a per-task Role and RoleBinding inside a dashed band that exists only in agentReported mode. As with an Agent, the Certificate's output Secret carries an ownerRef to the Certificate instead.](../diagrams/child-resource-ownership-task.svg)
 
@@ -117,7 +117,7 @@ What differs from an Agent:
 
 When [`completion.condition: agentReported`](../controller/task-lifecycle.md), the controller also provisions a per-task ConfigMap, pre-created with `data: {}`, where the gateway writes the completion payload, and a per-task Role and RoleBinding that grant the gateway ServiceAccount name-scoped `update` and `patch` on that one ConfigMap. The ConfigMap is a completion channel, not configuration delivery.
 
-For an `agentReported` task, the reconciler stamps `status.currentPodUID` with the Pod's UID on every Pod creation, initial and retry, and clears it during the retry-reset window; a task in `containerExit` mode never has the field set. The gateway reads the field from its cluster-wide AgentTask watch and rejects a completion from any other Pod at `/v1/task/complete` with `409 stale_pod` and a `StalePodCompletion` message. The reset and restamp order is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
+For an `agentReported` task, the reconciler writes the Pod's UID to `status.currentPodUID` on every Pod creation, initial and retry, and clears it during the retry-reset window; a task in `containerExit` mode never has the field set. The gateway reads the field from its cluster-wide AgentTask watch and rejects a completion from any other Pod at `/v1/task/complete` with `409 stale_pod` and a `StalePodCompletion` message. The order in which a retry clears and rewrites the field is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 
 ## Async response ConfigMaps are swept by label, not owned
 

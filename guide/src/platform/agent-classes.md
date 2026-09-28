@@ -121,8 +121,8 @@ spec:
 
 Pinning `allowedImages` to exactly the published base images keeps the grant
 narrow: mounted code runs only inside the runtime you chose, never inside an
-arbitrary allowlisted image. Flipping `allowHandlerMounts` back to `false`
-later degrades existing Agents that mount handlers, with the same recoverable
+image that a broader `allowedImages` list admits. Setting
+`allowHandlerMounts` back to `false` later degrades existing Agents that mount handlers, with the same recoverable
 handling as the other class gates.
 
 ## A sandboxed class for code-executing agents

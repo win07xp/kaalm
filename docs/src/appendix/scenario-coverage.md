@@ -7,7 +7,7 @@ surface is auditable rather than aspirational.
 
 Coverage is one of three kinds:
 
-- **Unit and integration**: a Go or Python test in the repo asserts the behavior directly. Go tests run with `make test` (or `make cover-check`, the CI gate) and `make runtime-test` for the agentruntime module and the Go starter; the Python base image suite runs with `make python-test`.
+- **Unit and integration**: a Go or Python test in the repository asserts the behavior directly. Go tests run with `make test` (or `make cover-check`, the CI gate) and `make runtime-test` for the agentruntime module and the Go starter; the Python base image suite runs with `make python-test`.
 - **Envtest**: a controller-runtime test against a real apiserver asserts the
   reconciler behavior; `make test` runs these too.
 - **End-to-end (e2e)**: a Ginkgo spec runs against a real k3d cluster with the
@@ -54,5 +54,5 @@ S4, S10, S17, and S24 run against the in-cluster mock upstream; each spec applie
 Two scenarios keep a scope note: their e2e spec proves the Kaalm-owned
 primitive, but part of the scenario is outside the code's test surface.
 
-- **S2**: k3d installs no gVisor `RuntimeClass`. The e2e proves the reconciler wiring (the class `runtimeClassName` reaches the Pod spec, and the image allowlist rejects a disallowed image); the sandbox-escape property is the cluster's ([Workload isolation](../security/threat-model.md#workload-isolation)).
+- **S2**: k3d installs no gVisor `RuntimeClass`. The e2e test proves the reconciler's part (the class `runtimeClassName` reaches the Pod spec, and the image allowlist rejects a disallowed image); the sandbox-escape property is the cluster's ([Workload isolation](../security/threat-model.md#workload-isolation)).
 - **S9**: k3d's local-path provisioner has no snapshot support. The e2e proves `existingClaim` adoption and read-back; the snapshot step is documented on [S9](scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover).

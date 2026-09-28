@@ -100,12 +100,12 @@ Per-line fields are per call site, not a fixed schema. The controller's lines ca
 
 This is a hard rule because logs are typically shipped to lower-trust aggregation pipelines, and prompt content can include credentials, customer data, or platform-team policy decisions surfaced through tool calls. The same rule is stated from the security side at [Audit trail](../security/model.md#audit-trail).
 
-### Debug-build escape hatch
+### Debug build for body logging
 
-A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies on the LLM proxy paths, and tool-call request and response bodies on the MCP broker routes, for contract bring-up and integration debugging. The escape hatch exists at the build layer only:
+A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies on the LLM proxy paths, and tool-call request and response bodies on the MCP broker routes, for testing an image against the contract and for integration debugging. Body logging exists only in that build:
 
 - The published images are default builds. A debug build emits a startup banner, so an operator who runs one notices.
-- There is **no runtime Helm value, environment variable, feature flag, or admin endpoint** that flips body logging on in a default build. The gate is build-time only.
+- There is **no runtime Helm value, environment variable, feature flag, or administration endpoint** that flips body logging on in a default build. The gate is build-time only.
 
 In the default build the body logger compiles to a no-op, so no configuration can turn body logging on; developers use the debug build for local work against the [runtime contract](../runtime/contract.md).
 
@@ -154,7 +154,7 @@ Three Grafana dashboards ship as JSON in `config/grafana/`, one per topology lev
 
 Conventions the panels follow:
 
-- Every query is over the [Aggregated catalog](#aggregated-catalog), and every catalog metric is on at least one panel; the test under `test/dashboards` pins both directions and the import shape. The only non-catalog series are on the cluster dashboard's control-plane row: the scrape `up` series, controller-runtime's reconcile and work-queue families, and its `leader_election_master_status` gauge.
+- Every query is over the [Aggregated catalog](#aggregated-catalog), and every catalog metric is on at least one panel; the test under `test/dashboards` checks both directions and that each dashboard file imports with no manual edits. The only non-catalog series are on the cluster dashboard's control-plane row: the scrape `up` series, controller-runtime's reconcile and work-queue families, and its `leader_election_master_status` gauge.
 - The phase-count and budget-utilization gauges are computed on every scrape by every replica, so the panels aggregate them with `max`, never `sum`.
 - The per-namespace rate-limit panel is the `rate_limited` outcome of `kaalm_llm_requests_total`; there is no separate utilization gauge for the per-(namespace, model) ceiling.
 - The cluster dashboard's `job` variable matches scrape jobs whose name contains `kaalm`; a ServiceMonitor on the chart's Services resolves to such names. Every other panel is independent of how the scrape is configured.

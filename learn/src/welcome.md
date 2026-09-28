@@ -11,13 +11,13 @@ again, still remembering the conversation you had before it slept.
 
 Every command in the chapters that need no account was run, in order, on a
 fresh cluster against Kaalm 1.0.0, and the output you see is the output it
-printed. The one chapter that needs a provider account says so.
+printed. One chapter needs a provider account, and it says so.
 
 ## Two notes before you start
 
-**The agent you run first is not very smart.** It echoes what you say back to
+**The agent you run first has no model behind it.** It echoes what you say back to
 you. That is deliberate: it lets you learn everything Kaalm does, including
-identity, storage, a front door, and sleeping and waking, without needing an
+identity, storage, a URL people can reach it at, and sleeping and waking, without needing an
 API key from a model provider or spending a cent. After all of that works,
 [Give it a real brain](give-it-a-real-brain.md) shows how to point it at an
 actual model. That is the only chapter that needs an account.

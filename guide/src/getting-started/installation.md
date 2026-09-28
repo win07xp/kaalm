@@ -94,7 +94,8 @@ helm upgrade --install kaalm charts/kaalm \
 
 Replace `REGISTRY` with a registry your cluster can pull from. The
 checkout's chart reports the placeholder version `0.2.0` in `helm list`
-and its notes; the release workflow stamps the real version at tag time.
+and its notes; at tag time, the release workflow packages the chart with the
+release version.
 
 On k3d you can skip the registry and `k3d image import` the two images
 instead. `make upgrade-images` builds and imports exactly those two;

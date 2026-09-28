@@ -10,17 +10,17 @@ Without the broker, tool traffic is the ungoverned twin of LLM traffic: a class-
 
 | Category | Example | Where it executes | What Kaalm can do |
 |---|---|---|---|
-| In-process | a file-read or shell function inside the agent | The agent's own pod | Govern the blast radius, observe indirectly, never intercept |
+| In-process | a file-read or shell function inside the agent | The agent's own pod | Limit what the tool can do, observe indirectly, never intercept |
 | Provider-side | an LLM provider's built-in web search | Inside the LLM provider, during the API call | Observe at the LLM gateway; it already sits on this wire |
 | External server | an MCP server | A network service with its own credential | Broker, meter, and enforce: this chapter's subject |
 
-The governing principle: **a tool is modeled by the resource that governs the connection it crosses.** [ModelProvider](../resources/modelprovider.md) governs everything that happens inside the LLM connection, including provider-side tools. ToolProvider governs the connections the gateway opens for tools. The pod's sandbox governs tools that never open a connection. Every category has exactly one home, and no resource claims to see traffic it does not carry.
+The governing principle: **a tool is modeled by the resource that governs the connection that carries its calls.** [ModelProvider](../resources/modelprovider.md) governs everything that happens inside the LLM connection, including provider-side tools. ToolProvider governs the connections the gateway opens for tools. The pod's sandbox governs tools that never open a connection. Every category has exactly one home, and no resource claims to see traffic it does not carry.
 
 ### In-process tools
 
-An in-process tool call never leaves the pod: the completion carries a `tool_use` block, the agent's own code runs a local function, and the result returns as a `tool_result` block in the next LLM request. Kaalm cannot intercept that call. It governs the blast radius with the controls the book already has: the image allowlist (rule 2) reviewed the code that is the tool, the synthesized NetworkPolicy bounds what a shell tool can reach, the RuntimeClass bounds what it can escape to, and resource limits bound what it can consume.
+An in-process tool call never leaves the pod: the completion carries a `tool_use` block, the agent's own code runs a local function, and the result returns as a `tool_result` block in the next LLM request. Kaalm cannot intercept that call. It limits what the tool can do with controls that Kaalm already applies to the pod: the image allowlist (rule 2) reviewed the code that is the tool, the synthesized NetworkPolicy bounds what a shell tool can reach, the RuntimeClass bounds what it can escape to, and resource limits bound what it can consume.
 
-Observing in-process calls, either at the LLM gateway inside the `tool_use` and `tool_result` blocks that pass through the proxy or through a cooperative SDK hook, is designed and not built; both are [roadmap](../ROADMAP.md#beyond) items. In-process metering is out of scope: no marginal cost crosses a boundary Kaalm bills against, and the pod's CPU and egress are metered by Kubernetes.
+Observing in-process calls, either at the LLM gateway inside the `tool_use` and `tool_result` blocks that pass through the proxy or through a cooperative SDK hook, is designed and not built; both are [roadmap](../ROADMAP.md#beyond) items. In-process metering is out of scope: an in-process call adds no cost at the gateways where Kaalm meters spend, and the pod's CPU and egress are metered by Kubernetes.
 
 ### Provider-side tools
 
@@ -212,7 +212,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Modern header missing or mismatched | `400` with JSON-RPC error `-32020` |
 | Rate limit exceeded | `429 rate_limited`, `Retry-After: 1` |
 | Oversized request or response | `413 request_too_large` or `413 response_too_large` |
-| Session id owned by another caller | `403 access_denied`; the audit record names the mismatch |
+| Session id bound to another caller | `403 access_denied`; the audit record names the mismatch |
 | Credential Secret unreadable | `503 tool_unavailable`, retryable |
 | Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, retryable, `Retry-After: 1` |
 | Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable. The health probe sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid`; as shipped no Warning event is emitted on the ToolProvider for it |

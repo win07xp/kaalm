@@ -87,7 +87,7 @@ status:
 
 ### Credential scoping, and why the ref is optional
 
-Credentials are referenced from the operator's namespace and read only there, the same invariant as LLM credentials ([Credential handling](../security/credentials.md)). They never reach agent containers: a workload that wants to call a tool goes through the gateway, which attaches the credential server-side. The one difference from ModelProvider is that `credentialsRef` is optional. LLM providers require keys; tool servers do not always (an in-cluster MCP server behind NetworkPolicy is a legitimate unauthenticated deployment), and requiring a placeholder Secret would manufacture a credential where none exists.
+Credentials are referenced from the operator's namespace and read only there, the same invariant as LLM credentials ([Credential handling](../security/credentials.md)). They never reach agent containers: a workload that wants to call a tool goes through the gateway, which attaches the credential server-side. Unlike on a ModelProvider, `credentialsRef` is optional. LLM providers require keys; tool servers do not always (an in-cluster MCP server behind NetworkPolicy is a legitimate unauthenticated deployment), and requiring a placeholder Secret would force a Secret that holds no real credential.
 
 ### The probe speaks MCP
 

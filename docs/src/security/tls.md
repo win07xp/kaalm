@@ -80,7 +80,7 @@ An agent that missed the bundle change at step 2 fails at step 3, in both direct
 
 As shipped the chart hard-codes the `Bundle`'s single source, so the second source from step 1 is an edit to a Helm-managed object and the next `helm upgrade` removes it. Finish the runbook, or re-add the source, before upgrading.
 
-The CRD `caBundle` is the one consumer that does not read the `Bundle`: cainjector refreshes it from `kaalm-controller-tls`'s `ca.crt` when step 3 re-issues that leaf, while the controller picks up the leaf through its projected volume. For up to the kubelet sync period, about a minute, the API server may trust only the new CA while a replica still serves the old leaf. During that gap only `v1alpha1` requests fail; `v1beta1` traffic never touches the webhook ([What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook)).
+The CRD `caBundle` is the only consumer that does not read the `Bundle`: cainjector refreshes it from `kaalm-controller-tls`'s `ca.crt` when step 3 re-issues that leaf, while the controller picks up the leaf through its projected volume. For up to the kubelet sync period, about a minute, the API server may trust only the new CA while a replica still serves the old leaf. During that gap only `v1alpha1` requests fail; `v1beta1` traffic never touches the webhook ([What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook)).
 
 No operator code implements renewal or re-key. An operator-managed CA was considered and rejected: the code to manage CA generation, bundle rotation, staged leaf re-issuance, and cross-namespace distribution would be large and would duplicate what cert-manager and trust-manager already do.
 
