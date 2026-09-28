@@ -127,9 +127,10 @@ Every child above lives in the same namespace as its parent, which is what makes
 
 An ownerReference cannot cross a namespace boundary. The garbage collector resolves an owner in the dependent's own namespace; a cross-namespace reference finds nothing there, and the collector deletes the dependent at once with an `OwnerRefInvalidNamespace` event. So these ConfigMaps carry no ownerRef. They carry the labels `kaalm.io/channel-namespace` and `kaalm.io/channel-name` instead, plus a `kaalm.io/expires-at` annotation for their one-hour TTL.
 
-Because cascade GC never sees them, cleanup is two explicit paths, and this is the only child that needs a finalizer sweep:
+Because cascade GC never sees them, cleanup is three explicit paths, and this is the only child that needs a finalizer sweep:
 
 - **On every pass**, the AgentChannelReconciler prunes expired entries by label selector.
 - **On deletion**, the channel finalizer sweeps the whole label-matched set after the gateway confirms the channel is disconnected.
+- **Every 10 minutes**, the async orphan pruner deletes an expired entry whose channel no longer exists, for the rare record a gateway replica creates after the finalizer sweep.
 
-Both paths are specified in [Async webhook responses](../gateways/api/async-responses.md), and the deletion handshake in [Finalizers](../controller/finalizers.md#agentchannel).
+All three paths are specified in [Async webhook responses](../gateways/api/async-responses.md), and the deletion handshake and the orphan pruner in [Finalizers](../controller/finalizers.md#agentchannel).
