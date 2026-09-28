@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -45,9 +46,9 @@ import (
 const defaultHealthInterval = 60 * time.Second
 
 // ModelProviderReconciler validates a ModelProvider's credentials, fallback tree,
-// and degrade targets, probes it for liveness, and holds it in Terminating while
-// referenced. Budget reconciliation and GatewayReachable depend on the gateway and
-// are deferred to a later phase. See docs/src/controller/reconcilers.md
+// and degrade targets, reduces its budget partials, mirrors GatewayReachable
+// from gateway Pod readiness, probes it for liveness, and holds it in
+// Terminating while referenced. See docs/src/controller/reconcilers.md
 // (ModelProviderReconciler).
 type ModelProviderReconciler struct {
 	client.Client
@@ -535,6 +536,9 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
 		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.providersForSecret)).
+		// GatewayReachable follows gateway Pod readiness event-driven.
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.allModelProviders),
+			builder.WithPredicates(gatewayReadinessChanged(r.OperatorNamespace))).
 		Complete(r)
 }
 
