@@ -21,11 +21,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -80,6 +83,61 @@ func TestPatchWithRetry_ContextCancel(t *testing.T) {
 	s.patchWithRetry(ctx, "req-1", "team-a", []byte(`{}`))
 	if fa.patches != 1 {
 		t.Errorf("patch attempts = %d, want 1 (cancelled before retry)", fa.patches)
+	}
+}
+
+// patchDropSignals runs patchWithRetry against a failing store and returns
+// the patch-failed counter for the namespace and the error log lines that
+// name requestID: every drop must produce exactly one of each (#208).
+// A zero cutoff runs under a context that never ends.
+func patchDropSignals(t *testing.T, cutoff time.Duration, backoff []time.Duration, requestID string) (float64, []map[string]any) {
+	t.Helper()
+	ctx := context.Background()
+	if cutoff > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cutoff)
+		defer cancel()
+	}
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	s := &Server{
+		Async: &failingAsync{}, Metrics: NewMetrics(prometheus.NewRegistry()),
+		Config: Config{CallbackBackoff: backoff},
+	}
+	s.patchWithRetry(ctx, requestID, "team-a", []byte(`{}`))
+
+	var logs []map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		var rec map[string]any
+		if json.Unmarshal(line, &rec) == nil && rec["requestId"] == requestID && rec["level"] == "ERROR" {
+			logs = append(logs, rec)
+		}
+	}
+	return testutil.ToFloat64(s.Metrics.patchFailed.WithLabelValues("team-a")), logs
+}
+
+func TestPatchWithRetry_ExhaustionSignalsOnce(t *testing.T) {
+	count, logs := patchDropSignals(t, 0, []time.Duration{time.Millisecond, time.Millisecond}, "req-exhausted")
+	if count != 1 || len(logs) != 1 {
+		t.Fatalf("exhaustion: counter = %v, error logs = %d; want 1 and 1", count, len(logs))
+	}
+	if logs[0]["reason"] != "retries_exhausted" {
+		t.Errorf("reason = %v, want retries_exhausted", logs[0]["reason"])
+	}
+}
+
+// A context that ends during a backoff sleep (the pipeline bound, or any
+// cancellation) drops the payload too, and must say so.
+func TestPatchWithRetry_ContextCutoffSignalsOnce(t *testing.T) {
+	count, logs := patchDropSignals(t, 20*time.Millisecond, []time.Duration{time.Hour}, "req-cutoff")
+	if count != 1 || len(logs) != 1 {
+		t.Fatalf("context cutoff: counter = %v, error logs = %d; want 1 and 1", count, len(logs))
+	}
+	if logs[0]["reason"] != "context_done" {
+		t.Errorf("reason = %v, want context_done", logs[0]["reason"])
 	}
 }
 
