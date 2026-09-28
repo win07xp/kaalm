@@ -175,14 +175,15 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	if !controllerutil.ContainsFinalizer(mp, kaalmv1beta1.ProviderFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	referenced, err := r.isReferenced(ctx, mp.Name)
+	refs, err := r.referrers(ctx, mp.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if referenced {
-		// Hold in Terminating while any Agent, AgentTask, or AgentClass references
-		// it. Their watches re-enqueue us when a referrer goes away.
-		return ctrl.Result{}, nil
+	if len(refs) > 0 {
+		// Hold while any Agent, AgentTask, or AgentClass references it, and
+		// say so on Ready. Their watches re-enqueue us when a referrer goes
+		// away.
+		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
@@ -448,26 +449,12 @@ func cheapestModel(mp *kaalmv1beta1.ModelProvider) (string, bool) {
 	return best, found
 }
 
-func (r *ModelProviderReconciler) isReferenced(ctx context.Context, name string) (bool, error) {
-	var agents kaalmv1beta1.AgentList
-	if err := r.List(ctx, &agents, client.MatchingFields{IndexProviderRef: name}); err != nil {
-		return false, err
-	}
-	if len(agents.Items) > 0 {
-		return true, nil
-	}
-	var tasks kaalmv1beta1.AgentTaskList
-	if err := r.List(ctx, &tasks, client.MatchingFields{IndexProviderRef: name}); err != nil {
-		return false, err
-	}
-	if len(tasks.Items) > 0 {
-		return true, nil
-	}
-	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: name}); err != nil {
-		return false, err
-	}
-	return len(classes.Items) > 0, nil
+// referrers lists the objects that hold the provider's delete: Agents and
+// AgentTasks naming it in spec.providers, and AgentClasses listing it in
+// allowedProviders.
+func (r *ModelProviderReconciler) referrers(ctx context.Context, name string) ([]string, error) {
+	return listReferrers(ctx, r.Client, name,
+		referrerIndexes{agent: IndexProviderRef, task: IndexProviderRef, class: IndexAllowedProviders})
 }
 
 // healthCheckEnabled reports whether the periodic upstream probe should run. A

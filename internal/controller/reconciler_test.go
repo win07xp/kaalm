@@ -121,6 +121,59 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
+// objectEvents returns the Events recorded against the named object (kind and
+// name; namespace too when it is namespaced) with the given reason. The
+// recorder folds repeats of one event into a single object with a count, so
+// callers that assert "once" read the sum of Count.
+func objectEvents(t *testing.T, kind, namespace, name, reason string) []corev1.Event {
+	t.Helper()
+	var events corev1.EventList
+	if err := testClient.List(ctxT(), &events); err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	var out []corev1.Event
+	for _, ev := range events.Items {
+		o := ev.InvolvedObject
+		if o.Kind == kind && o.Name == name && o.Namespace == namespace && ev.Reason == reason {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// eventCount sums the Count of events, treating an unset Count as one.
+func eventCount(events []corev1.Event) int32 {
+	var n int32
+	for _, ev := range events {
+		if ev.Count == 0 {
+			n++
+			continue
+		}
+		n += ev.Count
+	}
+	return n
+}
+
+// expectEvent waits for an Event with the reason and type on the object whose
+// message contains substr, and returns every matching Event.
+func expectEvent(t *testing.T, kind, namespace, name, reason, evType, substr string) []corev1.Event {
+	t.Helper()
+	var match []corev1.Event
+	eventually(t, func() error {
+		match = match[:0]
+		for _, ev := range objectEvents(t, kind, namespace, name, reason) {
+			if ev.Type == evType && strings.Contains(ev.Message, substr) {
+				match = append(match, ev)
+			}
+		}
+		if len(match) == 0 {
+			return errString(fmt.Sprintf("no %s %s event on %s %s containing %q", evType, reason, kind, name, substr))
+		}
+		return nil
+	})
+	return match
+}
+
 // ---- AgentClass ----
 
 func TestAgentClass_ValidBecomesReady(t *testing.T) {
@@ -374,7 +427,7 @@ const testStorageClass = "fast"
 
 func strptr(s string) *string { return &s }
 
-// ---- isReferenced: Agent and AgentTask branches ----
+// ---- referrers: Agent and AgentTask branches ----
 
 func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 	r := &ModelProviderReconciler{Client: testClient}
@@ -384,11 +437,11 @@ func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 	mkClass(t, "iref-cls")
 	mkAgent(t, "iref-agent", "iref-cls", "iref-only-agent-prov")
 	eventually(t, func() error {
-		ok, err := r.isReferenced(context.Background(), "iref-only-agent-prov")
+		refs, err := r.referrers(context.Background(), "iref-only-agent-prov")
 		if err != nil {
 			return err
 		}
-		if !ok {
+		if len(refs) != 1 || refs[0] != "Agent default/iref-agent" {
 			return errString("provider referenced by an Agent should report referenced")
 		}
 		return nil
@@ -402,19 +455,19 @@ func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 		}
 	})
 	eventually(t, func() error {
-		ok, err := r.isReferenced(context.Background(), "iref-task-prov")
+		refs, err := r.referrers(context.Background(), "iref-task-prov")
 		if err != nil {
 			return err
 		}
-		if !ok {
+		if len(refs) != 1 || refs[0] != "AgentTask default/iref-task" {
 			return errString("provider referenced by an AgentTask should report referenced")
 		}
 		return nil
 	})
 
 	// An unreferenced provider.
-	if ok, err := r.isReferenced(context.Background(), "nobody-references-me"); err != nil || ok {
-		t.Errorf("unreferenced provider: ok=%v err=%v", ok, err)
+	if refs, err := r.referrers(context.Background(), "nobody-references-me"); err != nil || len(refs) != 0 {
+		t.Errorf("unreferenced provider: refs=%v err=%v", refs, err)
 	}
 }
 
@@ -439,7 +492,7 @@ func TestModelProvider_CredentialKeyMissing(t *testing.T) {
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 }
 
-// ---- ModelProvider delete handshake (reconcileDelete + isReferenced) ----
+// ---- ModelProvider delete handshake (reconcileDelete + referrers) ----
 
 func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 	mkSecret(t, "mpref-key")
@@ -452,7 +505,7 @@ func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
-	// An AgentClass listing the provider makes isReferenced true (classes branch).
+	// An AgentClass listing the provider is a referrer (classes branch).
 	mkClass(t, "acref", "mpref")
 
 	// Delete the provider: the finalizer holds it in Terminating while referenced.
@@ -729,9 +782,9 @@ func TestReconcileDelete_NoFinalizerIsNoop(t *testing.T) {
 		&kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
 	clean("AgentTask", taskRes.Requeue, taskRes.RequeueAfter, err)
 
-	agRes, err := (&AgentReconciler{Client: testClient}).reconcileDelete(ctx,
+	err = (&AgentReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}})
-	clean("Agent", agRes.Requeue, agRes.RequeueAfter, err)
+	clean("Agent", false, 0, err)
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -844,18 +897,18 @@ func TestReferenceCountsPropagateListErrors(t *testing.T) {
 		t.Error("gatewayPods must surface a list error")
 	}
 
-	// isReferenced (via reconcileDelete on a finalized provider) surfaces it too.
+	// referrers (via reconcileDelete on a finalized provider) surfaces it too.
 	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	controllerutil.AddFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	if _, err := (&ModelProviderReconciler{Client: c}).reconcileDelete(ctx, mp); err == nil {
-		t.Error("provider reconcileDelete must surface the isReferenced list error")
+		t.Error("provider reconcileDelete must surface the referrers list error")
 	}
 
-	// countUsers (via reconcileDelete on a finalized class) surfaces it.
+	// listReferrers (via reconcileDelete on a finalized class) surfaces it.
 	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}
 	controllerutil.AddFinalizer(ac, kaalmv1beta1.ClassFinalizer)
 	if _, err := (&AgentClassReconciler{Client: c}).reconcileDelete(ctx, ac); err == nil {
-		t.Error("class reconcileDelete must surface the countUsers list error")
+		t.Error("class reconcileDelete must surface the referrers list error")
 	}
 }
 

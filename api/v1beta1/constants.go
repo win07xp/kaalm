@@ -146,6 +146,7 @@ const (
 	ReasonReplacementPending         = "ReplacementPending"
 	ReasonReplacing                  = "Replacing"
 	ReasonSpecDriftPending           = "SpecDriftPending"
+	ReasonDeletionBlocked            = "DeletionBlocked"
 )
 
 // ConditionBoundaryMarginRaised reports that a hard-enforcement gateway
@@ -189,8 +190,9 @@ const (
 // Well-known annotations and labels. See docs/src/controller/ and
 // gateways/api/async-responses.md.
 const (
-	AnnotationWake                = "kaalm.io/wake"                 // AnnotationTrue triggers a wake on a Hibernated Agent
+	AnnotationWake                = "kaalm.io/wake"                 // AnnotationTrue (manual) or AnnotationWakeChannel (activator) wakes a Hibernated Agent
 	AnnotationTrue                = "true"                          // the value every boolean Kaalm annotation carries
+	AnnotationWakeChannel         = "channel"                       // AnnotationWake value the activator writes, so a channel wake counts apart from a manual one
 	AnnotationChannelDisconnected = "kaalm.io/channel-disconnected" // "true", written by the gateway in the channel-delete handshake
 	AnnotationExpiresAt           = "kaalm.io/expires-at"           // RFC3339 TTL on async-response ConfigMaps (1h)
 

@@ -198,7 +198,7 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "act-agent"}, &ag); err != nil {
 			return err
 		}
-		if ag.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue {
+		if ag.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationWakeChannel {
 			return nil
 		}
 		var events corev1.EventList

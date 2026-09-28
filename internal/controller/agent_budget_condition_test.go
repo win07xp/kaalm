@@ -209,3 +209,26 @@ func TestAgent_BudgetConditionTracksWhileDegraded(t *testing.T) {
 		return nil
 	})
 }
+
+// S10: the developer sees budget exhaustion in `kubectl describe agent` as a
+// BudgetExhausted Warning event, emitted when the condition first appears and
+// not again on later passes while it holds.
+func TestAgent_BudgetExhaustedEmitsWarningOnce(t *testing.T) {
+	mkBlockingProvider(t, "s10-event", "s10-event-gw-0")
+	setProviderSpend(t, "s10-event", "s10-event-gw-0", "250.00")
+	mkClass(t, "s10-event-class", "s10-event")
+	mkAgent(t, "s10-event-agent", "s10-event-class", "s10-event")
+
+	expectEvent(t, "Agent", "default", "s10-event-agent", kaalmv1beta1.ReasonBudgetExhausted,
+		corev1.EventTypeWarning, `budget exhausted on provider s10-event`)
+
+	// Later passes with the condition unchanged emit nothing new.
+	for i := 0; i < 3; i++ {
+		touchAgent(t, "s10-event-agent")
+	}
+	time.Sleep(time.Second)
+	evs := objectEvents(t, "Agent", "default", "s10-event-agent", kaalmv1beta1.ReasonBudgetExhausted)
+	if n := eventCount(evs); n != 1 {
+		t.Errorf("BudgetExhausted emitted %d times while the condition held, want 1", n)
+	}
+}

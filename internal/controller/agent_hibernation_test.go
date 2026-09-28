@@ -22,10 +22,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -613,4 +616,109 @@ func terminatingPods(t *testing.T, name string) []corev1.Pod {
 		}
 	}
 	return out
+}
+
+// The wake annotation's value says who asked: the activator writes
+// "channel", and any "true" is a manual wake. Other values are not wakes.
+func TestWakeTrigger(t *testing.T) {
+	for _, tc := range []struct {
+		value, trigger string
+		ok             bool
+	}{
+		{kaalmv1beta1.AnnotationWakeChannel, wakeTriggerChannel, true},
+		{kaalmv1beta1.AnnotationTrue, wakeTriggerAnnotation, true},
+		{"yes", "", false},
+		{"", "", false},
+	} {
+		ag := &kaalmv1beta1.Agent{}
+		if tc.value != "" {
+			ag.Annotations = map[string]string{kaalmv1beta1.AnnotationWake: tc.value}
+		}
+		trigger, ok := wakeTrigger(ag)
+		if trigger != tc.trigger || ok != tc.ok {
+			t.Errorf("value %q: wakeTrigger = (%q, %v), want (%q, %v)", tc.value, trigger, ok, tc.trigger, tc.ok)
+		}
+	}
+}
+
+// kaalm_wakes_total counts a wake under the trigger its annotation names.
+func TestHandleWake_CountsByTrigger(t *testing.T) {
+	for _, tc := range []struct{ value, trigger string }{
+		{kaalmv1beta1.AnnotationWakeChannel, wakeTriggerChannel},
+		{kaalmv1beta1.AnnotationTrue, wakeTriggerAnnotation},
+	} {
+		ag := &kaalmv1beta1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Name: "wake-" + tc.trigger, Namespace: "wake-metric",
+				Annotations: map[string]string{kaalmv1beta1.AnnotationWake: tc.value}},
+			Status: kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentHibernated},
+		}
+		c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+			WithObjects(ag).WithStatusSubresource(ag).Build()
+		r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(8)}
+		before := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.trigger))
+		if _, err := r.handleWake(ctxT(), ag); err != nil {
+			t.Fatalf("%s: handleWake: %v", tc.trigger, err)
+		}
+		if got := testutil.ToFloat64(wakesTotal.WithLabelValues("wake-metric", tc.trigger)) - before; got != 1 {
+			t.Errorf("%s: kaalm_wakes_total{trigger=%q} rose by %v, want 1", tc.value, tc.trigger, got)
+		}
+		if ag.Status.Phase != kaalmv1beta1.AgentResuming {
+			t.Errorf("%s: phase = %s, want Resuming", tc.value, ag.Status.Phase)
+		}
+		if _, still := ag.Annotations[kaalmv1beta1.AnnotationWake]; still {
+			t.Errorf("%s: wake annotation not removed", tc.value)
+		}
+	}
+}
+
+// A Hibernated Agent wakes on the activator's value, through the full
+// reconcile path.
+func TestAgent_WakesOnChannelAnnotation(t *testing.T) {
+	mkWorkloadClass(t, "wc-chwake", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Persistence.Enabled = true
+		ac.Spec.Persistence.DefaultSizeGi = 1
+		ac.Spec.Lifecycle.HibernationAllowed = true
+	})
+	provisionRunningAgentWithLifecycle(t, "ch-wake", "wc-chwake", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Persistence.Enabled = true
+		ag.Spec.Lifecycle.HibernationEnabled = true
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Second}
+		ag.Spec.Lifecycle.HibernationDelay = metav1.Duration{Duration: time.Second}
+	})
+	fakeActivity.set([]ReplicaActivity{replicaWith(3*time.Hour, "ch-wake", 2*time.Hour)}, 1)
+	touchAgent(t, "ch-wake")
+	eventually(t, func() error {
+		var pods corev1.PodList
+		if err := testClient.List(ctxT(), &pods, listAgentPods("ch-wake")...); err != nil {
+			return err
+		}
+		for i := range pods.Items {
+			if !pods.Items[i].DeletionTimestamp.IsZero() {
+				forceDeletePod(t, &pods.Items[i])
+			}
+		}
+		if p := getWorkloadAgent(t, "ch-wake").Status.Phase; p != kaalmv1beta1.AgentHibernated {
+			return errString(fmt.Sprintf("phase=%s want Hibernated", p))
+		}
+		return nil
+	})
+
+	eventually(t, func() error {
+		got := getWorkloadAgent(t, "ch-wake")
+		if got.Annotations == nil {
+			got.Annotations = map[string]string{}
+		}
+		got.Annotations[kaalmv1beta1.AnnotationWake] = kaalmv1beta1.AnnotationWakeChannel
+		return testClient.Update(ctxT(), got)
+	})
+	eventually(t, func() error {
+		got := getWorkloadAgent(t, "ch-wake")
+		if got.Status.Phase == kaalmv1beta1.AgentHibernated {
+			return errString("still Hibernated")
+		}
+		if _, still := got.Annotations[kaalmv1beta1.AnnotationWake]; still {
+			return errString("wake annotation not consumed")
+		}
+		return nil
+	})
 }

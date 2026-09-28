@@ -127,17 +127,15 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// System-namespace guard (same SAN-integrity rule as Agents).
 	if task.Namespace == r.OperatorNamespace {
-		r.setTaskReady(&task, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
+		return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("AgentTasks may not run in the operator namespace %q", r.OperatorNamespace))
-		return ctrl.Result{}, r.Status().Update(ctx, &task)
 	}
 
 	var class kaalmv1beta1.AgentClass
 	if err := r.Get(ctx, types.NamespacedName{Name: task.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.setTaskReady(&task, false, kaalmv1beta1.ReasonInvalidReference,
+			return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q does not exist", task.Spec.AgentClassRef.Name))
-			return ctrl.Result{}, r.Status().Update(ctx, &task)
 		}
 		return ctrl.Result{}, err
 	}
@@ -173,9 +171,8 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
 				types.NamespacedName{Namespace: task.Namespace, Name: ref.Name}, &sec)
 			if apierrors.IsNotFound(err) {
-				r.setTaskReady(&task, false, kaalmv1beta1.ReasonImagePullSecretMissing,
-					fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, task.Namespace))
-				if err := r.Status().Update(ctx, &task); err != nil {
+				if err := r.gateTask(ctx, &task, kaalmv1beta1.ReasonImagePullSecretMissing,
+					fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, task.Namespace)); err != nil {
 					return ctrl.Result{}, err
 				}
 				return ctrl.Result{RequeueAfter: gateRequeue}, nil
@@ -184,16 +181,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			}
 		}
 		if eff.Image == "" {
-			r.setTaskReady(&task, false, kaalmv1beta1.ReasonInvalidReference,
+			return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
 				"no image: AgentTask.spec.image is empty and the AgentClass sets no defaultImage")
-			return ctrl.Result{}, r.Status().Update(ctx, &task)
 		}
 		// Rule 19: the class is Ready=False, and the NetworkPolicy built from
 		// its entries would fail the apiserver write on every pass.
 		if bad := invalidCIDRs(&class); len(bad) > 0 {
-			r.setTaskReady(&task, false, kaalmv1beta1.ReasonInvalidReference,
+			return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q is not usable: %s", class.Name, strings.Join(bad, "; ")))
-			return ctrl.Result{}, r.Status().Update(ctx, &task)
 		}
 	}
 
@@ -835,6 +830,25 @@ func (r *AgentTaskReconciler) setTaskReady(task *kaalmv1beta1.AgentTask, ok bool
 	apimeta.SetStatusCondition(&task.Status.Conditions, metav1.Condition{
 		Type: kaalmv1beta1.ConditionReady, Status: status, Reason: reason, Message: msg,
 	})
+}
+
+// gateTask sets Ready=False for a reconcile-time validation failure, writes
+// the status, and emits a Warning event with the same reason when the reason
+// first appears, not on each pass that finds the problem again. The event
+// follows a successful write, so a pass that lost its write to a conflict
+// does not report the reason twice.
+func (r *AgentTaskReconciler) gateTask(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string,
+) error {
+	first := readyFalseIsNew(task.Status.Conditions, reason)
+	r.setTaskReady(task, false, reason, msg)
+	if err := r.Status().Update(ctx, task); err != nil {
+		return err
+	}
+	if first && r.Recorder != nil {
+		r.Recorder.Event(task, corev1.EventTypeWarning, reason, msg)
+	}
+	return nil
 }
 
 // SetupWithManager wires the reconciler, its owned children (including the

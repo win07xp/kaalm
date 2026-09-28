@@ -37,7 +37,7 @@ import (
 // ActivatorServer serves the controller's :9443 endpoints: kubelet probes
 // (cert-less) and POST /v1/activate/{namespace}/{agentName} (gateway SAN
 // required). It runs on EVERY controller replica, not only the leader: the
-// handler is deliberately thin, patching kaalm.io/wake=true on the target
+// handler is deliberately thin, patching kaalm.io/wake=channel on the target
 // Agent so the leader's existing watch drives the actual wake. See
 // docs/src/gateways/user/activation-and-activity.md (The Activator).
 type ActivatorServer struct {
@@ -126,7 +126,10 @@ func (s *ActivatorServer) handleActivate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, kaalmv1beta1.AnnotationWake, kaalmv1beta1.AnnotationTrue)
+	// The value is "channel", not "true", so the reconciler can count this
+	// wake apart from a manual one (kaalm_wakes_total{trigger}).
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`,
+		kaalmv1beta1.AnnotationWake, kaalmv1beta1.AnnotationWakeChannel)
 	if err := s.Client.Patch(r.Context(), &agent, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
