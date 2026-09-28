@@ -1,9 +1,9 @@
 # langgraph-chat: a conversational LangGraph agent on the base image
 
 A LangGraph `StateGraph` running inside `handle_message` on the
-`kaalm-agent-python` base image. The base image keeps owning the runtime
-contract (TLS, mTLS enforcement, dedup, heartbeats, hibernation wiring); the
-graph is only the brains between envelope in and reply out.
+`kaalm-agent-python` base image. The base image implements the runtime
+contract (TLS, mTLS enforcement, dedup, heartbeats, and the persistent store
+that survives hibernation); the graph only turns each envelope into a reply.
 
 What it proves:
 
@@ -47,5 +47,5 @@ Requirements: an OpenAI-format ModelProvider (`spec.type` `openai` or
 through an AgentChannel; the same webhook session id continues the same
 conversation thread.
 
-The guide walks this example in Running Framework Agents
+The guide walks through this example in Running framework agents
 (`guide/src/developers/framework-agents.md`).

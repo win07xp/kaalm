@@ -13,11 +13,11 @@ If you have not outgrown the first two (mount a handler ConfigMap into
 
 ## What the runtime module implements for you
 
-Every item of the runtime contract, so you don't rebuild the error-prone
-parts: HTTPS serving with `/livez` and `/readyz`, graceful draining, mTLS on
-all gateway calls, per-path client-cert verification on `POST /v1/message`
+Every item of the runtime contract, so you don't reimplement any of it:
+HTTPS serving with `/livez` and `/readyz`, graceful draining, mTLS on all
+gateway calls, per-path client-cert verification on `POST /v1/message`
 (401 without a cert, 403 unless the SAN is the gateway Service DNS),
-certificate rotation via the `..data` directory watch, `messageId`
+certificate reload when the kubelet swaps the `..data` symlink, `messageId`
 deduplication persisted across hibernation, the Agent-mode heartbeat loop
 with task-mode detection from the cert SAN, and the `CompleteTask` helper
 with the bounded `409 stale_pod` retry.
@@ -33,7 +33,8 @@ it reaches the runtime's capabilities:
   qualified model request to `/v1/chat/completions` through it; the gateway
   proxies to your ModelProviders.
 
-`main.go` is wiring and should not need changes.
+`main.go` only starts the runtime with your handler and doesn't need
+changes.
 
 ## Building a copy of this template
 
@@ -45,9 +46,9 @@ docker build -t registry.example/agents/my-agent:v1 .
 
 The [Dockerfile](Dockerfile) compiles your program and layers the binary onto
 the `kaalm-agent-go` base image, replacing its default-handler binary at
-`/kaalm-agent` (the image's entrypoint). Inside the Kaalm repo itself the
-build works differently (the unreleased runtime is compiled from the tree via
-`test/e2e/starter-go/Dockerfile`); your copy never needs that.
+`/kaalm-agent` (the image's entrypoint). Inside the Kaalm repository, the
+build is different: `test/e2e/starter-go/Dockerfile` compiles the unreleased
+runtime from the working tree. Your copy doesn't need that file.
 
 ## Environment
 
@@ -58,11 +59,12 @@ runtime toggle:
 |---|---|---|
 | `KAALM_TEMPLATE_HEARTBEAT` | `auto` | `auto` emits every 30s in Agent mode only; `off` never emits. |
 
-**Hibernation warning:** the heartbeat is unconditional, so it is only safe
-with the default `activitySource: gatewayTraffic`. Setting `agentHeartbeat` or
-`both` while this loop runs keeps the agent permanently non-idle and it will
-never hibernate. Either leave `activitySource` at the default, or set
-`KAALM_TEMPLATE_HEARTBEAT=off` and gate emission on real work yourself.
+**Caution:** the heartbeat loop runs whether or not the agent does real work,
+so use it only with the default `activitySource: gatewayTraffic`. Setting
+`agentHeartbeat` or `both` while this loop runs keeps the agent permanently
+non-idle, and it never hibernates. Either leave `activitySource` at the
+default, or set `KAALM_TEMPLATE_HEARTBEAT=off` and gate emission on real work
+yourself.
 
 ## Deploy a test Agent
 
@@ -96,7 +98,7 @@ The same image runs as an AgentTask. Call `a.CompleteTask(ctx, "success",
 "done", map[string]string{"result": "..."})` from your task logic. The runtime
 detects task mode from the cert SAN and does not start the heartbeat loop.
 
-For smoke and e2e runs, set `KAALM_TASK_AUTOCOMPLETE=success` (via the
+For smoke and e2e runs, set `KAALM_TASK_AUTOCOMPLETE=success` (in the
 AgentTask `spec.env`) to have the task report that status on startup through
 `CompleteTask`. Leave it unset in real tasks, which report completion from
 their own work.
