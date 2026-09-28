@@ -59,7 +59,7 @@ const (
 // effectiveTaskSpec is the AgentTask spec after merging AgentClass defaults at
 // reconcile time. Same rules as effectiveAgentSpec, minus the Service and
 // lifecycle blocks tasks do not have. The task timeout and TTL are derived
-// separately, against the class bounds stamped at Pod creation.
+// separately, against the class bounds recorded at Pod creation.
 type effectiveTaskSpec struct {
 	Image            string
 	Env              []corev1.EnvVar
@@ -119,7 +119,7 @@ func deriveEffectiveTaskSpec(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.A
 	return eff
 }
 
-// classTaskBounds copies the class's task bounds for the snapshot stamped in
+// classTaskBounds copies the class's task bounds for the snapshot recorded in
 // status.classBounds at Pod creation. The pointers are copied too, so a later
 // class edit cannot reach the snapshot.
 func classTaskBounds(class *kaalmv1beta1.AgentClass) *kaalmv1beta1.AgentTaskClassBounds {

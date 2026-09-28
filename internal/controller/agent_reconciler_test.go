@@ -843,14 +843,14 @@ func TestAgent_ClassSecurityAndRuntimeChangeReplacesPod(t *testing.T) {
 	}
 }
 
-// stampAsV1 rewrites a live Pod's annotations the way a v1.0.0 controller
-// stamped them: the given hash and no hash-version annotation.
-func stampAsV1(t *testing.T, pod *corev1.Pod, hash string) {
+// writeAsV1 rewrites a live Pod's annotations the way a v1.0.0 controller
+// wrote them: the given hash and no hash-version annotation.
+func writeAsV1(t *testing.T, pod *corev1.Pod, hash string) {
 	t.Helper()
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q,%q:null}}}`,
 		annotationPodSpecHash, hash, annotationPodSpecHashVersion)
 	if err := testClient.Patch(ctxT(), pod, client.RawPatch(types.MergePatchType, []byte(patch))); err != nil {
-		t.Fatalf("stamp pod as v1: %v", err)
+		t.Fatalf("write pod as v1: %v", err)
 	}
 }
 
@@ -863,14 +863,14 @@ func effectiveSpecFor(t *testing.T, agentName, className string) effectiveAgentS
 	return deriveEffectiveSpec(getWorkloadAgent(t, agentName), &ac)
 }
 
-func TestAgent_V1HashMatchRestampsInPlace(t *testing.T) {
-	mkWorkloadClass(t, "wc-restamp", nil)
-	pod := provisionRunningAgent(t, "restamp-agent", "wc-restamp")
-	eff := effectiveSpecFor(t, "restamp-agent", "wc-restamp")
-	stampAsV1(t, pod, podSpecHashV1(eff))
+func TestAgent_V1HashMatchRewritesInPlace(t *testing.T) {
+	mkWorkloadClass(t, "wc-rehash", nil)
+	pod := provisionRunningAgent(t, "rehash-agent", "wc-rehash")
+	eff := effectiveSpecFor(t, "rehash-agent", "wc-rehash")
+	writeAsV1(t, pod, podSpecHashV1(eff))
 
 	// The Pod is current under the formula it was made with, so the upgrade
-	// re-stamps it rather than replacing it.
+	// rewrites its hash rather than replacing it.
 	eventually(t, func() error {
 		var got corev1.Pod
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
@@ -884,20 +884,20 @@ func TestAgent_V1HashMatchRestampsInPlace(t *testing.T) {
 			return errString("pod UID changed")
 		}
 		if got.Annotations[annotationPodSpecHashVersion] != podSpecHashVersion {
-			return errString("hash version not re-stamped yet")
+			return errString("hash version not rewritten yet")
 		}
 		if got.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
-			return errString("hash not re-stamped yet")
+			return errString("hash not rewritten yet")
 		}
 		return nil
 	})
-	expectAgentPhase(t, "restamp-agent", kaalmv1beta1.AgentRunning)
+	expectAgentPhase(t, "rehash-agent", kaalmv1beta1.AgentRunning)
 }
 
 func TestAgent_V1HashMismatchReplacesPod(t *testing.T) {
 	mkWorkloadClass(t, "wc-v1drift", nil)
 	pod := provisionRunningAgent(t, "v1drift-agent", "wc-v1drift")
-	stampAsV1(t, pod, "0000000000000000")
+	writeAsV1(t, pod, "0000000000000000")
 	pod.Annotations[annotationPodSpecHash] = "0000000000000000"
 	expectPodReplaced(t, "v1drift-agent", pod)
 }

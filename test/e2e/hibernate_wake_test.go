@@ -94,7 +94,7 @@ var _ = Describe("Hibernate and wake", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uid).To(Equal(s7PVCUID), "the memory PVC must persist across hibernation")
 
-		By("the Service survives and hibernatedAt is stamped")
+		By("the Service survives and hibernatedAt is set")
 		_, err = utils.Kubectl("get", "service", "s7-agent", "-n", "e2e")
 		Expect(err).NotTo(HaveOccurred())
 		hibAt, err := utils.ResourceField("agent", "e2e", "s7-agent", "{.status.hibernatedAt}")

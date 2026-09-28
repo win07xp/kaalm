@@ -142,7 +142,7 @@ func TestPodSpecHash_ClassPodInputsOrderAndOwnKeys(t *testing.T) {
 	}
 }
 
-func TestPodSpecHashV1_MatchesV100Stamp(t *testing.T) {
+func TestPodSpecHashV1_MatchesV100Hash(t *testing.T) {
 	// The expected value is what v1.0.0's podSpecHash returned for this spec.
 	// podSpecHashV1 must keep reproducing it, or every Pod created before the
 	// formula changed would look drifted and be replaced on upgrade.
@@ -164,14 +164,14 @@ func TestPodSpecHashV1_MatchesV100Stamp(t *testing.T) {
 		PodLabels:        map[string]string{"team": "search"},
 	}
 	if got, want := podSpecHashV1(eff), "4c14a4e2cc05fb0d"; got != want {
-		t.Errorf("podSpecHashV1 = %s, want the v1.0.0 stamp %s", got, want)
+		t.Errorf("podSpecHashV1 = %s, want the v1.0.0 hash %s", got, want)
 	}
 	if podSpecHash(eff) == podSpecHashV1(eff) {
 		t.Error("current formula must differ from v1 for a spec with class Pod inputs")
 	}
 }
 
-func TestDesiredPod_StampsHashVersion(t *testing.T) {
+func TestDesiredPod_SetsHashVersion(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
 	eff := classDerivedBase()
 	eff.PodAnnotations[annotationPodSpecHashVersion] = "1"
@@ -181,14 +181,14 @@ func TestDesiredPod_StampsHashVersion(t *testing.T) {
 	}
 }
 
-func TestPodSpecHash_StampedHashIgnoresOwnAnnotation(t *testing.T) {
+func TestPodSpecHash_WrittenHashIgnoresOwnAnnotation(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
 	eff := classDerivedBase()
 	pod := desiredPod(agent, eff, "kaalm-system")
-	// Re-deriving from the same spec must match what desiredPod stamped, so a
+	// Re-deriving from the same spec must match what desiredPod wrote, so a
 	// steady-state Agent never sees drift.
 	if got := pod.Annotations[annotationPodSpecHash]; got != podSpecHash(eff) {
-		t.Errorf("stamped hash %s, re-derived %s", got, podSpecHash(eff))
+		t.Errorf("written hash %s, re-derived %s", got, podSpecHash(eff))
 	}
 }
 

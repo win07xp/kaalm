@@ -21,7 +21,7 @@ type completionRequest struct {
 
 // staleRetrySchedule is the bounded backoff for the 409 stale_pod rejection
 // (message prefix StalePodCompletion), which covers the brief reconciler lag
-// between Pod creation and currentPodUID being stamped. Distinct from (and much tighter than) the gateway's delivery
+// between Pod creation and currentPodUID being set. Distinct from (and much tighter than) the gateway's delivery
 // retries. A package variable so tests can compress it.
 var staleRetrySchedule = []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
 

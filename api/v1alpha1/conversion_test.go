@@ -100,10 +100,10 @@ func TestConversionRoundTrip(t *testing.T) {
 	roundTrip(t, "ToolProvider", newFullToolProvider(), &kaalmv1beta1.ToolProvider{}, &ToolProvider{})
 }
 
-// TestConversionStampsDestinationGVK proves the stamp: a source whose TypeMeta
+// TestConversionSetsDestinationGVK proves the gvk is set: a source whose TypeMeta
 // names the other version must not leak it into the destination, and a
 // destination with an empty TypeMeta ends up with its own version regardless.
-func TestConversionStampsDestinationGVK(t *testing.T) {
+func TestConversionSetsDestinationGVK(t *testing.T) {
 	src := newFullAgent()
 	hub := &kaalmv1beta1.Agent{}
 	if err := src.ConvertTo(hub); err != nil {

@@ -115,7 +115,7 @@ func provisionRunningTask(t *testing.T, name, className string, mutate func(*kaa
 	})
 	pod := taskPod(t, name)
 	markPodReady(t, pod)
-	// StartTime is written in the same status update that stamps Running and
+	// StartTime is written in the same status update that sets Running and
 	// is never set anywhere else, so it is the durable witness of the
 	// transition: a task with a short completion timeout can settle before a
 	// poll samples the Running phase on a loaded machine (#145).
@@ -173,11 +173,11 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 		t.Error("task pod must carry no probes")
 	}
 
-	// UID stamped before Running.
+	// UID set before Running.
 	eventually(t, func() error {
 		task := getTask(t, "t-run")
 		if task.Status.CurrentPodUID != string(pod.UID) {
-			return errString("currentPodUID not stamped")
+			return errString("currentPodUID not set")
 		}
 		return nil
 	})
@@ -185,7 +185,7 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	markPodReady(t, pod)
 	expectTaskPhase(t, "t-run", kaalmv1beta1.TaskRunning)
 	if task := getTask(t, "t-run"); task.Status.StartTime == nil {
-		t.Error("startTime not stamped on Running")
+		t.Error("startTime not set on Running")
 	}
 }
 
@@ -223,7 +223,7 @@ func TestTask_PersistenceNotAllowedIsTerminalFailed(t *testing.T) {
 	expectTaskPhase(t, "t-per", kaalmv1beta1.TaskFailed)
 	task := getTask(t, "t-per")
 	if task.Status.CompletionTime == nil {
-		t.Error("terminal Failed must stamp completionTime")
+		t.Error("terminal Failed must set completionTime")
 	}
 	c := condition(task.Status.Conditions, kaalmv1beta1.ConditionCompleted)
 	if c == nil || c.Reason != kaalmv1beta1.ReasonPersistenceNotAllowed {
@@ -303,7 +303,7 @@ func TestTask_AgentReportedFailureRetriesThenFails(t *testing.T) {
 		}
 		return errString("old pod still present")
 	})
-	// Mailbox reset and a new Pod with a re-stamped UID.
+	// Mailbox reset and a new Pod with its UID recorded.
 	eventually(t, func() error {
 		var cm corev1.ConfigMap
 		if err := testClient.Get(ctxT(),
@@ -319,7 +319,7 @@ func TestTask_AgentReportedFailureRetriesThenFails(t *testing.T) {
 		}
 		task := getTask(t, "t-retry")
 		if task.Status.CurrentPodUID != string(newPod.UID) {
-			return errString("UID not re-stamped to the new pod")
+			return errString("UID not rewritten to the new pod")
 		}
 		return nil
 	})
@@ -331,7 +331,7 @@ func TestTask_AgentReportedFailureRetriesThenFails(t *testing.T) {
 	expectTaskPhase(t, "t-retry", kaalmv1beta1.TaskFailed)
 	task := getTask(t, "t-retry")
 	if task.Status.CompletionTime == nil {
-		t.Error("terminal Failed must stamp completionTime")
+		t.Error("terminal Failed must set completionTime")
 	}
 }
 
@@ -373,7 +373,7 @@ func TestTask_ExitCodeSuccessAndNoMailbox(t *testing.T) {
 		t.Errorf("exitCode task must not get a completion Role: %v", err)
 	}
 	if uid := getTask(t, "t-exit").Status.CurrentPodUID; uid != "" {
-		t.Errorf("exitCode task must not stamp currentPodUID, got %q", uid)
+		t.Errorf("exitCode task must not set currentPodUID, got %q", uid)
 	}
 
 	// Container exits 0.
@@ -545,16 +545,16 @@ func holdTaskPhase(t *testing.T, name string, phase kaalmv1beta1.AgentTaskPhase,
 	}
 }
 
-func TestTask_StampsClassBoundsAtPodCreation(t *testing.T) {
+func TestTask_RecordsClassBoundsAtPodCreation(t *testing.T) {
 	ttl, maxTTL := int32(600), int32(300)
-	mkWorkloadClass(t, "tc-stamp", func(c *kaalmv1beta1.AgentClass) {
+	mkWorkloadClass(t, "tc-bounds", func(c *kaalmv1beta1.AgentClass) {
 		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Hour}
 		c.Spec.Lifecycle.MaxTaskTimeout = metav1.Duration{Duration: 2 * time.Hour}
 		c.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = &ttl
 		c.Spec.Lifecycle.MaxTTLSecondsAfterFinished = &maxTTL
 	})
-	provisionRunningTask(t, "t-stamp", "tc-stamp", nil)
-	b := getTask(t, "t-stamp").Status.ClassBounds
+	provisionRunningTask(t, "t-bounds", "tc-bounds", nil)
+	b := getTask(t, "t-bounds").Status.ClassBounds
 	if b == nil || b.DefaultTaskTimeout.Duration != time.Hour || b.MaxTaskTimeout.Duration != 2*time.Hour ||
 		b.DefaultTTLSecondsAfterFinished == nil || *b.DefaultTTLSecondsAfterFinished != 600 ||
 		b.MaxTTLSecondsAfterFinished == nil || *b.MaxTTLSecondsAfterFinished != 300 {
@@ -610,17 +610,17 @@ func TestTask_ClassTTLEditSkipsFinishedTask(t *testing.T) {
 	holdTaskPhase(t, "t-snapttl", kaalmv1beta1.TaskSucceeded, 3*time.Second)
 }
 
-func TestTask_RetryRestampsFromEditedClass(t *testing.T) {
-	mkWorkloadClass(t, "tc-restamp", func(c *kaalmv1beta1.AgentClass) {
+func TestTask_RetryRecordsBoundsFromEditedClass(t *testing.T) {
+	mkWorkloadClass(t, "tc-rebounds", func(c *kaalmv1beta1.AgentClass) {
 		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: time.Hour}
 	})
-	oldPod := provisionRunningTask(t, "t-restamp", "tc-restamp", func(task *kaalmv1beta1.AgentTask) {
+	oldPod := provisionRunningTask(t, "t-rebounds", "tc-rebounds", func(task *kaalmv1beta1.AgentTask) {
 		task.Spec.Completion.BackoffLimit = 1
 	})
-	editClass(t, "tc-restamp", func(c *kaalmv1beta1.AgentClass) {
+	editClass(t, "tc-rebounds", func(c *kaalmv1beta1.AgentClass) {
 		c.Spec.Lifecycle.DefaultTaskTimeout = metav1.Duration{Duration: 2 * time.Hour}
 	})
-	writeMailbox(t, "t-restamp", map[string]string{"status": "failure", "message": "boom"})
+	writeMailbox(t, "t-rebounds", map[string]string{"status": "failure", "message": "boom"})
 	eventually(t, func() error {
 		var got corev1.Pod
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
@@ -636,12 +636,12 @@ func TestTask_RetryRestampsFromEditedClass(t *testing.T) {
 		return errString("old pod still present")
 	})
 	eventually(t, func() error {
-		newPod := taskPod(t, "t-restamp")
+		newPod := taskPod(t, "t-rebounds")
 		if newPod == nil || newPod.Name == oldPod.Name {
 			return errString("no replacement pod yet")
 		}
-		if b := getTask(t, "t-restamp").Status.ClassBounds; b == nil || b.DefaultTaskTimeout.Duration != 2*time.Hour {
-			return errString("classBounds not re-stamped to the 2h default")
+		if b := getTask(t, "t-rebounds").Status.ClassBounds; b == nil || b.DefaultTaskTimeout.Duration != 2*time.Hour {
+			return errString("classBounds not rewritten to the 2h default")
 		}
 		return nil
 	})
@@ -649,7 +649,7 @@ func TestTask_RetryRestampsFromEditedClass(t *testing.T) {
 
 // A task that settles before any Pod exists records the class bounds in the
 // settling write, so the class default TTL still cleans it up.
-func TestTask_PrePodFailureStampsBoundsAndExpires(t *testing.T) {
+func TestTask_PrePodFailureRecordsBoundsAndExpires(t *testing.T) {
 	ttl := int32(2)
 	mkWorkloadClass(t, "tc-prepod", func(c *kaalmv1beta1.AgentClass) {
 		c.Spec.Lifecycle.DefaultTTLSecondsAfterFinished = &ttl
@@ -661,7 +661,7 @@ func TestTask_PrePodFailureStampsBoundsAndExpires(t *testing.T) {
 		var got kaalmv1beta1.AgentTask
 		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-prepod"}, &got)
 		if apierrors.IsNotFound(err) {
-			return nil // already expired; the stamp is checked by the deletion
+			return nil // already expired; the recorded bounds are checked by the deletion
 		}
 		if err != nil {
 			return err
@@ -679,7 +679,7 @@ func TestTask_PrePodFailureStampsBoundsAndExpires(t *testing.T) {
 }
 
 // A task that settled before classBounds existed is never settled again, so
-// it stays unstamped and a class default TTL never reaches it.
+// it keeps no classBounds and a class default TTL never reaches it.
 func TestTask_PreUpgradeSettledTaskIsKept(t *testing.T) {
 	mkTask(t, "t-preupg", "tc-preupg", nil) // class absent: InvalidReference, no Pod
 	eventually(t, func() error {
@@ -699,13 +699,13 @@ func TestTask_PreUpgradeSettledTaskIsKept(t *testing.T) {
 	})
 	holdTaskPhase(t, "t-preupg", kaalmv1beta1.TaskFailed, 3*time.Second)
 	if b := getTask(t, "t-preupg").Status.ClassBounds; b != nil {
-		t.Errorf("a pre-upgrade settled task must stay unstamped, got %+v", b)
+		t.Errorf("a pre-upgrade settled task must keep no classBounds, got %+v", b)
 	}
 }
 
-// The timeout is derived every pass from the current spec and the stamped
+// The timeout is derived every pass from the current spec and the recorded
 // bounds; nil bounds (a task that predates them) leave the spec unbounded.
-func TestTimedOut_SpecWithinStampedBounds(t *testing.T) {
+func TestTimedOut_SpecWithinRecordedBounds(t *testing.T) {
 	started := metav1.NewTime(time.Now().Add(-time.Minute))
 	task := &kaalmv1beta1.AgentTask{Status: kaalmv1beta1.AgentTaskStatus{StartTime: &started}}
 	if timedOut(task) || runningRequeue(task).RequeueAfter != 0 {
@@ -724,21 +724,21 @@ func TestTimedOut_SpecWithinStampedBounds(t *testing.T) {
 		DefaultTaskTimeout: metav1.Duration{Duration: 30 * time.Second},
 		MaxTaskTimeout:     metav1.Duration{Duration: 2 * time.Minute},
 	}
-	// The owner raised the timeout to 5h: clamped to the stamped 2m max.
+	// The owner raised the timeout to 5h: clamped to the recorded 2m max.
 	if timedOut(task) {
 		t.Error("a minute into a 2m clamped timeout must not time out")
 	}
 	if got := runningRequeue(task).RequeueAfter; got > time.Minute+time.Second {
 		t.Errorf("requeue %v must follow the clamped 2m timeout", got)
 	}
-	// With no spec value, the stamped default applies.
+	// With no spec value, the recorded default applies.
 	task.Spec.Completion.Timeout = metav1.Duration{}
 	if !timedOut(task) {
-		t.Error("a minute past the stamped 30s default must time out")
+		t.Error("a minute past the recorded 30s default must time out")
 	}
 }
 
-func TestHandleTTL_SpecWithinStampedBounds(t *testing.T) {
+func TestHandleTTL_SpecWithinRecordedBounds(t *testing.T) {
 	ctx := context.Background()
 	i32 := func(v int32) *int32 { return &v }
 	settled := func(name string, spec *int32, b *kaalmv1beta1.AgentTaskClassBounds) *kaalmv1beta1.AgentTask {
@@ -761,13 +761,13 @@ func TestHandleTTL_SpecWithinStampedBounds(t *testing.T) {
 			DefaultTTLSecondsAfterFinished: i32(0),
 		}},
 	}
-	stampedDefault := &kaalmv1beta1.AgentTaskClassBounds{DefaultTTLSecondsAfterFinished: i32(30)}
-	stampedMax := &kaalmv1beta1.AgentTaskClassBounds{MaxTTLSecondsAfterFinished: i32(30)}
+	recordedDefault := &kaalmv1beta1.AgentTaskClassBounds{DefaultTTLSecondsAfterFinished: i32(30)}
+	recordedMax := &kaalmv1beta1.AgentTaskClassBounds{MaxTTLSecondsAfterFinished: i32(30)}
 	kept := settled("kept", nil, nil)
 	ownSpec := settled("own-spec", i32(30), nil)
-	byDefault := settled("by-default", nil, stampedDefault)
-	raised := settled("raised", i32(3600), stampedDefault)
-	clamped := settled("clamped", i32(3600), stampedMax)
+	byDefault := settled("by-default", nil, recordedDefault)
+	raised := settled("raised", i32(3600), recordedDefault)
+	clamped := settled("clamped", i32(3600), recordedMax)
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(class, kept, ownSpec, byDefault, raised, clamped).
 		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
@@ -783,20 +783,20 @@ func TestHandleTTL_SpecWithinStampedBounds(t *testing.T) {
 		t.Errorf("nil bounds: the spec TTL of 30s, a minute past, must delete the task (err %v)", err)
 	}
 	if _, err := r.handleTTL(ctx, byDefault); err != nil || exists(byDefault) {
-		t.Errorf("no spec TTL: the stamped 30s default must delete the task (err %v)", err)
+		t.Errorf("no spec TTL: the recorded 30s default must delete the task (err %v)", err)
 	}
 	// The owner raised the TTL on a finished task, the S9 escape hatch.
 	if res, err := r.handleTTL(ctx, raised); err != nil || res.RequeueAfter <= 0 || !exists(raised) {
-		t.Errorf("an owner-raised TTL must win over the stamped default: got %+v, %v", res, err)
+		t.Errorf("an owner-raised TTL must win over the recorded default: got %+v, %v", res, err)
 	}
 	if _, err := r.handleTTL(ctx, clamped); err != nil || exists(clamped) {
-		t.Errorf("an owner-raised TTL above the stamped 30s max must be clamped (err %v)", err)
+		t.Errorf("an owner-raised TTL above the recorded 30s max must be clamped (err %v)", err)
 	}
 }
 
 // A status write lost after the Pod's creation leaves podName behind; the
 // next pass repairs the snapshot from the observed Pod. A Pod created before
-// the snapshot fields existed has a matching podName and stays unstamped.
+// the snapshot fields existed has a matching podName and keeps no classBounds.
 func TestDriveProvisioning_RepairsLostSnapshotOnly(t *testing.T) {
 	ctx := context.Background()
 	eff := effectiveTaskSpec{}
@@ -805,7 +805,7 @@ func TestDriveProvisioning_RepairsLostSnapshotOnly(t *testing.T) {
 	}}}
 	for _, tc := range []struct {
 		name, recorded string
-		wantStamp      bool
+		wantBounds     bool
 	}{
 		{"lost-write", "", true},
 		{"pre-upgrade", "p-pre-upgrade", false},
@@ -831,10 +831,10 @@ func TestDriveProvisioning_RepairsLostSnapshotOnly(t *testing.T) {
 			if err := c.Get(ctx, client.ObjectKeyFromObject(task), &got); err != nil {
 				t.Fatal(err)
 			}
-			stamped := got.Status.ClassBounds != nil
-			if stamped != tc.wantStamp || got.Status.PodName != pod.Name {
-				t.Errorf("classBounds=%+v podName=%q, want stamped=%v podName=%q",
-					got.Status.ClassBounds, got.Status.PodName, tc.wantStamp, pod.Name)
+			recorded := got.Status.ClassBounds != nil
+			if recorded != tc.wantBounds || got.Status.PodName != pod.Name {
+				t.Errorf("classBounds=%+v podName=%q, want recorded=%v podName=%q",
+					got.Status.ClassBounds, got.Status.PodName, tc.wantBounds, pod.Name)
 			}
 		})
 	}
@@ -1253,7 +1253,7 @@ func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
 		return nil
 	})
 	// The old Pod is terminating (kubelet-less envtest never finishes it), and
-	// several passes later nothing has moved: no re-stamp, no second failure,
+	// several passes later nothing has moved: no UID rewrite, no second failure,
 	// no replacement.
 	time.Sleep(2 * time.Second)
 	var got corev1.Pod
@@ -1284,7 +1284,7 @@ func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
 		}
 		task := getTask(t, "t-hold")
 		if task.Status.CurrentPodUID != string(newPod.UID) {
-			return errString("UID not stamped to the new pod")
+			return errString("UID not set to the new pod")
 		}
 		if task.Status.Retries != 1 {
 			return errString("retries moved during the hold")

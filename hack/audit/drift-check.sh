@@ -35,6 +35,6 @@ done < "$manifest"
 if [ "$drifted" -eq 0 ]; then
     echo "no drift: every audited path is unchanged since $audited; all verdicts stand"
 else
-    echo "re-walk the drifted verdicts and re-stamp the manifest before the next release"
+    echo "re-walk the drifted verdicts and update the manifest's audited-commit line before the next release"
 fi
 exit "$drifted"

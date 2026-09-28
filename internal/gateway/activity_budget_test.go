@@ -57,7 +57,7 @@ func TestActivityStore_SourcesAndSnapshot(t *testing.T) {
 		t.Error("unseen source must be null")
 	}
 	if snap.ReplicaStartedAt.IsZero() {
-		t.Error("replicaStartedAt must be stamped")
+		t.Error("replicaStartedAt must be set")
 	}
 }
 

@@ -131,7 +131,7 @@ func TestAgent_HibernatesWithoutRecordedTraffic(t *testing.T) {
 	}
 	ag := getWorkloadAgent(t, "notraffic")
 	if ag.Status.HibernatedAt == nil {
-		t.Error("hibernatedAt must be stamped on the no-traffic hibernation path")
+		t.Error("hibernatedAt must be set on the no-traffic hibernation path")
 	}
 }
 
@@ -190,7 +190,7 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 	}
 	ag := getWorkloadAgent(t, "hib-wake")
 	if ag.Status.HibernatedAt == nil {
-		t.Error("hibernatedAt must be stamped")
+		t.Error("hibernatedAt must be set")
 	}
 
 	// Wake via annotation (what the activator writes).
@@ -325,8 +325,8 @@ func TestAgent_WakeDuringHibernating(t *testing.T) {
 // Ready, so the first Running pass after a wake can see only the record that
 // preceded the sleep. Left unfloored, an agent that slept longer than
 // idleTimeout+hibernationDelay went straight back through Idle to Hibernating
-// after answering one message. The wake stamps lastActivityTime, and both
-// windows are measured from no earlier than that stamp.
+// after answering one message. The wake sets lastActivityTime, and both
+// windows are measured from no earlier than that time.
 func TestAgent_WakeIsActivity(t *testing.T) {
 	mkWorkloadClass(t, "wc-wakeact", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
@@ -382,7 +382,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 
 	got := getWorkloadAgent(t, "wake-act")
 	if got.Status.LastActivityTime == nil || got.Status.LastActivityTime.Time.Before(woke.Add(-time.Second)) {
-		t.Fatalf("the wake must stamp lastActivityTime; got %v", got.Status.LastActivityTime)
+		t.Fatalf("the wake must set lastActivityTime; got %v", got.Status.LastActivityTime)
 	}
 
 	// Running holds for idleTimeout from the wake, then Idle; the stale

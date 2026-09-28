@@ -96,8 +96,8 @@ func writeRotated(t *testing.T, path string, content []byte, bump time.Duration)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stamp := time.Now().Add(bump)
-	if err := os.Chtimes(path, stamp, stamp); err != nil {
+	mtime := time.Now().Add(bump)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
 }
