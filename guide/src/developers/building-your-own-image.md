@@ -54,7 +54,9 @@ Numbered as in the design book (runtime contract items 1 to 8):
 6. **Completion (AgentTasks only).** Report the verdict with
    `POST /v1/task/complete`, including any declared artifacts. Retry a
    `409` with `error.type: stale_pod` a few times with backoff (the
-   identity stamp can lag Pod creation by a moment); treat
+   controller writes the new Pod's UID to the task's status after it
+   creates the Pod, and a call that arrives before that write gets the
+   `409`); treat
    `reason=TaskAlreadyCompleted` as final and exit.
 7. **Message deduplication (required if you implement /v1/message).**
    Deliveries carry a gateway-generated `messageId`; process each id once.
@@ -79,7 +81,7 @@ your case, stay there and skip this whole page. The templates carry no
 contract code of their own. `examples/starter-python` is a `FROM` build on
 the Python base image plus a `handler.py`, and `examples/starter-go` is a
 `main.go` and `handler.go` that import the `agentruntime` module, which
-implements the TLS wiring, rotation reload, envelope parsing, dedup,
+implements mTLS serving, certificate rotation reload, envelope parsing, dedup,
 heartbeat, and completion retry. Start from the Go template if Go is your
 language and you need the whole program. Start clean only when you need
 another runtime, and implement the checklist in order: serve, verify, reload,

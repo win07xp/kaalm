@@ -97,7 +97,7 @@ The gateway Service DNS is `kaalm-gateway.{operatorNamespace}.svc.cluster.local`
 
 ## 5. Activity signal (Agent only)
 
-This item is optional. An Agent may report liveness by calling `POST /v1/agent/heartbeat` on the gateway, which records the timestamp in memory with no API server write. The gateway also infers activity from LLM requests and delivered messages, and the Agent's `spec.lifecycle.activitySource` decides which signals the controller counts. Under the default `gatewayTraffic`, heartbeats are recorded and then ignored; an image that heartbeats on a timer must not be paired with `agentHeartbeat` or `both`, or the Agent never goes idle ([The heartbeat toggle and the hibernation footgun](starter-templates.md#the-heartbeat-toggle-and-the-hibernation-footgun)).
+This item is optional. An Agent may report liveness by calling `POST /v1/agent/heartbeat` on the gateway, which records the timestamp in memory with no API server write. The gateway also infers activity from LLM requests and delivered messages, and the Agent's `spec.lifecycle.activitySource` decides which signals the controller counts. Under the default `gatewayTraffic`, heartbeats are recorded and then ignored; an image that heartbeats on a timer must not be paired with `agentHeartbeat` or `both`, or the Agent never goes idle ([The heartbeat toggle and hibernation](starter-templates.md#the-heartbeat-toggle-and-hibernation)).
 
 Heartbeats are meaningful only for Agents: idle detection does not apply to one-shot tasks, and the endpoint rejects an AgentTask certificate with `403` ([The :8443 listener profile](../gateways/overview.md#the-8443-listener-profile)). A task image must not run a heartbeat loop.
 
@@ -105,7 +105,7 @@ Heartbeats are meaningful only for Agents: idle detection does not apply to one-
 
 This item is optional. An AgentTask in `completion.condition: agentReported` mode reports its result with `POST /v1/task/complete`, with a status and an optional set of artifacts ([Task completion](../gateways/api/task-complete.md)).
 
-The report can race the reconciler's status write that stamps `AgentTask.status.currentPodUID` after Pod creation, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `409 Conflict`, `error.type: stale_pod`, `retryable: true`, and a message beginning `StalePodCompletion:`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
+The report can race the status update in which the reconciler writes the new Pod's UID to `AgentTask.status.currentPodUID`, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `409 Conflict`, `error.type: stale_pod`, `retryable: true`, and a message beginning `StalePodCompletion:`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
 
 `403 access_denied` with a message beginning `TaskAlreadyCompleted:` is final. The task has reached `Succeeded`, `Failed`, or `TimedOut`, and further reports are rejected; the container logs and exits.
 
@@ -138,4 +138,4 @@ Both reference runtimes implement the item without handler involvement: the Go m
 
 ## Starter templates
 
-Two starter templates ship under `examples/starter-go/` and `examples/starter-python/`. Neither carries contract code of its own: the Python template is a `FROM` build on the Python base image, and the Go template imports the `agentruntime` module. Each is a handler plus wiring, and each README lists the manifests to deploy it. The templates target Kaalm-managed workloads; gateway-only-tier images are configured per [Tiered on-ramp](../operations/deployment.md#tiered-on-ramp). See [Starter templates](starter-templates.md).
+Two starter templates ship under `examples/starter-go/` and `examples/starter-python/`. Neither carries contract code of its own: the Python template is a `FROM` build on the Python base image, and the Go template imports the `agentruntime` module. Each is a handler plus the build and startup files around it, and each README lists the manifests to deploy it. The templates target Kaalm-managed workloads; gateway-only-tier images are configured per [Tiered on-ramp](../operations/deployment.md#tiered-on-ramp). See [Starter templates](starter-templates.md).

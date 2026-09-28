@@ -1,5 +1,5 @@
 @startuml crd-references-tool-gates
-' Figure 3 of 4: the same two-gate shape for ToolProvider. The class
+' Figure 3 of 4: the same two gates as figure 2, for ToolProvider. The class
 ' allows the tool provider and the workload names it. Source of truth:
 ' docs/src/concepts/core-concepts.md
 !include _style.puml

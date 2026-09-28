@@ -10,12 +10,12 @@ k3d cluster delete kaalm-tutorial
 INFO[0001] Successfully deleted cluster kaalm-tutorial!
 ```
 
-That is everything: the cluster, Kaalm, your agent, its storage, the lot.
+That is everything: the cluster, Kaalm, your agent, its storage, all of it.
 Nothing survives on your laptop except the files you wrote.
 
 And those are the part that matters. Three manifests and one handler
 (`agent.yaml`, `channel.yaml`, `task.yaml`, `handler.py`) describe an agent,
-a front door, a job, and the agent's actual behavior in well under a hundred
+a channel, a job, and the agent's behavior in well under a hundred
 lines, and they work the same against a real cluster as against the cluster you
 deleted a moment ago. That is the benefit of declaring things rather than operating
 them.
@@ -26,9 +26,9 @@ Not Kubernetes, particularly. You learned a handful of `kubectl` verbs, that spe
 the wish and status is the reality, and that an operator is a program that
 closes the gap between them. Everything else was Kaalm's vocabulary: classes as
 rules, agents as long-lived things with storage and an address, tasks as
-one-shot work, channels as doors.
+one-shot work, channels as the URLs that reach an agent.
 
-And you watched the behavior that is genuinely hard to build yourself: an
+And you watched the behavior that is hard to build yourself: an
 agent shutting down when nobody needs it, and coming back with its memory
 intact when somebody does.
 
@@ -36,9 +36,9 @@ intact when somebody does.
 
 **Do real work.** The user guide, starting at its
 [Introduction](https://github.com/win07xp/kaalm/blob/main/guide/src/introduction.md), is
-organized by task: installing for real, offering classes to teams, wiring up
-providers, setting budgets, connecting channels, and a troubleshooting chapter
-organized by the symptom you are actually seeing.
+organized by task: installing for real, offering classes to teams, providing
+LLM access, setting budgets, connecting channels, and a troubleshooting chapter
+organized by the symptom you see.
 
 **Understand the machine.** The design book, starting at its
 [Introduction](https://github.com/win07xp/kaalm/blob/main/docs/src/introduction.md), is the specification: how the

@@ -28,7 +28,7 @@ partition "the attempt: one slot" {
   if (budget admission?) then (blocked, throttled,\nor failed closed)
     :record the class;
   else (admitted)
-    :forward\n(translated if the edge crosses);
+    :forward\n(translated if the formats differ);
     if (response?) then (2xx)
       :return the response;
       stop

@@ -79,7 +79,7 @@ The three `provider_*` errors are not retryable because the gateway has already 
 
 ## Crossing formats
 
-A fallback edge may cross API formats: an `anthropic` provider may name an `openai` or `openai-compatible` fallback and the reverse. `google-vertex` stays same-type in both directions, because its model is part of the URL and its wire format is a third format, and an inbound `/v1/completions` request, the legacy completions format, never crosses. Rule 12 states this ([Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation)).
+A fallback edge may cross API formats: an `anthropic` provider may name an `openai` or `openai-compatible` fallback and the reverse. `google-vertex` stays same-type in both directions, because its model is part of the URL and its wire format is a third format, and an inbound `/v1/completions` request, the legacy completions format, is never translated into another format. Rule 12 states this ([Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation)).
 
 The primary is always spoken to in the caller's format, so nothing changes until the walk reaches a candidate of the other format. There, and only there, the gateway rewrites the request into the candidate's format before forwarding and rewrites the response back, streaming or not, so the caller never sees a format it did not ask for. Translation adds no round trip and happens before the first byte, which keeps the [point of no return](request-handling.md#streaming-responses) where it is: a stream that has started does not fall back, translated or not.
 

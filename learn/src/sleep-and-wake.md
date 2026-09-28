@@ -135,8 +135,8 @@ you pay for the handful that happen to be in a conversation right now, and the
 rest cost you nothing but disk.
 
 The hard part is what you watched Kaalm handle: an agent that is shut down
-and restarted must not lose the thread. That is why storage is a first-class
-part of the declaration, and why the count kept going. Anything your agent
+and restarted must not lose the thread. That is why storage is declared in the
+agent's own spec, and why the count kept going. Anything your agent
 keeps on that volume survives; anything it holds only in memory does not.
 
 Next: [Give it a real brain](give-it-a-real-brain.md).

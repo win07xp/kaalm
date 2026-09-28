@@ -20,9 +20,9 @@ A custom image has to satisfy every item of the contract. The templates satisfy 
 - **mTLS on every gateway call** through a preconfigured client that presents the same certificate and trusts `$KAALM_CA_CERT` (item 3).
 - **Certificate watch and reload** on the mount directory, rebuilding both trust pools on a CA-bundle change; see [Why the watch is on the directory, not the file](#why-the-watch-is-on-the-directory-not-the-file) (item 4).
 - **Per-path client-certificate verification on `/v1/message`**: `401` with no peer certificate, `403` unless the SAN is the gateway Service DNS (item 4).
-- **The `/v1/message` handler skeleton**, which decodes the envelope, deduplicates on `messageId` over a persisted window of 1024 ids, and calls the one developer-owned function (items 4 and 7).
+- **The `/v1/message` handler skeleton**, which decodes the envelope, deduplicates on `messageId` over a persisted window of 1024 ids, and calls the single function the developer writes (items 4 and 7).
 - **Trace-context propagation** on every gateway call made while handling a message (item 8).
-- **The heartbeat loop**, every 30s in Agent mode only; see [The heartbeat toggle and the hibernation footgun](#the-heartbeat-toggle-and-the-hibernation-footgun) (item 5).
+- **The heartbeat loop**, every 30s in Agent mode only; see [The heartbeat toggle and hibernation](#the-heartbeat-toggle-and-hibernation) (item 5).
 - **The task-completion helper** in Go, `CompleteTask`, with the bounded retry on `409 stale_pod` (`StalePodCompletion`) and `TaskAlreadyCompleted` treated as final (item 6). The Python `kaalm` module has no completion member as shipped, so a Python task posts to `/v1/task/complete` through `kaalm.gateway` itself; issue #235 tracks the helper ([Task mode](base-images.md#task-mode)).
 
 What a template does not do: choose an LLM client library, persist conversation state, or implement the agent's logic. The handler function is the single extension point.
@@ -40,7 +40,7 @@ The runtimes watch the mount directory instead, `/var/run/kaalm/`, for the creat
 
 Both reloads are needed. cert-manager rotates leaf certificates on its schedule ([Rotation defaults](../security/tls.md#rotation-defaults)), and trust-manager re-projects the CA ConfigMap whenever the CA renews or a re-key adds or removes bundle sources. Without the CA-bundle reload, a re-key breaks both directions once gateway leaves are re-issued under the new key: outbound calls stop trusting the gateway's serving certificate, and the inbound pool rejects the gateway's client certificate on `/v1/message` ([CA renewal and re-key](../security/tls.md#ca-renewal-and-re-key)).
 
-### The heartbeat toggle and the hibernation footgun
+### The heartbeat toggle and hibernation
 
 **The heartbeat is unconditional.** In Agent mode it fires every 30s for the lifetime of the process, whether or not the agent is doing useful work. That is compatible only with the default [`Agent.spec.lifecycle.activitySource: gatewayTraffic`](../resources/agent.md), where the controller ignores heartbeats for idle detection. The gateway still records them, but they play no part in the [`Idle` and `Hibernated` transitions](../controller/agent-lifecycle.md).
 
@@ -74,7 +74,7 @@ examples/
     README.md
 ```
 
-The Python template's image is `FROM ghcr.io/win07xp/kaalm-agent-python` (source in `images/agent-python/`), and the Go template imports the [`agentruntime` module](base-images.md#the-go-image) (source in `agentruntime/`). The module is served from the repository's `go.work` inside the repo, so the template's `go.mod` carries no `require` line; a copy outside the repo runs `go mod tidy` once to pin the published version.
+The Python template's image is `FROM ghcr.io/win07xp/kaalm-agent-python` (source in `images/agent-python/`), and the Go template imports the [`agentruntime` module](base-images.md#the-go-image) (source in `agentruntime/`). Inside the repository the module is resolved through the repository's `go.work`, so the template's `go.mod` carries no `require` line; a copy outside the repository runs `go mod tidy` once to pin the published version.
 
 Each README contains the `kubectl apply` manifests to deploy a test Agent from the template image, the environment variables the image expects (the `$KAALM_*` set the controller injects, plus `KAALM_TEMPLATE_HEARTBEAT`), and a "what to change" checklist pointing at the handler.
 

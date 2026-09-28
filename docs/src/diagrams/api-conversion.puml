@@ -9,7 +9,7 @@ skinparam rectangle {
 }
 rectangle "legacy clients, v1alpha1" as legacy #line:9E9E9E;line.dashed;text:555555 {
   rectangle "kubectl with v1alpha1 manifests" as kal #back:F5F5F5;line:9E9E9E;line.bold;text:555555
-  rectangle "a GitOps repo at v1alpha1" as gitops #back:F5F5F5;line:9E9E9E;line.bold;text:555555
+  rectangle "a GitOps repository at v1alpha1" as gitops #back:F5F5F5;line:9E9E9E;line.bold;text:555555
 }
 rectangle "current clients, v1beta1" as current #line:0D47A1;line.dashed;text:0a2540 {
   rectangle "kubectl, preferred version" as kbeta #back:F5F5F5;line:9E9E9E;line.bold;text:2a0a4a

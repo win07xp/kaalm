@@ -38,8 +38,8 @@ every namespace read with a `SubjectAccessReview`:
 - To see a namespace, the token must be allowed to `list` `agents.kaalm.io`
   there.
 - To test-chat an agent, the token must be allowed to `create`
-  `agentchannels.kaalm.io` there (wiring a channel is the standing form of
-  what a test message does once).
+  `agentchannels.kaalm.io` there (an AgentChannel delivers messages to the
+  agent for as long as it exists; a test message delivers one).
 
 So access to the console is ordinary RBAC. A viewer identity with exactly
 those permissions, from `test/e2e/testdata/console.yaml`:

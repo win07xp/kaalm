@@ -22,7 +22,7 @@ GET /channels/team-support/support-whatsapp?hub.mode=subscribe&hub.verify_token=
 | `hub.mode=subscribe` and `hub.verify_token` equals the channel's `verifyToken` | `200`, `Content-Type: text/plain`, body is the `hub.challenge` value verbatim |
 | `hub.verify_token` does not match, `hub.mode` is anything else, or `verifyToken` cannot be read | `401` with `error.type: unauthorized` |
 
-The token comparison is constant-time. The handshake produces no envelope. A mismatch is recorded as a `WebhookAuthFailed` health observation. The `401` is the listener's one rejection, identical to the answer for an unregistered path, so the handshake does not reveal that a WhatsApp channel owns the path.
+The token comparison is constant-time. The handshake produces no envelope. A mismatch is recorded as a `WebhookAuthFailed` health observation. The `401` is the listener's only rejection, identical to the answer for an unregistered path, so the handshake does not reveal that a WhatsApp channel is registered on the path.
 
 ## Inbound event
 

@@ -58,7 +58,7 @@ runtime toggle:
 |---|---|---|
 | `KAALM_TEMPLATE_HEARTBEAT` | `auto` | `auto` emits every 30s in Agent mode only; `off` never emits. |
 
-**Hibernation footgun:** the heartbeat is unconditional, so it is only safe
+**Hibernation warning:** the heartbeat is unconditional, so it is only safe
 with the default `activitySource: gatewayTraffic`. Setting `agentHeartbeat` or
 `both` while this loop runs keeps the agent permanently non-idle and it will
 never hibernate. Either leave `activitySource` at the default, or set

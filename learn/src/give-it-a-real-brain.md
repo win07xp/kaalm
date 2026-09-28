@@ -15,7 +15,7 @@ Three things have to line up:
 
 1. A **ModelProvider**, which holds the credential and the price list.
 2. The **class** must permit that provider, and the **agent** must reference it.
-3. The **agent's code** must actually call a model, which your handler so far
+3. The **agent's code** must call a model, which your handler so far
    does not.
 
 ## 1. The provider
@@ -57,7 +57,7 @@ spec:
 ```
 
 The costs are not decoration. Kaalm multiplies them by the tokens your agents
-actually spend, which is what makes budgets possible. `allowedNamespaces`
+spend, which is what makes budgets possible. `allowedNamespaces`
 decides who may use this provider at all.
 
 Check it came up:

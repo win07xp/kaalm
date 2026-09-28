@@ -32,7 +32,7 @@ As a result, an AgentClass edit made before the upgrade to a field that version 
 
 ## AgentClass change handling
 
-When an AgentClass, ModelProvider, or ToolProvider spec changes, the [AgentReconciler](reconcilers.md#agentreconciler) re-enqueues every Agent referencing it through three indexed watches (`agentClassRef.name`, `providers[].providerRef.name`, `tools[].providerRef.name`), so propagation is event-driven rather than waiting for a periodic requeue. The [AgentTaskReconciler](reconcilers.md#agenttaskreconciler) watches AgentClass only. Each watch is gated so that status-only writes never fan out: a class or tool provider fires on a spec generation change, and a model provider on a spec change or a change to the set of namespaces its budget blocks.
+When an AgentClass, ModelProvider, or ToolProvider spec changes, the [AgentReconciler](reconcilers.md#agentreconciler) re-enqueues every Agent referencing it through three indexed watches (`agentClassRef.name`, `providers[].providerRef.name`, `tools[].providerRef.name`), so propagation is event-driven rather than waiting for a periodic requeue. The [AgentTaskReconciler](reconcilers.md#agenttaskreconciler) watches AgentClass only. Each watch is gated so that status-only writes never fan out: a class or tool provider fires on a spec generation change, and a model provider on a spec change, a change to its `Ready` status or reason, or a change to the set of namespaces its budget blocks.
 
 A change propagates along one of three paths, decided in this order: does it exclude the Agent's stored spec (bucket 2), does it change the Pod spec hash (bucket 1), or neither (bucket 3, or an in-place child update).
 

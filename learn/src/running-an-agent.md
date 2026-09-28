@@ -3,7 +3,7 @@
 An agent is code in a container. You do not have to write or build any of it
 to get one running: Kaalm publishes reference images that already speak the
 operator's protocol, and out of the box they answer every message by echoing
-it back. That is not clever, and that is deliberate: it lets everything
+it back. An echo does nothing useful on its own, and that is deliberate: it lets everything
 else in this book work without an API key, and without Docker builds. Two
 chapters from here you hand this agent your own code, still without building
 anything.

@@ -16,7 +16,7 @@ controller (lifecycle, hibernation and wake, budgets, health probes,
 finalizers), the two-listener gateway (LLM proxy with credential isolation,
 budgets, rate limits, and fallback trees that cross API formats; the MCP tool
 broker; user gateway with webhook, Discord, and WhatsApp channels), the
-optional operator console, the Helm chart with cert-manager TLS wiring, the
+optional operator console, the Helm chart with cert-manager-issued TLS, the
 runtime contract with published base images and starter templates, and the
 three books.
 
@@ -110,7 +110,7 @@ they are likely to matter:
 
 - **The Discord Gateway WebSocket adapter.** Free-text message bots need a
   persistent connection per bot (identify, heartbeat, resume, sharding) and
-  one replica to own it; the v0.7.0 Discord adapter covers slash commands
+  one replica to hold it; the v0.7.0 Discord adapter covers slash commands
   over HTTP instead. Tracked as
   [#124](https://github.com/win07xp/kaalm/issues/124).
 - **Serving the `google-vertex` provider type.** The enum is reserved and

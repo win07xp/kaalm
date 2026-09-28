@@ -28,8 +28,8 @@ budget:
       degradeTo: claude-sonnet-4-6
 ```
 
-Policies fire as spend crosses their `atPercent`; when several have been
-crossed, the highest one wins. What each action means for the caller and for you:
+A policy applies when spend reaches its `atPercent`; when spend has reached
+several, the policy with the highest `atPercent` wins. What each action means for the caller and for you:
 
 | Action | The caller sees | You see |
 |---|---|---|
