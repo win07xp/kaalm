@@ -143,7 +143,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		case res.AuthFailed:
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, "provider rejected the credential")
 			r.setReady(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, "provider rejected the credential")
-			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.interval(&mp)})
+			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.probeRequeue(&mp)})
 		case res.Skipped:
 			apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 				Type: kaalmv1beta1.ConditionHealthy, Status: metav1.ConditionUnknown,
@@ -152,7 +152,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		case res.Err != nil:
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			requeue = ctrl.Result{RequeueAfter: r.interval(&mp)}
+			requeue = ctrl.Result{RequeueAfter: r.probeRequeue(&mp)}
 		default: // Healthy
 			r.setHealthy(&mp, true, kaalmv1beta1.ReasonUpstreamReachable, "provider is reachable")
 			requeue = ctrl.Result{RequeueAfter: r.interval(&mp)}
@@ -482,6 +482,12 @@ func (r *ModelProviderReconciler) interval(mp *kaalmv1beta1.ModelProvider) time.
 		return time.Duration(hc.IntervalSeconds) * time.Second
 	}
 	return defaultHealthInterval
+}
+
+// probeRequeue is the delay before the next probe: the interval, backed off
+// while the Healthy condition is False (see probeRequeue).
+func (r *ModelProviderReconciler) probeRequeue(mp *kaalmv1beta1.ModelProvider) time.Duration {
+	return probeRequeue(mp.Status.Conditions, r.interval(mp), time.Now())
 }
 
 func (r *ModelProviderReconciler) setReady(mp *kaalmv1beta1.ModelProvider, ok bool, reason, msg string) {
