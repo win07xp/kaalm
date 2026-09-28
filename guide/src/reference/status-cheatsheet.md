@@ -120,6 +120,8 @@ names the host, so `kubectl describe agentchannel` shows the typo.
   enforcement requires a fully priced model catalog), `DeletionBlocked`
   (a delete is held by a referrer; see [Deleting a provider, tool
   provider, or class never finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
+  `CredentialsMissing` also fires a `Warning` event the first time `Ready`
+  turns `False` with it; `CredentialsInvalid` stays a condition only.
 - `Healthy`: the periodic upstream probe (`UpstreamReachable` when good,
   `ProviderUnhealthy` when not, `ProbeSkipped` for a type with no probe).
   Ready without Healthy means valid config, unreachable provider.
@@ -151,6 +153,8 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
   the injected credential), `DeletionBlocked` (a delete is held by a
   referrer; see [Deleting a provider, tool provider, or class never
   finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
+  `CredentialsMissing` also fires a `Warning` event the first time `Ready`
+  turns `False` with it; `CredentialsInvalid` stays a condition only.
 - `Healthy`: the periodic probe, which speaks MCP (`server/discover` or
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
@@ -205,5 +209,6 @@ kubectl describe agent AGENT_NAME | sed -n '/Conditions:/,/Events:/p'
 ---
 
 *How this works: design book pages Controller, Agent lifecycle (the phase
-machine), Resources (each CRD page documents its full status), and
+machine), Resources (each CRD page documents its full status), Controller,
+Errors, events, and testing (the Event reasons and when they fire), and
 Operations, Observability (the metrics that complement these statuses).*

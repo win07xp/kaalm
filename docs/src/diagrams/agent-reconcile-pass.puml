@@ -9,8 +9,11 @@ start
 :Agent reconcile;
 
 partition "1 to 4: wake, guards, budget, degrade gate" {
-  if (kaalm.io/wake set,\nnot Hibernating?) then (yes)
+  if (wake=true,\nnot Hibernating?) then (yes)
     :Hibernated: Resuming;\nelse remove, WakeIgnored;
+    kill
+  elseif (stale wake-trigger,\nno wake request?) then (yes)
+    :remove it,\nrequeue;
     kill
   elseif (namespace is\nkaalm-system?) then (yes)
     :Ready=False\nSystemNamespaceForbidden;

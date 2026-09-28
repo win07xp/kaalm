@@ -31,7 +31,7 @@ database "apiserver\nand leader Lease" as api #back:FFD580;line:7a3f00;text:3a1f
 
 gw -[#1B5E20]-> svc : POST /v1/activate
 svc -[#1B5E20]-> b1 : any replica
-b1 -[#0D47A1]-> api : patch kaalm.io/wake=channel
+b1 -[#0D47A1]-> api : patch wake=true, wake-trigger=channel
 api -[#0D47A1,dashed]-> a4 : Agent watch
 a4 .[#9E9E9E].> api : holds the Lease
 b .[#9E9E9E].> api : waits on the Lease

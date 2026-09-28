@@ -115,7 +115,8 @@ Events are the surface for status changes that platform teams discover with `kub
 
 - **Phase transitions** on Agent (`Normal`, `PhaseChanged`). AgentTask emits no phase Event; its settle and retry Events carry the outcome.
 - **Hibernation and wake** on Agent (`Normal`, `Hibernated` and `Woken`; `Warning`, `WakeIgnored`). See [Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics).
-- **Provider health** on ModelProvider and ToolProvider (`Warning`, `ProviderUnhealthy`), and the hard-enforcement margin on ModelProvider (`Warning`, reason `BoundaryMarginRaised` as shipped, where the condition's reason is `ObservedTrafficExceededMargin`).
+- **Provider health** on ModelProvider and ToolProvider (`Warning`, `ProviderUnhealthy`), and the hard-enforcement margin on ModelProvider (`Warning`, reason `ObservedTrafficExceededMargin`, matching the `BoundaryMarginRaised` condition's reason).
+- **Credential validation** on ModelProvider and ToolProvider (`Warning`, `CredentialsMissing`, emitted once when `Ready` first turns `False` with that reason). `CredentialsInvalid`, the probe's auth failure, stays a condition only.
 - **Degraded entry** on Agent (`Warning`, the Degraded reason as the Event reason), emitted once when the Agent enters `Degraded` ([Degraded](../controller/agent-lifecycle.md#degraded)).
 - **Task settlement and retry** on AgentTask (`Normal`, `TaskSucceeded`; `Warning`, `TaskFailed` and the timeout reasons; one `Warning` per retry).
 - **Provider configuration** on ModelProvider (`Warning`, `FallbackIneligible` at reconcile time and at request time, `DegradeTargetNotCheapest`, `MaxOutputTokensUnset`) and the gateway's `CredentialsInvalid` when a provider refuses the key during a fallback walk ([Fallback logic](../gateways/llm/fallback.md)).

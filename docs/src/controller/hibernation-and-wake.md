@@ -77,7 +77,7 @@ While waiting, the gateway holds the message. The generic webhook adapter has no
 
 ### From activator call to Resuming
 
-On the controller, that call becomes one patch. The activator handler is served on every controller replica, and its only write is a patch that sets `kaalm.io/wake=channel` on the target Agent through the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` handles the annotation as its first step, transitioning the Agent to `Resuming` and requeueing; the next pass creates the Pod.
+On the controller, that call becomes one patch. The activator handler is served on every controller replica, and its only write is a merge patch that sets `kaalm.io/wake=true` and `kaalm.io/wake-trigger=channel` on the target Agent through the apiserver, in the same patch. The wake value is `true` for every trigger; only `kaalm.io/wake-trigger` marks this wake as the activator's, so a controller replica that predates the trigger annotation still honors it during a rolling upgrade. The leader's existing Agent watch fires, and the leader's `AgentReconciler` handles the annotations as its first step, transitioning the Agent to `Resuming` and requeueing; the next pass creates the Pod.
 
 This is why the handler does not need to run on the leader. The Service round-robins the POST across replicas, but any replica that receives it can drive the wake, because the signal is an annotation on the resource rather than an in-memory call on the leader. See [Operator structure](overview.md).
 
@@ -91,18 +91,22 @@ A gateway-side `wakeTimeout` exhaustion does not interrupt this: the caller gets
 
 ### Manual wake
 
-Manual wake is also supported by annotation, using the value `true`; the activator writes `channel` instead, so [`kaalm_wakes_total`](overview.md#activator-handler-served-on-every-replica) can tell the two apart ([Observability](operations.md#observability)).
+Manual wake sets the same `kaalm.io/wake=true` annotation the activator writes, but with no `kaalm.io/wake-trigger` annotation:
 
 ```
-kubectl annotate agent foo kaalm.io/wake=true
+kubectl annotate agent foo kaalm.io/wake=true --overwrite
 ```
 
-Operational uses include pre-warming an agent before expected traffic or forcing a wake when no AgentChannel is configured. The AgentReconciler handles this annotation with phase-dependent removal so a failed reconcile cannot silently drop the wake:
+The reconciler treats any Agent carrying `kaalm.io/wake=true` as a wake request. It tells a channel wake from a manual one by `kaalm.io/wake-trigger`: `channel` when the activator's patch set it, absent for a manual wake. [`kaalm_wakes_total{trigger}`](overview.md#activator-handler-served-on-every-replica) is labeled from that distinction ([Observability](operations.md#observability)).
 
-- If the agent is `Hibernating`, the annotation is kept. The reconciler finishes deleting the Pod, settles `Hibernated`, and requeues, so the next pass takes the `Hibernated` branch below.
-- If the agent is in any other non-`Hibernated` phase, the annotation is removed immediately. A `Warning` event (`reason=WakeIgnored`) is emitted **unless the agent is in `Resuming`**, where the annotation is removed silently: a wake observed during `Resuming` is a benign idempotent re-attempt, not the misfire case the Warning is meant to surface. Phase is unchanged in either branch. Outside `Resuming`, the Warning surfaces a misfire: a stale cached phase on the gateway, or a hand-set annotation on an Agent that is not asleep.
-- If the agent is `Hibernated`, the reconciler transitions it to `Resuming`, sets `status.lastActivityTime` to the wake time in the same status write, and requeues; the next pass creates the Pod. The annotation is removed only after the `Resuming` status write has committed, so a failed write leaves the annotation in place for the next pass to observe. Once `Resuming` is committed, the phase itself carries the wake intent across a failed Pod creation.
+Operational uses include pre-warming an agent before expected traffic or forcing a wake when no AgentChannel is configured. The AgentReconciler handles the wake with phase-dependent removal so a failed reconcile cannot silently drop it:
+
+- If the agent is `Hibernating`, the annotations are kept. The reconciler finishes deleting the Pod, settles `Hibernated`, and requeues, so the next pass takes the `Hibernated` branch below.
+- If the agent is in any other non-`Hibernated` phase, `kaalm.io/wake` and `kaalm.io/wake-trigger` are removed together at once. A `Warning` event (`reason=WakeIgnored`) is emitted **unless the agent is in `Resuming`**, where the annotations are removed silently: a wake observed during `Resuming` is a benign idempotent re-attempt, not the misfire case the Warning is meant to surface. Phase is unchanged in either branch. Outside `Resuming`, the Warning surfaces a misfire: a stale cached phase on the gateway, or a hand-set annotation on an Agent that is not asleep.
+- If the agent is `Hibernated`, the reconciler transitions it to `Resuming`, sets `status.lastActivityTime` to the wake time in the same status write, and requeues; the next pass creates the Pod. Both annotations are removed only after the `Resuming` status write has committed, so a failed write leaves them in place for the next pass to observe. Once `Resuming` is committed, the phase itself carries the wake intent across a failed Pod creation.
 - The wake sets `status.lastActivityTime` because the message that woke the agent is activity. The gateway records that message only once delivery succeeds, after the Pod is Ready, and the controller's activity read is cached per namespace, so the first `Running` reconcile after a wake can see only the record that preceded the sleep. The idle and hibernation windows after a wake are therefore measured from no earlier than the wake time; without that write, an agent that slept longer than `idleTimeout + hibernationDelay` would go straight back through `Idle` to `Hibernating` after answering one message.
+
+A `kaalm.io/wake-trigger` annotation left on an Agent with no `kaalm.io/wake=true` request is stale: the reconciler removes it on its next pass, before it can label a later manual wake as a channel wake.
 
 A wake requested during the transient `Hibernating` phase, by hand or by a channel message, is therefore not lost: the Agent passes through `Hibernated` and then resumes. The gateway calls the activator for a `Hibernating` Agent for this reason (see [The activator](../gateways/user/activation-and-activity.md#the-activator)).
 

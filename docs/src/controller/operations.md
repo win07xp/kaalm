@@ -36,16 +36,18 @@ The controller emits these Events. Each reason is a stable string; the message c
 | AgentTask | `TaskSucceeded`; `TaskFailed`, `TimeoutExceeded`, `TimeoutSucceeded`, and the provisioning and class reasons | Normal; Warning | the task settles, or a retry starts (message suffix `retrying (n/limit)`); see [Event reasons](task-lifecycle.md#event-reasons) |
 | AgentTask | `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing` | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason, when the reason first appears on `Ready`; see [Event reasons](task-lifecycle.md#event-reasons) |
 | ModelProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
+| ModelProvider | `CredentialsMissing` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | ModelProvider | `DegradeTargetNotCheapest`, `MaxOutputTokensUnset` | Warning | the degrade-target cost check, when its condition first turns `True`; a cross-format fallback into an Anthropic model with no `maxOutputTokens` |
-| ModelProvider | `BoundaryMarginRaised` as shipped (the condition's reason is `ObservedTrafficExceededMargin`) | Warning | a gateway replica first raises the boundary margin flag |
+| ModelProvider | `ObservedTrafficExceededMargin` | Warning | a gateway replica first raises the boundary margin flag; the `BoundaryMarginRaised` condition carries the same reason |
 | ToolProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
+| ToolProvider | `CredentialsMissing` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | AgentChannel | `CallbackHostUnresolved` | Warning | the `callbackUrl` host does not resolve at reconcile time; the channel stays `Ready=True` ([rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)). Emitted when the unresolved host first appears or changes, not on every pass |
 | AgentChannel | `SystemNamespaceForbidden`, `AgentNotFound`, and every other `Ready=False` reason `validateChannel` returns (`AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `ChildConflict`, `InvalidReference`, `CredentialsMissing`, and the other Secret and callback reasons) | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | AgentClass | `FQDNPolicyUnsupported` | Warning | `allowedHosts` is set on a CNI without FQDN egress, so the hosts are ignored |
 | AgentClass | `InvalidReference`, `InvalidCIDR` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | ModelProvider, ToolProvider, AgentClass | `DeletionBlocked` | Warning | the finalizer's delete hold first appears, naming a referrer ([Cluster-scoped resources](finalizers.md#cluster-scoped-resources)) |
 
-Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals are conditions only, not Events: a ModelProvider's or ToolProvider's `CredentialsMissing` and `CredentialsInvalid` (the `ProviderUnhealthy` Warning above covers only a non-credential probe failure), and `FallbackIneligible`, which is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).
+Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals are conditions only, not Events: a ModelProvider's or ToolProvider's `CredentialsInvalid`, the probe's auth failure (the `ProviderUnhealthy` Warning above covers only a non-credential probe failure), and `FallbackIneligible`, which is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).
 
 ## Observability
 

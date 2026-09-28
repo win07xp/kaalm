@@ -122,7 +122,10 @@ the last reference clears.
 
 - `CredentialsMissing` or `CredentialsInvalid`: the Secret named by
   `credentialsRef` is absent in `kaalm-system` or lacks the key, or the
-  provider rejected the key on the probe.
+  provider rejected the key on the probe. `CredentialsMissing` fires a
+  `Warning` event the first time `Ready` turns `False` with it, on
+  ModelProvider and ToolProvider alike; `CredentialsInvalid` never does,
+  so `kubectl get events` finds only the missing-Secret case.
 - `InvalidDegradeTarget`: a budget policy's `degradeTo` is not in
   `spec.models`.
 - `FallbackIneligible`: a fallback provider is missing, has a type the
