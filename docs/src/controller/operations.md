@@ -22,24 +22,30 @@ There is no bucket that stops reconciling: every class keeps the resource reconc
 
 ## Event emission
 
-The controller emits these Events. Each reason is a stable string; the message carries the detail.
+The controller emits these Events. Each reason is a stable string; the message carries the detail. Every event tied to a status change (a phase transition, a new `Ready=False` reason, budget exhaustion, a blocked delete) is emitted only after the status write that records the change succeeds, and only when the change is new, not on every pass that finds the same state again: a status write lost to a conflict does not report a change twice, and one that never happened is never reported.
 
 | Resource | Reason | Type | When |
 |---|---|---|---|
-| Agent | `PhaseChanged` | Normal | `Running` to `Idle`, `Idle` to `Hibernating`, and recovery from `Degraded`, each with a message naming the cause. As shipped no other phase change emits an event |
+| Agent | `PhaseChanged` | Normal | every phase transition, with a message naming the cause where the transition has one (for example `phase changed from Running to Idle: no activity for 30m0s`). An Agent's first phase, `Pending`, is not a transition and emits nothing |
+| Agent | `BudgetExhausted` | Warning | a referenced provider's budget first reports the Agent's namespace as blocked; not repeated while the block holds, and fired again if it clears and returns |
 | Agent | `Hibernated`, `Woken` | Normal | the Pod is gone after hibernation; a wake annotation is honored |
 | Agent | `WakeIgnored` | Warning | a wake annotation on a non-`Hibernated` Agent, except in `Hibernating` (kept until `Hibernated`) and `Resuming` |
 | Agent | `PodDisrupted`, `SpecDrift`, `SpecDriftPending` | Warning, Normal, Normal | a terminal Pod is replaced; a spec hash change replaces the Pod after a `maxUnavailableOnDrift` slot is free; a drifted Agent starts waiting for one |
 | Agent | the Degraded reason (`ClassConstraintViolation`, `PersistenceNotAllowed`, `HibernationNotAllowed`, `HibernationRequiresPersistence`, `HandlerMountNotAllowed`, `ToolNotInCatalog`) | Warning | the first entry into `Degraded`, once per entry |
+| Agent | `SystemNamespaceForbidden`, `InvalidReference`, `ExistingClaimNotFound`, `ImagePullSecretMissing`, `HandlerConfigMapNotFound` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | AgentTask | `TaskSucceeded`; `TaskFailed`, `TimeoutExceeded`, `TimeoutSucceeded`, and the provisioning and class reasons | Normal; Warning | the task settles, or a retry starts (message suffix `retrying (n/limit)`); see [Event reasons](task-lifecycle.md#event-reasons) |
+| AgentTask | `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing` | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason, when the reason first appears on `Ready`; see [Event reasons](task-lifecycle.md#event-reasons) |
 | ModelProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
 | ModelProvider | `DegradeTargetNotCheapest`, `MaxOutputTokensUnset` | Warning | the degrade-target cost check, when its condition first turns `True`; a cross-format fallback into an Anthropic model with no `maxOutputTokens` |
 | ModelProvider | `BoundaryMarginRaised` as shipped (the condition's reason is `ObservedTrafficExceededMargin`) | Warning | a gateway replica first raises the boundary margin flag |
 | ToolProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
 | AgentChannel | `CallbackHostUnresolved` | Warning | the `callbackUrl` host does not resolve at reconcile time; the channel stays `Ready=True` ([rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)). Emitted when the unresolved host first appears or changes, not on every pass |
+| AgentChannel | `SystemNamespaceForbidden`, `AgentNotFound`, and every other `Ready=False` reason `validateChannel` returns (`AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `ChildConflict`, `InvalidReference`, `CredentialsMissing`, and the other Secret and callback reasons) | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | AgentClass | `FQDNPolicyUnsupported` | Warning | `allowedHosts` is set on a CNI without FQDN egress, so the hosts are ignored |
+| AgentClass | `InvalidReference`, `InvalidCIDR` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
+| ModelProvider, ToolProvider, AgentClass | `DeletionBlocked` | Warning | the finalizer's delete hold first appears, naming a referrer ([Cluster-scoped resources](finalizers.md#cluster-scoped-resources)) |
 
-Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals the design calls for are not Events as shipped: budget exhaustion and reconcile-time validation failures (`InvalidReference`, `CredentialsMissing`, and the other `Ready=False` reasons) are conditions only, and `FallbackIneligible` is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).
+Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals are conditions only, not Events: a ModelProvider's or ToolProvider's `CredentialsMissing` and `CredentialsInvalid` (the `ProviderUnhealthy` Warning above covers only a non-credential probe failure), and `FallbackIneligible`, which is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).
 
 ## Observability
 
@@ -52,7 +58,7 @@ The chart serves the controller's Prometheus metrics on `:8080/metrics` over pla
 | `kaalm_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` | AgentChannel count by `status.phase`, the `Ready` condition, and the tri-state `PlatformConnected` condition, the last two as `true`, `false`, or `unknown` |
 | `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` | the canonical spend total the ModelProvider fold writes ([step 4](reconcilers.md#modelproviderreconciler)), distinct from the gateway's per-replica `kaalm_llm_spend_usd_total` partials |
 | `kaalm_hibernations_total` | counter | `namespace` | hibernations completed |
-| `kaalm_wakes_total` | counter | `namespace`, `trigger` | wakes honored. As shipped `trigger` is always `activator`, since the reconciler cannot tell a channel-driven annotation from a manual one |
+| `kaalm_wakes_total` | counter | `namespace`, `trigger` | wakes honored. `trigger` is `channel` for a wake the activator requested on a channel message, `annotation` for a manual wake ([Manual wake](hibernation-and-wake.md#manual-wake)) |
 | `kaalm_storage_migrated_objects_total` | counter | `kind` | custom resources the storage-version migrator rewrote at `v1beta1`: zero on a fresh install, the pre-upgrade object count on the first leader start after an upgrade, zero after that ([Storage version migration](../operations/api-versioning.md#storage-version-migration)) |
 
 The three phase gauges carry no `_total` suffix, which OpenMetrics reserves for counters. They are computed from the manager cache on every scrape, and a resource whose `status.phase` is still empty counts as `Pending`. Every replica serves them from its own cache, so dashboards aggregate them with `max`, not `sum`. Budget policy actions are counted where they happen, on the gateway's request path, as `kaalm_budget_threshold_events_total` ([LLM Gateway operations](../gateways/llm/operations.md#observability)); the channel metrics are under [User Gateway operations](../gateways/user/operations.md#observability).

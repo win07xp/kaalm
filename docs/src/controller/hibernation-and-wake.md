@@ -77,7 +77,7 @@ While waiting, the gateway holds the message. The generic webhook adapter has no
 
 ### From activator call to Resuming
 
-On the controller, that call becomes one patch. The activator handler is served on every controller replica, and its only write is a patch that sets `kaalm.io/wake=true` on the target Agent through the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` handles the annotation as its first step, transitioning the Agent to `Resuming` and requeueing; the next pass creates the Pod.
+On the controller, that call becomes one patch. The activator handler is served on every controller replica, and its only write is a patch that sets `kaalm.io/wake=channel` on the target Agent through the apiserver. The leader's existing Agent watch fires, and the leader's `AgentReconciler` handles the annotation as its first step, transitioning the Agent to `Resuming` and requeueing; the next pass creates the Pod.
 
 This is why the handler does not need to run on the leader. The Service round-robins the POST across replicas, but any replica that receives it can drive the wake, because the signal is an annotation on the resource rather than an in-memory call on the leader. See [Operator structure](overview.md).
 
@@ -91,7 +91,7 @@ A gateway-side `wakeTimeout` exhaustion does not interrupt this: the caller gets
 
 ### Manual wake
 
-Manual wake is also supported by annotation:
+Manual wake is also supported by annotation, using the value `true`; the activator writes `channel` instead, so [`kaalm_wakes_total`](overview.md#activator-handler-served-on-every-replica) can tell the two apart ([Observability](operations.md#observability)).
 
 ```
 kubectl annotate agent foo kaalm.io/wake=true

@@ -52,7 +52,7 @@ The Kaalm-specific metrics across all three components. The dashboard test under
 | Controller | `kaalm_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` |
 | Controller | `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` |
 | Controller | `kaalm_hibernations_total` | counter | `namespace` |
-| Controller | `kaalm_wakes_total` | counter | `namespace`, `trigger` (always `activator` as shipped) |
+| Controller | `kaalm_wakes_total` | counter | `namespace`, `trigger` (`channel` or `annotation`) |
 | LLM Gateway | `kaalm_llm_requests_total` | counter | `provider`, `model`, `namespace`, `status` |
 | LLM Gateway | `kaalm_llm_request_duration_seconds` | histogram | `provider`, `model` |
 | LLM Gateway | `kaalm_llm_tokens_total` | counter | `provider`, `model`, `namespace`, `direction` |

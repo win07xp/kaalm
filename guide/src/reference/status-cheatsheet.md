@@ -117,7 +117,9 @@ names the host, so `kubectl describe agentchannel` shows the typo.
 - `Ready`: spec valid and credentials resolve. False reasons:
   `CredentialsMissing`, `CredentialsInvalid`, `InvalidDegradeTarget`,
   `FallbackIneligible`, `InvalidModelMap`, `HardBudgetUnpriced` (hard
-  enforcement requires a fully priced model catalog).
+  enforcement requires a fully priced model catalog), `DeletionBlocked`
+  (a delete is held by a referrer; see [Deleting a provider, tool
+  provider, or class never finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
 - `Healthy`: the periodic upstream probe (`UpstreamReachable` when good,
   `ProviderUnhealthy` when not, `ProbeSkipped` for a type with no probe).
   Ready without Healthy means valid config, unreachable provider.
@@ -146,7 +148,9 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 - `Ready`: the spec is valid and, when `credentialsRef` is set, the Secret
   resolves in `kaalm-system`; a provider with no credential is Ready. False
   reasons: `CredentialsMissing`, `CredentialsInvalid` (the server rejected
-  the injected credential).
+  the injected credential), `DeletionBlocked` (a delete is held by a
+  referrer; see [Deleting a provider, tool provider, or class never
+  finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
 - `Healthy`: the periodic probe, which speaks MCP (`server/discover` or
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
@@ -164,9 +168,11 @@ holding a `maxUnavailableOnDrift` slot; `status.agentsPendingReplacement`
 counts the rest waiting for one, but has no column of its own.
 
 Conditions: `Ready` (`AllReferencesResolved`; `InvalidCIDR` when an
-`allowedCIDRs` entry does not parse; otherwise `InvalidReference` when a
+`allowedCIDRs` entry does not parse; `InvalidReference` when a
 listed provider or tool provider does not exist or an `allowedHosts` entry is
-not a DNS name), `SecurityBaseline` (`RestrictedBaseline`, or
+not a DNS name; `DeletionBlocked` while a delete is held by a referrer, see
+[Deleting a provider, tool provider, or class never
+finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)), `SecurityBaseline` (`RestrictedBaseline`, or
 `BelowRestrictedBaseline` naming each `security` field the class relaxes
 below the restricted Pod Security Standard), and `FQDNPolicySupported`
 (whether the CNI supports the FQDN egress rules the class asks for; reason
