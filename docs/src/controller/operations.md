@@ -36,6 +36,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | ModelProvider | `DegradeTargetNotCheapest`, `MaxOutputTokensUnset` | Warning | the degrade-target cost check, when its condition first turns `True`; a cross-format fallback into an Anthropic model with no `maxOutputTokens` |
 | ModelProvider | `BoundaryMarginRaised` as shipped (the condition's reason is `ObservedTrafficExceededMargin`) | Warning | a gateway replica first raises the boundary margin flag |
 | ToolProvider | `ProviderUnhealthy` | Warning | a probe fails for a reason other than the credential |
+| ToolProvider | `CredentialsInvalid` | Warning | the probe's `Healthy` condition first enters `CredentialsInvalid` (a `401` or `403` from the tool server), not on every pass while the credential stays rejected; a rejection after a recovery fires it again |
 | AgentChannel | `CallbackHostUnresolved` | Warning | the `callbackUrl` host does not resolve at reconcile time; the channel stays `Ready=True` ([rule 22](../resources/validation-and-defaulting.md#cross-resource-validation)). Emitted when the unresolved host first appears or changes, not on every pass |
 | AgentClass | `FQDNPolicyUnsupported` | Warning | `allowedHosts` is set on a CNI without FQDN egress, so the hosts are ignored |
 

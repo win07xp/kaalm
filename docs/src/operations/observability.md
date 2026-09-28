@@ -111,14 +111,14 @@ In the default build the body logger compiles to a no-op, so no configuration ca
 
 ## Kubernetes Events
 
-Events are the surface for status changes that platform teams discover with `kubectl describe`. [Event emission](../controller/operations.md#event-emission) is the full table of the controller's reasons, and the gateway's three runtime Warnings are stated under [Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions). The groups that matter for alerting:
+Events are the surface for status changes that platform teams discover with `kubectl describe`. [Event emission](../controller/operations.md#event-emission) is the full table of the controller's reasons, and the gateway's four runtime Warnings are stated under [Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions). The groups that matter for alerting:
 
 - **Phase transitions** on Agent (`Normal`, `PhaseChanged`). AgentTask emits no phase Event; its settle and retry Events carry the outcome.
 - **Hibernation and wake** on Agent (`Normal`, `Hibernated` and `Woken`; `Warning`, `WakeIgnored`). See [Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics).
-- **Provider health** on ModelProvider and ToolProvider (`Warning`, `ProviderUnhealthy`), and the hard-enforcement margin on ModelProvider (`Warning`, reason `BoundaryMarginRaised` as shipped, where the condition's reason is `ObservedTrafficExceededMargin`).
+- **Provider health** on ModelProvider and ToolProvider (`Warning`, `ProviderUnhealthy`), the ToolProviderReconciler's `CredentialsInvalid` when its probe's `Healthy` condition first enters that reason ([ToolProviderReconciler](../controller/reconcilers.md#toolproviderreconciler)), and the hard-enforcement margin on ModelProvider (`Warning`, reason `BoundaryMarginRaised` as shipped, where the condition's reason is `ObservedTrafficExceededMargin`).
 - **Degraded entry** on Agent (`Warning`, the Degraded reason as the Event reason), emitted once when the Agent enters `Degraded` ([Degraded](../controller/agent-lifecycle.md#degraded)).
 - **Task settlement and retry** on AgentTask (`Normal`, `TaskSucceeded`; `Warning`, `TaskFailed` and the timeout reasons; one `Warning` per retry).
-- **Provider configuration** on ModelProvider (`Warning`, `FallbackIneligible` at reconcile time and at request time, `DegradeTargetNotCheapest`, `MaxOutputTokensUnset`) and the gateway's `CredentialsInvalid` when a provider refuses the key during a fallback walk ([Fallback logic](../gateways/llm/fallback.md)).
+- **Provider configuration** on ModelProvider (`Warning`, `FallbackIneligible` at reconcile time and at request time, `DegradeTargetNotCheapest`, `MaxOutputTokensUnset`) and the gateway's `CredentialsInvalid` when a provider refuses the key, during a fallback walk for a ModelProvider or a brokered call for a ToolProvider ([Fallback logic](../gateways/llm/fallback.md), [The tool plane](../gateways/tool-plane.md#failure-modes)).
 - **Callback rejection** on AgentChannel (`Warning`, `CallbackRejected` when a platform refuses or exhausts a reply). A `callbackUrl` that fails the pre-dial check lands on the channel's `PlatformConnected` condition with reason `CallbackInvalid`, not in an Event ([Channel health tracking](../gateways/user/platform-adapters.md#channel-health-tracking)).
 - **Pod replacement** on Agent (`Normal`, `SpecDrift` and `SpecDriftPending`; `Warning`, `PodDisrupted`). See [Change propagation](../controller/change-propagation.md).
 

@@ -41,8 +41,8 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 403 | `tool_denied` | no | | The tool is outside the workload's grant, or the JSON-RPC method is outside the broker's allowlist |
 | 405 | `invalid_request` | no | | A method other than `POST` on `/v1/mcp/{toolProvider}`, or the wrong method on an internal mTLS path ([Listener TLS](../listener-tls.md)); the response carries `Allow` |
 | 409 | `stale_pod` | yes | | `POST /v1/task/complete`: the calling Pod is not the task's current Pod ([409 Conflict](task-complete.md#409-conflict)) |
-| 413 | `request_too_large` | no | | The body exceeds `gateway.maxLLMRequestBodyBytes` (default 4 MiB) on a proxy path, or the broker's own cap |
-| 413 | `response_too_large` | no | | The tool provider's response exceeds the broker's response cap |
+| 413 | `request_too_large` | no | | The body exceeds `gateway.maxLLMRequestBodyBytes` (default 4 MiB) on a proxy path, or `gateway.mcpMaxBodyBytes` (default 4 MiB) on the broker |
+| 413 | `response_too_large` | no | | The tool provider's response exceeds `gateway.mcpMaxBodyBytes` (default 4 MiB) |
 | 429 | `rate_limited` | yes | `1` | The per-namespace bucket for the model or tool provider is empty |
 | 429 | `budget_exhausted` | no after a block; yes after throttles only | seconds to the next period, or the throttle's `1` | The provider, or the provider and every fallback, is budget-blocked or throttled |
 | 429 | `budget_throttled` | yes | `1` | Hard enforcement: the boundary admission slot is held by another request |
@@ -55,7 +55,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 503 | `tool_unavailable` | yes | | The credential Secret is unreadable, or reading the tool server's response failed |
 | 503 | `tool_unavailable` | no | | The tool server rejects the gateway credential, or returns an unparseable `tools/list` response |
 | 504 | `provider_timeout` | no | | Every attempt in the fallback walk timed out |
-| 504 | `tool_timeout` | yes | | The brokered call exceeded the upstream timeout |
+| 504 | `tool_timeout` | yes | | The brokered call exceeded `gateway.mcpUpstreamTimeout` (default 120s) |
 
 Notes on the rows:
 

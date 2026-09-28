@@ -54,6 +54,8 @@ func main() {
 		callbackAllowlist    string
 		maxBodyBytes         int64
 		upstreamTimeout      time.Duration
+		mcpMaxBodyBytes      int64
+		mcpUpstreamTimeout   time.Duration
 		disableSourceIPCheck bool
 		userAddr             string
 		agentHostOverride    string
@@ -93,6 +95,8 @@ func main() {
 	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
 	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second,
 		"per-attempt upstream provider bound: the wait for the first response byte, then each gap between body reads")
+	flag.Int64Var(&mcpMaxBodyBytes, "mcp-max-body-bytes", 4<<20, "brokered MCP request and response body cap")
+	flag.DurationVar(&mcpUpstreamTimeout, "mcp-upstream-timeout", 120*time.Second, "brokered MCP whole-call timeout")
 	flag.BoolVar(&disableSourceIPCheck, "disable-source-ip-check", false,
 		"skip the source-IP-to-Pod cross-check (dev only; the check is defense in depth and must stay on in-cluster)")
 	flag.StringVar(&userAddr, "user-addr", ":8080", "User Gateway listener address")
@@ -244,6 +248,8 @@ func main() {
 		CAFile:                   caFile,
 		MaxBodyBytes:             maxBodyBytes,
 		UpstreamTimeout:          upstreamTimeout,
+		MCPMaxBodyBytes:          mcpMaxBodyBytes,
+		MCPUpstreamTimeout:       mcpUpstreamTimeout,
 		SessionKey:               sessionKey,
 		UpstreamCAFiles:          splitPaths(upstreamCAFile),
 		CallbackCAFiles:          splitPaths(callbackCAFile),

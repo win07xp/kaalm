@@ -137,9 +137,11 @@ gateway:
   # Per-attempt upstream LLM-provider bound (the gateway's --upstream-timeout).
   # It sets two bounds: the wait for the first response byte, then the
   # mid-stream idle-bytes bound between response body reads. A stream that
-  # keeps sending bytes runs to completion. Brokered MCP calls use it as a
-  # whole-call bound.
+  # keeps sending bytes runs to completion.
   providerFirstByteTimeout: 120s
+  # Whole-call bound for a brokered MCP tool call, response included (the
+  # gateway's --mcp-upstream-timeout). Over it gives 504 tool_timeout.
+  mcpUpstreamTimeout: 120s
   # Per-attempt read of an agent's /v1/message response.
   agentReadTimeout: 10s
   # Per-attempt read of a callback receiver's response.
@@ -151,6 +153,9 @@ gateway:
   maxResponseBodyBytes: 900Ki
   maxMessageBodyBytes: 1Mi
   maxLLMRequestBodyBytes: 4Mi
+  # Request and response body cap for a brokered MCP tool call (the gateway's
+  # --mcp-max-body-bytes).
+  mcpMaxBodyBytes: 4Mi
   # Dedicated health/readiness port (kubelet probes).
   healthPort: 8081
   # Port for a net/http/pprof listener, for profiling under load. 0 keeps it
