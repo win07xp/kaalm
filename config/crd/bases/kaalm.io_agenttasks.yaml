@@ -386,6 +386,26 @@ spec:
                   type: string
                 description: ArtifactValues holds the collected agentReported outputs.
                 type: object
+              classBounds:
+                description: |-
+                  ClassBounds records the class's task bounds when the current Pod is
+                  created, or when the task settles before any Pod exists. On every
+                  pass, the effective timeout and TTL are derived from the task's own
+                  values within these bounds, so an edit to the task applies at once and
+                  a later edit to the class doesn't reach the task. Nil means the task was
+                  created before this field existed, and its own values apply unbounded.
+                properties:
+                  defaultTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  defaultTaskTimeout:
+                    type: string
+                  maxTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  maxTaskTimeout:
+                    type: string
+                type: object
               completionTime:
                 format: date-time
                 type: string
@@ -846,6 +866,26 @@ spec:
                 additionalProperties:
                   type: string
                 description: ArtifactValues holds the collected agentReported outputs.
+                type: object
+              classBounds:
+                description: |-
+                  ClassBounds records the class's task bounds when the current Pod is
+                  created, or when the task settles before any Pod exists. On every
+                  pass, the effective timeout and TTL are derived from the task's own
+                  values within these bounds, so an edit to the task applies at once and
+                  a later edit to the class doesn't reach the task. Nil means the task was
+                  created before this field existed, and its own values apply unbounded.
+                properties:
+                  defaultTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  defaultTaskTimeout:
+                    type: string
+                  maxTTLSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                  maxTaskTimeout:
+                    type: string
                 type: object
               completionTime:
                 format: date-time

@@ -19,6 +19,7 @@ package controller
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/win07xp/kaalm/internal/gateway"
 
@@ -57,7 +58,8 @@ const (
 
 // effectiveTaskSpec is the AgentTask spec after merging AgentClass defaults at
 // reconcile time. Same rules as effectiveAgentSpec, minus the Service and
-// lifecycle blocks tasks do not have.
+// lifecycle blocks tasks do not have. The task timeout and TTL are derived
+// separately, against the class bounds stamped at Pod creation.
 type effectiveTaskSpec struct {
 	Image            string
 	Env              []corev1.EnvVar
@@ -115,6 +117,39 @@ func deriveEffectiveTaskSpec(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.A
 		eff.Providers = append(eff.Providers, p.ProviderRef.Name)
 	}
 	return eff
+}
+
+// classTaskBounds copies the class's task bounds for the snapshot stamped in
+// status.classBounds at Pod creation. The pointers are copied too, so a later
+// class edit cannot reach the snapshot.
+func classTaskBounds(class *kaalmv1beta1.AgentClass) *kaalmv1beta1.AgentTaskClassBounds {
+	lc := class.Spec.Lifecycle.DeepCopy()
+	return &kaalmv1beta1.AgentTaskClassBounds{
+		DefaultTaskTimeout:             lc.DefaultTaskTimeout,
+		MaxTaskTimeout:                 lc.MaxTaskTimeout,
+		DefaultTTLSecondsAfterFinished: lc.DefaultTTLSecondsAfterFinished,
+		MaxTTLSecondsAfterFinished:     lc.MaxTTLSecondsAfterFinished,
+	}
+}
+
+// effectiveTaskTimeout derives the task's completion timeout from its current
+// spec within bounds, like the Agent timings (rule 42): the task's own value,
+// else the default, clamped to the max. Nil bounds, a task that predates the
+// snapshot, leave the spec value unbounded. Zero means no timeout.
+func effectiveTaskTimeout(task *kaalmv1beta1.AgentTask, b *kaalmv1beta1.AgentTaskClassBounds) time.Duration {
+	if b == nil {
+		b = &kaalmv1beta1.AgentTaskClassBounds{}
+	}
+	return pickDuration(task.Spec.Completion.Timeout.Duration, b.DefaultTaskTimeout.Duration, b.MaxTaskTimeout.Duration)
+}
+
+// effectiveTaskTTL is effectiveTaskTimeout for ttlSecondsAfterFinished
+// (rule 43). Nil keeps the task.
+func effectiveTaskTTL(task *kaalmv1beta1.AgentTask, b *kaalmv1beta1.AgentTaskClassBounds) *int32 {
+	if b == nil {
+		b = &kaalmv1beta1.AgentTaskClassBounds{}
+	}
+	return pickSeconds(task.Spec.TTLSecondsAfterFinished, b.DefaultTTLSecondsAfterFinished, b.MaxTTLSecondsAfterFinished)
 }
 
 func taskCertificateName(taskName string) string    { return taskName + "-tls" }

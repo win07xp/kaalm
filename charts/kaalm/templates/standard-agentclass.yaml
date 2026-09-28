@@ -74,4 +74,8 @@ spec:
     maxHibernationDelay: 2h0m0s
     defaultWakeTimeout: 2m0s
     maxWakeTimeout: 5m0s
+    # A task that sets no completion.timeout stops after an hour. No default
+    # TTL: a TTL deletes the whole task record, including its status and
+    # artifacts, so the task owner chooses it.
+    defaultTaskTimeout: 1h0m0s
 {{- end }}

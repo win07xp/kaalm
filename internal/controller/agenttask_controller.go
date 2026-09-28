@@ -154,7 +154,12 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if pod == nil && (task.Status.Phase == kaalmv1beta1.TaskPending ||
 		task.Status.Phase == kaalmv1beta1.TaskProvisioning) {
 		if reason, msg := r.taskViolation(ctx, &task, &class, eff); reason != "" {
-			// Terminal: AgentTask has no Degraded phase.
+			// Terminal: AgentTask has no Degraded phase. A task that never had
+			// a Pod has no class bounds yet; record them in the settling
+			// write so the class default TTL still reaches it.
+			if task.Status.ClassBounds == nil && task.Status.PodName == "" {
+				task.Status.ClassBounds = classTaskBounds(&class)
+			}
 			return ctrl.Result{}, r.settle(ctx, &task, kaalmv1beta1.TaskFailed, reason, msg)
 		}
 		// Rule 23 reads Secrets in the task's namespace, where the operator
@@ -253,6 +258,9 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 		r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
 		task.Status.PodName = desired.Name
+		// The class snapshot for this attempt: a retry's new Pod stamps the
+		// bounds again from the class as it then stands.
+		task.Status.ClassBounds = classTaskBounds(class)
 		if isAgentReported(task) {
 			task.Status.CurrentPodUID = string(desired.UID)
 		}
@@ -270,9 +278,19 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
 	}
 
-	// Stamp identity on the observed Pod (re-opens the gate after a retry).
-	if isAgentReported(task) && task.Status.CurrentPodUID != string(pod.UID) {
-		task.Status.CurrentPodUID = string(pod.UID)
+	// Stamp identity on the observed Pod (re-opens the gate after a retry). A
+	// podName that does not match means the status write after the Pod's
+	// creation was lost, so the class bounds are stamped with it. A Pod
+	// created before status.classBounds existed has a matching podName and
+	// stays unstamped.
+	lost := task.Status.PodName != pod.Name
+	if lost || (isAgentReported(task) && task.Status.CurrentPodUID != string(pod.UID)) {
+		if lost {
+			task.Status.ClassBounds = classTaskBounds(class)
+		}
+		if isAgentReported(task) {
+			task.Status.CurrentPodUID = string(pod.UID)
+		}
 		task.Status.PodName = pod.Name
 		if err := r.Status().Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
@@ -287,7 +305,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		if err := r.Status().Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
-		return r.runningRequeue(task), nil
+		return runningRequeue(task), nil
 	}
 
 	// Terminal before Ready: under restartPolicy Never one crash is final.
@@ -367,7 +385,7 @@ func (r *AgentTaskReconciler) driveRunning(
 	if pod == nil || (isAgentReported(task) && pod.Status.Phase == corev1.PodFailed) {
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "PodDisrupted", "task Pod was lost mid-run")
 	}
-	return r.runningRequeue(task), nil
+	return runningRequeue(task), nil
 }
 
 // driveCompleting settles the terminal phase. The outcome is re-derived from
@@ -427,7 +445,7 @@ func (r *AgentTaskReconciler) settleTimeout(ctx context.Context, task *kaalmv1be
 			"timeout reached with onTimeout: Succeed")
 	}
 	return r.settle(ctx, task, kaalmv1beta1.TaskTimedOut, "TimeoutExceeded",
-		fmt.Sprintf("task exceeded its %s completion timeout", task.Spec.Completion.Timeout.Duration))
+		fmt.Sprintf("task exceeded its %s completion timeout", taskTimeout(task)))
 }
 
 // failOrRetry either executes the retry sequence (backoffLimit permitting) or
@@ -523,9 +541,11 @@ func (r *AgentTaskReconciler) settle(
 	return r.Status().Update(ctx, task)
 }
 
-// handleTTL deletes a terminal task once ttlSecondsAfterFinished has elapsed.
+// handleTTL deletes a terminal task once its effective ttlSecondsAfterFinished
+// has elapsed: the current spec within the class bounds stamped at Pod
+// creation, so a class edit after that never reaches the task.
 func (r *AgentTaskReconciler) handleTTL(ctx context.Context, task *kaalmv1beta1.AgentTask) (ctrl.Result, error) {
-	ttl := task.Spec.TTLSecondsAfterFinished
+	ttl := taskTTL(task)
 	if ttl == nil {
 		return ctrl.Result{}, nil
 	}
@@ -726,10 +746,10 @@ func (r *AgentTaskReconciler) childConflict(
 	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
-// runningRequeue schedules the next pass at the timeout deadline, when one is
-// configured.
-func (r *AgentTaskReconciler) runningRequeue(task *kaalmv1beta1.AgentTask) ctrl.Result {
-	d := task.Spec.Completion.Timeout.Duration
+// runningRequeue schedules the next pass at the deadline of the effective
+// timeout, when there is one.
+func runningRequeue(task *kaalmv1beta1.AgentTask) ctrl.Result {
+	d := taskTimeout(task)
 	if d <= 0 || task.Status.StartTime == nil {
 		return ctrl.Result{}
 	}
@@ -740,8 +760,22 @@ func (r *AgentTaskReconciler) runningRequeue(task *kaalmv1beta1.AgentTask) ctrl.
 	return ctrl.Result{RequeueAfter: remaining}
 }
 
+// taskTimeout is the effective completion timeout: the current spec within
+// the class bounds stamped when the current Pod was created, so an owner's
+// edit applies at once and a class edit never reaches the task.
+func taskTimeout(task *kaalmv1beta1.AgentTask) time.Duration {
+	return effectiveTaskTimeout(task, task.Status.ClassBounds)
+}
+
+// taskTTL is taskTimeout for ttlSecondsAfterFinished.
+func taskTTL(task *kaalmv1beta1.AgentTask) *int32 {
+	return effectiveTaskTTL(task, task.Status.ClassBounds)
+}
+
+// timedOut reports whether a started task has run past its effective
+// timeout.
 func timedOut(task *kaalmv1beta1.AgentTask) bool {
-	d := task.Spec.Completion.Timeout.Duration
+	d := taskTimeout(task)
 	return d > 0 && task.Status.StartTime != nil && time.Since(task.Status.StartTime.Time) > d
 }
 

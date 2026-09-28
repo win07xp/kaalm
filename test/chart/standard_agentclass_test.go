@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
@@ -106,5 +107,21 @@ func TestStandardAgentClass_DeclaresRestrictedBaseline(t *testing.T) {
 	if cs == nil || cs.ReadOnlyRootFilesystem == nil || !*cs.ReadOnlyRootFilesystem ||
 		cs.AllowPrivilegeEscalation == nil || *cs.AllowPrivilegeEscalation || cs.Capabilities == nil {
 		t.Errorf("containerSecurityContext is not the restricted baseline: %+v", cs)
+	}
+}
+
+// A task that sets no timeout stops after an hour under the standard class,
+// and the class sets no TTL, because a TTL deletes the whole task record.
+func TestStandardAgentClass_BoundsTaskTimeoutOnly(t *testing.T) {
+	lc := renderStandardClass(t).Spec.Lifecycle
+	if got := lc.DefaultTaskTimeout.Duration; got != time.Hour {
+		t.Errorf("lifecycle.defaultTaskTimeout is %v, want 1h", got)
+	}
+	if lc.MaxTaskTimeout.Duration != 0 {
+		t.Errorf("lifecycle.maxTaskTimeout is %v, want unset", lc.MaxTaskTimeout.Duration)
+	}
+	if lc.DefaultTTLSecondsAfterFinished != nil || lc.MaxTTLSecondsAfterFinished != nil {
+		t.Errorf("the standard class sets a task TTL (%v, %v), want none",
+			lc.DefaultTTLSecondsAfterFinished, lc.MaxTTLSecondsAfterFinished)
 	}
 }

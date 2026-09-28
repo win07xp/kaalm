@@ -61,6 +61,19 @@ type AgentTaskSpec struct {
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
+// AgentTaskClassBounds is a snapshot of the task fields of
+// AgentClassLifecycle, with the same names and types.
+type AgentTaskClassBounds struct {
+	// +optional
+	DefaultTaskTimeout metav1.Duration `json:"defaultTaskTimeout,omitempty"`
+	// +optional
+	MaxTaskTimeout metav1.Duration `json:"maxTaskTimeout,omitempty"`
+	// +optional
+	DefaultTTLSecondsAfterFinished *int32 `json:"defaultTTLSecondsAfterFinished,omitempty"`
+	// +optional
+	MaxTTLSecondsAfterFinished *int32 `json:"maxTTLSecondsAfterFinished,omitempty"`
+}
+
 // AgentTaskPersistence requests a PVC. Unlike Agent, there is no existingClaim.
 type AgentTaskPersistence struct {
 	// +optional
@@ -132,6 +145,14 @@ type AgentTaskStatus struct {
 	AgentReportedStatus string `json:"agentReportedStatus,omitempty"`
 	// +optional
 	AgentReportedMessage string `json:"agentReportedMessage,omitempty"`
+	// ClassBounds records the class's task bounds when the current Pod is
+	// created, or when the task settles before any Pod exists. On every
+	// pass, the effective timeout and TTL are derived from the task's own
+	// values within these bounds, so an edit to the task applies at once and
+	// a later edit to the class doesn't reach the task. Nil means the task was
+	// created before this field existed, and its own values apply unbounded.
+	// +optional
+	ClassBounds *AgentTaskClassBounds `json:"classBounds,omitempty"`
 }
 
 // +kubebuilder:object:root=true

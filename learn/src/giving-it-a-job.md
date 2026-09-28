@@ -100,8 +100,9 @@ Both gone, because `ttlSecondsAfterFinished: 60` said so. The field works
 the way it does on a Kubernetes Job: after a finished task has outlived its
 TTL, the whole record is collected, the task, its pod, everything it made.
 Sixty seconds is tutorial-sized; a real pipeline keeps the record for an
-hour or a day, and a task with no TTL at all stays until someone deletes
-it. Read the result before the TTL you chose, or set none.
+hour or a day. A task with no TTL stays until someone deletes it, unless its
+class sets a default TTL. Read the result before the TTL you chose, or set
+none.
 
 This is the difference between the two kinds of work. Your agent has a name,
 storage, and an address, and it stays. A task appears, does one job, reports,

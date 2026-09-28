@@ -56,8 +56,8 @@ spec:
     # /v1/task/complete. "exitCode": the task is complete when the
     # container exits.
     condition: agentReported
-    # Bounds running time, measured from status.startTime. Unset means no
-    # bound: the task runs until it reports or exits.
+    # Bounds running time, measured from status.startTime. Unset takes the
+    # class defaultTaskTimeout; clamped to the class maxTaskTimeout (rule 42).
     timeout: "1h"
     # "Fail" (schema default) settles a timeout as TimedOut, exempt from
     # backoffLimit. "Succeed" settles it as Succeeded with any partial
@@ -72,8 +72,9 @@ spec:
     - name: pr-url
     - name: summary
 
-  # Seconds to keep the resource after it settles. Unset means it is never
-  # cleaned up.
+  # Seconds to keep the resource after it settles. Unset takes the class
+  # defaultTTLSecondsAfterFinished; clamped to the class
+  # maxTTLSecondsAfterFinished (rule 43).
   ttlSecondsAfterFinished: 3600
 ```
 
@@ -95,6 +96,8 @@ status:
   podName: "fix-issue-342-xk9p2"
   currentPodUID: "9d3e2c1b-4a5f-6d7e-8c9b-1a2f3e4d5c6b"
   retries: 0
+  classBounds:
+    defaultTaskTimeout: "1h0m0s"
   artifactValues:
     pr-url: "https://github.com/acme/widgets/pull/587"
     summary: "Fixed null pointer in WidgetService.get(). Added regression test."
@@ -106,13 +109,14 @@ status:
 |---|---|
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
 | `Completed` | `True` with `reason: TaskSucceeded` or `TaskFailed` once the task settles; the message is the agent's reported message, the container's exit summary, or the validation failure. |
-| `startTime` | Stamped on the transition to `Running` (Pod Ready), in the same status write. `spec.completion.timeout` measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
-| `completionTime` | Stamped when the task settles. |
+| `startTime` | Set in the status write that moves the task to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
+| `completionTime` | Set when the task settles. |
 | `podName` | The current Pod. |
-| `currentPodUID` | For an `agentReported` task, the UID of the Pod allowed to report completion, stamped on every Pod creation and cleared during a retry reset. Never set for an `exitCode` task. |
+| `currentPodUID` | For an `agentReported` task, the UID of the Pod allowed to report completion, set on every Pod creation and cleared during a retry reset. Never set for an `exitCode` task. |
 | `retries` | Incremented at the start of each `backoffLimit` retry cycle and compared with the limit to decide whether `Failed` is terminal ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). |
 | `artifactValues` | The values the container reported, keyed by declared name. |
 | `agentReportedStatus`, `agentReportedMessage` | The `status` (`success` or `failure`) and `message` from the completion report. |
+| `classBounds` | A copy of the class's `defaultTaskTimeout`, `maxTaskTimeout`, `defaultTTLSecondsAfterFinished`, and `maxTTLSecondsAfterFinished`, recorded when the current Pod was created, or when the task settled before any Pod existed. The effective timeout and TTL are derived within these bounds ([The class bounds timeout and retention](#the-class-bounds-timeout-and-retention)). |
 
 ## Design notes
 
@@ -128,9 +132,23 @@ status:
 
 **There is no webhook condition and no retry on timeout.** The schema enums bound `condition` to `agentReported` and `exitCode` and `onTimeout` to `Fail` and `Succeed`.
 
-### Timeout and retention are unbounded by default
+### The class bounds timeout and retention
 
-`completion.timeout` has no default. Unset, the task runs until it reports or exits; an `agentReported` task whose container never reports holds its Pod, PVC, and certificate indefinitely. `ttlSecondsAfterFinished` has no default either: unset, a settled task and its children are never removed. As shipped, no AgentClass field bounds or defaults either value, unlike the idle and hibernation timings for Agents; issue #239 tracks it. Set both on every task.
+The reconciler derives the effective `completion.timeout` and `ttlSecondsAfterFinished` on every pass, the same way it derives an Agent's lifecycle timings (rules 42 and 43):
+
+1. The task's own value applies when the task sets one.
+2. When the task omits it, the class default applies: `lifecycle.defaultTaskTimeout` or `lifecycle.defaultTTLSecondsAfterFinished`.
+3. A value above the class cap, `lifecycle.maxTaskTimeout` or `lifecycle.maxTTLSecondsAfterFinished`, is lowered to the cap. A cap never supplies a value, so a class that bounds every task sets the default as well.
+
+The stored spec doesn't change, and a clamp sets no condition or event.
+
+When neither the task nor its class sets a value, the value is unbounded. With no timeout, the task runs until it reports or exits, so an `agentReported` task whose container never reports holds its Pod, PVC, and certificate indefinitely. With no TTL, a settled task and its children are kept until you delete them. The chart's `standard` class sets a default timeout and no default TTL ([Helm chart contents](../operations/deployment.md#helm-chart-contents)).
+
+The reconciler reads the class bounds from `status.classBounds`, not from the live class. It records the class's four task fields there in the status write that follows each Pod creation, including a retry's new Pod, so each attempt uses the class as it stood when its Pod was created. A task that settles before any Pod exists, such as one that fails the pre-Pod class check, records them in its settling write instead, so the class default TTL still cleans it up. The results:
+
+- A later class edit doesn't reach the task. [AgentTask handling](../controller/change-propagation.md#agenttask-handling-no-degraded-phase) lists what a class edit does to a task in each state.
+- An edit to the task's own `completion.timeout` or `ttlSecondsAfterFinished` applies on the next pass, within the recorded bounds. For example, to keep a settled task long enough to snapshot its PVC ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)), raise its `ttlSecondsAfterFinished`, up to the recorded `maxTTLSecondsAfterFinished`.
+- A task with no `classBounds`, because it was created before the field existed, uses its own values with no bounds. An upgrade therefore changes no running or finished task.
 
 ### Artifact collection
 
@@ -143,9 +161,9 @@ This payload-based design has no race, needs no `pods/exec` RBAC, and keeps the 
 The gateway and the reconciler coordinate completion through two mechanisms:
 
 - The per-task `{taskName}-completion` ConfigMap is the data channel. The gateway writes the completion payload; the reconciler watches it ([The completion mailbox](../runtime/child-resources.md#the-completion-mailbox)).
-- `status.currentPodUID` is the identity gate. The reconciler stamps it on every Pod creation of an `agentReported` task and clears it during the retry-reset window; the gateway rejects a report from any other Pod with `409 stale_pod` and a `StalePodCompletion` message, and a report against a settled task with `403 access_denied` and `TaskAlreadyCompleted`.
+- `status.currentPodUID` is the identity gate. The reconciler sets it on every Pod creation of an `agentReported` task and clears it during the retry-reset window; the gateway rejects a report from any other Pod with `409 stale_pod` and a `StalePodCompletion` message, and a report against a settled task with `403 access_denied` and `TaskAlreadyCompleted`.
 
-The wire-level contract is on [Task completion](../gateways/api/task-complete.md), and the clear, reset, create, and restamp order on [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
+The wire-level contract is on [Task completion](../gateways/api/task-complete.md), and the clear, reset, create, and set order on [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 
 ### Concurrency
 

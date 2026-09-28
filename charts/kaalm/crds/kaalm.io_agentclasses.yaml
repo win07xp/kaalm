@@ -159,12 +159,24 @@ spec:
                     type: string
                 type: object
               lifecycle:
-                description: Lifecycle sets idle, hibernation, and wake defaults and
-                  ceilings.
+                description: Lifecycle sets idle, hibernation, wake, and task defaults
+                  and ceilings.
                 properties:
                   defaultHibernationDelay:
                     type: string
                   defaultIdleTimeout:
+                    type: string
+                  defaultTTLSecondsAfterFinished:
+                    description: |-
+                      DefaultTTLSecondsAfterFinished applies to an AgentTask that sets no
+                      ttlSecondsAfterFinished. Unset keeps such a task after it finishes.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  defaultTaskTimeout:
+                    description: |-
+                      DefaultTaskTimeout applies to an AgentTask that sets no
+                      completion.timeout. Unset leaves such a task without a timeout.
                     type: string
                   defaultWakeTimeout:
                     type: string
@@ -175,6 +187,16 @@ spec:
                   maxHibernationDelay:
                     type: string
                   maxIdleTimeout:
+                    type: string
+                  maxTTLSecondsAfterFinished:
+                    description: |-
+                      MaxTTLSecondsAfterFinished caps an AgentTask's effective
+                      ttlSecondsAfterFinished.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  maxTaskTimeout:
+                    description: MaxTaskTimeout caps an AgentTask's effective completion.timeout.
                     type: string
                   maxWakeTimeout:
                     type: string
@@ -1003,12 +1025,24 @@ spec:
                     type: string
                 type: object
               lifecycle:
-                description: Lifecycle sets idle, hibernation, and wake defaults and
-                  ceilings.
+                description: Lifecycle sets idle, hibernation, wake, and task defaults
+                  and ceilings.
                 properties:
                   defaultHibernationDelay:
                     type: string
                   defaultIdleTimeout:
+                    type: string
+                  defaultTTLSecondsAfterFinished:
+                    description: |-
+                      DefaultTTLSecondsAfterFinished applies to an AgentTask that sets no
+                      ttlSecondsAfterFinished. Unset keeps such a task after it finishes.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  defaultTaskTimeout:
+                    description: |-
+                      DefaultTaskTimeout applies to an AgentTask that sets no
+                      completion.timeout. Unset leaves such a task without a timeout.
                     type: string
                   defaultWakeTimeout:
                     type: string
@@ -1019,6 +1053,16 @@ spec:
                   maxHibernationDelay:
                     type: string
                   maxIdleTimeout:
+                    type: string
+                  maxTTLSecondsAfterFinished:
+                    description: |-
+                      MaxTTLSecondsAfterFinished caps an AgentTask's effective
+                      ttlSecondsAfterFinished.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  maxTaskTimeout:
+                    description: MaxTaskTimeout caps an AgentTask's effective completion.timeout.
                     type: string
                   maxWakeTimeout:
                     type: string

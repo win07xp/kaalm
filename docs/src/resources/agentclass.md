@@ -123,6 +123,14 @@ spec:
     # Default and clamp for wakeTimeout; rule 9.
     defaultWakeTimeout: "2m"
     maxWakeTimeout: "5m"
+    # Default and clamp for AgentTask.spec.completion.timeout; rule 42.
+    # Unset default: a task that sets no timeout has none.
+    defaultTaskTimeout: "1h"
+    maxTaskTimeout: "6h"
+    # Default and clamp for AgentTask.spec.ttlSecondsAfterFinished; rule 43.
+    # Unset default: a settled task that sets no TTL is kept.
+    defaultTTLSecondsAfterFinished: 86400
+    maxTTLSecondsAfterFinished: 604800
     terminationGracePeriodSeconds: 60
 
   # Merged onto every workload Pod.
@@ -173,7 +181,7 @@ An empty `allowedImages` means any image, and nothing warns about it. Leave it e
 
 `resources.defaults` applies whole, and only when the workload sets neither `requests` nor `limits`. A workload that sets either one gets no class defaults for the other.
 
-`maxLimits` clamps and never rejects, at reconcile time (rule 6): a limit above the cap is lowered to it, a request above the cap is lowered to it, and a resource named in `maxLimits` that the workload leaves without a limit is given the cap as its limit. The same holds for `maxSizeGi`, `maxIdleTimeout`, and `maxHibernationDelay` (rules 7, 8, and 10). The full default-versus-cap table is on [Defaulting](validation-and-defaulting.md#defaulting).
+`maxLimits` clamps and never rejects, at reconcile time (rule 6): a limit above the cap is lowered to it, a request above the cap is lowered to it, and a resource named in `maxLimits` that the workload leaves without a limit is given the cap as its limit. The same holds for `maxSizeGi`, `maxIdleTimeout`, `maxHibernationDelay`, `maxWakeTimeout`, `maxTaskTimeout`, and `maxTTLSecondsAfterFinished` (rules 7 to 10, 42, and 43). A lifecycle max bounds a value and never supplies one, so a class that bounds every task sets the default as well ([AgentTask](agenttask.md#the-class-bounds-timeout-and-retention)). The full default-versus-cap table is on [Defaulting](validation-and-defaulting.md#defaulting).
 
 ### `pvcRetention`
 

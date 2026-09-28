@@ -91,7 +91,9 @@ Read the error type; the three cases behave differently:
 ## Task never completes
 
 - `completion.condition: agentReported` but the image never calls
-  `POST /v1/task/complete`: the task sits until `completion.timeout`. Either
+  `POST /v1/task/complete`: the task sits until its timeout. The timeout is
+  `completion.timeout`, or the class's `defaultTaskTimeout` when that's unset.
+  With neither set, the task sits until you delete it. Either
   report from the image, or set `completion.condition: exitCode`.
 - The completion call is rejected: only the task's current Pod may report
   (an identity gate against stale retries); a completion sent by anything
