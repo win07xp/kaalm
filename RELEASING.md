@@ -23,7 +23,7 @@ That publishes, for the tag `vX.Y.Z`:
   been fetched through the public proxy it is recorded in the checksum
   database permanently; deleting the git tag does not unpublish it.
 - **Chart** (OCI): `oci://ghcr.io/win07xp/charts/kaalm` version `X.Y.Z`,
-  with `appVersion` stamped to `X.Y.Z` so it pins the matching images.
+  with `appVersion` set to `X.Y.Z` so it pins the matching images.
 - **GitHub release** `vX.Y.Z` with generated notes and the chart `.tgz`
   attached.
 

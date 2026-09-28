@@ -1,15 +1,15 @@
 # starter-python
 
 The worked example of the **`FROM` rung** of the Kaalm on-ramp: a
-[reference base image](../../docs/src/runtime/base-images.md) owns the entire
-[runtime contract](../../docs/src/runtime/contract.md), and this directory is
-everything you own on top of it, a `handler.py` and a three-line Dockerfile.
+[reference base image](../../docs/src/runtime/base-images.md) implements the
+entire [runtime contract](../../docs/src/runtime/contract.md), and this directory is
+everything you own on top of it, a `handler.py` and a four-line Dockerfile.
 
-Since v0.3.0 the contract code is single-sourced in the base image
-(`images/agent-python/` in this repo); this template no longer carries a copy.
-Reach for this rung when you have outgrown mount-and-run
-(`Agent.spec.handler`): you need pip dependencies the base image does not
-bundle, or your handler passed the ConfigMap size cap.
+The contract code lives only in the base image (`images/agent-python/` in
+this repository), so this template doesn't carry a copy. Use this rung when
+you have outgrown mount-and-run (`Agent.spec.handler`): you need pip
+dependencies the base image does not bundle, or your handler exceeds the
+ConfigMap size cap.
 
 ## What the base image implements for you
 
@@ -59,10 +59,10 @@ spec:
 EOF
 ```
 
-The `FROM` tag pins a published release; on an unreleased tree build the base
+The `FROM` tag pins a published release; on an unreleased tree, build the base
 image locally first (`make python-image PYTHON_AGENT_IMG=kaalm-agent-python:dev`)
 and pass `--build-arg BASE=kaalm-agent-python:dev`.
 
-Note the baked handler needs no `spec.handler` and no `allowHandlerMounts`
+A baked handler needs no `spec.handler` and no `allowHandlerMounts`
 grant: those govern ConfigMap-mounted code. A `FROM` image goes through
 ordinary image review and the `allowedImages` gate, like any custom image.
