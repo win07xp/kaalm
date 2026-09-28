@@ -132,6 +132,10 @@ spec:
     defaultTTLSecondsAfterFinished: 86400
     maxTTLSecondsAfterFinished: 604800
     terminationGracePeriodSeconds: 60
+    # Caps concurrent Pod replacements for spec drift: an integer of at
+    # least 1, or a percentage of the class's Agents from 1% to 100%,
+    # rounded up. Schema default 25%; rule 44.
+    maxUnavailableOnDrift: "25%"
 
   # Merged onto every workload Pod.
   podMetadata:
@@ -161,6 +165,8 @@ status:
       reason: RestrictedBaseline
   agentsInUse: 14
   tasksInUse: 2
+  agentsReplacing: 1
+  agentsPendingReplacement: 3
 ```
 
 | Condition | Meaning |
@@ -169,7 +175,7 @@ status:
 | `FQDNPolicySupported` | Set on every pass: `reason: NoHostsRequested` while `allowedHosts` is empty; otherwise `FQDNPolicySupported` or `FQDNPolicyUnsupported` from the CNI probe described under the design notes. |
 | `SecurityBaseline` | Set on every pass: `True, reason: RestrictedBaseline` when no declared `security` field falls below the restricted Pod Security Standard; otherwise `False, reason: BelowRestrictedBaseline` with a message naming each relaxed field, and a `Warning` event of the same reason when the relaxation first appears. An unset field is never a deviation: it takes the baseline value. |
 
-`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. `kubectl get ac` prints both counts.
+`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid spec-drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` under the `Replacing` column.
 
 ## Design notes
 
@@ -190,6 +196,10 @@ The field governs the PVC Kaalm provisions for an Agent. Under `Retain`, the Age
 ### `allowHandlerMounts` guards the image review boundary, not code execution
 
 Anyone who can create an Agent can already run arbitrary code: any image matching `allowedImages`. What a mounted handler ([`Agent.spec.handler`](agent.md), consumed by the [reference base images](../runtime/base-images.md)) adds is code that bypasses image review: the platform team approved `kaalm-agent-python`, not the handler source injected into it. The field therefore defaults to `false`, and enabling it is the class-level statement that ConfigMap authorship in a namespace is an acceptable code provenance for that category of workload. Classes for production fleets built from reviewed images leave it off; a starter or development class turns it on. Enforcement is rule 30, with the same recoverable `Degraded` handling as the persistence and hibernation gates, including on class drift. What the grant means in RBAC terms is stated once in the [threat model](../security/threat-model.md#workload-isolation).
+
+### `maxUnavailableOnDrift` paces spec-drift replacements
+
+The field bounds how many of the class's Agents may have their Pod replaced for spec drift at once, whether the drift comes from an edit to the Agent's own spec or from a class or provider change. The mechanics, including how a slot is granted and freed and what happens when a replacement fails, are under [Drift replacements are capped per class](../controller/change-propagation.md#drift-replacements-are-capped-per-class).
 
 ### `automountServiceAccountToken` is the opt-in for API access
 

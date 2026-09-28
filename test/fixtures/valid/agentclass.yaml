@@ -17,3 +17,4 @@ spec:
   lifecycle:
     defaultIdleTimeout: 30m
     hibernationAllowed: true
+    maxUnavailableOnDrift: 50%

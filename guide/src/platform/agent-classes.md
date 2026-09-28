@@ -211,10 +211,12 @@ Which class fields reach a running agent depends on the field:
 - `resources.defaults`, `resources.maxLimits`, `image.pullPolicy`,
   `image.imagePullSecrets`, `security`, `podMetadata`,
   `runtime.runtimeClassName`, and `lifecycle.terminationGracePeriodSeconds`
-  change the desired Pod, so the Pod is replaced on the next reconcile. One
-  edit replaces every running agent Pod of the class at once, so edit a shared
-  class only when those restarts are acceptable. Hibernated agents pick up the
-  change on their next wake.
+  change the desired Pod, so the Pod is replaced on the next reconcile.
+  `lifecycle.maxUnavailableOnDrift` caps how many of the class's Pods are
+  replaced at once (default 25% of the class, rounded up); the rest wait
+  their turn as replaced Pods come back Ready. The cap paces the rollout; it
+  does not skip any agent Pod, so edit a shared class only when the restarts
+  are acceptable. Hibernated agents pick up the change on their next wake.
 
 Tightening `allowedImages` or `allowedProviders` does not stop a running
 agent: the Agent goes `Degraded` with `ClassConstraintViolation` at once, its

@@ -1,0 +1,7 @@
+# a maxUnavailableOnDrift percentage must be 1% to 100% (rule 44)
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata: {name: too-many-slots}
+spec:
+  lifecycle:
+    maxUnavailableOnDrift: 150%

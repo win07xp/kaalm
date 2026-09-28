@@ -21,6 +21,16 @@ Fields outside the hash are never applied to a live Pod: the reconciler creates,
 
 A spec edit's effect is guaranteed visible only after `status.phase` next settles at `Running`, `Hibernated`, or, for class recovery, the restored `preDegradedPhase`.
 
+### Drift replacements are capped per class
+
+A drifted Agent does not replace its Pod the moment it detects drift. It first asks its class for one of the `lifecycle.maxUnavailableOnDrift` slots: an integer of at least 1, or a percentage of the class's Agents, hibernated ones included, from 1% to 100%, rounded up and never below 1. A class with no `lifecycle.maxUnavailableOnDrift`, including one with no `lifecycle` block at all, gets 25% ([rule 44](../resources/validation-and-defaulting.md#the-rules)).
+
+A granted Agent's `PodUpToDate` condition becomes `False, reason=Replacing`, its old Pod is deleted, and a new one is created from the current spec. The slot frees after the new Pod is Ready on that spec (`PodUpToDate` turns `True, reason=Current`), or the Agent is deleted. A refused Agent's `PodUpToDate` condition becomes `False, reason=ReplacementPending`, and its current Pod keeps serving: `status.phase` and the `Ready` condition still come from that Pod. A refused Agent is re-queued as soon as another Agent of the class leaves `Replacing`, with a 30-second fallback retry. When both an Idle and a non-Idle Agent of the class wait for a slot, the Idle one is replaced first.
+
+The cap applies to every drift replacement alike: an edit to an Agent's own spec and a class or provider edit that reaches the Pod spec hash ([Bucket 1](#bucket-1-recreate-and-clamp-default)) compete for the same slots. `AgentClass.status.agentsReplacing` and `status.agentsPendingReplacement` count the class's Agents on each side of the wait ([AgentClass](../resources/agentclass.md)). An Agent that reaches `Hibernated` while waiting for a slot stops waiting and drops out of `agentsPendingReplacement`, since hibernation clears its `PodUpToDate` condition; its wake creates the Pod from the current spec.
+
+A Pod that never becomes Ready after a grant, because it crash-loops or cannot pull its image, sets the Agent `Failed` but keeps its slot, so a bad rollout halts at the cap instead of failing the whole class. A further spec change replaces that Agent's Pod at once, on the slot it already holds, and the rollout resumes from there.
+
 ### An upgrade that changes the hash formula replaces no Pod
 
 Each Pod carries a second annotation, `kaalm.io/pod-spec-hash-version`, which records the version of the formula that produced its hash. A Pod without this annotation has a version 1 hash. When the reconciler finds such a Pod, it recomputes the hash with the version 1 formula and compares:
@@ -42,7 +52,7 @@ The exclusion test runs first, so bucket membership follows what the change does
 
 ### Bucket 1: recreate-and-clamp (default)
 
-A class change that reaches the Pod spec hash replaces the Pod: `maxLimits` lowered (the Agent's `resources.limits` are clamped to it), `defaultImage` changed for an Agent with no image of its own, `defaultResources` changed for an Agent with none, or any change to `security`, `runtime.runtimeClassName`, `image.pullPolicy`, `image.imagePullSecrets`, `lifecycle.terminationGracePeriodSeconds`, or `podMetadata`. The reconciler transitions the Agent to `Provisioning`, deletes the Pod gracefully, and creates a new one from the clamped spec; a `Hibernated` Agent applies the change on its next wake. Agents must tolerate restart.
+A class change that reaches the Pod spec hash replaces the Pod, subject to the class's `maxUnavailableOnDrift` cap ([Drift replacements are capped per class](#drift-replacements-are-capped-per-class)): `maxLimits` lowered (the Agent's `resources.limits` are clamped to it), `defaultImage` changed for an Agent with no image of its own, `defaultResources` changed for an Agent with none, or any change to `security`, `runtime.runtimeClassName`, `image.pullPolicy`, `image.imagePullSecrets`, `lifecycle.terminationGracePeriodSeconds`, or `podMetadata`. Once an Agent holds a slot, the reconciler transitions it to `Provisioning`, deletes the Pod gracefully, and creates a new one from the clamped spec; a `Hibernated` Agent applies the change on its next wake. Agents must tolerate restart.
 
 Class fields outside the hash reach a running Agent by other routes or not at all:
 
@@ -51,6 +61,7 @@ Class fields outside the hash reach a running Agent by other routes or not at al
 | `network.egress.allowedCIDRs`, `allowSameNamespaceIngress` | the NetworkPolicy is updated in place; no restart |
 | `image.allowedImages` narrowed but still admitting the image | none |
 | `lifecycle` defaults and caps | applied on the next activity evaluation; no restart |
+| `lifecycle.maxUnavailableOnDrift` | paces how many Pods the changes above replace at once; see [Drift replacements are capped per class](#drift-replacements-are-capped-per-class) |
 
 ### Bucket 2: degrade-when-irreconcilable
 
@@ -85,4 +96,4 @@ A retry spends its `status.retries` increment before the check runs and does not
 
 ### Bulk impact
 
-Tightening a class with many Agents re-enqueues every one of them at once, and the restarts run concurrently up to `controller.maxConcurrentReconciles` (default 4). A class edit that changes the Pod spec hash replaces every running Pod of the class. Kaalm sets no ordering, pacing, or limit on how many Pods it replaces at once ([#295](https://github.com/win07xp/kaalm/issues/295)). Platform teams that need a staged rollout split the tightening across classes (`standard-v2`, say) and migrate Agents incrementally rather than editing an in-use class.
+Tightening a class with many Agents re-enqueues every one of them at once, and the reconciles run concurrently up to `controller.maxConcurrentReconciles` (default 4). A class edit that changes the Pod spec hash reaches every Agent of the class, but [`maxUnavailableOnDrift`](#drift-replacements-are-capped-per-class) paces the Pod replacements themselves: at most that many Agents restart at a time, and the rest wait their turn as slots free.

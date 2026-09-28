@@ -71,6 +71,7 @@ Rule numbers are stable identifiers. Other pages cite them by number, so the num
 | 41 | A model map names real models on both ends | ModelProviderReconciler | `Ready=False`, `InvalidModelMap` |
 | 42 | Task timeout within the class cap | AgentTaskReconciler | Clamped |
 | 43 | Task retention within the class cap | AgentTaskReconciler | Clamped |
+| 44 | `lifecycle.maxUnavailableOnDrift` is an integer of at least 1, or a percentage from 1% to 100% | CRD CEL | Rejected at apply |
 
 Two families behave differently from the rest. The class-mismatch family (rules 2 to 5, 24, 26, 29, 30, and 35 to 38) is recoverable on an Agent and terminal on an AgentTask, and a change to an AgentClass or ModelProvider can trigger any of its rules on a workload that was fine a moment ago ([Change propagation](../controller/change-propagation.md#agentclass-change-handling)). The cap family (rules 6 to 10, 42, and 43) never rejects: the effective value is the smaller of what the workload asked for and the class cap.
 
@@ -144,6 +145,8 @@ Resource limits, volume size, the Agent lifecycle timeouts, and the task timeout
 
 Like rules 8 to 10, rules 42 and 43 never supply a value: under a class with a max and no default, a value the workload leaves unset stays unset.
 
+**Rule 44: `maxUnavailableOnDrift` must be a valid count or percentage.** `AgentClass.spec.lifecycle.maxUnavailableOnDrift` must be an integer of at least 1, or a percentage string from `1%` to `100%`. *CRD CEL on the field.* Unlike rules 6 to 10, 42, and 43, a bad value is rejected at apply time rather than clamped: there is no reasonable value to substitute for a malformed count or percentage. The field bounds concurrent Pod replacements for spec drift rather than a workload value; see [Drift replacements are capped per class](../controller/change-propagation.md#drift-replacements-are-capped-per-class).
+
 #### Names and namespaces
 
 **Rule 21: Agent and AgentTask names are plain DNS labels.** `metadata.name` must match `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` and be at most 63 characters. *Root-scoped CRD CEL on both kinds (`self.metadata.name.matches(...) && size(self.metadata.name) <= 63`).* Names are used verbatim as single DNS labels in certificate SANs and as per-Agent Service names, both capped at 63, and the gateway reads the namespace by position in the dot-split SAN, so a dotted name would shift it ([Name validation](agent.md#name-validation-dns-1123-label-enforced-at-the-schema-root)).
@@ -203,6 +206,7 @@ Field-level checks the apiserver enforces from the CRD schema, without a rule nu
 | Every kind | `*Ref.name`, `credentialsRef.key`, `models[].id`, `tools[].id`, `artifacts[].name` | Required, at least one character |
 | AgentClass | `runtime.backend` | Enum `pod` |
 | AgentClass | `persistence.pvcRetention` | Enum `Delete`, `Retain` |
+| AgentClass | `lifecycle.maxUnavailableOnDrift` | Accepts an integer or a string (`x-kubernetes-int-or-string`) |
 | ModelProvider | `type` | Enum `anthropic`, `openai`, `google-vertex`, `openai-compatible` |
 | ModelProvider, ToolProvider | `endpoint` | Pattern `^https://` |
 | ModelProvider, ToolProvider | `models`, `tools` | Map-typed list keyed by `id`: duplicate ids rejected |
@@ -231,6 +235,7 @@ Defaults come from two places.
 |---|---|---|
 | AgentClass | `runtime.backend` | `pod` |
 | AgentClass | `persistence.pvcRetention` | `Delete` |
+| AgentClass | `lifecycle.maxUnavailableOnDrift` | `25%` |
 | ModelProvider | `budget.period` | `none` |
 | ModelProvider | `budget.enforcement` | `soft` |
 | ModelProvider | `budget.hard.boundaryMarginPercent` | `5` |

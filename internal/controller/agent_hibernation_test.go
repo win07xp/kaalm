@@ -484,7 +484,7 @@ func TestAgent_WakePodCreateErrorKeepsResuming(t *testing.T) {
 	}
 	r := &AgentReconciler{Client: newErrCreateClient(t), OperatorNamespace: "kaalm-system"}
 	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080}
-	if err := r.convergePod(context.Background(), agent, eff); err == nil {
+	if _, err := r.convergePod(context.Background(), agent, &kaalmv1beta1.AgentClass{}, eff); err == nil {
 		t.Fatal("convergePod must surface the Pod-creation error so the pass requeues")
 	}
 	if agent.Status.Phase != kaalmv1beta1.AgentResuming {

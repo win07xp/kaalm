@@ -128,15 +128,17 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Count users.
-	agents, tasks, err := r.countUsers(ctx, ac.Name)
+	usage, err := r.countUsers(ctx, ac.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// Write status.
 	ac.Status.ObservedGeneration = ac.Generation
-	ac.Status.AgentsInUse = agents
-	ac.Status.TasksInUse = tasks
+	ac.Status.AgentsInUse = usage.agents
+	ac.Status.TasksInUse = usage.tasks
+	ac.Status.AgentsReplacing = usage.replacing
+	ac.Status.AgentsPendingReplacement = usage.pending
 	apimeta.SetStatusCondition(&ac.Status.Conditions, fqdnCond)
 	apimeta.SetStatusCondition(&ac.Status.Conditions, baseline)
 	if len(problems) == 0 {
@@ -164,7 +166,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Status().Update(ctx, &ac); err != nil {
 		return ctrl.Result{}, err
 	}
-	logger.V(1).Info("reconciled AgentClass", "ready", len(problems) == 0, "agents", agents, "tasks", tasks)
+	logger.V(1).Info("reconciled AgentClass", "ready", len(problems) == 0, "agents", usage.agents, "tasks", usage.tasks)
 	return ctrl.Result{}, nil
 }
 
@@ -172,11 +174,11 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 	if !controllerutil.ContainsFinalizer(ac, kaalmv1beta1.ClassFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	agents, tasks, err := r.countUsers(ctx, ac.Name)
+	usage, err := r.countUsers(ctx, ac.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if agents > 0 || tasks > 0 {
+	if usage.agents > 0 || usage.tasks > 0 {
 		// Hold in Terminating until the last reference is removed. The watches on
 		// Agent/AgentTask re-enqueue us when a referrer goes away.
 		return ctrl.Result{}, nil
@@ -237,16 +239,32 @@ func invalidHosts(ac *kaalmv1beta1.AgentClass) []string {
 	return bad
 }
 
-func (r *AgentClassReconciler) countUsers(ctx context.Context, className string) (int32, int32, error) {
+// classUsage counts a class's referrers, and among its Agents those in a
+// spec-drift replacement: Replacing (holding a maxUnavailableOnDrift slot)
+// and ReplacementPending (waiting for one).
+type classUsage struct {
+	agents, tasks, replacing, pending int32
+}
+
+func (r *AgentClassReconciler) countUsers(ctx context.Context, className string) (classUsage, error) {
 	var agents kaalmv1beta1.AgentList
 	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
-		return 0, 0, err
+		return classUsage{}, err
 	}
 	var tasks kaalmv1beta1.AgentTaskList
 	if err := r.List(ctx, &tasks, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
-		return 0, 0, err
+		return classUsage{}, err
 	}
-	return int32(len(agents.Items)), int32(len(tasks.Items)), nil
+	u := classUsage{agents: int32(len(agents.Items)), tasks: int32(len(tasks.Items))}
+	for i := range agents.Items {
+		switch podUpToDateReason(&agents.Items[i]) {
+		case kaalmv1beta1.ReasonReplacing:
+			u.replacing++
+		case kaalmv1beta1.ReasonReplacementPending:
+			u.pending++
+		}
+	}
+	return u, nil
 }
 
 func (r *AgentClassReconciler) fqdnSupport() (bool, error) {

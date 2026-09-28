@@ -120,7 +120,7 @@ Events are the surface for status changes that platform teams discover with `kub
 - **Task settlement and retry** on AgentTask (`Normal`, `TaskSucceeded`; `Warning`, `TaskFailed` and the timeout reasons; one `Warning` per retry).
 - **Provider configuration** on ModelProvider (`Warning`, `FallbackIneligible` at reconcile time and at request time, `DegradeTargetNotCheapest`, `MaxOutputTokensUnset`) and the gateway's `CredentialsInvalid` when a provider refuses the key during a fallback walk ([Fallback logic](../gateways/llm/fallback.md)).
 - **Callback rejection** on AgentChannel (`Warning`, `CallbackRejected` when a platform refuses or exhausts a reply). A `callbackUrl` that fails the pre-dial check lands on the channel's `PlatformConnected` condition with reason `CallbackInvalid`, not in an Event ([Channel health tracking](../gateways/user/platform-adapters.md#channel-health-tracking)).
-- **Pod replacement** on Agent (`Normal`, `SpecDrift`; `Warning`, `PodDisrupted`). See [Change propagation](../controller/change-propagation.md).
+- **Pod replacement** on Agent (`Normal`, `SpecDrift` and `SpecDriftPending`; `Warning`, `PodDisrupted`). See [Change propagation](../controller/change-propagation.md).
 
 Events persist per the cluster's standard Event retention. For long-term audit, see [Audit trail](../security/model.md#audit-trail).
 
