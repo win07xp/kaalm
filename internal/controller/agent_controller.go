@@ -966,7 +966,7 @@ func (r *AgentReconciler) convergePod(
 	// A Pod hashed by an older formula that is current under that formula
 	// is not drift: rewrite its hash annotations in place so an upgrade that changes
 	// the formula replaces no Pod.
-	if err := r.restampLegacyHash(ctx, pod, eff); err != nil {
+	if err := r.rewriteLegacyHash(ctx, pod, eff); err != nil {
 		return err
 	}
 
@@ -1005,12 +1005,12 @@ func podPendingPhase(agent *kaalmv1beta1.Agent) kaalmv1beta1.AgentPhase {
 	return kaalmv1beta1.AgentProvisioning
 }
 
-// restampLegacyHash rewrites the hash annotations of a Pod whose hash came
+// rewriteLegacyHash rewrites the hash annotations of a Pod whose hash came
 // from formula 1 (no hash-version annotation) and still matches that
 // formula: it merge-patches only the two annotations, so the Pod keeps
 // running. A formula-1 Pod whose
 // hash does not match is real drift and is left for the caller to replace.
-func (r *AgentReconciler) restampLegacyHash(ctx context.Context, pod *corev1.Pod, eff effectiveAgentSpec) error {
+func (r *AgentReconciler) rewriteLegacyHash(ctx context.Context, pod *corev1.Pod, eff effectiveAgentSpec) error {
 	if _, ok := pod.Annotations[annotationPodSpecHashVersion]; ok {
 		return nil
 	}
@@ -1023,7 +1023,7 @@ func (r *AgentReconciler) restampLegacyHash(ctx context.Context, pod *corev1.Pod
 	if err := r.Patch(ctx, pod, patch); err != nil {
 		return err
 	}
-	log.FromContext(ctx).Info("re-stamped Pod spec hash for the current formula; Pod kept",
+	log.FromContext(ctx).Info("rewrote Pod spec hash for the current formula; Pod kept",
 		"pod", pod.Name, "hashVersion", podSpecHashVersion)
 	return nil
 }

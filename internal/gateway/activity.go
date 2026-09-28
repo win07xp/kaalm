@@ -43,7 +43,7 @@ type activityEntry struct {
 	heartbeat      time.Time
 }
 
-// NewActivityStore stamps replicaStartedAt at construction.
+// NewActivityStore sets replicaStartedAt at construction.
 func NewActivityStore() *ActivityStore {
 	return &ActivityStore{startedAt: time.Now(), now: time.Now, byNamespace: map[string]map[string]*activityEntry{}}
 }

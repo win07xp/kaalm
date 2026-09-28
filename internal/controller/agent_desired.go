@@ -87,7 +87,7 @@ const (
 	annotationPodSpecHash = "kaalm.io/pod-spec-hash"
 
 	// annotationPodSpecHashVersion names the formula that produced
-	// annotationPodSpecHash. A Pod without it was stamped by formula 1.
+	// annotationPodSpecHash. A Pod without it was hashed by formula 1.
 	annotationPodSpecHashVersion = "kaalm.io/pod-spec-hash-version"
 
 	// podSpecHashVersion is the formula podSpecHash implements.
@@ -388,9 +388,9 @@ func podSpecHash(eff effectiveAgentSpec) string {
 }
 
 // hashableSpecV1 and podSpecHashV1 freeze hash formula 1, which v1.0.0
-// stamped on every agent Pod. They exist only to re-stamp Pods created before
+// wrote on every agent Pod. They exist only to rewrite the hash of Pods created before
 // the formula changed, so an upgrade does not replace them. Remove them once
-// no supported upgrade path starts from a release that stamped v1 hashes.
+// no supported upgrade path starts from a release that wrote v1 hashes.
 // Do not edit: the output must stay byte-for-byte what v1.0.0 produced.
 type hashableSpecV1 struct {
 	Image     string                      `json:"image"`

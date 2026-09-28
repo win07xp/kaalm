@@ -107,7 +107,7 @@ jobs:
           cache: true
       - uses: azure/setup-helm@v5
 
-      - name: Package the chart with the tag version stamped in
+      - name: Package the chart at the tag version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           make chart-sync

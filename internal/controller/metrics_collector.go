@@ -114,7 +114,7 @@ func (c *PhaseCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-// phaseOrPending names a resource the reconciler has not stamped yet. The
+// phaseOrPending names a resource the reconciler has not set a phase on yet. The
 // empty string is not a usable label value, and Pending is where every Kaalm
 // state machine starts.
 func phaseOrPending(phase string) string {

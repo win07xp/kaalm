@@ -35,8 +35,8 @@ import (
 // day a field differs between the versions, the identity breaks for that
 // kind and its conversion becomes a hand-written rule.
 
-// convertViaJSON copies src into dst through their JSON forms and then stamps
-// dst with gvk. The stamp matters: the controller-runtime handler sets the
+// convertViaJSON copies src into dst through their JSON forms and then sets
+// dst's gvk. Setting it matters: the controller-runtime handler sets the
 // destination's apiVersion and kind before calling ConvertTo or ConvertFrom,
 // and the copy would otherwise overwrite them with the source's.
 func convertViaJSON(src, dst runtime.Object, gvk schema.GroupVersionKind) error {
