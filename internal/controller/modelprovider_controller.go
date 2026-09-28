@@ -121,6 +121,9 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		r.setReady(&mp, false, reason, strings.Join(problems, "; "))
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
+	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Budget reconciliation (the reducer over gateway partials) and the
 	// gateway-reachability mirror.

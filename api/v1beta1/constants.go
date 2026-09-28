@@ -160,6 +160,18 @@ const ConditionBoundaryMarginRaised = "BoundaryMarginRaised"
 // DegradeTargetNotCheapest Warning event fires on the rising edge only.
 const ConditionDegradeTargetNotCheapest = "DegradeTargetNotCheapest"
 
+// ConditionFallbackIneligible records the reconcile-time fallback
+// eligibility scan: True, with reason FallbackIneligible, when a fallback
+// candidate does not admit a caller's namespace or does not offer the model
+// a request would carry to it. It is advisory and never affects Ready; the
+// controller keeps it so the FallbackIneligible Warning event fires only
+// when the findings change.
+const ConditionFallbackIneligible = "FallbackIneligible"
+
+// ReasonFallbackCandidatesEligible is the FallbackIneligible condition's
+// reason once every candidate is eligible again.
+const ReasonFallbackCandidatesEligible = "AllCandidatesEligible"
+
 // Budget policy actions (ModelProvider.spec.budget.policies[].action), the
 // enforcement modes, and the per-namespace enforcement states reported in
 // status.budgetUsage[].state.
