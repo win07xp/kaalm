@@ -134,8 +134,8 @@ func TestHTTPProbe_Classification(t *testing.T) {
 	if res := probe("openai-compatible", serverErr.URL); res.Err == nil {
 		t.Errorf("500 should be a transient Err: %+v", res)
 	}
-	if res := probe("google-vertex", anthropic.URL); !res.Skipped {
-		t.Errorf("google-vertex should be Skipped: %+v", res)
+	if res := probe("google-vertex", anthropic.URL); !res.AuthFailed {
+		t.Errorf("google-vertex with an API key in place of a service-account key should be AuthFailed: %+v", res)
 	}
 	if res := probe("mystery-provider", anthropic.URL); res.Err == nil {
 		t.Errorf("unknown type should error: %+v", res)

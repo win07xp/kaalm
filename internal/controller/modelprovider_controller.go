@@ -142,14 +142,13 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		res := r.Health.Probe(ctx, &mp, credential)
 		switch {
 		case res.AuthFailed:
-			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, "provider rejected the credential")
-			r.setReady(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, "provider rejected the credential")
+			msg := "provider rejected the credential"
+			if res.Err != nil {
+				msg += ": " + res.Err.Error()
+			}
+			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
+			r.setReady(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
 			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.probeRequeue(&mp)})
-		case res.Skipped:
-			apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
-				Type: kaalmv1beta1.ConditionHealthy, Status: metav1.ConditionUnknown,
-				Reason: "ProbeSkipped", Message: "no liveness probe implemented for this provider type yet",
-			})
 		case res.Err != nil:
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())

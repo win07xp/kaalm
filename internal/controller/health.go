@@ -28,17 +28,16 @@ import (
 )
 
 // ProviderProbeResult classifies a provider liveness probe. Exactly one of
-// Healthy, AuthFailed, Skipped, or Err(!=nil) is the meaningful outcome. See the
+// Healthy, AuthFailed, or Err(!=nil) is the meaningful outcome. See the
 // result handling in docs/src/controller/reconcilers.md (ModelProviderReconciler).
 type ProviderProbeResult struct {
 	// Healthy is true on a 2xx from the provider.
 	Healthy bool
-	// AuthFailed is true on a 401 or 403: the credential is invalid.
+	// AuthFailed is true on a 401 or 403: the credential is invalid. For
+	// google-vertex it is also set when the Secret holds no usable
+	// service-account key or the token endpoint refuses it; Err then carries
+	// the detail.
 	AuthFailed bool
-	// Skipped is true when no probe is implemented for this provider type yet
-	// (Vertex OAuth2 minting lands in a later phase). The caller leaves Healthy
-	// Unknown rather than failing the provider.
-	Skipped bool
 	// Err is a network error or a 5xx: transient, does not flip Ready.
 	Err error
 }
@@ -92,22 +91,28 @@ func (h *HTTPProviderHealthChecker) Probe(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	url := strings.TrimSuffix(provider.Spec.Endpoint, "/") + "/v1/models"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return ProviderProbeResult{Err: err}
-	}
-
+	base := strings.TrimSuffix(provider.Spec.Endpoint, "/")
+	var req *http.Request
+	var err error
 	switch provider.Spec.Type {
 	case "anthropic":
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
+		if err != nil {
+			return ProviderProbeResult{Err: err}
+		}
 		req.Header.Set("x-api-key", credential)
 		req.Header.Set("anthropic-version", "2023-06-01")
 	case "openai", "openai-compatible":
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
+		if err != nil {
+			return ProviderProbeResult{Err: err}
+		}
 		req.Header.Set("Authorization", "Bearer "+credential)
 	case "google-vertex":
-		// Vertex needs an OAuth2 token minted from the SA JSON key; that lands in
-		// a later phase (docs/src/gateways/llm/provider-routing.md).
-		return ProviderProbeResult{Skipped: true}
+		var failed *ProviderProbeResult
+		if req, failed = vertexProbeRequest(ctx, cl, provider.Spec.Endpoint, credential); failed != nil {
+			return *failed
+		}
 	default:
 		return ProviderProbeResult{Err: fmt.Errorf("unknown provider type %q", provider.Spec.Type)}
 	}
