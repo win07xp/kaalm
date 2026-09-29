@@ -25,6 +25,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -36,8 +37,14 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -132,17 +139,14 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 		Client: testClient, OperatorNamespace: testSystemNamespace,
 		Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile, CAFile: caFile,
 	}
-	// Bind a fixed port so we know where to dial.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	server, err := srv.Listen()
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	srv.Addr = addr
+	addr := server.Listener.Addr().String()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = srv.Start(ctx) }()
+	go func() { _ = server.Start(ctx) }()
 
 	dial := func(clientCert *tls.Certificate) *http.Client {
 		cfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pki.caPool, ServerName: "localhost"}
@@ -281,22 +285,21 @@ func TestIsGatewayCert_ShortSAN(t *testing.T) {
 	}
 }
 
-// TestActivatorStart_Errors drives the ActivatorServer.Start setup failures:
-// missing CA, non-PEM CA, a bad key pair, and a bind failure.
-func TestActivatorStart_Errors(t *testing.T) {
-	ctx := context.Background()
+// TestActivatorListen_Errors drives the ActivatorServer.Listen setup
+// failures: missing CA, non-PEM CA, a bad key pair, and a bind failure.
+func TestActivatorListen_Errors(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := (&ActivatorServer{CAFile: filepath.Join(dir, "absent.crt")}).Start(ctx); err == nil {
-		t.Error("missing CA file must fail Start")
+	if _, err := (&ActivatorServer{CAFile: filepath.Join(dir, "absent.crt")}).Listen(); err == nil {
+		t.Error("missing CA file must fail Listen")
 	}
 
 	badPEM := filepath.Join(dir, "bad.pem")
 	if err := os.WriteFile(badPEM, []byte("not a pem block"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&ActivatorServer{CAFile: badPEM}).Start(ctx); err == nil {
-		t.Error("non-PEM CA must fail Start")
+	if _, err := (&ActivatorServer{CAFile: badPEM}).Listen(); err == nil {
+		t.Error("non-PEM CA must fail Listen")
 	}
 
 	pki := newActivatorPKI(t)
@@ -306,27 +309,35 @@ func TestActivatorStart_Errors(t *testing.T) {
 	badKeyPair := &ActivatorServer{
 		CAFile: caFile, CertFile: filepath.Join(dir, "absent.crt"), KeyFile: filepath.Join(dir, "absent.key"),
 	}
-	if err := badKeyPair.Start(ctx); err == nil {
-		t.Error("missing key pair must fail Start")
+	if _, err := badKeyPair.Listen(); err == nil {
+		t.Error("missing key pair must fail Listen")
 	}
 
-	// Valid material but an unbindable address: ListenAndServeTLS returns an
-	// error the select surfaces.
 	badAddr := &ActivatorServer{CAFile: caFile, CertFile: certFile, KeyFile: keyFile, Addr: "not-a-valid-address"}
-	if err := badAddr.Start(ctx); err == nil {
-		t.Error("an unbindable address must fail Start")
+	if _, err := badAddr.Listen(); err == nil {
+		t.Error("an unbindable address must fail Listen")
 	}
 }
 
-func TestNeedLeaderElection(t *testing.T) {
-	if (&ActivatorServer{}).NeedLeaderElection() {
-		t.Error("the activator must run on every replica (NeedLeaderElection=false)")
+// The activator is a manager.Server that runs on every replica. The manager
+// puts such a server in its HTTPServers group, which starts before the
+// caches, so the activator never waits on a cache sync.
+func TestActivator_ServerRunsOnEveryReplica(t *testing.T) {
+	pki := newActivatorPKI(t)
+	certFile, keyFile, caFile := pki.writeFiles(t, pki.issue(t, "localhost"))
+	server, err := (&ActivatorServer{Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile, CAFile: caFile}).Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Listener.Close() }()
+	if server.NeedLeaderElection() {
+		t.Error("the activator must run on every replica (OnlyServeWhenLeader=false)")
 	}
 }
 
-// The activator's readiness check fails until the :9443 listener is bound
-// and passes while it serves; once Start returns it fails again. A bind
-// failure never passes it.
+// The activator's readiness check fails until Listen binds the listener,
+// passes while it serves, and fails again once the server shuts down. A
+// bind failure never passes it.
 func TestActivator_ReadyCheck(t *testing.T) {
 	pki := newActivatorPKI(t)
 	serving := pki.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local", "localhost")
@@ -334,14 +345,19 @@ func TestActivator_ReadyCheck(t *testing.T) {
 
 	srv := &ActivatorServer{Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
 	if err := srv.ReadyCheck(nil); err == nil {
-		t.Fatal("the check must fail before Start binds the listener")
+		t.Fatal("the check must fail before Listen binds the listener")
+	}
+	server, err := srv.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.ReadyCheck(nil); err != nil {
+		t.Fatalf("the check must pass once the listener is bound: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- srv.Start(ctx) }()
-	eventually(t, func() error { return srv.ReadyCheck(nil) })
-
+	go func() { done <- server.Start(ctx) }()
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start after cancel: %v", err)
@@ -351,10 +367,114 @@ func TestActivator_ReadyCheck(t *testing.T) {
 	}
 
 	badAddr := &ActivatorServer{CAFile: caFile, CertFile: certFile, KeyFile: keyFile, Addr: "not-a-valid-address"}
-	if err := badAddr.Start(context.Background()); err == nil {
-		t.Fatal("an unbindable address must fail Start")
+	if _, err := badAddr.Listen(); err == nil {
+		t.Fatal("an unbindable address must fail Listen")
 	}
 	if err := badAddr.ReadyCheck(nil); err == nil {
 		t.Error("a replica whose listener never bound must not pass the check")
+	}
+}
+
+// neverSyncedCache stands in for a cache that can't sync: the case of an
+// upgrade whose stored v1alpha1 objects need the conversion webhook, which
+// the apiserver reaches only through Ready controller Pods.
+type neverSyncedCache struct{ cache.Cache }
+
+func (neverSyncedCache) WaitForCacheSync(ctx context.Context) bool {
+	<-ctx.Done()
+	return false
+}
+
+// blockedCacheRunnable joins the manager's cache group with a cache that
+// never syncs, so every runnable that waits on the caches stays unstarted.
+type blockedCacheRunnable struct{}
+
+func (blockedCacheRunnable) Start(ctx context.Context) error { <-ctx.Done(); return nil }
+func (blockedCacheRunnable) GetCache() cache.Cache           { return neverSyncedCache{} }
+
+// The activator serves, and its readiness check passes, while the manager's
+// caches have not synced. Controller readiness gates the conversion webhook,
+// which the caches may need in order to sync, so a check that waited on the
+// caches would deadlock an upgrade from before the v1beta1 graduation.
+func TestActivator_ServesBeforeCachesSync(t *testing.T) {
+	pki := newActivatorPKI(t)
+	certFile, keyFile, caFile := pki.writeFiles(t, pki.issue(t, "localhost"))
+	gatewayCert := pki.issue(t, "kaalm-gateway."+testSystemNamespace+".svc.cluster.local")
+
+	mgr, err := ctrl.NewManager(testEnv.Config, ctrl.Options{
+		Scheme:                 testClient.Scheme(),
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Add(blockedCacheRunnable{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := &ActivatorServer{
+		Client: testClient, OperatorNamespace: testSystemNamespace,
+		Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile, CAFile: caFile,
+	}
+	server, err := srv.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Add(server); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = mgr.Start(ctx) }()
+
+	hc := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12, RootCAs: pki.caPool, ServerName: "localhost",
+		Certificates: []tls.Certificate{gatewayCert},
+	}}}
+	// A missing Agent answers 404: the request reached the handler and the
+	// apiserver while the caches were still unsynced.
+	eventually(t, func() error {
+		resp, err := hc.Post("https://"+server.Listener.Addr().String()+"/v1/activate/default/no-such-agent",
+			"application/json", strings.NewReader(""))
+		if err != nil {
+			return err
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			return fmt.Errorf("status %d, want 404", resp.StatusCode)
+		}
+		return nil
+	})
+	if err := srv.ReadyCheck(nil); err != nil {
+		t.Errorf("readiness must not wait on the caches: %v", err)
+	}
+}
+
+// The handler never reads the Agent: in production its client reads from the
+// manager's cache, which may not have synced when a wake arrives. A patch on
+// a missing Agent answers NotFound on its own.
+func TestHandleActivate_PatchesWithoutRead(t *testing.T) {
+	ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sleeper", Namespace: "default"}}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return errString("the activator must not read the Agent")
+			},
+		}).Build()
+	s := &ActivatorServer{Client: c, OperatorNamespace: testSystemNamespace}
+	post := func(path string) int {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(""))
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
+			{DNSNames: []string{"kaalm-gateway." + testSystemNamespace + ".svc.cluster.local"}},
+		}}
+		w := httptest.NewRecorder()
+		s.handleActivate(w, req)
+		return w.Code
+	}
+	if got := post("/v1/activate/default/sleeper"); got != http.StatusAccepted {
+		t.Fatalf("existing agent: status %d, want 202", got)
+	}
+	if got := post("/v1/activate/default/missing"); got != http.StatusNotFound {
+		t.Errorf("missing agent: status %d, want 404", got)
 	}
 }

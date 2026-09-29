@@ -398,14 +398,21 @@ func main() {
 			KeyFile:           controllerTLSKey,
 			CAFile:            controllerTLSCA,
 		}
-		if err := mgr.Add(activator); err != nil {
+		// Listen binds :9443 now, so a bad address or certificate fails
+		// here, and returns a manager.Server, which the manager starts with
+		// the health probes, before the caches (see the readiness note by
+		// the readyz checks below).
+		activatorServer, err := activator.Listen()
+		if err != nil {
+			setupLog.Error(err, "unable to start the activator listener")
+			os.Exit(1)
+		}
+		if err := mgr.Add(activatorServer); err != nil {
 			setupLog.Error(err, "unable to add the activator server")
 			os.Exit(1)
 		}
 		// A replica is Ready only once the activator listener is bound, so
 		// the Service never routes a wake to a replica still starting it.
-		// A listener that fails later exits the process (Start's error
-		// stops the manager).
 		if err := mgr.AddReadyzCheck("activator", activator.ReadyCheck); err != nil {
 			setupLog.Error(err, "unable to set up the activator ready check")
 			os.Exit(1)
@@ -534,6 +541,12 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
+	// Readiness covers only what works without the manager's cache. Ready
+	// Pods are the controller Service's endpoints, and that Service also
+	// serves the CRD conversion webhook, which the caches need in order to
+	// sync on an upgrade that still stores v1alpha1 objects. A check that
+	// waited on the caches (or on a runnable the manager starts after them)
+	// would deadlock that upgrade: no Ready Pod, no conversion, no sync.
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)

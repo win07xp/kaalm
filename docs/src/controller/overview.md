@@ -26,9 +26,13 @@ The chart's readiness probe calls `/readyz` on `:8081`. That endpoint runs up to
 |---|---|---|
 | `readyz` | always (a ping) | always |
 | `conversion-webhook` | the conversion listener on `:9444` accepts a TLS connection | `--webhook-cert-path` is set |
-| `activator` | the `:9443` listener is bound and serving | the controller TLS identity is set (`--controller-tls-cert`), the same condition that enables the activator |
+| `activator` | the `:9443` listener is bound | the controller TLS identity is set (`--controller-tls-cert`), the same condition that enables the activator |
 
-The activator binds its port before it starts serving. The check reads a flag that the activator sets at bind time and clears when the listener stops, so a probe costs nothing. A replica therefore joins the `kaalm-controller` Service endpoints only once it can take a wake. A listener that fails after startup returns an error from the activator's `Start`, which stops the manager and exits the process, so a replica never stays Ready with a dead activator. The `:9443` `/readyz` path still answers `ok`, but only a serving listener can reach it; the kubelet does not probe it.
+Readiness covers only what works without the manager's cache. Ready Pods are the endpoints of the `kaalm-controller` Service, which also serves the conversion webhook, and on an upgrade that still stores `v1alpha1` objects the caches need that webhook to sync ([What depends on the webhook](../operations/api-versioning.md#what-depends-on-the-webhook)). A check that waited on the caches would deadlock that upgrade: no Ready Pod, so no conversion, so no cache sync.
+
+The activator never waits on the cache. `main` loads its TLS material and binds `:9443` before it starts the manager, so a bad address or certificate exits the process at startup. The manager then starts the activator with the probe listener, before the caches, so a replica serves wakes while its caches are still syncing. The handler never reads from the cache (see [Activator handler](#activator-handler-served-on-every-replica)).
+
+The `activator` check reads a flag that the activator sets at bind time and clears when the listener closes, so a probe costs nothing. A connection that arrives between the bind and the start of serving waits in the kernel's accept queue, so a replica joins the Service endpoints only once it can take a wake. A listener that fails after startup returns an error from the activator server, which stops the manager and exits the process, so a replica never stays Ready with a dead activator. The `:9443` `/readyz` path still answers `ok`, but only a serving listener can reach it; the kubelet does not probe it.
 
 ## Deployment and leader election
 
@@ -40,7 +44,7 @@ Every replica serves `/metrics` from its own cache. controller-runtime's reconci
 
 ### Activator handler (served on every replica)
 
-The `POST /v1/activate/{namespace}/{agentName}` handler runs on every replica, not only the leader. It authenticates the caller by SAN, loads the Agent, patches `kaalm.io/wake=true` and `kaalm.io/wake-trigger=channel` onto it in one merge patch through the apiserver, and answers `202`. The leader's Agent watch fires and the [AgentReconciler](reconcilers.md#agentreconciler) handles the annotations as its first step. The wake reaches the leader because it is written into the Agent: the apiserver, not the replica that took the call, is the message bus, so the Service needs no leader-aware endpoint selection, and a non-leader needs only the patch access the controller ServiceAccount already has. The gateway side of the call is under [The activator](../gateways/user/activation-and-activity.md#the-activator).
+The `POST /v1/activate/{namespace}/{agentName}` handler runs on every replica, not only the leader. It authenticates the caller by SAN, patches `kaalm.io/wake=true` and `kaalm.io/wake-trigger=channel` onto the Agent in one merge patch through the apiserver, and answers `202`. It doesn't read the Agent first, so a wake costs one API call; a missing Agent answers `404` because the patch returns NotFound. The leader's Agent watch fires and the [AgentReconciler](reconcilers.md#agentreconciler) handles the annotations as its first step. The wake reaches the leader because it is written into the Agent: the apiserver, not the replica that took the call, is the message bus, so the Service needs no leader-aware endpoint selection, and a non-leader needs only the patch access the controller ServiceAccount already has. The gateway side of the call is under [The activator](../gateways/user/activation-and-activity.md#the-activator).
 
 ## No admission webhooks
 
