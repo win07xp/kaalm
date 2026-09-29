@@ -159,9 +159,10 @@ page draws the traversal). The rules to know:
   same-type. When the fallback is `anthropic`, give its models a
   `maxOutputTokens`: Anthropic's API requires `max_tokens`, OpenAI clients
   often omit it, and the gateway fills it from the catalog (the reconciler
-  warns with `MaxOutputTokensUnset` when it cannot). A request using a feature the other format lacks (extended
-  thinking, `response_format`) skips that fallback with a
-  `FallbackIneligible` event on your provider.
+  sets the advisory `MaxOutputTokensUnset` condition on your provider, and
+  emits one event, when it cannot). A request using a feature the other
+  format lacks (extended thinking, `response_format`) skips that fallback
+  with a `FallbackIneligible` event on your provider.
 - A candidate whose `allowedNamespaces` or `models` can never serve one of
   your callers is flagged before any request reaches it: the reconciler
   scans the tree on every pass and sets a `FallbackIneligible` condition on the

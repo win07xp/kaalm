@@ -141,6 +141,10 @@ names the host, so `kubectl describe agentchannel` shows the typo.
 - `DegradeTargetNotCheapest` (advisory, never affects `Ready`): a degrade
   policy's `degradeTo` is not the cheapest model in the catalog
   (`CheaperModelAvailable`); `False` with `DegradeTargetCheapest` once it is.
+- `MaxOutputTokensUnset` (advisory, never affects `Ready`): a fallback edge
+  from `openai` or `openai-compatible` into `anthropic` reaches models with
+  no `maxOutputTokens`, and the message lists them; `False` with
+  `MaxOutputTokensDeclared` once none remain.
 - `BoundaryMarginRaised` (hard enforcement only): observed traffic forced the
   gateway to admit more conservatively than the configured
   `boundaryMarginPercent`; a signal to raise the value, not an outage.

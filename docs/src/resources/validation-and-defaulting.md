@@ -75,7 +75,7 @@ Rule numbers are stable identifiers. Other pages cite them by number, so the num
 
 Two families behave differently from the rest. The class-mismatch family (rules 2 to 5, 24, 26, 29, 30, and 35 to 38) is recoverable on an Agent and terminal on an AgentTask, and a change to an AgentClass or ModelProvider can trigger any of its rules on a workload that was fine a moment ago ([Change propagation](../controller/change-propagation.md#agentclass-change-handling)). The cap family (rules 6 to 10, 42, and 43) never rejects: the effective value is the smaller of what the workload asked for and the class cap.
 
-Two reconcile-time outcomes carry no number. A failure to write the per-channel credential Role sets `Ready=False, reason=InvalidReference` on the AgentChannel. The two ModelProvider advisory checks, `DegradeTargetNotCheapest` and `MaxOutputTokensUnset`, emit a `Warning` event and leave `Ready` unaffected ([ModelProvider](modelprovider.md#degradeto-validation)).
+Two reconcile-time outcomes carry no number. A failure to write the per-channel credential Role sets `Ready=False, reason=InvalidReference` on the AgentChannel. The two ModelProvider advisory checks, `DegradeTargetNotCheapest` and `MaxOutputTokensUnset`, each set an advisory condition, emit a `Warning` event when it turns `True`, and leave `Ready` unaffected ([ModelProvider](modelprovider.md#degradeto-validation)).
 
 ### The rules
 
