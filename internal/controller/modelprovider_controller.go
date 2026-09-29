@@ -57,6 +57,11 @@ type ModelProviderReconciler struct {
 	OperatorNamespace string
 	// Health probes provider liveness. Injected so tests need no real provider.
 	Health ProviderHealthChecker
+
+	// events holds the state events a pass derives (a Ready=False reason or
+	// an advisory condition turning True) until finish writes the status
+	// that records them. The zero value is ready to use.
+	events heldEvents
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=modelproviders,verbs=get;list;watch;update;patch
@@ -76,8 +81,11 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	if !mp.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &mp)
+		return ctrl.Result{}, r.reconcileDelete(ctx, &mp)
 	}
+	// Events held for a status write that never happened (an error before
+	// finish) are dropped: the next pass derives them again.
+	defer r.events.take(&mp)
 
 	if controllerutil.AddFinalizer(&mp, kaalmv1beta1.ProviderFinalizer) {
 		if err := r.Update(ctx, &mp); err != nil {
@@ -91,14 +99,8 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Credentials.
 	credential, credReason, credMsg := r.credential(ctx, &mp)
 	if credReason != kaalmv1beta1.ReasonCredentialsValid {
-		first := readyFalseIsNew(mp.Status.Conditions, credReason)
-		r.setReady(&mp, false, credReason, credMsg)
-		res, err := r.finish(ctx, &mp, ctrl.Result{})
-		// On the rising edge only, and after the status write.
-		if err == nil && first {
-			r.Recorder.Event(&mp, corev1.EventTypeWarning, credReason, credMsg)
-		}
-		return res, err
+		r.setReadyFalse(&mp, credReason, credMsg)
+		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 
 	// Config validation: fallback tree and degrade targets.
@@ -124,7 +126,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				break
 			}
 		}
-		r.setReady(&mp, false, reason, strings.Join(problems, "; "))
+		r.setReadyFalse(&mp, reason, strings.Join(problems, "; "))
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
@@ -156,9 +158,13 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				msg += ": " + res.Err.Error()
 			}
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
-			r.setReady(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
+			r.setReadyFalse(&mp, kaalmv1beta1.ReasonCredentialsInvalid, msg)
 			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.probeRequeue(&mp)})
 		case res.Err != nil:
+			// A failed probe is an occurrence, not a state: it is reported on
+			// every failing pass, and the recorder folds the repeats into one
+			// event with a count, which keeps it visible through a long
+			// outage.
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			requeue = ctrl.Result{RequeueAfter: r.probeRequeue(&mp)}
@@ -180,22 +186,22 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 func (r *ModelProviderReconciler) reconcileDelete(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider,
-) (ctrl.Result, error) {
+) error {
 	if !controllerutil.ContainsFinalizer(mp, kaalmv1beta1.ProviderFinalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 	refs, err := r.referrers(ctx, mp.Name)
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if len(refs) > 0 {
 		// Hold while any Agent, AgentTask, or AgentClass references it, and
 		// say so on Ready. Their watches re-enqueue us when a referrer goes
 		// away.
-		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, refs)
+		return holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
-	return ctrl.Result{}, r.Update(ctx, mp)
+	return r.Update(ctx, mp)
 }
 
 // credential resolves the referenced Secret key and returns the credential value
@@ -372,7 +378,8 @@ func validateHardPricing(mp *kaalmv1beta1.ModelProvider) []string {
 }
 
 // setBoundaryMargin surfaces the gateway's _marginExceeded flag as the
-// BoundaryMarginRaised condition, with a Warning event on the rising edge:
+// BoundaryMarginRaised condition, with a Warning event on the rising edge
+// once finish writes it:
 // observed traffic required a wider boundary margin than
 // budget.hard.boundaryMarginPercent configures. The guarantee held; the knob
 // is undersized for the deployment.
@@ -387,7 +394,7 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 				"budget.hard.boundaryMarginPercent to uphold the hard-enforcement guarantee",
 		})
 		if !was {
-			r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonBoundaryMarginRaised,
+			r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonBoundaryMarginRaised,
 				"observed traffic exceeded the configured boundary margin; size the knob from the overspend-bound formula")
 		}
 		return
@@ -404,7 +411,7 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 // costSanity emits an advisory Warning when a degrade target is not the cheapest
 // model. It never blocks readiness. The verdict is kept in the
 // DegradeTargetNotCheapest condition and the event fires on its rising edge,
-// the same way setBoundaryMargin does.
+// once finish writes it, the same way setBoundaryMargin does.
 func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
 	var findings []string
@@ -424,7 +431,7 @@ func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 		})
 		if !was {
 			for _, f := range findings {
-				r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest, f)
+				r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest, f)
 			}
 		}
 		return
@@ -496,6 +503,16 @@ func (r *ModelProviderReconciler) setReady(mp *kaalmv1beta1.ModelProvider, ok bo
 	})
 }
 
+// setReadyFalse sets Ready=False for a reason a person must fix, and holds a
+// Warning event with the same reason and message for finish to send when the
+// reason first appears.
+func (r *ModelProviderReconciler) setReadyFalse(mp *kaalmv1beta1.ModelProvider, reason, msg string) {
+	if readyFalseIsNew(mp.Status.Conditions, reason) {
+		r.events.add(mp, corev1.EventTypeWarning, reason, msg)
+	}
+	r.setReady(mp, false, reason, msg)
+}
+
 func (r *ModelProviderReconciler) setHealthy(mp *kaalmv1beta1.ModelProvider, ok bool, reason, msg string) {
 	status := metav1.ConditionFalse
 	if ok {
@@ -509,16 +526,21 @@ func (r *ModelProviderReconciler) setHealthy(mp *kaalmv1beta1.ModelProvider, ok 
 // finish writes the provider's status only when the pass changed it against
 // what the informer holds: the reconciler runs on every budget ConfigMap
 // event, and a status write per pass is an update event for every watcher
-// whether or not anything in it moved (#174).
+// whether or not anything in it moved (#174). The events the pass held go
+// out only when its write succeeds. A pass that finds its status already
+// stored drops them: the pass that stored it sent them.
 func (r *ModelProviderReconciler) finish(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider, res ctrl.Result,
 ) (ctrl.Result, error) {
 	var current kaalmv1beta1.ModelProvider
 	if err := r.Get(ctx, client.ObjectKeyFromObject(mp), &current); err == nil &&
 		equality.Semantic.DeepEqual(current.Status, mp.Status) {
+		r.events.flush(r.Recorder, mp, false)
 		return res, nil
 	}
-	return res, r.Status().Update(ctx, mp)
+	err := r.Status().Update(ctx, mp)
+	r.events.flush(r.Recorder, mp, err == nil)
+	return res, err
 }
 
 // SetupWithManager wires the reconciler and its reference watches.

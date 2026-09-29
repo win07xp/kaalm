@@ -19,6 +19,7 @@ package controller
 import (
 	"sync"
 
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -28,8 +29,8 @@ type heldEvent struct {
 }
 
 // heldEvents buffers the events a reconcile pass derives from a status change
-// (a phase transition, a new Ready=False reason) until the status write that
-// persists the change succeeds. The informer cache can lag the pass's own
+// (a phase transition, a new Ready=False reason, a condition's rising edge)
+// until the status write that persists the change succeeds. The informer cache can lag the pass's own
 // last write, so a pass may see the old status, derive the same transition
 // again, and lose its write to a conflict; emitting only after a successful
 // write reports each transition once. Entries are keyed by the object the
@@ -56,4 +57,18 @@ func (h *heldEvents) take(obj client.Object) []heldEvent {
 	evs := h.m[obj]
 	delete(h.m, obj)
 	return evs
+}
+
+// flush removes the events held for obj and sends them when written is true:
+// the pass's status write succeeded. A failed write drops them, and so does a
+// pass that found its status already stored, because the pass that stored it
+// sent them. rec may be nil.
+func (h *heldEvents) flush(rec record.EventRecorder, obj client.Object, written bool) {
+	evs := h.take(obj)
+	if !written || rec == nil {
+		return
+	}
+	for _, ev := range evs {
+		rec.Event(obj, ev.eventType, ev.reason, ev.message)
+	}
 }

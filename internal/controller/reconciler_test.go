@@ -775,9 +775,9 @@ func TestReconcileDelete_NoFinalizerIsNoop(t *testing.T) {
 		}
 	}
 
-	mpRes, err := (&ModelProviderReconciler{Client: testClient}).reconcileDelete(ctx,
+	err := (&ModelProviderReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
-	clean("ModelProvider", mpRes.Requeue, mpRes.RequeueAfter, err)
+	clean("ModelProvider", false, 0, err)
 
 	acRes, err := (&AgentClassReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
@@ -905,7 +905,7 @@ func TestReferenceCountsPropagateListErrors(t *testing.T) {
 	// referrers (via reconcileDelete on a finalized provider) surfaces it too.
 	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	controllerutil.AddFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
-	if _, err := (&ModelProviderReconciler{Client: c}).reconcileDelete(ctx, mp); err == nil {
+	if err := (&ModelProviderReconciler{Client: c}).reconcileDelete(ctx, mp); err == nil {
 		t.Error("provider reconcileDelete must surface the referrers list error")
 	}
 
@@ -1059,6 +1059,7 @@ func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
 		},
 	}
 	r.costSanity(mp)
+	r.events.flush(rec, mp, true)
 	select {
 	case ev := <-rec.Events:
 		if ev == "" {
@@ -1074,6 +1075,7 @@ func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
 	cheap := "cheap"
 	mp.Spec.Budget.Policies[0].DegradeTo = &cheap
 	r2.costSanity(mp)
+	r2.events.flush(rec2, mp, true)
 	select {
 	case <-rec2.Events:
 		t.Error("no warning expected when degrading to the cheapest model")
@@ -1083,7 +1085,8 @@ func TestCostSanity_WarnsWhenNotCheapest(t *testing.T) {
 
 // The cost sanity warning fires on the rising edge only: the verdict is kept
 // in the DegradeTargetNotCheapest condition, so a steady misconfiguration
-// does not emit an event on every reconcile pass.
+// does not emit an event on every reconcile pass. Each call stands for a pass
+// whose status write succeeded, so the held event is flushed after it.
 func TestCostSanity_RisingEdgeOnly(t *testing.T) {
 	rec := record.NewFakeRecorder(8)
 	r := &ModelProviderReconciler{Recorder: rec}
@@ -1103,7 +1106,9 @@ func TestCostSanity_RisingEdgeOnly(t *testing.T) {
 		},
 	}
 	r.costSanity(mp)
+	r.events.flush(rec, mp, true)
 	r.costSanity(mp)
+	r.events.flush(rec, mp, true)
 	if n := len(rec.Events); n != 1 {
 		t.Fatalf("two passes over the same misconfiguration emitted %d events, want 1", n)
 	}
@@ -1116,6 +1121,7 @@ func TestCostSanity_RisingEdgeOnly(t *testing.T) {
 	cheap := "cheap"
 	mp.Spec.Budget.Policies[0].DegradeTo = &cheap
 	r.costSanity(mp)
+	r.events.flush(rec, mp, true)
 	c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
 	if c == nil || c.Status != metav1.ConditionFalse {
 		t.Fatalf("condition after the fix = %+v, want False", c)
@@ -1127,6 +1133,7 @@ func TestCostSanity_RisingEdgeOnly(t *testing.T) {
 	// A new misconfiguration is a new rising edge.
 	mp.Spec.Budget.Policies[0].DegradeTo = &to
 	r.costSanity(mp)
+	r.events.flush(rec, mp, true)
 	if n := len(rec.Events); n != 1 {
 		t.Fatalf("a new rising edge emitted %d events, want 1", n)
 	}

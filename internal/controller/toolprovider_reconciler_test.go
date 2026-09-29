@@ -474,3 +474,78 @@ func TestToolProvider_AuthFailedEmitsCredentialsInvalidOnEntry(t *testing.T) {
 		t.Fatalf("a rejection after recovery recorded %d CredentialsInvalid events, want 1", n)
 	}
 }
+
+// eventsToolProvider is a ToolProvider that already carries its finalizer,
+// with a credential reference and the probe on.
+func eventsToolProvider(name string) *kaalmv1beta1.ToolProvider {
+	return &kaalmv1beta1.ToolProvider{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Generation: 1,
+			Finalizers: []string{kaalmv1beta1.ToolProviderFinalizer},
+		},
+		Spec: kaalmv1beta1.ToolProviderSpec{
+			Type: "mcp", Endpoint: "https://mcp.example.com",
+			CredentialsRef: &kaalmv1beta1.SecretKeyReference{Name: name + "-key", Key: "token"},
+			HealthCheck:    &kaalmv1beta1.ToolProviderHealthCheck{Enabled: true},
+		},
+	}
+}
+
+// The ToolProvider's Ready=False reasons are states: a Warning on the rising
+// edge, sent only after the status write that records it succeeds.
+func TestToolProvider_ReadyFalseWarningsFollowTheStatusWrite(t *testing.T) {
+	cases := []struct {
+		name   string
+		key    bool
+		probe  ToolProbeResult
+		reason string
+	}{
+		{"credentials missing", false, ToolProbeResult{}, kaalmv1beta1.ReasonCredentialsMissing},
+		{"the probe's rejected credential", true,
+			ToolProbeResult{ProviderProbeResult: ProviderProbeResult{AuthFailed: true}},
+			kaalmv1beta1.ReasonCredentialsInvalid},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "ev-tp-" + string(rune('a'+i))
+			tp := eventsToolProvider(name)
+			objs := []client.Object{tp}
+			if tc.key {
+				objs = append(objs, providerKey(name))
+			}
+			conflicts := &statusConflicts{}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+				WithObjects(objs...).WithStatusSubresource(tp).
+				WithInterceptorFuncs(conflicts.funcs()).Build()
+			health := newFakeToolHealth()
+			health.set(name, tc.probe)
+			rec := record.NewFakeRecorder(16)
+			r := &ToolProviderReconciler{
+				Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health,
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+			expectEventOnceAcrossConflict(t, r, rec, conflicts, req, "Warning "+tc.reason)
+		})
+	}
+}
+
+// A failing probe is an occurrence: every failing pass emits
+// ProviderUnhealthy.
+func TestToolProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
+	tp := eventsToolProvider("ev-tp-down")
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(tp, providerKey("ev-tp-down")).WithStatusSubresource(tp).Build()
+	health := newFakeToolHealth()
+	health.set("ev-tp-down", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Err: errString("connection refused")}})
+	rec := record.NewFakeRecorder(16)
+	r := &ToolProviderReconciler{Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-tp-down"}}
+	for range 3 {
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonProviderUnhealthy); len(got) != 3 {
+		t.Fatalf("three failing probes emitted %d ProviderUnhealthy events, want 3", len(got))
+	}
+}
