@@ -90,8 +90,14 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Credentials.
 	credential, credReason, credMsg := r.credential(ctx, &mp)
 	if credReason != kaalmv1beta1.ReasonCredentialsValid {
+		first := readyFalseIsNew(mp.Status.Conditions, credReason)
 		r.setReady(&mp, false, credReason, credMsg)
-		return r.finish(ctx, &mp, ctrl.Result{})
+		res, err := r.finish(ctx, &mp, ctrl.Result{})
+		// On the rising edge only, and after the status write.
+		if err == nil && first {
+			r.Recorder.Event(&mp, corev1.EventTypeWarning, credReason, credMsg)
+		}
+		return res, err
 	}
 
 	// Config validation: fallback tree and degrade targets.
@@ -175,14 +181,15 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	if !controllerutil.ContainsFinalizer(mp, kaalmv1beta1.ProviderFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	referenced, err := r.isReferenced(ctx, mp.Name)
+	refs, err := r.referrers(ctx, mp.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if referenced {
-		// Hold in Terminating while any Agent, AgentTask, or AgentClass references
-		// it. Their watches re-enqueue us when a referrer goes away.
-		return ctrl.Result{}, nil
+	if len(refs) > 0 {
+		// Hold while any Agent, AgentTask, or AgentClass references it, and
+		// say so on Ready. Their watches re-enqueue us when a referrer goes
+		// away.
+		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
@@ -377,7 +384,7 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 				"budget.hard.boundaryMarginPercent to uphold the hard-enforcement guarantee",
 		})
 		if !was {
-			r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ConditionBoundaryMarginRaised,
+			r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonBoundaryMarginRaised,
 				"observed traffic exceeded the configured boundary margin; size the knob from the overspend-bound formula")
 		}
 		return
@@ -448,26 +455,12 @@ func cheapestModel(mp *kaalmv1beta1.ModelProvider) (string, bool) {
 	return best, found
 }
 
-func (r *ModelProviderReconciler) isReferenced(ctx context.Context, name string) (bool, error) {
-	var agents kaalmv1beta1.AgentList
-	if err := r.List(ctx, &agents, client.MatchingFields{IndexProviderRef: name}); err != nil {
-		return false, err
-	}
-	if len(agents.Items) > 0 {
-		return true, nil
-	}
-	var tasks kaalmv1beta1.AgentTaskList
-	if err := r.List(ctx, &tasks, client.MatchingFields{IndexProviderRef: name}); err != nil {
-		return false, err
-	}
-	if len(tasks.Items) > 0 {
-		return true, nil
-	}
-	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: name}); err != nil {
-		return false, err
-	}
-	return len(classes.Items) > 0, nil
+// referrers lists the objects that hold the provider's delete: Agents and
+// AgentTasks naming it in spec.providers, and AgentClasses listing it in
+// allowedProviders.
+func (r *ModelProviderReconciler) referrers(ctx context.Context, name string) ([]string, error) {
+	return listReferrers(ctx, r.Client, name,
+		referrerIndexes{agent: IndexProviderRef, task: IndexProviderRef, class: IndexAllowedProviders})
 }
 
 // healthCheckEnabled reports whether the periodic upstream probe should run. A

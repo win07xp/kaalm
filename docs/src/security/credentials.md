@@ -26,7 +26,7 @@ A tool credential follows the LLM key's lifecycle on the [tool plane](../gateway
 - It is referenced by `ToolProvider.spec.credentialsRef`, and the reference is optional. A ToolProvider without one is an unauthenticated tool server, and the broker injects nothing.
 - The gateway resolves it per brokered call through the same watch cache and injects it as a bearer token on the upstream leg ([Credential injection](../gateways/tool-plane.md#credential-injection)). The operator reads it for the ToolProvider health probe and Ready validation.
 - It is used only on calls the broker admits. A call denied by the namespace gate, the grant chain, or session ownership ends before the credential is read, so a rejected call never spends it.
-- A credential the tool server rejects surfaces to the caller as `503 tool_unavailable`; [Failure modes](../gateways/tool-plane.md#failure-modes) lists the signals, and as shipped no Event is emitted.
+- A credential the tool server rejects surfaces to the caller as `503 tool_unavailable` and raises a `CredentialsInvalid` Warning event on the ToolProvider, so the platform team learns that the Secret needs rotating. [Failure modes](../gateways/tool-plane.md#failure-modes) lists the signals.
 
 The credential has no path into an agent's namespace: an Agent's `spec.tools` grant names the ToolProvider, and the Secret behind it stays in `kaalm-system`.
 

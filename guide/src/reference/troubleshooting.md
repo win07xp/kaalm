@@ -99,13 +99,33 @@ Read the error type; the three cases behave differently:
   (an identity gate against stale retries); a completion sent by anything
   else is refused.
 
+## Deleting a provider, tool provider, or class never finishes
+
+`kubectl delete` on a ModelProvider, ToolProvider, or AgentClass hangs when a
+finalizer holds it for an Agent, AgentTask, or AgentClass that still
+references it:
+
+```bash
+kubectl describe modelprovider PROVIDER_NAME   # or toolprovider, agentclass
+```
+
+Look for `Ready=False, reason=DeletionBlocked`; the message names a
+referrer, or the total count and the first when there is more than one. A
+`Warning` event with the same reason and message fires when the hold first
+appears, so `kubectl get events` finds it too. Remove or repoint the named
+referrer, then retry the delete; the object releases on the next pass after
+the last reference clears.
+
 ## ModelProvider `Ready=False`
 
 `kubectl describe modelprovider PROVIDER_NAME`:
 
 - `CredentialsMissing` or `CredentialsInvalid`: the Secret named by
   `credentialsRef` is absent in `kaalm-system` or lacks the key, or the
-  provider rejected the key on the probe.
+  provider rejected the key on the probe. `CredentialsMissing` fires a
+  `Warning` event the first time `Ready` turns `False` with it, on
+  ModelProvider and ToolProvider alike; `CredentialsInvalid` never does,
+  so `kubectl get events` finds only the missing-Secret case.
 - `InvalidDegradeTarget`: a budget policy's `degradeTo` is not in
   `spec.models`.
 - `FallbackIneligible`: a fallback provider is missing, has a type the
@@ -124,6 +144,7 @@ on the chart. The same applies to a ToolProvider's `Healthy` column.
 ---
 
 *How this works: design book pages Gateways, API, Error reference (the full error
-catalog), Controller, Errors, events, and testing (error-handling philosophy), and Appendix,
+catalog), Controller, Errors, events, and testing (error-handling philosophy), Controller,
+Finalizers (the deletion-hold mechanics), and Appendix,
 Scenarios (S5, S7, S10, S14 cover the revocation, hibernation, and budget
 stories behind these symptoms).*

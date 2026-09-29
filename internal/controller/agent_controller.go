@@ -102,6 +102,9 @@ type AgentReconciler struct {
 	// driftSlots bounds concurrent spec-drift replacements per class
 	// (maxUnavailableOnDrift). The zero value is ready to use.
 	driftSlots driftSlots
+	// events holds the events a pass derives from a status change until the
+	// write that persists it succeeds. The zero value is ready to use.
+	events heldEvents
 }
 
 func (r *AgentReconciler) now() time.Time {
@@ -131,9 +134,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	statusBefore := agent.Status.DeepCopy()
+	// Events held for a status write that never happened (no change, or an
+	// error) are dropped: the next pass derives them again from what the
+	// apiserver holds.
+	defer r.events.take(&agent)
 
 	if !agent.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &agent)
+		return ctrl.Result{}, r.reconcileDelete(ctx, &agent)
 	}
 
 	if controllerutil.AddFinalizer(&agent, kaalmv1beta1.AgentFinalizer) {
@@ -145,7 +152,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	agent.Status.ObservedGeneration = agent.Generation
 	if agent.Status.Phase == "" {
-		r.setPhase(&agent, kaalmv1beta1.AgentPending)
+		r.setPhase(&agent, kaalmv1beta1.AgentPending, "")
 	}
 
 	// Step 9: wake-annotation handling, with phase-dependent removal so a
@@ -153,14 +160,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Hibernating stays on the Agent: driveHibernating finishes the Pod
 	// deletion, settles Hibernated, and requeues so this step then commits
 	// Resuming.
-	if agent.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue &&
-		agent.Status.Phase != kaalmv1beta1.AgentHibernating {
-		return r.handleWake(ctx, &agent)
+	if handled, res, err := r.reconcileWakeAnnotations(ctx, &agent); handled {
+		return res, err
 	}
 
 	// Step 1: the system namespace is forbidden (SAN-integrity guard).
 	if agent.Namespace == r.OperatorNamespace {
-		r.setReady(&agent, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
+		r.setReadyGate(&agent, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("Agents may not run in the operator namespace %q", r.OperatorNamespace))
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
@@ -169,7 +175,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	var class kaalmv1beta1.AgentClass
 	if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.setReady(&agent, false, kaalmv1beta1.ReasonInvalidReference,
+			r.setReadyGate(&agent, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q does not exist", agent.Spec.AgentClassRef.Name))
 			return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 		}
@@ -230,7 +236,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	if !certReady {
 		if agent.Status.Phase == kaalmv1beta1.AgentPending {
-			r.setPhase(&agent, kaalmv1beta1.AgentProvisioning)
+			r.setPhase(&agent, kaalmv1beta1.AgentProvisioning, "")
 		}
 		r.setReady(&agent, false, "CertificateNotReady", "waiting for cert-manager to issue the agent certificate")
 		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
@@ -295,6 +301,29 @@ func (r *AgentReconciler) childConflict(
 	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
+// reconcileWakeAnnotations runs step 1: a wake request on an Agent that is
+// not Hibernating is handled and ends the pass. A wake-trigger annotation
+// with no wake request is left over (a controller that predates the trigger
+// annotation consumed the wake and kept it); it is removed and the pass ends,
+// so a later manual wake is not counted as a channel wake.
+func (r *AgentReconciler) reconcileWakeAnnotations(
+	ctx context.Context, agent *kaalmv1beta1.Agent,
+) (bool, ctrl.Result, error) {
+	_, wake := wakeTrigger(agent)
+	if wake && agent.Status.Phase != kaalmv1beta1.AgentHibernating {
+		res, err := r.handleWake(ctx, agent)
+		return true, res, err
+	}
+	if _, trigger := agent.Annotations[kaalmv1beta1.AnnotationWakeTrigger]; trigger && !wake {
+		delete(agent.Annotations, kaalmv1beta1.AnnotationWakeTrigger)
+		if err := r.Update(ctx, agent); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		return true, ctrl.Result{Requeue: true}, nil
+	}
+	return false, ctrl.Result{}, nil
+}
+
 // handleWake implements the phase-dependent wake-annotation protocol: on a
 // Hibernated agent the Resuming transition is committed BEFORE the annotation
 // is removed, so an apiserver failure between the two leaves the wake intent
@@ -302,8 +331,9 @@ func (r *AgentReconciler) childConflict(
 // a WakeIgnored warning except in Resuming (a benign idempotent re-attempt).
 // Reconcile never calls it while Hibernating: that wake waits for Hibernated.
 func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
+	trigger, _ := wakeTrigger(agent)
 	if agent.Status.Phase == kaalmv1beta1.AgentHibernated {
-		r.setPhase(agent, kaalmv1beta1.AgentResuming)
+		r.setPhase(agent, kaalmv1beta1.AgentResuming, "wake requested ("+trigger+")")
 		agent.Status.HibernatedAt = nil
 		// The message that woke the agent is activity. The gateway records it
 		// only once delivery succeeds, which is after the Pod is Ready, and
@@ -314,12 +344,12 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 		woke := metav1.NewTime(r.now())
 		agent.Status.LastActivityTime = &woke
 		r.setReady(agent, false, kaalmv1beta1.ReasonWoken, "wake requested; recreating the Pod")
-		if err := r.Status().Update(ctx, agent); err != nil {
+		if err := r.writeStatus(ctx, agent); err != nil {
 			return ctrl.Result{}, err
 		}
 		r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonWoken, "waking from hibernation")
-		wakesTotal.WithLabelValues(agent.Namespace, "activator").Inc()
-		delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
+		wakesTotal.WithLabelValues(agent.Namespace, trigger).Inc()
+		clearWake(agent)
 		if err := r.Update(ctx, agent); err != nil {
 			// The next reconcile observes the annotation on a Resuming agent
 			// and removes it silently.
@@ -329,7 +359,7 @@ func (r *AgentReconciler) handleWake(ctx context.Context, agent *kaalmv1beta1.Ag
 	}
 
 	phase := agent.Status.Phase
-	delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
+	clearWake(agent)
 	if err := r.Update(ctx, agent); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -353,9 +383,9 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 				return ctrl.Result{}, err
 			}
 		}
-		return ctrl.Result{}, r.Status().Update(ctx, agent)
+		return ctrl.Result{}, r.writeStatus(ctx, agent)
 	}
-	r.setPhase(agent, kaalmv1beta1.AgentHibernated)
+	r.setPhase(agent, kaalmv1beta1.AgentHibernated, "Pod deleted, state retained")
 	// With no Pod there is nothing to replace: an Agent that waited for a
 	// drift slot stops waiting, and its wake creates the Pod from the
 	// current spec.
@@ -367,11 +397,12 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated,
 		"hibernated: Pod deleted, state retained")
 	hibernationsTotal.WithLabelValues(agent.Namespace).Inc()
-	if err := r.Status().Update(ctx, agent); err != nil {
+	if err := r.writeStatus(ctx, agent); err != nil {
 		return ctrl.Result{}, err
 	}
 	// A wake requested while Hibernating is honored now that the Pod is gone.
-	return ctrl.Result{Requeue: agent.Annotations[kaalmv1beta1.AnnotationWake] == kaalmv1beta1.AnnotationTrue}, nil
+	_, wake := wakeTrigger(agent)
+	return ctrl.Result{Requeue: wake}, nil
 }
 
 // evaluateActivity reads the gateway activity data and drives Running <->
@@ -429,11 +460,9 @@ func (r *AgentReconciler) evaluateActivity(
 			marker = agent.Status.LastActivityTime.Time
 		}
 		if now.Sub(marker) > eff.IdleTimeout {
-			r.setPhase(agent, kaalmv1beta1.AgentIdle)
+			r.setPhase(agent, kaalmv1beta1.AgentIdle, fmt.Sprintf("no activity for %s", eff.IdleTimeout))
 			lt := metav1.NewTime(marker)
 			agent.Status.LastActivityTime = &lt
-			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged,
-				fmt.Sprintf("idle: no activity for %s", eff.IdleTimeout))
 			// Re-enter promptly: an already-elapsed hibernationDelay should
 			// carry straight on to Hibernating on the next pass.
 			return ctrl.Result{Requeue: true}
@@ -450,7 +479,7 @@ func (r *AgentReconciler) evaluateActivity(
 		// instant as fresh activity on every pass.
 		if !synthetic && agent.Status.LastActivityTime != nil &&
 			last.Truncate(time.Second).After(agent.Status.LastActivityTime.Time) {
-			r.setPhase(agent, kaalmv1beta1.AgentRunning)
+			r.setPhase(agent, kaalmv1beta1.AgentRunning, "new activity")
 			lt := metav1.NewTime(*last)
 			agent.Status.LastActivityTime = &lt
 			return ctrl.Result{Requeue: true}
@@ -468,9 +497,8 @@ func (r *AgentReconciler) evaluateActivity(
 			silenceStart = &agent.Status.LastActivityTime.Time
 		}
 		if eff.HibernationEnabled && now.Sub(*silenceStart) > eff.IdleTimeout+eff.HibernationDelay {
-			r.setPhase(agent, kaalmv1beta1.AgentHibernating)
-			r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged,
-				fmt.Sprintf("hibernating: idle for %s past the idle timeout", eff.HibernationDelay))
+			r.setPhase(agent, kaalmv1beta1.AgentHibernating,
+				fmt.Sprintf("idle for %s past the idle timeout", eff.HibernationDelay))
 			return ctrl.Result{Requeue: true}
 		}
 	}
@@ -490,12 +518,12 @@ func (r *AgentReconciler) readyGates(
 	// Rule 19: the class is Ready=False, and the NetworkPolicy built from its
 	// entries would fail the apiserver write on every pass.
 	if bad := invalidCIDRs(class); len(bad) > 0 {
-		r.setReady(agent, false, kaalmv1beta1.ReasonInvalidReference,
+		r.setReadyGate(agent, kaalmv1beta1.ReasonInvalidReference,
 			fmt.Sprintf("AgentClass %q is not usable: %s", class.Name, strings.Join(bad, "; ")))
 		return true, ctrl.Result{}, nil
 	}
 	if eff.Image == "" {
-		r.setReady(agent, false, kaalmv1beta1.ReasonInvalidReference,
+		r.setReadyGate(agent, kaalmv1beta1.ReasonInvalidReference,
 			"no image: Agent.spec.image is empty and the AgentClass sets no defaultImage")
 		return true, ctrl.Result{}, nil
 	}
@@ -503,7 +531,7 @@ func (r *AgentReconciler) readyGates(
 		var pvc corev1.PersistentVolumeClaim
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.ExistingClaim}, &pvc)
 		if apierrors.IsNotFound(err) {
-			r.setReady(agent, false, kaalmv1beta1.ReasonExistingClaimNotFound,
+			r.setReadyGate(agent, kaalmv1beta1.ReasonExistingClaimNotFound,
 				fmt.Sprintf("existingClaim %q not found in namespace %q", eff.ExistingClaim, agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 		} else if err != nil {
@@ -521,7 +549,7 @@ func (r *AgentReconciler) readyGates(
 		err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
 			types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}, &sec)
 		if apierrors.IsNotFound(err) {
-			r.setReady(agent, false, kaalmv1beta1.ReasonImagePullSecretMissing,
+			r.setReadyGate(agent, kaalmv1beta1.ReasonImagePullSecretMissing,
 				fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 		} else if err != nil {
@@ -536,7 +564,7 @@ func (r *AgentReconciler) readyGates(
 		var cm corev1.ConfigMap
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.HandlerConfigMap}, &cm)
 		if apierrors.IsNotFound(err) {
-			r.setReady(agent, false, kaalmv1beta1.ReasonHandlerConfigMapNotFound,
+			r.setReadyGate(agent, kaalmv1beta1.ReasonHandlerConfigMapNotFound,
 				fmt.Sprintf("handler ConfigMap %q not found in namespace %q", eff.HandlerConfigMap, agent.Namespace))
 			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 		} else if err != nil {
@@ -565,11 +593,9 @@ func (r *AgentReconciler) reconcileDegraded(
 	if restored == "" {
 		restored = kaalmv1beta1.AgentPending
 	}
-	r.setPhase(agent, restored)
+	r.setPhase(agent, restored, "every Degraded check has cleared")
 	agent.Status.PreDegradedPhase = ""
-	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged,
-		fmt.Sprintf("recovered from Degraded to %s", restored))
-	return true, ctrl.Result{Requeue: true}, r.Status().Update(ctx, agent)
+	return true, ctrl.Result{Requeue: true}, r.writeStatus(ctx, agent)
 }
 
 // degradedReasons evaluates every Degraded-triggering cross-check and returns
@@ -653,11 +679,11 @@ func (r *AgentReconciler) enterOrStayDegraded(
 	first := reasons[0]
 	if agent.Status.Phase != kaalmv1beta1.AgentDegraded {
 		agent.Status.PreDegradedPhase = agent.Status.Phase
-		r.setPhase(agent, kaalmv1beta1.AgentDegraded)
+		r.setPhase(agent, kaalmv1beta1.AgentDegraded, first.Reason)
 		r.Recorder.Event(agent, corev1.EventTypeWarning, first.Reason, first.Message)
 	}
 	r.setReady(agent, false, first.Reason, first.Message)
-	return r.Status().Update(ctx, agent)
+	return r.writeStatus(ctx, agent)
 }
 
 // reconcileBudgetCondition mirrors provider budget state onto the Agent (S10).
@@ -667,9 +693,11 @@ func (r *AgentReconciler) enterOrStayDegraded(
 // budget exhaustion is a recoverable runtime state, not a lifecycle transition,
 // so the agent keeps running and the signal clears on its own when the provider
 // reports the namespace unblocked (period reset, budget increase, or spend
-// drop), driven by the ModelProvider watch. Provider Get errors are tolerated
-// (a missing or unreadable provider is the degrade path's concern, not this
-// one): the condition reflects what could be read.
+// drop), driven by the ModelProvider watch. When the condition first appears a
+// BudgetExhausted Warning event is emitted, so `kubectl describe agent` shows
+// it. Provider Get errors are tolerated (a missing or unreadable provider is
+// the degrade path's concern, not this one): the condition reflects what could
+// be read.
 func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *kaalmv1beta1.Agent) {
 	var blocking []string
 	for _, p := range agent.Spec.Providers {
@@ -688,13 +716,20 @@ func (r *AgentReconciler) reconcileBudgetCondition(ctx context.Context, agent *k
 		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1beta1.ConditionDegraded)
 		return
 	}
+	msg := fmt.Sprintf("namespace %q budget exhausted on provider %s", agent.Namespace, strings.Join(blocking, ", "))
+	// The Warning fires on the transition into the condition only: a
+	// blocked namespace stays blocked until the period resets, and every
+	// pass in between re-reads the same state.
+	if prev := apimeta.FindStatusCondition(agent.Status.Conditions, kaalmv1beta1.ConditionDegraded); prev == nil ||
+		prev.Status != metav1.ConditionTrue || prev.Reason != kaalmv1beta1.ReasonBudgetExhausted {
+		r.events.add(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonBudgetExhausted, msg)
+	}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
 		Type:               kaalmv1beta1.ConditionDegraded,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: agent.Generation,
 		Reason:             kaalmv1beta1.ReasonBudgetExhausted,
-		Message: fmt.Sprintf("namespace %q budget exhausted on provider %s",
-			agent.Namespace, strings.Join(blocking, ", ")),
+		Message:            msg,
 	})
 }
 
@@ -942,7 +977,7 @@ func (r *AgentReconciler) convergePod(
 		if err := r.Create(ctx, desired); err != nil {
 			return false, err
 		}
-		r.setPhase(agent, podPendingPhase(agent))
+		r.setPhase(agent, podPendingPhase(agent), "Pod created")
 		r.setReady(agent, false, "PodProvisioning", "agent Pod created, waiting for readiness")
 		agent.Status.PodName = desired.Name
 		return false, nil
@@ -951,7 +986,7 @@ func (r *AgentReconciler) convergePod(
 	// A Pod already being deleted is a replacement in progress: wait for the
 	// owned-Pod watch to fire when it is gone.
 	if !pod.DeletionTimestamp.IsZero() {
-		r.setPhase(agent, podPendingPhase(agent))
+		r.setPhase(agent, podPendingPhase(agent), "previous Pod terminating")
 		r.setReady(agent, false, "PodProvisioning", "previous Pod terminating")
 		return false, nil
 	}
@@ -961,7 +996,7 @@ func (r *AgentReconciler) convergePod(
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 		r.Recorder.Event(agent, corev1.EventTypeWarning, "PodDisrupted",
 			fmt.Sprintf("Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase))
-		r.setPhase(agent, podPendingPhase(agent))
+		r.setPhase(agent, podPendingPhase(agent), "replacing a terminal Pod")
 		r.setReady(agent, false, "PodDisrupted", "replacing a terminal Pod")
 		return false, r.Delete(ctx, pod)
 	}
@@ -996,7 +1031,8 @@ func (r *AgentReconciler) convergePod(
 		if cs.State.Waiting != nil &&
 			(cs.State.Waiting.Reason == "CrashLoopBackOff" && cs.RestartCount >= crashLoopThreshold ||
 				cs.State.Waiting.Reason == "ImagePullBackOff") {
-			r.setPhase(agent, kaalmv1beta1.AgentFailed)
+			r.setPhase(agent, kaalmv1beta1.AgentFailed,
+				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Reason))
 			r.setReady(agent, false, cs.State.Waiting.Reason,
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Message))
 			return waiting, nil
@@ -1008,7 +1044,7 @@ func (r *AgentReconciler) convergePod(
 		// Idle is a pod-bearing phase: a ready Pod does not promote an Idle
 		// agent back to Running; only fresh activity does.
 		if agent.Status.Phase != kaalmv1beta1.AgentIdle {
-			r.setPhase(agent, kaalmv1beta1.AgentRunning)
+			r.setPhase(agent, kaalmv1beta1.AgentRunning, "Pod is Ready")
 		}
 		r.setReady(agent, true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")
 		if !waiting {
@@ -1017,7 +1053,7 @@ func (r *AgentReconciler) convergePod(
 				"agent Pod matches the derived spec")
 		}
 	} else {
-		r.setPhase(agent, podPendingPhase(agent))
+		r.setPhase(agent, podPendingPhase(agent), "Pod is not Ready")
 		r.setReady(agent, false, "PodNotReady", "agent Pod is not ready")
 	}
 	return waiting, nil
@@ -1060,9 +1096,9 @@ func (r *AgentReconciler) admitDriftReplacement(
 	}
 	r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacing,
 		"replacing the Pod for the updated spec")
-	r.setPhase(agent, podPendingPhase(agent))
+	r.setPhase(agent, podPendingPhase(agent), "replacing the Pod for the updated spec")
 	r.setReady(agent, false, "SpecDrift", "replacing Pod for updated spec")
-	if err := r.Status().Update(ctx, agent); err != nil {
+	if err := r.writeStatus(ctx, agent); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1141,16 +1177,16 @@ func podReady(pod *corev1.Pod) bool {
 // reconcileDelete implements the agent finalizer: gracefully terminate the Pod
 // if one exists, apply pvcRetention by rewriting the PVC's ownerRef, then
 // release the finalizer. See docs/src/controller/finalizers.md (Agent).
-func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1beta1.Agent) (ctrl.Result, error) {
+func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	if !controllerutil.ContainsFinalizer(agent, kaalmv1beta1.AgentFinalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	if agent.Status.Phase != kaalmv1beta1.AgentTerminating {
 		agent.Status.PreDegradedPhase = ""
-		r.setPhase(agent, kaalmv1beta1.AgentTerminating)
-		if err := r.Status().Update(ctx, agent); err != nil {
-			return ctrl.Result{}, err
+		r.setPhase(agent, kaalmv1beta1.AgentTerminating, "the Agent is being deleted")
+		if err := r.writeStatus(ctx, agent); err != nil {
+			return err
 		}
 	}
 
@@ -1158,15 +1194,15 @@ func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1bet
 	// watch re-enqueues us when it does.
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if pod != nil {
 		if pod.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
+				return err
 			}
 		}
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	// pvcRetention: Retain strips the PVC's ownerRef before the finalizer is
@@ -1194,25 +1230,83 @@ func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1bet
 			if len(kept) != len(pvc.OwnerReferences) {
 				pvc.OwnerReferences = kept
 				if err := r.Update(ctx, &pvc); err != nil {
-					return ctrl.Result{}, err
+					return err
 				}
 			}
 		} else if !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+			return err
 		}
 	}
 
 	controllerutil.RemoveFinalizer(agent, kaalmv1beta1.AgentFinalizer)
-	return ctrl.Result{}, r.Update(ctx, agent)
+	return r.Update(ctx, agent)
 }
 
-func (r *AgentReconciler) setPhase(agent *kaalmv1beta1.Agent, phase kaalmv1beta1.AgentPhase) {
-	if agent.Status.Phase == phase {
+// setPhase is the only writer of status.phase and phaseTransitionTime, and
+// so the one place PhaseChanged is emitted: a Normal event naming the old and
+// new phase, with why appended when it is set. Setting the current phase is
+// not a transition, and neither is an Agent's first phase (Pending, from
+// none), so neither emits. The event is held until the status write that
+// persists the new phase succeeds (writeStatus), so a write lost to a
+// conflict does not report a transition that did not happen, and the retry
+// does not report it twice.
+func (r *AgentReconciler) setPhase(agent *kaalmv1beta1.Agent, phase kaalmv1beta1.AgentPhase, why string) {
+	old := agent.Status.Phase
+	if old == phase {
 		return
 	}
 	agent.Status.Phase = phase
 	now := metav1.Now()
 	agent.Status.PhaseTransitionTime = &now
+	if old == "" {
+		return
+	}
+	msg := fmt.Sprintf("phase changed from %s to %s", old, phase)
+	if why != "" {
+		msg += ": " + why
+	}
+	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged, msg)
+}
+
+// setReadyGate sets Ready=False for a reconcile-time validation failure and
+// emits a Warning event with the same reason and message when the reason
+// first appears, once the status write succeeds. Gates on unwatched objects
+// requeue every gateRequeue, so an event per pass would repeat for as long as
+// the problem lasts.
+func (r *AgentReconciler) setReadyGate(agent *kaalmv1beta1.Agent, reason, msg string) {
+	if readyFalseIsNew(agent.Status.Conditions, reason) {
+		r.events.add(agent, corev1.EventTypeWarning, reason, msg)
+	}
+	r.setReady(agent, false, reason, msg)
+}
+
+// Wake triggers, the kaalm_wakes_total trigger label values.
+const (
+	wakeTriggerChannel    = "channel"    // the activator, on a channel message
+	wakeTriggerAnnotation = "annotation" // anyone else who set kaalm.io/wake=true
+)
+
+// wakeTrigger reports whether the Agent carries a wake request
+// (kaalm.io/wake=true) and who made it. The activator writes
+// kaalm.io/wake-trigger=channel in the same patch as the wake; with no
+// trigger annotation the wake is manual (kubectl annotate). The wake value
+// stays "true" for every trigger, so a controller that predates the trigger
+// annotation still honors an activator wake during a rollout.
+func wakeTrigger(agent *kaalmv1beta1.Agent) (string, bool) {
+	if agent.Annotations[kaalmv1beta1.AnnotationWake] != kaalmv1beta1.AnnotationTrue {
+		return "", false
+	}
+	if agent.Annotations[kaalmv1beta1.AnnotationWakeTrigger] == kaalmv1beta1.AnnotationWakeTriggerChannel {
+		return wakeTriggerChannel, true
+	}
+	return wakeTriggerAnnotation, true
+}
+
+// clearWake removes the wake request and its trigger together, so a trigger
+// never outlives the wake it labeled.
+func clearWake(agent *kaalmv1beta1.Agent) {
+	delete(agent.Annotations, kaalmv1beta1.AnnotationWake)
+	delete(agent.Annotations, kaalmv1beta1.AnnotationWakeTrigger)
 }
 
 func (r *AgentReconciler) setReady(agent *kaalmv1beta1.Agent, ok bool, reason, msg string) {
@@ -1384,5 +1478,20 @@ func (r *AgentReconciler) updateStatusIfChanged(
 	if equality.Semantic.DeepEqual(before, &agent.Status) {
 		return nil
 	}
-	return r.Status().Update(ctx, agent)
+	return r.writeStatus(ctx, agent)
+}
+
+// writeStatus writes the Agent's status and, when the write succeeds, emits
+// the events the pass held for it (phase transitions, gate warnings, and
+// budget exhaustion). A failed write drops them.
+func (r *AgentReconciler) writeStatus(ctx context.Context, agent *kaalmv1beta1.Agent) error {
+	err := r.Status().Update(ctx, agent)
+	held := r.events.take(agent)
+	if err != nil {
+		return err
+	}
+	for _, ev := range held {
+		r.Recorder.Event(agent, ev.eventType, ev.reason, ev.message)
+	}
+	return nil
 }

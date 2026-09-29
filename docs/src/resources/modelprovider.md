@@ -138,7 +138,7 @@ status:
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), or `HardBudgetUnpriced` (rule 33). |
+| `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), `HardBudgetUnpriced` (rule 33), or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). |
 | `Healthy` | The periodic upstream probe. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event; `Unknown` with `ProbeSkipped` for `google-vertex`, which has no probe. |
 | `GatewayReachable` | Set on every pass: `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. The same value is mirrored onto every ModelProvider. |
 | `DegradeTargetNotCheapest` | Advisory; never affects `Ready`. `True` with `CheaperModelAvailable` when a degrade policy's `degradeTo` is not the cheapest model in the catalog, `False` with `DegradeTargetCheapest` once it is. The `Warning` event fires on the transition to `True` ([`degradeTo` validation](#degradeto-validation)). |
