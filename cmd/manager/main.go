@@ -491,6 +491,16 @@ func main() {
 		setupLog.Error(err, "unable to add the storage-version migrator to manager")
 		os.Exit(1)
 	}
+	// On the leader, every ten minutes: reap expired async response records
+	// whose channel no longer exists (a record created after the finalizer
+	// sweep by a gateway replica that had not yet seen Terminating). Reads
+	// come from the cache the AgentChannel reconciler already fills.
+	if err := mgr.Add(&controller.AsyncOrphanPruner{
+		Client: mgr.GetClient(), OperatorNamespace: operatorNamespace,
+	}); err != nil {
+		setupLog.Error(err, "unable to add the async orphan prune to manager")
+		os.Exit(1)
+	}
 
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")

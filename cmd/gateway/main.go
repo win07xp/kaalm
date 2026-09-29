@@ -24,7 +24,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -367,28 +366,9 @@ func main() {
 		logger.Warn("budget ConfigMap informer unavailable; folds ride the tick only", "error", err)
 	}
 
-	// The gateway's half of the channel-delete handshake: once a channel is
-	// observed Terminating, confirm disconnection with the annotation the
-	// reconciler waits on. The webhook write gate itself lives in the intake
-	// handler.
+	// The gateway's half of the channel-delete handshake (Add and Update).
 	if informer, err := cl.GetCache().GetInformer(ctx, &kaalmv1beta1.AgentChannel{}); err == nil {
-		_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
-			UpdateFunc: func(_, newObj any) {
-				ch, ok := newObj.(*kaalmv1beta1.AgentChannel)
-				if !ok || ch.Status.Phase != kaalmv1beta1.ChannelTerminating {
-					return
-				}
-				if ch.Annotations[kaalmv1beta1.AnnotationChannelDisconnected] == kaalmv1beta1.AnnotationTrue {
-					return
-				}
-				patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`,
-					kaalmv1beta1.AnnotationChannelDisconnected, kaalmv1beta1.AnnotationTrue))
-				if err := cl.GetClient().Patch(ctx, ch.DeepCopy(),
-					client.RawPatch(types.MergePatchType, patch)); err != nil {
-					logger.Warn("disconnect annotation patch failed", "channel", ch.Name, "error", err)
-				}
-			},
-		})
+		_, _ = informer.AddEventHandler(channelDisconnectHandler(ctx, cl.GetClient(), logger))
 	}
 
 	logger.Info("kaalm gateway starting",
