@@ -81,9 +81,30 @@ type unreachableForgetter interface {
 	ForgetUnreachable()
 }
 
+// activityStepRuns reports whether the activity step evaluates the Agent:
+// it is Running or Idle, its effective idleTimeout is above zero, and the
+// controller has an activity client.
+func (r *AgentReconciler) activityStepRuns(agent *kaalmv1beta1.Agent, idleTimeout time.Duration) bool {
+	return r.Activity != nil && idleTimeout > 0 &&
+		(agent.Status.Phase == kaalmv1beta1.AgentRunning || agent.Status.Phase == kaalmv1beta1.AgentIdle)
+}
+
+// dropGatewayReachableUnlessEvaluated removes GatewayReachable from an Agent
+// the activity step does not evaluate. The condition reports the step's
+// last fan-out, so without the step a value would only go stale, and a
+// stale False would keep the Agent on the recovery kick's list.
+func (r *AgentReconciler) dropGatewayReachableUnlessEvaluated(agent *kaalmv1beta1.Agent, idleTimeout time.Duration) {
+	if !r.activityStepRuns(agent, idleTimeout) {
+		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable)
+	}
+}
+
 // agentsWaitingOnGateway is the recovery kick: when a gateway Pod turns
 // Ready, it enqueues every Running or Idle Agent whose GatewayReachable is
-// False, so the outage backoff never delays recovery. It lists Agents from
+// False, so the outage backoff never delays recovery. It skips the Agents
+// the activity step does not evaluate: all of them when the controller has
+// no activity client, and those with idle detection off (IdleDetection
+// False, the status mark of a zero effective idleTimeout). It lists Agents from
 // the cache without a field index and without deep copies: gateway Pod
 // readiness changes are rare (a rollout, a restart), and one list per
 // change stays cheap at a thousand Agents, where an index on a status
@@ -92,7 +113,7 @@ type unreachableForgetter interface {
 // of a rollout together. A Pod leaving Ready enqueues nothing: the Agents
 // find the outage on their own next pass.
 func (r *AgentReconciler) agentsWaitingOnGateway(ctx context.Context, obj client.Object) []reconcile.Request {
-	if !countsAsReadyGateway(obj) {
+	if r.Activity == nil || !countsAsReadyGateway(obj) {
 		return nil
 	}
 	if f, ok := r.Activity.(unreachableForgetter); ok {
@@ -106,6 +127,9 @@ func (r *AgentReconciler) agentsWaitingOnGateway(ctx context.Context, obj client
 	for i := range agents.Items {
 		a := &agents.Items[i]
 		if a.Status.Phase != kaalmv1beta1.AgentRunning && a.Status.Phase != kaalmv1beta1.AgentIdle {
+			continue
+		}
+		if apimeta.IsStatusConditionFalse(a.Status.Conditions, kaalmv1beta1.ConditionIdleDetection) {
 			continue
 		}
 		if apimeta.IsStatusConditionFalse(a.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable) {

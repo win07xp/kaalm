@@ -155,7 +155,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		r.setPhase(&agent, kaalmv1beta1.AgentPending, "")
 	}
 
-	// Step 9: wake-annotation handling, with phase-dependent removal so a
+	// Step 1: wake-annotation handling, with phase-dependent removal so a
 	// failed reconcile cannot silently drop the wake. A wake that lands while
 	// Hibernating stays on the Agent: driveHibernating finishes the Pod
 	// deletion, settles Hibernated, and requeues so this step then commits
@@ -164,14 +164,14 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return res, err
 	}
 
-	// Step 1: the system namespace is forbidden (SAN-integrity guard).
+	// Step 2: the system namespace is forbidden (SAN-integrity guard).
 	if agent.Namespace == r.OperatorNamespace {
 		r.setReadyGate(&agent, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("Agents may not run in the operator namespace %q", r.OperatorNamespace))
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
-	// Step 1 continued: resolve the AgentClass.
+	// Step 2 continued: resolve the AgentClass.
 	var class kaalmv1beta1.AgentClass
 	if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -193,27 +193,31 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// IdleDetection says when no idle timeout applies, which turns the
 	// idle and hibernation cycle off.
 	setIdleDetection(&agent, class.Name, eff.IdleTimeout)
+	// GatewayReachable lives only while the activity step evaluates the
+	// Agent. Removing it here covers the passes that end before that step;
+	// the step itself covers a phase change later in the pass.
+	r.dropGatewayReachableUnlessEvaluated(&agent, eff.IdleTimeout)
 
 	// ProvidersReady mirrors the Ready state of every referenced
 	// ModelProvider. A status condition only: it never moves the phase, and
 	// every status write below persists it.
 	r.reconcileProvidersCondition(ctx, &agent, &class)
 
-	// Step 10 (S10): surface budget exhaustion as a Degraded condition without
-	// a phase transition. Runs before the degrade branch so a Degraded agent
-	// re-evaluates it on every pass; the mutation is persisted by whichever
-	// Status().Update the reconcile path below hits.
+	// Step 3 (scenario S10): surface budget exhaustion as a Degraded
+	// condition without a phase transition. Runs before the degrade branch so
+	// a Degraded agent re-evaluates it on every pass; the mutation is
+	// persisted by whichever Status().Update the reconcile path below hits.
 	r.reconcileBudgetCondition(ctx, &agent)
 
-	// Steps 2 and 5: the Degraded-triggering cross-checks (rules 2, 4, 5, 24,
-	// 26, 29). All outstanding reasons are evaluated together so recovery can
-	// be per-condition.
+	// Step 4: the Degraded-triggering class-versus-spec cross-checks. All
+	// outstanding reasons are evaluated together so recovery can be
+	// per-condition.
 	if handled, res, err := r.reconcileDegraded(ctx, &agent, &class, eff); handled {
 		return res, err
 	}
 
-	// Hibernation phases: Hibernating drives the Pod down; Hibernated holds
-	// with no Pod (PVC, Service, Certificate, SA, and NetworkPolicy persist).
+	// Step 5: Hibernating drives the Pod down; Hibernated holds with no Pod
+	// (PVC, Service, Certificate, SA, and NetworkPolicy persist).
 	switch agent.Status.Phase {
 	case kaalmv1beta1.AgentHibernating:
 		return r.driveHibernating(ctx, &agent)
@@ -221,7 +225,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
-	// Step 5: Ready=False gates that block Pod creation without degrading.
+	// Step 6: Ready=False gates that block Pod creation without degrading.
 	gated, gateResult, err := r.readyGates(ctx, &agent, &class, eff)
 	if err != nil {
 		return r.childConflict(ctx, &agent, statusBefore, err)
@@ -233,7 +237,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return gateResult, nil
 	}
 
-	// Step 4: ensure the Certificate and gate Pod creation on its readiness.
+	// Step 7: ensure the Certificate and gate Pod creation on its readiness.
 	certReady, err := r.ensureCertificate(ctx, &agent)
 	if err != nil {
 		return r.childConflict(ctx, &agent, statusBefore, err)
@@ -249,29 +253,32 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
 	}
 
-	// Step 6: converge the non-Pod children.
+	// Step 8: converge the non-Pod children.
 	if err := r.ensureChildren(ctx, &agent, &class, eff); err != nil {
 		return r.childConflict(ctx, &agent, statusBefore, err)
 	}
 
-	// Steps 3, 6, 7: converge the Pod and derive the phase from it.
+	// Step 9: converge the Pod and derive the phase from it.
 	driftWaiting, err := r.convergePod(ctx, &agent, &class, eff)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Step 8: activity evaluation for Running and Idle agents drives the
-	// idle and hibernation transitions.
+	// Step 10: activity evaluation for Running and Idle agents drives the
+	// idle and hibernation transitions. An Agent the step skips, including
+	// one the Pod step just moved out of Running, loses GatewayReachable.
 	res := ctrl.Result{}
-	if (agent.Status.Phase == kaalmv1beta1.AgentRunning || agent.Status.Phase == kaalmv1beta1.AgentIdle) &&
-		eff.IdleTimeout > 0 && r.Activity != nil {
+	if r.activityStepRuns(&agent, eff.IdleTimeout) {
 		res = r.evaluateActivity(ctx, &agent, eff)
+	} else {
+		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable)
 	}
 
 	if driftWaiting {
 		res = withDriftRetry(res)
 	}
 
+	// Step 11: write status only when the pass changed it.
 	if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 		return ctrl.Result{}, err
 	}

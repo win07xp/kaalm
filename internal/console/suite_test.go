@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/testenv"
 )
 
 // envClient is a real-apiserver client, nil when envtest is unavailable
@@ -37,37 +38,48 @@ import (
 var envClient client.Client
 
 func TestMain(m *testing.M) {
+	os.Exit(runSuite(m))
+}
+
+// runSuite starts envtest when its assets are present, runs the tests, and
+// stops envtest on every path, so the kube-apiserver and etcd never outlive
+// the test binary.
+func runSuite(m *testing.M) int {
 	testEnv := &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd", "bases"),
 		},
 		ErrorIfCRDPathMissing: true,
 	}
-	cfg, err := testEnv.Start()
+	cfg, err := testenv.Start(testEnv)
 	if err != nil {
 		// The data-layer envtest skips without assets (plain `go test`);
 		// make test / cover-check provide them. Print why so a skip in CI is
 		// diagnosable rather than silent.
 		_, _ = os.Stderr.WriteString("console envtest unavailable: " + err.Error() + "\n")
+		return m.Run()
 	}
-	if err == nil {
-		scheme := runtime.NewScheme()
-		if err := clientgoscheme.AddToScheme(scheme); err != nil {
-			panic(err)
-		}
-		if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
-			panic(err)
-		}
-		envClient, err = client.New(cfg, client.Options{Scheme: scheme})
-		if err != nil {
-			panic("client: " + err.Error())
-		}
+	defer func() { _ = testEnv.Stop() }()
+
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return setupFailed("scheme", err)
 	}
-	code := m.Run()
-	if cfg != nil {
-		_ = testEnv.Stop()
+	if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
+		return setupFailed("scheme", err)
 	}
-	os.Exit(code)
+	envClient, err = client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return setupFailed("client", err)
+	}
+	return m.Run()
+}
+
+// setupFailed reports a suite setup failure and returns the exit code, so
+// runSuite's deferred cleanup still stops envtest.
+func setupFailed(step string, err error) int {
+	_, _ = os.Stderr.WriteString("suite setup: " + step + ": " + err.Error() + "\n")
+	return 1
 }
 
 // TestData_AgainstRealAPIServer proves the data layer against a real

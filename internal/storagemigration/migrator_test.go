@@ -48,6 +48,7 @@ import (
 
 	kaalmv1alpha1 "github.com/win07xp/kaalm/api/v1alpha1"
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/testenv"
 )
 
 const timeout = 20 * time.Second
@@ -63,6 +64,20 @@ var (
 // storage version the way "kubectl apply -f crds/" does and runs the
 // migrator against objects that are really stored as v1alpha1 bytes.
 func TestMain(m *testing.M) {
+	os.Exit(runSuite(m))
+}
+
+// setupFailed reports a suite setup failure and returns the exit code, so
+// runSuite's deferred cleanup still stops envtest.
+func setupFailed(step string, err error) int {
+	fmt.Fprintf(os.Stderr, "suite setup: %s: %v\n", step, err)
+	return 1
+}
+
+// runSuite is TestMain's body. It stops envtest on every path: a setup
+// failure returns instead of panicking, so the kube-apiserver and etcd never
+// outlive the test binary.
+func runSuite(m *testing.M) int {
 	logf.SetLogger(zap.New(zap.WriteTo(os.Stderr), zap.UseDevMode(true)))
 	testScheme = runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
@@ -80,37 +95,38 @@ func TestMain(m *testing.M) {
 		Scheme:            testScheme,
 		CRDInstallOptions: envtest.CRDInstallOptions{CRDs: crds},
 	}
-	cfg, err := testEnv.Start()
+	cfg, err := testenv.Start(testEnv)
 	if err != nil {
-		panic("start envtest: " + err.Error())
+		return setupFailed("start envtest", err)
 	}
+	defer func() { _ = testEnv.Stop() }()
 	whOpts := testEnv.WebhookInstallOptions
 	srv := webhook.NewServer(webhook.Options{
 		Host: whOpts.LocalServingHost, Port: whOpts.LocalServingPort, CertDir: whOpts.LocalServingCertDir,
 	})
 	srv.Register("/convert", webhookconversion.NewWebhookHandler(testScheme))
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
 		if err := srv.Start(ctx); err != nil {
-			panic("webhook server: " + err.Error())
+			// The started check below then times out, or the tests fail,
+			// and runSuite stops envtest.
+			fmt.Fprintf(os.Stderr, "webhook server: %v\n", err)
 		}
 	}()
 	started := srv.StartedChecker()
 	for deadline := time.Now().Add(timeout); started(nil) != nil; {
 		if time.Now().After(deadline) {
-			panic("conversion webhook server did not start: " + started(nil).Error())
+			return setupFailed("conversion webhook server", started(nil))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	testClient, err = client.New(cfg, client.Options{Scheme: testScheme})
 	if err != nil {
-		panic("client: " + err.Error())
+		return setupFailed("client", err)
 	}
 
-	code := m.Run()
-	cancel()
-	_ = testEnv.Stop()
-	os.Exit(code)
+	return m.Run()
 }
 
 // loadCRDs reads the generated CRDs and makes storage the storage version,
