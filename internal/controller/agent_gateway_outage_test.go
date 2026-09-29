@@ -249,3 +249,130 @@ func TestAgent_GatewayRecoveryKick(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// The kick skips Agents the activity step does not evaluate: an Agent with
+// idle detection off, and every Agent when the controller runs without an
+// activity client. Their passes would not dial the gateway.
+func TestAgentsWaitingOnGateway_SkipsAgentsWithoutActivityStep(t *testing.T) {
+	down := gatewayReachableCond(metav1.ConditionFalse, time.Now())
+	idleOff := append(gatewayReachableCond(metav1.ConditionFalse, time.Now()), metav1.Condition{
+		Type: kaalmv1beta1.ConditionIdleDetection, Status: metav1.ConditionFalse,
+		Reason: kaalmv1beta1.ReasonIdleDetectionDisabled,
+	})
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(
+		agentWithGateway("running-down", kaalmv1beta1.AgentRunning, down),
+		agentWithGateway("idle-off", kaalmv1beta1.AgentRunning, idleOff),
+	).Build()
+	gwLabels := map[string]string{labelKeyComponent: componentGateway}
+	ready := gatewayPod(testOperatorNamespace, gwLabels, true)
+
+	r := &AgentReconciler{Client: c, Activity: &stubActivity{}, OperatorNamespace: testOperatorNamespace}
+	reqs := r.agentsWaitingOnGateway(context.Background(), ready)
+	if len(reqs) != 1 || reqs[0].Name != "running-down" {
+		t.Errorf("enqueued %v, want only running-down", reqs)
+	}
+
+	r.Activity = nil
+	if reqs := r.agentsWaitingOnGateway(context.Background(), ready); len(reqs) != 0 {
+		t.Errorf("without an activity client the kick enqueued %v, want none", reqs)
+	}
+}
+
+// GatewayReachable describes the activity step, so it exists only while
+// the step runs: Running or Idle, an effective idleTimeout above zero, and
+// an activity client.
+func TestSyncGatewayReachable_RemovesWhenStepDoesNotRun(t *testing.T) {
+	down := gatewayReachableCond(metav1.ConditionFalse, time.Now())
+	cases := []struct {
+		name     string
+		activity ActivityClient
+		phase    kaalmv1beta1.AgentPhase
+		idle     time.Duration
+		keep     bool
+	}{
+		{"running", &stubActivity{}, kaalmv1beta1.AgentRunning, time.Hour, true},
+		{"idle", &stubActivity{}, kaalmv1beta1.AgentIdle, time.Hour, true},
+		{"idle timeout zero", &stubActivity{}, kaalmv1beta1.AgentRunning, 0, false},
+		{"no activity client", nil, kaalmv1beta1.AgentRunning, time.Hour, false},
+		{"provisioning", &stubActivity{}, kaalmv1beta1.AgentProvisioning, time.Hour, false},
+		{"hibernated", &stubActivity{}, kaalmv1beta1.AgentHibernated, time.Hour, false},
+		{"degraded", &stubActivity{}, kaalmv1beta1.AgentDegraded, time.Hour, false},
+	}
+	for _, tc := range cases {
+		r := &AgentReconciler{Activity: tc.activity}
+		agent := agentWithGateway("a", tc.phase, append([]metav1.Condition(nil), down...))
+		runs := r.activityStepRuns(agent, tc.idle)
+		if runs != tc.keep {
+			t.Errorf("%s: activityStepRuns = %v, want %v", tc.name, runs, tc.keep)
+		}
+		r.dropGatewayReachableUnlessEvaluated(agent, tc.idle)
+		if got := condition(agent.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable) != nil; got != tc.keep {
+			t.Errorf("%s: GatewayReachable present = %v, want %v", tc.name, got, tc.keep)
+		}
+	}
+}
+
+// End to end: an Agent left with GatewayReachable=False loses the
+// condition once the activity step stops running for it, here because its
+// idle timeout drops to zero.
+func TestAgent_GatewayReachableRemovedWhenIdleTimeoutDropsToZero(t *testing.T) {
+	mkWorkloadClass(t, "wc-gr-zero", nil)
+	provisionRunningAgentWithLifecycle(t, "gr-zero", "wc-gr-zero", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Hour}
+	})
+
+	fakeActivity.set(nil, 1)
+	touchAgent(t, "gr-zero")
+	eventually(t, func() error {
+		c := condition(getWorkloadAgent(t, "gr-zero").Status.Conditions, kaalmv1beta1.ConditionGatewayReachable)
+		if c == nil || c.Status != metav1.ConditionFalse {
+			return errString("GatewayReachable should be False")
+		}
+		return nil
+	})
+
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, "gr-zero")
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{}
+		return testClient.Update(ctxT(), ag)
+	})
+	eventually(t, func() error {
+		if condition(getWorkloadAgent(t, "gr-zero").Status.Conditions,
+			kaalmv1beta1.ConditionGatewayReachable) != nil {
+			return errString("GatewayReachable should be removed")
+		}
+		return nil
+	})
+}
+
+// End to end: an Agent that leaves Running while the gateway is down loses
+// the condition on the same pass, so it no longer reads as waiting on the
+// gateway.
+func TestAgent_GatewayReachableRemovedWhenAgentLeavesRunning(t *testing.T) {
+	mkWorkloadClass(t, "wc-gr-leave", nil)
+	provisionRunningAgentWithLifecycle(t, "gr-leave", "wc-gr-leave", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Lifecycle.IdleTimeout = metav1.Duration{Duration: time.Hour}
+	})
+
+	fakeActivity.set(nil, 1)
+	touchAgent(t, "gr-leave")
+	eventually(t, func() error {
+		c := condition(getWorkloadAgent(t, "gr-leave").Status.Conditions, kaalmv1beta1.ConditionGatewayReachable)
+		if c == nil || c.Status != metav1.ConditionFalse {
+			return errString("GatewayReachable should be False")
+		}
+		return nil
+	})
+
+	forceDeletePod(t, agentPod(t, "gr-leave"))
+	eventually(t, func() error {
+		ag := getWorkloadAgent(t, "gr-leave")
+		if ag.Status.Phase == kaalmv1beta1.AgentRunning {
+			return errString("still Running")
+		}
+		if condition(ag.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable) != nil {
+			return errString("GatewayReachable should be removed once the Agent leaves Running")
+		}
+		return nil
+	})
+}
