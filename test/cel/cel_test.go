@@ -33,6 +33,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/yaml"
+
+	"github.com/win07xp/kaalm/internal/testenv"
 )
 
 var restCfg *rest.Config
@@ -42,7 +44,8 @@ func TestMain(m *testing.M) {
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
 	}
-	cfg, err := env.Start()
+	// testenv.Start stops the control plane itself when the start fails.
+	cfg, err := testenv.Start(env)
 	if err != nil {
 		panic("failed to start envtest (run 'make envtest' to fetch binaries): " + err.Error())
 	}
