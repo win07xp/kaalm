@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -44,6 +46,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/mcp"
 	"github.com/win07xp/kaalm/internal/secretwatch"
+	"github.com/win07xp/kaalm/internal/testenv"
 )
 
 const (
@@ -208,6 +211,20 @@ func (w withoutGroup) ServerGroups() (*metav1.APIGroupList, error) {
 }
 
 func TestMain(m *testing.M) {
+	os.Exit(runSuite(m))
+}
+
+// setupFailed reports a suite setup failure and returns the exit code, so
+// runSuite's deferred cleanup still stops envtest.
+func setupFailed(step string, err error) int {
+	fmt.Fprintf(os.Stderr, "suite setup: %s: %v\n", step, err)
+	return 1
+}
+
+// runSuite starts envtest and the manager, runs the tests, and stops envtest
+// on every path: a setup failure returns instead of panicking, so the
+// kube-apiserver and etcd never outlive the test binary.
+func runSuite(m *testing.M) int {
 	// The scheme holds both API versions so envtest sees every kind as
 	// convertible and installs the conversion webhook into the CRDs, pointed
 	// at the local webhook server below. The reconcilers under test work at
@@ -236,10 +253,11 @@ func TestMain(m *testing.M) {
 		},
 		ErrorIfCRDPathMissing: true,
 	}
-	cfg, err := testEnv.Start()
+	cfg, err := testenv.Start(testEnv)
 	if err != nil {
-		panic("start envtest: " + err.Error())
+		return setupFailed("start envtest", err)
 	}
+	defer func() { _ = testEnv.Stop() }()
 
 	whOpts := testEnv.WebhookInstallOptions
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
@@ -252,7 +270,7 @@ func TestMain(m *testing.M) {
 		}),
 	})
 	if err != nil {
-		panic("manager: " + err.Error())
+		return setupFailed("manager", err)
 	}
 	mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(scheme))
 
@@ -260,18 +278,19 @@ func TestMain(m *testing.M) {
 	gateRequeue = 500 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	if err := SetupIndexers(ctx, mgr); err != nil {
-		panic("indexers: " + err.Error())
+		return setupFailed("indexers", err)
 	}
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
-		panic(err)
+		return setupFailed("discovery client", err)
 	}
 	// User-namespace Secret reads go through the production path: one
 	// name-filtered watch per referenced Secret.
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		panic(err)
+		return setupFailed("clientset", err)
 	}
 	secretSource := secretwatch.NewReader(secretwatch.New(ctx, clientset))
 	fakeHealth = newFakeHealth()
@@ -288,20 +307,20 @@ func TestMain(m *testing.M) {
 			Secret: types.NamespacedName{Namespace: testOperatorNamespace, Name: ControllerTLSSecretName},
 		},
 	}).SetupWithManager(mgr); err != nil {
-		panic(err)
+		return setupFailed("AgentClassReconciler", err)
 	}
 	if err := (&ModelProviderReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testOperatorNamespace, Health: fakeHealth,
 	}).SetupWithManager(mgr); err != nil {
-		panic(err)
+		return setupFailed("ModelProviderReconciler", err)
 	}
 	fakeToolHealth = newFakeToolHealth()
 	if err := (&ToolProviderReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testOperatorNamespace, Health: fakeToolHealth,
 	}).SetupWithManager(mgr); err != nil {
-		panic(err)
+		return setupFailed("ToolProviderReconciler", err)
 	}
 	fakeActivity = &fakeActivityClient{}
 	if err := (&AgentReconciler{
@@ -311,7 +330,7 @@ func TestMain(m *testing.M) {
 		Activity:          fakeActivity,
 		FQDNSupport:       fqdnSupportedInTests,
 	}).SetupWithManager(mgr); err != nil {
-		panic(err)
+		return setupFailed("AgentReconciler", err)
 	}
 	if err := (&AgentTaskReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
@@ -319,7 +338,7 @@ func TestMain(m *testing.M) {
 		SecretReader:      secretSource,
 		FQDNSupport:       fqdnSupportedInTests,
 	}).SetupWithManager(mgr); err != nil {
-		panic(err)
+		return setupFailed("AgentTaskReconciler", err)
 	}
 	disconnectTimeout = 3 * time.Second
 	if err := (&AgentChannelReconciler{
@@ -327,23 +346,26 @@ func TestMain(m *testing.M) {
 		OperatorNamespace: testSystemNamespace,
 		SecretReader:      secretSource,
 	}).SetupWithManager(mgr); err != nil {
-		panic(err)
+		return setupFailed("AgentChannelReconciler", err)
 	}
 
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
-			panic("manager start: " + err.Error())
+			// Cancelling unblocks the cache sync below, or fails the tests
+			// already running, and runSuite then stops envtest.
+			fmt.Fprintf(os.Stderr, "manager start: %v\n", err)
+			cancel()
 		}
 	}()
 	if !mgr.GetCache().WaitForCacheSync(ctx) {
-		panic("cache sync failed")
+		return setupFailed("cache sync", errors.New("caches did not sync"))
 	}
 	// conversion_test.go writes at v1alpha1, which converts through the
 	// webhook, so it must be listening before any test runs.
 	started := mgr.GetWebhookServer().StartedChecker()
 	for deadline := time.Now().Add(timeout); started(nil) != nil; {
 		if time.Now().After(deadline) {
-			panic("conversion webhook server did not start: " + started(nil).Error())
+			return setupFailed("conversion webhook server", started(nil))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -353,13 +375,10 @@ func TestMain(m *testing.M) {
 	// The system namespace must exist for the SystemNamespaceForbidden test.
 	sysNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testSystemNamespace}}
 	if err := testClient.Create(ctx, sysNS); err != nil {
-		panic("create system namespace: " + err.Error())
+		return setupFailed("create system namespace", err)
 	}
 
-	code := m.Run()
-	cancel()
-	_ = testEnv.Stop()
-	os.Exit(code)
+	return m.Run()
 }
 
 // eventually polls fn until it returns nil or the package timeout elapses.
