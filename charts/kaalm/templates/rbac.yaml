@@ -147,10 +147,10 @@ rules:
     resources: ["services"]
     verbs: ["get"]
   # Warning events on the resources the gateway governs at runtime:
-  # FallbackIneligible and CredentialsInvalid on ModelProviders (cluster-scoped,
-  # so their events land in the default namespace) and CallbackRejected on
-  # AgentChannels in user namespaces. Cluster-wide by necessity, as the
-  # controller's is.
+  # FallbackIneligible and CredentialsInvalid on ModelProviders, and
+  # CredentialsInvalid on ToolProviders (both cluster-scoped, so their events
+  # land in the default namespace), and CallbackRejected on AgentChannels in
+  # user namespaces. Cluster-wide by necessity, as the controller's is.
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]

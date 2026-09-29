@@ -407,6 +407,36 @@ func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 		expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
 	})
 
+	// A rejected gateway credential is an operator problem: the broker
+	// records a Warning CredentialsInvalid event on the ToolProvider, as the
+	// LLM path does on the ModelProvider.
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(fmt.Sprintf("upstream %d records CredentialsInvalid on the ToolProvider", status), func(t *testing.T) {
+			h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			})
+			capture := &eventCapture{}
+			h.server.Recorder = capture
+			h.seedToolRoute()
+			cert := agentCert(t, h.ca)
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+			expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+
+			capture.mu.Lock()
+			defer capture.mu.Unlock()
+			if len(capture.reasons) != 1 || capture.reasons[0] != kaalmv1beta1.ReasonCredentialsInvalid {
+				t.Fatalf("event reasons = %v, want one %s", capture.reasons, kaalmv1beta1.ReasonCredentialsInvalid)
+			}
+			tp, ok := capture.objects[0].(*kaalmv1beta1.ToolProvider)
+			if !ok || tp.Name != "search" {
+				t.Fatalf("event object = %#v, want ToolProvider search", capture.objects[0])
+			}
+			if want := fmt.Sprintf("tool server returned %d", status); !strings.Contains(capture.messages[0], want) {
+				t.Errorf("event message = %q, want it to contain %q", capture.messages[0], want)
+			}
+		})
+	}
+
 	t.Run("upstream 404 relayed for session semantics", func(t *testing.T) {
 		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
