@@ -87,8 +87,14 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		var reason, msg string
 		credential, reason, msg = r.credential(ctx, &tp)
 		if reason != kaalmv1beta1.ReasonCredentialsValid {
+			first := readyFalseIsNew(tp.Status.Conditions, reason)
 			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false, reason, msg)
-			return r.finish(ctx, &tp, ctrl.Result{})
+			res, err := r.finish(ctx, &tp, ctrl.Result{})
+			// On the rising edge only, and after the status write.
+			if err == nil && first {
+				r.Recorder.Event(&tp, corev1.EventTypeWarning, reason, msg)
+			}
+			return res, err
 		}
 		readyMsg = "provider is valid"
 	}
@@ -138,39 +144,26 @@ func (r *ToolProviderReconciler) reconcileDelete(
 	if !controllerutil.ContainsFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	referenced, err := r.isReferenced(ctx, tp.Name)
+	refs, err := r.referrers(ctx, tp.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if referenced {
-		// Hold in Terminating while any Agent, AgentTask, or AgentClass
-		// references it. Their watches re-enqueue us when a referrer goes away.
-		return ctrl.Result{}, nil
+	if len(refs) > 0 {
+		// Hold while any Agent, AgentTask, or AgentClass references it, and
+		// say so on Ready. Their watches re-enqueue us when a referrer goes
+		// away.
+		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, tp, &tp.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, tp)
 }
 
-func (r *ToolProviderReconciler) isReferenced(ctx context.Context, name string) (bool, error) {
-	var agents kaalmv1beta1.AgentList
-	if err := r.List(ctx, &agents, client.MatchingFields{IndexToolProviderRef: name}); err != nil {
-		return false, err
-	}
-	if len(agents.Items) > 0 {
-		return true, nil
-	}
-	var tasks kaalmv1beta1.AgentTaskList
-	if err := r.List(ctx, &tasks, client.MatchingFields{IndexToolProviderRef: name}); err != nil {
-		return false, err
-	}
-	if len(tasks.Items) > 0 {
-		return true, nil
-	}
-	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: name}); err != nil {
-		return false, err
-	}
-	return len(classes.Items) > 0, nil
+// referrers lists the objects that hold the provider's delete: Agents and
+// AgentTasks granting its tools in spec.tools, and AgentClasses listing it in
+// allowedToolProviders.
+func (r *ToolProviderReconciler) referrers(ctx context.Context, name string) ([]string, error) {
+	return listReferrers(ctx, r.Client, name,
+		referrerIndexes{agent: IndexToolProviderRef, task: IndexToolProviderRef, class: IndexAllowedToolProviders})
 }
 
 // credential resolves the referenced Secret key from the operator namespace

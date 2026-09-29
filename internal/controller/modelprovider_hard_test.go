@@ -153,6 +153,9 @@ func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 		}
 		return nil
 	})
+	// The Event carries the condition's reason, so the two agree.
+	expectEvent(t, "ModelProvider", "", "mp-margin", kaalmv1beta1.ReasonBoundaryMarginRaised,
+		corev1.EventTypeWarning, "boundary margin")
 
 	// Flag drops: the condition clears on a later reconcile.
 	eventually(t, func() error {

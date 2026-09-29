@@ -143,9 +143,8 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// The system-namespace guard runs first, as on the workload reconcilers.
 	if channel.Namespace == r.OperatorNamespace {
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
-		r.setChannelReady(&channel, false, kaalmv1beta1.ReasonSystemNamespaceForbidden,
+		return ctrl.Result{}, r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("AgentChannels may not live in the operator namespace %q", r.OperatorNamespace))
-		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
 	}
 
 	// Step 1: resolve agentRef (an Agent, never an AgentTask).
@@ -156,9 +155,8 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, agentErr
 		}
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
-		r.setChannelReady(&channel, false, kaalmv1beta1.ReasonAgentNotFound,
+		return ctrl.Result{}, r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonAgentNotFound,
 			fmt.Sprintf("Agent %q not found in namespace %q", channel.Spec.AgentRef.Name, channel.Namespace))
-		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
 	}
 
 	// Steps 2 and 3 validation chain; the first failure reports and stops.
@@ -166,7 +164,6 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// A failing channel is not Ready, so the unresolved-host Warning has
 		// nothing to add; clear it so it fires afresh once the channel passes.
 		r.forgetCallbackResolution(&channel)
-		r.setChannelReady(&channel, false, reason, msg)
 		r.reducePhase(&channel, &agent)
 		// Re-check on the same cadence as a healthy channel: the reconciler
 		// watches no Secrets (its Secret access is scoped per channel), so a
@@ -178,7 +175,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if reason == kaalmv1beta1.ReasonChildConflict {
 			requeue = gateRequeue
 		}
-		return ctrl.Result{RequeueAfter: requeue}, r.updateStatusIfChanged(ctx, &channel, statusBefore)
+		return ctrl.Result{RequeueAfter: requeue}, r.gateChannel(ctx, &channel, statusBefore, reason, msg)
 	}
 	r.setChannelReady(&channel, true, kaalmv1beta1.ReasonAgentReachable, "channel is valid")
 
@@ -758,6 +755,26 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 	r.forgetCallbackResolution(channel)
 	controllerutil.RemoveFinalizer(channel, kaalmv1beta1.ChannelFinalizer)
 	return ctrl.Result{}, r.Update(ctx, channel)
+}
+
+// gateChannel sets Ready=False for a validation failure, writes the status if
+// the pass changed it, and emits a Warning event with the same reason when
+// the reason first appears, not on each pass that finds the problem again.
+// The event follows a successful write, so a pass that lost its write to a
+// conflict does not report the reason twice.
+func (r *AgentChannelReconciler) gateChannel(
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, before *kaalmv1beta1.AgentChannelStatus,
+	reason, msg string,
+) error {
+	first := readyFalseIsNew(channel.Status.Conditions, reason)
+	r.setChannelReady(channel, false, reason, msg)
+	if err := r.updateStatusIfChanged(ctx, channel, before); err != nil {
+		return err
+	}
+	if first && r.Recorder != nil {
+		r.Recorder.Event(channel, corev1.EventTypeWarning, reason, msg)
+	}
+	return nil
 }
 
 func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1beta1.AgentChannel, ok bool, reason, msg string) {

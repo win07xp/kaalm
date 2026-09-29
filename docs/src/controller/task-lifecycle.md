@@ -80,5 +80,6 @@ A retry re-runs the pre-Pod class check against the class as it now stands. A vi
 | `PodStartFailed`, `ProvisioningDeadlineExceeded`, `InvalidImageName`, `ErrImageNeverPull` | Warning | a provisioning failure settles or retries |
 | `PodDisrupted` | Warning | the Pod was lost mid-run or before completion settled |
 | `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog` | Warning | the pre-Pod class check settles the task `Failed` |
+| `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing` | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason, when the reason first appears on `Ready`, not on each pass that finds the problem again |
 
 A retry emits the failure's reason with the message suffix `retrying (n/limit)`; the settled event fires once, when the terminal phase is written.

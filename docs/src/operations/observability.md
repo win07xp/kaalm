@@ -52,7 +52,7 @@ The Kaalm-specific metrics across all three components. The dashboard test under
 | Controller | `kaalm_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` |
 | Controller | `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` |
 | Controller | `kaalm_hibernations_total` | counter | `namespace` |
-| Controller | `kaalm_wakes_total` | counter | `namespace`, `trigger` (always `activator` as shipped) |
+| Controller | `kaalm_wakes_total` | counter | `namespace`, `trigger` (`channel` or `annotation`) |
 | LLM Gateway | `kaalm_llm_requests_total` | counter | `provider`, `model`, `namespace`, `status` |
 | LLM Gateway | `kaalm_llm_request_duration_seconds` | histogram | `provider`, `model` |
 | LLM Gateway | `kaalm_llm_tokens_total` | counter | `provider`, `model`, `namespace`, `direction` |
@@ -115,7 +115,8 @@ Events are the surface for status changes that platform teams discover with `kub
 
 - **Phase transitions** on Agent (`Normal`, `PhaseChanged`). AgentTask emits no phase Event; its settle and retry Events carry the outcome.
 - **Hibernation and wake** on Agent (`Normal`, `Hibernated` and `Woken`; `Warning`, `WakeIgnored`). See [Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics).
-- **Provider health** on ModelProvider and ToolProvider (`Warning`, `ProviderUnhealthy`), the ToolProviderReconciler's `CredentialsInvalid` when its probe's `Healthy` condition first enters that reason ([ToolProviderReconciler](../controller/reconcilers.md#toolproviderreconciler)), and the hard-enforcement margin on ModelProvider (`Warning`, reason `BoundaryMarginRaised` as shipped, where the condition's reason is `ObservedTrafficExceededMargin`).
+- **Provider health** on ModelProvider and ToolProvider (`Warning`, `ProviderUnhealthy`), the ToolProviderReconciler's `CredentialsInvalid` when its probe's `Healthy` condition first enters that reason ([ToolProviderReconciler](../controller/reconcilers.md#toolproviderreconciler)), and the hard-enforcement margin on ModelProvider (`Warning`, reason `ObservedTrafficExceededMargin`, matching the `BoundaryMarginRaised` condition's reason).
+- **Credential validation** on ModelProvider and ToolProvider (`Warning`, `CredentialsMissing`, emitted once when `Ready` first turns `False` with that reason). On ModelProvider, `CredentialsInvalid`, the probe's auth failure, stays a condition only; the ToolProvider's is the event above.
 - **Degraded entry** on Agent (`Warning`, the Degraded reason as the Event reason), emitted once when the Agent enters `Degraded` ([Degraded](../controller/agent-lifecycle.md#degraded)).
 - **Task settlement and retry** on AgentTask (`Normal`, `TaskSucceeded`; `Warning`, `TaskFailed` and the timeout reasons; one `Warning` per retry).
 - **Provider configuration** on ModelProvider (`Warning`, `FallbackIneligible` at reconcile time and at request time, `DegradeTargetNotCheapest`, `MaxOutputTokensUnset`) and the gateway's `CredentialsInvalid` when a provider refuses the key, during a fallback walk for a ModelProvider or a brokered call for a ToolProvider ([Fallback logic](../gateways/llm/fallback.md), [The tool plane](../gateways/tool-plane.md#failure-modes)).

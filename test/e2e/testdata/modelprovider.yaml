@@ -1,7 +1,6 @@
-# Hermetic e2e: google-vertex has no liveness probe implemented, so Probe
-# returns Skipped (no network) and Ready goes True on a dummy credential.
-# healthCheck.enabled:false now works too (the bool no longer carries omitempty),
-# but google-vertex is kept here because it needs no live endpoint at all.
+# Hermetic e2e: the probe is off, so Ready goes True on a dummy credential
+# with no live endpoint. Every provider type is probed when the probe is on,
+# google-vertex included (it mints a token from a service-account key).
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
@@ -12,6 +11,8 @@ spec:
   credentialsRef:
     name: e2e-vertex-key
     key: token
+  healthCheck:
+    enabled: false
   # Since v0.4.0 an omitted allowedNamespaces list allows none.
   allowedNamespaces: ["*"]
   models:

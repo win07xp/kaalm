@@ -160,6 +160,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if certCleanup != nil {
 		apimeta.SetStatusCondition(&ac.Status.Conditions, *certCleanup)
 	}
+	var invalid *metav1.Condition
 	if len(problems) == 0 {
 		apimeta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionReady,
@@ -175,15 +176,24 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if len(badCIDRs) > 0 {
 			reason = kaalmv1beta1.ReasonInvalidCIDR
 		}
+		msg := strings.Join(problems, "; ")
+		// Emitted after the status write below, and only when the reason
+		// first appears.
+		if readyFalseIsNew(ac.Status.Conditions, reason) {
+			invalid = &metav1.Condition{Reason: reason, Message: msg}
+		}
 		apimeta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionReady,
 			Status:  metav1.ConditionFalse,
 			Reason:  reason,
-			Message: strings.Join(problems, "; "),
+			Message: msg,
 		})
 	}
 	if err := r.Status().Update(ctx, &ac); err != nil {
 		return ctrl.Result{}, err
+	}
+	if invalid != nil {
+		r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
 	}
 	logger.V(1).Info("reconciled AgentClass", "ready", len(problems) == 0, "agents", usage.agents, "tasks", usage.tasks)
 	return ctrl.Result{}, nil
@@ -193,14 +203,15 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 	if !controllerutil.ContainsFinalizer(ac, kaalmv1beta1.ClassFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	usage, err := r.countUsers(ctx, ac.Name)
+	refs, err := listReferrers(ctx, r.Client, ac.Name,
+		referrerIndexes{agent: IndexAgentClassRef, task: IndexAgentClassRef})
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if usage.agents > 0 || usage.tasks > 0 {
-		// Hold in Terminating until the last reference is removed. The watches on
-		// Agent/AgentTask re-enqueue us when a referrer goes away.
-		return ctrl.Result{}, nil
+	if len(refs) > 0 {
+		// Hold until the last reference is removed, and say so on Ready. The
+		// watches on Agent/AgentTask re-enqueue us when a referrer goes away.
+		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, ac, &ac.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(ac, kaalmv1beta1.ClassFinalizer)
 	return ctrl.Result{}, r.Update(ctx, ac)

@@ -44,7 +44,7 @@ ModelProvider, ToolProvider, and AgentClass are cluster-scoped and carry no phas
 | ToolProvider | any Agent or AgentTask, or any AgentClass | `spec.tools[].providerRef`, `spec.allowedToolProviders` |
 | AgentClass | any Agent or AgentTask | `spec.agentClassRef` |
 
-The hold is by reference, not by validity: a workload whose reference violates a validation rule still pins its provider or class. As shipped the hold is silent: no condition, event, or phase says that a delete is blocked, so a hung `kubectl delete` is diagnosed by listing the referrers.
+The hold is by reference, not by validity: a workload whose reference violates a validation rule still pins its provider or class. While the hold lasts, the reconciler sets `Ready=False, reason=DeletionBlocked`, with a message naming one referrer (or, with more than one, the total count and the first) so `kubectl describe` and a hung `kubectl delete` both point somewhere useful. The named referrer is the first in the order Agents, then AgentTasks, then AgentClasses, each sorted by name. A `Warning` event with the same reason and message fires when the hold first appears; the condition is rewritten only when the message changes, such as when the count drops.
 
 No gateway-side teardown is needed for a provider. The gateway's own watch drops it from its routing table, and its credential Secret is an independent resource the platform team deletes separately. Gateway-only-tier callers hold no Agent or AgentTask reference and never block a delete; their next request to a deleted provider fails with `400 invalid_request`.
 
