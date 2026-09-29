@@ -158,7 +158,7 @@ The placeholder ConfigMap is durable in etcd, but the per-request delivery pipel
 
 ### Response-patch failure
 
-The `Patch` is an apiserver write and can fail transiently: apiserver unavailable, etcd unreachable, a `Patch` conflict, or RBAC drift on the gateway's `kaalm-system` ConfigMap surface. The gateway retries it on the [bounded retry schedule](#the-bounded-retry-schedule), capped at 4 attempts. If all fail, the in-memory payload is dropped, the gateway increments `kaalm_channel_async_patch_failed_total` (labeled by namespace), and logs at error level. The counter is the only operator-side signal; see [Recommended alerts](../../operations/observability.md#recommended-alerts).
+The `Patch` is an apiserver write and can fail transiently: apiserver unavailable, etcd unreachable, a `Patch` conflict, or RBAC drift on the gateway's `kaalm-system` ConfigMap surface. The gateway retries it on the [bounded retry schedule](#the-bounded-retry-schedule), capped at 4 attempts. The gateway drops the in-memory payload in two cases: the last attempt still fails, or the pipeline's own context ends during a backoff sleep, from the [async pipeline bound](#async-pipeline-bound) or any other cancellation. Either way, the gateway increments `kaalm_channel_async_patch_failed_total` (labeled by namespace) exactly once and logs one error with the request ID, namespace, the drop reason (`retries_exhausted` or `context_done`), the last `Patch` error, and, for `context_done`, the context's cancellation cause. The counter is the only operator-side signal; see [Recommended alerts](../../operations/observability.md#recommended-alerts).
 
 ## Error payloads
 

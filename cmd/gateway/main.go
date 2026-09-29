@@ -282,6 +282,7 @@ func main() {
 	server.Completions = &gateway.KubeCompletionWriter{Client: clientset}
 	server.Metrics = gateway.NewMetrics(metrics.Registry)
 	server.Recorder = cl.GetEventRecorderFor("kaalm-gateway")
+	server.Informers = requestPathInformers(cl.GetCache(), logger)
 
 	// Prometheus metrics on a dedicated unauthenticated in-cluster port.
 	go func() {
@@ -398,6 +399,37 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("kaalm gateway shut down")
+}
+
+// requestPathInformers registers the informers the request path reads,
+// before the cache starts, so the startup WaitForCacheSync covers every one
+// of them and /readyz can report each by name. Registered lazily, an
+// informer would first sync inside a live request. The list is every kind
+// KubeStore reads from the cache, and matches the table in
+// docs/src/gateways/llm/operations.md (Gateway readiness).
+func requestPathInformers(c cache.Cache, logger *slog.Logger) []gateway.InformerSync {
+	objects := []struct {
+		name string
+		obj  client.Object
+	}{
+		{"Pod", &corev1.Pod{}},
+		{"Agent", &kaalmv1beta1.Agent{}},
+		{"AgentTask", &kaalmv1beta1.AgentTask{}},
+		{"AgentClass", &kaalmv1beta1.AgentClass{}},
+		{"AgentChannel", &kaalmv1beta1.AgentChannel{}},
+		{"ModelProvider", &kaalmv1beta1.ModelProvider{}},
+		{"ToolProvider", &kaalmv1beta1.ToolProvider{}},
+	}
+	out := make([]gateway.InformerSync, 0, len(objects))
+	for _, o := range objects {
+		informer, err := c.GetInformer(context.Background(), o.obj, cache.BlockUntilSynced(false))
+		if err != nil {
+			logger.Error("registering informer", "kind", o.name, "error", err)
+			os.Exit(1)
+		}
+		out = append(out, gateway.InformerSync{Name: o.name, HasSynced: informer.HasSynced})
+	}
+	return out
 }
 
 // parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".

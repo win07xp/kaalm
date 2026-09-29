@@ -140,7 +140,7 @@ These alerts cover the failure modes this book names. The page states no PromQL 
 | Per-namespace rate-limit saturation | Warn | Tenant hitting the per-(namespace, model) ceiling. See [Rate limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting) |
 | Wake duration p95 elevated | Warn | [Activator](../gateways/user/activation-and-activity.md#the-activator) path slow. Watch `kaalm_channel_wake_duration_seconds` |
 | Async-callback exhaustion rate elevated | Warn | Receivers' `callbackUrl` repeatedly unreachable; receivers should [poll](../gateways/api/async-responses.md) |
-| `kaalm_channel_async_patch_failed_total` nonzero | Warn | An async response was dropped after `Patch` retry exhaustion; pollers see `202` then `404`. See [Response-patch failure](../gateways/api/async-responses.md#response-patch-failure) |
+| `kaalm_channel_async_patch_failed_total` nonzero | Warn | An async response payload was dropped; pollers see `202` then `404`. See [Response-patch failure](../gateways/api/async-responses.md#response-patch-failure) |
 
 ## Dashboards
 

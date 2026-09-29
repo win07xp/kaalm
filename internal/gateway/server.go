@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
@@ -171,6 +172,10 @@ type Server struct {
 	// AgentResolver resolves agent Service names for delivery dials; nil
 	// means net.DefaultResolver. Tests inject a counting fake.
 	AgentResolver ipResolver
+
+	// Informers are the caches the request path depends on; /readyz fails
+	// until each one reports its initial sync. Empty means no cache (tests).
+	Informers []InformerSync
 }
 
 // ipResolver is the slice of net.Resolver the delivery dialer uses.
@@ -347,50 +352,127 @@ func (s *Server) TLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
-// Run serves the cluster listener and the health port until ctx is cancelled.
+// listeners are the gateway's three bound sockets. Binding before serving
+// gives the readiness probe the real addresses to dial.
+type listeners struct {
+	main, health, user net.Listener
+}
+
+// listen binds the cluster, health, and user listeners.
+func (s *Server) listen() (*listeners, error) {
+	ls := &listeners{}
+	for _, bind := range []struct {
+		addr string
+		into *net.Listener
+	}{
+		{s.Config.ListenAddr, &ls.main},
+		{s.Config.HealthAddr, &ls.health},
+		{s.Config.UserListenAddr, &ls.user},
+	} {
+		ln, err := net.Listen("tcp", bind.addr)
+		if err != nil {
+			ls.close()
+			return nil, err
+		}
+		*bind.into = ln
+	}
+	return ls, nil
+}
+
+func (ls *listeners) close() {
+	for _, ln := range []net.Listener{ls.main, ls.health, ls.user} {
+		if ln != nil {
+			_ = ln.Close()
+		}
+	}
+}
+
+// Run serves the cluster listener, the user listener, and the health port
+// until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	tlsCfg, err := s.TLSConfig()
 	if err != nil {
 		return err
 	}
+	ls, err := s.listen()
+	if err != nil {
+		return err
+	}
+	return s.serve(ctx, ls, tlsCfg)
+}
+
+// serve runs the three servers on already-bound listeners. /healthz is
+// liveness only (the process answers); /readyz runs the readiness checks.
+func (s *Server) serve(ctx context.Context, ls *listeners, tlsCfg *tls.Config) error {
 	main := &http.Server{
-		Addr: s.Config.ListenAddr, Handler: s.Handler(), TLSConfig: tlsCfg,
+		Handler: s.Handler(), TLSConfig: tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	servingCert := func() error {
+		_, err := tlsCfg.GetCertificate(&tls.ClientHelloInfo{})
+		return err
+	}
 	healthMux := http.NewServeMux()
-	ok := func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }
-	healthMux.HandleFunc("/healthz", ok)
-	healthMux.HandleFunc("/readyz", ok)
+	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	healthMux.HandleFunc("/readyz", s.readyzHandler(ls.main.Addr(), ls.user.Addr(), servingCert))
 	health := &http.Server{
-		Addr: s.Config.HealthAddr, Handler: healthMux,
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: tlsCfg.GetCertificate},
+		Handler:           healthMux,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: lastGoodCertificate(tlsCfg.GetCertificate)},
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	user := &http.Server{
-		Addr: s.Config.UserListenAddr, Handler: s.UserHandler(),
+		Handler:           s.UserHandler(),
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: tlsCfg.GetCertificate},
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	errCh := make(chan error, 3)
-	go func() { errCh <- main.ListenAndServeTLS("", "") }()
-	go func() { errCh <- health.ListenAndServeTLS("", "") }()
-	go func() { errCh <- user.ListenAndServeTLS("", "") }()
+	go func() { errCh <- main.ServeTLS(ls.main, "", "") }()
+	go func() { errCh <- health.ServeTLS(ls.health, "", "") }()
+	go func() { errCh <- user.ServeTLS(ls.user, "", "") }()
 
-	select {
-	case <-ctx.Done():
+	shutdown := func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = main.Shutdown(shutdownCtx)
 		_ = health.Shutdown(shutdownCtx)
 		_ = user.Shutdown(shutdownCtx)
+	}
+	select {
+	case <-ctx.Done():
+		shutdown()
 		return nil
 	case err := <-errCh:
+		shutdown()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
+	}
+}
+
+// lastGoodCertificate wraps the serving-cert source for the health
+// listener: when the cert can no longer be read, the listener keeps
+// handshaking with the last cert it served, so /readyz can still answer and
+// name the serving_cert failure instead of failing the probe's handshake.
+func lastGoodCertificate(
+	get func(*tls.ClientHelloInfo) (*tls.Certificate, error),
+) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	var last atomic.Pointer[tls.Certificate]
+	if cert, err := get(&tls.ClientHelloInfo{}); err == nil {
+		last.Store(cert)
+	}
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		cert, err := get(hello)
+		if err == nil {
+			last.Store(cert)
+			return cert, nil
+		}
+		if prev := last.Load(); prev != nil {
+			return prev, nil
+		}
+		return nil, err
 	}
 }
 
