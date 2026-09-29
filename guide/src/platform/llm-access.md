@@ -81,7 +81,7 @@ The two columns to read: `Ready` means the spec is valid and the credential
 resolves; `Healthy` reports the periodic upstream probe. A provider can be
 Ready but Unhealthy (endpoint down); it recovers on its own when the probe
 succeeds again. A key the provider rejects is different: the probe reports
-it as `Ready=False` with reason `CredentialsInvalid`, and the provider stays
+it as `Ready=False` with reason `CredentialsInvalid` and a `Warning` event, and the provider stays
 that way until the Secret holds a key the provider accepts.
 
 The probe is configurable through `spec.healthCheck` (`enabled`, default

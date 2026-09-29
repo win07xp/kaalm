@@ -144,16 +144,19 @@ the last reference clears.
 
 - `CredentialsMissing` or `CredentialsInvalid`: the Secret named by
   `credentialsRef` is absent in `kaalm-system` or lacks the key, or the
-  provider rejected the key on the probe. `CredentialsMissing` fires a
-  `Warning` event the first time `Ready` turns `False` with it, on
-  ModelProvider and ToolProvider alike; `CredentialsInvalid` never does,
-  so `kubectl get events` finds only the missing-Secret case.
+  provider rejected the key on the probe. ToolProvider reports both the
+  same way.
 - `InvalidDegradeTarget`: a budget policy's `degradeTo` is not in
   `spec.models`.
 - `FallbackIneligible`: a fallback provider is missing, has a type the
   gateway cannot translate to, or the chain loops back on itself.
 - `InvalidModelMap`: a `modelMap` on a fallback edge names a model that one
   end's catalog does not have.
+- `HardBudgetUnpriced`: hard enforcement is on and a model in the catalog
+  has no prices.
+
+Each of these reasons also fires a `Warning` event with the same reason the
+first time `Ready` turns `False` with it.
 
 A `FallbackIneligible` `Warning` event with `Ready` still `True` is
 different: the reconciler's eligibility scan found a fallback candidate that
