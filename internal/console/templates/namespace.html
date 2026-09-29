@@ -16,6 +16,7 @@
   </tr>
   {{end}}
 </table>
+{{if gt .FleetTotal (len .Fleet)}}<p class="empty">Showing the newest {{len .Fleet}} of {{.FleetTotal}} agents.</p>{{end}}
 {{else}}<p class="empty">No agents in this namespace.</p>{{end}}
 
 <h2>Spend against budget</h2>
@@ -53,6 +54,7 @@
   </tr>
   {{end}}
 </table>
+{{if gt .TasksTotal (len .Tasks)}}<p class="empty">Showing the newest {{len .Tasks}} of {{.TasksTotal}} tasks.</p>{{end}}
 {{else}}<p class="empty">No tasks in this namespace.</p>{{end}}
 
 <h2>Channel health</h2>
@@ -63,5 +65,6 @@
   <tr><td>{{.Name}}</td><td>{{.Agent}}</td><td class="phase-{{.Phase}}">{{.Phase}}</td><td>{{.Ready}}</td><td>{{.PlatformConnected}}</td><td>{{.Reason}}</td></tr>
   {{end}}
 </table>
+{{if gt .ChannelsTotal (len .Channels)}}<p class="empty">Showing the newest {{len .Channels}} of {{.ChannelsTotal}} channels.</p>{{end}}
 {{else}}<p class="empty">No channels in this namespace.</p>{{end}}
 {{template "foot" .}}

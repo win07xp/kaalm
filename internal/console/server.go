@@ -40,6 +40,10 @@ type Config struct {
 	CertFile string
 	KeyFile  string
 	CAFile   string
+	// MaxMessageBodyBytes caps a test-chat request body (default 1 MiB).
+	// The chart passes gateway.maxMessageBodyBytes, the cap the gateway's
+	// POST /v1/test-chat applies, so both hops refuse the same size.
+	MaxMessageBodyBytes int64
 }
 
 // Server is the console: one data layer, two faces (JSON API and pages),
@@ -60,6 +64,9 @@ func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, gw Ga
 	}
 	if cfg.HealthAddr == "" {
 		cfg.HealthAddr = ":8081"
+	}
+	if cfg.MaxMessageBodyBytes == 0 {
+		cfg.MaxMessageBodyBytes = 1 << 20
 	}
 	return &Server{
 		Config:   cfg,
@@ -91,7 +98,8 @@ func (s *Server) Handler() http.Handler {
 }
 
 // Run serves the console listener and the health port until ctx is
-// cancelled. Rotation is handled by the tlsutil loader per handshake.
+// cancelled, with the cache janitor running for the same lifetime. Rotation
+// is handled by the tlsutil loader per handshake.
 func (s *Server) Run(ctx context.Context) error {
 	loader := &tlsutil.CertLoader{CertFile: s.Config.CertFile, KeyFile: s.Config.KeyFile, CAFile: s.Config.CAFile}
 	if _, err := loader.Certificate(); err != nil {
@@ -116,6 +124,8 @@ func (s *Server) Run(ctx context.Context) error {
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: tlsCfg.GetCertificate},
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	go s.janitor(ctx, sweepInterval)
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- main.ListenAndServeTLS("", "") }()

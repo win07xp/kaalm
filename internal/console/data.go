@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -49,18 +50,20 @@ func (d *Data) Namespaces(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-// Fleet returns the namespace's agents as fleet rows, sorted by name.
-func (d *Data) Fleet(ctx context.Context, namespace string) ([]FleetRow, error) {
+// Fleet returns the newest limit agents in the namespace as fleet rows,
+// sorted by name, and the namespace's total agent count.
+func (d *Data) Fleet(ctx context.Context, namespace string, limit int) ([]FleetRow, int, error) {
 	var list kaalmv1beta1.AgentList
 	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	rows := make([]FleetRow, 0, len(list.Items))
-	for i := range list.Items {
+	keep := newest(len(list.Items), limit, func(i int) *metav1.ObjectMeta { return &list.Items[i].ObjectMeta })
+	rows := make([]FleetRow, 0, len(keep))
+	for _, i := range keep {
 		rows = append(rows, fleetRow(&list.Items[i]))
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-	return rows, nil
+	return rows, len(list.Items), nil
 }
 
 // Agent returns one agent in detail; found is false when it does not exist.
@@ -75,15 +78,17 @@ func (d *Data) Agent(ctx context.Context, namespace, name string) (AgentDetail, 
 	return agentDetail(&a), true, nil
 }
 
-// Tasks returns the namespace's task history, most recently started first
-// (tasks with no start time sort last, by name).
-func (d *Data) Tasks(ctx context.Context, namespace string) ([]TaskRow, error) {
+// Tasks returns the newest limit tasks in the namespace, most recently
+// started first (tasks with no start time sort last, by name), and the
+// namespace's total task count.
+func (d *Data) Tasks(ctx context.Context, namespace string, limit int) ([]TaskRow, int, error) {
 	var list kaalmv1beta1.AgentTaskList
 	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	rows := make([]TaskRow, 0, len(list.Items))
-	for i := range list.Items {
+	keep := newest(len(list.Items), limit, func(i int) *metav1.ObjectMeta { return &list.Items[i].ObjectMeta })
+	rows := make([]TaskRow, 0, len(keep))
+	for _, i := range keep {
 		rows = append(rows, taskRow(&list.Items[i]))
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -97,21 +102,45 @@ func (d *Data) Tasks(ctx context.Context, namespace string) ([]TaskRow, error) {
 			return a.Name < b.Name
 		}
 	})
-	return rows, nil
+	return rows, len(list.Items), nil
 }
 
-// Channels returns the namespace's channel health rows, sorted by name.
-func (d *Data) Channels(ctx context.Context, namespace string) ([]ChannelRow, error) {
+// Channels returns the newest limit channels in the namespace as health
+// rows, sorted by name, and the namespace's total channel count.
+func (d *Data) Channels(ctx context.Context, namespace string, limit int) ([]ChannelRow, int, error) {
 	var list kaalmv1beta1.AgentChannelList
 	if err := d.Reader.List(ctx, &list, client.InNamespace(namespace)); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	rows := make([]ChannelRow, 0, len(list.Items))
-	for i := range list.Items {
+	keep := newest(len(list.Items), limit, func(i int) *metav1.ObjectMeta { return &list.Items[i].ObjectMeta })
+	rows := make([]ChannelRow, 0, len(keep))
+	for _, i := range keep {
 		rows = append(rows, channelRow(&list.Items[i]))
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-	return rows, nil
+	return rows, len(list.Items), nil
+}
+
+// newest returns the indexes of the limit most recently created of n
+// objects (ties broken by name), so a truncated list keeps the newest rows
+// whatever order the caller then displays them in. The list-route limit
+// (defaultListLimit, maxListLimit) is applied here, after the list read.
+func newest(n, limit int, meta func(i int) *metav1.ObjectMeta) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	if n <= limit {
+		return idx
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		ma, mb := meta(idx[a]), meta(idx[b])
+		if !ma.CreationTimestamp.Equal(&mb.CreationTimestamp) {
+			return mb.CreationTimestamp.Before(&ma.CreationTimestamp)
+		}
+		return ma.Name < mb.Name
+	})
+	return idx[:limit]
 }
 
 // Spend returns the namespace's budget rows across all providers, sorted by

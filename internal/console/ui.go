@@ -19,6 +19,7 @@ package console
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -128,28 +129,27 @@ type homePage struct {
 
 func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 	id := identityFrom(r.Context())
-	all, err := s.Data.Namespaces(r.Context())
+	visible, err := s.visibleNamespaces(r.Context(), id)
 	if err != nil {
 		http.Error(w, "listing namespaces failed", http.StatusServiceUnavailable)
 		return
 	}
-	page := homePage{User: id.Username}
-	for _, ns := range all {
-		if ok, err := s.Gate.CanView(r.Context(), id, ns); err == nil && ok {
-			page.Namespaces = append(page.Namespaces, ns)
-		}
-	}
-	s.render(w, "namespaces.html", page)
+	s.render(w, "namespaces.html", homePage{User: id.Username, Namespaces: visible})
 }
 
+// namespacePage carries the three limited lists with their namespace
+// totals, so the template can say when a list shows only the newest rows.
 type namespacePage struct {
-	User      string
-	Namespace string
-	Fleet     []FleetRow
-	Spend     []SpendRow
-	Workloads []WorkloadSpend
-	Tasks     []TaskRow
-	Channels  []ChannelRow
+	User          string
+	Namespace     string
+	Fleet         []FleetRow
+	FleetTotal    int
+	Spend         []SpendRow
+	Workloads     []WorkloadSpend
+	Tasks         []TaskRow
+	TasksTotal    int
+	Channels      []ChannelRow
+	ChannelsTotal int
 }
 
 // gateView authorizes one namespace view for a page, writing the denial.
@@ -172,16 +172,20 @@ func (s *Server) uiNamespace(w http.ResponseWriter, r *http.Request) {
 	if !s.gateView(w, r, ns) {
 		return
 	}
+	limit, err := listLimit(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	page := namespacePage{User: identityFrom(r.Context()).Username, Namespace: ns}
-	var err error
-	if page.Fleet, err = s.Data.Fleet(r.Context(), ns); err != nil {
+	if page.Fleet, page.FleetTotal, err = s.Data.Fleet(r.Context(), ns, limit); err != nil {
 		http.Error(w, "reading the namespace failed", http.StatusServiceUnavailable)
 		return
 	}
 	page.Spend, _ = s.Data.Spend(r.Context(), ns)
 	page.Workloads = s.workloadSpend(r.Context(), ns)
-	page.Tasks, _ = s.Data.Tasks(r.Context(), ns)
-	page.Channels, _ = s.Data.Channels(r.Context(), ns)
+	page.Tasks, page.TasksTotal, _ = s.Data.Tasks(r.Context(), ns, limit)
+	page.Channels, page.ChannelsTotal, _ = s.Data.Channels(r.Context(), ns, limit)
 	s.render(w, "namespace.html", page)
 }
 
@@ -231,6 +235,12 @@ func (s *Server) uiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if !allowed {
 		s.renderAgent(w, r, "", "test-chat requires permission to create channels in this namespace")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, s.Config.MaxMessageBodyBytes)
+	if err := r.ParseForm(); tooLarge(err) {
+		http.Error(w, fmt.Sprintf("the message exceeds %d bytes", s.Config.MaxMessageBodyBytes),
+			http.StatusRequestEntityTooLarge)
 		return
 	}
 	content := r.PostFormValue("content")
