@@ -48,7 +48,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | AgentClass | `InvalidReference`, `InvalidCIDR` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | ModelProvider, ToolProvider, AgentClass | `DeletionBlocked` | Warning | the finalizer's delete hold first appears, naming a referrer ([Cluster-scoped resources](finalizers.md#cluster-scoped-resources)) |
 
-Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals are conditions only, not Events: a ModelProvider's or ToolProvider's `CredentialsInvalid`, the probe's auth failure (the `ProviderUnhealthy` Warning above covers only a non-credential probe failure), and `FallbackIneligible`, which is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).
+Events are how `kubectl describe` reports state changes, and an operator debugging a stuck resource reaches for it before metrics or logs. Two signals are not controller Events: a ModelProvider's `CredentialsInvalid`, the probe's auth failure, which stays a condition only (the `ProviderUnhealthy` Warning above covers only a non-credential probe failure; the ToolProvider probe's `CredentialsInvalid` is the Event in the table), and `FallbackIneligible`, which is a gateway Event at request time, not a controller one ([Recommended alerts](../operations/observability.md#recommended-alerts) lists the gateway's).
 
 ## Observability
 

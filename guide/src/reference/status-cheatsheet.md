@@ -154,7 +154,8 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
   referrer; see [Deleting a provider, tool provider, or class never
   finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
   `CredentialsMissing` also fires a `Warning` event the first time `Ready`
-  turns `False` with it; `CredentialsInvalid` stays a condition only.
+  turns `False` with it, and `CredentialsInvalid` fires one when the probe's
+  `Healthy` condition first enters that reason.
 - `Healthy`: the periodic probe, which speaks MCP (`server/discover` or
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
