@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
@@ -339,6 +340,13 @@ func main() {
 		Client:      mgr.GetClient(),
 		Recorder:    mgr.GetEventRecorderFor("agentclass-controller"),
 		FQDNSupport: fqdnProbe.Supported,
+		// Reads the controller's own cert-manager-issued Secret from the
+		// operator-namespace Secret cache to tell whether cert-manager
+		// cleans up workload TLS Secrets.
+		CertCleanup: &controller.CertCleanupCheck{
+			Reader: mgr.GetClient(),
+			Secret: types.NamespacedName{Namespace: operatorNamespace, Name: controller.ControllerTLSSecretName},
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentClass")
 		os.Exit(1)
@@ -489,6 +497,16 @@ func main() {
 	// own. Idempotent, retried with backoff, never fatal to the manager.
 	if err := mgr.Add(&storagemigration.Migrator{Reader: mgr.GetAPIReader(), Client: mgr.GetClient()}); err != nil {
 		setupLog.Error(err, "unable to add the storage-version migrator to manager")
+		os.Exit(1)
+	}
+	// On the leader, every ten minutes: reap expired async response records
+	// whose channel no longer exists (a record created after the finalizer
+	// sweep by a gateway replica that had not yet seen Terminating). Reads
+	// come from the cache the AgentChannel reconciler already fills.
+	if err := mgr.Add(&controller.AsyncOrphanPruner{
+		Client: mgr.GetClient(), OperatorNamespace: operatorNamespace,
+	}); err != nil {
+		setupLog.Error(err, "unable to add the async orphan prune to manager")
 		os.Exit(1)
 	}
 

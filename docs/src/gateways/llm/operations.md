@@ -12,12 +12,14 @@ When the gateway cannot fulfill an LLM request, it returns a structured error re
 
 Readiness is a gate, not a formality. A gateway replica that is listening but has not hydrated its caches would answer real requests with wrong answers: spurious `404`, `403`, or `invalid_request` responses caused by lookups against an empty cache, not by anything the caller did. The readiness probe exists to keep such a replica out of the Service until it can answer correctly.
 
-The probe is `GET /readyz` on the internal health port (`:8081` by default, Helm value `gateway.healthPort`). That port serves TLS with no client auth and exposes only `/healthz` and `/readyz`. It returns `200` only when **all** of the following are true:
+The probe is `GET /readyz` on the internal health port (`:8081` by default, Helm value `gateway.healthPort`). That port serves TLS with no client auth and exposes only `/healthz` and `/readyz`. The probe runs four checks concurrently, bounded to 500ms as a whole, so it answers within the kubelet's default 1s probe timeout. Each check writes one line to the response body: the check's name, followed by `ok` or the error, for example `cluster_listener: ok` or `informers: not synced: ModelProvider`. The response is `200` only when **all** of the following checks pass, otherwise `503`:
 
-1. The **cluster listener** on `:8443` is bound and accepting TLS connections. The probe performs a local dial to confirm.
-2. The **User listener** on `:8080` is bound and accepting TLS connections (both listeners use the `kaalm-gateway-tls` certificate). The probe performs a local TLS dial to confirm.
-3. **All informer caches** the request path depends on have completed their initial sync (`cache.WaitForCacheSync` returned true for each).
-4. The **gateway serving certificate** (`kaalm-gateway-tls`) has been loaded from disk. On startup, the gateway reads the mounted Secret; if the Secret does not exist (cert-manager has not issued it), readiness fails. This matters on initial chart install, where the Pod may start before cert-manager completes issuance.
+1. **`cluster_listener`**: the cluster listener on `:8443` is bound and accepting TLS connections. The probe completes a local TLS handshake to confirm, then closes the connection.
+2. **`user_listener`**: the user listener on `:8080` is bound and accepting TLS connections (both listeners use the `kaalm-gateway-tls` certificate). The probe completes a local TLS handshake to confirm, then closes the connection.
+3. **`informers`**: every informer cache the request path depends on has completed its initial sync. The probe reads each informer's `HasSynced` state; at startup, the gateway process itself waits on `WaitForCacheSync` for every one of them before it opens any listener.
+4. **`serving_cert`**: the gateway serving certificate (`kaalm-gateway-tls`, mounted at `--tls-cert`/`--tls-key`) loads from disk. The chart mounts the Secret as a required volume, so the Pod doesn't start until cert-manager has issued it, and the gateway process exits if the certificate can't be loaded at startup. If the certificate file later becomes unreadable, this check fails; the health listener keeps serving TLS with the last certificate it loaded successfully, so the probe still gets an answer that names the failure.
+
+Neither TLS handshake check verifies the certificate chain: the connection is over loopback, and the certificate names the Service, not `localhost`.
 
 ### The informers the request path depends on
 
@@ -31,14 +33,15 @@ Each cache in check 3 backs a specific step of request handling:
 | `AgentClass` | The `allowedProviders` gate in the mTLS-tier routing chain |
 | `AgentChannel` | Webhook path to target Agent lookup |
 | `ModelProvider` | Model validation, `allowedNamespaces`, fallback chain traversal |
+| `ToolProvider` | The MCP broker's `/v1/mcp/{toolProvider}` lookup |
 
-Until every cache is synced, namespace identification, provider routing, and channel routing would either fail or return spurious `404` / `403` / `invalid_request` responses while caches hydrate. See [Workload identity](workload-identity.md) for how source-IP and auth-mode resolution use the `Pod` cache.
+Until every cache is synced, namespace identification, provider routing, channel routing, and tool-provider resolution would either fail or return spurious `404` / `403` / `invalid_request` responses while caches hydrate. See [Workload identity](workload-identity.md) for how source-IP and auth-mode resolution use the `Pod` cache.
 
 ### Probe failure behavior
 
-Any single failure above returns `503 Service Unavailable` with a body listing which checks failed. Kubernetes retries the probe per the Pod's `readinessProbe.periodSeconds` (default 10s) until the gateway is fully ready, which keeps the gateway Pod out of the Service's endpoints during the startup window. The same checks feed the "Gateway not ready" row in [Failure modes](#failure-modes).
+Any single failure above returns `503 Service Unavailable` with a body listing which checks failed. Kubernetes retries the probe per the Pod's `readinessProbe.periodSeconds` (default 10s) until the gateway is fully ready, which keeps the gateway Pod out of the Service's endpoints during the startup window. The same checks feed the "Gateway replica not ready" row in [Failure modes](#failure-modes).
 
-Because both listeners and every dependent informer must be green for the probe to pass, the Service never receives traffic for a listener that would error at connection time or for a Pod that cannot yet resolve source IPs to namespaces, map ownerRefs to Agents/AgentTasks, look up AgentChannels, or validate requested models.
+Because every check above must pass for the probe to succeed, the Service never receives traffic for a listener that would error at connection time, for a Pod that cannot yet resolve source IPs to namespaces, map ownerRefs to Agents/AgentTasks, look up AgentChannels, resolve a ToolProvider by name, or validate requested models, or for a replica whose serving certificate can't be read.
 
 ---
 
@@ -69,7 +72,7 @@ For User Gateway metrics, see [User Gateway operations](../user/operations.md#ob
 |---|---|
 | Gateway replica crashes | Other replicas continue; Kubernetes restarts the crashed replica |
 | All gateway replicas down | LLM calls from agents fail; up to 10s of spend data may be lost (see [Budget state management](budgets-and-rate-limits.md#budget-state-management)) |
-| Gateway replica not ready (listener dial fails, any of the dependent informers not synced, or cert not issued) | Readiness probe returns 503; replica excluded from Service endpoints until all checks pass. See [Gateway readiness](#gateway-readiness) |
+| Gateway replica not ready (a listener isn't accepting connections, a dependent informer hasn't synced, or the serving certificate can't be loaded) | Readiness probe returns 503; replica excluded from Service endpoints until all checks pass. See [Gateway readiness](#gateway-readiness) |
 | Provider API down | Fallback chain walked (same-type or translatable-format providers, up to `maxFallbackDepth` attempts); if all providers in the chain fail, the request fails with a fallback-exhausted error |
 | Budget exhausted | Request blocked (`429 budget_exhausted` with `Retry-After` header) or degraded per policy; Warning event emitted on ModelProvider |
 | `TokenReview` apiserver unreachable (mode 2 only) | Gateway returns `503 Service Unavailable` to the caller for requests that miss the token cache; mTLS requests and cached-token requests are unaffected |
@@ -77,6 +80,6 @@ For User Gateway metrics, see [User Gateway operations](../user/operations.md#ob
 
 Details for the rows that need them:
 
-- **Gateway replica not ready**: the dependent informers are `Pod`, `Agent`, `AgentTask`, `AgentClass`, `AgentChannel`, and `ModelProvider`.
+- **Gateway replica not ready**: the dependent informers are `Pod`, `Agent`, `AgentTask`, `AgentClass`, `AgentChannel`, `ModelProvider`, and `ToolProvider`.
 - **Provider API down**: the fallback-exhausted error is `502 provider_error`, or `503` / `504` when every attempt was unreachable or timed out. See [Depth cap semantics](fallback.md#depth-cap-semantics).
 - **`TokenReview` apiserver unreachable**: the `503` carries `error.type: internal_unavailable`, `retryable: true`, and `Retry-After: 1`. See [LLM Gateway error responses](../api/errors.md#llm-gateway-error-responses).

@@ -163,6 +163,9 @@ status:
     - type: SecurityBaseline
       status: "True"
       reason: RestrictedBaseline
+    - type: CertificateCleanup
+      status: "True"
+      reason: OwnerRefEnabled
   agentsInUse: 14
   tasksInUse: 2
   agentsReplacing: 1
@@ -174,6 +177,7 @@ status:
 | `Ready` | `True` with `reason: AllReferencesResolved` when every `allowedProviders` and `allowedToolProviders` entry names an existing provider, every `allowedCIDRs` entry parses (rule 19), and every `allowedHosts` entry is a DNS name (rule 20). Otherwise `False` with a message listing every problem, sorted and joined with `; `. The reason is `InvalidCIDR` when an `allowedCIDRs` entry does not parse, which sorts first, and `InvalidReference` for a missing provider or tool provider or a malformed host. Provider health is not consulted. |
 | `FQDNPolicySupported` | Set on every pass: `reason: NoHostsRequested` while `allowedHosts` is empty; otherwise `FQDNPolicySupported` or `FQDNPolicyUnsupported` from the CNI probe described under the design notes. |
 | `SecurityBaseline` | Set on every pass: `True, reason: RestrictedBaseline` when no declared `security` field falls below the restricted Pod Security Standard; otherwise `False, reason: BelowRestrictedBaseline` with a message naming each relaxed field, and a `Warning` event of the same reason when the relaxation first appears. An unset field is never a deviation: it takes the baseline value. |
+| `CertificateCleanup` | A cluster capability, set on every class like `FQDNPolicySupported`: whether cert-manager runs with `--enable-certificate-owner-ref=true` ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `True, reason: OwnerRefEnabled` when the flag is set, so deleting an Agent or AgentTask deletes its TLS Secret. `False, reason: OwnerRefDisabled` when it is not, so a deleted workload's TLS Secret is orphaned; setting the flag later flips this to `True` without recreating workloads ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `Unknown, reason: ControllerSecretNotFound` when the controller's own `kaalm-controller-tls` Secret is missing. It never affects `Ready` and emits no Event; the controller logs the result once at startup and again only when it changes. |
 
 `agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid spec-drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` under the `Replacing` column.
 

@@ -42,3 +42,17 @@ key order, for controller flags that take one.
 {{- end -}}
 {{- join "," $pairs -}}
 {{- end -}}
+
+{{/*
+The CA Bundle sources shared by the workload Bundle (kaalm-ca) and the
+operator Bundle (kaalm-ca-system): the kaalm-ca Secret first, then
+trustManager.extraSources verbatim.
+*/}}
+{{- define "kaalm.caBundleSources" -}}
+- secret:
+    name: kaalm-ca
+    key: tls.crt
+{{- with .Values.trustManager.extraSources }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}

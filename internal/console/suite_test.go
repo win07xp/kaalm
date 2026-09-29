@@ -124,7 +124,7 @@ func TestData_AgainstRealAPIServer(t *testing.T) {
 	}
 
 	d := &Data{Reader: envClient}
-	rows, err := d.Fleet(ctx, "console-e2e")
+	rows, _, err := d.Fleet(ctx, "console-e2e", defaultListLimit)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("fleet = %+v, %v", rows, err)
 	}
@@ -141,7 +141,7 @@ func TestData_AgainstRealAPIServer(t *testing.T) {
 	}
 
 	// Namespace scoping: another namespace sees no fleet.
-	empty, err := d.Fleet(ctx, "default")
+	empty, _, err := d.Fleet(ctx, "default", defaultListLimit)
 	if err != nil || len(empty) != 0 {
 		t.Errorf("default fleet = %+v", empty)
 	}

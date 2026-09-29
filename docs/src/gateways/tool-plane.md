@@ -175,7 +175,7 @@ MCP revision **2026-07-28** makes the protocol stateless. Kaalm is dual-era for 
 
 ### Limits and SSRF protection
 
-Request and response bodies are capped, and each call carries an upstream timeout. Both reuse the LLM proxy's values: the cap is `gateway.maxLLMRequestBodyBytes`, and the timeout is `gateway.providerFirstByteTimeout`. On the broker the timeout is one deadline for each call, response included.
+Request and response bodies are capped by `gateway.mcpMaxBodyBytes` (default 4 MiB), and each call carries an upstream timeout, `gateway.mcpUpstreamTimeout` (default 120s). The broker uses these dedicated settings, distinct from the LLM proxy's `gateway.maxLLMRequestBodyBytes` and `gateway.providerFirstByteTimeout`. Over the body cap: `413 request_too_large` for the request, `413 response_too_large` for the response. The timeout is one deadline for each call, response included: exceeding it gives `504 tool_timeout`, retryable.
 
 ToolProvider endpoints are operator-declared configuration, exactly as ModelProvider endpoints are, so they get the trust provider endpoints get rather than the full [callback policy](../resources/validation-and-defaulting.md) that user-supplied callback URLs receive. The schema requires `https://`, and the broker never follows redirects, which closes the confused-deputy path a compromised tool server could otherwise open.
 
@@ -215,7 +215,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Session id bound to another caller | `403 access_denied`; the audit record names the mismatch |
 | Credential Secret unreadable | `503 tool_unavailable`, retryable |
 | Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, retryable, `Retry-After: 1` |
-| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable. The health probe sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid`; as shipped no Warning event is emitted on the ToolProvider for it |
+| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable, with a `Warning` event, `reason=CredentialsInvalid`, recorded on the ToolProvider for the rejected call. The health probe separately sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid` ([ToolProviderReconciler](../controller/reconcilers.md#toolproviderreconciler)) |
 | `tools/list` response the broker cannot parse | `503 tool_unavailable`, not retryable |
 | Tool call exceeds the upstream timeout | `504 tool_timeout`, retryable |
 | Other protocol-level 4xx from the server | relayed verbatim (an expired session's 404, for example), so MCP session semantics survive the broker |

@@ -99,6 +99,13 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		res := r.Health.Probe(ctx, &tp, credential)
 		switch {
 		case res.AuthFailed:
+			// The event fires on entry to CredentialsInvalid, not on every
+			// probe pass while the credential stays rejected.
+			if prev := apimeta.FindStatusCondition(tp.Status.Conditions, kaalmv1beta1.ConditionHealthy); prev == nil ||
+				prev.Reason != kaalmv1beta1.ReasonCredentialsInvalid {
+				r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonCredentialsInvalid,
+					"tool server rejected the credential; credential rotation may be needed")
+			}
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
 				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
 			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false,

@@ -190,3 +190,85 @@ func TestSessionStore_Delete(t *testing.T) {
 		t.Error("a deleted session must not resolve")
 	}
 }
+
+func TestGate_CanViewAllAsksClusterWideAndCaches(t *testing.T) {
+	az := &fakeAuthorizer{allowed: map[string]bool{
+		"priya/list/agents.kaalm.io/": true,
+	}}
+	g := NewGate(az)
+	now := time.Now()
+	g.now = func() time.Time { return now }
+
+	if ok, err := g.CanViewAll(context.Background(), Identity{Username: "priya"}); err != nil || !ok {
+		t.Fatalf("CanViewAll = %v, %v", ok, err)
+	}
+	if az.last != "priya/list/agents.kaalm.io/" {
+		t.Errorf("cluster-wide check asked %q, want an empty-namespace review", az.last)
+	}
+	if ok, _ := g.CanViewAll(context.Background(), Identity{Username: "dev"}); ok {
+		t.Error("dev holds no cluster-wide grant")
+	}
+	before := az.calls
+	_, _ = g.CanViewAll(context.Background(), Identity{Username: "priya"})
+	if az.calls != before {
+		t.Error("a cached cluster-wide answer must not hit the authorizer")
+	}
+}
+
+func TestGate_SweepDropsExpiredEntries(t *testing.T) {
+	az := &fakeAuthorizer{allowed: map[string]bool{}}
+	g := NewGate(az)
+	now := time.Now()
+	g.now = func() time.Time { return now }
+	priya := Identity{Username: "priya"}
+
+	_, _ = g.CanView(context.Background(), priya, "team-a")
+	now = now.Add(sarCacheTTL / 2)
+	_, _ = g.CanView(context.Background(), priya, "team-b")
+
+	now = now.Add(sarCacheTTL/2 + time.Second)
+	g.Sweep()
+	if len(g.cache) != 1 {
+		t.Fatalf("after sweep the cache holds %d entries, want only team-b's", len(g.cache))
+	}
+	if _, ok := g.cache[gateKey{user: "priya", namespace: "team-b", verb: "list:agents"}]; !ok {
+		t.Error("the unexpired entry must survive the sweep")
+	}
+}
+
+func TestCachingReviewer_SweepDropsExpiredEntries(t *testing.T) {
+	fr := &fakeReviewer{tokens: map[string]Identity{"old": {Username: "a"}, "new": {Username: "b"}}}
+	cr := NewCachingReviewer(fr)
+	now := time.Now()
+	cr.now = func() time.Time { return now }
+
+	_, _ = cr.Review(context.Background(), "old")
+	now = now.Add(reviewCacheTTL / 2)
+	_, _ = cr.Review(context.Background(), "new")
+
+	now = now.Add(reviewCacheTTL/2 + time.Second)
+	cr.Sweep()
+	if len(cr.cache) != 1 {
+		t.Fatalf("after sweep the cache holds %d entries, want 1", len(cr.cache))
+	}
+}
+
+func TestSessionStore_SweepDropsSessionsPastMaxAge(t *testing.T) {
+	fr := &fakeReviewer{tokens: map[string]Identity{"tok": {Username: "priya"}}}
+	st := NewSessionStore(fr)
+	now := time.Now()
+	st.now = func() time.Time { return now }
+
+	old, _, _ := st.Create(context.Background(), "tok")
+	now = now.Add(sessionMaxAge / 2)
+	fresh, _, _ := st.Create(context.Background(), "tok")
+
+	now = now.Add(sessionMaxAge/2 + time.Minute)
+	st.Sweep()
+	if _, ok := st.m[old]; ok {
+		t.Error("a session past the 24h cap must be swept without being touched")
+	}
+	if _, ok := st.m[fresh]; !ok {
+		t.Error("a live session must survive the sweep")
+	}
+}

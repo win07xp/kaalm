@@ -56,12 +56,12 @@ sessions are held in memory and a read surface carries no availability
 requirement; [The two Deployments](../operations/deployment.md#the-two-deployments)
 states the chart settings.
 
-The console ServiceAccount holds `get`, `list`, and `watch` on the six
-`kaalm.io` kinds and on Namespaces, cluster-wide, and `create` on
-`TokenReview` and `SubjectAccessReview`. It holds nothing else: no Secrets,
-ConfigMaps, or Pods, and no write on any Kaalm object. As shipped the data
-layer reads four of the six kinds (Agent, AgentTask, AgentChannel,
-ModelProvider); AgentClass and ToolProvider are granted and unused.
+The console ServiceAccount holds `get`, `list`, and `watch` on four
+`kaalm.io` kinds (Agent, AgentTask, AgentChannel, ModelProvider) and on
+Namespaces, cluster-wide, and `create` on `TokenReview` and
+`SubjectAccessReview`. It holds nothing else: no Secrets, ConfigMaps, or
+Pods, no AgentClass or ToolProvider access, and no write on any Kaalm
+object.
 
 ![The console: the operator reaches the HTML pages by port-forward with a session cookie, or the JSON read API with a bearer token; both faces share one data layer that watches four CRDs and Namespaces through the Kubernetes API server under the console ServiceAccount; the console validates callers with TokenReview and SubjectAccessReview, calls the gateway for test-chat and spend over mTLS with the console SAN, and the gateway delivers to the agent Pod.](../diagrams/console-overview.svg)
 
@@ -107,16 +107,28 @@ faces over one data layer.
 | Method and path | Returns |
 |---|---|
 | `GET /api/v1/namespaces` | The namespaces this caller can view, filtered by [Authentication](#authentication) |
-| `GET /api/v1/namespaces/{ns}/agents` | Fleet rows for the namespace |
+| `GET /api/v1/namespaces/{ns}/agents` | Fleet rows for the namespace, limited |
 | `GET /api/v1/namespaces/{ns}/agents/{name}` | One agent in detail: conditions, class, providers, tools, endpoint, pod and PVC names, and its own current-period spend |
-| `GET /api/v1/namespaces/{ns}/tasks` | Task history rows |
-| `GET /api/v1/namespaces/{ns}/channels` | Channel health rows |
+| `GET /api/v1/namespaces/{ns}/tasks` | Task history rows, limited |
+| `GET /api/v1/namespaces/{ns}/channels` | Channel health rows, limited |
 | `GET /api/v1/namespaces/{ns}/spend` | Per-provider budget usage for the namespace, plus the per-workload breakdown |
 | `POST /api/v1/namespaces/{ns}/agents/{name}/chat` | Test-chat: delivers one message, returns the reply |
 
+The three routes marked "limited" take a `limit` query parameter: 100 rows
+by default, and up to 1000. A larger value is clamped to 1000 rather than
+rejected; a value that isn't a positive integer answers `400
+invalid_request`. Each response holds the newest `limit` rows by creation
+time (ties broken by name), in the same order the unlimited response used.
+Alongside the rows, the response carries `total` (how many objects the
+namespace holds of that kind) and `truncated` (`true` when `total` is
+greater than the number of rows returned). Spend and the single-agent route
+take no `limit`.
+
 Errors use the gateway's envelope, `{"error": {"type", "message"}}`, with
-`401 unauthorized`, `403 access_denied`, `400 invalid_request`, `404`, and
-`502` or `503 internal_unavailable`; the chat route relays the gateway's own
+`401 unauthorized`, `403 access_denied`, `400 invalid_request`, `404`,
+`413 request_too_large` on the chat route when the request body exceeds the
+console's own body cap ([Test-chat](#test-chat)), and `502` or `503
+internal_unavailable`; the chat route otherwise relays the gateway's own
 status. The pages have routes of their own: `GET /login` and `POST /login`,
 `POST /logout`, `GET /`, `GET /ns/{ns}`, `GET /ns/{ns}/agents/{name}`, and
 `POST /ns/{ns}/agents/{name}/chat`.
@@ -182,11 +194,21 @@ The console authenticates humans with the cluster's own `TokenReview` and
    gated separately: the caller must be allowed to `create`
    `agentchannels.kaalm.io` in the namespace, because an AgentChannel is the
    standing form of what test-chat does once. Results are cached per
-   (username, namespace, verb and resource) for five minutes. The namespace
-   list is built by one `SubjectAccessReview` per namespace in the cluster.
+   (username, namespace, verb and resource) for five minutes. To build the
+   namespace list, the console first asks one cluster-wide
+   `SubjectAccessReview`: can this caller `list` `agents.kaalm.io` with no
+   namespace given? A yes makes every namespace visible with no further
+   reviews. Only a no falls back to one `SubjectAccessReview` per namespace.
+   The cluster-wide answer is cached the same way, for five minutes. If a
+   review fails, the namespace list request answers `503` instead of
+   silently dropping the namespace.
 4. **The reads' identity.** The `SubjectAccessReview` is the gate; the reads
    themselves run under the console's ServiceAccount. The console does not
    impersonate the caller.
+
+A background sweep clears the `SubjectAccessReview` cache, the token-review
+cache, and login sessions past their 24-hour cap every five minutes, so an
+expired entry leaves memory even when nobody looks it up again.
 
 `ModelProvider` is cluster-scoped, but the spend panel shows only the budget
 rows of the namespace being viewed, and the namespace gate covers them.
@@ -229,12 +251,20 @@ agents with session memory behave normally; and no collision with a real
 channel session is possible, because real channel identifiers begin with
 `/channels/`.
 
-Limits: plain text only (`attachments` is always empty). The gateway caps the
-request body at `gateway.maxMessageBodyBytes` and answers `413` above it,
-caps the reply as it does a sync webhook reply, and bounds the call by
+Limits: plain text only (`attachments` is always empty). Both the console's
+chat routes and the gateway's `POST /v1/test-chat` cap the request body at
+`gateway.maxMessageBodyBytes`, so a single chart value bounds both hops:
+`POST /api/v1/namespaces/{ns}/agents/{name}/chat` reads the body through
+`http.MaxBytesReader` and, above the cap, answers `413 request_too_large`
+with the message "request body exceeds N bytes" without reading the rest of
+the body and without calling the gateway; the page form route,
+`POST /ns/{ns}/agents/{name}/chat`, enforces the same cap and answers `413`
+as plain text. The console reads its cap from `--max-message-body-bytes`
+(default 1 MiB), the flag the chart sets from `gateway.maxMessageBodyBytes`,
+the same value the gateway itself applies. The gateway also caps the reply
+as it does a sync webhook reply, and bounds the call by
 `gateway.syncDeliveryDeadline`; the console's client gives up after two
-minutes. As shipped the console's own chat route reads the body with no cap of
-its own before forwarding it.
+minutes.
 
 ## Console observability
 

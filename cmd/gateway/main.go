@@ -24,7 +24,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -54,6 +53,8 @@ func main() {
 		callbackAllowlist    string
 		maxBodyBytes         int64
 		upstreamTimeout      time.Duration
+		mcpMaxBodyBytes      int64
+		mcpUpstreamTimeout   time.Duration
 		disableSourceIPCheck bool
 		userAddr             string
 		agentHostOverride    string
@@ -93,6 +94,8 @@ func main() {
 	flag.Int64Var(&maxBodyBytes, "max-llm-body-bytes", 4<<20, "inbound LLM request body cap")
 	flag.DurationVar(&upstreamTimeout, "upstream-timeout", 120*time.Second,
 		"per-attempt upstream provider bound: the wait for the first response byte, then each gap between body reads")
+	flag.Int64Var(&mcpMaxBodyBytes, "mcp-max-body-bytes", 4<<20, "brokered MCP request and response body cap")
+	flag.DurationVar(&mcpUpstreamTimeout, "mcp-upstream-timeout", 120*time.Second, "brokered MCP whole-call timeout")
 	flag.BoolVar(&disableSourceIPCheck, "disable-source-ip-check", false,
 		"skip the source-IP-to-Pod cross-check (dev only; the check is defense in depth and must stay on in-cluster)")
 	flag.StringVar(&userAddr, "user-addr", ":8080", "User Gateway listener address")
@@ -244,6 +247,8 @@ func main() {
 		CAFile:                   caFile,
 		MaxBodyBytes:             maxBodyBytes,
 		UpstreamTimeout:          upstreamTimeout,
+		MCPMaxBodyBytes:          mcpMaxBodyBytes,
+		MCPUpstreamTimeout:       mcpUpstreamTimeout,
 		SessionKey:               sessionKey,
 		UpstreamCAFiles:          splitPaths(upstreamCAFile),
 		CallbackCAFiles:          splitPaths(callbackCAFile),
@@ -282,6 +287,7 @@ func main() {
 	server.Completions = &gateway.KubeCompletionWriter{Client: clientset}
 	server.Metrics = gateway.NewMetrics(metrics.Registry)
 	server.Recorder = cl.GetEventRecorderFor("kaalm-gateway")
+	server.Informers = requestPathInformers(cl.GetCache(), logger)
 
 	// Prometheus metrics on a dedicated unauthenticated in-cluster port.
 	go func() {
@@ -366,28 +372,9 @@ func main() {
 		logger.Warn("budget ConfigMap informer unavailable; folds ride the tick only", "error", err)
 	}
 
-	// The gateway's half of the channel-delete handshake: once a channel is
-	// observed Terminating, confirm disconnection with the annotation the
-	// reconciler waits on. The webhook write gate itself lives in the intake
-	// handler.
+	// The gateway's half of the channel-delete handshake (Add and Update).
 	if informer, err := cl.GetCache().GetInformer(ctx, &kaalmv1beta1.AgentChannel{}); err == nil {
-		_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
-			UpdateFunc: func(_, newObj any) {
-				ch, ok := newObj.(*kaalmv1beta1.AgentChannel)
-				if !ok || ch.Status.Phase != kaalmv1beta1.ChannelTerminating {
-					return
-				}
-				if ch.Annotations[kaalmv1beta1.AnnotationChannelDisconnected] == kaalmv1beta1.AnnotationTrue {
-					return
-				}
-				patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`,
-					kaalmv1beta1.AnnotationChannelDisconnected, kaalmv1beta1.AnnotationTrue))
-				if err := cl.GetClient().Patch(ctx, ch.DeepCopy(),
-					client.RawPatch(types.MergePatchType, patch)); err != nil {
-					logger.Warn("disconnect annotation patch failed", "channel", ch.Name, "error", err)
-				}
-			},
-		})
+		_, _ = informer.AddEventHandler(channelDisconnectHandler(ctx, cl.GetClient(), logger))
 	}
 
 	logger.Info("kaalm gateway starting",
@@ -398,6 +385,37 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("kaalm gateway shut down")
+}
+
+// requestPathInformers registers the informers the request path reads,
+// before the cache starts, so the startup WaitForCacheSync covers every one
+// of them and /readyz can report each by name. Registered lazily, an
+// informer would first sync inside a live request. The list is every kind
+// KubeStore reads from the cache, and matches the table in
+// docs/src/gateways/llm/operations.md (Gateway readiness).
+func requestPathInformers(c cache.Cache, logger *slog.Logger) []gateway.InformerSync {
+	objects := []struct {
+		name string
+		obj  client.Object
+	}{
+		{"Pod", &corev1.Pod{}},
+		{"Agent", &kaalmv1beta1.Agent{}},
+		{"AgentTask", &kaalmv1beta1.AgentTask{}},
+		{"AgentClass", &kaalmv1beta1.AgentClass{}},
+		{"AgentChannel", &kaalmv1beta1.AgentChannel{}},
+		{"ModelProvider", &kaalmv1beta1.ModelProvider{}},
+		{"ToolProvider", &kaalmv1beta1.ToolProvider{}},
+	}
+	out := make([]gateway.InformerSync, 0, len(objects))
+	for _, o := range objects {
+		informer, err := c.GetInformer(context.Background(), o.obj, cache.BlockUntilSynced(false))
+		if err != nil {
+			logger.Error("registering informer", "kind", o.name, "error", err)
+			os.Exit(1)
+		}
+		out = append(out, gateway.InformerSync{Name: o.name, HasSynced: informer.HasSynced})
+	}
+	return out
 }
 
 // parseBackoff parses a comma-separated duration schedule like "1s,5s,25s".

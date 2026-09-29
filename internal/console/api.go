@@ -19,11 +19,36 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// The list routes' limit query parameter (docs/src/console/overview.md, The
+// read API): the default when absent, and the hard maximum a larger value
+// clamps to.
+const (
+	defaultListLimit = 100
+	maxListLimit     = 1000
+)
+
+// listLimit reads the limit query parameter. Absent means defaultListLimit;
+// above maxListLimit clamps; anything but a positive integer is an error.
+func listLimit(r *http.Request) (int, error) {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return defaultListLimit, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("limit must be a positive integer")
+	}
+	return min(n, maxListLimit), nil
+}
 
 // identityKey carries the authenticated Identity through a request context.
 type identityKey struct{}
@@ -101,35 +126,63 @@ func (s *Server) requireAPI(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// apiNamespaces lists the namespaces this caller may view.
-func (s *Server) apiNamespaces(w http.ResponseWriter, r *http.Request) {
-	id := identityFrom(r.Context())
-	all, err := s.Data.Namespaces(r.Context())
+// visibleNamespaces returns the namespaces this caller may view. A caller
+// allowed to list agents in every namespace sees them all after one review;
+// only a caller without that grant costs one review per namespace.
+func (s *Server) visibleNamespaces(ctx context.Context, id Identity) ([]string, error) {
+	all, err := s.Data.Namespaces(ctx)
 	if err != nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "listing namespaces failed")
-		return
+		return nil, err
+	}
+	everywhere, err := s.Gate.CanViewAll(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if everywhere {
+		return all, nil
 	}
 	visible := make([]string, 0, len(all))
 	for _, ns := range all {
-		allowed, err := s.Gate.CanView(r.Context(), id, ns)
+		allowed, err := s.Gate.CanView(ctx, id, ns)
 		if err != nil {
-			writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "authorization check failed")
-			return
+			return nil, err
 		}
 		if allowed {
 			visible = append(visible, ns)
 		}
 	}
+	return visible, nil
+}
+
+// apiNamespaces lists the namespaces this caller may view.
+func (s *Server) apiNamespaces(w http.ResponseWriter, r *http.Request) {
+	visible, err := s.visibleNamespaces(r.Context(), identityFrom(r.Context()))
+	if err != nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "listing namespaces failed")
+		return
+	}
 	writeJSON(w, map[string]any{"namespaces": visible})
 }
 
-func (s *Server) apiFleet(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Data.Fleet(r.Context(), r.PathValue("ns"))
+// apiList serves one limited list route: the rows under key, the
+// namespace's total, and whether the limit cut the list.
+func apiList[T any](w http.ResponseWriter, r *http.Request, key, what string,
+	list func(ctx context.Context, ns string, limit int) ([]T, int, error)) {
+	limit, err := listLimit(r)
 	if err != nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "listing agents failed")
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	writeJSON(w, map[string]any{"agents": rows})
+	rows, total, err := list(r.Context(), r.PathValue("ns"), limit)
+	if err != nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "listing "+what+" failed")
+		return
+	}
+	writeJSON(w, map[string]any{key: rows, "total": total, "truncated": total > len(rows)})
+}
+
+func (s *Server) apiFleet(w http.ResponseWriter, r *http.Request) {
+	apiList(w, r, "agents", "agents", s.Data.Fleet)
 }
 
 func (s *Server) apiAgent(w http.ResponseWriter, r *http.Request) {
@@ -147,21 +200,11 @@ func (s *Server) apiAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiTasks(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Data.Tasks(r.Context(), r.PathValue("ns"))
-	if err != nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "listing tasks failed")
-		return
-	}
-	writeJSON(w, map[string]any{"tasks": rows})
+	apiList(w, r, "tasks", "tasks", s.Data.Tasks)
 }
 
 func (s *Server) apiChannels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Data.Channels(r.Context(), r.PathValue("ns"))
-	if err != nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "listing channels failed")
-		return
-	}
-	writeJSON(w, map[string]any{"channels": rows})
+	apiList(w, r, "channels", "channels", s.Data.Channels)
 }
 
 func (s *Server) apiSpend(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +270,12 @@ func (s *Server) apiChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Content) == "" {
+	err = json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Config.MaxMessageBodyBytes)).Decode(&req)
+	if tooLarge(err) {
+		s.writeTooLarge(w)
+		return
+	}
+	if err != nil || strings.TrimSpace(req.Content) == "" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "a non-empty content field is required")
 		return
 	}
@@ -246,4 +294,16 @@ func (s *Server) apiChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+// tooLarge reports whether err is http.MaxBytesReader's cap being hit.
+func tooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
+}
+
+// writeTooLarge answers 413 in the gateway's own shape for the same cap.
+func (s *Server) writeTooLarge(w http.ResponseWriter) {
+	writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+		fmt.Sprintf("request body exceeds %d bytes", s.Config.MaxMessageBodyBytes))
 }

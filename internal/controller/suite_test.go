@@ -29,6 +29,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -276,6 +277,12 @@ func TestMain(m *testing.M) {
 		// FQDNPolicySupported=False path stays covered while the Agent and
 		// AgentTask reconcilers below synthesize policies.
 		FQDNSupport: NewFQDNProbe(withoutGroup{dc, "cilium.io"}).Supported,
+		// No test creates this Secret except cert_cleanup_test.go, so other
+		// classes report CertificateCleanup=Unknown.
+		CertCleanup: &CertCleanupCheck{
+			Reader: mgr.GetClient(),
+			Secret: types.NamespacedName{Namespace: testOperatorNamespace, Name: ControllerTLSSecretName},
+		},
 	}).SetupWithManager(mgr); err != nil {
 		panic(err)
 	}

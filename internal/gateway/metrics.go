@@ -122,7 +122,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "kaalm_channel_response_too_large_total", Help: "Oversized agent responses.",
 		}, []string{labelNamespace, "mode"}),
 		patchFailed: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "kaalm_channel_async_patch_failed_total", Help: "Async response patch exhaustions (v1 silent-loss).",
+			Name: "kaalm_channel_async_patch_failed_total", Help: "Async response payload drops: Patch retries exhausted or the pipeline context ended (v1 silent-loss).",
 		}, []string{labelNamespace}),
 	}
 }

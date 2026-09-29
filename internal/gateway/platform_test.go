@@ -56,16 +56,20 @@ func TestTruncatedReplyBody(t *testing.T) {
 	}
 }
 
-// eventCapture records Eventf messages for assertions.
+// eventCapture records Eventf calls for assertions.
 type eventCapture struct {
 	mu       sync.Mutex
 	messages []string
+	reasons  []string
+	objects  []runtime.Object
 }
 
-func (c *eventCapture) Eventf(_ runtime.Object, _, _, messageFmt string, args ...any) {
+func (c *eventCapture) Eventf(object runtime.Object, _, reason, messageFmt string, args ...any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.messages = append(c.messages, fmt.Sprintf(messageFmt, args...))
+	c.reasons = append(c.reasons, reason)
+	c.objects = append(c.objects, object)
 }
 
 // TestReplyRefused_BoundsEventDetail: a 64 KiB platform error body must not
