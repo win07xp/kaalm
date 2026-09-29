@@ -283,17 +283,12 @@ func main() {
 		PprofBindAddress: pprofAddr,
 		LeaderElection:   enableLeaderElection,
 		LeaderElectionID: "e06da714.io",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
+		// A leader that stops (a drain, a rollout) releases the Lease on its
+		// way out, so the standby takes over at once instead of waiting out
+		// the lease duration. Safe here because main does nothing after
+		// mgr.Start returns but log and exit: no cleanup runs while another
+		// replica may already lead.
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -395,15 +390,24 @@ func main() {
 			KeyFile:           controllerTLSKey,
 			CAFile:            controllerTLSCA,
 		}
-		if err := mgr.Add(&controller.ActivatorServer{
+		activator := &controller.ActivatorServer{
 			Client:            mgr.GetClient(),
 			OperatorNamespace: operatorNamespace,
 			Addr:              activatorAddr,
 			CertFile:          controllerTLSCert,
 			KeyFile:           controllerTLSKey,
 			CAFile:            controllerTLSCA,
-		}); err != nil {
+		}
+		if err := mgr.Add(activator); err != nil {
 			setupLog.Error(err, "unable to add the activator server")
+			os.Exit(1)
+		}
+		// A replica is Ready only once the activator listener is bound, so
+		// the Service never routes a wake to a replica still starting it.
+		// A listener that fails later exits the process (Start's error
+		// stops the manager).
+		if err := mgr.AddReadyzCheck("activator", activator.ReadyCheck); err != nil {
+			setupLog.Error(err, "unable to set up the activator ready check")
 			os.Exit(1)
 		}
 	} else {

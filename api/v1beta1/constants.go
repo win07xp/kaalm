@@ -76,6 +76,7 @@ const (
 	ConditionCompleted           = "Completed"           // AgentTask
 	ConditionPlatformConnected   = "PlatformConnected"   // AgentChannel, tri-state
 	ConditionPodUpToDate         = "PodUpToDate"         // Agent: spec-drift replacement progress
+	ConditionIdleDetection       = "IdleDetection"       // Agent: False (Disabled) when no idle timeout applies; absent otherwise
 )
 
 // AgentChannel platform types (spec.type). discord and whatsapp name the
@@ -149,6 +150,7 @@ const (
 	ReasonPodCurrent                 = "Current"
 	ReasonReplacementPending         = "ReplacementPending"
 	ReasonReplacing                  = "Replacing"
+	ReasonIdleDetectionDisabled      = "Disabled" // IdleDetection: no effective idle timeout
 	ReasonSpecDriftPending           = "SpecDriftPending"
 	ReasonDeletionBlocked            = "DeletionBlocked"
 )

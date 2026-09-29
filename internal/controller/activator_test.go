@@ -323,3 +323,38 @@ func TestNeedLeaderElection(t *testing.T) {
 		t.Error("the activator must run on every replica (NeedLeaderElection=false)")
 	}
 }
+
+// The activator's readiness check fails until the :9443 listener is bound
+// and passes while it serves; once Start returns it fails again. A bind
+// failure never passes it.
+func TestActivator_ReadyCheck(t *testing.T) {
+	pki := newActivatorPKI(t)
+	serving := pki.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local", "localhost")
+	certFile, keyFile, caFile := pki.writeFiles(t, serving)
+
+	srv := &ActivatorServer{Addr: "127.0.0.1:0", CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
+	if err := srv.ReadyCheck(nil); err == nil {
+		t.Fatal("the check must fail before Start binds the listener")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Start(ctx) }()
+	eventually(t, func() error { return srv.ReadyCheck(nil) })
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start after cancel: %v", err)
+	}
+	if err := srv.ReadyCheck(nil); err == nil {
+		t.Error("the check must fail once the listener has shut down")
+	}
+
+	badAddr := &ActivatorServer{CAFile: caFile, CertFile: certFile, KeyFile: keyFile, Addr: "not-a-valid-address"}
+	if err := badAddr.Start(context.Background()); err == nil {
+		t.Fatal("an unbindable address must fail Start")
+	}
+	if err := badAddr.ReadyCheck(nil); err == nil {
+		t.Error("a replica whose listener never bound must not pass the check")
+	}
+}

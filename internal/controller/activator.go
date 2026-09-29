@@ -22,8 +22,10 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,6 +50,10 @@ type ActivatorServer struct {
 	CertFile          string
 	KeyFile           string
 	CAFile            string
+
+	// listening is true from the moment the listener is bound until Start
+	// returns; ReadyCheck reads it.
+	listening atomic.Bool
 }
 
 // NeedLeaderElection returns false: the activator runs on every replica.
@@ -77,8 +83,17 @@ func (s *ActivatorServer) Start(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Bind before serving, so the readiness flag means the port accepts
+	// connections: the kernel queues any that arrive before Serve runs.
+	ln, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		return err
+	}
+	s.listening.Store(true)
+	defer s.listening.Store(false)
+
 	errCh := make(chan error, 1)
-	go func() { errCh <- server.ListenAndServeTLS("", "") }()
+	go func() { errCh <- server.ServeTLS(ln, "", "") }()
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -91,6 +106,18 @@ func (s *ActivatorServer) Start(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+// ReadyCheck is the manager's readyz check for the activator: it passes only
+// while the :9443 listener is bound and serving, so a replica joins the
+// controller Service only once it can take a wake. It reads a flag, so it
+// costs nothing per probe. A listener that fails after binding ends Start
+// with an error, which stops the manager and exits the process.
+func (s *ActivatorServer) ReadyCheck(_ *http.Request) error {
+	if !s.listening.Load() {
+		return errors.New("activator listener not serving")
+	}
+	return nil
 }
 
 // handleActivate authorizes the gateway SAN and patches the wake annotation.

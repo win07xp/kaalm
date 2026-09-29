@@ -18,9 +18,21 @@ The operator is one `controller-runtime` binary. It hosts six reconcilers, `Agen
 
 The activator listener serves TLS with `tls.Config.ClientAuth = VerifyClientCertIfGiven`, so a caller without a client cert completes the handshake and per-path middleware enforces mTLS with SAN authorization on `/v1/activate` only; the rules are under [Internal endpoint authentication](../security/rbac.md#internal-endpoint-authentication). Kubelet probes the `:8081` listener, not `:9443`. The controller serves no admission webhooks; see [No admission webhooks](#no-admission-webhooks).
 
+### Readiness
+
+The chart's readiness probe calls `/readyz` on `:8081`. That endpoint runs up to three checks:
+
+| Check | Passes when | Added when |
+|---|---|---|
+| `readyz` | always (a ping) | always |
+| `conversion-webhook` | the conversion listener on `:9444` accepts a TLS connection | `--webhook-cert-path` is set |
+| `activator` | the `:9443` listener is bound and serving | the controller TLS identity is set (`--controller-tls-cert`), the same condition that enables the activator |
+
+The activator binds its port before it starts serving. The check reads a flag that the activator sets at bind time and clears when the listener stops, so a probe costs nothing. A replica therefore joins the `kaalm-controller` Service endpoints only once it can take a wake. A listener that fails after startup returns an error from the activator's `Start`, which stops the manager and exits the process, so a replica never stays Ready with a dead activator. The `:9443` `/readyz` path still answers `ok`, but only a serving listener can reach it; the kubelet does not probe it.
+
 ## Deployment and leader election
 
-The operator runs as a Deployment in `kaalm-system` with leader election on the Lease `e06da714.io`. The chart enforces two replicas as a floor; only the leader runs the reconcilers, the storage-version migrator, and the [async orphan pruner](finalizers.md#async-orphan-pruning), while every replica serves the activator, the conversion webhook, metrics, and the probes. Leader release on shutdown is not enabled, so after the leader exits the survivor acquires the Lease when it expires, 15 seconds by default, and reconciles from there. The replica count, disruption budget, and anti-affinity are under [The two Deployments](../operations/deployment.md#the-two-deployments).
+The operator runs as a Deployment in `kaalm-system` with leader election on the Lease `e06da714.io`. The chart enforces two replicas as a floor; only the leader runs the reconcilers, the storage-version migrator, and the [async orphan pruner](finalizers.md#async-orphan-pruning), while every replica serves the activator, the conversion webhook, metrics, and the probes. A leader that stops gracefully (a drain, a rollout, or SIGTERM) releases the Lease on its way out, so the standby acquires it on its next attempt (controller-runtime's default retry period, 2 seconds) and reconciles from there. This is safe because `main` does nothing after the manager stops except log and exit. A leader that crashes or is killed without a graceful stop still holds the Lease until it expires, 15 seconds by default. The replica count, disruption budget, and anti-affinity are under [The two Deployments](../operations/deployment.md#the-two-deployments).
 
 Every replica serves `/metrics` from its own cache. controller-runtime's reconcile and workqueue families read zero on a non-leader, but the three Kaalm phase gauges (`kaalm_agents`, `kaalm_tasks`, `kaalm_channels`) are computed from the cache on every scrape and read the same fleet counts on both replicas, so dashboards aggregate them with `max`, not `sum`; see [Observability](operations.md#observability).
 
@@ -46,11 +58,11 @@ Every reconciler runs on events first; each also requeues on a cadence of its ow
 
 | Reconciler | Requeues |
 |---|---|
-| Agent | every 15 seconds while `Running` or `Idle` (the activity cache window); every 30 seconds while a Ready gate or a gateway outage holds; every 5 seconds while waiting on the Certificate |
+| Agent | every 15 seconds while `Running` or `Idle` (the activity cache window); every 30 seconds while a Ready gate holds or a restarted gateway defers the idle decision; backing off from 30 seconds to 5 minutes while no gateway replica answers ([Gateway unavailability](hibernation-and-wake.md#when-activity-data-is-missing)); every 5 seconds while waiting on the Certificate |
 | AgentTask | every 5 seconds while waiting on the Certificate or for the Pod to become Ready; every 30 seconds while a pull Secret is missing; at `startTime + timeout` while `Running`; at TTL expiry once terminal |
 | ModelProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers.md#probe-backoff)); every minute for a provider with a budget period when the probe is disabled; the budget ConfigMap watch fires the fold between passes |
 | ToolProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers.md#probe-backoff)) |
 | AgentChannel | every minute |
 | AgentClass | on events only |
 
-controller-runtime's own resync (10 hours by default) is the only other periodic trigger. The Agent, AgentChannel, and AgentTask reconcilers each run up to `controller.maxConcurrentReconciles` reconciles at once (default 4; [Deployment](../operations/deployment.md)); controller-runtime serializes reconciles of the same object at any setting, and the reconcilers hold no state across objects that concurrency could race. Every cross-resource lookup goes through an indexed cache; the indexes and watches are tabled under [What each reconciler watches](reconcilers.md#what-each-reconciler-watches). The design target is 1,000 or more Agents and AgentTasks per cluster; [Load and scale](../operations/load-and-scale.md) records what a run proves.
+controller-runtime's own resync (10 hours by default) is the only other periodic trigger. The Agent, AgentChannel, and AgentTask reconcilers each run up to `controller.maxConcurrentReconciles` reconciles at once (default 4; [Deployment](../operations/deployment.md)); controller-runtime serializes reconciles of the same object at any setting, and the reconcilers hold no state across objects that concurrency could race. Every cross-resource lookup goes through an indexed cache, except the gateway recovery kick, which lists Agents from the cache without an index ([Gateway unavailability](hibernation-and-wake.md#when-activity-data-is-missing)); the indexes and watches are tabled under [What each reconciler watches](reconcilers.md#what-each-reconciler-watches). The design target is 1,000 or more Agents and AgentTasks per cluster; [Load and scale](../operations/load-and-scale.md) records what a run proves.
