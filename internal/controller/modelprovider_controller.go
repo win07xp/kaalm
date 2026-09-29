@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -45,9 +46,9 @@ import (
 const defaultHealthInterval = 60 * time.Second
 
 // ModelProviderReconciler validates a ModelProvider's credentials, fallback tree,
-// and degrade targets, probes it for liveness, and holds it in Terminating while
-// referenced. Budget reconciliation and GatewayReachable depend on the gateway and
-// are deferred to a later phase. See docs/src/controller/reconcilers.md
+// and degrade targets, reduces its budget partials, mirrors GatewayReachable
+// from gateway Pod readiness, probes it for liveness, and holds it in
+// Terminating while referenced. See docs/src/controller/reconcilers.md
 // (ModelProviderReconciler).
 type ModelProviderReconciler struct {
 	client.Client
@@ -126,6 +127,9 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		r.setReady(&mp, false, reason, strings.Join(problems, "; "))
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
+	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Budget reconciliation (the reducer over gateway partials) and the
 	// gateway-reachability mirror.
@@ -147,18 +151,17 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		res := r.Health.Probe(ctx, &mp, credential)
 		switch {
 		case res.AuthFailed:
-			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, "provider rejected the credential")
-			r.setReady(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, "provider rejected the credential")
-			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.interval(&mp)})
-		case res.Skipped:
-			apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
-				Type: kaalmv1beta1.ConditionHealthy, Status: metav1.ConditionUnknown,
-				Reason: "ProbeSkipped", Message: "no liveness probe implemented for this provider type yet",
-			})
+			msg := "provider rejected the credential"
+			if res.Err != nil {
+				msg += ": " + res.Err.Error()
+			}
+			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
+			r.setReady(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
+			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.probeRequeue(&mp)})
 		case res.Err != nil:
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			requeue = ctrl.Result{RequeueAfter: r.interval(&mp)}
+			requeue = ctrl.Result{RequeueAfter: r.probeRequeue(&mp)}
 		default: // Healthy
 			r.setHealthy(&mp, true, kaalmv1beta1.ReasonUpstreamReachable, "provider is reachable")
 			requeue = ctrl.Result{RequeueAfter: r.interval(&mp)}
@@ -477,6 +480,12 @@ func (r *ModelProviderReconciler) interval(mp *kaalmv1beta1.ModelProvider) time.
 	return defaultHealthInterval
 }
 
+// probeRequeue is the delay before the next probe: the interval, backed off
+// while the Healthy condition is False (see probeRequeue).
+func (r *ModelProviderReconciler) probeRequeue(mp *kaalmv1beta1.ModelProvider) time.Duration {
+	return probeRequeue(mp.Status.Conditions, r.interval(mp), time.Now())
+}
+
 func (r *ModelProviderReconciler) setReady(mp *kaalmv1beta1.ModelProvider, ok bool, reason, msg string) {
 	status := metav1.ConditionFalse
 	if ok {
@@ -522,6 +531,9 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
 		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.providersForSecret)).
+		// GatewayReachable follows gateway Pod readiness event-driven.
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.allModelProviders),
+			builder.WithPredicates(gatewayReadinessChanged(r.OperatorNamespace))).
 		Complete(r)
 }
 

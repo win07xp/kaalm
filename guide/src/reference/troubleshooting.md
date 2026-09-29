@@ -133,7 +133,13 @@ the last reference clears.
 - `InvalidModelMap`: a `modelMap` on a fallback edge names a model that one
   end's catalog does not have.
 
-`Healthy=False` with Ready=True is different: the spec is fine but the
+A `FallbackIneligible` `Warning` event with `Ready` still `True` is
+different: the reconciler's eligibility scan found a fallback candidate that
+one of your namespaces or models can never reach (an `allowedNamespaces` or
+`spec.models` mismatch on the candidate). It is advisory and clears on its
+own once the candidate's configuration is fixed.
+
+`Healthy=False` with Ready=True is different too: the spec is fine but the
 periodic upstream probe is failing; check the endpoint and the provider's
 status page. If the endpoint serves a certificate from a private CA (an
 in-cluster provider, for example) and the gateway forwards to it fine, the
@@ -144,7 +150,8 @@ on the chart. The same applies to a ToolProvider's `Healthy` column.
 ---
 
 *How this works: design book pages Gateways, API, Error reference (the full error
-catalog), Controller, Errors, events, and testing (error-handling philosophy), Controller,
-Finalizers (the deletion-hold mechanics), and Appendix,
-Scenarios (S5, S7, S10, S14 cover the revocation, hibernation, and budget
-stories behind these symptoms).*
+catalog), Controller, Errors, events, and testing (error-handling philosophy),
+Controller, Reconcilers (the reconcile-time fallback eligibility scan and the
+probe backoff), Controller, Finalizers (the deletion-hold mechanics), and
+Appendix, Scenarios (S5, S7, S10, S14 cover the revocation, hibernation, and
+budget stories behind these symptoms).*

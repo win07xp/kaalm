@@ -122,11 +122,17 @@ names the host, so `kubectl describe agentchannel` shows the typo.
   provider, or class never finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
   `CredentialsMissing` also fires a `Warning` event the first time `Ready`
   turns `False` with it; `CredentialsInvalid` stays a condition only.
-- `Healthy`: the periodic upstream probe (`UpstreamReachable` when good,
-  `ProviderUnhealthy` when not, `ProbeSkipped` for a type with no probe).
-  Ready without Healthy means valid config, unreachable provider.
+- `Healthy`: the periodic upstream probe, run against every provider type
+  (`UpstreamReachable` when good, `ProviderUnhealthy` when not, or
+  `CredentialsInvalid` when the probe itself is refused). A probe that keeps
+  failing is checked less often over time. Ready without Healthy means valid
+  config, unreachable provider.
 - `GatewayReachable`: mirrored onto every provider from the controller's
-  view of the gateway Pods.
+  view of the gateway Pods, refreshed on every reconcile pass and at once on
+  a gateway Pod readiness change.
+- `FallbackIneligible` (advisory, never affects `Ready`): the reconcile-time
+  scan found a fallback candidate that a caller's namespace or model can
+  never reach. Clears on its own once the configuration is fixed.
 - `DegradeTargetNotCheapest` (advisory, never affects `Ready`): a degrade
   policy's `degradeTo` is not the cheapest model in the catalog
   (`CheaperModelAvailable`); `False` with `DegradeTargetCheapest` once it is.

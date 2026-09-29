@@ -48,8 +48,8 @@ Every reconciler runs on events first; each also requeues on a cadence of its ow
 |---|---|
 | Agent | every 15 seconds while `Running` or `Idle` (the activity cache window); every 30 seconds while a Ready gate or a gateway outage holds; every 5 seconds while waiting on the Certificate |
 | AgentTask | every 5 seconds while waiting on the Certificate or for the Pod to become Ready; every 30 seconds while a pull Secret is missing; at `startTime + timeout` while `Running`; at TTL expiry once terminal |
-| ModelProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled, else every minute for a provider with a budget period; the budget ConfigMap watch fires the fold between passes |
-| ToolProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled |
+| ModelProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers.md#probe-backoff)); every minute for a provider with a budget period when the probe is disabled; the budget ConfigMap watch fires the fold between passes |
+| ToolProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers.md#probe-backoff)) |
 | AgentChannel | every minute |
 | AgentClass | on events only |
 

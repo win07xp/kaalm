@@ -81,7 +81,7 @@ status:
 | `Ready` | Whether the credential resolves. `True` with `reason: CredentialsValid`, and the message `provider is valid (no credential configured)` when there is no `credentialsRef`. `False` with `CredentialsMissing` when the Secret or key is absent or empty, `CredentialsInvalid` when the server answers the probe with a 401 or 403, or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). |
 | `Healthy` | The periodic probe. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event on every failing pass for a network or protocol failure, which does not affect `Ready`; `False` with `CredentialsInvalid` on a 401 or 403, which also sets `Ready=False`. A `Warning` event with reason `CredentialsInvalid` fires when `Healthy` first enters that reason, not on every pass while the credential stays rejected. |
 
-`healthCheck.enabled: false` disables the probe; `intervalSeconds` (default 60) sets its cadence and `timeoutSeconds` (default 10) bounds each probe sequence. The reconciler writes status only when it changes, so a pass that finds nothing new leaves the object untouched.
+`healthCheck.enabled: false` disables the probe; `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each probe sequence. A failing probe requeues on a backoff instead of the plain interval, the same one ModelProvider uses ([Probe backoff](../controller/reconcilers.md#probe-backoff)). The reconciler writes status only when it changes, so a pass that finds nothing new leaves the object untouched.
 
 ## Design notes
 

@@ -537,25 +537,30 @@ func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 	})
 }
 
-// ---- ModelProvider probe outcomes (Skipped, Err, interval) ----
+// ---- ModelProvider probe outcomes (AuthFailed detail, Err, interval) ----
 
-func TestModelProvider_ProbeSkipped(t *testing.T) {
-	mkSecret(t, "mp-skip-key")
-	fakeHealth.set("mp-skip", ProviderProbeResult{Skipped: true})
-	mkProvider(t, "mp-skip", func(mp *kaalmv1beta1.ModelProvider) {
-		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-skip-key", Key: "token"}
-		mp.Spec.HealthCheck = &kaalmv1beta1.ModelProviderHealthCheck{Enabled: true}
+// A rejected credential whose probe carries a detail (a Vertex Secret that
+// holds no service-account key) names it in the condition message.
+func TestModelProvider_AuthFailedDetailInMessage(t *testing.T) {
+	mkSecret(t, "mp-authdetail-key")
+	fakeHealth.set("mp-authdetail", ProviderProbeResult{
+		AuthFailed: true, Err: errString("invalid service-account key: not JSON"),
+	})
+	mkProvider(t, "mp-authdetail", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.CredentialsRef = kaalmv1beta1.SecretKeyReference{Name: "mp-authdetail-key", Key: "token"}
 	})
 	get := func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-skip"}, &mp)
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-authdetail"}, &mp)
 		return mp.Status.Conditions
 	}
-	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
+	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsInvalid)
 	eventually(t, func() error {
-		c := condition(get(), kaalmv1beta1.ConditionHealthy)
-		if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != "ProbeSkipped" {
-			return errString("Healthy should be Unknown/ProbeSkipped")
+		for _, typ := range []string{kaalmv1beta1.ConditionReady, kaalmv1beta1.ConditionHealthy} {
+			c := condition(get(), typ)
+			if c == nil || !strings.Contains(c.Message, "not JSON") {
+				return errString(typ + " message should carry the probe detail")
+			}
 		}
 		return nil
 	})

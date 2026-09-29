@@ -86,7 +86,9 @@ that way until the Secret holds a key the provider accepts.
 
 The probe is configurable through `spec.healthCheck` (`enabled`, default
 true; `intervalSeconds`, default 60; `timeoutSeconds`, default 10). Disabling
-it is useful for offline fixtures or provider types with no probe.
+it is useful for offline fixtures. A provider whose probe keeps failing is
+checked less often over time, back to the plain interval as soon as it
+recovers.
 
 ## 4. Trust a private CA
 
@@ -115,4 +117,5 @@ private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.
 
 *How this works: design book pages Resources, ModelProvider (every field and
 the status fields), Security, Credential handling (why keys live only in
-kaalm-system), and Gateways, LLM Gateway (how the proxy injects the credential).*
+kaalm-system), Gateways, LLM Gateway (how the proxy injects the credential),
+and Controller, Reconcilers (the probe backoff and the google-vertex probe).*

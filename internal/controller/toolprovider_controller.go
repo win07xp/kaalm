@@ -116,12 +116,12 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
 			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false,
 				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
-			return r.finish(ctx, &tp, ctrl.Result{RequeueAfter: r.interval(&tp)})
+			return r.finish(ctx, &tp, ctrl.Result{RequeueAfter: r.probeRequeue(&tp)})
 		case res.Err != nil:
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
 				kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			requeue = ctrl.Result{RequeueAfter: r.interval(&tp)}
+			requeue = ctrl.Result{RequeueAfter: r.probeRequeue(&tp)}
 		default: // Healthy
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, true,
 				kaalmv1beta1.ReasonUpstreamReachable, "server is reachable")
@@ -194,6 +194,12 @@ func (r *ToolProviderReconciler) interval(tp *kaalmv1beta1.ToolProvider) time.Du
 		return time.Duration(hc.IntervalSeconds) * time.Second
 	}
 	return defaultHealthInterval
+}
+
+// probeRequeue is the delay before the next probe: the interval, backed off
+// while the Healthy condition is False (see probeRequeue).
+func (r *ToolProviderReconciler) probeRequeue(tp *kaalmv1beta1.ToolProvider) time.Duration {
+	return probeRequeue(tp.Status.Conditions, r.interval(tp), time.Now())
 }
 
 func (r *ToolProviderReconciler) setCondition(

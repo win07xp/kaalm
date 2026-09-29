@@ -16,7 +16,9 @@ metadata:
 spec:
   # Required. "anthropic" | "openai" | "google-vertex" | "openai-compatible".
   # The gateway routes no inbound path for google-vertex (see The
-  # google-vertex type is reserved on Request handling).
+  # google-vertex type is reserved on Request handling); only the
+  # controller's liveness probe mints Vertex tokens (see The google-vertex
+  # probe on Reconcilers).
   type: anthropic
 
   # Required. The schema pattern ^https:// rejects any other scheme: the
@@ -24,7 +26,9 @@ spec:
   endpoint: "https://api.anthropic.com"
 
   # Required. A Secret key in the operator namespace, read by the gateway
-  # there; credentials never reach agent containers.
+  # there; credentials never reach agent containers. For google-vertex the
+  # value is a GCP service-account JSON key, not a static API key (see The
+  # google-vertex probe on Reconcilers).
   credentialsRef:
     name: anthropic-api-key
     key: api-key
@@ -139,12 +143,13 @@ status:
 | Condition | Meaning |
 |---|---|
 | `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), `HardBudgetUnpriced` (rule 33), or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). |
-| `Healthy` | The periodic upstream probe. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event; `Unknown` with `ProbeSkipped` for `google-vertex`, which has no probe. |
-| `GatewayReachable` | Set on every pass: `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. The same value is mirrored onto every ModelProvider. |
+| `Healthy` | The periodic upstream probe, run against every provider type including `google-vertex`. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event, or with `CredentialsInvalid` when the probe itself is refused. |
+| `GatewayReachable` | `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. Set on every pass and refreshed at once on a gateway Pod readiness change ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)). The same value is mirrored onto every ModelProvider. |
+| `FallbackIneligible` | Advisory; never affects `Ready`. `True` with `reason: FallbackIneligible` when the reconcile-time scan finds a fallback candidate that a caller's namespace or model can never reach; `False` with `AllCandidatesEligible` once the findings clear. A provider with no findings carries no such condition ([Reconcile-time fallback eligibility scan](../controller/reconcilers.md#reconcile-time-fallback-eligibility-scan)). |
 | `DegradeTargetNotCheapest` | Advisory; never affects `Ready`. `True` with `CheaperModelAvailable` when a degrade policy's `degradeTo` is not the cheapest model in the catalog, `False` with `DegradeTargetCheapest` once it is. The `Warning` event fires on the transition to `True` ([`degradeTo` validation](#degradeto-validation)). |
 | `BoundaryMarginRaised` | Hard enforcement only. `True` when a gateway replica observed traffic that needed a wider boundary margin than `hard.boundaryMarginPercent` configures ([Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). |
 
-`healthCheck.enabled: false` disables the probe (for example for an offline test fixture); `intervalSeconds` (default 60) sets its cadence and `timeoutSeconds` (default 10) bounds each request. `budgetUsage` is per-namespace spend for the current period, and `clusterSpentUSD` is the sum across namespaces.
+`healthCheck.enabled: false` disables the probe (for example for an offline test fixture); `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each request. A failing probe requeues on a backoff instead of the plain interval ([Probe backoff](../controller/reconcilers.md#probe-backoff)). `budgetUsage` is per-namespace spend for the current period, and `clusterSpentUSD` is the sum across namespaces.
 
 Each `budgetUsage` entry's `state` is a per-namespace state machine over the current period:
 
