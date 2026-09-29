@@ -264,6 +264,11 @@ func TestModelProvider_AdvisoryWarningsFollowTheStatusWrite(t *testing.T) {
 			},
 		}},
 		reason: kaalmv1beta1.ReasonBoundaryMarginRaised,
+	}, {
+		name:   "a crossing into an anthropic model with no maxOutputTokens",
+		mp:     eventsProvider("ev-mp-nomax", crossIntoAnthropic("ev-mp-nomax-claude")),
+		extra:  []client.Object{anthropicBackup("ev-mp-nomax-claude", nil)},
+		reason: kaalmv1beta1.ReasonMaxOutputTokensUnset,
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -302,5 +307,107 @@ func TestModelProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
 	}
 	if got := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonProviderUnhealthy); len(got) != 3 {
 		t.Fatalf("three failing probes emitted %d ProviderUnhealthy events, want 3", len(got))
+	}
+}
+
+// crossIntoAnthropic gives an openai primary one fallback edge into the
+// named anthropic provider, mapping m1 to claude.
+func crossIntoAnthropic(backup string) func(*kaalmv1beta1.ModelProvider) {
+	return func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{
+			{Name: backup, ModelMap: map[string]string{"m1": "claude"}},
+		}
+	}
+}
+
+// anthropicBackup is an anthropic provider offering claude, declaring
+// maxOutputTokens when max is set.
+func anthropicBackup(name string, max *int64) *kaalmv1beta1.ModelProvider {
+	return eventsProvider(name, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Type = kaalmv1beta1.ProviderTypeAnthropic
+		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "claude", MaxOutputTokens: max}}
+	})
+}
+
+// A crossing into anthropic models with no maxOutputTokens is an advisory
+// state: the MaxOutputTokensUnset condition lists the models while Ready
+// stays True, the Warning fires once on its rising edge, a pass that finds
+// the same models stays quiet, and declaring maxOutputTokens sets the
+// condition False without an event.
+func TestModelProvider_MaxOutputTokensUnsetCondition(t *testing.T) {
+	mp := eventsProvider("ev-mp-max", crossIntoAnthropic("ev-mp-max-claude"))
+	r, rec := eventsProviderReconciler(t, &statusConflicts{}, nil,
+		mp, providerKey("ev-mp-max"), anthropicBackup("ev-mp-max-claude", nil))
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-mp-max"}}
+	cond := func() *metav1.Condition {
+		var got kaalmv1beta1.ModelProvider
+		if err := r.Get(ctxT(), req.NamespacedName, &got); err != nil {
+			t.Fatal(err)
+		}
+		return condition(got.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
+	}
+	prefix := "Warning " + kaalmv1beta1.ReasonMaxOutputTokensUnset
+	for range 3 {
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := withPrefix(drainEvents(rec), prefix); len(got) != 1 ||
+		!strings.Contains(got[0], "ev-mp-max-claude/claude") {
+		t.Fatalf("three passes over the same models emitted %q, want one naming ev-mp-max-claude/claude", got)
+	}
+	if c := cond(); c == nil || c.Status != metav1.ConditionTrue ||
+		c.Reason != kaalmv1beta1.ReasonMaxOutputTokensUnset || !strings.Contains(c.Message, "ev-mp-max-claude/claude") {
+		t.Fatalf("MaxOutputTokensUnset = %+v, want True naming ev-mp-max-claude/claude", c)
+	}
+
+	// Declaring the ceiling clears the condition without an event.
+	var backup kaalmv1beta1.ModelProvider
+	if err := r.Get(ctxT(), types.NamespacedName{Name: "ev-mp-max-claude"}, &backup); err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(8192)
+	backup.Spec.Models[0].MaxOutputTokens = &limit
+	if err := r.Update(ctxT(), &backup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctxT(), req); err != nil {
+		t.Fatal(err)
+	}
+	if c := cond(); c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("after declaring maxOutputTokens the condition = %+v, want False", c)
+	}
+	if got := drainEvents(rec); len(got) != 0 {
+		t.Fatalf("clearing the condition emitted %q", got)
+	}
+
+	// Removing it again is a new rising edge.
+	backup.Spec.Models[0].MaxOutputTokens = nil
+	if err := r.Update(ctxT(), &backup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctxT(), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := withPrefix(drainEvents(rec), prefix); len(got) != 1 {
+		t.Fatalf("a new rising edge emitted %d events, want 1", len(got))
+	}
+}
+
+// A provider with no crossing into anthropic gets no MaxOutputTokensUnset
+// condition at all.
+func TestModelProvider_NoCrossingNoMaxOutputTokensCondition(t *testing.T) {
+	mp := eventsProvider("ev-mp-plain", nil)
+	r, _ := eventsProviderReconciler(t, &statusConflicts{}, nil, mp, providerKey("ev-mp-plain"))
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-mp-plain"}}
+	if _, err := r.Reconcile(ctxT(), req); err != nil {
+		t.Fatal(err)
+	}
+	var got kaalmv1beta1.ModelProvider
+	if err := r.Get(ctxT(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset); c != nil {
+		t.Fatalf("a provider with no crossing has MaxOutputTokensUnset = %+v", c)
 	}
 }

@@ -146,6 +146,7 @@ const (
 	ReasonBoundaryMarginOK           = "MarginSufficient"
 	ReasonCheaperModelAvailable      = "CheaperModelAvailable"
 	ReasonDegradeTargetCheapest      = "DegradeTargetCheapest"
+	ReasonMaxOutputTokensDeclared    = "MaxOutputTokensDeclared"
 	ReasonChildConflict              = "ChildConflict"
 	ReasonPodCurrent                 = "Current"
 	ReasonReplacementPending         = "ReplacementPending"
@@ -166,6 +167,13 @@ const ConditionBoundaryMarginRaised = "BoundaryMarginRaised"
 // It is advisory and never affects Ready; the controller keeps it so the
 // DegradeTargetNotCheapest Warning event fires on the rising edge only.
 const ConditionDegradeTargetNotCheapest = "DegradeTargetNotCheapest"
+
+// ConditionMaxOutputTokensUnset records the crossings into anthropic models
+// that declare no maxOutputTokens: True, with reason MaxOutputTokensUnset,
+// listing each provider/model a request without max_tokens cannot cross
+// into. It is advisory and never affects Ready; the controller keeps it so
+// the MaxOutputTokensUnset Warning event fires on the rising edge only.
+const ConditionMaxOutputTokensUnset = "MaxOutputTokensUnset"
 
 // ConditionFallbackIneligible records the reconcile-time fallback
 // eligibility scan: True, with reason FallbackIneligible, when a fallback

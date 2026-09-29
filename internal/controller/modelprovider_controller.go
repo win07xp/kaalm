@@ -232,9 +232,9 @@ func (r *ModelProviderReconciler) credential(
 // its own ancestors; a provider reached twice on different branches (a
 // shared backup) is not one, so its edges are checked on every branch but its
 // own fallbacks are walked once, as the gateway's walk skips the repeat. A
-// crossing into anthropic whose mapped models declare no maxOutputTokens gets
-// a Warning event on the primary: it stays valid, but a request without
-// max_tokens cannot cross it.
+// crossing into anthropic whose mapped models declare no maxOutputTokens sets
+// the advisory MaxOutputTokensUnset condition on the primary: it stays valid,
+// but a request without max_tokens cannot cross it.
 func (r *ModelProviderReconciler) validateFallback(
 	ctx context.Context, primary *kaalmv1beta1.ModelProvider,
 ) []string {
@@ -305,17 +305,44 @@ func (r *ModelProviderReconciler) validateFallback(
 		}
 	}
 	walk(primary)
-	if len(unsetMax) > 0 && r.Recorder != nil {
-		names := make([]string, 0, len(unsetMax))
-		for n := range unsetMax {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		r.Recorder.Event(primary, corev1.EventTypeWarning, kaalmv1beta1.ReasonMaxOutputTokensUnset,
-			"a request without max_tokens cannot cross into these anthropic models until they declare "+
-				"maxOutputTokens: "+strings.Join(names, ", "))
+	names := make([]string, 0, len(unsetMax))
+	for n := range unsetMax {
+		names = append(names, n)
 	}
+	sort.Strings(names)
+	r.setMaxOutputTokensUnset(primary, names)
 	return problems
+}
+
+// setMaxOutputTokensUnset records the anthropic models a crossing reaches
+// without a declared maxOutputTokens in the advisory MaxOutputTokensUnset
+// condition, and holds a Warning event for finish to send when the condition
+// turns True. A steady finding, even with a changed list, does not warn
+// again; clearing it sets the condition False without an event, and a
+// provider that never had a finding gets no condition. Ready is not touched.
+func (r *ModelProviderReconciler) setMaxOutputTokensUnset(mp *kaalmv1beta1.ModelProvider, names []string) {
+	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset)
+	if len(names) == 0 {
+		if apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionMaxOutputTokensUnset) != nil {
+			apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
+				Type:   kaalmv1beta1.ConditionMaxOutputTokensUnset,
+				Status: metav1.ConditionFalse,
+				Reason: kaalmv1beta1.ReasonMaxOutputTokensDeclared,
+			})
+		}
+		return
+	}
+	msg := "a request without max_tokens cannot cross into these anthropic models until they declare " +
+		"maxOutputTokens: " + strings.Join(names, ", ")
+	apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
+		Type:    kaalmv1beta1.ConditionMaxOutputTokensUnset,
+		Status:  metav1.ConditionTrue,
+		Reason:  kaalmv1beta1.ReasonMaxOutputTokensUnset,
+		Message: msg,
+	})
+	if !was {
+		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonMaxOutputTokensUnset, msg)
+	}
 }
 
 func modelSet(mp *kaalmv1beta1.ModelProvider) map[string]bool {
