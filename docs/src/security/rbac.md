@@ -60,7 +60,7 @@ The gateway runs as `kaalm-system/kaalm-gateway` and holds the ClusterRole `kaal
 | `AgentChannel` | `get, list, watch, patch` | Routes channel messages to an Agent and manages platform connections; `patch` writes only the `kaalm.io/channel-disconnected` annotation during the [delete handshake](../controller/finalizers.md#agentchannel) |
 | `Pods` | `get, list, watch` | The source-IP to Pod cross-check on every request and the Mode 2 precheck |
 | `Services` | `get` | Resolves an Agent's Service for message delivery. Services carry no secret material, so the cluster-wide reach is harmless |
-| `Events` | `create, patch` | `FallbackIneligible` and `CredentialsInvalid` on a ModelProvider during a fallback walk, `CallbackRejected` on an AgentChannel when a platform refuses a reply. ModelProviders are cluster-scoped, so their events land in the `default` namespace |
+| `Events` | `create, patch` | `FallbackIneligible` and `CredentialsInvalid` on a ModelProvider during a fallback walk, `CredentialsInvalid` on a ToolProvider when a brokered call is rejected, `CallbackRejected` on an AgentChannel when a platform refuses a reply. ModelProviders and ToolProviders are cluster-scoped, so their events land in the `default` namespace |
 
 The gateway does not create the per-task completion ConfigMap and does not set its ownerRef. The AgentTaskReconciler creates it at provisioning time.
 

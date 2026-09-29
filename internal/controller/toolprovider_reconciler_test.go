@@ -404,3 +404,73 @@ func TestToolProvider_UnchangedPassSkipsStatusWrite(t *testing.T) {
 			writes, settled.ResourceVersion, after.ResourceVersion)
 	}
 }
+
+// drainEvents returns every event the fake recorder has buffered.
+func drainEvents(rec *record.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case e := <-rec.Events:
+			out = append(out, e)
+		default:
+			return out
+		}
+	}
+}
+
+// A rejected credential records one Warning CredentialsInvalid event when
+// Healthy first enters that reason, not one per probe pass, and records
+// another when the credential is rejected again after a recovery.
+func TestToolProvider_AuthFailedEmitsCredentialsInvalidOnEntry(t *testing.T) {
+	ctx := context.Background()
+	tp := &kaalmv1beta1.ToolProvider{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tp-authev", Generation: 1,
+			Finalizers: []string{kaalmv1beta1.ToolProviderFinalizer},
+		},
+		Spec: kaalmv1beta1.ToolProviderSpec{Type: "mcp", Endpoint: "https://mcp.example.com"},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(tp).WithStatusSubresource(tp).Build()
+	health := newFakeToolHealth()
+	rec := record.NewFakeRecorder(10)
+	r := &ToolProviderReconciler{
+		Client: c, Recorder: rec,
+		OperatorNamespace: testOperatorNamespace, Health: health,
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "tp-authev"}}
+	reconcile := func() {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	credEvents := func() int {
+		n := 0
+		for _, e := range drainEvents(rec) {
+			if strings.HasPrefix(e, corev1.EventTypeWarning+" "+kaalmv1beta1.ReasonCredentialsInvalid+" ") {
+				n++
+			}
+		}
+		return n
+	}
+
+	health.set("tp-authev", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{AuthFailed: true}})
+	reconcile()
+	if n := credEvents(); n != 1 {
+		t.Fatalf("first rejected probe recorded %d CredentialsInvalid events, want 1", n)
+	}
+	reconcile()
+	reconcile()
+	if n := credEvents(); n != 0 {
+		t.Fatalf("repeat rejected probes recorded %d CredentialsInvalid events, want 0", n)
+	}
+
+	health.set("tp-authev", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true}})
+	reconcile()
+	health.set("tp-authev", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{AuthFailed: true}})
+	reconcile()
+	if n := credEvents(); n != 1 {
+		t.Fatalf("a rejection after recovery recorded %d CredentialsInvalid events, want 1", n)
+	}
+}

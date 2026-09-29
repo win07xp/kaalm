@@ -48,6 +48,7 @@ func main() {
 		gatewayURL          string
 		insecureSkipGateway bool
 		logLevel            slog.Level
+		maxMessageBodyBytes int64
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "console listener (pages and read API, TLS)")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health probe listener")
@@ -57,6 +58,8 @@ func main() {
 	flag.StringVar(&gatewayURL, "gateway-url", "",
 		"gateway cluster listener base URL (default derived from POD_NAMESPACE)")
 	flag.BoolVar(&insecureSkipGateway, "insecure-skip-gateway-verify", false, "skip gateway cert verification (dev only)")
+	flag.Int64Var(&maxMessageBodyBytes, "max-message-body-bytes", 1<<20,
+		"test-chat request body cap in bytes; larger bodies get 413 (the chart passes gateway.maxMessageBodyBytes)")
 	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
 	flag.Parse()
 
@@ -76,8 +79,9 @@ func main() {
 
 	restCfg := ctrl.GetConfigOrDie()
 	// The cached client starts informers lazily per type. The console's RBAC
-	// covers exactly the six kaalm.io CRDs and namespaces, and the data layer
-	// reads nothing else, so no other informer ever starts.
+	// covers exactly the four kaalm.io kinds the data layer reads (Agent,
+	// AgentTask, AgentChannel, ModelProvider) and namespaces, and the data
+	// layer reads nothing else, so no other informer ever starts.
 	cl, err := cluster.New(restCfg, func(o *cluster.Options) {
 		o.Scheme = scheme
 	})
@@ -101,12 +105,13 @@ func main() {
 	}
 
 	server := console.NewServer(console.Config{
-		OperatorNamespace: operatorNamespace,
-		ListenAddr:        listenAddr,
-		HealthAddr:        healthAddr,
-		CertFile:          certFile,
-		KeyFile:           keyFile,
-		CAFile:            caFile,
+		OperatorNamespace:   operatorNamespace,
+		ListenAddr:          listenAddr,
+		HealthAddr:          healthAddr,
+		CertFile:            certFile,
+		KeyFile:             keyFile,
+		CAFile:              caFile,
+		MaxMessageBodyBytes: maxMessageBodyBytes,
 	},
 		&console.Data{Reader: cl.GetClient()},
 		&console.KubeTokenReviewer{Client: clientset},

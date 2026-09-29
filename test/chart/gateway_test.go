@@ -79,3 +79,35 @@ func TestGateway_ProviderFirstByteTimeoutReachesUpstreamTimeout(t *testing.T) {
 		})
 	}
 }
+
+// gateway.mcpMaxBodyBytes and gateway.mcpUpstreamTimeout are the tool
+// broker's own body cap and whole-call timeout, separate from the LLM proxy's.
+func TestGateway_MCPLimitsReachGatewayFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"default", nil, []string{"--mcp-max-body-bytes=4194304", "--mcp-upstream-timeout=120s"}},
+		{"custom", []string{
+			"--set", "gateway.mcpMaxBodyBytes=8Mi",
+			"--set", "gateway.mcpUpstreamTimeout=300s",
+		}, []string{"--mcp-max-body-bytes=8388608", "--mcp-upstream-timeout=300s"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := renderGatewayArgs(t, tc.args...)
+			for _, want := range tc.want {
+				found := false
+				for _, a := range args {
+					if a == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("gateway args %v do not contain %s", args, want)
+				}
+			}
+		})
+	}
+}

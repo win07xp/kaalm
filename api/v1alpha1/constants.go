@@ -68,6 +68,7 @@ const (
 	ConditionReady               = "Ready"
 	ConditionFQDNPolicySupported = "FQDNPolicySupported" // AgentClass
 	ConditionSecurityBaseline    = "SecurityBaseline"    // AgentClass
+	ConditionCertificateCleanup  = "CertificateCleanup"  // AgentClass: cert-manager owner-ref cleanup of workload TLS Secrets
 	ConditionHealthy             = "Healthy"             // ModelProvider
 	ConditionGatewayReachable    = "GatewayReachable"    // ModelProvider, Agent
 	ConditionProvidersReady      = "ProvidersReady"      // Agent
@@ -130,6 +131,9 @@ const (
 	ReasonInvalidReference           = "InvalidReference"
 	ReasonRestrictedBaseline         = "RestrictedBaseline"
 	ReasonBelowRestrictedBaseline    = "BelowRestrictedBaseline"
+	ReasonOwnerRefEnabled            = "OwnerRefEnabled"
+	ReasonOwnerRefDisabled           = "OwnerRefDisabled"
+	ReasonControllerSecretNotFound   = "ControllerSecretNotFound"
 	ReasonHibernated                 = "Hibernated"
 	ReasonWoken                      = "Woken"
 	ReasonTaskSucceeded              = "TaskSucceeded"

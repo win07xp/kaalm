@@ -278,24 +278,43 @@ func (s *Server) runAsyncPipeline(
 }
 
 // patchWithRetry patches the polling record on the shared bounded schedule.
-// Exhaustion drops the payload (v1 limitation) with an error log and the
-// kaalm_channel_async_patch_failed_total signal.
+// A payload that never lands is dropped (v1 limitation), and every drop
+// produces exactly one kaalm_channel_async_patch_failed_total increment and
+// one error log: after the last attempt fails, and when the pipeline context
+// ends during a backoff sleep (#208).
 func (s *Server) patchWithRetry(ctx context.Context, requestID, namespace string, payload []byte) {
 	backoff := append([]time.Duration{0}, s.Config.CallbackBackoff...)
+	var lastErr error
 	for _, delay := range backoff {
 		if delay > 0 {
 			select {
 			case <-ctx.Done():
+				s.dropAsyncPayload(requestID, namespace, "context_done", context.Cause(ctx), lastErr)
 				return
 			case <-time.After(delay):
 			}
 		}
-		if err := s.Async.Patch(ctx, requestID, payload); err == nil {
+		if lastErr = s.Async.Patch(ctx, requestID, payload); lastErr == nil {
 			return
 		}
 	}
+	s.dropAsyncPayload(requestID, namespace, "retries_exhausted", nil, lastErr)
+}
+
+// logKeyRequestID is the log field that carries an async request id.
+const logKeyRequestID = "requestId"
+
+// dropAsyncPayload emits the one signal a dropped async payload gets.
+func (s *Server) dropAsyncPayload(requestID, namespace, reason string, ctxErr, patchErr error) {
 	s.Metrics.AsyncPatchFailed(namespace)
-	slog.Error("async response patch failed; payload dropped", "requestId", requestID)
+	attrs := []any{logKeyRequestID, requestID, labelNamespace, namespace, "reason", reason}
+	if patchErr != nil {
+		attrs = append(attrs, "error", patchErr.Error())
+	}
+	if ctxErr != nil {
+		attrs = append(attrs, "context", ctxErr.Error())
+	}
+	slog.Error("async response patch failed; payload dropped", attrs...)
 }
 
 // The pre-dial target check lives in internal/callbackpolicy, shared with the

@@ -13,7 +13,8 @@ of them:
 1. **cert-manager**, running with `--enable-certificate-owner-ref=true`. Kaalm
    issues every workload a cert-manager certificate, and the owner-ref flag
    is required so certificate Secrets are cleaned up with their Certificates.
-   Nothing checks the flag for you.
+   After install, check any AgentClass's `CertificateCleanup` condition to
+   confirm the flag is set (see [Verifying the install](verifying.md)).
 2. **trust-manager**, which distributes the CA bundle that agents and the
    gateway verify each other against. Its trust namespace must be the same
    namespace as cert-manager's cluster resource namespace (both default to

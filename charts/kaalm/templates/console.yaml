@@ -17,7 +17,7 @@ metadata:
     {{- include "kaalm.labels" . | nindent 4 }}
 ---
 # The console's whole reach (docs/src/console/overview.md, Placement): read
-# the six CRDs and namespaces, validate tokens, ask authorization questions.
+# the four CRDs and namespaces, validate tokens, ask authorization questions.
 # No Secrets, no ConfigMaps, no Pods, no writes.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -27,7 +27,7 @@ metadata:
     {{- include "kaalm.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["kaalm.io"]
-    resources: ["agentclasses", "modelproviders", "toolproviders", "agents", "agenttasks", "agentchannels"]
+    resources: ["modelproviders", "agents", "agenttasks", "agentchannels"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -113,6 +113,7 @@ spec:
             - --tls-key=/var/run/kaalm/tls.key
             - --tls-ca=/var/run/kaalm/ca.crt
             - --log-level={{ .Values.console.logLevel }}
+            - --max-message-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxMessageBodyBytes }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
@@ -160,7 +161,7 @@ spec:
                     - { key: tls.crt, path: tls.crt }
                     - { key: tls.key, path: tls.key }
               - configMap:
-                  name: kaalm-ca
+                  name: kaalm-ca-system
                   items:
                     - { key: ca.crt, path: ca.crt }
 ---

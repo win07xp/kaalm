@@ -29,6 +29,12 @@ var _ = Describe("Golden path", Ordered, func() {
 		Eventually(func() (bool, error) {
 			return readyTrue("agentclass", "", "e2e-standard")
 		}, "60s", "3s").Should(BeTrue())
+
+		By("the class reports certificate cleanup on: hack/k3d-up.sh runs cert-manager with --enable-certificate-owner-ref")
+		Eventually(func() (string, error) {
+			return utils.ResourceField("agentclass", "", "e2e-standard",
+				`{.status.conditions[?(@.type=="CertificateCleanup")].reason}`)
+		}, "60s", "3s").Should(Equal("OwnerRefEnabled"))
 	})
 
 	It("reconciles the ModelProvider to Ready", func() {

@@ -61,6 +61,11 @@ kubectl get agentclasses
 kubectl describe agentclass standard   # conditions show Ready=True
 ```
 
+The same conditions include `CertificateCleanup`, which reports whether
+cert-manager runs with `--enable-certificate-owner-ref=true`. `True` means
+deleting an Agent or AgentTask deletes its TLS Secret; `False` means the
+Secret is left behind and cert-manager needs the flag set.
+
 ```text
 NAME       AGENTS   TASKS   AGE
 standard                    28s
@@ -80,5 +85,5 @@ goes `Degraded` until the platform team names one
 ---
 
 *How this works: design book pages Controller, Operator structure (what the
-controller replicas do) and Gateways, Gateway overview (the two listeners and their
-ports).*
+controller replicas do); Gateways, Gateway overview (the two listeners and their
+ports); and Security, TLS and certificates (the `CertificateCleanup` condition).*

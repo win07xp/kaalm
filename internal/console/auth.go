@@ -131,6 +131,15 @@ func (g *Gate) CanView(ctx context.Context, id Identity, namespace string) (bool
 	return g.allowed(ctx, id, namespace, "list", "agents")
 }
 
+// CanViewAll reports whether the identity may list agents.kaalm.io in every
+// namespace: one SubjectAccessReview with an empty namespace. A caller who
+// holds that grant passes CanView everywhere, so the namespace list needs no
+// per-namespace review for them. It is cached like the other answers, under
+// the empty namespace.
+func (g *Gate) CanViewAll(ctx context.Context, id Identity) (bool, error) {
+	return g.allowed(ctx, id, "", "list", "agents")
+}
+
 // CanChat reports whether the identity may test-chat agents in the namespace.
 func (g *Gate) CanChat(ctx context.Context, id Identity, namespace string) (bool, error) {
 	return g.allowed(ctx, id, namespace, "create", "agentchannels")
@@ -153,6 +162,19 @@ func (g *Gate) allowed(ctx context.Context, id Identity, namespace, verb, resour
 	g.cache[key] = gateEntry{allowed: allowed, expires: g.now().Add(sarCacheTTL)}
 	g.mu.Unlock()
 	return allowed, nil
+}
+
+// Sweep drops every expired answer. Lookups already ignore expired entries;
+// the sweep bounds memory for identities and namespaces never asked again.
+func (g *Gate) Sweep() {
+	now := g.now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for k, e := range g.cache {
+		if !now.Before(e.expires) {
+			delete(g.cache, k)
+		}
+	}
 }
 
 // CachingReviewer wraps a TokenReviewer with a hash-keyed result cache so
@@ -195,6 +217,18 @@ func (c *CachingReviewer) Review(ctx context.Context, token string) (Identity, e
 	c.cache[key] = reviewEntry{id: id, expires: c.now().Add(reviewCacheTTL)}
 	c.mu.Unlock()
 	return id, nil
+}
+
+// Sweep drops every expired review.
+func (c *CachingReviewer) Sweep() {
+	now := c.now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, e := range c.cache {
+		if !now.Before(e.expires) {
+			delete(c.cache, k)
+		}
+	}
 }
 
 type session struct {
@@ -272,4 +306,17 @@ func (s *SessionStore) Delete(value string) {
 	s.mu.Lock()
 	delete(s.m, value)
 	s.mu.Unlock()
+}
+
+// Sweep forgets every session past sessionMaxAge, so an abandoned session
+// and its stored token leave memory without another request.
+func (s *SessionStore) Sweep() {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for v, sess := range s.m {
+		if now.Sub(sess.created) > sessionMaxAge {
+			delete(s.m, v)
+		}
+	}
 }

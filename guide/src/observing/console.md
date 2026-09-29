@@ -108,7 +108,10 @@ If the console restarts, log in again.
 ## 4. What you see
 
 The home page lists the namespaces your token may read. A namespace page
-has four panels:
+has four panels. The fleet, tasks, and channels panels each show the newest
+100 rows by default; when a namespace holds more, the page says so, for
+example "Showing the newest 100 of 140 agents." Add a `limit` query
+parameter to the page URL, such as `?limit=500`, to see more, up to 1000.
 
 - **Fleet**: each Agent's phase, readiness, class, when it hibernated, and
   its last activity.
@@ -165,16 +168,22 @@ curl -sk -H "Authorization: Bearer $TOKEN" https://localhost:8443/api/v1/namespa
 | Method and path | Returns |
 |---|---|
 | `GET /api/v1/namespaces` | The namespaces this token may view |
-| `GET /api/v1/namespaces/{ns}/agents` | Fleet rows |
+| `GET /api/v1/namespaces/{ns}/agents` | Fleet rows, limited |
 | `GET /api/v1/namespaces/{ns}/agents/{name}` | One agent in detail |
-| `GET /api/v1/namespaces/{ns}/tasks` | Task history rows |
-| `GET /api/v1/namespaces/{ns}/channels` | Channel health rows |
+| `GET /api/v1/namespaces/{ns}/tasks` | Task history rows, limited |
+| `GET /api/v1/namespaces/{ns}/channels` | Channel health rows, limited |
 | `GET /api/v1/namespaces/{ns}/spend` | Budget usage per provider, with the per-workload breakdown |
 | `POST /api/v1/namespaces/{ns}/agents/{name}/chat` | Test-chat: `{"content": "..."}` in, the reply out |
 
+The rows marked "limited" take the same `limit` query parameter as the
+pages (see [What you see](#4-what-you-see)) and add `total` and `truncated`
+fields to the response. The design book's Console overview page states the
+full contract.
+
 An invalid token gets `401` and a namespace the token may not read gets
-`403`, both as `{"error": {"type": "...", "message": "..."}}`. Fields and
-endpoints are added to `/api/v1`, never renamed or removed, so a script
+`403`, both as `{"error": {"type": "...", "message": "..."}}`. A test-chat
+body over the size cap gets `413`, as in [Test-chat](#5-test-chat). Fields
+and endpoints are added to `/api/v1`, never renamed or removed, so a script
 written against it keeps working.
 
 ## 7. If something is off

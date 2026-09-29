@@ -36,7 +36,7 @@ rectangle "**kaalm-system**, only with console.enabled" as nscon #line:9E9E9E;li
 }
 rectangle "cluster resource namespace: **cert-manager** by default" as nscm #line:7a3f00;line.dashed;text:3a1f00 {
   rectangle "Certificate kaalm-ca" as cacert #back:FFD580;line:7a3f00;line.bold;text:3a1f00
-  rectangle "Bundle kaalm-ca" as bundle #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "Bundles kaalm-ca, kaalm-ca-system" as bundle #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 pcm -[hidden]right- ptm
 ptm -[hidden]right- pcni

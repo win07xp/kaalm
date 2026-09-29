@@ -50,17 +50,26 @@ No gateway-side teardown is needed for a provider. The gateway's own watch drops
 
 ## AgentChannel
 
-Deleting a channel is a handshake with the gateway, because the channel's async response records live in `kaalm-system`, carry no ownerRef to the channel, and are invisible to cascade GC; see [Response persistence](../gateways/api/async-responses.md#response-persistence). The finalizer's sweep is their only cleanup, and the handshake exists so no gateway replica writes a new record after the sweep.
+Deleting a channel is a handshake with the gateway, because the channel's async response records live in `kaalm-system`, carry no ownerRef to the channel, and are invisible to cascade GC; see [Response persistence](../gateways/api/async-responses.md#response-persistence). The handshake exists so no gateway replica writes a new record after the finalizer sweeps. The [async orphan pruner](#async-orphan-pruning) below catches the record a replica still manages to write.
 
 ![Sequence diagram of AgentChannel deletion with two gateway replicas. The reconciler sets status.phase to Terminating; both replicas see it in their watch and answer 401 on the channel's path; the first replica to see it writes the channel-disconnected annotation. The reconciler proceeds when it sees the annotation, or 30 seconds after the deletion timestamp without it, then deletes the kaalm-async-* ConfigMaps by the channel's labels and removes the finalizer.](../diagrams/channel-delete-handshake.svg)
 
 1. The reconciler sets `status.phase: Terminating`.
 2. Every gateway replica sees the phase in its watch and rejects further inbound requests on the channel's path with `401`, so it creates no new `kaalm-async-*` record. The gate is the intake handler's, so it costs nothing extra.
-3. The first replica to see the phase writes the `kaalm.io/channel-disconnected: "true"` annotation on the channel.
+3. The first replica to see the phase, whether through an Add or an Update event, writes the `kaalm.io/channel-disconnected: "true"` annotation on the channel. Handling Add as well as Update means a replica that starts or re-lists after the phase already flipped to `Terminating` still writes the annotation.
 4. The reconciler proceeds when it sees the annotation, checking every two seconds, or 30 seconds after the deletion timestamp without it, so a dead gateway cannot wedge the delete.
 5. It deletes every `kaalm-async-*` ConfigMap in `kaalm-system` carrying the channel's `kaalm.io/channel-namespace` and `kaalm.io/channel-name` labels, expired or not.
 6. It removes the finalizer and the apiserver deletes the channel.
 
-With the confirmation the sweep is final. As shipped the confirmation is one annotation written by whichever replica saw the phase first, not one per replica, so a second replica that has not seen `Terminating` can still write a record after the sweep; the same holds on the timeout branch. Such a record lingers until nothing reaps it, since the expiry prune runs only for live channels.
+The confirmation is one annotation written by whichever replica saw the phase first, not one per replica, so a replica that has not seen `Terminating` can still create a `kaalm-async-*` record after the sweep; the same holds on the timeout branch. Records are created only at intake, behind the write gate described under [Response persistence](../gateways/api/async-responses.md#response-persistence), and after that are only patched: a `Patch` on a deleted record fails and does not recreate it. Every record expires 1 hour after creation. The [async orphan pruner](#async-orphan-pruning) reaps such a record once it expires.
+
+### Async orphan pruning
+
+A leader-only runnable, separate from the reconcilers, runs one pass when its replica becomes leader and then every 10 minutes. Each pass lists the ConfigMaps in `kaalm-system`, considers only names starting with `kaalm-async-`, and deletes a record when both of the following are true:
+
+- It's expired: `kaalm.io/expires-at` is at or before now, or, when that annotation is missing or not a parseable RFC 3339 timestamp, `creationTimestamp` is more than 2 hours old (twice the fixed 1-hour TTL).
+- Its channel no longer exists, read from the `kaalm.io/channel-namespace` and `kaalm.io/channel-name` labels. A record with no channel labels has no channel to look up and counts as orphaned once expired.
+
+A record whose channel exists is left to that channel's own expiry prune and finalizer sweep, even while the channel is being deleted. A failed pass is logged and retried on the next tick; it never stops the manager. So a stray record left behind by the race above lingers at most about 10 minutes past its expiry.
 
 The Role and RoleBinding the reconciler created for the channel are owner-referenced and cascade-delete with it; see [Per-channel credential Role](reconcilers.md#per-channel-credential-role).

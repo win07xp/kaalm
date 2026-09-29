@@ -218,3 +218,55 @@ func TestUI_AgentPageAndChat(t *testing.T) {
 		t.Errorf("unknown agent page = %d, want 404", status)
 	}
 }
+
+func TestUI_NamespaceSaysWhenAListIsTruncated(t *testing.T) {
+	h := newAPIHarness(t)
+	c := uiClient(t, h)
+	login(t, h, c, "priya-token")
+
+	_, body := page(t, c, h.srv.URL+"/ns/team-a")
+	if strings.Contains(body, "Showing the newest") {
+		t.Error("an untruncated page must not carry the truncation note")
+	}
+
+	status, body := page(t, c, h.srv.URL+"/ns/team-a?limit=1")
+	if status != 200 {
+		t.Fatalf("limited page = %d", status)
+	}
+	for _, want := range []string{
+		"Showing the newest 1 of 2 agents.",
+		"Showing the newest 1 of 2 tasks.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("limited page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "of 1 channels") {
+		t.Error("a list that fits must not say it was truncated")
+	}
+
+	if status, _ := page(t, c, h.srv.URL+"/ns/team-a?limit=zero"); status != 400 {
+		t.Errorf("a bad limit on the page = %d, want 400", status)
+	}
+}
+
+func TestUI_ChatBodyCap(t *testing.T) {
+	h := newAPIHarness(t)
+	h.server.Config.MaxMessageBodyBytes = 64
+	c := uiClient(t, h)
+	login(t, h, c, "priya-token")
+	h.chat.lastUID = ""
+
+	resp, err := c.PostForm(h.srv.URL+"/ns/team-a/agents/support-assistant/chat",
+		url.Values{"content": {strings.Repeat("a", 1024)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized chat form = %d, want 413", resp.StatusCode)
+	}
+	if h.chat.lastUID != "" {
+		t.Error("an oversized chat form must not reach the gateway")
+	}
+}

@@ -7,7 +7,8 @@ The chart installs:
   - ServiceAccounts, ClusterRoles/Bindings, and the gateway's namespaced Role
   - the cert-manager trust chain (kaalm-selfsigned + kaalm-ca-issuer
     ClusterIssuers, the kaalm-ca root Certificate, the gateway and controller
-    leaf Certificates) and the trust-manager kaalm-ca Bundle
+    leaf Certificates) and the trust-manager kaalm-ca and kaalm-ca-system
+    Bundles
   - a default "standard" AgentClass, which allows storage and hibernation
 {{- if and .Values.standardAgentClass.enabled (not .Values.standardAgentClass.allowedProviders) }}
 

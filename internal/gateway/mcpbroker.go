@@ -496,10 +496,14 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 
 	// The gateway's credential being rejected is an operator problem, not
-	// the caller's: surface unavailability, not retryable, and let the
-	// ToolProvider health probe flip the resource's conditions independently.
+	// the caller's: surface unavailability, not retryable, and record a
+	// Warning event on the ToolProvider, as the LLM path does on the
+	// ModelProvider. The health probe flips the resource's conditions
+	// independently.
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		slog.Warn("tool server rejected the gateway credential", "provider", tp.Name, "status", resp.StatusCode)
+		s.recordEvent(tp, kaalmv1beta1.ReasonCredentialsInvalid,
+			"tool server returned %d; credential rotation may be needed", resp.StatusCode)
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
 			fmt.Sprintf("tool provider %q rejected the gateway credential", tp.Name), false, 0, msg.Method, toolName)
 		return
