@@ -46,10 +46,12 @@ subjects:
     name: kaalm-controller
     namespace: {{ .Release.Namespace }}
 ---
-# The controller's only standing Secret read: provider credentials in the
-# release namespace. The ClusterRole carries no secrets rule; a Secret in a
-# user namespace is read through a Role the reconcilers mint for exactly the
-# names a channel or a class references.
+# The controller's standing Secret read for provider credentials in the
+# release namespace. The same cache also serves the AgentClassReconciler's
+# read of the kaalm-controller-tls Secret's ownerReferences, for the
+# CertificateCleanup condition. The ClusterRole carries no secrets rule; a
+# Secret in a user namespace is read through a Role the reconcilers mint for
+# exactly the names a channel or a class references.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

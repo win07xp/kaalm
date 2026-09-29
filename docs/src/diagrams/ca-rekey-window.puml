@@ -5,12 +5,13 @@
 skinparam maxMessageSize 150
 actor "Platform\nengineer" as PE #FFE4B5
 participant "cert-manager" as CM #F5F5F5
-participant "**Bundle**\nkaalm-ca" as TM #F5F5F5
+participant "**Bundles**\nkaalm-ca,\nkaalm-ca-system" as TM #F5F5F5
 participant "**Agent**" as AG #E6E6FA
 participant "**Gateway**" as GW #90EE90
 == 1. Keep the old CA trusted ==
-PE -> TM : add a copy of the old CA as a second source
+PE -> TM : helm upgrade: set trustManager.extraSources to the old CA
 TM -> AG : bundle = old CA, old CA copy
+TM -> GW : bundle = old CA, old CA copy
 == 2. New CA key ==
 PE -> CM : delete the kaalm-ca Secret
 CM -> CM : re-issue with a new key
@@ -30,6 +31,7 @@ else the agent missed the bundle change
   GW -[#B71C1C]->x AG : inbound fails: ClientCAs holds the old CA only
 end
 == 4. Close the window ==
-PE -> TM : remove the old CA source
+PE -> TM : helm upgrade: clear trustManager.extraSources
 TM -> AG : bundle = new CA only
+TM -> GW : bundle = new CA only
 @enduml
