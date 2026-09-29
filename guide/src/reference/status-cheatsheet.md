@@ -25,7 +25,11 @@ Phases, in lifecycle order:
 | `Terminating` | Deletion in progress, finalizer running |
 
 Conditions: `Ready` (the roll-up), `GatewayReachable` (the controller's view
-of the gateway; reasons `GatewayReady` and `GatewayUnavailable`),
+of the gateway; reasons `GatewayReady` and `GatewayUnavailable`, the latter
+deferring idle and hibernation transitions until the gateway answers),
+`IdleDetection` (present only as `False` with `Disabled`, when neither the
+Agent nor its class sets an idle timeout, so the Agent never goes `Idle` on
+its own; absent otherwise),
 `ProvidersReady` (`AllProvidersHealthy` when every referenced provider is
 allowed, exists, and is `Ready`; `ClassConstraintViolation` when one is not
 allowed or does not exist; `ProviderUnhealthy` when one is not `Ready`),

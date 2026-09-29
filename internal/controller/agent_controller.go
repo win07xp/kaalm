@@ -190,6 +190,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		agent.Status.EffectiveWakeTimeout = &metav1.Duration{Duration: eff.WakeTimeout}
 	}
 
+	// IdleDetection says when no idle timeout applies, which turns the
+	// idle and hibernation cycle off.
+	setIdleDetection(&agent, class.Name, eff.IdleTimeout)
+
 	// ProvidersReady mirrors the Ready state of every referenced
 	// ModelProvider. A status condition only: it never moves the phase, and
 	// every status write below persists it.
@@ -415,11 +419,15 @@ func (r *AgentReconciler) evaluateActivity(
 	now := r.now()
 	reachable, total, err := r.Activity.NamespaceActivity(ctx, agent.Namespace)
 	if err != nil || total == 0 || len(reachable) == 0 {
+		// The transition time comes from the reconciler clock: the outage
+		// backoff measures from it. SetStatusCondition keeps the stored
+		// time while the condition stays False.
 		apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
 			Type: kaalmv1beta1.ConditionGatewayReachable, Status: metav1.ConditionFalse,
 			Reason: "GatewayUnavailable", Message: "no gateway activity data; idle transitions deferred",
+			LastTransitionTime: metav1.NewTime(now),
 		})
-		return ctrl.Result{RequeueAfter: 30 * time.Second}
+		return ctrl.Result{RequeueAfter: gatewayOutageRequeue(agent.Status.Conditions, now, outageJitter())}
 	}
 	apimeta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
 		Type: kaalmv1beta1.ConditionGatewayReachable, Status: metav1.ConditionTrue,
@@ -1347,6 +1355,11 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A freed drift slot re-queues the class's Agents that wait for one.
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.driftWaitersOfClass),
 			builder.WithPredicates(driftSlotFreed())).
+		// A gateway Pod turning Ready re-queues the Agents waiting on the
+		// gateway, so the outage backoff does not delay recovery. The Pod
+		// informer is already cluster-wide for the owned Pods.
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.agentsWaitingOnGateway),
+			builder.WithPredicates(gatewayTurnedReady(r.OperatorNamespace))).
 		Complete(r)
 }
 

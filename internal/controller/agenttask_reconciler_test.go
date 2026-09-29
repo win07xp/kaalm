@@ -53,7 +53,7 @@ func mkTask(t *testing.T, name, className string, mutate func(*kaalmv1beta1.Agen
 func getTask(t *testing.T, name string) *kaalmv1beta1.AgentTask {
 	t.Helper()
 	var task kaalmv1beta1.AgentTask
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
 		t.Fatalf("get task %s: %v", name, err)
 	}
 	return &task

@@ -131,7 +131,7 @@ These alerts cover the failure modes this book names. The page states no PromQL 
 
 | Alert | Severity | Architectural hook |
 |---|---|---|
-| Controller all replicas unready | Page | Wake-on-demand depends on the controller. See [The activator](../gateways/user/activation-and-activity.md#the-activator) |
+| Controller all replicas unready | Page | Wake-on-demand depends on the controller. A replica is Ready only while its activator listener serves, so this alert also covers a dead or not-yet-started activator ([Readiness](../controller/overview.md#readiness)). See [The activator](../gateways/user/activation-and-activity.md#the-activator) |
 | Gateway all replicas unready | Page | LLM and webhook traffic blocked cluster-wide |
 | Reconcile error rate elevated | Warn | Reconciler is stuck. Surface before the work queue backs up |
 | LLM error rate elevated for a provider | Warn | Provider degraded; consider promoting fallback |

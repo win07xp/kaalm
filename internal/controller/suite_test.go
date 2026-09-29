@@ -56,7 +56,11 @@ const (
 )
 
 var (
-	testClient     client.Client
+	testClient client.Client
+	// testAPIReader reads straight from the apiserver. The test read helpers
+	// use it: testClient reads from the manager's cache, which can miss an
+	// object the test created a moment ago (#313).
+	testAPIReader  client.Reader
 	testEnv        *envtest.Environment
 	fakeHealth     *fakeHealthChecker
 	fakeToolHealth *fakeToolHealthChecker
@@ -344,6 +348,7 @@ func TestMain(m *testing.M) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	testClient = mgr.GetClient()
+	testAPIReader = mgr.GetAPIReader()
 
 	// The system namespace must exist for the SystemNamespaceForbidden test.
 	sysNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testSystemNamespace}}

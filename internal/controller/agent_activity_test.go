@@ -426,3 +426,24 @@ func TestGatewayChannelHealthClient_FanOutAndCache(t *testing.T) {
 		t.Errorf("expected one dial (cached second call), got %d", n)
 	}
 }
+
+// ForgetUnreachable drops only the cached answers that carried no activity
+// data, so the recovery kick's passes dial the gateway again while a
+// namespace with a live answer keeps its cache entry.
+func TestGatewayActivityClient_ForgetUnreachable(t *testing.T) {
+	g := &GatewayActivityClient{cache: map[string]activityCacheEntry{
+		"no-pods":     {fetched: time.Now(), total: 0},
+		"all-down":    {fetched: time.Now(), total: 2},
+		"one-answers": {fetched: time.Now(), total: 2, reachable: []ReplicaActivity{{}}},
+	}}
+	g.ForgetUnreachable()
+	if _, ok := g.cache["one-answers"]; !ok {
+		t.Error("a cached answer with activity data must stay")
+	}
+	for _, ns := range []string{"no-pods", "all-down"} {
+		if _, ok := g.cache[ns]; ok {
+			t.Errorf("the no-data answer for %s must be dropped", ns)
+		}
+	}
+	(&GatewayActivityClient{}).ForgetUnreachable() // an empty cache is a no-op
+}

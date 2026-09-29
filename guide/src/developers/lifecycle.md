@@ -12,6 +12,10 @@ A healthy persistent agent moves through `Pending`, `Provisioning`, and
 through `Resuming` to `Running` when a message arrives or you wake it. The full status vocabulary is on the
 [Status cheatsheet](../reference/status-cheatsheet.md).
 
+An agent with no idle timeout never goes `Idle`. If neither the Agent's
+`spec.lifecycle.idleTimeout` nor its class's `defaultIdleTimeout` sets a
+value, the `IdleDetection` condition reads `False` with reason `Disabled`.
+
 ![Agent state machine. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Idle when idleTimeout elapses, Idle back to Running on activity observed, Idle to Hibernating when hibernationDelay elapses, Hibernating to Hibernated when the Pod is gone, Hibernated to Resuming on the wake annotation, and Resuming to Running on Pod Ready. Running and Idle return to Provisioning on spec drift or Pod disruption. From any phase: Degraded on a class mismatch, returning to that phase when the mismatch clears; Failed on a crash loop or image pull failure, returning to Provisioning when the Pod recovers or is replaced; Terminating when deleted.](../diagrams/agent-lifecycle.svg)
 
 `Degraded` means the Agent's spec does not match its class, or a provider

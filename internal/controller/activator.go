@@ -17,18 +17,22 @@ limitations under the License.
 package controller
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/tlsutil"
@@ -41,6 +45,14 @@ import (
 // kaalm.io/wake-trigger=channel) on the target Agent so the leader's existing
 // watch drives the actual wake. See
 // docs/src/gateways/user/activation-and-activity.md (The Activator).
+//
+// It never depends on the manager's cache: the handler writes without
+// reading, and Listen returns a manager.Server, which the manager starts
+// with the health probes, before the caches. Controller readiness includes
+// the activator, and the same readiness gates the conversion webhook that
+// the caches may need in order to sync (an upgrade from before the v1beta1
+// graduation still stores v1alpha1 objects). An activator that waited on
+// the caches would deadlock that upgrade.
 type ActivatorServer struct {
 	Client            client.Client
 	OperatorNamespace string
@@ -48,20 +60,28 @@ type ActivatorServer struct {
 	CertFile          string
 	KeyFile           string
 	CAFile            string
+
+	// listening is true from the moment Listen binds the listener until the
+	// server closes it; ReadyCheck reads it.
+	listening atomic.Bool
 }
 
-// NeedLeaderElection returns false: the activator runs on every replica.
-func (s *ActivatorServer) NeedLeaderElection() bool { return false }
+// activatorShutdownTimeout bounds the graceful shutdown of in-flight wakes.
+const activatorShutdownTimeout = 5 * time.Second
 
-// Start serves until ctx is cancelled. It satisfies manager.Runnable.
-func (s *ActivatorServer) Start(ctx context.Context) error {
+// Listen loads the TLS material, binds the listener, and returns the
+// activator as a manager.Server to pass to mgr.Add. Binding here, before the
+// manager starts, makes a bad address or certificate fail at startup, and
+// the readiness check passes from this point: the kernel queues any
+// connection that arrives before the server starts serving.
+func (s *ActivatorServer) Listen() (*manager.Server, error) {
 	// The serving cert is re-read per handshake and ClientCAs rebuilt per
 	// connection, so cert-manager rotation applies without a restart (#149).
 	// Probes present no cert; the activate handler enforces per-path.
 	loader := &tlsutil.CertLoader{CertFile: s.CertFile, KeyFile: s.KeyFile, CAFile: s.CAFile}
 	tlsCfg, err := loader.ServerMTLSConfig(tls.VerifyClientCertIfGiven)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	mux := http.NewServeMux()
@@ -70,27 +90,45 @@ func (s *ActivatorServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/readyz", ok)
 	mux.HandleFunc("/v1/activate/", s.handleActivate)
 
-	server := &http.Server{
-		Addr:              s.Addr,
-		Handler:           mux,
-		TLSConfig:         tlsCfg,
-		ReadHeaderTimeout: 10 * time.Second,
+	ln, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		return nil, err
 	}
+	s.listening.Store(true)
+	tracked := &closeTrackingListener{Listener: ln, onClose: func() { s.listening.Store(false) }}
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- server.ListenAndServeTLS("", "") }()
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-		return nil
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
+	timeout := activatorShutdownTimeout
+	return &manager.Server{
+		Name:            "activator",
+		Server:          &http.Server{Handler: mux, TLSConfig: tlsCfg, ReadHeaderTimeout: 10 * time.Second},
+		Listener:        tls.NewListener(tracked, tlsCfg),
+		ShutdownTimeout: &timeout,
+	}, nil
+}
+
+// closeTrackingListener runs onClose once when the listener is closed, which
+// http.Server does on shutdown and when Serve fails.
+type closeTrackingListener struct {
+	net.Listener
+	once    sync.Once
+	onClose func()
+}
+
+func (l *closeTrackingListener) Close() error {
+	l.once.Do(l.onClose)
+	return l.Listener.Close()
+}
+
+// ReadyCheck is the manager's readyz check for the activator: it passes only
+// while the :9443 listener is bound, so a replica joins the controller
+// Service only once it can take a wake. It reads a flag, so it costs nothing
+// per probe. A server that fails after binding ends its Start with an error,
+// which stops the manager and exits the process.
+func (s *ActivatorServer) ReadyCheck(_ *http.Request) error {
+	if !s.listening.Load() {
+		return errors.New("activator listener not serving")
 	}
+	return nil
 }
 
 // handleActivate authorizes the gateway SAN and patches the wake annotation.
@@ -118,22 +156,20 @@ func (s *ActivatorServer) handleActivate(w http.ResponseWriter, r *http.Request)
 	}
 	namespace, name := parts[0], parts[1]
 
-	var agent kaalmv1beta1.Agent
-	if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: namespace, Name: name}, &agent); err != nil {
-		if apierrors.IsNotFound(err) {
-			http.Error(w, "agent not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// No read first: the patch alone answers NotFound for a missing Agent,
+	// and the client's reads come from a cache that may not have synced.
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}}
 	// One patch carries the wake and its trigger, so the reconciler never
 	// sees one without the other and can count this wake apart from a manual
 	// one (kaalm_wakes_total{trigger}).
 	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q,%q:%q}}}`,
 		kaalmv1beta1.AnnotationWake, kaalmv1beta1.AnnotationTrue,
 		kaalmv1beta1.AnnotationWakeTrigger, kaalmv1beta1.AnnotationWakeTriggerChannel)
-	if err := s.Client.Patch(r.Context(), &agent, client.RawPatch(types.MergePatchType, patch)); err != nil {
+	if err := s.Client.Patch(r.Context(), agent, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		if apierrors.IsNotFound(err) {
+			http.Error(w, "agent not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

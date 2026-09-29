@@ -95,7 +95,7 @@ func createPlatformPolicy(t *testing.T, name string) networkingv1.NetworkPolicyS
 func getPolicy(t *testing.T, name string) *networkingv1.NetworkPolicy {
 	t.Helper()
 	var np networkingv1.NetworkPolicy
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &np); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &np); err != nil {
 		t.Fatalf("get policy %s: %v", name, err)
 	}
 	return &np

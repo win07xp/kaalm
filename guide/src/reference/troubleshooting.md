@@ -34,6 +34,28 @@ goes `Degraded` instead.
   the namespace. The condition clears when the budget frees up (period reset,
   ceiling increase, or spend drop).
 
+## Agent never goes `Idle` or `Hibernated`
+
+```bash
+kubectl describe agent AGENT_NAME        # conditions carry the reason
+```
+
+- **Idle detection is off**: the `IdleDetection` condition is `False` with
+  reason `Disabled`. Neither the Agent's `spec.lifecycle.idleTimeout` nor its
+  class's `defaultIdleTimeout` sets a value, so the controller never checks
+  for activity. A class `maxIdleTimeout` alone sets no value. Set
+  `idleTimeout` on the Agent or `defaultIdleTimeout` on the class; the
+  condition disappears once a nonzero timeout applies.
+- **The gateway does not answer**: the `GatewayReachable` condition is `False`
+  with reason `GatewayUnavailable`. The controller keeps the phase and makes
+  no idle or hibernation transition without activity data. It checks again
+  after a delay that grows from 30 seconds to 5 minutes, and at once when a
+  gateway Pod turns Ready. Check the gateway with
+  `kubectl get pods -n kaalm-system`.
+
+Hibernation also needs `hibernationEnabled` on the Agent and
+`hibernationAllowed` on the class; see [Hibernation, observed](../developers/lifecycle.md#hibernation-observed).
+
 ## Webhook returns `401`
 
 ![Flowchart of every check on POST /channels/{namespace}/{path} in the order the User Gateway runs them, as three rows. Intake: body within maxMessageBodyBytes, else 413 request_too_large; path registered to a Ready=True AgentChannel, else 401; channel not Terminating, else 401; bearer or HMAC auth passes, else 401. Envelope and target: body normalizes, else 400 invalid_request; referenced Agent exists, else 502 delivery_failed; then responseMode: sync wakes if needed, delivers, and answers inline. Async accept: pending records below maxPendingAsyncResponses, else 503 internal_unavailable; placeholder ConfigMap created, else 503 internal_unavailable; then 202 with requestId and channelPath.](../diagrams/user-webhook-intake.svg)

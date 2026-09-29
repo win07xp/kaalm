@@ -9,7 +9,7 @@ start
 
 partition "evidence" {
   if (any replica reachable?) then (no)
-    :keep the phase, requeue 30s\nGatewayReachable=False;
+    :keep the phase, back off\nGatewayReachable=False;
     kill
   elseif (any replica recorded\nactivity for the Agent?) then (yes)
     :newest timestamp per source,\nthen activitySource;

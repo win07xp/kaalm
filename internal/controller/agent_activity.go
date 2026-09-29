@@ -202,6 +202,20 @@ func (g *GatewayActivityClient) NamespaceActivity(ctx context.Context, namespace
 	return reachable, total, nil
 }
 
+// ForgetUnreachable drops the cached answers that carried no activity data
+// (no gateway replica enumerated or none answered). The recovery kick calls
+// it when a gateway Pod turns Ready, so the kicked passes dial the gateway
+// instead of reading a no-data answer up to 15 seconds old.
+func (g *GatewayActivityClient) ForgetUnreachable() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for ns, entry := range g.cache {
+		if len(entry.reachable) == 0 {
+			delete(g.cache, ns)
+		}
+	}
+}
+
 // mergedActivity merges one agent's timestamps across replicas (most recent
 // per source), then applies the activitySource filter. The order is
 // load-bearing: merge first, filter second; the controller owns the policy.

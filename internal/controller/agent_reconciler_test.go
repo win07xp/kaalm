@@ -77,7 +77,7 @@ func mkWorkloadAgent(t *testing.T, name, className string, mutate func(*kaalmv1b
 func getWorkloadAgent(t *testing.T, name string) *kaalmv1beta1.Agent {
 	t.Helper()
 	var ag kaalmv1beta1.Agent
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 		t.Fatalf("get agent %s: %v", name, err)
 	}
 	return &ag
