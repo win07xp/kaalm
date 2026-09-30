@@ -39,7 +39,7 @@ several, the policy with the highest `atPercent` wins. What each action means fo
 
 Two validation notes on `degradeTo`: it must name a model in the same
 provider's catalog (`Ready=False, reason=InvalidDegradeTarget` otherwise),
-and if it is not the cheapest model in the catalog the controller sets the
+and if it costs more than another priced model in the catalog the controller sets the
 advisory `DegradeTargetNotCheapest` condition and emits one
 `DegradeTargetNotCheapest` event, since a "degrade" that escalates cost is
 usually a mistake. The condition clears when the target changes. A

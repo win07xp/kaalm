@@ -141,8 +141,8 @@ names the host, so `kubectl describe agentchannel` shows the typo.
   scan found a fallback candidate that a caller's namespace or model can
   never reach. Clears on its own once the configuration is fixed.
 - `DegradeTargetNotCheapest` (advisory, never affects `Ready`): a degrade
-  policy's `degradeTo` is not the cheapest model in the catalog
-  (`CheaperModelAvailable`); `False` with `DegradeTargetCheapest` once it is.
+  policy's `degradeTo` costs more than another priced model in the catalog
+  (`CheaperModelAvailable`); `False` with `DegradeTargetCheapest` once none does.
 - `MaxOutputTokensUnset` (advisory, never affects `Ready`): a fallback edge
   from `openai` or `openai-compatible` into `anthropic` reaches models with
   no `maxOutputTokens`, and the message lists them; `False` with
