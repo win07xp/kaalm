@@ -131,7 +131,7 @@ func TestFallbackIneligibility(t *testing.T) {
 
 // The reconciler reports ineligible candidates in the FallbackIneligible
 // condition and a Warning event, without touching Ready. The event fires
-// when the findings change, not on every pass.
+// when findings are added, not on every pass.
 func TestModelProvider_FallbackEligibilityScan(t *testing.T) {
 	ctx := context.Background()
 	primary := probedProvider("mp-elig", metav1.ConditionTrue, metav1.Now().Time)
@@ -222,7 +222,7 @@ func TestModelProvider_FallbackEligibilityScan(t *testing.T) {
 		t.Fatalf("clearing the findings emitted %d events, want 0", n)
 	}
 
-	// A different finding is a change and warns again.
+	// A finding after the condition went False is an added finding and warns.
 	backup.Spec.Models = []kaalmv1beta1.ModelProviderModel{{ID: "other"}}
 	if err := c.Update(ctx, backup); err != nil {
 		t.Fatal(err)
@@ -232,5 +232,92 @@ func TestModelProvider_FallbackEligibilityScan(t *testing.T) {
 	}
 	if n := len(rec.Events); n != 1 {
 		t.Fatalf("a new finding emitted %d events, want 1", n)
+	}
+}
+
+// The scan's findings grow when other people act (a new team's Agents use
+// the primary from a namespace the fallback does not admit), so the Warning
+// announces each added finding, naming only the new ones, and stays quiet
+// when the set is unchanged or shrinks (#324). The condition message always
+// lists the full current set.
+func TestModelProvider_FallbackIneligibleWarnsOnAddedFindings(t *testing.T) {
+	mp := eventsProvider("ev-mp-grow", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "ev-mp-grow-backup"}}
+	})
+	backup := eventsProvider("ev-mp-grow-backup", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.AllowedNamespaces = []string{"team-a"}
+	})
+	agentIn := func(ns string) *kaalmv1beta1.Agent {
+		return &kaalmv1beta1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: ns},
+			Spec: kaalmv1beta1.AgentSpec{Providers: []kaalmv1beta1.AgentProviderReference{
+				{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "ev-mp-grow"}},
+			}},
+		}
+	}
+	conflicts := &statusConflicts{}
+	r, rec := eventsProviderReconciler(t, conflicts, nil,
+		mp, backup, providerKey("ev-mp-grow"), agentIn("team-a"), agentIn("team-b"))
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-mp-grow"}}
+	prefix := "Warning " + kaalmv1beta1.ReasonFallbackIneligible
+	teamB := `fallback "ev-mp-grow-backup" does not admit namespace "team-b"`
+	teamC := `fallback "ev-mp-grow-backup" does not admit namespace "team-c"`
+	message := func() string {
+		t.Helper()
+		var got kaalmv1beta1.ModelProvider
+		if err := r.Get(ctxT(), req.NamespacedName, &got); err != nil {
+			t.Fatal(err)
+		}
+		c := condition(got.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
+		if c == nil || c.Status != metav1.ConditionTrue {
+			t.Fatalf("FallbackIneligible = %+v, want True", c)
+		}
+		return c.Message
+	}
+	pass := func() []string {
+		t.Helper()
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+		return withPrefix(drainEvents(rec), prefix)
+	}
+
+	// First appearance: one Warning with the finding, sent only once the
+	// status write succeeds.
+	if ev := expectEventOnceAcrossConflict(t, r, rec, conflicts, req, prefix); !strings.Contains(ev, teamB) {
+		t.Errorf("first event = %q, want it to name %s", ev, teamB)
+	}
+
+	// The same set sends nothing.
+	if got := pass(); len(got) != 0 {
+		t.Fatalf("a pass over the same findings emitted %q", got)
+	}
+
+	// An added finding warns once, naming only the new one; the condition
+	// lists both.
+	if err := r.Create(ctxT(), agentIn("team-c")); err != nil {
+		t.Fatal(err)
+	}
+	ev := expectEventOnceAcrossConflict(t, r, rec, conflicts, req, prefix)
+	if !strings.Contains(ev, teamC) || strings.Contains(ev, "team-b") {
+		t.Errorf("event for the added finding = %q, want only %s", ev, teamC)
+	}
+	if got, want := message(), teamB+"; "+teamC; got != want {
+		t.Errorf("condition message = %q, want %q", got, want)
+	}
+
+	// A removed finding sends nothing, and the condition message shrinks.
+	var gone kaalmv1beta1.Agent
+	if err := r.Get(ctxT(), types.NamespacedName{Namespace: "team-b", Name: "agent"}, &gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctxT(), &gone); err != nil {
+		t.Fatal(err)
+	}
+	if got := pass(); len(got) != 0 {
+		t.Fatalf("a shrinking set emitted %q", got)
+	}
+	if got := message(); got != teamC {
+		t.Errorf("condition message after the removal = %q, want %q", got, teamC)
 	}
 }
