@@ -166,7 +166,7 @@ page draws the traversal). The rules to know:
 - A candidate whose `allowedNamespaces` or `models` can never serve one of
   your callers is flagged before any request reaches it: the reconciler
   scans the tree on every pass and sets a `FallbackIneligible` condition on the
-  primary, with an event when the findings change. The provider stays `Ready`; the scan is advisory.
+  primary, with an event naming each new finding. The provider stays `Ready`; the scan is advisory.
 - The gateway-level depth cap (`gateway.maxFallbackDepth`, default 3) bounds
   the *total providers attempted per request, including the primary*, not
   the nesting depth.

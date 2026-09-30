@@ -144,10 +144,20 @@ func fallbackIneligibility(
 }
 
 // setFallbackEligibility records the scan in the FallbackIneligible
-// condition, and holds a FallbackIneligible Warning event, sent once finish
-// writes the condition, when the findings change to a new non-empty set, so
-// a steady misconfiguration does not warn on every pass. Clearing the findings sets the condition False without an
-// event; a provider that never had findings gets no condition.
+// condition, whose message lists every current finding. It holds a
+// FallbackIneligible Warning event, sent once finish writes the condition,
+// that names only the findings the previous condition did not list. A pass
+// with the same or fewer findings updates the message without an event.
+// Clearing the findings sets the condition False without an event; a
+// provider that never had findings gets no condition.
+//
+// DegradeTargetNotCheapest and MaxOutputTokensUnset warn only when their
+// condition first turns True, because only an edit to the providers changes
+// them. This scan's findings also grow when other people act: a new team's
+// Agents start using the primary from a namespace a fallback does not admit.
+// The platform team learns of that only from an event, so each added
+// finding is announced; a fixed finding is not, since whoever fixed it
+// already knows.
 func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelProvider, findings []string) {
 	prev := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
 	if len(findings) == 0 {
@@ -160,15 +170,39 @@ func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelP
 		}
 		return
 	}
-	msg := strings.Join(findings, "; ")
-	changed := prev == nil || prev.Status != metav1.ConditionTrue || prev.Message != msg
+	// prev points into the conditions slice, so diff before the set below
+	// overwrites its message.
+	added := addedFindings(prev, findings)
 	apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 		Type:    kaalmv1beta1.ConditionFallbackIneligible,
 		Status:  metav1.ConditionTrue,
 		Reason:  kaalmv1beta1.ReasonFallbackIneligible,
-		Message: msg,
+		Message: strings.Join(findings, findingsSeparator),
 	})
-	if changed {
-		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonFallbackIneligible, msg)
+	if len(added) > 0 {
+		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonFallbackIneligible,
+			strings.Join(added, findingsSeparator))
 	}
+}
+
+// findingsSeparator joins the sorted findings in the condition message.
+const findingsSeparator = "; "
+
+// addedFindings returns the findings, in order, that the previous
+// FallbackIneligible condition did not list. An absent or False previous
+// condition listed none.
+func addedFindings(prev *metav1.Condition, findings []string) []string {
+	listed := map[string]bool{}
+	if prev != nil && prev.Status == metav1.ConditionTrue && prev.Message != "" {
+		for _, f := range strings.Split(prev.Message, findingsSeparator) {
+			listed[f] = true
+		}
+	}
+	var added []string
+	for _, f := range findings {
+		if !listed[f] {
+			added = append(added, f)
+		}
+	}
+	return added
 }
