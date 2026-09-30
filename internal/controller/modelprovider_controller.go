@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,30 +105,15 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 
-	// Config validation: fallback tree and degrade targets.
-	var problems []string
+	// Config validation: fallback tree, degrade targets, and hard pricing.
+	var problems []validationProblem
 	problems = append(problems, r.validateFallback(ctx, &mp)...)
 	problems = append(problems, validateDegradeTargets(&mp)...)
 	problems = append(problems, validateHardPricing(&mp)...)
 	r.costSanity(&mp)
 	if len(problems) > 0 {
-		sort.Strings(problems)
-		reason := kaalmv1beta1.ReasonFallbackIneligible
-		for _, p := range problems {
-			if strings.Contains(p, "degradeTo") {
-				reason = kaalmv1beta1.ReasonInvalidDegradeTarget
-				break
-			}
-			if strings.Contains(p, "unpriced") {
-				reason = kaalmv1beta1.ReasonHardBudgetUnpriced
-				break
-			}
-			if strings.Contains(p, "modelMap") {
-				reason = kaalmv1beta1.ReasonInvalidModelMap
-				break
-			}
-		}
-		r.setReadyFalse(&mp, reason, strings.Join(problems, "; "))
+		reason, msg := readyFalseFromProblems(problems)
+		r.setReadyFalse(&mp, reason, msg)
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
@@ -227,6 +213,44 @@ func (r *ModelProviderReconciler) credential(
 	return string(val), kaalmv1beta1.ReasonCredentialsValid, ""
 }
 
+// validationProblem is one failed config check: the Ready=False reason the
+// check reports and the message that describes the problem.
+type validationProblem struct {
+	reason  string
+	message string
+}
+
+// validationReasonPrecedence orders the Ready=False reasons of the config
+// checks. When several checks fail, the reason earliest in this list wins.
+var validationReasonPrecedence = []string{
+	kaalmv1beta1.ReasonInvalidDegradeTarget,
+	kaalmv1beta1.ReasonHardBudgetUnpriced,
+	kaalmv1beta1.ReasonInvalidModelMap,
+	kaalmv1beta1.ReasonFallbackIneligible,
+}
+
+// readyFalseFromProblems picks the Ready=False reason for a non-empty set of
+// problems by validationReasonPrecedence, and joins every problem's message,
+// sorted, into one message. A reason missing from the precedence list ranks
+// after every listed one.
+func readyFalseFromProblems(problems []validationProblem) (reason, message string) {
+	rank := func(reason string) int {
+		if i := slices.Index(validationReasonPrecedence, reason); i >= 0 {
+			return i
+		}
+		return len(validationReasonPrecedence)
+	}
+	msgs := make([]string, 0, len(problems))
+	for _, p := range problems {
+		if reason == "" || rank(p.reason) < rank(reason) {
+			reason = p.reason
+		}
+		msgs = append(msgs, p.message)
+	}
+	sort.Strings(msgs)
+	return reason, strings.Join(msgs, "; ")
+}
+
 // validateFallback walks the fallback tree detecting cycles (rule 11),
 // format incompatibility (rule 12), and model maps naming models that do not
 // exist on either end (rule 41). A cycle is a provider that reappears among
@@ -238,8 +262,18 @@ func (r *ModelProviderReconciler) credential(
 // but a request without max_tokens cannot cross it.
 func (r *ModelProviderReconciler) validateFallback(
 	ctx context.Context, primary *kaalmv1beta1.ModelProvider,
-) []string {
-	var problems []string
+) []validationProblem {
+	var problems []validationProblem
+	ineligible := func(format string, args ...any) {
+		problems = append(problems, validationProblem{
+			reason: kaalmv1beta1.ReasonFallbackIneligible, message: fmt.Sprintf(format, args...),
+		})
+	}
+	badMap := func(format string, args ...any) {
+		problems = append(problems, validationProblem{
+			reason: kaalmv1beta1.ReasonInvalidModelMap, message: fmt.Sprintf(format, args...),
+		})
+	}
 	unsetMax := map[string]bool{}
 	// fetched caches each provider read; nil records one that does not exist.
 	fetched := map[string]*kaalmv1beta1.ModelProvider{}
@@ -249,14 +283,14 @@ func (r *ModelProviderReconciler) validateFallback(
 	walk = func(parent *kaalmv1beta1.ModelProvider) {
 		for _, ref := range parent.Spec.Fallback {
 			if onPath[ref.Name] {
-				problems = append(problems, fmt.Sprintf("fallback chain is circular at %q", ref.Name))
+				ineligible("fallback chain is circular at %q", ref.Name)
 				continue
 			}
 			if _, seen := fetched[ref.Name]; !seen {
 				var got kaalmv1beta1.ModelProvider
 				if err := r.Get(ctx, types.NamespacedName{Name: ref.Name}, &got); err != nil {
 					if apierrors.IsNotFound(err) {
-						problems = append(problems, fmt.Sprintf("fallback provider %q does not exist", ref.Name))
+						ineligible("fallback provider %q does not exist", ref.Name)
 						fetched[ref.Name] = nil
 					}
 					continue
@@ -268,20 +302,17 @@ func (r *ModelProviderReconciler) validateFallback(
 				continue
 			}
 			if !kaalmv1beta1.FallbackFormatCompatible(parent.Spec.Type, child.Spec.Type) {
-				problems = append(problems, fmt.Sprintf(
-					"fallback provider %q has type %q, which cannot follow type %q (rule 12)",
-					ref.Name, child.Spec.Type, parent.Spec.Type))
+				ineligible("fallback provider %q has type %q, which cannot follow type %q (rule 12)",
+					ref.Name, child.Spec.Type, parent.Spec.Type)
 			}
 			parentModels := modelSet(parent)
 			childModels := modelSet(child)
 			for key, value := range ref.ModelMap {
 				if !parentModels[key] {
-					problems = append(problems, fmt.Sprintf(
-						"modelMap on fallback %q: key %q is not a model of %q", ref.Name, key, parent.Name))
+					badMap("modelMap on fallback %q: key %q is not a model of %q", ref.Name, key, parent.Name)
 				}
 				if !childModels[value] {
-					problems = append(problems, fmt.Sprintf(
-						"modelMap on fallback %q: value %q is not a model of %q", ref.Name, value, ref.Name))
+					badMap("modelMap on fallback %q: value %q is not a model of %q", ref.Name, value, ref.Name)
 				}
 			}
 			if kaalmv1beta1.FallbackCrossesFormat(parent.Spec.Type, child.Spec.Type) &&
@@ -365,12 +396,12 @@ func findModel(mp *kaalmv1beta1.ModelProvider, id string) *kaalmv1beta1.ModelPro
 
 // validateDegradeTargets checks that every degrade policy names a real model in
 // the same provider's catalog (rule 18).
-func validateDegradeTargets(mp *kaalmv1beta1.ModelProvider) []string {
+func validateDegradeTargets(mp *kaalmv1beta1.ModelProvider) []validationProblem {
 	models := map[string]bool{}
 	for _, m := range mp.Spec.Models {
 		models[m.ID] = true
 	}
-	var problems []string
+	var problems []validationProblem
 	for _, p := range mp.Spec.Budget.Policies {
 		if p.Action == "degrade" {
 			if p.DegradeTo == nil || !models[*p.DegradeTo] {
@@ -378,7 +409,10 @@ func validateDegradeTargets(mp *kaalmv1beta1.ModelProvider) []string {
 				if p.DegradeTo != nil {
 					target = *p.DegradeTo
 				}
-				problems = append(problems, fmt.Sprintf("degradeTo %q is not a model in this provider", target))
+				problems = append(problems, validationProblem{
+					reason:  kaalmv1beta1.ReasonInvalidDegradeTarget,
+					message: fmt.Sprintf("degradeTo %q is not a model in this provider", target),
+				})
 			}
 		}
 	}
@@ -390,16 +424,20 @@ func validateDegradeTargets(mp *kaalmv1beta1.ModelProvider) []string {
 // model costs zero in the ledger, so a cap over it is silently vacuous. The
 // check must match the ledger's decimal parsing exactly, which is why it is
 // reconcile-time rather than CRD CEL.
-func validateHardPricing(mp *kaalmv1beta1.ModelProvider) []string {
+func validateHardPricing(mp *kaalmv1beta1.ModelProvider) []validationProblem {
 	if mp.Spec.Budget.Enforcement != kaalmv1beta1.BudgetEnforcementHard {
 		return nil
 	}
-	var problems []string
+	var problems []validationProblem
 	for _, m := range mp.Spec.Models {
 		_, errIn := strconv.ParseFloat(m.CostPer1MInputTokens, 64)
 		_, errOut := strconv.ParseFloat(m.CostPer1MOutputTokens, 64)
 		if errIn != nil || errOut != nil {
-			problems = append(problems, fmt.Sprintf("model %q is unpriced; hard budget enforcement requires a fully priced catalog (rule 33)", m.ID))
+			problems = append(problems, validationProblem{
+				reason: kaalmv1beta1.ReasonHardBudgetUnpriced,
+				message: fmt.Sprintf(
+					"model %q is unpriced; hard budget enforcement requires a fully priced catalog (rule 33)", m.ID),
+			})
 		}
 	}
 	return problems
