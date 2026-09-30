@@ -51,7 +51,7 @@ The harness is a release-time local gate, listed in the release checklist, not a
 
 ## Baseline numbers
 
-Every table except the soak is from the single `make load` run of September 12, 2026, reproduced from the baseline file as printed. The run-to-run spread on this machine is stated where it matters.
+Every table except the soak and the restart table is from the single `make load` run of September 12, 2026, reproduced from the baseline file as printed. The restart table is from a separate run of September 29, 2026, described under it. The run-to-run spread on this machine is stated where it matters.
 
 ### Gateway
 
@@ -114,14 +114,20 @@ The per-agent rates divide every write the component made by the fleet size, inc
 
 ### Restart under load
 
-A rolling restart of each component with the ramp fleet up:
+A rolling restart of each component with the ramp fleet up. The figures come from a separate run on the same machine, September 29, 2026 (`make load-run LOAD_FLAGS='-ramp-target 400 -phases ramp,restart'` on a fresh `kaalm-load` cluster, product code `1866257`), whose result file is `test/load/baseline/2026-09-29-restart.json`:
 
 | Measure | Value |
 |---|---|
-| Controller rollout with 400 agents up | 20 s to both replicas Ready; first reconcile of the new leader at 21 s |
-| Gateway rollout under a 60 s token-tier leg | 11 s; 1 of 626838 requests failed |
+| Controller rollout with 400 agents up | 11 s to both replicas Ready; first reconcile of the new leader at 21 s |
+| Gateway rollout under a 60 s token-tier leg | 11 s; 1 of 810505 requests failed |
 
-The controller's number is the leader handoff as well as the rollout, since the first reconcile of the new leader is what the fleet waits for. The gateway's rollout drops the requests that were in flight on the replica being replaced; with two replicas and the default `maxUnavailable` that is a handful per roll.
+The first reconcile of the new leader is what the fleet waits for, and its 21 s divides into three parts, read from the controller logs of that run:
+
+1. **About 11 s of rollout.** The new Pod asks for the Lease within a second of the restart, but the old leader is the last old Pod to exit, and the rollout finishes when it does.
+2. **About 2 s of handoff.** The old leader releases the Lease as it shuts down, so the new Pod acquires it on its next retry (the 2 s retry period) instead of waiting out the Lease duration. Without the release, the new leader would wait up to the Lease duration, 15 s by default, after the old leader exits.
+3. **About 8 s of new-leader startup.** The controllers start at once on acquisition, and the first reconcile comes while the new leader's caches fill with 400 Agents.
+
+The gateway's one failed request was a refused connection to the Service during the roll.
 
 ### Fleet teardown
 

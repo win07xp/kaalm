@@ -1,0 +1,648 @@
+{
+  "commit": "1866257",
+  "startedAt": "2026-09-29T21:04:17.221483549-04:00",
+  "finishedAt": "2026-09-29T21:14:07.017666699-04:00",
+  "config": {
+    "Context": "k3d-kaalm-load",
+    "Namespace": "load",
+    "AgentImage": "registry.test/agents/starter-go:e2e",
+    "LoadgenImage": "registry.test/load/loadgen:load",
+    "Infra": "test/load/testdata/infra.yaml",
+    "Out": "",
+    "Phases": [
+      "ramp",
+      "restart"
+    ],
+    "HostPreflight": true,
+    "RampTarget": 400,
+    "WaveSize": 50,
+    "WaveTimeout": 360000000000,
+    "MemFloorMiB": 3072,
+    "HoldDuration": 180000000000,
+    "HoldPerAgentInterval": 60000000000,
+    "HoldSampleInterval": 60000000000,
+    "IdleDuration": 180000000000,
+    "ChurnAgents": 100,
+    "ChurnCycle": 90000000000,
+    "ChurnDuration": 600000000000,
+    "Tasks": 200,
+    "TaskTimeout": 900000000000,
+    "GatewayConcurrency": 32,
+    "GatewayDuration": 60000000000
+  },
+  "environment": {
+    "hostCpus": 16,
+    "hostMemTotalMiB": 15953.648,
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "k3dVersion": "k3d version v5.8.3",
+    "kubernetesVersion": "v1.31.5+k3s1",
+    "nodes": [
+      {
+        "name": "k3d-kaalm-load-agent-0",
+        "allocatablePods": 250,
+        "allocatableCpu": "16",
+        "allocatableMemMiB": 15953.648,
+        "kubelet": "v1.31.5+k3s1"
+      },
+      {
+        "name": "k3d-kaalm-load-agent-1",
+        "allocatablePods": 250,
+        "allocatableCpu": "16",
+        "allocatableMemMiB": 15953.648,
+        "kubelet": "v1.31.5+k3s1"
+      },
+      {
+        "name": "k3d-kaalm-load-server-0",
+        "allocatablePods": 250,
+        "allocatableCpu": "16",
+        "allocatableMemMiB": 15953.648,
+        "kubelet": "v1.31.5+k3s1"
+      }
+    ],
+    "components": {
+      "kaalm-controller": {
+        "replicas": 2,
+        "image": "ghcr.io/win07xp/kaalm-controller:0.2.0"
+      },
+      "kaalm-gateway": {
+        "replicas": 2,
+        "image": "ghcr.io/win07xp/kaalm-gateway:0.2.0"
+      }
+    }
+  },
+  "ramp": {
+    "target": 400,
+    "waveSize": 50,
+    "waves": [
+      {
+        "index": 0,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 50,
+        "wallSec": 61.051,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 34.56,
+          "p50": 35,
+          "p90": 49,
+          "p95": 56,
+          "p99": 60,
+          "max": 60
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 29.8,
+          "p50": 27,
+          "p90": 46,
+          "p95": 48,
+          "p99": 52,
+          "max": 52
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 31.34,
+          "p50": 29,
+          "p90": 47,
+          "p95": 50,
+          "p99": 53,
+          "max": 53
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 3.22,
+          "p50": 1,
+          "p90": 10,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 12141.738,
+        "controller": {
+          "cpuMilli": 48.94964900000001,
+          "memMiB": 45.77734375
+        },
+        "gateway": {
+          "cpuMilli": 12.898420999999999,
+          "memMiB": 30.703125
+        },
+        "reconcileMs": {
+          "count": 1075,
+          "mean": 15.615,
+          "p50": 3.118,
+          "p90": 20.582,
+          "p95": 166.563,
+          "p99": 230.093,
+          "max": 250
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 444.102,
+          "k3d-kaalm-load-agent-1": 406.52,
+          "k3d-kaalm-load-server-0": 1186.309
+        }
+      },
+      {
+        "index": 1,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 100,
+        "wallSec": 58.771,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 33.1,
+          "p50": 33,
+          "p90": 49,
+          "p95": 51,
+          "p99": 57,
+          "max": 57
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 27.66,
+          "p50": 27,
+          "p90": 42,
+          "p95": 46,
+          "p99": 47,
+          "max": 47
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 29.24,
+          "p50": 28,
+          "p90": 44,
+          "p95": 47,
+          "p99": 49,
+          "max": 49
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 3.86,
+          "p50": 2,
+          "p90": 10,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 11463.27,
+        "controller": {
+          "cpuMilli": 57.998194999999996,
+          "memMiB": 52.96484375
+        },
+        "gateway": {
+          "cpuMilli": 13.702456999999999,
+          "memMiB": 36.8203125
+        },
+        "reconcileMs": {
+          "count": 1057,
+          "mean": 15.564,
+          "p50": 3.353,
+          "p90": 21.432,
+          "p95": 164.926,
+          "p99": 231.776,
+          "max": 250
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 635.707,
+          "k3d-kaalm-load-agent-1": 579.566,
+          "k3d-kaalm-load-server-0": 1447.063
+        }
+      },
+      {
+        "index": 2,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 150,
+        "wallSec": 65.301,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 36.74,
+          "p50": 35,
+          "p90": 54,
+          "p95": 56,
+          "p99": 64,
+          "max": 64
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 31.48,
+          "p50": 29,
+          "p90": 50,
+          "p95": 52,
+          "p99": 54,
+          "max": 54
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 32.98,
+          "p50": 30,
+          "p90": 51,
+          "p95": 53,
+          "p99": 55,
+          "max": 55
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 3.76,
+          "p50": 1,
+          "p90": 11,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 10848.637,
+        "controller": {
+          "cpuMilli": 54.258212,
+          "memMiB": 58.48828125
+        },
+        "gateway": {
+          "cpuMilli": 14.719161,
+          "memMiB": 41.30859375
+        },
+        "reconcileMs": {
+          "count": 1118,
+          "mean": 15.068,
+          "p50": 3.429,
+          "p90": 23.455,
+          "p95": 160.143,
+          "p99": 230.036,
+          "max": 250
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 830.234,
+          "k3d-kaalm-load-agent-1": 778.051,
+          "k3d-kaalm-load-server-0": 1718.195
+        }
+      },
+      {
+        "index": 3,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 200,
+        "wallSec": 56.893,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 33.26,
+          "p50": 31,
+          "p90": 50,
+          "p95": 51,
+          "p99": 57,
+          "max": 57
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 28.74,
+          "p50": 28,
+          "p90": 44,
+          "p95": 47,
+          "p99": 48,
+          "max": 48
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 30.32,
+          "p50": 29,
+          "p90": 45,
+          "p95": 49,
+          "p99": 49,
+          "max": 49
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 2.94,
+          "p50": 1,
+          "p90": 10,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 10119.461,
+        "controller": {
+          "cpuMilli": 72.53868100000001,
+          "memMiB": 64.64453125
+        },
+        "gateway": {
+          "cpuMilli": 15.617293000000002,
+          "memMiB": 45.45703125
+        },
+        "reconcileMs": {
+          "count": 1060,
+          "mean": 16.16,
+          "p50": 3.552,
+          "p90": 34.545,
+          "p95": 164.516,
+          "p99": 232.903,
+          "max": 250
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 1049.516,
+          "k3d-kaalm-load-agent-1": 997.711,
+          "k3d-kaalm-load-server-0": 1980.277
+        }
+      },
+      {
+        "index": 4,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 250,
+        "wallSec": 66.361,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 39.66,
+          "p50": 40,
+          "p90": 55,
+          "p95": 57,
+          "p99": 65,
+          "max": 65
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 35.62,
+          "p50": 37,
+          "p90": 52,
+          "p95": 54,
+          "p99": 56,
+          "max": 56
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 36.98,
+          "p50": 38,
+          "p90": 53,
+          "p95": 55,
+          "p99": 57,
+          "max": 57
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 2.68,
+          "p50": 1,
+          "p90": 10,
+          "p95": 10,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 9380.074,
+        "controller": {
+          "cpuMilli": 85.74415400000001,
+          "memMiB": 68.54296875
+        },
+        "gateway": {
+          "cpuMilli": 19.698074,
+          "memMiB": 50.87890625
+        },
+        "reconcileMs": {
+          "count": 1152,
+          "mean": 15.516,
+          "p50": 3.499,
+          "p90": 37.619,
+          "p95": 153.529,
+          "p99": 227.846,
+          "max": 250
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 1325.563,
+          "k3d-kaalm-load-agent-1": 1230.871,
+          "k3d-kaalm-load-server-0": 2262.789
+        }
+      },
+      {
+        "index": 5,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 300,
+        "wallSec": 57.452,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 36.22,
+          "p50": 37,
+          "p90": 50,
+          "p95": 51,
+          "p99": 56,
+          "max": 56
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 31.4,
+          "p50": 30,
+          "p90": 44,
+          "p95": 48,
+          "p99": 48,
+          "max": 48
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 32.86,
+          "p50": 31,
+          "p90": 46,
+          "p95": 49,
+          "p99": 49,
+          "max": 49
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 3.36,
+          "p50": 2,
+          "p90": 10,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 8510.332,
+        "controller": {
+          "cpuMilli": 101.865639,
+          "memMiB": 79.83203125
+        },
+        "gateway": {
+          "cpuMilli": 19.581898000000002,
+          "memMiB": 55.21484375
+        },
+        "reconcileMs": {
+          "count": 1094,
+          "mean": 16.39,
+          "p50": 3.557,
+          "p90": 38.516,
+          "p95": 159.844,
+          "p99": 231.138,
+          "max": 250
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 1530.016,
+          "k3d-kaalm-load-agent-1": 1502.383,
+          "k3d-kaalm-load-server-0": 2583.625
+        }
+      },
+      {
+        "index": 6,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 350,
+        "wallSec": 67.538,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 41.04,
+          "p50": 42,
+          "p90": 57,
+          "p95": 61,
+          "p99": 64,
+          "max": 64
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 35.52,
+          "p50": 36,
+          "p90": 52,
+          "p95": 54,
+          "p99": 55,
+          "max": 55
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 36.94,
+          "p50": 38,
+          "p90": 53,
+          "p95": 56,
+          "p99": 56,
+          "max": 56
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 4.1,
+          "p50": 2,
+          "p90": 10,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 7747.656,
+        "controller": {
+          "cpuMilli": 160.93147700000003,
+          "memMiB": 82.10546875
+        },
+        "gateway": {
+          "cpuMilli": 19.484772,
+          "memMiB": 60.94140625
+        },
+        "reconcileMs": {
+          "count": 1166,
+          "mean": 15.777,
+          "p50": 3.466,
+          "p90": 37.857,
+          "p95": 154.655,
+          "p99": 232.806,
+          "max": 300
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 1820.129,
+          "k3d-kaalm-load-agent-1": 1769.172,
+          "k3d-kaalm-load-server-0": 3034.965
+        }
+      },
+      {
+        "index": 7,
+        "requested": 50,
+        "readyInWave": 50,
+        "fleetReady": 400,
+        "wallSec": 62.015,
+        "timeToReadySec": {
+          "count": 50,
+          "mean": 34.32,
+          "p50": 34,
+          "p90": 49,
+          "p95": 53,
+          "p99": 60,
+          "max": 60
+        },
+        "certIssueSec": {
+          "count": 50,
+          "mean": 29.34,
+          "p50": 28,
+          "p90": 45,
+          "p95": 49,
+          "p99": 51,
+          "max": 51
+        },
+        "podStartSec": {
+          "count": 50,
+          "mean": 30.8,
+          "p50": 29,
+          "p90": 47,
+          "p95": 50,
+          "p99": 52,
+          "max": 52
+        },
+        "startToReadySec": {
+          "count": 50,
+          "mean": 3.52,
+          "p50": 1,
+          "p90": 11,
+          "p95": 11,
+          "p99": 11,
+          "max": 11
+        },
+        "hostMemAvailMiB": 6836.84,
+        "controller": {
+          "cpuMilli": 150.594179,
+          "memMiB": 82.22265625
+        },
+        "gateway": {
+          "cpuMilli": 22.713786,
+          "memMiB": 67.625
+        },
+        "reconcileMs": {
+          "count": 1086,
+          "mean": 17.157,
+          "p50": 3.568,
+          "p90": 40.682,
+          "p95": 159.5,
+          "p99": 231.9,
+          "max": 250
+        },
+        "workqueueDepth": 0,
+        "nodeMemMiB": {
+          "k3d-kaalm-load-agent-0": 2063.793,
+          "k3d-kaalm-load-agent-1": 2010.93,
+          "k3d-kaalm-load-server-0": 3265.77
+        }
+      }
+    ],
+    "achieved": 400,
+    "hostMemBeforeMiB": 12605.117,
+    "memPerAgentMiB": 14.427
+  },
+  "restart": {
+    "agents": 400,
+    "controllerRolloutSec": 10.539,
+    "controllerFirstReconcileSec": 20.853,
+    "gatewayRolloutSec": 10.726,
+    "gatewayClient": {
+      "mode": "gateway",
+      "requests": 810505,
+      "statuses": {
+        "200": 810504,
+        "error": 1
+      },
+      "durationSec": 60.001,
+      "rps": 13508.165,
+      "latencyMs": {
+        "count": 810504,
+        "mean": 2.35,
+        "p50": 1.828,
+        "p90": 4.128,
+        "p95": 5.075,
+        "p99": 7.555,
+        "max": 2116
+      },
+      "errors": [
+        "Post \"https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions\": dial tcp 10.43.203.187:8443: connect: connection refused"
+      ],
+      "warmupSec": 2.031
+    },
+    "gatewayFailed": 1
+  }
+}
