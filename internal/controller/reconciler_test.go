@@ -1139,6 +1139,62 @@ func TestCostSanity_RisingEdgeOnly(t *testing.T) {
 	}
 }
 
+// Several degrade policies with a finding are one state: one Warning whose
+// message lists every finding, the same text as the condition message, with a
+// target named by two policies listed once. A changed set of findings while
+// the condition stays True updates the message and sends nothing, like
+// MaxOutputTokensUnset.
+func TestCostSanity_OneEventListsEveryFinding(t *testing.T) {
+	rec := record.NewFakeRecorder(8)
+	r := &ModelProviderReconciler{Recorder: rec}
+	pricey, mid, cheap := "pricey", "mid", "cheap"
+	mp := &kaalmv1beta1.ModelProvider{
+		ObjectMeta: metav1.ObjectMeta{Name: "mp"},
+		Spec: kaalmv1beta1.ModelProviderSpec{
+			Models: []kaalmv1beta1.ModelProviderModel{
+				{ID: "cheap", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "1"},
+				{ID: "mid", CostPer1MInputTokens: "5", CostPer1MOutputTokens: "5"},
+				{ID: "pricey", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "10"},
+			},
+			Budget: kaalmv1beta1.ModelProviderBudget{
+				Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{
+					{AtPercent: 80, Action: "degrade", DegradeTo: &pricey},
+					{AtPercent: 90, Action: "degrade", DegradeTo: &mid},
+					{AtPercent: 95, Action: "degrade", DegradeTo: &pricey},
+				},
+			},
+		},
+	}
+	r.costSanity(mp)
+	r.events.flush(rec, mp, true)
+	if n := len(rec.Events); n != 1 {
+		t.Fatalf("three degrade policies with findings emitted %d events, want 1", n)
+	}
+	ev := <-rec.Events
+	want := `degradeTo "pricey" is not the cheapest model ("cheap"); degradeTo "mid" is not the cheapest model ("cheap")`
+	if ev != "Warning "+kaalmv1beta1.ReasonDegradeTargetNotCheapest+" "+want {
+		t.Errorf("event = %q, want the joined findings %q", ev, want)
+	}
+	c := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
+	if c == nil || c.Message != want {
+		t.Fatalf("condition = %+v, want message %q", c, want)
+	}
+
+	// Fixing one target while another stays wrong changes the message only.
+	mp.Spec.Budget.Policies[0].DegradeTo = &cheap
+	mp.Spec.Budget.Policies[2].DegradeTo = &cheap
+	r.costSanity(mp)
+	r.events.flush(rec, mp, true)
+	if n := len(rec.Events); n != 0 {
+		t.Fatalf("a changed set of findings while the condition stayed True emitted %d events, want 0", n)
+	}
+	c = apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
+	if want := `degradeTo "mid" is not the cheapest model ("cheap")`; c == nil ||
+		c.Status != metav1.ConditionTrue || c.Message != want {
+		t.Fatalf("condition after a partial fix = %+v, want True with %q", c, want)
+	}
+}
+
 // A class that relaxes the restricted baseline reports SecurityBaseline=False
 // naming the field; one that declares nothing or only tightens reports True.
 func TestAgentClass_SecurityBaselineCondition(t *testing.T) {
