@@ -36,10 +36,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -225,11 +227,12 @@ func (r *AgentChannelReconciler) validateChannel(
 			fmt.Sprintf("%s.path must begin with %q", channelType(channel), prefix)
 	}
 	// Path conflict: the earliest creationTimestamp wins, across every type.
-	var channels kaalmv1beta1.AgentChannelList
-	if err := r.List(ctx, &channels, client.InNamespace(channel.Namespace)); err == nil {
-		for i := range channels.Items {
-			other := &channels.Items[i]
-			if other.Name == channel.Name || other.Spec.Path() != path {
+	// A change to any channel on this path re-runs this check for the others
+	// (pathSiblingHandler), so the loser's status follows at once.
+	if channels, err := r.channelsOnPath(ctx, channel.Namespace, path); err == nil {
+		for i := range channels {
+			other := &channels[i]
+			if other.Name == channel.Name {
 				continue
 			}
 			if other.CreationTimestamp.Before(&channel.CreationTimestamp) ||
@@ -787,8 +790,10 @@ func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1beta1.AgentChan
 	})
 }
 
-// SetupWithManager wires the reconciler, its owned RBAC pair, and the Agent
-// watch (phase reduction must track Agent phase changes).
+// SetupWithManager wires the reconciler, its owned RBAC pair, the Agent
+// watch (phase reduction must track Agent phase changes), and the path
+// sibling watch (a rule 15 conflict's outcome depends on every channel on
+// the path).
 func (r *AgentChannelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
@@ -796,7 +801,78 @@ func (r *AgentChannelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.channelsForAgent)).
+		Watches(&kaalmv1beta1.AgentChannel{}, r.pathSiblingHandler()).
 		Complete(r)
+}
+
+// channelsOnPath lists the channels in namespace registered at path, through
+// the IndexChannelPath field index.
+func (r *AgentChannelReconciler) channelsOnPath(
+	ctx context.Context, namespace, path string,
+) ([]kaalmv1beta1.AgentChannel, error) {
+	var channels kaalmv1beta1.AgentChannelList
+	if err := r.List(ctx, &channels, client.InNamespace(namespace),
+		client.MatchingFields{IndexChannelPath: path}); err != nil {
+		return nil, err
+	}
+	return channels.Items, nil
+}
+
+// pathSiblingHandler re-enqueues the other channels on a channel's path when
+// the channel is created or deleted, and the other channels on both its old
+// and its new path when its path changes. Which channel wins a rule 15 path
+// conflict depends on every channel on the path, so without this a channel
+// that lost to a newly created one (a timestamp tie lost by name, or a clock
+// that went back), or that won once the older one left, would show its old
+// Ready condition until its one-minute requeue. An update that keeps the
+// path, such as a status write, enqueues nothing.
+func (r *AgentChannelReconciler) pathSiblingHandler() handler.EventHandler {
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.enqueuePathSiblings(ctx, q, e.Object)
+		},
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			if channelPath(e.ObjectOld) == channelPath(e.ObjectNew) {
+				return
+			}
+			r.enqueuePathSiblings(ctx, q, e.ObjectOld)
+			r.enqueuePathSiblings(ctx, q, e.ObjectNew)
+		},
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.enqueuePathSiblings(ctx, q, e.Object)
+		},
+	}
+}
+
+// channelPath returns an AgentChannel's path, or "" for any other object.
+func channelPath(obj client.Object) string {
+	if ch, ok := obj.(*kaalmv1beta1.AgentChannel); ok {
+		return ch.Spec.Path()
+	}
+	return ""
+}
+
+// enqueuePathSiblings adds every channel other than obj that shares obj's
+// path in obj's namespace. A channel with no path has no siblings.
+func (r *AgentChannelReconciler) enqueuePathSiblings(
+	ctx context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request], obj client.Object,
+) {
+	path := channelPath(obj)
+	if path == "" {
+		return
+	}
+	siblings, err := r.channelsOnPath(ctx, obj.GetNamespace(), path)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "listing channels on a path", "path", path)
+		return
+	}
+	for i := range siblings {
+		if siblings[i].Name == obj.GetName() {
+			continue
+		}
+		q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
+			Namespace: siblings[i].Namespace, Name: siblings[i].Name}})
+	}
 }
 
 // channelsForAgent re-enqueues every channel referencing a changed Agent.

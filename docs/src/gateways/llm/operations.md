@@ -31,7 +31,7 @@ Each cache in check 3 backs a specific step of request handling:
 | `Agent` | Provider-routing ownerRef resolution, hibernation-state checks |
 | `AgentTask` | Provider-routing ownerRef resolution, hibernation-state checks |
 | `AgentClass` | The `allowedProviders` gate in the mTLS-tier routing chain |
-| `AgentChannel` | Webhook path to target Agent lookup |
+| `AgentChannel` | Channel lookup by path through the `spec.path` field index, for webhook, Discord, and WhatsApp channels |
 | `ModelProvider` | Model validation, `allowedNamespaces`, fallback chain traversal |
 | `ToolProvider` | The MCP broker's `/v1/mcp/{toolProvider}` lookup |
 

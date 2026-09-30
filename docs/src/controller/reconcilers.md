@@ -15,9 +15,9 @@ For the state machines these reconcilers drive, see [Agent lifecycle](agent-life
 | ToolProvider | none | Secrets in `kaalm-system`, by a list-and-filter map; Agent, AgentTask, and AgentClass, by their tool references | a credential created after its provider recovers it; workload changes release the delete hold |
 | Agent | Pod, Service, ServiceAccount, PVC, NetworkPolicy, Certificate, and a CiliumNetworkPolicy that is not watched | AgentClass and ToolProvider (spec generation changes only), ModelProvider (spec changes, changes to its `Ready` status or reason, and changes to the set of budget-blocked namespaces), each indexed by the referencing field; other Agents of the same class, when one leaves `PodUpToDate` reason `Replacing` or is deleted while `Replacing`; Pods in `kaalm-system` carrying the gateway's `app.kubernetes.io/component: gateway` label | class, provider, and tool-provider drift, without a periodic requeue; a freed `maxUnavailableOnDrift` slot, re-queueing the class's Agents waiting on `PodUpToDate` reason `ReplacementPending`; a gateway Pod turning Ready, re-queueing the `Running` or `Idle` Agents whose `GatewayReachable` is `False`, except those with idle detection off ([Gateway unavailability](hibernation-and-wake.md#when-activity-data-is-missing)) |
 | AgentTask | Pod, PVC, ConfigMap, NetworkPolicy, ServiceAccount, Role, RoleBinding, Certificate, and a CiliumNetworkPolicy that is not watched | AgentClass, indexed by `agentClassRef` | class drift only; a ModelProvider or ToolProvider change does not re-enqueue tasks |
-| AgentChannel | Role, RoleBinding | Agent, by `agentRef` | the bound Agent's phase changes |
+| AgentChannel | Role, RoleBinding | Agent, by `agentRef`; other AgentChannels on the same path, by the `spec.path` index | the bound Agent's phase changes; a channel on the path is created, deleted, or moved to another path, to re-evaluate `PathConflict` |
 
-The cert-manager output Secret of a Certificate carries an ownerRef to the Certificate, set by cert-manager, never to the Agent or AgentTask. The predicates on the Agent watches limit the fan-out: a class or tool provider re-enqueues its Agents only when its spec generation changes, and a model provider only when its spec, its set of blocked namespaces, or its `Ready` status or reason changes, so the spend counters the gateway publishes every ten seconds and the in-use counts the class reconciler writes do not re-enqueue the fleet.
+The cert-manager output Secret of a Certificate carries an ownerRef to the Certificate, set by cert-manager, never to the Agent or AgentTask. The predicates on the Agent watches limit the fan-out: a class or tool provider re-enqueues its Agents only when its spec generation changes, and a model provider only when its spec, its set of blocked namespaces, or its `Ready` status or reason changes, so the spend counters the gateway publishes every ten seconds and the in-use counts the class reconciler writes do not re-enqueue the fleet. The AgentChannel path watch works the same way: an update that keeps the channel's path, such as a status write, re-enqueues nothing.
 
 ## AgentClassReconciler
 
@@ -238,6 +238,14 @@ The reconciler creates no Pods. It validates the channel, scopes credential acce
 7. **Prune.** Delete this channel's expired async records; see [Async ConfigMap pruning](#async-configmap-pruning).
 
 Status is written only when the pass changed it, and every pass requeues in one minute (30 seconds after a `ChildConflict`). Secret events do not enqueue a channel: the reconciler reads each referenced Secret from its own single-object watch ([Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)), which keeps the value current without a GET on every pass, so a credential fixed in place is noticed by the next pass. The gateway's side of a channel, from intake to delivery, is under [Request flow](../gateways/user/overview.md#request-flow).
+
+Path conflicts are also re-evaluated when a channel on the same path changes, not only on the one-minute pass. The path check lists channels through the `spec.path` field index, whose value is the path of whichever block the type selects (`spec.webhook.path`, `spec.discord.path`, or `spec.whatsapp.path`); a channel with no path is not indexed. A watch on AgentChannel re-enqueues the other channels in the namespace on a path in these cases:
+
+- A channel is created: the other channels on its path.
+- A channel is deleted: the other channels on its path. The delete event fires when the object leaves the API server, after the finalizer releases ([Finalizers](finalizers.md#agentchannel)), so a `Terminating` channel still holds its path in the conflict check until then.
+- A channel's path changes: the other channels on both its old and its new path.
+
+When a new or moved channel takes the path (it wins a `creationTimestamp` tie by name, or the clock went back), the channel that was `Ready=True` turns `Ready=False, reason=PathConflict` on the next pass, without waiting for its requeue. When the winner is deleted or moves to another path, the loser becomes `Ready=True` on the pass that event triggers.
 
 ### Per-channel credential Role
 

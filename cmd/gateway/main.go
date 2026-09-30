@@ -196,6 +196,11 @@ func main() {
 		logger.Error("registering pod IP index", "error", err)
 		os.Exit(1)
 	}
+	if err := cl.GetFieldIndexer().IndexField(context.Background(), &kaalmv1beta1.AgentChannel{},
+		gateway.ChannelPathIndex, gateway.ChannelPathIndexValue); err != nil {
+		logger.Error("registering channel path index", "error", err)
+		os.Exit(1)
+	}
 
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
