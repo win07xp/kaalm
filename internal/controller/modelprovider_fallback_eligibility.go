@@ -144,9 +144,9 @@ func fallbackIneligibility(
 }
 
 // setFallbackEligibility records the scan in the FallbackIneligible
-// condition, and emits a FallbackIneligible Warning event when the findings
-// change to a new non-empty set, so a steady misconfiguration does not warn
-// on every pass. Clearing the findings sets the condition False without an
+// condition, and holds a FallbackIneligible Warning event, sent once finish
+// writes the condition, when the findings change to a new non-empty set, so
+// a steady misconfiguration does not warn on every pass. Clearing the findings sets the condition False without an
 // event; a provider that never had findings gets no condition.
 func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelProvider, findings []string) {
 	prev := apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible)
@@ -168,7 +168,7 @@ func (r *ModelProviderReconciler) setFallbackEligibility(mp *kaalmv1beta1.ModelP
 		Reason:  kaalmv1beta1.ReasonFallbackIneligible,
 		Message: msg,
 	})
-	if changed && r.Recorder != nil {
-		r.Recorder.Event(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonFallbackIneligible, msg)
+	if changed {
+		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonFallbackIneligible, msg)
 	}
 }

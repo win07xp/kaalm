@@ -60,7 +60,9 @@ func TestModelProviderSample_DegradeIsEffective(t *testing.T) {
 		t.Fatal("the sample has no degrade policy")
 	}
 	rec := record.NewFakeRecorder(4)
-	(&ModelProviderReconciler{Recorder: rec}).costSanity(&mp)
+	r := &ModelProviderReconciler{Recorder: rec}
+	r.costSanity(&mp)
+	r.events.flush(rec, &mp, true)
 	if n := len(rec.Events); n != 0 {
 		t.Errorf("the sample's degrade target is not the cheapest model: %s", <-rec.Events)
 	}

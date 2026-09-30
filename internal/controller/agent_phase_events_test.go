@@ -21,7 +21,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -146,5 +148,87 @@ func TestAgent_PhaseChangedOnEveryTransition(t *testing.T) {
 		if len(ev.Message) >= 5 && ev.Message[:5] == "idle:" {
 			t.Errorf("old-style PhaseChanged event still emitted: %q", ev.Message)
 		}
+	}
+}
+
+// agentPass is one pass of an Agent reconciler step over a fresh read of the
+// Agent, dropping what it held on the way out as Reconcile does.
+func agentPass(t *testing.T, r *AgentReconciler, name string, step func(*kaalmv1beta1.Agent) error) error {
+	t.Helper()
+	var ag kaalmv1beta1.Agent
+	if err := r.Get(ctxT(), types.NamespacedName{Name: name, Namespace: "default"}, &ag); err != nil {
+		t.Fatal(err)
+	}
+	defer r.events.take(&ag)
+	return step(&ag)
+}
+
+// The Agent's state events wait for the status write: a pass that loses its
+// write to a conflict emits nothing, and the retry emits each once.
+func TestAgent_StateEventsFollowTheStatusWrite(t *testing.T) {
+	cases := []struct {
+		name   string
+		phase  kaalmv1beta1.AgentPhase
+		prefix string
+		step   func(r *AgentReconciler, ag *kaalmv1beta1.Agent) error
+		steady bool // a third pass over the stored state must stay quiet
+	}{{
+		name: "ChildConflict", phase: kaalmv1beta1.AgentRunning,
+		prefix: "Warning " + kaalmv1beta1.ReasonChildConflict, steady: true,
+		step: func(r *AgentReconciler, ag *kaalmv1beta1.Agent) error {
+			_, err := r.childConflict(ctxT(), ag, ag.Status.DeepCopy(),
+				&ChildConflictError{Kind: "Service", Name: ag.Name, OwnerKind: "Agent"})
+			return err
+		},
+	}, {
+		name: "entering Degraded", phase: kaalmv1beta1.AgentRunning,
+		prefix: "Warning " + kaalmv1beta1.ReasonHandlerMountNotAllowed, steady: true,
+		step: func(r *AgentReconciler, ag *kaalmv1beta1.Agent) error {
+			return r.enterOrStayDegraded(ctxT(), ag, []metav1.Condition{{
+				Reason: kaalmv1beta1.ReasonHandlerMountNotAllowed, Message: "handler mounts are off",
+			}})
+		},
+	}, {
+		name: "Hibernated", phase: kaalmv1beta1.AgentHibernating,
+		prefix: "Normal " + kaalmv1beta1.ReasonHibernated,
+		step: func(r *AgentReconciler, ag *kaalmv1beta1.Agent) error {
+			_, err := r.driveHibernating(ctxT(), ag)
+			return err
+		},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "ev-agent", Namespace: "default"},
+				Status: kaalmv1beta1.AgentStatus{Phase: tc.phase}}
+			conflicts := &statusConflicts{}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).
+				WithStatusSubresource(ag).WithInterceptorFuncs(conflicts.funcs()).Build()
+			rec := record.NewFakeRecorder(16)
+			r := &AgentReconciler{Client: c, Recorder: rec}
+			step := func(a *kaalmv1beta1.Agent) error { return tc.step(r, a) }
+
+			conflicts.failNext()
+			if err := agentPass(t, r, "ev-agent", step); !apierrors.IsConflict(err) {
+				t.Fatalf("err = %v, want a conflict", err)
+			}
+			if got := drainEvents(rec); len(got) != 0 {
+				t.Fatalf("a pass whose status write failed emitted %q", got)
+			}
+			if err := agentPass(t, r, "ev-agent", step); err != nil {
+				t.Fatal(err)
+			}
+			if got := withPrefix(drainEvents(rec), tc.prefix); len(got) != 1 {
+				t.Fatalf("the retry emitted %d %q events, want 1", len(got), tc.prefix)
+			}
+			if !tc.steady {
+				return
+			}
+			if err := agentPass(t, r, "ev-agent", step); err != nil {
+				t.Fatal(err)
+			}
+			if got := withPrefix(drainEvents(rec), tc.prefix); len(got) != 0 {
+				t.Fatalf("a pass over the stored state emitted %q again", got)
+			}
+		})
 	}
 }

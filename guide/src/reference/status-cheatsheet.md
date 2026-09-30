@@ -109,7 +109,8 @@ credential Secret is absent or lacks a required key), `CredentialsInvalid`
 (the `callbackAuth` Secret or key does not exist), `CallbackAuthInvalid`
 (the `callbackAuth` key is empty), and `ChildConflict` (a Role or RoleBinding
 with the channel's credential Role name exists and the channel does not own
-it).
+it; the channel re-checks every 30 seconds, so removing that object clears
+the conflict).
 
 A `callbackUrl` host that does not resolve leaves the channel `Ready=True`,
 because the gateway checks the host again before every delivery. The
@@ -126,8 +127,8 @@ names the host, so `kubectl describe agentchannel` shows the typo.
   enforcement requires a fully priced model catalog), `DeletionBlocked`
   (a delete is held by a referrer; see [Deleting a provider, tool
   provider, or class never finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
-  `CredentialsMissing` also fires a `Warning` event the first time `Ready`
-  turns `False` with it; `CredentialsInvalid` stays a condition only.
+  Each of these reasons fires a `Warning` event the first time `Ready` turns
+  `False` with it.
 - `Healthy`: the periodic upstream probe, run against every provider type
   (`UpstreamReachable` when good, `ProviderUnhealthy` when not, or
   `CredentialsInvalid` when the probe itself is refused). A probe that keeps
@@ -142,6 +143,10 @@ names the host, so `kubectl describe agentchannel` shows the typo.
 - `DegradeTargetNotCheapest` (advisory, never affects `Ready`): a degrade
   policy's `degradeTo` is not the cheapest model in the catalog
   (`CheaperModelAvailable`); `False` with `DegradeTargetCheapest` once it is.
+- `MaxOutputTokensUnset` (advisory, never affects `Ready`): a fallback edge
+  from `openai` or `openai-compatible` into `anthropic` reaches models with
+  no `maxOutputTokens`, and the message lists them; `False` with
+  `MaxOutputTokensDeclared` once none remain.
 - `BoundaryMarginRaised` (hard enforcement only): observed traffic forced the
   gateway to admit more conservatively than the configured
   `boundaryMarginPercent`; a signal to raise the value, not an outage.
@@ -165,9 +170,8 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
   the injected credential), `DeletionBlocked` (a delete is held by a
   referrer; see [Deleting a provider, tool provider, or class never
   finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
-  `CredentialsMissing` also fires a `Warning` event the first time `Ready`
-  turns `False` with it, and `CredentialsInvalid` fires one when the probe's
-  `Healthy` condition first enters that reason.
+  Each of these reasons fires a `Warning` event the first time `Ready` turns
+  `False` with it.
 - `Healthy`: the periodic probe, which speaks MCP (`server/discover` or
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`

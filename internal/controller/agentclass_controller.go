@@ -92,9 +92,14 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	problems = append(problems, badCIDRs...)
 	problems = append(problems, invalidHosts(&ac)...)
 
+	// warnings are the advisory findings that first appear on this pass,
+	// emitted after the status write below records them.
+	var warnings []heldEvent
+
 	// FQDN support only matters when allowedHosts is set. When unsupported, warn
-	// but do not block: the Agent and AgentTask reconcilers then synthesize no
-	// FQDN policy and allowedHosts is ignored.
+	// once, when the condition first turns False, but do not block: the Agent
+	// and AgentTask reconcilers then synthesize no FQDN policy and allowedHosts
+	// is ignored.
 	fqdnCond := metav1.Condition{Type: kaalmv1beta1.ConditionFQDNPolicySupported}
 	if len(ac.Spec.Network.Egress.AllowedHosts) > 0 {
 		supported, err := r.fqdnSupport()
@@ -108,8 +113,10 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			fqdnCond.Status = metav1.ConditionFalse
 			fqdnCond.Reason = kaalmv1beta1.ReasonFQDNPolicyUnsupported
 			fqdnCond.Message = "the cluster CNI cannot enforce FQDN egress policies; allowedHosts is ignored"
-			r.Recorder.Event(&ac, corev1.EventTypeWarning, kaalmv1beta1.ReasonFQDNPolicyUnsupported,
-				"allowedHosts is set but the CNI does not support FQDN egress policies")
+			if !apimeta.IsStatusConditionFalse(ac.Status.Conditions, kaalmv1beta1.ConditionFQDNPolicySupported) {
+				warnings = append(warnings, heldEvent{corev1.EventTypeWarning, kaalmv1beta1.ReasonFQDNPolicyUnsupported,
+					"allowedHosts is set but the CNI does not support FQDN egress policies"})
+			}
 		}
 	} else {
 		fqdnCond.Status = metav1.ConditionTrue
@@ -128,8 +135,8 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		baseline.Reason = kaalmv1beta1.ReasonBelowRestrictedBaseline
 		baseline.Message = strings.Join(deviations, "; ")
 		if !apimeta.IsStatusConditionFalse(ac.Status.Conditions, kaalmv1beta1.ConditionSecurityBaseline) {
-			r.Recorder.Event(&ac, corev1.EventTypeWarning, kaalmv1beta1.ReasonBelowRestrictedBaseline,
-				"security block is below the restricted Pod Security Standard: "+baseline.Message)
+			warnings = append(warnings, heldEvent{corev1.EventTypeWarning, kaalmv1beta1.ReasonBelowRestrictedBaseline,
+				"security block is below the restricted Pod Security Standard: " + baseline.Message})
 		}
 	}
 
@@ -191,6 +198,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	if err := r.Status().Update(ctx, &ac); err != nil {
 		return ctrl.Result{}, err
+	}
+	for _, w := range warnings {
+		r.Recorder.Event(&ac, w.eventType, w.reason, w.message)
 	}
 	if invalid != nil {
 		r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)

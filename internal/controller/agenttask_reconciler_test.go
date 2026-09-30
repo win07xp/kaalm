@@ -27,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -1291,4 +1292,78 @@ func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// The AgentTask's transition events wait for the status write: a pass that
+// loses its write to a conflict emits nothing, and the retry emits once.
+func TestAgentTask_EventsFollowTheStatusWrite(t *testing.T) {
+	cases := []struct {
+		name   string
+		prefix string
+		step   func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error
+		steady bool // a third pass over the stored state must stay quiet
+	}{{
+		name: "ChildConflict", prefix: "Warning " + kaalmv1beta1.ReasonChildConflict, steady: true,
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			_, err := r.childConflict(ctxT(), task,
+				&ChildConflictError{Kind: "Service", Name: task.Name, OwnerKind: "AgentTask"})
+			return err
+		},
+	}, {
+		name: "a terminal phase", prefix: "Warning TimeoutExceeded",
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			return r.settle(ctxT(), task, kaalmv1beta1.TaskTimedOut, "TimeoutExceeded", "task exceeded its timeout")
+		},
+	}, {
+		name: "a retry", prefix: "Warning PodFailed",
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			return r.retry(ctxT(), task, "PodFailed", "container exited 1")
+		},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &kaalmv1beta1.AgentTask{
+				ObjectMeta: metav1.ObjectMeta{Name: "ev-task", Namespace: "default"},
+				Spec: kaalmv1beta1.AgentTaskSpec{Completion: kaalmv1beta1.AgentTaskCompletion{
+					Condition: completionExitCode, BackoffLimit: 3,
+				}},
+				Status: kaalmv1beta1.AgentTaskStatus{Phase: kaalmv1beta1.TaskRunning},
+			}
+			conflicts := &statusConflicts{}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
+				WithStatusSubresource(task).WithInterceptorFuncs(conflicts.funcs()).Build()
+			rec := record.NewFakeRecorder(16)
+			r := &AgentTaskReconciler{Client: c, Recorder: rec}
+			pass := func() error {
+				var got kaalmv1beta1.AgentTask
+				if err := c.Get(ctxT(), client.ObjectKeyFromObject(task), &got); err != nil {
+					t.Fatal(err)
+				}
+				return tc.step(r, &got)
+			}
+
+			conflicts.failNext()
+			if err := pass(); !apierrors.IsConflict(err) {
+				t.Fatalf("err = %v, want a conflict", err)
+			}
+			if got := drainEvents(rec); len(got) != 0 {
+				t.Fatalf("a pass whose status write failed emitted %q", got)
+			}
+			if err := pass(); err != nil {
+				t.Fatal(err)
+			}
+			if got := withPrefix(drainEvents(rec), tc.prefix); len(got) != 1 {
+				t.Fatalf("the retry emitted %d %q events, want 1", len(got), tc.prefix)
+			}
+			if !tc.steady {
+				return
+			}
+			if err := pass(); err != nil {
+				t.Fatal(err)
+			}
+			if got := withPrefix(drainEvents(rec), tc.prefix); len(got) != 0 {
+				t.Fatalf("a pass over the stored state emitted %q again", got)
+			}
+		})
+	}
 }

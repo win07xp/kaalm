@@ -112,9 +112,9 @@ A request that carries a feature the other format cannot express is not forwarde
 - Anthropic to OpenAI: extended `thinking`, server tools (`web_search` and the other server-side tools), `mcp_servers`, `document` and audio content blocks, `output_format` structured outputs.
 - OpenAI to Anthropic: `n` greater than 1, `logprobs`, `response_format`, the legacy `functions` and `function_call` fields, audio content parts, and a request without `max_tokens` when the mapped model declares no `maxOutputTokens`.
 
-The reconciler warns about the last one ahead of traffic: a crossing edge into an `anthropic` provider whose mapped models declare no `maxOutputTokens` gets a `Warning` event (`reason=MaxOutputTokensUnset`) on the primary at reconcile time. The edge stays valid, because same-format traffic and requests that carry their own `max_tokens` cross it.
+The reconciler flags the last one ahead of traffic: a crossing edge into an `anthropic` provider whose mapped models declare no `maxOutputTokens` sets the advisory `MaxOutputTokensUnset` condition on the primary at reconcile time, listing the affected `provider/model` pairs ([ModelProvider status](../../resources/modelprovider.md#status)). A `Warning` event with the same reason fires once, when the condition turns `True`. The edge stays valid, because same-format traffic and requests that carry their own `max_tokens` cross it.
 
-This is the only eligibility check the reconciler cannot run ahead of time, because it depends on the request body. The event is the operator's signal that a chain was configured to cross and the traffic cannot.
+This is the only eligibility check the reconciler cannot run ahead of time, because it depends on the request body. The condition is the operator's signal that a chain was configured to cross and the traffic cannot.
 
 ### Streaming across the crossing
 

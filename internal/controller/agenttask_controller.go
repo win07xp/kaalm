@@ -461,8 +461,7 @@ func (r *AgentTaskReconciler) failOrRetry(
 // The clear-before-reset ordering is load-bearing: resetting the mailbox first
 // would let an in-flight stale write land on the fresh mailbox.
 func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string) error {
-	r.Recorder.Event(task, corev1.EventTypeWarning, reason,
-		fmt.Sprintf("%s; retrying (%d/%d)", msg, task.Status.Retries+1, task.Spec.Completion.BackoffLimit))
+	retrying := fmt.Sprintf("%s; retrying (%d/%d)", msg, task.Status.Retries+1, task.Spec.Completion.BackoffLimit)
 
 	// Steps 1 and 2 in one status write: the counter moves and the gate closes.
 	task.Status.Retries++
@@ -476,6 +475,9 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 	if err := r.Status().Update(ctx, task); err != nil {
 		return err
 	}
+	// After the write that counts the retry, so a pass that lost its write
+	// to a conflict does not report the same retry twice.
+	r.Recorder.Event(task, corev1.EventTypeWarning, reason, retrying)
 
 	// Step 3: delete the old Pod if any remains.
 	pod, err := r.ownedTaskPod(ctx, task)
@@ -514,7 +516,8 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 	return r.Status().Update(ctx, task)
 }
 
-// settle commits a terminal phase with its condition and completion time.
+// settle commits a terminal phase with its condition and completion time, and
+// reports it in an event once the write succeeds.
 func (r *AgentTaskReconciler) settle(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, phase kaalmv1beta1.AgentTaskPhase, reason, msg string,
 ) error {
@@ -533,8 +536,11 @@ func (r *AgentTaskReconciler) settle(
 	if phase != kaalmv1beta1.TaskSucceeded {
 		eventType = corev1.EventTypeWarning
 	}
+	if err := r.Status().Update(ctx, task); err != nil {
+		return err
+	}
 	r.Recorder.Event(task, eventType, reason, msg)
-	return r.Status().Update(ctx, task)
+	return nil
 }
 
 // handleTTL deletes a terminal task once its effective ttlSecondsAfterFinished
@@ -733,11 +739,11 @@ func (r *AgentTaskReconciler) childConflict(
 	msg := cc.Error()
 	if prev := apimeta.FindStatusCondition(task.Status.Conditions, kaalmv1beta1.ConditionReady); prev == nil ||
 		prev.Reason != kaalmv1beta1.ReasonChildConflict || prev.Message != msg {
-		r.Recorder.Event(task, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
 		r.setTaskReady(task, false, kaalmv1beta1.ReasonChildConflict, msg)
 		if err := r.Status().Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Event(task, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
 	}
 	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }

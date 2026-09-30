@@ -303,7 +303,7 @@ func (r *AgentReconciler) childConflict(
 	msg := cc.Error()
 	if prev := apimeta.FindStatusCondition(before.Conditions, kaalmv1beta1.ConditionReady); prev == nil ||
 		prev.Reason != kaalmv1beta1.ReasonChildConflict || prev.Message != msg {
-		r.Recorder.Event(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
+		r.events.add(agent, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
 	}
 	r.setReady(agent, false, kaalmv1beta1.ReasonChildConflict, msg)
 	if err := r.updateStatusIfChanged(ctx, agent, before); err != nil {
@@ -405,12 +405,12 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 	agent.Status.HibernatedAt = &now
 	agent.Status.PodName = ""
 	r.setReady(agent, false, kaalmv1beta1.ReasonHibernated, "Pod deleted; PVC retained for wake")
-	r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated,
+	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonHibernated,
 		"hibernated: Pod deleted, state retained")
-	hibernationsTotal.WithLabelValues(agent.Namespace).Inc()
 	if err := r.writeStatus(ctx, agent); err != nil {
 		return ctrl.Result{}, err
 	}
+	hibernationsTotal.WithLabelValues(agent.Namespace).Inc()
 	// A wake requested while Hibernating is honored now that the Pod is gone.
 	_, wake := wakeTrigger(agent)
 	return ctrl.Result{Requeue: wake}, nil
@@ -695,7 +695,7 @@ func (r *AgentReconciler) enterOrStayDegraded(
 	if agent.Status.Phase != kaalmv1beta1.AgentDegraded {
 		agent.Status.PreDegradedPhase = agent.Status.Phase
 		r.setPhase(agent, kaalmv1beta1.AgentDegraded, first.Reason)
-		r.Recorder.Event(agent, corev1.EventTypeWarning, first.Reason, first.Message)
+		r.events.add(agent, corev1.EventTypeWarning, first.Reason, first.Message)
 	}
 	r.setReady(agent, false, first.Reason, first.Message)
 	return r.writeStatus(ctx, agent)
@@ -1101,7 +1101,7 @@ func (r *AgentReconciler) admitDriftReplacement(
 		}
 		if !granted {
 			if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacementPending {
-				r.Recorder.Event(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonSpecDriftPending,
+				r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonSpecDriftPending,
 					"derived Pod spec changed; waiting for a free maxUnavailableOnDrift slot")
 			}
 			r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacementPending,
@@ -1502,16 +1502,11 @@ func (r *AgentReconciler) updateStatusIfChanged(
 }
 
 // writeStatus writes the Agent's status and, when the write succeeds, emits
-// the events the pass held for it (phase transitions, gate warnings, and
-// budget exhaustion). A failed write drops them.
+// the events the pass held for it (phase transitions, gate warnings, entry to
+// Degraded, ChildConflict, Hibernated, SpecDriftPending, and budget
+// exhaustion). A failed write drops them.
 func (r *AgentReconciler) writeStatus(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	err := r.Status().Update(ctx, agent)
-	held := r.events.take(agent)
-	if err != nil {
-		return err
-	}
-	for _, ev := range held {
-		r.Recorder.Event(agent, ev.eventType, ev.reason, ev.message)
-	}
-	return nil
+	r.events.flush(r.Recorder, agent, err == nil)
+	return err
 }

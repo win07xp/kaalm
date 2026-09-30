@@ -50,6 +50,11 @@ type ToolProviderReconciler struct {
 	OperatorNamespace string
 	// Health probes tool server liveness. Injected so tests need no real server.
 	Health ToolHealthChecker
+
+	// events holds the Warning a pass derives from a new Ready=False reason
+	// until finish writes the status that records it. The zero value is
+	// ready to use.
+	events heldEvents
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders,verbs=get;list;watch;update;patch
@@ -68,8 +73,11 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !tp.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &tp)
+		return ctrl.Result{}, r.reconcileDelete(ctx, &tp)
 	}
+	// Events held for a status write that never happened are dropped: the
+	// next pass derives them again.
+	defer r.events.take(&tp)
 	if controllerutil.AddFinalizer(&tp, kaalmv1beta1.ToolProviderFinalizer) {
 		if err := r.Update(ctx, &tp); err != nil {
 			return ctrl.Result{}, err
@@ -87,14 +95,8 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		var reason, msg string
 		credential, reason, msg = r.credential(ctx, &tp)
 		if reason != kaalmv1beta1.ReasonCredentialsValid {
-			first := readyFalseIsNew(tp.Status.Conditions, reason)
-			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false, reason, msg)
-			res, err := r.finish(ctx, &tp, ctrl.Result{})
-			// On the rising edge only, and after the status write.
-			if err == nil && first {
-				r.Recorder.Event(&tp, corev1.EventTypeWarning, reason, msg)
-			}
-			return res, err
+			r.setReadyFalse(&tp, reason, msg, msg)
+			return r.finish(ctx, &tp, ctrl.Result{})
 		}
 		readyMsg = "provider is valid"
 	}
@@ -105,19 +107,16 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		res := r.Health.Probe(ctx, &tp, credential)
 		switch {
 		case res.AuthFailed:
-			// The event fires on entry to CredentialsInvalid, not on every
-			// probe pass while the credential stays rejected.
-			if prev := apimeta.FindStatusCondition(tp.Status.Conditions, kaalmv1beta1.ConditionHealthy); prev == nil ||
-				prev.Reason != kaalmv1beta1.ReasonCredentialsInvalid {
-				r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonCredentialsInvalid,
-					"tool server rejected the credential; credential rotation may be needed")
-			}
+			// A state: the event fires when Ready enters CredentialsInvalid,
+			// not on every probe pass while the credential stays rejected.
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
 				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
-			r.setCondition(&tp, kaalmv1beta1.ConditionReady, false,
-				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
+			r.setReadyFalse(&tp, kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential",
+				"tool server rejected the credential; credential rotation may be needed")
 			return r.finish(ctx, &tp, ctrl.Result{RequeueAfter: r.probeRequeue(&tp)})
 		case res.Err != nil:
+			// An occurrence: reported on every failing pass, and the recorder
+			// folds the repeats into one event with a count.
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
 				kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
 			r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
@@ -140,22 +139,22 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 func (r *ToolProviderReconciler) reconcileDelete(
 	ctx context.Context, tp *kaalmv1beta1.ToolProvider,
-) (ctrl.Result, error) {
+) error {
 	if !controllerutil.ContainsFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 	refs, err := r.referrers(ctx, tp.Name)
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if len(refs) > 0 {
 		// Hold while any Agent, AgentTask, or AgentClass references it, and
 		// say so on Ready. Their watches re-enqueue us when a referrer goes
 		// away.
-		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, tp, &tp.Status.Conditions, refs)
+		return holdDeletion(ctx, r.Client, r.Recorder, tp, &tp.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer)
-	return ctrl.Result{}, r.Update(ctx, tp)
+	return r.Update(ctx, tp)
 }
 
 // referrers lists the objects that hold the provider's delete: Agents and
@@ -215,16 +214,32 @@ func (r *ToolProviderReconciler) setCondition(
 }
 
 // finish writes status only when it differs from the stored object, so a
-// pass that changes nothing does not bump resourceVersion.
+// pass that changes nothing does not bump resourceVersion. The events the
+// pass held go out only when its write succeeds; a pass that finds its
+// status already stored drops them, because the pass that stored it sent
+// them.
 func (r *ToolProviderReconciler) finish(
 	ctx context.Context, tp *kaalmv1beta1.ToolProvider, res ctrl.Result,
 ) (ctrl.Result, error) {
 	var current kaalmv1beta1.ToolProvider
 	if err := r.Get(ctx, client.ObjectKeyFromObject(tp), &current); err == nil &&
 		equality.Semantic.DeepEqual(current.Status, tp.Status) {
+		r.events.flush(r.Recorder, tp, false)
 		return res, nil
 	}
-	return res, r.Status().Update(ctx, tp)
+	err := r.Status().Update(ctx, tp)
+	r.events.flush(r.Recorder, tp, err == nil)
+	return res, err
+}
+
+// setReadyFalse sets Ready=False with reason and msg, and holds a Warning
+// event with the reason and eventMsg for finish to send when the reason
+// first appears.
+func (r *ToolProviderReconciler) setReadyFalse(tp *kaalmv1beta1.ToolProvider, reason, msg, eventMsg string) {
+	if readyFalseIsNew(tp.Status.Conditions, reason) {
+		r.events.add(tp, corev1.EventTypeWarning, reason, eventMsg)
+	}
+	r.setCondition(tp, kaalmv1beta1.ConditionReady, false, reason, msg)
 }
 
 // SetupWithManager wires the reconciler, the credential-Secret watch, and the

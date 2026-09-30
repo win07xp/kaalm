@@ -47,8 +47,8 @@ spec:
       # Declared output ceiling, minimum 1. Supplied as max_tokens when a
       # request crosses a fallback edge into an anthropic provider without
       # one, and caps a larger value. A model without it cannot serve such
-      # a request; the reconciler warns (MaxOutputTokensUnset) on the
-      # primary that maps to it.
+      # a request; the reconciler sets the MaxOutputTokensUnset condition
+      # on the primary that maps to it.
       maxOutputTokens: 64000
 
   # Glob patterns. "*" matches every namespace; an empty list admits none.
@@ -142,11 +142,12 @@ status:
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), `HardBudgetUnpriced` (rule 33), or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). |
-| `Healthy` | The periodic upstream probe, run against every provider type including `google-vertex`. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event, or with `CredentialsInvalid` when the probe itself is refused. |
+| `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), `HardBudgetUnpriced` (rule 33), or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). Each reason sends a `Warning` event with the same reason when it first appears on `Ready` ([Event emission](../controller/operations.md#event-emission)). |
+| `Healthy` | The periodic upstream probe, run against every provider type including `google-vertex`. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event on every failing pass, or with `CredentialsInvalid` when the probe itself is refused. |
 | `GatewayReachable` | `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. Set on every pass and refreshed at once on a gateway Pod readiness change ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)). The same value is mirrored onto every ModelProvider. |
 | `FallbackIneligible` | Advisory; never affects `Ready`. `True` with `reason: FallbackIneligible` when the reconcile-time scan finds a fallback candidate that a caller's namespace or model can never reach; `False` with `AllCandidatesEligible` once the findings clear. A provider with no findings carries no such condition ([Reconcile-time fallback eligibility scan](../controller/reconcilers.md#reconcile-time-fallback-eligibility-scan)). |
 | `DegradeTargetNotCheapest` | Advisory; never affects `Ready`. `True` with `CheaperModelAvailable` when a degrade policy's `degradeTo` is not the cheapest model in the catalog, `False` with `DegradeTargetCheapest` once it is. The `Warning` event fires on the transition to `True` ([`degradeTo` validation](#degradeto-validation)). |
+| `MaxOutputTokensUnset` | Advisory; never affects `Ready`. `True` with `MaxOutputTokensUnset` when a fallback edge from an `openai` or `openai-compatible` provider into an `anthropic` provider reaches models that declare no `maxOutputTokens`. The message lists each `provider/model` in sorted order. `False` with `MaxOutputTokensDeclared` once none remain. A provider with no findings carries no such condition. The `Warning` event fires on the transition to `True` ([What does not translate](../gateways/llm/fallback.md#what-does-not)). |
 | `BoundaryMarginRaised` | Hard enforcement only. `True` when a gateway replica observed traffic that needed a wider boundary margin than `hard.boundaryMarginPercent` configures ([Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). |
 
 `healthCheck.enabled: false` disables the probe (for example for an offline test fixture); `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each request. A failing probe requeues on a backoff instead of the plain interval ([Probe backoff](../controller/reconcilers.md#probe-backoff)). `budgetUsage` is per-namespace spend for the current period, and `clusterSpentUSD` is the sum across namespaces.
