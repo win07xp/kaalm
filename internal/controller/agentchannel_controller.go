@@ -875,18 +875,18 @@ func (r *AgentChannelReconciler) enqueuePathSiblings(
 	}
 }
 
-// channelsForAgent re-enqueues every channel referencing a changed Agent.
+// channelsForAgent re-enqueues every channel referencing a changed Agent,
+// through the IndexChannelAgentRef field index.
 func (r *AgentChannelReconciler) channelsForAgent(ctx context.Context, obj client.Object) []reconcile.Request {
 	var channels kaalmv1beta1.AgentChannelList
-	if err := r.List(ctx, &channels, client.InNamespace(obj.GetNamespace())); err != nil {
+	if err := r.List(ctx, &channels, client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{IndexChannelAgentRef: obj.GetName()}); err != nil {
 		return nil
 	}
-	var reqs []reconcile.Request
+	reqs := make([]reconcile.Request, 0, len(channels.Items))
 	for _, ch := range channels.Items {
-		if ch.Spec.AgentRef.Name == obj.GetName() {
-			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{Namespace: ch.Namespace, Name: ch.Name}})
-		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: ch.Namespace, Name: ch.Name}})
 	}
 	return reqs
 }

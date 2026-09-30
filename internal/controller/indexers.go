@@ -48,6 +48,9 @@ const (
 	// type selects (spec.webhook.path, spec.discord.path, or
 	// spec.whatsapp.path). A channel with no path is not indexed.
 	IndexChannelPath = "spec.path"
+	// IndexChannelAgentRef indexes AgentChannels by spec.agentRef.name, the
+	// Agent they bind in their own namespace.
+	IndexChannelAgentRef = "spec.agentRef.name"
 )
 
 // SetupIndexers registers the field indexers the reconcilers depend on. It must
@@ -108,6 +111,9 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex); err != nil {
 		return err
 	}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentChannel{}, IndexChannelAgentRef, channelAgentRefIndex); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -117,6 +123,11 @@ func channelPathIndex(o client.Object) []string {
 		return []string{path}
 	}
 	return nil
+}
+
+// channelAgentRefIndex is the IndexChannelAgentRef extractor.
+func channelAgentRefIndex(o client.Object) []string {
+	return []string{o.(*kaalmv1beta1.AgentChannel).Spec.AgentRef.Name}
 }
 
 func providerRefNames(refs []kaalmv1beta1.AgentProviderReference) []string {

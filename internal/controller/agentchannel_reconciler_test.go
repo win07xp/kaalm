@@ -380,6 +380,46 @@ func TestChannelPathSiblings(t *testing.T) {
 	}
 }
 
+// TestChannelsForAgent: an Agent change enqueues the channels that bind that
+// Agent in its namespace, and no others, through the spec.agentRef index
+// (#329).
+func TestChannelsForAgent(t *testing.T) {
+	bound := func(ns, name, agent string) *kaalmv1beta1.AgentChannel {
+		return &kaalmv1beta1.AgentChannel{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       kaalmv1beta1.AgentChannelSpec{AgentRef: kaalmv1beta1.LocalObjectReference{Name: agent}},
+		}
+	}
+	objs := []client.Object{
+		bound("team-a", "a-1", "alpha"), bound("team-a", "a-2", "alpha"),
+		bound("team-a", "b-1", "beta"), bound("team-a", "g-1", "gamma"),
+		bound("team-b", "other-ns", "alpha"),
+	}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "alpha"}}
+	ctx := context.Background()
+
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelAgentRef, channelAgentRefIndex).
+		WithObjects(objs...).Build()
+	var names []string
+	for _, req := range (&AgentChannelReconciler{Client: c}).channelsForAgent(ctx, agent) {
+		if req.Namespace != "team-a" {
+			t.Errorf("enqueued %s outside the Agent's namespace", req)
+		}
+		names = append(names, req.Name)
+	}
+	sort.Strings(names)
+	if got := strings.Join(names, ","); got != "a-1,a-2" {
+		t.Errorf("channelsForAgent enqueued %q, want %q", got, "a-1,a-2")
+	}
+
+	// The lookup goes through the index: a cache without it cannot answer.
+	unindexed := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	if reqs := (&AgentChannelReconciler{Client: unindexed}).channelsForAgent(ctx, agent); reqs != nil {
+		t.Errorf("channelsForAgent without the %s index answered %v; want the indexed lookup", IndexChannelAgentRef, reqs)
+	}
+}
+
 func TestPathConflictLoser(t *testing.T) {
 	t0 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Second)
