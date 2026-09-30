@@ -435,31 +435,34 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 	}
 }
 
-// costSanity emits an advisory Warning when a degrade target is not the cheapest
-// model. It never blocks readiness. The verdict is kept in the
-// DegradeTargetNotCheapest condition and the event fires on its rising edge,
-// once finish writes it, the same way setBoundaryMargin does.
+// costSanity records the degrade targets that are not the cheapest model in
+// the advisory DegradeTargetNotCheapest condition, one finding per distinct
+// target joined into its message, and holds one Warning event with that
+// message for finish to send when the condition turns True. A steady finding,
+// even with a changed list, does not warn again, the same as
+// setMaxOutputTokensUnset. It never blocks readiness.
 func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
 	var findings []string
 	if cheapest, ok := cheapestModel(mp); ok {
+		seen := map[string]bool{}
 		for _, p := range mp.Spec.Budget.Policies {
-			if p.Action == "degrade" && p.DegradeTo != nil && *p.DegradeTo != cheapest {
+			if p.Action == "degrade" && p.DegradeTo != nil && *p.DegradeTo != cheapest && !seen[*p.DegradeTo] {
+				seen[*p.DegradeTo] = true
 				findings = append(findings, fmt.Sprintf("degradeTo %q is not the cheapest model (%q)", *p.DegradeTo, cheapest))
 			}
 		}
 	}
 	if len(findings) > 0 {
+		msg := strings.Join(findings, "; ")
 		apimeta.SetStatusCondition(&mp.Status.Conditions, metav1.Condition{
 			Type:    kaalmv1beta1.ConditionDegradeTargetNotCheapest,
 			Status:  metav1.ConditionTrue,
 			Reason:  kaalmv1beta1.ReasonCheaperModelAvailable,
-			Message: strings.Join(findings, "; "),
+			Message: msg,
 		})
 		if !was {
-			for _, f := range findings {
-				r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest, f)
-			}
+			r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDegradeTargetNotCheapest, msg)
 		}
 		return
 	}
