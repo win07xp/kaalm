@@ -176,11 +176,76 @@ func TestChannel_PathConflictNewerLoses(t *testing.T) {
 	mkChannelSecret(t, "ch-conf-b-secret")
 	mkChannel(t, "ch-conf-a", "ch-agent-conf", "/channels/default/shared-path", nil)
 	expectChannelReady(t, "ch-conf-a", metav1.ConditionTrue, "")
-	time.Sleep(1100 * time.Millisecond) // distinct creationTimestamps (1s resolution)
+	// creationTimestamp has 1-second resolution, so the sleep normally makes B
+	// the newer channel and the test exercises "newer loses". The apiserver
+	// stamps it from the wall clock, though, and a backward clock jump inside
+	// the sleep can reverse the order (#321). expectPathConflict therefore
+	// picks the loser from the stored timestamps, not from creation order.
+	time.Sleep(1100 * time.Millisecond)
 	mkChannel(t, "ch-conf-b", "ch-agent-conf", "/channels/default/shared-path", nil)
 
-	expectChannelReady(t, "ch-conf-b", metav1.ConditionFalse, kaalmv1beta1.ReasonPathConflict)
-	expectChannelReady(t, "ch-conf-a", metav1.ConditionTrue, "")
+	expectPathConflict(t, "ch-agent-conf", "ch-conf-a", "ch-conf-b")
+}
+
+// pathConflictLoser applies rule 15 as the book states it: of two channels on
+// one path, the newer by creationTimestamp gets PathConflict, and when the
+// timestamps are equal the one later by name does.
+func pathConflictLoser(aName string, aCreated time.Time, bName string, bCreated time.Time) (loser, winner string) {
+	switch {
+	case aCreated.After(bCreated):
+		return aName, bName
+	case bCreated.After(aCreated):
+		return bName, aName
+	case aName > bName:
+		return aName, bName
+	default:
+		return bName, aName
+	}
+}
+
+// expectPathConflict reads the stored creationTimestamps of two channels on
+// the same path, works out the loser from rule 15, and expects the loser to
+// be Ready=False, reason=PathConflict and the winner to stay Ready=True. It
+// touches the channels' Agent first so both are reconciled again: when the
+// clock went back, the second channel is the older one and the first must
+// re-check to see that it lost.
+func expectPathConflict(t *testing.T, agentName, a, b string) {
+	t.Helper()
+	created := func(name string) time.Time {
+		var ch kaalmv1beta1.AgentChannel
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
+			t.Fatalf("read channel %s: %v", name, err)
+		}
+		return ch.CreationTimestamp.Time
+	}
+	loser, winner := pathConflictLoser(a, created(a), b, created(b))
+	touchAgent(t, agentName)
+	expectChannelReady(t, loser, metav1.ConditionFalse, kaalmv1beta1.ReasonPathConflict)
+	expectChannelReady(t, winner, metav1.ConditionTrue, "")
+}
+
+func TestPathConflictLoser(t *testing.T) {
+	t0 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Second)
+	cases := []struct {
+		name               string
+		aName              string
+		aCreated           time.Time
+		bName              string
+		bCreated           time.Time
+		wantLoser, wantWin string
+	}{
+		{"b newer", "ch-a", t0, "ch-b", t1, "ch-b", "ch-a"},
+		{"b older (clock went back)", "ch-a", t1, "ch-b", t0, "ch-a", "ch-b"},
+		{"tie, b later by name", "ch-a", t0, "ch-b", t0, "ch-b", "ch-a"},
+		{"tie, a later by name", "ch-z", t0, "ch-b", t0, "ch-z", "ch-b"},
+	}
+	for _, c := range cases {
+		loser, winner := pathConflictLoser(c.aName, c.aCreated, c.bName, c.bCreated)
+		if loser != c.wantLoser || winner != c.wantWin {
+			t.Errorf("%s: loser=%s winner=%s, want loser=%s winner=%s", c.name, loser, winner, c.wantLoser, c.wantWin)
+		}
+	}
 }
 
 func TestChannel_CredentialsMissing(t *testing.T) {
@@ -1123,7 +1188,9 @@ func TestChannel_PathConflictAcrossTypes(t *testing.T) {
 
 	mkPlatformSecret(t, "ch-xt-creds", map[string][]byte{"publicKey": []byte(testDiscordPublicKey)})
 	mkDiscordChannel(t, "ch-xt-b", "ch-agent-xt", "/channels/default/ch-xt", "ch-xt-creds")
-	expectChannelReady(t, "ch-xt-b", metav1.ConditionFalse, kaalmv1beta1.ReasonPathConflict)
+	// The two channels usually share a creationTimestamp second, so the tie
+	// goes to the lower name; the stored timestamps decide, not creation order.
+	expectPathConflict(t, "ch-agent-xt", "ch-xt-a", "ch-xt-b")
 }
 
 // TestChannel_UnchangedPassWritesNoStatus: a pass that changes nothing in the
