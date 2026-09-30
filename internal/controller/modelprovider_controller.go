@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -435,22 +436,30 @@ func (r *ModelProviderReconciler) setBoundaryMargin(mp *kaalmv1beta1.ModelProvid
 	}
 }
 
-// costSanity records the degrade targets that are not the cheapest model in
-// the advisory DegradeTargetNotCheapest condition, one finding per distinct
-// target joined into its message, and holds one Warning event with that
-// message for finish to send when the condition turns True. A steady finding,
-// even with a changed list, does not warn again, the same as
-// setMaxOutputTokensUnset. It never blocks readiness.
+// costSanity records the degrade targets that cost more than some priced
+// model in the advisory DegradeTargetNotCheapest condition, one finding per
+// distinct target joined into its message, and holds one Warning event with
+// that message for finish to send when the condition turns True. A target
+// tied for the lowest cost is not a finding, and neither is a target without
+// both prices, whose cost the check cannot judge (rule 33 covers pricing where
+// budgets need it). A steady finding, even with a changed list, does not warn
+// again, the same as setMaxOutputTokensUnset. It never blocks readiness.
 func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 	was := apimeta.IsStatusConditionTrue(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
 	var findings []string
-	if cheapest, ok := cheapestModel(mp); ok {
+	if cheapest, cheapestAvg, ok := cheapestModel(mp); ok {
 		seen := map[string]bool{}
 		for _, p := range mp.Spec.Budget.Policies {
-			if p.Action == "degrade" && p.DegradeTo != nil && *p.DegradeTo != cheapest && !seen[*p.DegradeTo] {
-				seen[*p.DegradeTo] = true
-				findings = append(findings, fmt.Sprintf("degradeTo %q is not the cheapest model (%q)", *p.DegradeTo, cheapest))
+			if p.Action != "degrade" || p.DegradeTo == nil || seen[*p.DegradeTo] {
+				continue
 			}
+			seen[*p.DegradeTo] = true
+			avg, priced := modelAverageCost(mp, *p.DegradeTo)
+			if !priced || avg.Cmp(cheapestAvg) <= 0 {
+				continue
+			}
+			findings = append(findings, fmt.Sprintf("degradeTo %q ($%s average) costs more than %q ($%s)",
+				*p.DegradeTo, formatUSD(avg), cheapest, formatUSD(cheapestAvg)))
 		}
 	}
 	if len(findings) > 0 {
@@ -475,24 +484,67 @@ func (r *ModelProviderReconciler) costSanity(mp *kaalmv1beta1.ModelProvider) {
 	}
 }
 
-// cheapestModel returns the id of the model with the lowest average of its input
-// and output token costs. ok is false when no model has parseable costs.
-func cheapestModel(mp *kaalmv1beta1.ModelProvider) (string, bool) {
+// cheapestModel returns the priced model with the lowest average of its input
+// and output token costs, and that average. Among tied models it returns the
+// first in spec.models, so the finding that names it is stable across passes.
+// ok is false when no model is priced.
+func cheapestModel(mp *kaalmv1beta1.ModelProvider) (string, *big.Rat, bool) {
 	best := ""
-	var bestCost float64
-	found := false
+	var bestAvg *big.Rat
 	for _, m := range mp.Spec.Models {
-		in, errIn := strconv.ParseFloat(m.CostPer1MInputTokens, 64)
-		out, errOut := strconv.ParseFloat(m.CostPer1MOutputTokens, 64)
-		if errIn != nil || errOut != nil {
-			continue
-		}
-		avg := (in + out) / 2
-		if !found || avg < bestCost {
-			best, bestCost, found = m.ID, avg, true
+		avg, ok := averageCost(m)
+		if ok && (bestAvg == nil || avg.Cmp(bestAvg) < 0) {
+			best, bestAvg = m.ID, avg
 		}
 	}
-	return best, found
+	return best, bestAvg, bestAvg != nil
+}
+
+// modelAverageCost returns the average cost of the first catalog entry with
+// the id; ok is false when there is none or it is unpriced.
+func modelAverageCost(mp *kaalmv1beta1.ModelProvider, id string) (*big.Rat, bool) {
+	for _, m := range mp.Spec.Models {
+		if m.ID == id {
+			return averageCost(m)
+		}
+	}
+	return nil, false
+}
+
+// averageCost is (costPer1MInputTokens + costPer1MOutputTokens) / 2 as an
+// exact decimal, so prices that are equal in decimal compare equal. ok is
+// false unless both prices parse.
+func averageCost(m kaalmv1beta1.ModelProviderModel) (*big.Rat, bool) {
+	in, okIn := parsePrice(m.CostPer1MInputTokens)
+	out, okOut := parsePrice(m.CostPer1MOutputTokens)
+	if !okIn || !okOut {
+		return nil, false
+	}
+	sum := new(big.Rat).Add(in, out)
+	return sum.Quo(sum, big.NewRat(2, 1)), true
+}
+
+// parsePrice reads a decimal price string exactly. A price counts only when
+// the gateway ledger can also parse it (strconv.ParseFloat, as in
+// validateHardPricing), which rules out the fractions big.Rat alone accepts.
+func parsePrice(s string) (*big.Rat, bool) {
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
+		return nil, false
+	}
+	return new(big.Rat).SetString(s)
+}
+
+// formatUSD prints an average as an exact decimal with at least two fraction
+// digits: 3 is "3.00", 0.0025 is "0.0025". Averages of decimal prices always
+// terminate, so the loop ends well before its cap.
+func formatUSD(r *big.Rat) string {
+	for prec := 2; prec < 40; prec++ {
+		s := r.FloatString(prec)
+		if v, ok := new(big.Rat).SetString(s); ok && v.Cmp(r) == 0 {
+			return s
+		}
+	}
+	return r.FloatString(40)
 }
 
 // referrers lists the objects that hold the provider's delete: Agents and

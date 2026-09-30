@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1023,20 +1025,118 @@ func TestCheapestModel(t *testing.T) {
 	mp := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
 		Models: []kaalmv1beta1.ModelProviderModel{
 			{ID: "bad", CostPer1MInputTokens: "nope", CostPer1MOutputTokens: "x"},
+			{ID: "half", CostPer1MInputTokens: "0.5"},
 			{ID: "cheap", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "1"},
+			{ID: "tied", CostPer1MInputTokens: "0.5", CostPer1MOutputTokens: "1.5"},
 			{ID: "pricey", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "10"},
 		},
 	}}
-	got, ok := cheapestModel(mp)
-	if !ok || got != "cheap" {
-		t.Errorf("cheapestModel = %q, %v; want cheap,true", got, ok)
+	got, avg, ok := cheapestModel(mp)
+	if !ok || got != "cheap" || avg.Cmp(big.NewRat(1, 1)) != 0 {
+		t.Errorf("cheapestModel = %q, %v, %v; want the first of the tied cheapest, cheap at 1", got, avg, ok)
 	}
-	// No parseable costs -> ok false.
+	// No model with both prices parseable -> ok false.
 	none := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
-		Models: []kaalmv1beta1.ModelProviderModel{{ID: "m", CostPer1MInputTokens: "x", CostPer1MOutputTokens: "y"}},
+		Models: []kaalmv1beta1.ModelProviderModel{
+			{ID: "m", CostPer1MInputTokens: "x", CostPer1MOutputTokens: "y"},
+			{ID: "in-only", CostPer1MInputTokens: "1"},
+		},
 	}}
-	if _, ok := cheapestModel(none); ok {
-		t.Error("unparseable costs must yield ok=false")
+	if _, _, ok := cheapestModel(none); ok {
+		t.Error("unpriced models must yield ok=false")
+	}
+}
+
+func TestFormatUSD(t *testing.T) {
+	for in, want := range map[string]string{
+		"3": "3.00", "2.5": "2.50", "0.0025": "0.0025", "12.345": "12.345", "0": "0.00",
+	} {
+		r, _ := new(big.Rat).SetString(in)
+		if got := formatUSD(r); got != want {
+			t.Errorf("formatUSD(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// costSanityFindings runs one pass over the models with one degrade policy per
+// target and returns the condition, or nil when there is none.
+func costSanityFindings(t *testing.T, models []kaalmv1beta1.ModelProviderModel, targets ...string) *metav1.Condition {
+	t.Helper()
+	mp := &kaalmv1beta1.ModelProvider{
+		ObjectMeta: metav1.ObjectMeta{Name: "mp"},
+		Spec:       kaalmv1beta1.ModelProviderSpec{Models: models},
+	}
+	for i := range targets {
+		mp.Spec.Budget.Policies = append(mp.Spec.Budget.Policies, kaalmv1beta1.ModelProviderBudgetPolicy{
+			AtPercent: int32(80 + i), Action: "degrade", DegradeTo: &targets[i],
+		})
+	}
+	rec := record.NewFakeRecorder(4)
+	r := &ModelProviderReconciler{Recorder: rec}
+	r.costSanity(mp)
+	return apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
+}
+
+// A target tied for the lowest cost is not flagged, whichever of the tied
+// models comes first in spec.models (#325).
+func TestCostSanity_TiedCheapestIsNotFlagged(t *testing.T) {
+	models := []kaalmv1beta1.ModelProviderModel{
+		{ID: "a", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "3"},
+		{ID: "b", CostPer1MInputTokens: "2", CostPer1MOutputTokens: "2"},
+		{ID: "pricey", CostPer1MInputTokens: "10", CostPer1MOutputTokens: "10"},
+	}
+	for _, target := range []string{"a", "b"} {
+		if c := costSanityFindings(t, models, target); c != nil && c.Status == metav1.ConditionTrue {
+			t.Errorf("degradeTo %q ties for the lowest cost but was flagged: %s", target, c.Message)
+		}
+	}
+}
+
+// A target without both prices has an unknown cost, so the check skips it
+// rather than flagging it (#325).
+func TestCostSanity_UnpricedTargetIsNotFlagged(t *testing.T) {
+	models := []kaalmv1beta1.ModelProviderModel{
+		{ID: "cheap", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "1"},
+		{ID: "unpriced"},
+		{ID: "half", CostPer1MInputTokens: "50"},
+	}
+	for _, target := range []string{"unpriced", "half"} {
+		if c := costSanityFindings(t, models, target); c != nil && c.Status == metav1.ConditionTrue {
+			t.Errorf("unpriced degradeTo %q was flagged: %s", target, c.Message)
+		}
+	}
+}
+
+// A priced target that costs strictly more than a priced model is flagged,
+// naming its average and the first cheapest model with that model's average.
+func TestCostSanity_FindingNamesBothAverages(t *testing.T) {
+	models := []kaalmv1beta1.ModelProviderModel{
+		{ID: "unpriced"},
+		{ID: "b", CostPer1MInputTokens: "2", CostPer1MOutputTokens: "4"},
+		{ID: "a", CostPer1MInputTokens: "2", CostPer1MOutputTokens: "3"},
+		{ID: "a2", CostPer1MInputTokens: "1.5", CostPer1MOutputTokens: "3.5"},
+	}
+	c := costSanityFindings(t, models, "b")
+	want := `degradeTo "b" ($3.00 average) costs more than "a" ($2.50)`
+	if c == nil || c.Status != metav1.ConditionTrue || c.Message != want {
+		t.Fatalf("condition = %+v, want True with %q", c, want)
+	}
+}
+
+// Prices compare as exact decimals: 0.1 + 0.2 equals 0.3, although the float64
+// sums differ, so the tied target is not flagged.
+func TestCostSanity_ComparesExactDecimals(t *testing.T) {
+	models := []kaalmv1beta1.ModelProviderModel{
+		{ID: "sum", CostPer1MInputTokens: "0.1", CostPer1MOutputTokens: "0.2"},
+		{ID: "whole", CostPer1MInputTokens: "0.3", CostPer1MOutputTokens: "0"},
+	}
+	// Guard the premise: the float64 averages of these prices differ.
+	f := func(s string) float64 { v, _ := strconv.ParseFloat(s, 64); return v }
+	if (f("0.1")+f("0.2"))/2 == (f("0.3")+f("0"))/2 {
+		t.Fatal("float64 averages agree; the test no longer covers float rounding")
+	}
+	if c := costSanityFindings(t, models, "sum"); c != nil && c.Status == metav1.ConditionTrue {
+		t.Errorf("degradeTo \"sum\" costs the same as \"whole\" but was flagged: %s", c.Message)
 	}
 }
 
@@ -1171,7 +1271,8 @@ func TestCostSanity_OneEventListsEveryFinding(t *testing.T) {
 		t.Fatalf("three degrade policies with findings emitted %d events, want 1", n)
 	}
 	ev := <-rec.Events
-	want := `degradeTo "pricey" is not the cheapest model ("cheap"); degradeTo "mid" is not the cheapest model ("cheap")`
+	want := `degradeTo "pricey" ($10.00 average) costs more than "cheap" ($1.00); ` +
+		`degradeTo "mid" ($5.00 average) costs more than "cheap" ($1.00)`
 	if ev != "Warning "+kaalmv1beta1.ReasonDegradeTargetNotCheapest+" "+want {
 		t.Errorf("event = %q, want the joined findings %q", ev, want)
 	}
@@ -1189,7 +1290,7 @@ func TestCostSanity_OneEventListsEveryFinding(t *testing.T) {
 		t.Fatalf("a changed set of findings while the condition stayed True emitted %d events, want 0", n)
 	}
 	c = apimeta.FindStatusCondition(mp.Status.Conditions, kaalmv1beta1.ConditionDegradeTargetNotCheapest)
-	if want := `degradeTo "mid" is not the cheapest model ("cheap")`; c == nil ||
+	if want := `degradeTo "mid" ($5.00 average) costs more than "cheap" ($1.00)`; c == nil ||
 		c.Status != metav1.ConditionTrue || c.Message != want {
 		t.Fatalf("condition after a partial fix = %+v, want True with %q", c, want)
 	}
