@@ -37,3 +37,7 @@ make e2e                                # full k3d e2e suite
 ## Conventions
 
 - Use the LSP tool before GREP when doing code search.
+- Test files mirror source files by subject (`agent_controller.go` is tested
+  in `agent_controller_test.go` and subject-named siblings such as
+  `agent_drift_cap_test.go`); no generic names like `coverage_test.go`.
+- Bugs are fixed test first: a failing test that shows the bug, then the fix.
