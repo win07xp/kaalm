@@ -31,8 +31,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
@@ -184,7 +187,7 @@ func TestChannel_PathConflictNewerLoses(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	mkChannel(t, "ch-conf-b", "ch-agent-conf", "/channels/default/shared-path", nil)
 
-	expectPathConflict(t, "ch-agent-conf", "ch-conf-a", "ch-conf-b")
+	expectPathConflict(t, "ch-conf-a", "ch-conf-b")
 }
 
 // pathConflictLoser applies rule 15 as the book states it: of two channels on
@@ -206,10 +209,11 @@ func pathConflictLoser(aName string, aCreated time.Time, bName string, bCreated 
 // expectPathConflict reads the stored creationTimestamps of two channels on
 // the same path, works out the loser from rule 15, and expects the loser to
 // be Ready=False, reason=PathConflict and the winner to stay Ready=True. It
-// touches the channels' Agent first so both are reconciled again: when the
-// clock went back, the second channel is the older one and the first must
-// re-check to see that it lost.
-func expectPathConflict(t *testing.T, agentName, a, b string) {
+// returns the loser and the winner. Nothing re-runs the channels here: when
+// the loser is the channel that was Ready first (a timestamp tie it loses by
+// name, or a clock that went back), only the reconciler's re-enqueue of the
+// channels sharing a path makes it re-check and see that it lost (#326).
+func expectPathConflict(t *testing.T, a, b string) (loser, winner string) {
 	t.Helper()
 	created := func(name string) time.Time {
 		var ch kaalmv1beta1.AgentChannel
@@ -218,10 +222,162 @@ func expectPathConflict(t *testing.T, agentName, a, b string) {
 		}
 		return ch.CreationTimestamp.Time
 	}
-	loser, winner := pathConflictLoser(a, created(a), b, created(b))
-	touchAgent(t, agentName)
+	loser, winner = pathConflictLoser(a, created(a), b, created(b))
 	expectChannelReady(t, loser, metav1.ConditionFalse, kaalmv1beta1.ReasonPathConflict)
 	expectChannelReady(t, winner, metav1.ConditionTrue, "")
+	return loser, winner
+}
+
+// setChannelPath moves a webhook channel to another path.
+func setChannelPath(t *testing.T, name, path string) {
+	t.Helper()
+	eventually(t, func() error {
+		var ch kaalmv1beta1.AgentChannel
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
+			return err
+		}
+		ch.Spec.Webhook.Path = path
+		return testClient.Update(ctxT(), &ch)
+	})
+}
+
+// TestChannel_PathConflictExistingChannelLoses: a channel that moves onto a
+// path held by a newer Ready channel wins it, and the newer channel turns
+// PathConflict at once, not on its one-minute requeue (#326). Nothing touches
+// the Agent: only the other channel's change re-runs the loser.
+func TestChannel_PathConflictExistingChannelLoses(t *testing.T) {
+	mkWorkloadClass(t, "chc-pcx", nil)
+	mkWorkloadAgent(t, "ch-agent-pcx", "chc-pcx", nil)
+	mkChannelSecret(t, "ch-pcx-a-secret")
+	mkChannelSecret(t, "ch-pcx-z-secret")
+	// a is created first and sorts first by name, so it is the older channel
+	// or wins the tie.
+	mkChannel(t, "ch-pcx-a", "ch-agent-pcx", "/channels/default/pcx-other", nil)
+	mkChannel(t, "ch-pcx-z", "ch-agent-pcx", "/channels/default/pcx-shared", nil)
+	expectChannelReady(t, "ch-pcx-a", metav1.ConditionTrue, "")
+	expectChannelReady(t, "ch-pcx-z", metav1.ConditionTrue, "")
+
+	setChannelPath(t, "ch-pcx-a", "/channels/default/pcx-shared")
+	expectPathConflict(t, "ch-pcx-a", "ch-pcx-z")
+}
+
+// TestChannel_PathConflictLoserWinsWhenWinnerLeaves: when the winner moves
+// to another path or is deleted, the loser becomes Ready at once (#326).
+func TestChannel_PathConflictLoserWinsWhenWinnerLeaves(t *testing.T) {
+	mkWorkloadClass(t, "chc-pcl", nil)
+	mkWorkloadAgent(t, "ch-agent-pcl", "chc-pcl", nil)
+	for _, n := range []string{"ch-pcl-a", "ch-pcl-b", "ch-pcl-c"} {
+		mkChannelSecret(t, n+"-secret")
+	}
+	mkChannel(t, "ch-pcl-a", "ch-agent-pcl", "/channels/default/pcl-shared", nil)
+	mkChannel(t, "ch-pcl-b", "ch-agent-pcl", "/channels/default/pcl-shared", nil)
+	loser, winner := expectPathConflict(t, "ch-pcl-a", "ch-pcl-b")
+
+	// The winner moves away: the old path's loser takes the path.
+	setChannelPath(t, winner, "/channels/default/pcl-moved")
+	expectChannelReady(t, loser, metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+	expectChannelReady(t, winner, metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	// A third channel on that path loses to the channel already there, which
+	// is older, then takes the path once that channel is deleted.
+	mkChannel(t, "ch-pcl-c", "ch-agent-pcl", "/channels/default/pcl-shared", nil)
+	newLoser, newWinner := expectPathConflict(t, loser, "ch-pcl-c")
+	var ch kaalmv1beta1.AgentChannel
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: newWinner}, &ch); err != nil {
+		t.Fatal(err)
+	}
+	// Mark it disconnected so the finalizer releases without waiting for a
+	// gateway.
+	if ch.Annotations == nil {
+		ch.Annotations = map[string]string{}
+	}
+	ch.Annotations[kaalmv1beta1.AnnotationChannelDisconnected] = kaalmv1beta1.AnnotationTrue
+	if err := testClient.Update(ctxT(), &ch); err != nil {
+		t.Fatal(err)
+	}
+	if err := testClient.Delete(ctxT(), &ch); err != nil {
+		t.Fatal(err)
+	}
+	expectChannelReady(t, newLoser, metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+}
+
+// TestChannelPathSiblings: a channel's create, delete, or move to another
+// path enqueues the other channels on each path it touched, in its own
+// namespace; an update that keeps the path, such as a status write, enqueues
+// nothing (#326).
+func TestChannelPathSiblings(t *testing.T) {
+	onPath := func(ns, name, path string) *kaalmv1beta1.AgentChannel {
+		return &kaalmv1beta1.AgentChannel{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: path}},
+		}
+	}
+	const p1, p2 = "/channels/team-a/one", "/channels/team-a/two"
+	self := onPath("team-a", "self", p1)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
+		WithObjects(self,
+			onPath("team-a", "one-x", p1), onPath("team-a", "one-y", p1),
+			onPath("team-a", "two-x", p2),
+			onPath("team-b", "one-other-ns", p1),
+			onPath("team-a", "no-path", "")).
+		Build()
+	h := (&AgentChannelReconciler{Client: c}).pathSiblingHandler()
+	ctx := context.Background()
+
+	drain := func(q workqueue.TypedRateLimitingInterface[reconcile.Request]) string {
+		var names []string
+		for q.Len() > 0 {
+			req, _ := q.Get()
+			names = append(names, req.Name)
+			q.Done(req)
+		}
+		sort.Strings(names)
+		return strings.Join(names, ",")
+	}
+	newQueue := func() workqueue.TypedRateLimitingInterface[reconcile.Request] {
+		return workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
+	}
+
+	moved := self.DeepCopy()
+	moved.Spec.Webhook.Path = p2
+	statusOnly := self.DeepCopy()
+	statusOnly.Status.Phase = kaalmv1beta1.ChannelActive
+	unset := self.DeepCopy()
+	unset.Spec.Webhook.Path = ""
+
+	cases := []struct {
+		name string
+		fire func(q workqueue.TypedRateLimitingInterface[reconcile.Request])
+		want string
+	}{
+		{"create", func(q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			h.Create(ctx, event.CreateEvent{Object: self}, q)
+		}, "one-x,one-y"},
+		{"delete", func(q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			h.Delete(ctx, event.DeleteEvent{Object: self}, q)
+		}, "one-x,one-y"},
+		{"path change", func(q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			h.Update(ctx, event.UpdateEvent{ObjectOld: self, ObjectNew: moved}, q)
+		}, "one-x,one-y,two-x"},
+		{"status only", func(q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			h.Update(ctx, event.UpdateEvent{ObjectOld: self, ObjectNew: statusOnly}, q)
+		}, ""},
+		{"path unset", func(q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			h.Update(ctx, event.UpdateEvent{ObjectOld: self, ObjectNew: unset}, q)
+		}, "one-x,one-y"},
+		{"generic", func(q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			h.Generic(ctx, event.GenericEvent{Object: self}, q)
+		}, ""},
+	}
+	for _, tc := range cases {
+		q := newQueue()
+		tc.fire(q)
+		if got := drain(q); got != tc.want {
+			t.Errorf("%s: enqueued %q, want %q", tc.name, got, tc.want)
+		}
+		q.ShutDown()
+	}
 }
 
 func TestPathConflictLoser(t *testing.T) {
@@ -1190,7 +1346,7 @@ func TestChannel_PathConflictAcrossTypes(t *testing.T) {
 	mkDiscordChannel(t, "ch-xt-b", "ch-agent-xt", "/channels/default/ch-xt", "ch-xt-creds")
 	// The two channels usually share a creationTimestamp second, so the tie
 	// goes to the lower name; the stored timestamps decide, not creation order.
-	expectPathConflict(t, "ch-agent-xt", "ch-xt-a", "ch-xt-b")
+	expectPathConflict(t, "ch-xt-a", "ch-xt-b")
 }
 
 // TestChannel_UnchangedPassWritesNoStatus: a pass that changes nothing in the

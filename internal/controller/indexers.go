@@ -44,6 +44,10 @@ const (
 	// IndexAllowedToolProviders indexes AgentClasses by each
 	// spec.allowedToolProviders[].name.
 	IndexAllowedToolProviders = "spec.allowedToolProviders.name"
+	// IndexChannelPath indexes AgentChannels by the path of the block their
+	// type selects (spec.webhook.path, spec.discord.path, or
+	// spec.whatsapp.path). A channel with no path is not indexed.
+	IndexChannelPath = "spec.path"
 )
 
 // SetupIndexers registers the field indexers the reconcilers depend on. It must
@@ -100,6 +104,17 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 		return names
 	}); err != nil {
 		return err
+	}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex); err != nil {
+		return err
+	}
+	return nil
+}
+
+// channelPathIndex is the IndexChannelPath extractor.
+func channelPathIndex(o client.Object) []string {
+	if path := o.(*kaalmv1beta1.AgentChannel).Spec.Path(); path != "" {
+		return []string{path}
 	}
 	return nil
 }

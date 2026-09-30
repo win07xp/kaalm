@@ -19,6 +19,7 @@ package gateway
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,7 +46,8 @@ func gatewayScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// kubeClientWith builds a fake reader seeded with objs and a status.podIP index.
+// kubeClientWith builds a fake reader seeded with objs, a status.podIP
+// index, and the AgentChannel path index.
 func kubeClientWith(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	return fake.NewClientBuilder().
@@ -58,6 +60,7 @@ func kubeClientWith(t *testing.T, objs ...client.Object) client.Client {
 			}
 			return []string{ip}
 		}).
+		WithIndex(&kaalmv1beta1.AgentChannel{}, ChannelPathIndex, ChannelPathIndexValue).
 		Build()
 }
 
@@ -199,6 +202,45 @@ func TestKubeStore_ChannelByPath(t *testing.T) {
 	}
 	if _, ok := k.ChannelByPath(ctx, "/channels/team-a/unknown"); ok {
 		t.Error("unknown path must miss")
+	}
+}
+
+// TestKubeStore_ChannelByPathPicksRule15Winner: when two Ready channels share
+// a path (the loser's status has not caught up yet), the gateway routes to
+// rule 15's winner, the earlier creationTimestamp with a tie to the lower
+// name, whatever order the cache lists them in (#326).
+func TestKubeStore_ChannelByPathPicksRule15Winner(t *testing.T) {
+	ctx := context.Background()
+	t0 := metav1.NewTime(time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC))
+	t1 := metav1.NewTime(t0.Add(time.Second))
+	const path = "/channels/team-a/shared"
+	at := func(name string, created metav1.Time, ready bool) *kaalmv1beta1.AgentChannel {
+		ch := readyChannel("team-a", name, path, ready)
+		ch.CreationTimestamp = created
+		return ch
+	}
+	cases := []struct {
+		name string
+		objs []client.Object
+		want string
+	}{
+		{"older sorts first", []client.Object{at("ch-a", t0, true), at("ch-b", t1, true)}, "ch-a"},
+		{"older sorts last", []client.Object{at("ch-a", t1, true), at("ch-b", t0, true)}, "ch-b"},
+		{"tie goes to the lower name", []client.Object{at("ch-b", t0, true), at("ch-a", t0, true)}, "ch-a"},
+		{"a non-Ready older channel is skipped", []client.Object{at("ch-a", t0, false), at("ch-b", t1, true)}, "ch-b"},
+		{"three Ready channels", []client.Object{
+			at("ch-c", t1, true), at("ch-b", t0, true), at("ch-a", t1, true)}, "ch-b"},
+	}
+	for _, tc := range cases {
+		k := &KubeStore{Reader: kubeClientWith(t, tc.objs...), OperatorNamespace: "kaalm-system"}
+		ch, ok := k.ChannelByPath(ctx, path)
+		if !ok || ch.Name != tc.want {
+			name := ""
+			if ch != nil {
+				name = ch.Name
+			}
+			t.Errorf("%s: ChannelByPath = %q ok=%v, want %q", tc.name, name, ok, tc.want)
+		}
 	}
 }
 
