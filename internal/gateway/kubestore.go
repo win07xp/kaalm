@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -32,6 +33,20 @@ import (
 // PodIPIndex is the cache index mapping status.podIP to Pods. Registered by
 // cmd/gateway before the cache starts.
 const PodIPIndex = "status.podIP"
+
+// ChannelPathIndex is the cache index mapping an AgentChannel's path to the
+// channels registered at it, across all namespaces. Registered by
+// cmd/gateway before the cache starts, with ChannelPathIndexValue.
+const ChannelPathIndex = "spec.path"
+
+// ChannelPathIndexValue is the ChannelPathIndex extractor: the path of the
+// block the channel's type selects. A channel with no path is not indexed.
+func ChannelPathIndexValue(o client.Object) []string {
+	if path := o.(*kaalmv1beta1.AgentChannel).Spec.Path(); path != "" {
+		return []string{path}
+	}
+	return nil
+}
 
 // KubeStore is the production Store over a controller-runtime informer cache.
 type KubeStore struct {
@@ -141,30 +156,48 @@ func (k *KubeStore) Credential(ctx context.Context, provider *kaalmv1beta1.Model
 	return string(val), nil
 }
 
-// ChannelByPath scans AgentChannels for a Ready channel registered at path.
-// The prefix defense (the path must begin with the channel's own
-// /channels/{namespace}/ prefix) is enforced here, independent of the
-// reconciler's InvalidPath status.
+// ChannelByPath resolves path to the Ready AgentChannel registered at it,
+// listing through ChannelPathIndex. The prefix defense (the path must begin
+// with the channel's own /channels/{namespace}/ prefix) is enforced here,
+// independent of the reconciler's InvalidPath status. When more than one
+// Ready channel holds the path, which happens only until the reconciler marks
+// the loser PathConflict, rule 15 picks the winner: the earliest
+// creationTimestamp, and on a tie the lower name.
 func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1beta1.AgentChannel, bool) {
 	var channels kaalmv1beta1.AgentChannelList
-	if err := k.Reader.List(ctx, &channels); err != nil {
+	if err := k.Reader.List(ctx, &channels, client.MatchingFields{ChannelPathIndex: path}); err != nil {
 		return nil, false
 	}
+	var winner *kaalmv1beta1.AgentChannel
 	for i := range channels.Items {
 		ch := &channels.Items[i]
-		if ch.Spec.Path() != path {
+		if ch.Spec.Path() != path || !channelPathAllowed(ch) || !channelReady(ch) {
 			continue
 		}
-		if !channelPathAllowed(ch) {
-			continue
-		}
-		for _, c := range ch.Status.Conditions {
-			if c.Type == kaalmv1beta1.ConditionReady && c.Status == "True" {
-				return ch, true
-			}
+		if winner == nil || channelPrecedes(ch, winner) {
+			winner = ch
 		}
 	}
-	return nil, false
+	return winner, winner != nil
+}
+
+// channelReady reports whether the channel's Ready condition is True.
+func channelReady(ch *kaalmv1beta1.AgentChannel) bool {
+	for _, c := range ch.Status.Conditions {
+		if c.Type == kaalmv1beta1.ConditionReady && c.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// channelPrecedes reports whether a wins a rule 15 path conflict against b:
+// the earlier creationTimestamp, and on a tie the lower name.
+func channelPrecedes(a, b *kaalmv1beta1.AgentChannel) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	}
+	return a.Name < b.Name
 }
 
 // channelPathAllowed is the gateway-side half of validation rule 15.
