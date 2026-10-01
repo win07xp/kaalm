@@ -129,12 +129,34 @@ rateLimits:
 ```
 
 Buckets are per `(namespace, model)`: each pair gets the full configured
-ceiling of requests per minute (the schema also accepts `tokensPerMinute`, which
-the gateway does not enforce), so a namespace using three models can reach three times the ceiling
-against the provider in aggregate. The configured value is the intended
-cluster-wide limit; each gateway replica enforces its share. A limited caller
-gets `429` with error type `rate_limited`; unlike a budget block, this clears
-in seconds, not at a period boundary.
+ceiling of requests per minute, so a namespace using three models can reach
+three times the ceiling against the provider in aggregate. The configured value
+is the intended cluster-wide limit; each gateway replica enforces its share. A
+limited caller gets `429` with error type `rate_limited` and a `Retry-After`
+that says when to retry. Unlike a budget block, it clears when `Retry-After`
+says, not at a period boundary: usually seconds, longer when the request limit
+is below the replica count.
+
+`tokensPerMinute` is a second ceiling on the input plus output tokens per
+minute, with the same per-`(namespace, model)` key. Leave it unset for no token
+limit. It works after the fact:
+
+- The gateway admits a request while the namespace's token bucket for that
+  model is above 0, then subtracts the call's tokens when the call ends, or
+  when a stream ends. A large call blocks the next request, not itself.
+- The call's tokens come off the primary provider's bucket for the model you
+  asked for, even when a fallback provider answered.
+- Concurrent long streams all pass while the bucket is positive, because each
+  stream's tokens land only when it ends.
+- The debit is the adapter's input plus output count. Anthropic cache tokens are
+  not counted. OpenAI and OpenAI-compatible input counts include cached prompt
+  tokens, so cache hits count. A response with no usage debits nothing.
+- Every namespace, and every model in a namespace, gets the full ceiling, so
+  the limit does not keep a shared provider key under the provider's own
+  tokens-per-minute limit.
+
+The design book's Budgets and rate limits chapter, Rate limiting section, has
+the bucket sizes and the `Retry-After` arithmetic.
 
 ## Fallback chains
 

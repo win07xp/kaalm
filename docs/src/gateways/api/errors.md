@@ -43,7 +43,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 409 | `stale_pod` | yes | | `POST /v1/task/complete`: the calling Pod is not the task's current Pod ([409 Conflict](task-complete.md#409-conflict)) |
 | 413 | `request_too_large` | no | | The body exceeds `gateway.maxLLMRequestBodyBytes` (default 4 MiB) on a proxy path, or `gateway.mcpMaxBodyBytes` (default 4 MiB) on the broker |
 | 413 | `response_too_large` | no | | The tool provider's response exceeds `gateway.mcpMaxBodyBytes` (default 4 MiB) |
-| 429 | `rate_limited` | yes | `1` | The per-namespace bucket for the model or tool provider is empty |
+| 429 | `rate_limited` | yes | LLM: seconds until the bucket admits again, at least 1 ([Retry-After](../llm/budgets-and-rate-limits.md#retry-after)); tool: `1` | The per-namespace request bucket for the model or tool provider is empty, or the model's token bucket is at or below zero |
 | 429 | `budget_exhausted` | no after a block; yes after throttles only | seconds to the next period, or the throttle's `1` | The provider, or the provider and every fallback, is budget-blocked or throttled |
 | 429 | `budget_throttled` | yes | `1` | Hard enforcement: the boundary admission slot is held by another request |
 | 500 | `internal_unavailable` | yes | | The broker could not re-encode a `tools/list` response |

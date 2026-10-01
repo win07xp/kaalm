@@ -165,19 +165,60 @@ Serialized admission near the ceiling, one ConfigMap write per settle inside the
 
 ## Rate limiting
 
-Rate limits are enforced at the gateway using token-bucket limiters keyed on (namespace, model). Limits come from `ModelProvider.spec.rateLimits` and represent **cluster-wide ceilings**. When a limit is hit, the gateway returns HTTP 429 with a `Retry-After` header.
+Rate limits are enforced at the gateway. Limits come from `ModelProvider.spec.rateLimits` and represent **cluster-wide ceilings**. Each (namespace, model) pair has up to two buckets, both refilled continuously:
+
+| Bucket | Limit | Counts | Admits a request when |
+|---|---|---|---|
+| Request bucket | `requestsPerMinute` | Requests | It holds at least one request |
+| Token bucket | `tokensPerMinute` | Input plus output LLM tokens | It holds more than 0 tokens |
+
+An unset or zero limit disables its bucket. A request refused by either bucket gets `429 rate_limited` with a computed `Retry-After` ([Retry-After](#retry-after)). The rejection is retryable and does not fall back.
+
+### The token limit
+
+The token limit is enforced after the fact, because the gateway cannot know a call's token count before the provider answers.
+
+1. **Admit.** The gateway admits a request while the token bucket is above 0. The request does not need a whole token, and admission consumes no tokens. The token check runs before the request check, so a request the token bucket refuses does not use up a request token.
+2. **Debit.** After the call, the gateway subtracts the settled input tokens plus output tokens from the token bucket that admitted the request. That bucket belongs to the primary provider's limits and the requested model, after any budget `degrade` rewrite, even when a fallback provider served the call. A buffered response debits when the gateway reads the response. A stream debits when the stream ends ([Streaming responses](request-handling.md#streaming-responses)).
+3. **Block.** A large call blocks the next request, not itself.
+
+The token bucket may go negative. The debt is clamped at minus one burst (`tokensPerMinute / number_of_replicas`), so one call larger than a burst blocks the key for at most about one minute.
+
+### Retry-After
+
+The gateway computes `Retry-After` from how far the refused bucket is from admitting again, as whole seconds and at least 1:
+
+| Refused by | `Retry-After` (seconds) |
+|---|---|
+| Token bucket | `ceil(-tokens / per_replica_tokens_per_minute * 60)` |
+| Request bucket | The time until the next request token |
+
+For example, with `requestsPerMinute: 2` and one replica, the third request in a burst gets `Retry-After: 30`. Tool-plane and heartbeat `rate_limited` responses send `Retry-After: 1`.
+
+### Limits of the token limit
+
+- **Concurrent long streams all pass.** The debit lands only when each stream ends, so streams that start while the bucket is positive are all admitted.
+- **The split is approximate.** The per-replica split is approximate, the same as for requests ([Dividing by live replica count](#dividing-by-live-replica-count)), and the debit lands only on the replica that served the call.
+- **Only input plus output tokens count.** The debit is the input plus output count that the provider adapter reads from the response's usage. For `anthropic`, cache read and cache creation tokens are not in that count. For `openai` and `openai-compatible`, the input count is `prompt_tokens`, which already includes cached prompt tokens, so cache hits count. A response with no usage debits nothing. It is the same case the gateway logs and counts as `kaalm_llm_usage_missing_total` ([Streaming responses](request-handling.md#streaming-responses)).
+- **Each key gets the full ceiling.** Buckets are per (namespace, model), so N namespaces, or N models in one namespace, each get the full `requestsPerMinute` and the full `tokensPerMinute`. Together, tenants can still reach the provider's own rate limit, so these limits do not keep a shared provider key under it.
 
 ### Dividing by live replica count
 
-Each gateway replica divides the configured limit by the number of active gateway replicas, counted from its Pod informer by the gateway label selector and refreshed at most every few seconds rather than on every request. When replicas scale up or down, each replica resizes its local token bucket within that refresh and the next refill cycle, so the configured value represents the intended cluster-wide limit regardless of replica count.
+Each gateway replica divides each configured limit by the number of active gateway replicas, counted from its Pod informer by the gateway label selector and refreshed at most every few seconds rather than on every request. Each bucket's burst equals that per-replica share, except the request bucket, which always holds at least one request ([Request limits below the replica count](#request-limits-below-the-replica-count)). The token bucket's burst is exactly `tokensPerMinute / number_of_replicas`, with no floor. When replicas scale up or down, each replica resizes its local buckets within that refresh and the next refill cycle, so the configured value represents the intended cluster-wide limit regardless of replica count.
 
-Because each replica enforces its share independently, the effective cluster-wide limit is approximate. Transient bursts may exceed the configured ceiling by up to one replica's full bucket, `configured_limit / number_of_replicas`, the accepted trade for a coordination-free request path.
+Because each replica enforces its share independently, the effective cluster-wide limit is approximate. Transient bursts may exceed the configured ceiling by up to one replica's full bucket: `configured_limit / number_of_replicas`. The request bucket holds at least one request, so when the request share is below one, a cluster-wide burst can admit up to one request per replica, which is `number_of_replicas` requests at once ([Request limits below the replica count](#request-limits-below-the-replica-count)). This is the accepted trade for a coordination-free request path.
+
+### Request limits below the replica count
+
+When `requestsPerMinute` is lower than the number of gateway replicas, each replica's share is less than one request per minute. The request bucket always has room for one request, so each replica admits one request for each (namespace, model), then refuses until the bucket refills at `requestsPerMinute / number_of_replicas` requests per minute. The limit does not cap how many requests run at once. For example, `requestsPerMinute: 2` on 3 replicas admits one request per replica every 90 seconds.
+
+Because every replica's bucket starts with one request, a cluster-wide burst can admit up to one request per replica, up to `number_of_replicas` requests at once. The long-run rate stays at `requestsPerMinute`.
 
 ### Worst-case deviation during scaling events
 
 During scale-up, existing replicas divide by N+1 as soon as the new Pod appears in their informer, before the new replica begins serving traffic, momentarily reducing each existing replica's effective limit. During rolling restarts (`maxUnavailable: 1`), different replicas can transiently hold different bucket sizes, so the effective cluster-wide ceiling deviates by up to one replica's share.
 
-Per-replica division is the design point. A shared token bucket coordinated through a ConfigMap the way the budget exchange is would cost a coordinated write per request, which is why it was not chosen.
+Per-replica division is the design point. A shared bucket coordinated through a ConfigMap the way the budget exchange is would cost a coordinated write per request, which is why it was not chosen.
 
 ## Related
 

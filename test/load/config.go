@@ -101,12 +101,14 @@ const (
 	agentControllerName = "agent" // the controller label on controller-runtime metrics
 )
 
-// The three ModelProviders testdata/infra.yaml defines, told apart by the
-// mock's endpoint prefix: immediate, 50 ms, and immediate under hard budget.
+// The four ModelProviders testdata/infra.yaml defines, told apart by the
+// mock's endpoint prefix: immediate, 50 ms, immediate under hard budget, and
+// immediate with rate limits on.
 const (
-	providerFast = "load-fast"
-	providerSlow = "load-slow"
-	providerHard = "load-hard"
+	providerFast    = "load-fast"
+	providerSlow    = "load-slow"
+	providerHard    = "load-hard"
+	providerLimited = "load-limited"
 )
 
 var allPhases = []string{phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks}
