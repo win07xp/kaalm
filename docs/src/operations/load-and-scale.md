@@ -4,15 +4,15 @@ This page states the load harness, the environment it runs on, and the baseline 
 
 ## What the harness measures
 
-`make load` creates a dedicated k3d cluster and installs the chart with the mock provider trusted for upstream and callbacks and the pprof listeners open; the console and tracing stay off. The harness (`test/load`) then applies `test/load/testdata/infra.yaml`, which holds the load namespace, the mock provider, and the three ModelProviders the legs select (`load-fast`, `load-slow`, `load-hard`), and runs seven phases in order. Each phase writes its own block of the summary JSON. The ramp leaves its fleet up for the hold, restart, and teardown phases; every other phase cleans up its own objects.
+`make load` creates a dedicated k3d cluster and installs the chart with the mock provider trusted for upstream and callbacks and the pprof listeners open; the console and tracing stay off. The harness (`test/load`) then applies `test/load/testdata/infra.yaml`, which holds the load namespace, the mock provider, and the four ModelProviders the legs select (`load-fast`, `load-slow`, `load-hard`, `load-limited`), and runs seven phases in order. Each phase writes its own block of the summary JSON. The ramp leaves its fleet up for the hold, restart, and teardown phases; every other phase cleans up its own objects.
 
 ![The load harness topology: the harness on the host creates objects and reads metrics; inside the k3d cluster a load generator Job drives the gateway on the LLM leg to the mock provider and on the channel leg through the agent fleet, whose callbacks return to the mock's receiver; the controller reconciles and wakes the fleet.](../diagrams/load-harness-topology.svg)
 
 ![The seven phases in order: gateway, ramp, hold, restart, teardown, churn, tasks. Hold, restart, and teardown run on the ramp fleet.](../diagrams/load-phase-order.svg)
 
-The harness drives one load profile: non-streaming chat completions, no tool calls, one AgentClass, three ModelProviders, and one namespace. Streaming and the tool plane are not measured.
+The harness drives one load profile: non-streaming chat completions, no tool calls, one AgentClass, four ModelProviders, and one namespace. `load-limited` is `load-fast` with `rateLimits.requestsPerMinute` and `tokensPerMinute` both set to 2000000000, far above any rate a leg reaches, so every request on it runs the gateway's rate limiter (admission, then the token debit when usage settles) and none is refused. Streaming and the tool plane are not measured.
 
-1. **Gateway steady state.** An in-cluster load generator calls the LLM proxy at fixed concurrency in four legs: the ServiceAccount-token tier against a mock provider that answers immediately, then the mTLS path (the load generator presents the certificate of a real Agent, so the gateway sees a Kaalm-managed workload calling from its own namespace) against an immediate provider, a 50 ms provider, and an immediate provider under hard budget enforcement. Each leg records client-observed latency, the gateway's own request histogram, and the gateway's peak CPU and memory. The immediate legs isolate the gateway's per-request cost; the hard leg isolates what synchronous ledger admission adds.
+1. **Gateway steady state.** An in-cluster load generator calls the LLM proxy at fixed concurrency in five legs: the ServiceAccount-token tier against a mock provider that answers immediately, then the mTLS path (the load generator presents the certificate of a real Agent, so the gateway sees a Kaalm-managed workload calling from its own namespace) against an immediate provider, a 50 ms provider, an immediate provider under hard budget enforcement, and an immediate provider with rate limits on. Each leg records client-observed latency, the gateway's own request histogram, and the gateway's peak CPU and memory. The immediate legs isolate the gateway's per-request cost; the hard leg isolates what synchronous ledger admission adds, and the rate-limits leg isolates what the request and token limiter adds.
 2. **Max-active ramp.** Agents are created in waves of 50, with persistence and hibernation off, and none are retired. The ramp stops at the target or at the environment's first limit: agent Pods crash-looping on probe timeouts, host memory below a floor, a node reporting memory pressure, the scheduler refusing a Pod, or a wave that misses Ready within `-wave-timeout` (default six minutes). The wave that hits the limit is trimmed, so the later phases run on the largest fleet that came up clean. Each wave records time-to-Ready (creation to the Ready condition) and its breakdown (certificate issuance, Pod start, start to Ready), the controller's reconcile histogram and queue depth, the operator components' memory, and the host's available memory, which yields the memory cost per running agent.
 3. **Hold and serve.** At the peak fleet, every active agent receives one message per interval through its own async webhook channel, with replies pushed to the mock's callback receiver. The phase records accepted messages, every delivery attempt by outcome, callback counts, message latency, and whether any agent lost readiness or restarted. Around the hold it reads what the operator asked of the control plane: both components' client-side request counters by method, the apiserver's own request counters by verb and resource, and from those the writes per agent per minute. During the hold it samples goroutines, heap, and RSS from both components once a minute, so a long hold (`-hold-duration 60m`) is the soak.
 4. **Restart under load.** With the fleet up, a rolling restart of the controller (rollout wall time, then time to the first reconcile of the new leader, leader handoff included), then a rolling restart of the gateway under a 60 s token-tier LLM leg, counting the requests that fail while it rolls.
@@ -31,7 +31,7 @@ make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'   # the
 make load-down                  # delete the cluster
 ```
 
-`make load` takes about 45 minutes on the baseline machine. Results land in `test/load/results/` as JSON, which is not committed; the published baseline lives in `test/load/baseline/`. The flags in `test/load/config.go` change the fleet size, the wave size, the phase list, and every duration. The defaults are the baseline settings, so a baseline re-run is the one-line command. The load deploy also opens the [Profiling](observability.md#profiling) listeners on both components (`LOAD_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the pure functions on the gateway's request paths with no cluster at all; save two runs and compare them with `benchstat` before and after a change to one of those paths.
+`make load` takes about 45 minutes on the baseline machine. Results land in `test/load/results/` as JSON, which is not committed; the published baseline lives in `test/load/baseline/`. The flags in `test/load/config.go` change the fleet size, the wave size, the phase list, and every duration. The defaults are the baseline settings, so a baseline re-run is the one-line command. The load deploy also opens the [Profiling](observability.md#profiling) listeners on both components (`LOAD_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the gateway's request paths with no cluster at all: the pure functions on those paths, and the whole in-process proxy path (`BenchmarkLLMProxyMTLS`, plus `BenchmarkLLMProxyMTLSRateLimited` and `BenchmarkLLMProxyMTLSRateLimitedParallel` with both limits on, sequential and with many callers on one key). Save two runs and compare them with `benchstat` before and after a change to one of those paths.
 
 The harness checks one host prerequisite before it starts: `fs.inotify.max_user_instances` of at least 512 and `fs.inotify.max_user_watches` of at least 524288. The k3d nodes share the host kernel, and a few hundred Pods exhaust the defaults with confusing symptoms. It also records the node count, allocatable Pods, and kubelet version without enforcing them; `make load-up` creates one server and two agents at 250 Pods each, because the kubelet default of 110 caps a fleet long before memory does.
 
@@ -51,11 +51,11 @@ The harness is a release-time local gate, listed in the release checklist, not a
 
 ## Baseline numbers
 
-Every table except the soak and the restart table is from the single `make load` run of September 12, 2026, reproduced from the baseline file as printed. The restart table is from a separate run of September 29, 2026, described under it. The run-to-run spread on this machine is stated where it matters.
+Every table except the soak, the restart table, and the rate-limits leg is from the single `make load` run of September 12, 2026, reproduced from the baseline file as printed. The restart table is from a separate run of September 29, 2026, described under it. The rate-limits leg is from a gateway-phase run of October 1, 2026, described under the gateway table. The run-to-run spread on this machine is stated where it matters.
 
 ### Gateway
 
-Four legs of 60 s at 32 concurrent callers in an in-cluster load generator:
+Five legs of 60 s at 32 concurrent callers in an in-cluster load generator. The table holds the first four, from the September 12 run:
 
 | Leg | rps | Client p50 / p95 / p99 (ms) | Gateway-side p50 / p95 / p99 (ms) | Gateway peak |
 |---|---|---|---|---|
@@ -65,6 +65,14 @@ Four legs of 60 s at 32 concurrent callers in an in-cluster load generator:
 | mTLS, hard budget, immediate upstream | 15176 | 1.7 / 4.6 / 6.4 | 2.5 / 4.8 / 5.1 | 5.8 cores, 55 MiB |
 
 The immediate legs isolate the gateway's per-request cost, about 0.4 ms of CPU per request. The provider-facing transport holds 256 idle connections per host, so at 32 callers a request reuses a connection instead of dialing and running a TLS handshake. The 50 ms leg is bound by the 32 callers times the upstream delay. The immediate legs vary between runs on this machine, from about 13,500 to 17,500 requests per second across the three `make load` runs of September 12.
+
+The fifth leg, `mtls: rate limits on, 0 ms upstream` against `load-limited`, is not in the September 12 baseline. It was measured on October 1, 2026, in one gateway-phase run on the same load cluster and environment (60 s legs at 32 callers, product code `463ba5b` with the rate-limiter change applied), so it is a separate measurement and not a row of the September 12 run:
+
+| Leg | rps | Client p50 / p99 (ms) | Gateway-side p99 (ms) | Gateway peak CPU | Non-200 responses |
+|---|---|---|---|---|---|
+| mTLS, rate limits on, immediate upstream | 17266 | 1.53 / 5.47 | 4.97 | 6.2 cores | 0 |
+
+In the same run, the plain mTLS immediate leg served 17203 requests per second with a client p99 of 5.67 ms. Rate limits add no measurable per-request cost: the 63 requests per second between the two legs is inside the run-to-run spread stated above for the immediate legs. `BenchmarkLLMProxyMTLSRateLimited` and its parallel variant measure the same cost without a cluster (see [Run the harness](#run-the-harness)).
 
 ### Max-active ramp
 
