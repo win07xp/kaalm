@@ -348,7 +348,7 @@ func (s *usageSampler) finish() map[string]usage {
 
 // ---- gateway ----
 
-var gatewayProviders = []string{providerFast, providerSlow, providerHard}
+var gatewayProviders = []string{providerFast, providerSlow, providerHard, providerLimited}
 
 func (h *harness) runGateway(ctx context.Context) error {
 	// The token tier is the gateway-only adoption path (a ServiceAccount
@@ -363,6 +363,7 @@ func (h *harness) runGateway(ctx context.Context) error {
 		{"mtls: soft budget, 0 ms upstream", providerFast, true},
 		{"mtls: soft budget, 50 ms upstream", providerSlow, true},
 		{"mtls: hard budget, 0 ms upstream", providerHard, true},
+		{"mtls: rate limits on, 0 ms upstream", providerLimited, true},
 	}
 	if err := h.k.ensureClass(ctx, activeClass()); err != nil {
 		return err

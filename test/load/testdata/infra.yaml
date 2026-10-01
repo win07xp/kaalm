@@ -193,3 +193,31 @@ spec:
     - id: mock-model
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
+---
+# load-limited: load-fast with request and token rate limits set far above
+# any rate the leg reaches, so every request runs the limiter (admission,
+# then the token debit once usage settles) and none is refused.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: load-limited
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.load.svc:8443/ok/limited
+  credentialsRef:
+    name: load-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - load
+  budget:
+    period: daily
+    perNamespaceUSD: "1000000"
+  rateLimits:
+    requestsPerMinute: 2000000000
+    tokensPerMinute: 2000000000
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"

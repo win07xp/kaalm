@@ -159,3 +159,61 @@ func BenchmarkLLMProxyMTLS(b *testing.B) {
 		<-h.upreqs
 	}
 }
+
+// rateLimitedProxyHarness is the BenchmarkLLMProxyMTLS setup with request and
+// token rate limits on the provider, set far above any rate a benchmark
+// reaches, so every request runs the limiter (admission, and the token debit
+// once usage settles) and none is refused.
+func rateLimitedProxyHarness(b *testing.B) (*harness, *http.Client, map[string]any) {
+	b.Helper()
+	h := newHarness(b, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(openAIResponse)
+	})
+	h.seedRoute()
+	h.store.providers["prov"].Spec.RateLimits = kaalmv1beta1.ModelProviderRateLimits{
+		RequestsPerMinute: 2_000_000_000,
+		TokensPerMinute:   2_000_000_000,
+	}
+	cert := agentCert(b, h.ca)
+	body := map[string]any{"model": "prov/m1", "messages": []any{map[string]any{"role": "user", "content": "hi"}}}
+	return h, h.client(&cert), body
+}
+
+// BenchmarkLLMProxyMTLSRateLimited is BenchmarkLLMProxyMTLS with rate limits
+// on: the difference between the two is the limiter's per-request cost.
+func BenchmarkLLMProxyMTLSRateLimited(b *testing.B) {
+	h, client, body := rateLimitedProxyHarness(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resp := postJSON(b, client, h.url("/v1/chat/completions"), body, nil)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b.Fatalf("status %d", resp.StatusCode)
+		}
+		<-h.upreqs
+	}
+}
+
+// BenchmarkLLMProxyMTLSRateLimitedParallel runs the rate-limited proxy path
+// from many callers at once on one (namespace, model) key, so the number
+// includes contention on the limiter's lock.
+func BenchmarkLLMProxyMTLSRateLimitedParallel(b *testing.B) {
+	h, client, body := rateLimitedProxyHarness(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			resp := postJSON(b, client, h.url("/v1/chat/completions"), body, nil)
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				b.Errorf("status %d", resp.StatusCode)
+				return
+			}
+			<-h.upreqs
+		}
+	})
+}
