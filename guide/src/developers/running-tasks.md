@@ -30,7 +30,8 @@ spec:
 
 `KAALM_TASK_AUTOCOMPLETE` is a test hook in both base images and in the
 starter templates. In a task, any non-empty value is sent as the completion
-status, `success` or `failure`, shortly after the container starts. The hook
+status shortly after the container starts, and the gateway accepts only
+`success` or `failure`. The hook
 reports alongside whatever else the task does and does not replace it. Your
 task image reports completion itself, from its own code. The e2e suite's
 fixture, `test/e2e/testdata/agenttask.yaml`, has the same fields. The
