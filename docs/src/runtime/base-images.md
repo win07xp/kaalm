@@ -51,9 +51,9 @@ Handler source is read once, at container start. The reconciler does not track C
 | Unset | The runtime serves the built-in [default handler](#the-default-handler). |
 | Set but unloadable | A missing `handler.py`, an import error, a missing `handle_message`, or a `handle_message` with the wrong signature logs the exact failure and exits nonzero. The container enters `CrashLoopBackOff`, the loud outcome a configured-but-broken handler must have. There is no fallback to the default handler, because an agent that echoes when it was configured to do real work is a debugging trap. |
 
-`handle_message(envelope)` is the handler ABI: a function, sync or async, taking exactly one required positional argument. The loader rejects any other arity.
+`handle_message(envelope)` is the handler ABI: a function, sync or async, taking exactly one required positional argument. The loader rejects any other arity. The module may also define an optional `async def run_task()`, the AgentTask entry point described under [Task mode](#task-mode); `handle_message` stays required either way.
 
-The runtime exposes one importable module, `kaalm`, as the handler's interface to the runtime it sits on. Its surface is exactly five members:
+The runtime exposes one importable module, `kaalm`, as the handler's interface to the runtime it sits on. Its surface is exactly seven members:
 
 | Member | What it is |
 |---|---|
@@ -61,10 +61,10 @@ The runtime exposes one importable module, `kaalm`, as the handler's interface t
 | `kaalm.memory` | The runtime's persistent store, namespaced under a `user/` key prefix so handler state cannot collide with the dedup window ([Memory and dedup persistence](#memory-and-dedup-persistence)). |
 | `kaalm.http_client()`, `kaalm.http_async_client()` | Factories returning standard `httpx.Client` and `httpx.AsyncClient` objects that carry the same identity and trust and follow rotation. They exist for code the runtime does not control: framework SDKs accept a stock httpx client through their `http_client=` and `http_async_client=` arguments. |
 | `kaalm.trace_context()` | The W3C trace context of the message being handled, as a `{"traceparent": ..., "tracestate": ...}` dict, empty outside message handling, for frameworks that run their own OpenTelemetry SDK ([contract item 8](contract.md#8-trace-context-propagation)). The Go module's `agentruntime.TraceContext(ctx)` is the same surface for Go handlers. |
+| `await kaalm.complete_task(status, message="", artifacts=None)` | The runtime's own coroutine for reporting AgentTask completion ([contract item 6](contract.md#6-completion-signal-agenttask-only)). `status` is `"success"` or `"failure"`, and `artifacts` is a dict of `str` to `str`. It retries only the `409 stale_pod` rejection (`StalePodCompletion`), after 100ms, 500ms, and 2s (four attempts in all), then raises `RuntimeError("task completion exhausted retries")`. Any other non-`200` answer raises `RuntimeError` at once, with no retry. The module does not block a call outside task mode; the gateway rejects it. The Go module's `CompleteTask` is the same surface. |
+| `kaalm.TaskAlreadyCompleted` | An `Exception` subclass that `kaalm.complete_task` raises when the gateway answers `403 TaskAlreadyCompleted`, which means the task is already terminal. The error is final: do not retry. It mirrors Go's `agentruntime.ErrTaskAlreadyCompleted`. It is a plain class, so an `except` clause can name it without a running runtime. |
 
 The httpx factories matter because a client hand-built from the certificate files snapshots its SSL context at construction. An agent that neither hibernates nor restarts through most of a leaf certificate's duration would keep presenting the stale certificate past its expiry while its probes stay green. The factories' transports rebuild on the rotation watch. Extra keyword arguments pass through to the httpx constructor; `transport`, `verify`, and `cert` are set by the factory and rejected as arguments; and proxy environment variables are ignored unless re-enabled, because a proxy would route around the identity-bearing transport.
-
-The module has no task-completion member. A Python handler that runs as an AgentTask posts to `/v1/task/complete` through `kaalm.gateway` itself and implements the retry of [contract item 6](contract.md#6-completion-signal-agenttask-only); issue #235 tracks a helper with parity to the Go module's `CompleteTask`.
 
 This surface is append-only within a minor release series: a handler written against one `X.Y` tag runs unchanged on every `X.Y.z`. Members are only ever added, so a handler written against an older minor series usually runs on a newer one, but that is not the tested contract.
 
@@ -128,9 +128,24 @@ Both images ship the same built-in handler, active only when no handler is confi
 
 ## Task mode
 
-Both runtimes detect task mode from the certificate SAN: run as an AgentTask, they start no heartbeat and present the task SAN, exactly as the starter templates do. The Go module also honors `KAALM_TASK_AUTOCOMPLETE`: when set on a task, the runtime reports the given status at startup instead of doing work, which is how the e2e suite and the learn book exercise the task lifecycle without a real handler. The Python image has no equivalent.
+Both runtimes detect task mode from the certificate SAN, which ends in `.task.kaalm.io` for an AgentTask: run as an AgentTask, they start no heartbeat and present the task SAN, exactly as the starter templates do.
 
-`spec.handler` exists only on the Agent schema. An AgentTask's work is its whole program, driven by goal environment variables and ending in a completion report, not a resident message loop, so a message-handler mount is the wrong extension point for it. The task on-ramp is the starter templates and custom images.
+### The KAALM_TASK_AUTOCOMPLETE hook
+
+Both runtimes honor `KAALM_TASK_AUTOCOMPLETE`, a startup test hook for smoke and e2e runs. In task mode, any non-empty value is sent as the completion status (the gateway accepts only `success` or `failure`) with the message `auto-complete on startup`, in up to six attempts 5 seconds apart. Outside task mode the variable is ignored. The hook runs beside the task's own work and does not replace it: the Go runtime starts it in its own goroutine next to user code, and the Python runtime starts it as a background task. The e2e suite and the learn book use it to exercise the task lifecycle without a real handler. The Python runtime stops retrying once the gateway answers that the task is already completed.
+
+### The Python run_task entry point
+
+In Python, the runtime provides `main()`, so a task's entry point is `run_task`: an optional `async def run_task()` that takes no arguments and sits next to `handle_message` in the handler module. In Go, your code provides `main()` and calls `CompleteTask` itself. The Python rules:
+
+- **Start.** In task mode, the runtime starts `run_task` once as a background task after the HTTPS server is listening, and keeps serving while it runs. Outside task mode, the runtime logs that `run_task` is defined and does not run it.
+- **Reporting.** If `run_task` returns and the task has not reported, the runtime reports `success` with an empty message. If it raises, the runtime reports `failure` with the exception text, or the exception type name when the text is empty, unless the task has already reported. If `run_task` already called `kaalm.complete_task` and the gateway accepted it or answered `TaskAlreadyCompleted`, the runtime makes no second report. When the runtime's own report gets `TaskAlreadyCompleted`, that counts as success and is only logged.
+- **Retries.** The runtime's own report retries like the hook: up to six attempts 5 seconds apart. A report from `kaalm.complete_task` follows the schedule in the member table.
+- **Both set.** When the hook and `run_task` are both set, both run. Whichever reports first wins, and a later `kaalm.complete_task` call in `run_task` raises `kaalm.TaskAlreadyCompleted`.
+- **SIGTERM.** A running `run_task` is cancelled and nothing is reported.
+- **Load errors.** A `run_task` that is not `async def` (including a non-callable value) or that has required parameters fails the handler load. The container logs the error, exits 1, and enters `CrashLoopBackOff`, like the other unloadable-handler cases above.
+
+`spec.handler` exists only on the Agent schema. An AgentTask's work is its whole program, driven by goal environment variables and ending in a completion report, not a resident message loop, so a message-handler mount is the wrong extension point for it. The Python task on-ramp is a `FROM`-built image whose `handler.py` defines `run_task`; the image sets `KAALM_HANDLER_PATH` itself, as the [`FROM` example](#the-python-image) shows and as `examples/starter-python/Dockerfile` does. The Go on-ramp is the starter template. Custom images are the other option.
 
 ## Versioning and support
 
