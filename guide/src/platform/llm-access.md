@@ -94,21 +94,27 @@ recovers.
 
 Both the gateway (which forwards requests) and the controller (which probes)
 trust the system CA roots by default. A provider served with a certificate
-from your own CA, an in-cluster model server for example, needs the same
-trust on both sides, set on the chart:
+from your own CA, an in-cluster model server for example, needs a trust value
+on the chart. One value covers both components, because the controller's probe
+trusts what the gateway's forwarding path trusts:
 
-| Endpoint certificate issued by | Gateway side | Controller side |
-|---|---|---|
-| The Kaalm cluster CA (`kaalm-ca-issuer`) | `gateway.trustClusterCAForUpstream=true` | `controller.trustClusterCAForProbes=true` |
-| Any other CA | `gateway.upstreamCA.configMap=CONFIGMAP_NAME` | `controller.probeCA.configMap=CONFIGMAP_NAME` |
+| Endpoint certificate issued by | Chart value |
+|---|---|
+| The Kaalm cluster CA (`kaalm-ca-issuer`) | `gateway.trustClusterCAForUpstream=true` |
+| Any other CA | `gateway.upstreamCA.configMap=CONFIGMAP_NAME` |
 
 For the second row, create a ConfigMap named `CONFIGMAP_NAME` in `kaalm-system` whose `ca.crt` key
-holds the PEM bundle (the key name is `gateway.upstreamCA.key` and
-`controller.probeCA.key`, default `ca.crt`). Both components re-read the
-bundle when it rotates, with no restart. The two rows compose: enabling both
-merges the cluster CA and your bundle into one trust pool. Enable a side
-without the other and the provider is either forwarded to but never
-`Healthy`, or `Healthy` but every call fails TLS verification.
+holds the PEM bundle (the key name is `gateway.upstreamCA.key`, default
+`ca.crt`). Both components re-read the bundle when it rotates, with no
+restart. The two rows compose: enabling both merges the cluster CA and your
+bundle into one trust pool.
+
+The older `controller.trustClusterCAForProbes` and `controller.probeCA` values
+are deprecated but still honored. They add CAs to the controller's probe pool
+only, so a CA set there makes a provider `Healthy` without making forwarding
+trust it. The chart's
+install notes print a warning when either is set, so move to the gateway
+values above.
 
 The same choice exists for async webhook callbacks to receivers under a
 private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.

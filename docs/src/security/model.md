@@ -78,14 +78,14 @@ Fourteen traffic classes carry Kaalm's data. Seven stay inside the cluster and s
 | 10 | Gateway to MCP tool server | Brokered tool calls, with the tool credential injected | HTTPS to the ToolProvider endpoint, in or outside the cluster ([The broker](../gateways/tool-plane.md#the-broker)) |
 | 11 | Gateway to `callbackUrl` | Async response and error payloads, which may carry PII | HTTPS, every POST signed ([rule 25](../resources/validation-and-defaulting.md#cross-resource-validation)); the receiver is chosen by the channel owner and is not trusted, so the target passes the deny ranges and the checked IP is pinned into the dial ([SSRF through callbackUrl](threat-model.md#ssrf-through-callbackurl)) |
 | 12 | Gateway to platform reply API | Agent replies, carrying the channel's platform credential | HTTPS to the operator-set `gateway.platforms.<type>.apiBaseUrl` ([The platform adapters](../gateways/user/platform-adapters.md)) |
-| 13 | Controller to LLM provider and tool server | Health probes, carrying the provider key or tool credential | HTTPS ([Liveness probe](../controller/reconcilers.md#liveness-probe)) |
+| 13 | Controller to LLM provider and tool server | Health probes, carrying the provider key or tool credential | HTTPS, bounded to the configured endpoint ([Health probes are a second credential egress](credentials.md#health-probes-are-a-second-credential-egress)) |
 | 14 | Gateway to OTLP collector (optional) | Trace spans with request metadata, never prompt or reply content | HTTPS verified against the upstream trust pool when one is configured, else the system roots; `http://` endpoints send in the clear ([Tracing](../operations/observability.md#tracing)) |
 
 ![The seven traffic classes that stay inside the cluster: the agent's calls to the gateway, delivery back to the agent, the two internal endpoint directions between gateway and controller, both components' API server traffic, and the optional console's calls.](../diagrams/traffic-inside.svg)
 
 ![The seven traffic classes that cross the cluster boundary: the inbound webhook, and the outbound edges from the gateway to the LLM provider, the MCP tool server, the callbackUrl receiver, and the platform reply API, plus the controller's health probes and the optional OTLP export.](../diagrams/traffic-crossing.svg)
 
-Six classes leave the cluster carrying a credential or content: 9, 10, 11, 12, 13, and 14. Class 11 is the only one whose target the platform team does not choose, which is why it carries the most controls. Classes 9, 10, 12, and 13 go to hosts an operator or platform engineer configured, and defending the gateway against its own operator is out of scope by the trust model.
+Six classes leave the cluster carrying a credential or content: 9, 10, 11, 12, 13, and 14. Class 11 is the only one whose target the platform team does not choose, which is why it carries the most controls. Classes 9, 10, 12, and 13 go to hosts an operator or platform engineer configured, and defending the gateway against its own operator is out of scope by the trust model. Class 13 is the only class that carries a credential without passing through the gateway. The controller sends each probe to the provider's `spec.endpoint`, and for `google-vertex` also to the key's `token_uri`, and never follows a redirect.
 
 ### Audit trail
 

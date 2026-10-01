@@ -32,8 +32,9 @@ import (
 // chart passes the gateway's upstream trust (gateway.trustClusterCAForUpstream
 // and gateway.upstreamCA, plus the deprecated controller.trustClusterCAForProbes
 // and controller.probeCA), and the given bundles are merged into the system
-// roots, so probes trust what the gateway's forwarding path trusts. The client carries no Timeout of its own; each probe
-// is bounded by its healthCheck.timeoutSeconds context.
+// roots, so probes trust what the gateway's forwarding path trusts. The
+// client carries no Timeout of its own; each probe is bounded by its
+// healthCheck.timeoutSeconds context.
 func NewProbeClient(caFiles []string) *http.Client {
 	return &http.Client{
 		Transport: &caReloadingTransport{
