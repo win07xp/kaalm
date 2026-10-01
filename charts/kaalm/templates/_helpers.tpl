@@ -56,3 +56,16 @@ trustManager.extraSources verbatim.
 {{ toYaml . }}
 {{- end }}
 {{- end }}
+
+{{/*
+Non-empty when the deprecated controller.probeCA bundle needs its own
+projection into the controller: it is set and does not name the same
+ConfigMap key as gateway.upstreamCA, which the controller already projects.
+*/}}
+{{- define "kaalm.controllerProbeCAProjected" -}}
+{{- $p := .Values.controller.probeCA }}
+{{- $u := .Values.gateway.upstreamCA }}
+{{- if and $p.configMap (not (and (eq $p.configMap $u.configMap) (eq $p.key $u.key))) -}}
+true
+{{- end }}
+{{- end }}

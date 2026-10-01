@@ -28,11 +28,13 @@ import (
 )
 
 // NewProbeClient builds the HTTP client both health checkers use when the
-// chart configures probe CA trust (docs/src/operations/deployment.md,
-// controller.trustClusterCAForProbes and controller.probeCA): the given
-// bundles are merged into the system roots, mirroring the gateway's
-// upstream trust pool. The client carries no Timeout of its own; each probe
-// is bounded by its healthCheck.timeoutSeconds context.
+// chart configures probe CA trust (docs/src/operations/deployment.md): the
+// chart passes the gateway's upstream trust (gateway.trustClusterCAForUpstream
+// and gateway.upstreamCA, plus the deprecated controller.trustClusterCAForProbes
+// and controller.probeCA), and the given bundles are merged into the system
+// roots, so probes trust what the gateway's forwarding path trusts. The
+// client carries no Timeout of its own; each probe is bounded by its
+// healthCheck.timeoutSeconds context.
 func NewProbeClient(caFiles []string) *http.Client {
 	return &http.Client{
 		Transport: &caReloadingTransport{
@@ -69,10 +71,21 @@ func (t *caReloadingTransport) RoundTrip(req *http.Request) (*http.Response, err
 		if t.inner != nil {
 			t.inner.CloseIdleConnections()
 		}
-		t.inner = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+		t.inner = newProbeTransport(pool)
 		t.pool = pool
 	}
 	inner := t.inner
 	t.mu.Unlock()
 	return inner.RoundTrip(req)
+}
+
+// newProbeTransport clones http.DefaultTransport, the transport the
+// nil-client probe path and the gateway's forwarding transport use, so the
+// CA-trusting probe keeps proxy from the environment (HTTPS_PROXY,
+// NO_PROXY), HTTP/2, and the dial and TLS-handshake timeouts. Only the trust
+// pool differs.
+func newProbeTransport(pool *x509.CertPool) *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	return tr
 }

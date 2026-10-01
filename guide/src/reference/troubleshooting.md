@@ -170,10 +170,14 @@ own once the candidate's configuration is fixed.
 `Healthy=False` with Ready=True is different too: the spec is fine but the
 periodic upstream probe is failing; check the endpoint and the provider's
 status page. If the endpoint serves a certificate from a private CA (an
-in-cluster provider, for example) and the gateway forwards to it fine, the
-probe is missing the trust the gateway has: set
-`controller.trustClusterCAForProbes=true` or `controller.probeCA.configMap`
-on the chart. The same applies to a ToolProvider's `Healthy` column.
+in-cluster provider, for example) and `Healthy=False` comes from TLS
+verification, the chart does not trust that CA. The controller's probe and
+the gateway's forwarding path take their trust from the same chart values,
+so one value fixes both. Set `gateway.trustClusterCAForUpstream=true` for a
+`kaalm-ca-issuer` certificate, or `gateway.upstreamCA.configMap` for any
+other CA
+([Trust a private CA](../platform/llm-access.md#4-trust-a-private-ca)). The
+same applies to a ToolProvider's `Healthy` column.
 
 ---
 

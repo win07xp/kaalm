@@ -2,7 +2,7 @@
 
 Kaalm handles three kinds of long-lived secret material: LLM API keys, which authenticate the gateway to model providers; tool server credentials, which authenticate the gateway's broker to MCP tool servers; and channel credentials, which verify inbound webhook callers and sign outbound callbacks. LLM keys and tool credentials live in one namespace, `kaalm-system`, and are never copied. Channel credentials live in each agent's own namespace.
 
-One rule spans all three: agent containers never hold credential material. The gateway is the only component that uses a credential on the data path, and it is a separate Pod in `kaalm-system`, which is what lets a plain NetworkPolicy enforce the separation ([Protecting agent containers from LLM provider access](#protecting-agent-containers-from-llm-provider-access)). The operator reads credentials only to validate them and to run health probes.
+One rule spans all three: agent containers never hold credential material. The gateway is the only component that uses a credential on the data path, and it is a separate Pod in `kaalm-system`, which is what lets a plain NetworkPolicy enforce the separation ([Protecting agent containers from LLM provider access](#protecting-agent-containers-from-llm-provider-access)). The operator reads LLM keys and tool credentials to validate them and to run health probes. The probes are a second egress, bounded to each provider's configured endpoint and, for `google-vertex`, the key's `token_uri` ([Health probes are a second credential egress](#health-probes-are-a-second-credential-egress)).
 
 TLS material (the workload certificates and the CA trust chain) follows a separate lifecycle under cert-manager ([In-cluster TLS](tls.md#in-cluster-tls)). Workload identity, which selects the grants, the budget, and the audit name a credential is used for, is specified on [Workload identity](../gateways/llm/workload-identity.md).
 
@@ -43,6 +43,20 @@ The credential has no path into an agent's namespace: an Agent's `spec.tools` gr
 ![One channel Secret in use: the gateway verifies the inbound webhook with the auth material, delivers the envelope to the agent with no credential, and either signs the async callback POST with the callbackAuth material or answers the platform inline.](../diagrams/channel-credential-use.svg)
 
 Channel credentials are namespace-scoped so that each namespace holds only the credentials for its own agents' channels, and a leak in one namespace is bounded to that namespace's channels.
+
+## Health probes are a second credential egress
+
+The rule that the gateway is the only component that uses a credential covers the data path only. The controller's health probes also send a credential to the provider's configured endpoint, in or outside the cluster. Most probes send the provider key or tool credential itself. A `google-vertex` probe sends an assertion signed with the key, and a token minted from it. Kaalm does not route the probes through the gateway, so the controller is a second credential egress.
+
+Each probe is bounded as follows:
+
+- **`anthropic`, `openai`, and `openai-compatible` ModelProviders, and ToolProviders:** the credential goes to `spec.endpoint` and nowhere else. A ToolProvider with no `credentialsRef` sends no credential.
+- **`google-vertex`:** the probe makes two requests. It sends a JWT assertion, signed with the service-account key's private key, to the key's `token_uri`, and then sends the minted access token to `spec.endpoint`. The private key is never sent. The bound is `spec.endpoint` plus the key's `token_uri`, and the gateway sends this credential nowhere.
+- **Redirects:** a probe never follows one, and a redirect counts as a transient error. A redirecting endpoint cannot move the credential to another host.
+- **Time:** each probe, including the Vertex token request, is bounded by `healthCheck.timeoutSeconds` (default 10s).
+- **TLS trust:** the probes trust the system roots plus the gateway's upstream trust, which is what forwarding trusts, plus anything the deprecated `controller.trustClusterCAForProbes` and `controller.probeCA` values add ([Probe TLS trust](../controller/reconcilers.md#probe-tls-trust)).
+
+The request each probe sends, including the headers that carry the credential, is specified under [Liveness probe](../controller/reconcilers.md#liveness-probe) and [The google-vertex probe](../controller/reconcilers.md#the-google-vertex-probe) for ModelProviders, and under [ToolProviderReconciler](../controller/reconcilers.md#toolproviderreconciler) for ToolProviders.
 
 ## Protecting agent containers from LLM provider access
 

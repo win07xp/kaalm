@@ -8,20 +8,18 @@ controller:
     repository: ghcr.io/win07xp/kaalm-controller
     tag: ""            # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
-  # Selectors for the DNS egress rule on every synthesized per-agent NetworkPolicy.
-  # Trust the cluster CA (kaalm-ca-system, already mounted at
-  # /var/run/kaalm/ca.crt) for provider health probes, in addition to the
-  # public system roots. Enable this so ModelProviders and ToolProviders
-  # whose endpoint is an in-cluster server with a kaalm-ca-issuer certificate
-  # can probe Healthy; it mirrors gateway.trustClusterCAForUpstream, which
-  # governs the same trust for the forwarding path. Off by default; public
-  # providers need only system roots.
+  # Deprecated: set gateway.trustClusterCAForUpstream instead, which also
+  # governs the controller's provider health probe trust. Still honored: when
+  # true, the cluster CA (kaalm-ca-system, already mounted at
+  # /var/run/kaalm/ca.crt) is added to the probe trust pool, once even when
+  # both values are set. NOTES.txt prints a warning while it is set.
   trustClusterCAForProbes: false
-  # An operator-supplied ConfigMap of additional CA certificates to trust for
-  # provider health probes, mirroring gateway.upstreamCA. Set configMap to its
-  # name to have the chart project it into the controller and pass it along;
-  # composes with trustClusterCAForProbes into one additive pool. The
-  # controller re-reads it when it rotates.
+  # Deprecated: set gateway.upstreamCA instead, which the chart also
+  # projects into the controller. Still honored: configMap names an
+  # operator-supplied ConfigMap of CA certificates that the chart projects into
+  # the controller as probe-ca.crt and adds to the probe trust pool, unless it
+  # names the same ConfigMap and key as gateway.upstreamCA, in which case it is
+  # projected once. NOTES.txt prints a warning while configMap is set.
   probeCA:
     configMap: ""
     key: ca.crt
@@ -82,14 +80,18 @@ gateway:
   # /var/run/kaalm/ca.crt) for upstream provider TLS, in addition to the
   # public system roots. Enable this to route to in-cluster or self-hosted
   # providers whose endpoint is served with a cert signed by kaalm-ca-issuer.
-  # Off by default; public providers need only the system roots.
+  # Off by default; public providers need only the system roots. This value
+  # also governs the controller's ModelProvider and ToolProvider health probe
+  # trust, so a provider that is forwarded to is also probed Healthy.
   trustClusterCAForUpstream: false
   # An operator-supplied ConfigMap of additional CA certificates to trust for
   # upstream provider TLS (the kaalm-upstream-ca bundle in the design docs). Set
   # configMap to its name to have the chart mount it and pass it to the gateway;
   # leave empty to trust only the system roots. It composes with
   # trustClusterCAForUpstream: enabling both merges the cluster CA and this
-  # bundle into one trust pool. The gateway re-reads it when it rotates.
+  # bundle into one trust pool. The gateway re-reads it when it rotates. The
+  # chart also projects it into the controller (as upstream-ca.crt), so it
+  # governs the controller's health probe trust too.
   upstreamCA:
     configMap: ""
     key: ca.crt

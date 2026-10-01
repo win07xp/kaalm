@@ -70,13 +70,11 @@ What each block does:
   MCP itself: `server/discover` and a `tools/list` for a server on the
   2026-07-28 revision, or `initialize` then `tools/list` for an older one.
   The revision it negotiated lands in `status.mcpRevision`. The probe trusts
-  system CA roots by default. For a server with a private CA (a
-  cluster-internal certificate, for example), give the controller the same
-  trust you give the gateway: `controller.trustClusterCAForProbes=true`
-  adds the cluster CA, and `controller.probeCA.configMap` names a ConfigMap
-  with any other bundle, the probe-side mirror of
-  `gateway.trustClusterCAForUpstream` and `gateway.upstreamCA`. Enable both
-  sides, so the server is both forwarded to and probed `Healthy`.
+  system CA roots plus the gateway's upstream trust. For a server with a
+  private CA (a cluster-internal certificate, for example), set
+  `gateway.trustClusterCAForUpstream=true` for the cluster CA, or
+  `gateway.upstreamCA.configMap` for any other bundle. One value covers both
+  the broker and the probe ([Trust a private CA](llm-access.md#4-trust-a-private-ca)).
 
 ![Flowchart of every check on POST /v1/mcp/{toolProvider} in the order the broker runs them, as four rows. Route and namespace: ToolProvider exists, else 400 invalid_request; caller namespace in allowedNamespaces, else 403 access_denied. Workload grant, for mTLS callers only: ToolProvider in the workload's spec.tools providerRef, and in the AgentClass allowedToolProviders, else 403 access_denied. Request: token bucket per namespace and ToolProvider, else 429 rate_limited; body within the cap, else 413 request_too_large; one JSON-RPC message, else 400 invalid_request; method on the allowlist, else 403 tool_denied. Tool and session: modern headers match the body, else 400 with JSON-RPC error -32020; tools/call names a tool in the grant and catalog, else 403 tool_denied; a legacy session id is owned by this caller, else 403 access_denied; then inject the credential and forward.](../diagrams/tool-grant-chain.svg)
 

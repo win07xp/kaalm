@@ -56,7 +56,16 @@ The pass requeues at the probe's next delay ([Probe backoff](#probe-backoff)) wh
 
 ### Liveness probe
 
-The probe uses the provider's model-list endpoint, which requires authentication but consumes no tokens: Anthropic, OpenAI, and OpenAI-compatible adapters send `GET /v1/models`. For `google-vertex` the probe mints an OAuth2 access token from the credential and requests the publisher-model list; see [The google-vertex probe](#the-google-vertex-probe). Every provider type is probed.
+The probe uses the provider's model-list endpoint, which requires authentication but consumes no tokens. It sends `GET {spec.endpoint}/v1/models`, with a trailing slash on the endpoint trimmed, and carries the credential in the headers for the provider type:
+
+| `spec.type` | Credential headers |
+|---|---|
+| `anthropic` | `x-api-key: <key>` and `anthropic-version: 2023-06-01` |
+| `openai`, `openai-compatible` | `Authorization: Bearer <key>` |
+
+For `google-vertex` the probe mints an OAuth2 access token from the credential and requests the publisher-model list; see [The google-vertex probe](#the-google-vertex-probe). Every provider type is probed.
+
+The probe never follows a redirect, because Go's cross-host header stripping does not cover `x-api-key` and a redirecting endpoint is not a healthy one. A redirect counts as a transient error, so it takes the last row of the following table. Each probe is bounded by `healthCheck.timeoutSeconds` (default 10s). The probe is a second credential egress, apart from the gateway's data path; [Health probes are a second credential egress](../security/credentials.md#health-probes-are-a-second-credential-egress) states its bound.
 
 | Outcome | Conditions | Requeue |
 |---|---|---|
@@ -76,13 +85,24 @@ The backoff sets only the periodic requeue. A credential Secret change, a spec c
 
 For `spec.type: google-vertex` the credential Secret holds a GCP service-account JSON key: `type: service_account`, with `project_id`, `client_email`, and a PEM RSA `private_key` (PKCS#8 or PKCS#1); an optional `private_key_id`; and an optional `token_uri`, which must be an `https` URL and defaults to `https://oauth2.googleapis.com/token`.
 
-The probe mints an OAuth2 access token (scope `https://www.googleapis.com/auth/cloud-platform`) with a JWT bearer grant signed by the key, then sends `GET {endpoint}/v1/projects/{project}/locations/{location}/publishers/google/models` with the token as a bearer credential. `project` is the key's `project_id`. `location` is the `{location}` of a regional `{location}-aiplatform.googleapis.com` endpoint host, and `global` for any other host, including the global `aiplatform.googleapis.com` endpoint. The token exchange runs over the probe's own HTTP client, so it shares `healthCheck.timeoutSeconds`, the probe's redirect refusal, and the probe trust pool (`controller.trustClusterCAForProbes`, `controller.probeCA`; see [Deployment](../operations/deployment.md)).
+The probe mints an OAuth2 access token (scope `https://www.googleapis.com/auth/cloud-platform`) with a JWT bearer grant signed by the key, then sends `GET {endpoint}/v1/projects/{project}/locations/{location}/publishers/google/models` with the token as a bearer credential. `project` is the key's `project_id`. `location` is the `{location}` of a regional `{location}-aiplatform.googleapis.com` endpoint host, and `global` for any other host, including the global `aiplatform.googleapis.com` endpoint. The token exchange runs over the probe's own HTTP client, so it shares `healthCheck.timeoutSeconds`, the probe's redirect refusal, and the [probe trust pool](#probe-tls-trust). The private key signs the assertion and is never sent. The probe sends the assertion to the key's `token_uri` and the access token to `spec.endpoint`, so those two hosts bound where this credential goes.
 
 A 2xx response from Vertex sets `Healthy=True`. `CredentialsInvalid` covers a 401 or 403 from Vertex, a token endpoint that refuses the key (HTTP 401, 403, or a 400 carrying OAuth2 error `invalid_grant` or `invalid_client`), and a Secret value that is not a usable service-account key; the condition message is `provider rejected the credential: <detail>`. Any other failure (a network error, a 5xx, or another token-endpoint error) sets `ProviderUnhealthy`.
 
 Only the controller's liveness probe mints Vertex tokens. The gateway still does not serve the `google-vertex` type; see [The google-vertex type is reserved](../gateways/llm/request-handling.md#the-google-vertex-type-is-reserved).
 
-Probe TLS trust is the system roots plus whatever the chart configures: `controller.trustClusterCAForProbes` adds the cluster CA and `controller.probeCA` an operator bundle, mirroring the gateway's upstream pair, so an in-cluster endpoint under a private CA can probe `Healthy` instead of failing every handshake ([Deployment](../operations/deployment.md)). The pool follows rotation without a restart. The same pool serves the ToolProvider probe.
+### Probe TLS trust
+
+Probe TLS trust is the system roots plus the gateway's upstream trust, so probes trust what forwarding trusts, plus anything the deprecated values described below add. The chart sets it from the gateway values:
+
+- `gateway.trustClusterCAForUpstream` adds the cluster CA (`kaalm-ca-system`, already mounted in the controller at `/var/run/kaalm/ca.crt`).
+- `gateway.upstreamCA.configMap` and `gateway.upstreamCA.key` are projected into the controller's `kaalm-tls` volume as `upstream-ca.crt` and added.
+
+The pool is additive and follows rotation without a restart. The same pool serves the ModelProvider and ToolProvider probes, including the Vertex token request. An in-cluster endpoint under a private CA can therefore probe `Healthy` instead of failing every handshake.
+
+The chart passes the bundle paths to the controller as `--probe-ca`, a comma-separated list of CA bundle paths added to the system roots. When the flag is empty, probes use the system roots only. The deprecated `controller.trustClusterCAForProbes` and `controller.probeCA` values still feed the same flag; see [Deployment](../operations/deployment.md#configuration-reference).
+
+The probe transport is Go's `http.DefaultTransport`. With `--probe-ca` set, it is a clone with only the trust pool changed. Either way, probes honor `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` from the controller's environment, and they keep HTTP/2, the 30s dial timeout, and the 10s TLS handshake timeout.
 
 ### Budget reconciliation
 
@@ -125,7 +145,7 @@ The check is advisory: it never sets `Ready=False`, because platform teams may h
 Reconciliation is the ModelProviderReconciler's pass without budgets, fallback, and the gateway mirror:
 
 1. **Credentials.** Resolve `spec.credentialsRef` only when set, and only from the operator namespace: a same-named Secret in a tenant namespace never satisfies the ref. A missing Secret or a missing or empty key sets `Ready=False, reason=CredentialsMissing` and ends the pass. A nil ref is valid, since unauthenticated servers exist; the probe then carries no credential, and the Ready message says so.
-2. **Liveness probe**, when `healthCheck.enabled` (a nil block defaults to enabled, as on ModelProvider), bounded by `healthCheck.timeoutSeconds` (default 10s). The probe speaks MCP in whichever revision the server does; the sequence is specified under [Protocol revisions](../gateways/tool-plane.md#protocol-revisions). Success sets `Healthy=True, reason=UpstreamReachable` and records the negotiated revision in `status.mcpRevision`; a failed probe keeps the last recorded revision. A `401` or `403` anywhere in the sequence sets `Healthy=False` and `Ready=False`, both `reason=CredentialsInvalid`, and ends the pass; a `Warning` event with the same reason fires when `Ready` first takes `CredentialsInvalid`, not on every pass while the credential stays rejected, and fires again if a later rejection follows a recovery. Any other failure sets `Healthy=False, reason=ProviderUnhealthy` with a `Warning` event on every failing pass. The probe requeues at `healthCheck.intervalSeconds` (default 60) while healthy, backing off while it fails ([Probe backoff](#probe-backoff)). The probe trust pool is the ModelProvider's.
+2. **Liveness probe**, when `healthCheck.enabled` (a nil block defaults to enabled, as on ModelProvider), bounded by `healthCheck.timeoutSeconds` (default 10s). The probe connects to `spec.endpoint` with the tool credential as `Authorization: Bearer <credential>`, and never follows a redirect. It speaks MCP in whichever revision the server does: it tries `server/discover` and then a `tools/list` for the stateless 2026-07-28 revision, and falls back to `initialize` followed by `tools/list` for a legacy server. The sequence is specified under [Protocol revisions](../gateways/tool-plane.md#protocol-revisions). Success sets `Healthy=True, reason=UpstreamReachable` and records the negotiated revision in `status.mcpRevision`; a failed probe keeps the last recorded revision. A `401` or `403` anywhere in the sequence sets `Healthy=False` and `Ready=False`, both `reason=CredentialsInvalid`, and ends the pass; a `Warning` event with the same reason fires when `Ready` first takes `CredentialsInvalid`, not on every pass while the credential stays rejected, and fires again if a later rejection follows a recovery. Any other failure sets `Healthy=False, reason=ProviderUnhealthy` with a `Warning` event on every failing pass. The probe requeues at `healthCheck.intervalSeconds` (default 60) while healthy, backing off while it fails ([Probe backoff](#probe-backoff)). The probe trust pool is the ModelProvider's ([Probe TLS trust](#probe-tls-trust)).
 3. **Ready.** Set `Ready=True, reason=CredentialsValid`.
 
 On delete, the reconciler holds the ToolProvider while any Agent, AgentTask, or AgentClass references it ([Cluster-scoped resources](finalizers.md#cluster-scoped-resources)). The grant checks of rules 35 to 38 run on the workload reconcilers, not here, exactly as the provider checks of rules 3 to 5 do. The broker on the gateway enforces the grants at call time; see [The broker](../gateways/tool-plane.md#the-broker).
