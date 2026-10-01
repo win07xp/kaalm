@@ -113,6 +113,19 @@ func TestValidFixturesApply(t *testing.T) {
 	}
 }
 
+// TestSandboxedSampleApplies asserts the sandboxed AgentClass sample passes
+// the CRD schema and CEL rules. It is not in the samples kustomization, so
+// no other check applies it.
+func TestSandboxedSampleApplies(t *testing.T) {
+	c := newClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	u := decode(t, "../../config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml")
+	if err := c.Create(ctx, u, client.DryRunAll); err != nil {
+		t.Fatalf("expected accept, got: %v", err)
+	}
+}
+
 // TestInvalidFixturesRejected asserts every invalid fixture is rejected. Each
 // fixture is crafted to trip exactly one apply-time rule (see its header comment).
 func TestInvalidFixturesRejected(t *testing.T) {

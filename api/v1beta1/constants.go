@@ -77,6 +77,7 @@ const (
 	ConditionPlatformConnected   = "PlatformConnected"   // AgentChannel, tri-state
 	ConditionPodUpToDate         = "PodUpToDate"         // Agent: spec-drift replacement progress
 	ConditionIdleDetection       = "IdleDetection"       // Agent: False (Disabled) when no idle timeout applies; absent otherwise
+	ConditionDeprecatedFields    = "DeprecatedFields"    // AgentClass: advisory, True while the class sets a deprecated field
 )
 
 // AgentChannel platform types (spec.type). discord and whatsapp name the
@@ -133,6 +134,8 @@ const (
 	ReasonInvalidReference           = "InvalidReference"
 	ReasonRestrictedBaseline         = "RestrictedBaseline"
 	ReasonBelowRestrictedBaseline    = "BelowRestrictedBaseline"
+	ReasonDeprecatedFieldSet         = "DeprecatedFieldSet"
+	ReasonNoDeprecatedFields         = "NoDeprecatedFields"
 	ReasonOwnerRefEnabled            = "OwnerRefEnabled"
 	ReasonOwnerRefDisabled           = "OwnerRefDisabled"
 	ReasonControllerSecretNotFound   = "ControllerSecretNotFound"

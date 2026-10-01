@@ -217,8 +217,11 @@ spec:
                   per workload.
                 properties:
                   allowHostNetwork:
-                    description: AllowHostNetwork permits workload Pods to use host
-                      networking.
+                    description: |-
+                      AllowHostNetwork is deprecated and has no effect: no Pod Kaalm creates
+                      uses host networking, whatever its value. A class that sets it true
+                      reports the DeprecatedFields condition and a Warning event. The field
+                      stays in the schema for compatibility.
                     type: boolean
                   allowSameNamespaceIngress:
                     description: |-
@@ -1113,8 +1116,11 @@ spec:
                   per workload.
                 properties:
                   allowHostNetwork:
-                    description: AllowHostNetwork permits workload Pods to use host
-                      networking.
+                    description: |-
+                      AllowHostNetwork is deprecated and has no effect: no Pod Kaalm creates
+                      uses host networking, whatever its value. A class that sets it true
+                      reports the DeprecatedFields condition and a Warning event. The field
+                      stays in the schema for compatibility.
                     type: boolean
                   allowSameNamespaceIngress:
                     description: |-

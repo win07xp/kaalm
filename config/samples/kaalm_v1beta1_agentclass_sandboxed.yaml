@@ -1,0 +1,52 @@
+# A sandboxed AgentClass for agents that execute untrusted code (scenario S2
+# in the design book). Its Pods run under the RuntimeClass named gvisor
+# (handler runsc). The cluster must provide that RuntimeClass before any
+# Agent or AgentTask selects this class, because the apiserver rejects a Pod
+# that names a RuntimeClass that does not exist. Check with:
+#
+#   kubectl get runtimeclass gvisor
+#
+# This file is not in kustomization.yaml. Apply it on its own:
+#
+#   kubectl apply -f config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: sandboxed
+spec:
+  runtime:
+    backend: pod
+    runtimeClassName: gvisor
+  image:
+    # One reviewed repository, tighter than the standard class. Replace it
+    # with yours.
+    allowedImages: ["registry.internal.corp/agents/sandboxed/*"]
+    pullPolicy: IfNotPresent
+    # allowHandlerMounts stays at its default, false.
+  resources:
+    defaults:
+      requests: { cpu: "250m", memory: "512Mi" }
+      limits: { cpu: "1", memory: "1Gi" }
+    maxLimits: { cpu: "2", memory: "2Gi" }
+  # Workloads opt in to a volume, capped at 10Gi.
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+    maxSizeGi: 10
+    pvcRetention: Delete
+  allowedProviders:
+    - name: anthropic-shared
+  # No network block: egress is the gateway and cluster DNS only.
+  # The restricted Pod Security Standard, written out although it is also
+  # the controller's default, so the object shows what runs.
+  security:
+    podSecurityContext:
+      runAsNonRoot: true
+      seccompProfile: { type: RuntimeDefault }
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: ["ALL"] }
+  lifecycle:
+    defaultTaskTimeout: 1h
+    maxTaskTimeout: 6h

@@ -427,6 +427,28 @@ func TestDesiredPods_NoServiceAccountToken(t *testing.T) {
 	}
 }
 
+// The class field allowHostNetwork is deprecated and has no effect: no Agent
+// or AgentTask Pod uses host networking, whatever the class says.
+func TestDesiredPods_ClassAllowHostNetworkHasNoEffect(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"},
+		Spec: kaalmv1beta1.AgentSpec{Image: "img:v1"}}
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"},
+		Spec: kaalmv1beta1.AgentTaskSpec{Image: "img:v1"}}
+	for _, allow := range []bool{false, true} {
+		class := &kaalmv1beta1.AgentClass{}
+		class.Spec.Network.AllowHostNetwork = allow
+		pods := map[string]*corev1.Pod{
+			"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops"),
+			"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops"),
+		}
+		for kind, pod := range pods {
+			if pod.Spec.HostNetwork {
+				t.Errorf("class allowHostNetwork %v: %s pod uses host networking", allow, kind)
+			}
+		}
+	}
+}
+
 // A zero CertLifetime takes the defaults; set fields pass through.
 func TestCertLifetime_Resolve(t *testing.T) {
 	d, rb := CertLifetime{}.resolve()

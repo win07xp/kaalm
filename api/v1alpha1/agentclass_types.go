@@ -135,7 +135,10 @@ type AgentClassNetwork struct {
 	// Egress lists permitted external destinations beyond the gateway.
 	// +optional
 	Egress AgentClassEgress `json:"egress,omitempty"`
-	// AllowHostNetwork permits workload Pods to use host networking.
+	// AllowHostNetwork is deprecated and has no effect: no Pod Kaalm creates
+	// uses host networking, whatever its value. A class that sets it true
+	// reports the DeprecatedFields condition and a Warning event. The field
+	// stays in the schema for compatibility.
 	// +optional
 	AllowHostNetwork bool `json:"allowHostNetwork,omitempty"`
 	// AllowSameNamespaceIngress permits ingress from the namespace's other agent
