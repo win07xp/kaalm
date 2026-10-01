@@ -84,9 +84,10 @@ func desiredFQDNPolicy(
 // hosts it creates or updates the policy; with support and no hosts it deletes
 // any policy left from an earlier spec. A policy of that name the owner does
 // not control is a ChildConflictError, never updated or deleted. Without support it does nothing: the
-// kind may not exist, so even a read would fail. A cluster whose FQDN-capable
-// CNI is not Cilium has no CiliumNetworkPolicy kind either, so a no-match
-// error is also nothing to do.
+// kind may not exist, so even a read would fail. The probe result is cached
+// for the process lifetime, so the kind can still be missing with support
+// reported, for example after Cilium is uninstalled and before the controller
+// restarts and probes again; a no-match error is then also nothing to do.
 func ensureFQDNPolicy(
 	ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	owner client.Object, podLabels map[string]string, hosts []string, dns DNSSelector, supported bool,

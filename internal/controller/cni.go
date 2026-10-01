@@ -23,36 +23,34 @@ import (
 	"k8s.io/client-go/discovery"
 )
 
-// fqdnCapableGroups are the API groups whose presence signals a CNI that can
-// enforce FQDN egress policies (AgentClass.spec.network.egress.allowedHosts).
-// Only Cilium is supported: the controller writes a CiliumNetworkPolicy with
-// toFQDNs. Calico is not listed because crd.projectcalico.org exists on
-// open-source Calico too, which has no domain-based egress, and the controller
-// writes no Calico policy. Standard Kubernetes NetworkPolicy cannot express
-// FQDN rules (docs/src/resources/agentclass.md, rule 20).
-var fqdnCapableGroups = []string{
-	"cilium.io",
-}
+// ciliumPolicyResource is the resource the probe looks for in
+// ciliumPolicyGVK's group version. Only Cilium is supported: the controller
+// writes a CiliumNetworkPolicy with toFQDNs. The cilium.io group alone is not
+// enough, because Tetragon installs CRDs in cilium.io (TracingPolicy, in
+// cilium.io/v1alpha1) on any CNI. Calico is not supported because
+// crd.projectcalico.org exists on open-source Calico too, which has no
+// domain-based egress, and the controller writes no Calico policy. Standard
+// Kubernetes NetworkPolicy cannot express FQDN rules
+// (docs/src/resources/agentclass.md, rule 20).
+const ciliumPolicyResource = "ciliumnetworkpolicies"
 
 // ProbeFQDNPolicySupport reports whether the cluster's CNI can enforce FQDN
-// egress policies. It is a one-time discovery check; FQDNProbe caches the
-// result for the process lifetime (docs/src/controller/reconcilers.md,
+// egress policies: the cluster serves the ciliumnetworkpolicies resource in
+// cilium.io/v2. It is a one-time discovery check; FQDNProbe caches the result
+// for the process lifetime (docs/src/controller/reconcilers.md,
 // AgentClassReconciler).
 func ProbeFQDNPolicySupport(dc discovery.DiscoveryInterface) (bool, error) {
-	groups, err := dc.ServerGroups()
+	list, err := dc.ServerResourcesForGroupVersion(ciliumPolicyGVK.GroupVersion().String())
 	if err != nil {
-		// A partial discovery error still yields the group list; only a hard
-		// failure is fatal.
-		if groups == nil || errors.IsServiceUnavailable(err) {
-			return false, err
+		// The API server answers NotFound for a group version it does not
+		// serve; any other failure is no answer at all.
+		if errors.IsNotFound(err) {
+			return false, nil
 		}
+		return false, err
 	}
-	present := map[string]bool{}
-	for _, g := range groups.Groups {
-		present[g.Name] = true
-	}
-	for _, g := range fqdnCapableGroups {
-		if present[g] {
+	for _, r := range list.APIResources {
+		if r.Name == ciliumPolicyResource {
 			return true, nil
 		}
 	}

@@ -28,9 +28,11 @@ import (
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
@@ -208,6 +210,16 @@ func (w withoutGroup) ServerGroups() (*metav1.APIGroupList, error) {
 		}
 	}
 	return out, err
+}
+
+// ServerResourcesForGroupVersion answers NotFound for a version of the hidden
+// group, as the API server does for a group version it does not serve.
+func (w withoutGroup) ServerResourcesForGroupVersion(gv string) (*metav1.APIResourceList, error) {
+	parsed, err := schema.ParseGroupVersion(gv)
+	if err == nil && parsed.Group == w.group {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Group: w.group}, "")
+	}
+	return w.DiscoveryInterface.ServerResourcesForGroupVersion(gv)
 }
 
 func TestMain(m *testing.M) {
