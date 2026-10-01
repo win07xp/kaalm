@@ -32,6 +32,8 @@ NOT_AGENT_REPORTED = GatewayReply(403, {"error": {
     "type": "access_denied", "retryable": False,
     "message": "TaskNotAgentReported: this task completes via container exit"}})
 UNAVAILABLE = GatewayReply(503, {"error": {"type": "internal_unavailable", "retryable": True}})
+UNKNOWN_SOURCE = GatewayReply(401, {"error": {
+    "type": "unauthenticated", "message": "source address is not a known Pod"}})
 BAD_REQUEST = GatewayReply(400, {"error": {
     "type": "bad_request", "message": "missing declared artifact: report"}})
 
@@ -179,6 +181,33 @@ async def test_runtime_completion_stops_on_a_4xx(caplog):
     rejected = [r for r in caplog.records if "missing declared artifact" in r.getMessage()]
     assert len(rejected) == 1
     assert rejected[0].levelno == logging.ERROR
+
+
+async def test_runtime_completion_retries_a_401_from_the_source_ip_check():
+    """A Pod that has just started can answer the gateway's source-IP check
+    with 401 until the kubelet posts its IP; the runtime's own report retries
+    it, as agentruntime's hook does."""
+    async def run_task():
+        return None
+
+    gw = RecordingGateway(UNKNOWN_SOURCE, UNKNOWN_SOURCE)
+    agent = mk_task_agent(gw, run_task)
+    await agent.run_task_and_complete()
+    assert [b["status"] for b in gw.bodies] == ["success"] * 3
+    assert agent.task_reported
+
+
+async def test_report_after_exit_code_is_known_sends_nothing():
+    """Once the task is known to be exitCode, a report waiting on the lock
+    sends nothing (the hook and run_task can both be in flight)."""
+    gw = RecordingGateway(NOT_AGENT_REPORTED)
+    agent = mk_task_agent(gw)
+    with pytest.raises(runtime.CompletionRejected):
+        await agent.complete_task("success")
+    with pytest.raises(runtime.CompletionRejected) as second:
+        await agent.complete_task("failure")
+    assert second.value.not_agent_reported
+    assert len(gw.bodies) == 1
 
 
 async def test_failure_message_is_cut_to_4_kib():

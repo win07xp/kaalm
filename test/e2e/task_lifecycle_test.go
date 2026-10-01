@@ -23,16 +23,6 @@ var _ = Describe("Task lifecycle", Ordered, func() {
 		}, "180s", "5s").Should(Equal("Succeeded"))
 	})
 
-	It("runs an agentReported AgentTask on the Python base image to Succeeded", func() {
-		// The Python image's KAALM_TASK_AUTOCOMPLETE hook reports through
-		// the same /v1/task/complete path as the Go starter above.
-		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/agenttask-python.yaml")
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(func() (string, error) {
-			return utils.ResourceField("agenttask", "e2e", "e2e-task-python", "{.status.phase}")
-		}, "180s", "5s").Should(Equal("Succeeded"))
-	})
-
 	It("created the per-task completion mailbox ConfigMap and Role", func() {
 		// agentReported tasks get a completion mailbox ConfigMap
 		// (<task>-completion) and a per-task Role
@@ -47,7 +37,7 @@ var _ = Describe("Task lifecycle", Ordered, func() {
 		}, "30s", "3s").Should(Succeed())
 		out, err := utils.Kubectl("get", "role", "-n", "e2e", "-o", "name")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("e2e-task"))
+		Expect(out).To(ContainSubstring("role.rbac.authorization.k8s.io/kaalm-task-e2e-task-completion"))
 	})
 
 	It("garbage-collects the task Pod after ttlSecondsAfterFinished", func() {
@@ -58,5 +48,16 @@ var _ = Describe("Task lifecycle", Ordered, func() {
 			ContainSubstring("No resources found"),
 			BeEmpty(),
 		))
+	})
+
+	It("runs an agentReported AgentTask on the Python base image to Succeeded", func() {
+		// The Python image's KAALM_TASK_AUTOCOMPLETE hook reports through
+		// the same /v1/task/complete path as the Go starter above. It runs
+		// last so the Go task's mailbox checks run before its TTL expires.
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/agenttask-python.yaml")
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() (string, error) {
+			return utils.ResourceField("agenttask", "e2e", "e2e-task-python", "{.status.phase}")
+		}, "180s", "5s").Should(Equal("Succeeded"))
 	})
 })

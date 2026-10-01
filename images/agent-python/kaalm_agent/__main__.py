@@ -52,10 +52,10 @@ TRANSPORT_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, OSError)
 
 # The runtime's own completion reports (the KAALM_TASK_AUTOCOMPLETE hook and
 # the report after run_task) retry like agentruntime/agent.go autocomplete: a
-# report made as the Pod starts can race the gateway's source-IP check, whose
-# Pod informer may not have indexed this Pod's IP yet. Only answers that a
-# later attempt may change are retried: transport errors, a 5xx, and a 409
-# stale_pod that outlasts complete_task's own schedule.
+# report made as the Pod starts can race the gateway's source-IP check, which
+# answers 401 until the kubelet posts this Pod's IP. Only answers that a later
+# attempt may change are retried: transport errors, a 5xx, that 401, and a
+# 409 stale_pod that outlasts complete_task's own schedule.
 AUTOCOMPLETE_ATTEMPTS = 6
 AUTOCOMPLETE_RETRY_DELAY = 5.0  # seconds
 
@@ -184,6 +184,10 @@ class Agent:
         async with self._report_lock:
             if self.task_reported:
                 raise kaalm.TaskAlreadyCompleted("this task already reported its completion")
+            if self.not_agent_reported:
+                # An exitCode task: the gateway gives every report the same
+                # 403, so a report that waited on the lock sends nothing.
+                raise CompletionRejected(403, "TaskNotAgentReported: this task completes via container exit")
             body = {"status": status, "message": message, "artifacts": artifacts or {}}
             last: Exception | None = None
             for delay in COMPLETE_RETRY_SCHEDULE:
@@ -216,8 +220,9 @@ class Agent:
 
         Nothing is sent once any report was accepted or the task is known to
         be exitCode. An already-terminal task, an exitCode task, and any
-        other 4xx (a 409 stale_pod aside, which complete_task retries) end
-        the attempts at once, since a retry gets the same answer."""
+        other 4xx (a 409 stale_pod aside, which complete_task retries, and a
+        401 from the source-IP check at Pod start) end the attempts at once,
+        since a retry gets the same answer."""
         if self.task_reported or self.not_agent_reported:
             log.info("task completion %r not sent: the task already has its outcome", status)
             return
@@ -233,7 +238,7 @@ class Agent:
                 if exc.not_agent_reported:
                     log.info("task completes via container exit (exitCode); completion %r not reported", status)
                     return
-                if 400 <= exc.status < 500:
+                if 400 <= exc.status < 500 and exc.status != 401:
                     log.error("task completion %r rejected, not retrying: %s", status, exc)
                     return
                 log.warning("task completion attempt %d failed: %s", attempt, exc)
