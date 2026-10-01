@@ -36,7 +36,7 @@ His concerns:
 - He wants to use the LLM providers his platform team has approved without managing API keys himself.
 - For some use cases, he needs a one-shot agent that does a task and reports its result.
 
-Dev's half of the two-tier model is the namespaced resources: [Agent](../resources/agent.md) for the long-lived assistant, [AgentTask](../resources/agenttask.md) for the one-shot job, and [AgentChannel](../resources/agentchannel.md) for reaching it from outside. What Priya set (isolation, budgets, credentials) is out of his reach by resource scope: credentials stay in `kaalm-system`, and the class and provider objects are cluster-scoped. Whether he can edit them is a question of the RBAC the platform team writes, which the chart does not ship ([Roles for people](../security/rbac.md#roles-for-people)). He names a class, names a provider, and ships.
+Dev's half of the two-tier model is the namespaced resources: [Agent](../resources/agent.md) for the long-lived assistant, [AgentTask](../resources/agenttask.md) for the one-shot job, and [AgentChannel](../resources/agentchannel.md) for reaching it from outside. What Priya set (isolation, budgets, credentials) is out of his reach by resource scope: credentials stay in `kaalm-system`, and the class and provider objects are cluster-scoped. Whether he can edit them is a question of RBAC: the chart's opt-in persona roles give Dev read-only access to the catalog and full access to the agents in his namespace ([Roles for people](../security/rbac.md#roles-for-people)). He names a class, names a provider, and ships.
 
 ## Why this scenario drives the design
 

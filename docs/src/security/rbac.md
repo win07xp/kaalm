@@ -88,26 +88,63 @@ The gateway's standing Secret read is `kaalm-system`. In user namespaces it read
 
 ## Roles for people
 
-The chart ships RBAC for its own components only: the controller, the gateway, and the console when it is enabled. The two roles that follow are the recommended starting points for a platform team's own RBAC; [Managing team access](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/managing-access.md) in the user guide covers the day-to-day grants.
+The chart ships RBAC for its own components: the controller, the gateway, and the console when it is enabled. It can also install four ClusterRoles for the people who run Kaalm. They are off by default (`rbac.personas.enabled: false`), and off renders nothing. [Managing team access](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/managing-access.md) in the user guide covers the day-to-day grants, and the [Configuration reference](../operations/deployment.md#configuration-reference) lists the values.
 
-### Platform engineer role
+### Persona roles
 
-A ClusterRole (`kaalm-platform-admin`, say), bound with a ClusterRoleBinding to the people who manage platform configuration:
+With `rbac.personas.enabled`, the chart installs these four ClusterRoles:
 
-- full access to `AgentClass`, `ModelProvider`, and `ToolProvider`;
-- `get, list, watch` on `Agent`, `AgentTask`, and `AgentChannel` cluster-wide, for observability.
+| ClusterRole | Grants | For |
+|---|---|---|
+| `kaalm-platform-admin` | `*` on `agentclasses`, `modelproviders`, and `toolproviders`; `get, list, watch` on `agents`, `agenttasks`, and `agentchannels` | People who manage platform configuration; the second rule is cluster-wide observability |
+| `kaalm-catalog-reader` | `get, list, watch` on `agentclasses`, `modelproviders`, and `toolproviders`, and nothing else | Developers, so they can read the classes and providers they reference by name |
+| `kaalm-developer` | `*` on `agents`, `agenttasks`, and `agentchannels`; `get, list, watch` on core `pods`, `persistentvolumeclaims`, `services`, `configmaps`, and `events`; `get` on `pods/log` | A team working in its own namespace |
+| `kaalm-secrets-admin` | `get, list, watch, create, update, patch, delete` on core `secrets` | The people who manage LLM, tool, and channel credentials |
 
-Secret management stays out of this ClusterRole, because a ClusterRoleBinding would hand it out in every namespace. A companion Role (`kaalm-secrets-admin`, say, with `create, get, update, delete` on Secrets) is bound in `kaalm-system` for LLM and tool credentials and in each agent namespace that holds channel credentials.
+The grants on the Kaalm kinds are in the `kaalm.io` API group. Four properties hold across the set:
 
-### Agent developer role
+- No persona role grants a `/status` subresource.
+- Only `kaalm-secrets-admin` grants Secrets. Developers get no Secret access, and `kaalm-platform-admin` has none because a ClusterRoleBinding would hand it out in every namespace.
+- `kaalm-developer` grants no catalog kind, so developers cannot write the catalog.
+- None of the four carries an `aggregate-to` label. [Aggregation into the built-in roles](#aggregation-into-the-built-in-roles) is a separate switch.
 
-A Role (`kaalm-developer`, say) in the team's namespace:
+`kaalm-secrets-admin` lists `patch` because `kubectl apply` on an existing Secret needs it, and `list` because `kubectl get secrets` without a name needs it. `get` already exposes every Secret by name, so `list` widens nothing in the namespace where the role is bound.
 
-- full access to `Agent`, `AgentTask`, and `AgentChannel`;
-- `get, list, watch` on Pods, PersistentVolumeClaims, Services, ConfigMaps, and Events, and `get` on `pods/log`;
-- `create` on `pods/exec` for debugging, if the platform team allows it.
+`rbac.personas.developerExec` (default `false`) adds `pods/exec` with `get` and `create` to `kaalm-developer` only, for debugging inside an agent container. Both verbs are needed: `kubectl exec` over WebSockets is authorized as `get`, and over SPDY (or with the `AuthorizePodWebsocketUpgradeCreatePermission` feature gate) as `create`. The value has no effect while `rbac.personas.enabled` is `false`.
 
-A Role cannot grant access to cluster-scoped resources, so catalog visibility is a separate ClusterRole (`kaalm-catalog-reader`, say: `get, list, watch` on `AgentClass`, `ModelProvider`, and `ToolProvider`) bound to developer groups. Developers get no Secret access, no write access to the catalog kinds, and no access to other namespaces.
+### Bindings come from values
+
+Each binding comes from a value, and an empty or missing list renders no binding:
+
+| Value | Renders |
+|---|---|
+| `rbac.personas.platformAdmins` | ClusterRoleBinding `kaalm-platform-admin` |
+| `rbac.personas.catalogReaders` | ClusterRoleBinding `kaalm-catalog-reader` |
+| `rbac.personas.secretsAdmins` | RoleBinding `kaalm-secrets-admin` in the release namespace |
+| `rbac.personas.developers` | A map of namespace to subject list. Each namespace whose list is not empty gets a RoleBinding `kaalm-developer` in that namespace |
+
+Subjects are `rbac.authorization.k8s.io/v1` Subject objects, rendered verbatim. Subject values set while `rbac.personas.enabled` is `false` are ignored.
+
+The chart never binds `kaalm-developer` or `kaalm-secrets-admin` with a ClusterRoleBinding. A ClusterRole bound by a RoleBinding grants only in that namespace, so a developer has no access to other namespaces, and credential management is limited to the namespaces you choose. `kaalm-platform-admin` and `kaalm-catalog-reader` are the roles bound with ClusterRoleBindings, because the catalog kinds are cluster-scoped and a RoleBinding cannot grant them. `kaalm-platform-admin` also reads Agent, AgentTask, and AgentChannel in every namespace.
+
+The `kaalm-secrets-admin` binding covers the release namespace, which holds the LLM and tool credentials. Channel credential Secrets live in the channel's namespace. To manage them, bind `kaalm-secrets-admin` by hand with a RoleBinding in that namespace.
+
+Three lifecycle rules follow from rendering the bindings:
+
+- Each namespace in `rbac.personas.developers` must already exist, or `helm install` and `helm upgrade` fail with `namespace not found`. For a namespace created later, add an entry and upgrade, or write a RoleBinding to ClusterRole `kaalm-developer` yourself.
+- Removing an entry on upgrade deletes that RoleBinding, which revokes the access.
+- Turning `rbac.personas.enabled` off deletes the four ClusterRoles. A hand-written binding that references them dangles and grants nothing.
+
+### Aggregation into the built-in roles
+
+`rbac.aggregateToDefaultRoles` (default `false`) adds the namespaced Kaalm kinds to the Kubernetes built-in `view`, `edit`, and `admin` roles. It works without `rbac.personas.enabled`. It renders two ClusterRoles on the `agents`, `agenttasks`, and `agentchannels` resources:
+
+| ClusterRole | Labels | Verbs |
+|---|---|---|
+| `kaalm-aggregate-to-view` | `rbac.authorization.k8s.io/aggregate-to-view: "true"` | `get, list, watch` |
+| `kaalm-aggregate-to-edit` | `rbac.authorization.k8s.io/aggregate-to-edit: "true"` and `rbac.authorization.k8s.io/aggregate-to-admin: "true"` | `get, list, watch, create, update, patch, delete, deletecollection` |
+
+The catalog kinds (`AgentClass`, `ModelProvider`, `ToolProvider`) and Secrets are never aggregated. `edit` and `admin` are often bound to tenants per namespace, and a catalog write is cluster-wide policy.
 
 ## Agent Pod ServiceAccount
 

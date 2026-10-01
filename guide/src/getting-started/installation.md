@@ -40,7 +40,7 @@ Releases are listed on the
 controller and gateway images it pulls all share that version, so the install
 is fully pinned.
 
-![What the Helm chart installs, by where each object lands: the three prerequisites it does not install; the six CRDs, two ClusterIssuers, two ClusterRoles with bindings, and the standard AgentClass at cluster scope; the two Deployments with PodDisruptionBudgets, two Services, ServiceAccounts, Roles, leaf Certificates, and the session-key Secret in kaalm-system; the console objects when enabled; and the CA Certificate and Bundle in the cluster resource namespace.](../diagrams/helm-install-inventory.svg)
+![What the Helm chart installs, by where each object lands: the three prerequisites it does not install; the six CRDs, two ClusterIssuers, two ClusterRoles with bindings, and the standard AgentClass at cluster scope; the two Deployments with PodDisruptionBudgets, two Services, ServiceAccounts, Roles, leaf Certificates, and the session-key Secret in kaalm-system; the console objects when enabled; the four persona ClusterRoles and the bindings from values when rbac.personas.enabled is set; and the CA Certificate and Bundle in the cluster resource namespace.](../diagrams/helm-install-inventory.svg)
 
 `certManager.clusterResourceNamespace` must match your cert-manager install's
 cluster resource namespace (a default cert-manager install uses
