@@ -98,8 +98,8 @@ func workloadKey(c *caller) string {
 
 // handleLLMProxy is the LLM proxy happy path: parse, authorize, inject the
 // credential under the forwarded-header contract, relay (buffered or SSE),
-// and account for usage. Budget checks, rate limits, and the fallback chain
-// land in later phases.
+// and account for usage. Before forwarding it admits the call against the
+// primary provider's budget and rate limits, then walks the fallback chain.
 func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	c := callerFrom(r.Context())
 	adapter, ok := adapterForPath(r.URL.Path)

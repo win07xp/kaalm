@@ -28,7 +28,8 @@ import (
 // Each configured limit is a cluster-wide ceiling; each replica divides it by
 // the live replica count so the effective limit is replica-independent.
 // Approximate by design: bursts may exceed the ceiling by up to one replica's
-// share. The token ceiling is enforced after the fact: a request is admitted
+// share, and a request ceiling below the replica count still admits one
+// request at a time on each replica. The token ceiling is enforced after the fact: a request is admitted
 // while the token bucket is above zero, and its settled usage is debited when
 // the call ends (DebitTokens), so a large call blocks the next request rather
 // than itself. See docs/src/gateways/llm/budgets-and-rate-limits.md.
@@ -62,23 +63,32 @@ func NewRateLimiter(replicas func() int) *RateLimiter {
 // Retry-After in seconds. It checks the token bucket first (tokensPerMinute:
 // admitted while above zero, nothing consumed), then consumes one request
 // token (requestsPerMinute), so a request the token bucket refuses keeps its
-// request token. An unset limit always allows.
+// request token. An unset limit always allows. The request bucket holds at
+// least one request, so a ceiling below the replica count still admits one
+// request per refill on each replica.
 func (r *RateLimiter) Allow(provider *kaalmv1beta1.ModelProvider, namespace, model string) (bool, int) {
 	limits := provider.Spec.RateLimits
+	if limits.TokensPerMinute <= 0 && limits.RequestsPerMinute <= 0 {
+		return true, 0
+	}
+	// Read the replica count before taking the lock: Replicas lists Pods from
+	// the cache and can block, and must not stall every other limiter call.
+	replicas := r.replicas()
+	tokenShare := perReplica(limits.TokensPerMinute, replicas)
+	requestShare := perReplica(limits.RequestsPerMinute, replicas)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if limits.TokensPerMinute > 0 {
-		perReplica := r.perReplica(limits.TokensPerMinute)
-		b := r.refilled(tokenKey(namespace, model), perReplica, perReplica)
+		b := r.refilled(tokenKey(namespace, model), tokenShare, tokenShare)
 		if b.tokens <= 0 {
-			return false, retryAfterSeconds(-b.tokens, perReplica)
+			return false, retryAfterSeconds(-b.tokens, tokenShare)
 		}
 	}
 	if limits.RequestsPerMinute > 0 {
-		perReplica := r.perReplica(limits.RequestsPerMinute)
-		b := r.refilled(namespace+"/"+model, perReplica, perReplica)
+		b := r.refilled(namespace+"/"+model, requestShare, math.Max(requestShare, 1))
 		if b.tokens < 1 {
-			return false, retryAfterSeconds(1-b.tokens, perReplica)
+			return false, retryAfterSeconds(1-b.tokens, requestShare)
 		}
 		b.tokens--
 	}
@@ -95,13 +105,13 @@ func (r *RateLimiter) DebitTokens(provider *kaalmv1beta1.ModelProvider, namespac
 	if limit <= 0 || tokens <= 0 {
 		return
 	}
+	share := perReplica(limit, r.replicas()) // outside the lock, as in Allow
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	perReplica := r.perReplica(limit)
-	b := r.refilled(tokenKey(namespace, model), perReplica, perReplica)
+	b := r.refilled(tokenKey(namespace, model), share, share)
 	b.tokens -= float64(tokens)
-	if b.tokens < -perReplica {
-		b.tokens = -perReplica
+	if b.tokens < -share {
+		b.tokens = -share
 	}
 }
 
@@ -147,16 +157,21 @@ func (r *RateLimiter) allow(limit int32, key string) bool {
 	if limit <= 0 {
 		return true
 	}
-	perReplica := r.perReplica(limit)
-	return r.take(key, perReplica, perReplica)
+	share := perReplica(limit, r.replicas())
+	return r.take(key, share, share)
 }
 
-// perReplica divides a cluster-wide ceiling by the live replica count.
-func (r *RateLimiter) perReplica(limit int32) float64 {
-	replicas := r.Replicas()
-	if replicas < 1 {
-		replicas = 1
+// replicas is the live replica count, at least 1. It calls Replicas, which
+// can block, so callers invoke it before taking r.mu.
+func (r *RateLimiter) replicas() int {
+	if n := r.Replicas(); n > 1 {
+		return n
 	}
+	return 1
+}
+
+// perReplica divides a cluster-wide ceiling by the replica count.
+func perReplica(limit int32, replicas int) float64 {
 	return float64(limit) / float64(replicas)
 }
 
