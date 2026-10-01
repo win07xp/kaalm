@@ -88,3 +88,69 @@ func TestProbeClient_TrustsConfiguredCAAndFollowsRotation(t *testing.T) {
 		t.Fatal("the rotated-out CA is still trusted")
 	}
 }
+
+// #217: the CA-trusting probe transport keeps what http.DefaultTransport
+// gives the nil-client path and the gateway's forwarding transport: proxy
+// from the environment, HTTP/2, and dial and TLS-handshake bounds. Only the
+// trust pool differs. A rebuild after CA rotation keeps them too.
+func TestProbeClient_InnerTransportKeepsDefaultTransportSettings(t *testing.T) {
+	pki := newActivatorPKI(t)
+	srv := tlsServer(t, pki)
+
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caFile, caPEM(pki), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := NewProbeClient([]string{caFile})
+	rt, ok := client.Transport.(*caReloadingTransport)
+	if !ok {
+		t.Fatalf("probe client transport is %T, want *caReloadingTransport", client.Transport)
+	}
+
+	check := func(stage string) {
+		t.Helper()
+		resp, err := client.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("%s: probe failed: %v", stage, err)
+		}
+		_ = resp.Body.Close()
+
+		rt.mu.Lock()
+		inner, pool := rt.inner, rt.pool
+		rt.mu.Unlock()
+		if inner.Proxy == nil {
+			t.Errorf("%s: inner transport has no Proxy; HTTPS_PROXY/NO_PROXY are ignored", stage)
+		}
+		if !inner.ForceAttemptHTTP2 {
+			t.Errorf("%s: inner transport does not attempt HTTP/2", stage)
+		}
+		if inner.TLSHandshakeTimeout <= 0 {
+			t.Errorf("%s: inner transport has no TLS handshake timeout", stage)
+		}
+		if inner.DialContext == nil {
+			t.Errorf("%s: inner transport has no bounded dialer", stage)
+		}
+		if inner.IdleConnTimeout <= 0 {
+			t.Errorf("%s: inner transport has no idle connection timeout", stage)
+		}
+		if inner.TLSClientConfig == nil || inner.TLSClientConfig.RootCAs != pool {
+			t.Errorf("%s: inner transport does not use the loaded trust pool", stage)
+		}
+		if inner.TLSClientConfig != nil && inner.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+			t.Errorf("%s: inner transport MinVersion = %x, want TLS 1.2", stage, inner.TLSClientConfig.MinVersion)
+		}
+	}
+	check("first build")
+
+	// Rotate to a fresh CA and point the check at a server under it.
+	pki2 := newActivatorPKI(t)
+	srv = tlsServer(t, pki2)
+	if err := os.WriteFile(caFile, caPEM(pki2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(caFile, time.Now(), time.Now().Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	check("rebuild after rotation")
+}

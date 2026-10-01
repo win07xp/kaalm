@@ -71,10 +71,21 @@ func (t *caReloadingTransport) RoundTrip(req *http.Request) (*http.Response, err
 		if t.inner != nil {
 			t.inner.CloseIdleConnections()
 		}
-		t.inner = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+		t.inner = newProbeTransport(pool)
 		t.pool = pool
 	}
 	inner := t.inner
 	t.mu.Unlock()
 	return inner.RoundTrip(req)
+}
+
+// newProbeTransport clones http.DefaultTransport, the transport the
+// nil-client probe path and the gateway's forwarding transport use, so the
+// CA-trusting probe keeps proxy from the environment (HTTPS_PROXY,
+// NO_PROXY), HTTP/2, and the dial and TLS-handshake timeouts. Only the trust
+// pool differs.
+func newProbeTransport(pool *x509.CertPool) *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	return tr
 }
