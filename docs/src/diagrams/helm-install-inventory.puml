@@ -34,6 +34,10 @@ rectangle "**kaalm-system**, only with console.enabled" as nscon #line:9E9E9E;li
   rectangle "ServiceAccount, ClusterRole and binding kaalm-console" as rbcon #back:F5F5F5;line:9E9E9E;line.dashed;text:2a0a4a
   rectangle "Certificate kaalm-console-tls" as certcon #back:F5F5F5;line:9E9E9E;line.dashed;text:2a0a4a
 }
+rectangle "**cluster-scoped**, only with rbac.personas.enabled" as nsper #line:9E9E9E;line.dashed;text:555555 {
+  rectangle "ClusterRoles kaalm-platform-admin, kaalm-catalog-reader, kaalm-developer, kaalm-secrets-admin" as perroles #back:F5F5F5;line:9E9E9E;line.dashed;text:2a0a4a
+  rectangle "bindings from values" as perbind #back:F5F5F5;line:9E9E9E;line.dashed;text:2a0a4a
+}
 rectangle "cluster resource namespace: **cert-manager** by default" as nscm #line:7a3f00;line.dashed;text:3a1f00 {
   rectangle "Certificate kaalm-ca" as cacert #back:FFD580;line:7a3f00;line.bold;text:3a1f00
   rectangle "Bundles kaalm-ca, kaalm-ca-system" as bundle #back:FFD580;line:7a3f00;line.bold;text:3a1f00
@@ -57,5 +61,7 @@ cacert -[hidden]right- bundle
 pcm -[hidden]down- crds
 clusterroles -[hidden]down- dctrl
 leafcerts -[hidden]down- dcon
-rbcon -[hidden]down- cacert
+rbcon -[hidden]down- perroles
+perroles -[hidden]right- perbind
+perroles -[hidden]down- cacert
 @enduml

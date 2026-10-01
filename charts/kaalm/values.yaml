@@ -259,3 +259,42 @@ console:
   # Log level for the JSON logs: debug, info, warn, or error.
   logLevel: info
   resources: {}
+
+# Roles for people (docs/src/security/rbac.md#roles-for-people). Off renders
+# nothing: a default install creates none of these objects. The template reads
+# these values with `default dict`, so this block documents the defaults and
+# changes no rendering.
+rbac:
+  personas:
+    # Installs four ClusterRoles: kaalm-platform-admin, kaalm-catalog-reader,
+    # kaalm-developer, and kaalm-secrets-admin. The subject lists below bind
+    # them. Subject values set while this is false are ignored.
+    enabled: false
+    # Subjects are rbac.authorization.k8s.io/v1 Subject objects, rendered
+    # verbatim. A User or Group needs apiGroup: rbac.authorization.k8s.io, and
+    # a ServiceAccount needs a namespace. An empty list renders no binding.
+    #
+    # Bound with ClusterRoleBinding kaalm-platform-admin.
+    platformAdmins: []
+    # Bound with ClusterRoleBinding kaalm-catalog-reader. Add the developer
+    # groups here so developers can read the catalog.
+    catalogReaders: []
+    # Bound with RoleBinding kaalm-secrets-admin in the release namespace only.
+    secretsAdmins: []
+    # A map of namespace to subject list. Each namespace with a non-empty list
+    # gets RoleBinding kaalm-developer there. The namespace must already exist,
+    # or helm install and upgrade fail with namespace not found. A value that
+    # is not a map fails the render. Example:
+    #   developers:
+    #     team-new:
+    #       - kind: Group
+    #         name: team-new-developers
+    #         apiGroup: rbac.authorization.k8s.io
+    developers: {}
+    # Adds get and create on pods/exec to kaalm-developer. No effect while
+    # personas.enabled is false.
+    developerExec: false
+  # Adds Agent, AgentTask, and AgentChannel to the built-in view, edit, and
+  # admin roles. Works without personas.enabled. Never adds the catalog kinds
+  # (AgentClass, ModelProvider, ToolProvider) or Secrets.
+  aggregateToDefaultRoles: false
