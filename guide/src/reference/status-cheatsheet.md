@@ -176,9 +176,9 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
   when not. As with ModelProvider, Ready without Healthy means valid config,
-  unreachable server. The probe trusts the system CA roots plus the gateway's upstream trust
-  (`gateway.trustClusterCAForUpstream` and `gateway.upstreamCA.configMap`;
-  see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca)).
+  unreachable server. The probe trusts the system CA roots plus the gateway's
+  upstream trust (`gateway.trustClusterCAForUpstream` and
+  `gateway.upstreamCA.configMap`; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca)).
 
 ## AgentClass
 

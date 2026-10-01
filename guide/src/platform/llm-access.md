@@ -112,9 +112,8 @@ bundle into one trust pool.
 The older `controller.trustClusterCAForProbes` and `controller.probeCA` values
 are deprecated but still honored. They add CAs to the controller's probe pool
 only, so a CA set there makes a provider `Healthy` without making forwarding
-trust it. The chart's
-install notes print a warning when either is set, so move to the gateway
-values above.
+trust it. The chart's install notes print a warning when either is set, so
+move to the gateway values above.
 
 The same choice exists for async webhook callbacks to receivers under a
 private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.
