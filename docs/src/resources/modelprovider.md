@@ -175,6 +175,10 @@ Periods reset at midnight UTC: `monthly` on the first day of the calendar month,
 
 There is no pre-request cost estimation: a request's cost is knowable only after the response, so soft mode counts after the fact within its stated bound, and hard mode bounds the crossing with serialized admission rather than estimates.
 
+### Rate limit scope
+
+Both `rateLimits` fields are cluster-wide ceilings per (namespace, model), so N namespaces, or N models in one namespace, each get the full ceiling. `tokensPerMinute` therefore does not keep a shared provider key under the provider's own tokens-per-minute limit. The token limit is enforced after the call, so a large call blocks the next request, not itself ([Rate limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting)).
+
 ### Glob semantics in `allowedNamespaces`
 
 Patterns use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules: `*` matches any run of non-`/` characters. Namespace names contain no `/`, so `sandbox-*` matches `sandbox-foo` and `sandbox-foo-bar` alike. Prefer exact names where possible.
