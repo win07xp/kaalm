@@ -12,7 +12,10 @@ single signal (docs/src/runtime/base-images.md):
   configured-but-broken handler must have. There is no silent fallback.
 
 The handler ABI is exactly ``handle_message(envelope)``, sync or async, with
-capabilities reached via ``import kaalm``.
+capabilities reached via ``import kaalm``. The module may also define
+``async def run_task()``, the AgentTask entry point the runtime starts once at
+startup in task mode; a ``run_task`` that is not ``async def`` or takes
+arguments is a broken handler and fails the same way.
 """
 
 from __future__ import annotations
@@ -25,25 +28,36 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, NamedTuple
 
 HANDLER_ENV = "KAALM_HANDLER_PATH"
 HANDLER_FILE = "handler.py"
 
 AsyncHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+TaskEntry = Callable[[], Awaitable[Any]]
+
+
+class Loaded(NamedTuple):
+    """What resolve() found: the normalized handler, where it came from, and
+    the optional run_task entry point (None when the module defines none)."""
+
+    handler: AsyncHandler
+    source: str
+    run_task: TaskEntry | None
 
 
 class HandlerLoadError(Exception):
     """A configured handler could not be loaded. Fatal by design."""
 
 
-def resolve() -> tuple[AsyncHandler, str]:
-    """Return (normalized async handler, human-readable source)."""
+def resolve() -> Loaded:
+    """Return the normalized async handler, a human-readable source, and the
+    module's run_task (or None)."""
     path = os.environ.get(HANDLER_ENV)
     if not path:
         from . import echo
 
-        return echo.handle_message, "built-in echo handler (no handler configured)"
+        return Loaded(echo.handle_message, "built-in echo handler (no handler configured)", None)
 
     file = Path(path) / HANDLER_FILE
     if not file.is_file():
@@ -72,7 +86,31 @@ def resolve() -> tuple[AsyncHandler, str]:
         raise HandlerLoadError(f"{file} defines no callable handle_message(envelope)")
 
     _check_signature(fn, file)
-    return _normalize(fn), f"handler loaded from {file}"
+    return Loaded(_normalize(fn), f"handler loaded from {file}", _resolve_run_task(module, file))
+
+
+def _resolve_run_task(module: Any, file: Path) -> TaskEntry | None:
+    """Return the module's run_task, or None when it defines none."""
+    fn = getattr(module, "run_task", None)
+    if fn is None:
+        return None
+    if not inspect.iscoroutinefunction(fn):
+        raise HandlerLoadError(f"{file}: run_task must be defined as 'async def run_task()'")
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return fn
+    required = [
+        p
+        for p in sig.parameters.values()
+        if p.default is inspect.Parameter.empty
+        and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+    if required:
+        raise HandlerLoadError(
+            f"{file}: run_task must take no arguments; found required {[p.name for p in required]}"
+        )
+    return fn
 
 
 def _check_signature(fn: Callable[..., Any], file: Path) -> None:
@@ -119,7 +157,7 @@ def _normalize(fn: Callable[..., Any]) -> AsyncHandler:
     return _run_sync
 
 
-def load_or_exit(logger: logging.Logger) -> tuple[AsyncHandler, str]:
+def load_or_exit(logger: logging.Logger) -> Loaded:
     """resolve(), with the fatal path applied: log precisely, exit nonzero."""
     try:
         return resolve()

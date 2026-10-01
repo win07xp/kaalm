@@ -23,7 +23,7 @@ def handle_message(envelope):
 
 
 async def test_no_env_serves_echo():
-    handler, source = loader.resolve()
+    handler, source, _ = loader.resolve()
     assert "echo" in source
     reply = await handler({"content": "hi"})
     assert reply["content"] == "echo: hi"
@@ -31,13 +31,13 @@ async def test_no_env_serves_echo():
 
 async def test_empty_env_serves_echo(monkeypatch):
     monkeypatch.setenv("KAALM_HANDLER_PATH", "")
-    handler, source = loader.resolve()
+    handler, source, _ = loader.resolve()
     assert "echo" in source
 
 
 async def test_async_handler_loads(handler_dir, monkeypatch):
     monkeypatch.setenv("KAALM_HANDLER_PATH", str(handler_dir(ASYNC_HANDLER)))
-    handler, source = loader.resolve()
+    handler, source, _ = loader.resolve()
     assert "handler.py" in source
     reply = await handler({"content": "hi"})
     assert reply["content"] == "custom: hi"
@@ -45,7 +45,7 @@ async def test_async_handler_loads(handler_dir, monkeypatch):
 
 async def test_sync_handler_is_wrapped(handler_dir, monkeypatch):
     monkeypatch.setenv("KAALM_HANDLER_PATH", str(handler_dir(SYNC_HANDLER)))
-    handler, _ = loader.resolve()
+    handler, _, _ = loader.resolve()
     reply = await handler({"content": "hi"})
     assert reply["content"] == "sync: hi"
 
@@ -58,7 +58,7 @@ async def test_sibling_modules_are_importable(handler_dir, monkeypatch):
         helper="def decorate(text):\n    return '<<' + text + '>>'\n",
     )
     monkeypatch.setenv("KAALM_HANDLER_PATH", str(d))
-    handler, _ = loader.resolve()
+    handler, _, _ = loader.resolve()
     reply = await handler({"content": "hi"})
     assert reply["content"] == "<<hi>>"
 
@@ -123,7 +123,7 @@ def test_defaulted_second_arg_is_accepted(handler_dir, monkeypatch):
         "KAALM_HANDLER_PATH",
         str(handler_dir("def handle_message(envelope, extra=None):\n    return {'content': 'ok'}\n")),
     )
-    handler, _ = loader.resolve()  # must not raise: one REQUIRED argument
+    handler, _, _ = loader.resolve()  # must not raise: one REQUIRED argument
 
 
 def test_load_or_exit_exits_nonzero(handler_dir, monkeypatch):
@@ -144,7 +144,7 @@ async def test_handler_can_import_kaalm_after_bind(handler_dir, monkeypatch):
 
     kaalm._bind(
         gateway=object(), memory=FakeMemory(), http_client=object(), http_async_client=object(),
-        trace_context=dict,
+        trace_context=dict, complete_task=object(),
     )
     d = handler_dir(
         "import kaalm\n"
@@ -152,6 +152,55 @@ async def test_handler_can_import_kaalm_after_bind(handler_dir, monkeypatch):
         "    return {'content': kaalm.memory.get('x')}\n"
     )
     monkeypatch.setenv("KAALM_HANDLER_PATH", str(d))
-    handler, _ = loader.resolve()
+    handler, _, _ = loader.resolve()
     reply = await handler({})
     assert reply["content"] == "remembered"
+
+
+RUN_TASK_HANDLER = """
+async def handle_message(envelope):
+    return {}
+
+async def run_task():
+    return None
+"""
+
+
+def test_no_run_task_resolves_to_none(handler_dir, monkeypatch):
+    monkeypatch.setenv("KAALM_HANDLER_PATH", str(handler_dir(ASYNC_HANDLER)))
+    assert loader.resolve().run_task is None
+
+
+def test_echo_has_no_run_task():
+    assert loader.resolve().run_task is None
+
+
+def test_async_run_task_is_resolved(handler_dir, monkeypatch):
+    monkeypatch.setenv("KAALM_HANDLER_PATH", str(handler_dir(RUN_TASK_HANDLER)))
+    loaded = loader.resolve()
+    assert loaded.run_task is not None
+    assert loaded.run_task.__name__ == "run_task"
+
+
+def test_sync_run_task_fails(handler_dir, monkeypatch):
+    monkeypatch.setenv(
+        "KAALM_HANDLER_PATH",
+        str(handler_dir(ASYNC_HANDLER + "\ndef run_task():\n    return None\n")),
+    )
+    with pytest.raises(loader.HandlerLoadError, match="async def run_task"):
+        loader.resolve()
+
+
+def test_run_task_with_required_argument_fails(handler_dir, monkeypatch):
+    monkeypatch.setenv(
+        "KAALM_HANDLER_PATH",
+        str(handler_dir(ASYNC_HANDLER + "\nasync def run_task(x):\n    return None\n")),
+    )
+    with pytest.raises(loader.HandlerLoadError, match="no arguments"):
+        loader.resolve()
+
+
+def test_non_callable_run_task_fails(handler_dir, monkeypatch):
+    monkeypatch.setenv("KAALM_HANDLER_PATH", str(handler_dir(ASYNC_HANDLER + "\nrun_task = 1\n")))
+    with pytest.raises(loader.HandlerLoadError, match="async def run_task"):
+        loader.resolve()
