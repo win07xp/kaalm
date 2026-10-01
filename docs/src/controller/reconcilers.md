@@ -32,12 +32,9 @@ On delete, the class is held while either count is above zero; see [Cluster-scop
 
 ### CNI FQDN-policy probe
 
-The probe runs the first time a reconciler needs its answer, and its result is cached for the process lifetime. The AgentClass, Agent, and AgentTask reconcilers share one cached probe, so the condition and the policies always agree. A failed probe is not cached; the pass fails and retries. It checks the apiserver's discovery API for CRDs that indicate FQDN egress support:
+The probe runs the first time a reconciler needs its answer, and its result is cached for the process lifetime. The AgentClass, Agent, and AgentTask reconcilers share one cached probe, so the condition and the policies always agree. A failed probe is not cached; the pass fails and retries. It checks the apiserver's discovery API for the `cilium.io` API group. The group's presence marks Cilium, which supports `toFQDNs`. The probe checks the group, not the `ciliumnetworkpolicies` resource.
 
-- Cilium: presence of `ciliumnetworkpolicies.cilium.io` (v2), which supports `toFQDNs`.
-- Calico Enterprise: presence of `networkpolicies.crd.projectcalico.org` with the Enterprise licensing CRD (`licensekeys.crd.projectcalico.org`). Open-source Calico does not support FQDN egress.
-
-If neither is present, FQDN policy is unsupported. Unknown CNIs count as unsupported, so the controller never generates policy the CNI cannot enforce. The controller writes only Cilium's policy type, so on Calico Enterprise the condition reports support but no policy is written and `allowedHosts` has no effect. Because the probe runs once per process, a CNI change is not picked up until the controller restarts; operators who change their CNI roll the controller Deployment afterwards.
+Hostname egress is supported on Cilium only. Every other CNI, Calico Enterprise included, reports unsupported. The probe does not look for Calico: open-source Calico serves the same `crd.projectcalico.org` group but has no domain-based egress, and the controller writes no Calico policy. When the group is absent, `allowedHosts` has no effect and the condition reports `False, reason=FQDNPolicyUnsupported`. Because the probe runs once per process, a CNI change is not picked up until the controller restarts; operators who change their CNI roll the controller Deployment afterwards.
 
 ## ModelProviderReconciler
 
