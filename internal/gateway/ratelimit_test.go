@@ -291,6 +291,33 @@ func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 	}
 }
 
+// TestAllowTool_FewerCallsThanReplicas: with requestsPerMinute below the
+// replica count, the tool bucket still holds one whole call, so the key is
+// admitted once per refill instead of refused forever (#345).
+func TestAllowTool_FewerCallsThanReplicas(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 3 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	tp := &kaalmv1beta1.ToolProvider{}
+	tp.Name = "search"
+	tp.Spec.RateLimits.RequestsPerMinute = 2 // 2/3 call per minute per replica
+
+	if !rl.AllowTool(tp, "team-a") {
+		t.Fatal("a fresh bucket must admit one call even when the share is below 1")
+	}
+	if rl.AllowTool(tp, "team-a") {
+		t.Fatal("a drained bucket must refuse the next call")
+	}
+	now = now.Add(60 * time.Second)
+	if rl.AllowTool(tp, "team-a") {
+		t.Error("after 60s only about 0.67 of a call has refilled; must refuse")
+	}
+	now = now.Add(30 * time.Second)
+	if !rl.AllowTool(tp, "team-a") {
+		t.Error("a bucket refilled to one call (90s at 2/3 per minute) must admit")
+	}
+}
+
 func TestAllowHeartbeat_BurstAndRefill(t *testing.T) {
 	// Replica count does not divide the heartbeat cap.
 	rl := NewRateLimiter(func() int { return 4 })

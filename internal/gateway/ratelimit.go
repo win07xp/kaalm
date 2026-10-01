@@ -29,13 +29,14 @@ import (
 // the live replica count so the effective limit is replica-independent.
 // Approximate by design: bursts may exceed the ceiling by up to one replica's
 // share. A request ceiling below the replica count still gives each replica's
-// request bucket room for one request, refilled at the per-replica share, so a
-// cluster-wide burst can admit up to one request per replica (up to
-// number_of_replicas requests at once) while the long-run rate stays at the
-// ceiling. It does not cap concurrency. The token ceiling is enforced after
-// the fact: a request is admitted while the token bucket is above zero, and its settled
-// usage is debited when the call ends (DebitTokens), so a large call blocks
-// the next request rather than itself. See docs/src/gateways/llm/budgets-and-rate-limits.md.
+// LLM request bucket and tool bucket room for one request or call, refilled at
+// the per-replica share, so a cluster-wide burst can admit up to one request
+// per replica (up to number_of_replicas requests at once) while the long-run
+// rate stays at the ceiling. It does not cap concurrency. The token ceiling is
+// enforced after the fact: a request is admitted while the token bucket is
+// above zero, and its settled usage is debited when the call ends
+// (DebitTokens), so a large call blocks the next request rather than itself.
+// See docs/src/gateways/llm/budgets-and-rate-limits.md.
 type RateLimiter struct {
 	// Replicas returns the live gateway replica count (>= 1). Injected so
 	// tests need no informer.
@@ -89,7 +90,7 @@ func (r *RateLimiter) Allow(provider *kaalmv1beta1.ModelProvider, namespace, mod
 		}
 	}
 	if limits.RequestsPerMinute > 0 {
-		b := r.refilled(namespace+"/"+model, requestShare, math.Max(requestShare, 1))
+		b := r.refilled(namespace+"/"+model, requestShare, requestBurst(requestShare))
 		if b.tokens < 1 {
 			return false, retryAfterSeconds(1-b.tokens, requestShare)
 		}
@@ -135,7 +136,10 @@ func retryAfterSeconds(deficit, perMinute float64) int {
 
 // AllowTool is the brokered-call analog, keyed per (namespace, ToolProvider)
 // under a prefix no namespace name can produce (":" is not a DNS label
-// character), so tool buckets never collide with LLM model buckets.
+// character), so tool buckets never collide with LLM model buckets. Its
+// bucket holds at least one call, as the LLM request bucket does, so a
+// ceiling below the replica count still admits one call per refill on each
+// replica.
 func (r *RateLimiter) AllowTool(tp *kaalmv1beta1.ToolProvider, namespace string) bool {
 	return r.allow(tp.Spec.RateLimits.RequestsPerMinute, "mcp:"+namespace+"/"+tp.Name)
 }
@@ -161,7 +165,7 @@ func (r *RateLimiter) allow(limit int32, key string) bool {
 		return true
 	}
 	share := perReplica(limit, r.replicas())
-	return r.take(key, share, share)
+	return r.take(key, share, requestBurst(share))
 }
 
 // replicas is the live replica count, at least 1. It calls Replicas, which
@@ -177,6 +181,12 @@ func (r *RateLimiter) replicas() int {
 func perReplica(limit int32, replicas int) float64 {
 	return float64(limit) / float64(replicas)
 }
+
+// requestBurst is the burst of a bucket that counts whole requests or calls:
+// the per-replica share, but room for at least one, so a share below one
+// still admits one per refill. The refill rate stays at the share, so the
+// long-run rate stays at the ceiling.
+func requestBurst(share float64) float64 { return math.Max(share, 1) }
 
 // take consumes one token from key's bucket, which refills at perMinute and
 // holds at most burst tokens.
