@@ -6,8 +6,7 @@ happened, and goes away.
 
 Same class, entirely different lifecycle. The image changes too, to the Go
 sibling of the Python image your agent runs: a task brings its whole program rather
-than a mounted handler, and the Go reference image has a tutorial shortcut
-built in that you will use in a moment.
+than a mounted handler.
 
 ## Run one
 

@@ -53,7 +53,7 @@ the agent's volume when persistence is enabled), `kaalm.http_client()` and
 framework SDKs), `kaalm.trace_context()` (the current message's trace
 headers), `kaalm.complete_task` (reports an AgentTask's result), and
 `kaalm.TaskAlreadyCompleted` (the exception `complete_task` raises when the
-task is already finished). The last two matter only for tasks; see
+task is already finished or has already reported). The last two matter only for tasks; see
 [Running tasks](running-tasks.md).
 
 ```python

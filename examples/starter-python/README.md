@@ -35,7 +35,7 @@ async. An image that runs as an AgentTask may also define an optional
   otherwise.
 - `await kaalm.complete_task(status, message="", artifacts=None)` reports an
   AgentTask's result, and `kaalm.TaskAlreadyCompleted` is the exception it
-  raises when the task is already finished.
+  raises when the task is already finished or has already reported.
 
 Extra dependencies go into the Dockerfile as a
 `RUN pip install --no-cache-dir <packages>` line before the `COPY`.
@@ -77,9 +77,12 @@ ordinary image review and the `allowedImages` gate, like any custom image.
 The same image runs as an AgentTask. The runtime detects task mode from the
 certificate SAN, does not start the heartbeat loop, and starts `run_task` once
 if `handler.py` defines it. When `run_task` returns, the runtime reports
-`success`; when it raises, the runtime reports `failure`. Call
-`kaalm.complete_task` from `run_task` to report a message and artifacts
-yourself. See [Task mode](../../docs/src/runtime/base-images.md#task-mode) for
+`success` with an empty message and no artifacts; when it raises, the runtime
+reports `failure` with the exception text. A task that declares
+`spec.artifacts` must call `kaalm.complete_task` from `run_task` with them,
+because the gateway rejects an automatic `success` that omits one;
+`kaalm.complete_task` also reports a message. It retries transport errors and
+`409 stale_pod` for you. See [Task mode](../../docs/src/runtime/base-images.md#task-mode) for
 the full rules.
 
 For smoke and e2e runs, set `KAALM_TASK_AUTOCOMPLETE=success` (in the

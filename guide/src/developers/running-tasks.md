@@ -62,7 +62,10 @@ def handle_message(envelope):
 
 async def run_task():
     report_url = await do_the_work()
-    await kaalm.complete_task("success", "done", {"report-url": report_url})
+    try:
+        await kaalm.complete_task("success", "done", {"report-url": report_url})
+    except kaalm.TaskAlreadyCompleted:
+        pass  # something else already settled the task
 ```
 
 The runtime starts `run_task` once, after its HTTPS server is listening, and
@@ -71,12 +74,31 @@ required.
 
 - `kaalm.complete_task(status, message="", artifacts=None)` reports the
   result. `status` is `"success"` or `"failure"`, and `artifacts` is a dict
-  of strings. It retries the `409 stale_pod` answer for you.
-- If `run_task` returns without reporting, the runtime reports `success`.
-  If it raises, the runtime reports `failure` with the exception text.
-- If the task is already finished, `kaalm.complete_task` raises
-  `kaalm.TaskAlreadyCompleted`. Do not retry; let the error end the run or
-  catch it and return.
+  of strings. It retries transport errors and the `409 stale_pod` answer for
+  you, within four attempts. Any other refusal raises `RuntimeError`.
+- If `run_task` returns without reporting, the runtime reports `success`
+  with an empty message and no artifacts. A task that declares
+  `spec.artifacts` must call `kaalm.complete_task` itself with them;
+  otherwise the gateway rejects the automatic `success` with `400`, and the
+  runtime logs that once and does not retry.
+- If `run_task` raises, the runtime reports `failure` with the exception
+  text, or the exception type name when the text is empty, cut to 4 KiB.
+  That includes an exception from `kaalm.complete_task` inside `run_task`.
+- Once the gateway accepts a report, no other report is sent.
+  `kaalm.complete_task` then raises `kaalm.TaskAlreadyCompleted` without
+  sending, and so does a call after the gateway answers that the task is
+  already finished. Do not retry; let the error end the run or catch it
+  and return.
+- In an `exitCode` task, the container's exit is the verdict, and the
+  gateway refuses every report with `403 TaskNotAgentReported`. The runtime
+  then exits for you: 0 when `run_task` returned, 1 when it raised. Do not
+  call `kaalm.complete_task` there. The refusal raises `RuntimeError`
+  (`task completion failed: 403 ...TaskNotAgentReported...`), not
+  `kaalm.TaskAlreadyCompleted`, so the `except` clause in the example above
+  does not catch it. If the error escapes `run_task`, it counts as a raise:
+  no report is sent and the container exits 1, even when the work
+  succeeded. Return from `run_task` to succeed and raise to fail. The
+  example above fits `agentReported` tasks.
 - A `run_task` that is not `async def`, or that takes required arguments,
   stops the container at startup with an error in its log.
 
@@ -94,7 +116,9 @@ and calls `CompleteTask` itself.
   you.
 - **`exitCode`**: the container's exit status is the verdict; zero succeeds.
   Use this for agents that behave like batch jobs. Artifacts cannot be
-  declared in this mode; there is nobody to report them.
+  declared in this mode; there is nobody to report them. A Python
+  task on the base image gets its exit code from the runtime; see
+  [Writing a task in Python](#writing-a-task-in-python).
 
 `completion.timeout` bounds the run either way. If you leave it unset, the
 class's default timeout applies; under the chart's `standard` class, that's
