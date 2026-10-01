@@ -179,7 +179,7 @@ There is no pre-request cost estimation: a request's cost is knowable only after
 
 Both `rateLimits` fields are cluster-wide ceilings per (namespace, model), so N namespaces, or N models in one namespace, each get the full ceiling. `tokensPerMinute` therefore does not keep a shared provider key under the provider's own tokens-per-minute limit. The token limit is enforced after the call, so a large call blocks the next request, not itself ([Rate limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting)).
 
-The gateway divides each ceiling across its replicas, so the split is approximate. When `requestsPerMinute` is lower than the replica count, each replica still admits one request for each (namespace, model), then refuses until its bucket refills, and cluster-wide admission can run slightly over the limit ([Request limits below the replica count](../gateways/llm/budgets-and-rate-limits.md#request-limits-below-the-replica-count)).
+The gateway divides each ceiling across its replicas, so the split is approximate. When `requestsPerMinute` is lower than the replica count, each replica still admits one request for each (namespace, model), then refuses until its bucket refills, and a cluster-wide burst can admit up to one request per replica while the long-run rate stays at the limit ([Request limits below the replica count](../gateways/llm/budgets-and-rate-limits.md#request-limits-below-the-replica-count)).
 
 ### Glob semantics in `allowedNamespaces`
 

@@ -29,9 +29,11 @@ import (
 // the live replica count so the effective limit is replica-independent.
 // Approximate by design: bursts may exceed the ceiling by up to one replica's
 // share. A request ceiling below the replica count still gives each replica's
-// request bucket room for one request, refilled at the per-replica share; it
-// does not cap concurrency. The token ceiling is enforced after the fact: a
-// request is admitted while the token bucket is above zero, and its settled
+// request bucket room for one request, refilled at the per-replica share, so a
+// cluster-wide burst can admit up to one request per replica (up to
+// number_of_replicas requests at once) while the long-run rate stays at the
+// ceiling. It does not cap concurrency. The token ceiling is enforced after
+// the fact: a request is admitted while the token bucket is above zero, and its settled
 // usage is debited when the call ends (DebitTokens), so a large call blocks
 // the next request rather than itself. See docs/src/gateways/llm/budgets-and-rate-limits.md.
 type RateLimiter struct {

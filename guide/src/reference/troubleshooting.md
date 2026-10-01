@@ -103,10 +103,10 @@ One of the three gates denied; the error message names which:
 Read the error type; the three cases behave differently:
 
 - **`rate_limited`**: per (namespace, model) requests per minute or tokens
-  per minute; clears in seconds. `Retry-After` is the seconds until the
-  limit admits you again, at least 1. Wait that long and retry. After a call
-  larger than one burst, the token limit can hold a namespace off for up to
-  about a minute.
+  per minute. `Retry-After` is the seconds until the limit admits you again, at
+  least 1, and the limit clears then. That is usually seconds, but a request
+  limit below the replica count can take longer: 1 request per minute on 3
+  replicas gives `Retry-After: 180`. Wait that long and retry.
 - **`budget_throttled`**: a hard-enforcement provider is serializing requests
   near its ceiling; `Retry-After: 1`. Retry on a short backoff.
 - **`budget_exhausted`**: the namespace or cluster budget is spent;

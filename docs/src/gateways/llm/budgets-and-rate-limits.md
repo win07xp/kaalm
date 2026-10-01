@@ -199,20 +199,20 @@ For example, with `requestsPerMinute: 2` and one replica, the third request in a
 
 - **Concurrent long streams all pass.** The debit lands only when each stream ends, so streams that start while the bucket is positive are all admitted.
 - **The split is approximate.** The per-replica split is approximate, the same as for requests ([Dividing by live replica count](#dividing-by-live-replica-count)), and the debit lands only on the replica that served the call.
-- **Only input plus output tokens count.** The count is what the gateway reads from the provider's usage. Cache tokens are not counted. A response with no usage debits nothing. It is the same case the gateway already logs and counts as `kaalm_llm_usage_missing_total` ([Streaming responses](request-handling.md#streaming-responses)).
+- **Only input plus output tokens count.** The debit is the input plus output count that the provider adapter reads from the response's usage. For `anthropic`, cache read and cache creation tokens are not in that count. For `openai` and `openai-compatible`, the input count is `prompt_tokens`, which already includes cached prompt tokens, so cache hits count. A response with no usage debits nothing. It is the same case the gateway logs and counts as `kaalm_llm_usage_missing_total` ([Streaming responses](request-handling.md#streaming-responses)).
 - **Each key gets the full ceiling.** Buckets are per (namespace, model), so N namespaces, or N models in one namespace, each get the full `requestsPerMinute` and the full `tokensPerMinute`. Together, tenants can still reach the provider's own rate limit, so these limits do not keep a shared provider key under it.
 
 ### Dividing by live replica count
 
 Each gateway replica divides each configured limit by the number of active gateway replicas, counted from its Pod informer by the gateway label selector and refreshed at most every few seconds rather than on every request. Each bucket's burst equals that per-replica share, except the request bucket, which always holds at least one request ([Request limits below the replica count](#request-limits-below-the-replica-count)). The token bucket's burst is exactly `tokensPerMinute / number_of_replicas`, with no floor. When replicas scale up or down, each replica resizes its local buckets within that refresh and the next refill cycle, so the configured value represents the intended cluster-wide limit regardless of replica count.
 
-Because each replica enforces its share independently, the effective cluster-wide limit is approximate. Transient bursts may exceed the configured ceiling by up to one replica's full bucket: `configured_limit / number_of_replicas`, or one request when the request share is below one. This is the accepted trade for a coordination-free request path.
+Because each replica enforces its share independently, the effective cluster-wide limit is approximate. Transient bursts may exceed the configured ceiling by up to one replica's full bucket: `configured_limit / number_of_replicas`. The request bucket holds at least one request, so when the request share is below one, a cluster-wide burst can admit up to one request per replica, which is `number_of_replicas` requests at once ([Request limits below the replica count](#request-limits-below-the-replica-count)). This is the accepted trade for a coordination-free request path.
 
 ### Request limits below the replica count
 
 When `requestsPerMinute` is lower than the number of gateway replicas, each replica's share is less than one request per minute. The request bucket always has room for one request, so each replica admits one request for each (namespace, model), then refuses until the bucket refills at `requestsPerMinute / number_of_replicas` requests per minute. The limit does not cap how many requests run at once. For example, `requestsPerMinute: 2` on 3 replicas admits one request per replica every 90 seconds.
 
-Cluster-wide admission can therefore run slightly over the configured limit.
+Because every replica's bucket starts with one request, a cluster-wide burst can admit up to one request per replica, up to `number_of_replicas` requests at once. The long-run rate stays at `requestsPerMinute`.
 
 ### Worst-case deviation during scaling events
 
