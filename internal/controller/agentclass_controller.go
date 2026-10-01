@@ -140,6 +140,26 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// A deprecated field is accepted and has no effect, but never silently:
+	// DeprecatedFields records it and the Warning fires on its rising edge.
+	// A class that never set one gets no condition.
+	var deprecated *metav1.Condition
+	if findings := deprecatedFields(&ac.Spec); len(findings) > 0 {
+		msg := strings.Join(findings, "; ")
+		deprecated = &metav1.Condition{
+			Type: kaalmv1beta1.ConditionDeprecatedFields, Status: metav1.ConditionTrue,
+			Reason: kaalmv1beta1.ReasonDeprecatedFieldSet, Message: msg,
+		}
+		if !apimeta.IsStatusConditionTrue(ac.Status.Conditions, kaalmv1beta1.ConditionDeprecatedFields) {
+			warnings = append(warnings, heldEvent{corev1.EventTypeWarning, kaalmv1beta1.ReasonDeprecatedFieldSet, msg})
+		}
+	} else if apimeta.FindStatusCondition(ac.Status.Conditions, kaalmv1beta1.ConditionDeprecatedFields) != nil {
+		deprecated = &metav1.Condition{
+			Type: kaalmv1beta1.ConditionDeprecatedFields, Status: metav1.ConditionFalse,
+			Reason: kaalmv1beta1.ReasonNoDeprecatedFields, Message: "the class sets no deprecated field",
+		}
+	}
+
 	// A cluster capability shown on each class, like FQDNPolicySupported.
 	var certCleanup *metav1.Condition
 	if r.CertCleanup != nil {
@@ -166,6 +186,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	apimeta.SetStatusCondition(&ac.Status.Conditions, baseline)
 	if certCleanup != nil {
 		apimeta.SetStatusCondition(&ac.Status.Conditions, *certCleanup)
+	}
+	if deprecated != nil {
+		apimeta.SetStatusCondition(&ac.Status.Conditions, *deprecated)
 	}
 	var invalid *metav1.Condition
 	if len(problems) == 0 {
@@ -257,6 +280,17 @@ func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaa
 		}
 	}
 	return missing
+}
+
+// deprecatedFields is the one list of deprecated AgentClass fields. It
+// returns a finding for each one the spec sets; the schema keeps them for
+// compatibility, and none has an effect.
+func deprecatedFields(spec *kaalmv1beta1.AgentClassSpec) []string {
+	var found []string
+	if spec.Network.AllowHostNetwork {
+		found = append(found, "network.allowHostNetwork is deprecated and has no effect: no Pod Kaalm creates uses host networking")
+	}
+	return found
 }
 
 func invalidCIDRs(ac *kaalmv1beta1.AgentClass) []string {

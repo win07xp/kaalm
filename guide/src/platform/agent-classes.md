@@ -133,10 +133,36 @@ commands) need a separate class with stricter settings: a
 has installed, a tighter image allowlist, and lower storage ceilings. Offer it
 as a second class, for example `sandboxed`, rather than loosening `standard`;
 a class is one object and teams pick by name. Pin a `RuntimeClass` only where
-it exists: a class that names one the cluster lacks leaves every Pod that
-selects it unschedulable with `RuntimeClass not found`. The class field
-`network.allowHostNetwork` is accepted but, as shipped, read by nothing: no
-Pod Kaalm creates uses host networking.
+it exists: a class that names one the cluster lacks makes the apiserver reject
+every Pod that selects it, with `RuntimeClass not found`.
+The class field `network.allowHostNetwork` is deprecated and has no effect:
+no Pod Kaalm creates uses host networking, whatever its value. A class that
+sets it to `true` reports the `DeprecatedFields` condition and a `Warning`
+event.
+
+The repository's `config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml` is
+a starting point. It names the class `sandboxed` and runs its Pods under the
+`gvisor` RuntimeClass (handler `runsc`). The class gives you:
+
+- One allowed image repository, with `allowHandlerMounts` left at `false`.
+- Default resource requests and limits, and a maximum limit above which a
+  workload cannot go.
+- Opt-in persistence with a storage size cap.
+- `anthropic-shared` as the only allowed provider.
+- No `network` block, so egress is the gateway and cluster DNS only.
+- The restricted security baseline, written out.
+- A default and a maximum task timeout.
+
+The sample file holds the exact values. Replace the image repository with
+yours before you apply it.
+
+Before you apply the sample, confirm that the cluster has the `gvisor`
+RuntimeClass with `kubectl get runtimeclass gvisor`. The file is not in
+`config/samples/kustomization.yaml`, so apply it on its own:
+
+```bash
+kubectl apply -f config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml
+```
 
 ## Pod security defaults
 

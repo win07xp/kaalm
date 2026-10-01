@@ -195,7 +195,9 @@ not a DNS name; `DeletionBlocked` while a delete is held by a referrer, see
 [Deleting a provider, tool provider, or class never
 finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)), `SecurityBaseline` (`RestrictedBaseline`, or
 `BelowRestrictedBaseline` naming each `security` field the class relaxes
-below the restricted Pod Security Standard), and `FQDNPolicySupported`
+below the restricted Pod Security Standard), `DeprecatedFields` (advisory, present
+only once the class sets a deprecated field: `DeprecatedFieldSet` naming each
+one, or `NoDeprecatedFields` after it is removed; it never affects `Ready`), and `FQDNPolicySupported`
 (whether the CNI supports the FQDN egress rules the class asks for; reason
 `NoHostsRequested` when the class names no `allowedHosts`,
 `FQDNPolicySupported` when it does and the CNI can carry them out,

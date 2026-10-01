@@ -2,9 +2,10 @@
 A default AgentClass platform teams can customize or delete. It leaves
 runtimeClassName unset (the cluster default runtime), since stock clusters
 define no RuntimeClass and pinning a named one would fail Pod admission
-everywhere it is not installed. A sandboxed (gVisor) class is shipped as an
-example manifest, not a live default, for the same reason. See
-docs/src/operations/deployment.md.
+everywhere it is not installed. A sandboxed (gVisor) class is not a live
+default for the same reason; the repository's
+config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml is one to start from.
+See docs/src/operations/deployment.md.
 */}}
 {{/*
 The graduation gate: while the AgentClass CRD still lists v1alpha1 in
