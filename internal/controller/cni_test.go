@@ -42,6 +42,15 @@ func TestProbeFQDNPolicySupport(t *testing.T) {
 		t.Errorf("cilium.io present should be supported: %v %v", ok, err)
 	}
 
+	// Calico's CRD group exists on open-source Calico, which has no
+	// domain-based egress, and Kaalm writes no Calico policy (#273).
+	calico := fakeDiscovery{groups: &metav1.APIGroupList{Groups: []metav1.APIGroup{
+		{Name: "apps"}, {Name: "crd.projectcalico.org"},
+	}}}
+	if ok, err := ProbeFQDNPolicySupport(calico); err != nil || ok {
+		t.Errorf("crd.projectcalico.org alone should be unsupported: %v %v", ok, err)
+	}
+
 	// No CNI group -> unsupported.
 	no := fakeDiscovery{groups: &metav1.APIGroupList{Groups: []metav1.APIGroup{{Name: "apps"}}}}
 	if ok, err := ProbeFQDNPolicySupport(no); err != nil || ok {

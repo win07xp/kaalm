@@ -250,8 +250,8 @@ spec:
                         type: array
                       allowedHosts:
                         description: |-
-                          AllowedHosts are DNS names permitted for egress, enforced only on CNIs that
-                          support FQDN policies (Cilium, Calico Enterprise).
+                          AllowedHosts are DNS names permitted for egress, enforced only on Cilium,
+                          which supports FQDN policies.
                         items:
                           type: string
                         type: array
@@ -1146,8 +1146,8 @@ spec:
                         type: array
                       allowedHosts:
                         description: |-
-                          AllowedHosts are DNS names permitted for egress, enforced only on CNIs that
-                          support FQDN policies (Cilium, Calico Enterprise).
+                          AllowedHosts are DNS names permitted for egress, enforced only on Cilium,
+                          which supports FQDN policies.
                         items:
                           type: string
                         type: array

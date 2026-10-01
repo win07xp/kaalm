@@ -25,12 +25,13 @@ import (
 
 // fqdnCapableGroups are the API groups whose presence signals a CNI that can
 // enforce FQDN egress policies (AgentClass.spec.network.egress.allowedHosts).
-// Cilium's CiliumNetworkPolicy supports toFQDNs; Calico Enterprise uses its own
-// projectcalico.org API. Standard Kubernetes NetworkPolicy cannot express FQDN
-// rules (docs/src/resources/agentclass.md, rule 20).
+// Only Cilium is supported: the controller writes a CiliumNetworkPolicy with
+// toFQDNs. Calico is not listed because crd.projectcalico.org exists on
+// open-source Calico too, which has no domain-based egress, and the controller
+// writes no Calico policy. Standard Kubernetes NetworkPolicy cannot express
+// FQDN rules (docs/src/resources/agentclass.md, rule 20).
 var fqdnCapableGroups = []string{
 	"cilium.io",
-	"crd.projectcalico.org",
 }
 
 // ProbeFQDNPolicySupport reports whether the cluster's CNI can enforce FQDN
