@@ -114,7 +114,7 @@ The grants on the Kaalm kinds are in the `kaalm.io` API group. Four properties h
 
 `rbac.personas.developerExec` (default `false`) adds `pods/exec` with `get` and `create` to `kaalm-developer` only, for debugging inside an agent container. Both verbs are needed: `kubectl exec` over WebSockets is authorized as `get`, and over SPDY (or with the `AuthorizePodWebsocketUpgradeCreatePermission` feature gate) as `create`. The value has no effect while `rbac.personas.enabled` is `false`.
 
-`rbac.personas.developerSecrets` (default `false`) adds one rule to `kaalm-developer`: core `secrets` with `get, list, watch, create, update, patch, delete`, in every namespace where `kaalm-developer` is bound. The other persona roles do not change, and the value has no effect while `rbac.personas.enabled` is `false`. Use it for teams whose developers own their channel credentials. A channel still uses only Secrets that carry the label `kaalm.io/channel-credential: "true"` ([rule 45](../resources/validation-and-defaulting.md#cross-resource-validation)), including the Secrets developers create.
+`rbac.personas.developerSecrets` (default `false`) adds one rule to `kaalm-developer`: core `secrets` with `get, list, watch, create, update, patch, delete`, in every namespace where `kaalm-developer` is bound. The other persona roles do not change, and the value has no effect while `rbac.personas.enabled` is `false`. Use it when a team's developers manage Secrets themselves, for example in a dev loop. A channel still uses only Secrets that carry the label `kaalm.io/channel-credential: "true"` ([rule 45](../resources/validation-and-defaulting.md#cross-resource-validation)), including the Secrets developers create.
 
 ### Bindings come from values
 

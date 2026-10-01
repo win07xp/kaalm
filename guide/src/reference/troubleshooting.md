@@ -99,11 +99,14 @@ The channel re-checks every minute, so it turns `Ready=True` on the next pass
 after you fix the Secret, or at once when you edit the channel. The gateway
 does not wait for that pass: it refuses an unlabeled Secret on every read,
 and before every callback attempt it checks the label and the host again.
-When it refuses a callback, the channel's `PlatformConnected` condition
-carries `CallbackInvalid` with a message that starts `callbackAuth secret
-unavailable:`, nothing is delivered, and the response is still available by
-polling. Who may label a Secret depends on your platform team: see
-[Managing team access](../platform/managing-access.md).
+When it refuses a callback, nothing is delivered, the response is still
+available by polling, and the gateway records `CallbackInvalid` channel health
+with a message that starts `callbackAuth secret unavailable:`. The channel's
+`PlatformConnected` condition shows `CallbackInvalid` only when no delivery
+succeeded within the health window. If one did, `PlatformConnected` stays
+`True`, and the next pass reports `SecretNotOptedIn` or
+`CallbackHostNotApproved` on `Ready`. Who may label a Secret depends on your
+platform team: see [Managing team access](../platform/managing-access.md).
 
 ## Webhook returns `401`
 

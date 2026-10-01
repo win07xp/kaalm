@@ -173,12 +173,13 @@ shows what a channel reports when a Secret lacks the label.
 
 ### Let developers manage Secrets
 
-For teams whose developers own their channel credentials, set
-`rbac.personas.developerSecrets: true`. The developer role then grants `get`,
-`list`, `watch`, `create`, `update`, `patch`, and `delete` on Secrets in every
-namespace where `kaalm-developer` is bound. The other roles do not change.
-The setting has no effect while `enabled` is `false`. Developers still label
-the Secrets they create, because the channel rule has no exception.
+When a team's developers manage Secrets themselves, for example in a dev
+loop, set `rbac.personas.developerSecrets: true`. The developer role then
+grants `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
+Secrets in every namespace where `kaalm-developer` is bound. The other roles
+do not change. The setting has no effect while `enabled` is `false`.
+Developers still label the Secrets they create, because the channel rule has
+no exception.
 
 ### Let developers exec into agents
 
