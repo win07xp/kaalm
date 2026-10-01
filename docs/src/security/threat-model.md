@@ -14,7 +14,7 @@ Provider credentials stay in `kaalm-system`, and agent Pods reach providers only
 | A gateway-only-tier workload calls providers with its own keys | No Agent resource, so no synthesized policy. See [Gateway-only-tier workload calls providers directly](#gateway-only-tier-workload-calls-providers-directly). | Out of scope |
 | A developer writes a permissive NetworkPolicy that widens agent egress | NetworkPolicy is additive. See [Developer authors a permissive NetworkPolicy](#developer-authors-a-permissive-networkpolicy). | Out of scope |
 | A developer embeds provider credentials in the image | Image scanning and registry controls, outside Kaalm. | Out of scope |
-| A provider key or tool credential leaves `kaalm-system` on the controller's health probe | The probe is a second credential egress, bounded to the provider's configured endpoint (for `google-vertex`, also the key's `token_uri`). It never follows a redirect and does not move behind the gateway ([Health probes are a second credential egress](credentials.md#health-probes-are-a-second-credential-egress)). | Accepted |
+| A provider key or tool credential leaves `kaalm-system` on the controller's health probe | The probe is a second credential egress, bounded to the provider's configured endpoint (for `google-vertex`, also the key's `token_uri`). It never follows a redirect ([Health probes are a second credential egress](credentials.md#health-probes-are-a-second-credential-egress)). | Accepted |
 
 #### Gateway-only-tier workload calls providers directly
 
