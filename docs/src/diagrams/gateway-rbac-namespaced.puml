@@ -13,7 +13,7 @@ rectangle "**Role** kaalm-gateway in kaalm-system" as nssys #line:1B5E20;line.da
   rectangle "ConfigMaps: get, list, watch, create, patch" as cms #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 rectangle "**Role** kaalm-channel-{name}-creds in the AgentChannel's namespace" as nsch #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "Secrets named by the channel: get, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+  rectangle "Labeled Secrets it names: get, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 rectangle "**Role** kaalm-task-{name}-completion in the AgentTask's namespace" as nstask #line:7a3f00;line.dashed;text:3a1f00 {
   rectangle "ConfigMap {name}-completion: update, patch" as compcm #back:FFD580;line:7a3f00;line.bold;text:3a1f00

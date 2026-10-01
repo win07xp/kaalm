@@ -86,7 +86,7 @@ LLM and tool credentials are Secrets in `kaalm-system`, read by the gateway and 
 | `create` on `tokenreviews` | Cluster | Bearer-token callers in the gateway-only tier |
 | `get, list, watch` on the Kaalm CRDs and Pods; `patch` on AgentChannels; `get` on Services; `create, patch` on Events | Cluster | Provider and channel routing, the source-IP cross-check, delivery endpoints, the channel delete handshake, and channel events |
 | `get, watch` on Secrets; `get, list, watch, create, patch` on ConfigMaps | `kaalm-system` only | Credentials, the budget exchange, async response records |
-| Per-channel and per-task Roles | One user namespace each, `resourceNames`-scoped | `get, watch` on a channel's credential Secrets; `update, patch` on one task's completion ConfigMap, never `create` |
+| Per-channel and per-task Roles | One user namespace each, `resourceNames`-scoped | `get, watch` on a channel's credential Secrets that carry the [rule 45](../resources/validation-and-defaulting.md#cross-resource-validation) label; `update, patch` on one task's completion ConfigMap, never `create` |
 
 The per-namespace Roles are created by the reconcilers and carry an ownerRef to the AgentChannel or AgentTask, so they are collected with it.
 

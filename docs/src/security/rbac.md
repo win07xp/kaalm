@@ -27,15 +27,15 @@ The operator runs as `kaalm-system/kaalm-controller`. It holds the ClusterRole `
 
 **CiliumNetworkPolicies.** The rule ships in every install, whatever the CNI. RBAC does not check that an API group exists, so on a cluster without Cilium the rule grants nothing and does no harm, and there is no chart value to turn it off.
 
-**Secrets.** The ClusterRole grants nothing on Secrets. The operator's only standing read is the Role `kaalm-controller-credentials`, which grants `get, list, watch` on Secrets in `kaalm-system`: it validates that a ModelProvider or ToolProvider credential exists and runs the provider health probes with it ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler), step 1). The manager's Secret informer is limited to that namespace. The operator reads a Secret in a user namespace in two cases, each under a Role it mints for exactly the names involved: an AgentChannel's credential keys ([AgentChannelReconciler](../controller/reconcilers.md#agentchannelreconciler), step 3) and the rule 23 check that a class's image pull Secrets exist. Each such Secret is served from its own watch, the same single-object watch the gateway uses: the first read is a GET, the watch is filtered to the Secret's name, and later reads come from memory. The operator process therefore holds exactly the user-namespace Secrets that its channels and workloads reference, and drops a Secret after an hour with no read. If a watch has not synced within two seconds, the read goes to the API server directly. It never writes or copies a Secret. [The threat model](threat-model.md#component-compromise) states what this means for a compromised operator.
+**Secrets.** The ClusterRole grants nothing on Secrets. The operator's only standing read is the Role `kaalm-controller-credentials`, which grants `get, list, watch` on Secrets in `kaalm-system`: it validates that a ModelProvider or ToolProvider credential exists and runs the provider health probes with it ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler), step 1). The manager's Secret informer is limited to that namespace. The operator reads a Secret in a user namespace in two cases, each under a Role it mints for exactly the names involved: the Secrets an AgentChannel references, which it reads to check the rule 45 label and the credential keys ([AgentChannelReconciler](../controller/reconcilers.md#agentchannelreconciler), step 3), and the rule 23 check that a class's image pull Secrets exist. Each such Secret is served from its own watch, the same single-object watch the gateway uses: the first read is a GET, the watch is filtered to the Secret's name, and later reads come from memory. The operator process therefore holds exactly the user-namespace Secrets that its channels and workloads reference, labeled or not, and drops a Secret after an hour with no read. If a watch has not synced within two seconds, the read goes to the API server directly. It never writes or copies a Secret. [The threat model](threat-model.md#component-compromise) states what this means for a compromised operator.
 
 **Roles and RoleBindings.** The reconcilers mint the per-channel, per-task, and per-workload Roles described on this page, in whichever user namespace the resource lives. Kubernetes escalation prevention forbids creating a Role that grants a permission the creator does not hold, and binding a Role the creator could not have created. The operator holds no Secret read outside `kaalm-system`, so the ClusterRole carries `escalate` and `bind` on `roles`. That trades a standing read of every Secret for the ability to grant a named one, and each grant is a Role and a RoleBinding that the API server's audit log records.
 
-![The operator ServiceAccount's namespaced Roles. Two are in kaalm-system: the leader-election Role holding Leases, Events, and ConfigMaps, and the credentials Role holding Secrets with get, list, and watch. Two kinds are minted in user namespaces: the per-channel Role holding the channel's named Secrets with get and watch, and the per-workload pull-Secret Role holding the class's named pull Secrets with get and watch.](../diagrams/operator-rbac-namespaced.svg)
+![The operator ServiceAccount's namespaced Roles. Two are in kaalm-system: the leader-election Role holding Leases, Events, and ConfigMaps, and the credentials Role holding Secrets with get, list, and watch. Two kinds are minted in user namespaces: the per-channel Roles, a check Role holding every Secret the channel names and a credentials Role holding only the labeled ones, both with get and watch, and the per-workload pull-Secret Role holding the class's named pull Secrets with get and watch.](../diagrams/operator-rbac-namespaced.svg)
 
 **Leader election.** The Role `kaalm-controller-leader-election` grants all verbs on `Leases` in `kaalm-system`, which controller-runtime's leader-election lock requires; shipping it as a Role is what confines it to the operator's namespace. The Role also lists `Events` and all verbs on `ConfigMaps`. The lock uses Leases, and the operator's ConfigMap work in `kaalm-system` is already covered by the ClusterRole, so the ConfigMap entry grants nothing new.
 
-**Per-channel Role.** For every AgentChannel, the AgentChannelReconciler ensures one Role, `kaalm-channel-{name}-creds`, in the channel's namespace, granting `get, watch` with `resourceNames` limited to the Secrets the channel references, and two RoleBindings, one for the gateway ServiceAccount and one for the operator. All three carry a controller ownerRef to the AgentChannel and are deleted with it. The operator's binding is what lets it read the channel's credential keys: it holds no other Secret read in that namespace.
+**Per-channel Roles.** For every AgentChannel, the AgentChannelReconciler ensures two Roles in the channel's namespace ([Per-channel credential Roles](../controller/reconcilers.md#per-channel-credential-roles) gives the order). The check Role, `kaalm-channel-{name}-check`, grants `get, watch` with `resourceNames` limited to every Secret the channel references, and its RoleBinding names the operator alone. RBAC cannot grant a read by label, so the operator needs this grant to see the rule 45 label on each Secret. The credential Role, `kaalm-channel-{name}-creds`, grants `get, watch` on the referenced Secrets that carry the label only, with two RoleBindings, one for the gateway ServiceAccount and one for the operator; it has no rules while no referenced Secret is labeled. All of them carry a controller ownerRef to the AgentChannel and are deleted with it. The operator holds no other Secret read in that namespace.
 
 **Per-workload pull-Secret Role.** When a class sets `image.imagePullSecrets`, the AgentReconciler and AgentTaskReconciler ensure one Role per workload, `kaalm-agent-{name}-pullsecrets` or `kaalm-task-{name}-pullsecrets`, granting `get, watch` with `resourceNames` limited to those Secrets, and one RoleBinding for the operator. The `watch` verb lets the operator's watch on each Secret sync; `list` is omitted because `resourceNames` cannot constrain a plain list request. Both carry a controller ownerRef to the workload and are deleted with it, and both are removed when the class stops naming a pull Secret. A class with no pull Secrets creates neither. The kubelet, not the operator, uses the Secret to pull the image; the Role exists so that rule 23 can report a missing Secret before the Pod is created.
 
@@ -64,16 +64,18 @@ The gateway runs as `kaalm-system/kaalm-gateway` and holds the ClusterRole `kaal
 
 The gateway does not create the per-task completion ConfigMap and does not set its ownerRef. The AgentTaskReconciler creates it at provisioning time.
 
-![The gateway ServiceAccount's namespaced grants: the kaalm-gateway Role in kaalm-system holding Secrets and ConfigMaps, the per-channel Role holding the channel's named Secrets, and the per-task Role holding the completion ConfigMap with update and patch.](../diagrams/gateway-rbac-namespaced.svg)
+![The gateway ServiceAccount's namespaced grants: the kaalm-gateway Role in kaalm-system holding Secrets and ConfigMaps, the per-channel credentials Role holding the channel's labeled Secrets, and the per-task Role holding the completion ConfigMap with update and patch.](../diagrams/gateway-rbac-namespaced.svg)
 
 ### Dynamic per-namespace grants: channel credentials
 
-The gateway holds `get, watch` on the Secrets an AgentChannel references, in the channel's namespace, through the per-channel Role described under the operator. The Role lists every Secret the channel's type references:
+The gateway holds `get, watch` on the Secrets an AgentChannel references and that carry the label `kaalm.io/channel-credential: "true"`, in the channel's namespace, through the per-channel credential Role described under the operator. The Role lists the labeled Secrets among those the channel's type references:
 
 - a webhook channel's inbound Secret (`spec.webhook.auth.secretRef` for bearer, `spec.webhook.auth.hmac.secretRef` for HMAC) and, when `callbackUrl` is set, the outbound `spec.webhook.callbackAuth` Secret ([rule 25](../resources/validation-and-defaulting.md#cross-resource-validation)); the same Secret named twice is listed once;
 - a platform channel's single `spec.discord.credentialsRef` or `spec.whatsapp.credentialsRef` Secret ([rule 40](../resources/validation-and-defaulting.md#cross-resource-validation)), which backs both the inbound verifier and the outbound reply.
 
 `list` is omitted because `resourceNames` cannot constrain it, and a name-scoped `watch` must set `fieldSelector metadata.name=<secret>` to pass the check. The gateway has no blanket Secret access in user namespaces.
+
+The Role follows the label only at the next reconcile pass, and a watch that the gateway opened before the Role shrank can outlive it. The gateway therefore checks the label itself ([rule 45](../resources/validation-and-defaulting.md#cross-resource-validation)): it reads a channel Secret only if the Secret carries the label, even while the Role still grants it, and a bearer callback token only for a host the Secret's `kaalm.io/callback-hosts` annotation lists (rule 46). The gateway's LLM provider and tool credential reads in `kaalm-system` are separate and need no label.
 
 ### Dynamic per-namespace grants: task completion ConfigMaps
 
@@ -84,7 +86,7 @@ For an `agentReported` task, the AgentTaskReconciler pre-creates an empty `{task
 
 ### Summary of the gateway's reach
 
-The gateway's standing Secret read is `kaalm-system`. In user namespaces it reads only the Secrets each AgentChannel names and writes only the completion ConfigMap each `agentReported` task pre-creates. Async response ConfigMaps live in `kaalm-system` under the gateway's namespaced Role, which is why no per-channel grant exists for them; the AgentChannelReconciler sweeps them by label ([Async response ConfigMaps are swept by label, not owned](../runtime/child-resources.md#async-response-configmaps-are-swept-by-label-not-owned)). Activity tracking writes nothing: the gateway keeps activity timestamps in memory and serves them through the [activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api).
+The gateway's standing Secret read is `kaalm-system`. In user namespaces it reads only the labeled Secrets each AgentChannel names and writes only the completion ConfigMap each `agentReported` task pre-creates. Async response ConfigMaps live in `kaalm-system` under the gateway's namespaced Role, which is why no per-channel grant exists for them; the AgentChannelReconciler sweeps them by label ([Async response ConfigMaps are swept by label, not owned](../runtime/child-resources.md#async-response-configmaps-are-swept-by-label-not-owned)). Activity tracking writes nothing: the gateway keeps activity timestamps in memory and serves them through the [activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api).
 
 ## Roles for people
 
@@ -98,19 +100,21 @@ With `rbac.personas.enabled`, the chart installs these four ClusterRoles:
 |---|---|---|
 | `kaalm-platform-admin` | `*` on `agentclasses`, `modelproviders`, and `toolproviders`; `get, list, watch` on `agents`, `agenttasks`, and `agentchannels` | People who manage platform configuration; the second rule is cluster-wide observability |
 | `kaalm-catalog-reader` | `get, list, watch` on `agentclasses`, `modelproviders`, and `toolproviders`, and nothing else | Developers, so they can read the classes and providers they reference by name |
-| `kaalm-developer` | `*` on `agents`, `agenttasks`, and `agentchannels`; `get, list, watch` on core `pods`, `persistentvolumeclaims`, `services`, `configmaps`, and `events`; `get` on `pods/log` | A team working in its own namespace |
-| `kaalm-secrets-admin` | `get, list, watch, create, update, patch, delete` on core `secrets` | The people who manage LLM, tool, and channel credentials |
+| `kaalm-developer` | `*` on `agents`, `agenttasks`, and `agentchannels`; `get, list, watch` on core `pods`, `persistentvolumeclaims`, `services`, `configmaps`, and `events`; `get` on `pods/log`; with `rbac.personas.developerSecrets`, also `get, list, watch, create, update, patch, delete` on core `secrets` | A team working in its own namespace |
+| `kaalm-secrets-admin` | `get, list, watch, create, update, patch, delete` on core `secrets` | The people who manage credentials: LLM and tool credentials in the release namespace, and a team's channel credentials in that team's namespace |
 
 The grants on the Kaalm kinds are in the `kaalm.io` API group. Four properties hold across the set:
 
 - No persona role grants a `/status` subresource.
-- Only `kaalm-secrets-admin` grants Secrets. Developers get no Secret access, and `kaalm-platform-admin` has none because a ClusterRoleBinding would hand it out in every namespace.
+- Only `kaalm-secrets-admin` grants Secrets, with one exception: `rbac.personas.developerSecrets` adds Secret management to `kaalm-developer`. By default developers get no Secret access, and `kaalm-platform-admin` has none because a ClusterRoleBinding would hand it out in every namespace.
 - `kaalm-developer` grants no catalog kind, so developers cannot write the catalog.
 - None of the four carries an `aggregate-to` label. [Aggregation into the built-in roles](#aggregation-into-the-built-in-roles) is a separate switch.
 
 `kaalm-secrets-admin` lists `patch` because `kubectl apply` on an existing Secret needs it, and `list` because `kubectl get secrets` without a name needs it. `get` already exposes every Secret by name, so `list` widens nothing in the namespace where the role is bound.
 
 `rbac.personas.developerExec` (default `false`) adds `pods/exec` with `get` and `create` to `kaalm-developer` only, for debugging inside an agent container. Both verbs are needed: `kubectl exec` over WebSockets is authorized as `get`, and over SPDY (or with the `AuthorizePodWebsocketUpgradeCreatePermission` feature gate) as `create`. The value has no effect while `rbac.personas.enabled` is `false`.
+
+`rbac.personas.developerSecrets` (default `false`) adds one rule to `kaalm-developer`: core `secrets` with `get, list, watch, create, update, patch, delete`, in every namespace where `kaalm-developer` is bound. The other persona roles do not change, and the value has no effect while `rbac.personas.enabled` is `false`. Use it for teams whose developers own their channel credentials. A channel still uses only Secrets that carry the label `kaalm.io/channel-credential: "true"` ([rule 45](../resources/validation-and-defaulting.md#cross-resource-validation)), including the Secrets developers create.
 
 ### Bindings come from values
 
@@ -120,18 +124,21 @@ Each binding comes from a value, and an empty or missing list renders no binding
 |---|---|
 | `rbac.personas.platformAdmins` | ClusterRoleBinding `kaalm-platform-admin` |
 | `rbac.personas.catalogReaders` | ClusterRoleBinding `kaalm-catalog-reader` |
-| `rbac.personas.secretsAdmins` | RoleBinding `kaalm-secrets-admin` in the release namespace |
+| `rbac.personas.secretsAdmins` | A list of subjects. RoleBinding `kaalm-secrets-admin` in the release namespace only, for provider and tool credentials |
+| `rbac.personas.namespaceSecretsAdmins` | A map of namespace to subject list. Each namespace whose list is not empty gets a RoleBinding `kaalm-secrets-admin` in that namespace, for that team's channel credentials |
 | `rbac.personas.developers` | A map of namespace to subject list. Each namespace whose list is not empty gets a RoleBinding `kaalm-developer` in that namespace |
 
 Subjects are `rbac.authorization.k8s.io/v1` Subject objects, rendered verbatim. Subject values set while `rbac.personas.enabled` is `false` are ignored.
 
 The chart never binds `kaalm-developer` or `kaalm-secrets-admin` with a ClusterRoleBinding. A ClusterRole bound by a RoleBinding grants only in that namespace, so a developer has no access to other namespaces, and credential management is limited to the namespaces you choose. `kaalm-platform-admin` and `kaalm-catalog-reader` are the roles bound with ClusterRoleBindings, because the catalog kinds are cluster-scoped and a RoleBinding cannot grant them. `kaalm-platform-admin` also reads Agent, AgentTask, and AgentChannel in every namespace.
 
-The `kaalm-secrets-admin` binding covers the release namespace, which holds the LLM and tool credentials. Channel credential Secrets live in the channel's namespace. To manage them, bind `kaalm-secrets-admin` by hand with a RoleBinding in that namespace.
+Each team's credential manager owns that team's channel credentials: bind `kaalm-secrets-admin` to them in the team's namespace with `rbac.personas.namespaceSecretsAdmins`. The platform team holds no Secret rights in team namespaces. `rbac.personas.secretsAdmins` stays a list and covers the release namespace only, which holds the LLM and tool credentials. The credential manager labels each channel Secret (rule 45) and, for a bearer callback token, annotates it with the approved hosts (rule 46).
 
-Three lifecycle rules follow from rendering the bindings:
+These lifecycle rules follow from rendering the bindings:
 
-- Each namespace in `rbac.personas.developers` must already exist, or `helm install` and `helm upgrade` fail with `namespace not found`. For a namespace created later, add an entry and upgrade, or write a RoleBinding to ClusterRole `kaalm-developer` yourself.
+- Each namespace in `rbac.personas.developers` and `rbac.personas.namespaceSecretsAdmins` must already exist, or `helm install` and `helm upgrade` fail with `namespace not found`. For a namespace created later, add an entry and upgrade.
+- A value of `namespaceSecretsAdmins` that is not a map fails the render with `kaalm: rbac.personas.namespaceSecretsAdmins must be a map of namespace to a list of subjects`. A non-empty entry for the release namespace fails it with `kaalm: rbac.personas.namespaceSecretsAdmins must not list the release namespace; use rbac.personas.secretsAdmins`.
+- A RoleBinding `kaalm-secrets-admin` that someone made by hand in a listed namespace makes `helm install` and `helm upgrade` fail with `exists and cannot be imported`. Its `roleRef` matches the chart's, so adopt it into the release or delete it ([Managing team access](https://github.com/win07xp/kaalm/blob/main/guide/src/platform/managing-access.md)).
 - Removing an entry on upgrade deletes that RoleBinding, which revokes the access.
 - Turning `rbac.personas.enabled` off deletes the four ClusterRoles. A hand-written binding that references them dangles and grants nothing.
 

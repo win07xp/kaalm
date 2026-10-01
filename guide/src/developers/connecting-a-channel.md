@@ -39,6 +39,21 @@ Three rules about `path`:
 - The bearer Secret (`e2e-hook`) lives in your namespace, next to the
   channel; the reconciler grants the gateway a scoped read.
 
+The Secret must carry the label `kaalm.io/channel-credential: "true"`, which
+opts it in to channel use. The e2e suite's `test/e2e/testdata/secrets.yaml`
+creates `e2e-hook` with it. Your team's credential manager creates and labels
+the Secret; if the platform team set `rbac.personas.developerSecrets`, you do
+it yourself:
+
+```bash
+kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/channel-credential=true
+```
+
+Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with your
+namespace. A channel whose Secret has no label reports `Ready=False` with
+reason `SecretNotOptedIn`; see
+[Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
+
 Apply it and check the channel reaches `Active`:
 
 ```bash
@@ -80,6 +95,20 @@ channel shows an HMAC-signed callback); without one, poll
 `channelPath` value from the `202` body. Responses are held for a bounded
 time; the design book's Async webhook responses page states the TTL and the
 retry schedule.
+
+Every Secret a channel names needs the label, including the `callbackAuth`
+Secret; the sample's `webhook-secret` and `callback-secret` both do. A
+`callbackAuth` of type `bearer` also needs the host of the `callbackUrl` in the
+Secret's `kaalm.io/callback-hosts` annotation, a comma-separated list of
+hostnames, or the channel reports `CallbackHostNotApproved`. An HMAC callback
+needs no annotation.
+
+```bash
+kubectl annotate secret SECRET_NAME -n NAMESPACE kaalm.io/callback-hosts=HOST
+```
+
+Replace `HOST` with the hostname of your `callbackUrl`, such as
+`receiver.example.com`.
 
 ![Sequence diagram of delivery and response after intake. The webhook caller POSTs to the User Gateway on :8080, which runs the intake checks. In async mode the gateway creates the placeholder ConfigMap and answers 202 with requestId and channelPath. If the Agent is Hibernated or Hibernating the gateway POSTs /v1/activate/{namespace}/{name} to the controller activator on :9443 and polls the Agent Service for reachability up to wakeTimeout. The gateway POSTs /v1/message to the Agent Service with up to four attempts and receives the response envelope. In sync mode it answers 200 within syncDeliveryDeadline; in async mode with a callbackUrl it sends a signed POST with up to four attempts; otherwise it patches the ConfigMap with the payload.](../diagrams/user-webhook-flow.svg)
 

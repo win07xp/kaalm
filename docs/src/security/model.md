@@ -7,8 +7,8 @@ This part of the book defines Kaalm's security design: who trusts whom, how agen
 Kaalm assumes four trust tiers:
 
 1. **Cluster administrator**: trusted to install Kaalm, manage CRDs, and deploy the operator.
-2. **Platform engineer**: trusted to create AgentClasses, ModelProviders, and ToolProviders, and to manage credentials. Keep this role distinct from agent developers.
-3. **Agent developer**: trusted to deploy workloads in their namespace within the guardrails the platform team sets. Not trusted with credentials or cross-namespace access.
+2. **Platform engineer**: trusted to create AgentClasses, ModelProviders, and ToolProviders, and to manage the provider and tool credentials in `kaalm-system`. Keep this role distinct from agent developers. Each team's channel credentials belong to that team's credential manager, not to this tier ([Roles for people](rbac.md#roles-for-people)).
+3. **Agent developer**: trusted to deploy workloads in their namespace within the guardrails the platform team sets. Not trusted with cross-namespace access, and with credentials only where the platform team sets `rbac.personas.developerSecrets`.
 4. **Agent container**: not trusted. Even a developer-authored agent may execute LLM-generated code, so the container is treated as adversarial.
 
 Most controls on the following pages exist because of tier 4.
@@ -104,5 +104,5 @@ Kaalm does not log prompts or completions. LLM payloads may carry PII or proprie
 3. **Expose the User listener through a dedicated Ingress or LoadBalancer** with an HTTPS backend; the listener is TLS-only ([TLS and Ingress](../gateways/user/overview.md#tls-and-ingress)).
 4. **Enable Kubernetes audit logging** at the `Metadata` level at least, and `RequestResponse` for Secret access where the volume allows it.
 5. **Rely on standard NetworkPolicy** for the agent-to-gateway rule and for CIDR egress. It is enforced on every CNI that implements NetworkPolicy and needs no service mesh. Hostname egress (`allowedHosts`) needs Cilium; on another CNI, use `allowedCIDRs` or write the CNI's own hostname policy beside Kaalm's. Workloads in the gateway-only tier get no synthesized policy, so apply a default-deny egress policy on those namespaces yourself if direct provider calls must be prevented.
-6. **Separate credential management from platform engineering** where you can: bind the `kaalm-secrets-admin` role (`rbac.personas.secretsAdmins`) for the credential Secrets in `kaalm-system`, and by hand in each channel namespace, to different people than the catalog role ([Roles for people](rbac.md#roles-for-people)).
+6. **Give each team one credential manager, and keep the platform team out of team Secrets.** Bind the `kaalm-secrets-admin` role to the team's credential manager in the team's namespace (`rbac.personas.namespaceSecretsAdmins`), so the platform team holds no Secret rights there. Bind it with `rbac.personas.secretsAdmins` for the provider and tool credentials in `kaalm-system` to people other than the catalog role ([Roles for people](rbac.md#roles-for-people)).
 7. **Require a RuntimeClass on any AgentClass that runs LLM-generated code.** Installing the RuntimeClass and validating it on the cluster is the platform team's job.

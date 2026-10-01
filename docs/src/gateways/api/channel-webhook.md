@@ -12,7 +12,7 @@ The route is served on the user listener, `:8080`, with TLS from `kaalm-gateway-
 
 ## Routing gate
 
-The gateway routes a path only while its AgentChannel is `Ready=True` and not `Terminating`. A channel that fails validation (bad path, path conflict, missing Agent, missing auth Secret, invalid `callbackUrl`) receives no traffic, and a request to its path answers `401` exactly as an unregistered path does.
+The gateway routes a path only while its AgentChannel is `Ready=True` and not `Terminating`. A channel that fails validation (bad path, path conflict, missing Agent, missing or unlabeled auth Secret, invalid `callbackUrl`) receives no traffic, and a request to its path answers `401` exactly as an unregistered path does.
 
 ## Auth
 

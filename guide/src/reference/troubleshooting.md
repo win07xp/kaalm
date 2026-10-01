@@ -56,6 +56,55 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
 Hibernation also needs `hibernationEnabled` on the Agent and
 `hibernationAllowed` on the class; see [Hibernation, observed](../developers/lifecycle.md#hibernation-observed).
 
+## Channel is `Ready=False` with `SecretNotOptedIn` or `CallbackHostNotApproved`
+
+The `Ready` condition's message names the Secret:
+
+```bash
+kubectl get agentchannel CHANNEL_NAME -n NAMESPACE \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
+```
+
+A channel is not `Ready` until each Secret it references passes these checks.
+The gateway routes only `Ready=True` channels, so an unlabeled Secret stops
+traffic to the channel:
+
+- **`SecretNotOptedIn`**: the message says `Secret "NAME" does not carry the
+  label kaalm.io/channel-credential: "true"`. Confirm that the Secret was
+  created for the channel, then label it. Only the exact value `true`
+  counts; `True`, `yes`, and an empty value do not.
+
+  ```bash
+  kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/channel-credential=true
+  ```
+
+  A message that starts `callbackAuth:` names the callback Secret. The
+  message never lists the Secret's keys.
+- **`CallbackHostNotApproved`**: a Secret that holds a `bearer` callback token
+  must list the host of the channel's `callbackUrl` in its
+  `kaalm.io/callback-hosts` annotation. The annotation is a comma-separated
+  list of bare hostnames. An entry must equal the hostname, ignoring case and
+  surrounding spaces, with no wildcards and no suffixes, and the port in
+  `callbackUrl` plays no part. A channel with an `hmac` callback needs no
+  annotation.
+
+  ```bash
+  kubectl annotate secret SECRET_NAME -n NAMESPACE kaalm.io/callback-hosts=HOST --overwrite
+  ```
+
+  Replace `HOST` with the hostname, or with a comma-separated list that
+  keeps the hosts already approved.
+
+The channel re-checks every minute, so it turns `Ready=True` on the next pass
+after you fix the Secret, or at once when you edit the channel. The gateway
+does not wait for that pass: it refuses an unlabeled Secret on every read,
+and before every callback attempt it checks the label and the host again.
+When it refuses a callback, the channel's `PlatformConnected` condition
+carries `CallbackInvalid` with a message that starts `callbackAuth secret
+unavailable:`, nothing is delivered, and the response is still available by
+polling. Who may label a Secret depends on your platform team: see
+[Managing team access](../platform/managing-access.md).
+
 ## Webhook returns `401`
 
 ![Flowchart of every check on POST /channels/{namespace}/{path} in the order the User Gateway runs them, as three rows. Intake: body within maxMessageBodyBytes, else 413 request_too_large; path registered to a Ready=True AgentChannel, else 401; channel not Terminating, else 401; bearer or HMAC auth passes, else 401. Envelope and target: body normalizes, else 400 invalid_request; referenced Agent exists, else 502 delivery_failed; then responseMode: sync wakes if needed, delivers, and answers inline. Async accept: pending records below maxPendingAsyncResponses, else 503 internal_unavailable; placeholder ConfigMap created, else 503 internal_unavailable; then 202 with requestId and channelPath.](../diagrams/user-webhook-intake.svg)
@@ -67,7 +116,9 @@ authentication succeeds, on purpose:
   `/channels/{namespace}/`, and `/v1/` paths are the gateway API, not
   channels. `kubectl get agentchannels -n NAMESPACE` lists the paths.
 - The channel is not `Ready`, or is `Terminating`: a `Degraded` channel still
-  accepts traffic.
+  accepts traffic. A `Ready=False` channel with reason `SecretNotOptedIn`
+  needs its Secret labeled; see
+  [Channel is `Ready=False` with `SecretNotOptedIn` or `CallbackHostNotApproved`](#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 - Wrong or missing bearer token: compare with the channel's Secret.
 
 A WhatsApp verification `GET` whose verify token does not match answers the

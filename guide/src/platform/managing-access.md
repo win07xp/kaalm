@@ -97,6 +97,11 @@ To give a team its roles:
          - kind: Group
            name: platform-team
            apiGroup: rbac.authorization.k8s.io
+       namespaceSecretsAdmins:
+         team-new:
+           - kind: Group
+             name: team-new-credential-managers
+             apiGroup: rbac.authorization.k8s.io
        developers:
          team-new:
            - kind: Group
@@ -131,25 +136,49 @@ Each list does one job:
   with a RoleBinding in that namespace yourself.
 - `secretsAdmins` binds the Secret role in `kaalm-system` only, for the LLM
   and tool credentials.
+- `namespaceSecretsAdmins` maps a team namespace to that team's credential
+  managers, who own its channel credentials. See
+  [Keep channel credentials in team namespaces](#keep-channel-credentials-in-team-namespaces).
 
-If `developers` is not a map (for example, a list), the upgrade fails with
-`kaalm: rbac.personas.developers must be a map of namespace to a list of
-subjects`.
+If `developers` or `namespaceSecretsAdmins` is not a map (for example, a
+list), the upgrade fails with `kaalm: rbac.personas.developers must be a map
+of namespace to a list of subjects`, or the same message for
+`namespaceSecretsAdmins`.
 
 ### Keep channel credentials in team namespaces
 
-Neither the developer role nor the catalog role grants Secrets, so a team creates its
-channel and platform credential Secrets under whatever Secret access your
-namespace policy already gives it. To let a group manage the Secrets in one
-team namespace, bind the Secret role there:
+Each team owns its channel credentials. Name a credential manager for the
+team's namespace in `namespaceSecretsAdmins`, as in the example above. The
+chart then binds the Secret role there with a RoleBinding named
+`kaalm-secrets-admin`, and the platform team holds no Secret rights in team
+namespaces. The namespace must already exist, and an empty list renders
+nothing. Do not list the release namespace: the upgrade fails with
+`kaalm: rbac.personas.namespaceSecretsAdmins must not list the release
+namespace; use rbac.personas.secretsAdmins`. `secretsAdmins` is the list for
+the release namespace, which holds the provider and tool credentials.
+
+The credential manager creates each channel Secret and labels it, because a
+channel may use only Secrets that carry the label:
 
 ```bash
-kubectl create rolebinding kaalm-secrets-admin \
-  --clusterrole=kaalm-secrets-admin --group=team-new-leads -n team-new
+kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/channel-credential=true
 ```
 
-Bind it with a RoleBinding, never a ClusterRoleBinding: a RoleBinding limits
-the role to that namespace.
+Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with the team's
+namespace. A Secret used as a bearer `callbackAuth` token also needs its
+approved hosts in the `kaalm.io/callback-hosts` annotation. The label applies
+in every namespace, whoever creates the Secret. Developers need no Secret
+access to use the channel. [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved)
+shows what a channel reports when a Secret lacks the label.
+
+### Let developers manage Secrets
+
+For teams whose developers own their channel credentials, set
+`rbac.personas.developerSecrets: true`. The developer role then grants `get`,
+`list`, `watch`, `create`, `update`, `patch`, and `delete` on Secrets in every
+namespace where `kaalm-developer` is bound. The other roles do not change.
+The setting has no effect while `enabled` is `false`. Developers still label
+the Secrets they create, because the channel rule has no exception.
 
 ### Let developers exec into agents
 
@@ -159,8 +188,9 @@ allows developers into agent containers. It applies in every namespace where `ka
 
 ### Revoke access
 
-Removing a namespace from `developers` and upgrading deletes that namespace's
-RoleBinding, which revokes the team's access. Setting `enabled` to `false`
+Removing a namespace from `developers` or `namespaceSecretsAdmins` and
+upgrading deletes that namespace's RoleBinding, which revokes the team's
+access. Setting `enabled` to `false`
 deletes all four ClusterRoles, so any binding you wrote by hand that
 references them stays in place but grants nothing.
 
@@ -174,11 +204,14 @@ kind, name, and namespace. The chart can render these objects:
   `kaalm-developer`, and `kaalm-secrets-admin`.
 - ClusterRoleBindings `kaalm-platform-admin` and `kaalm-catalog-reader`.
 - RoleBinding `kaalm-secrets-admin` in the release namespace.
+- RoleBinding `kaalm-secrets-admin` in each namespace listed in
+  `namespaceSecretsAdmins`.
 - RoleBinding `kaalm-developer` in each namespace listed in `developers`.
 
 The common cases are a hand-written ClusterRole `kaalm-catalog-reader`, its
-ClusterRoleBinding if you also named it `kaalm-catalog-reader`, and a
-RoleBinding `kaalm-developer`.
+ClusterRoleBinding if you also named it `kaalm-catalog-reader`, a RoleBinding
+`kaalm-developer`, and a RoleBinding `kaalm-secrets-admin` that you bound by
+hand in a team namespace that you list in `namespaceSecretsAdmins`.
 
 A binding's `roleRef` cannot change after you create the binding, and the API
 server rejects any update to it. The chart renders every binding with
