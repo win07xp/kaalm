@@ -318,7 +318,6 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 		--set gateway.trustClusterCAForCallbacks=true \
 		--set 'gateway.callbackUrl.allowlist={mock-provider.e2e.svc}' \
 		--set console.enabled=true \
-		--set controller.trustClusterCAForProbes=true \
 		--set gateway.tracing.otlpEndpoint=http://jaeger.tracing-e2e.svc:4318 \
 		--set gateway.platforms.discord.apiBaseUrl=http://mock-discord.e2e.svc:8080/api/v10 \
 		--set gateway.platforms.whatsapp.apiBaseUrl=http://mock-whatsapp.e2e.svc:8080 \
@@ -417,7 +416,6 @@ load-deploy: chart-sync ## Install the chart onto the load cluster with the mock
 		--set gateway.trustClusterCAForUpstream=true \
 		--set gateway.trustClusterCAForCallbacks=true \
 		--set 'gateway.callbackUrl.allowlist={mock-provider.load.svc}' \
-		--set controller.trustClusterCAForProbes=true \
 		--set controller.pprofPort=$(LOAD_PPROF_PORT) \
 		--set gateway.pprofPort=$(LOAD_PPROF_PORT) \
 		--wait --timeout 5m

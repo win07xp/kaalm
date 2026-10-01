@@ -76,11 +76,18 @@ spec:
             {{- if .Values.controller.pprofPort }}
             - --pprof-bind-address=:{{ .Values.controller.pprofPort }}
             {{- end }}
+            {{- /* Provider health probes trust what the gateway's forwarding
+                 path trusts (gateway.trustClusterCAForUpstream and
+                 gateway.upstreamCA). The deprecated controller values add to
+                 the same additive pool so older values files keep working. */}}
             {{- $probeCAs := list }}
-            {{- if .Values.controller.trustClusterCAForProbes }}
+            {{- if or .Values.gateway.trustClusterCAForUpstream .Values.controller.trustClusterCAForProbes }}
             {{- $probeCAs = append $probeCAs "/var/run/kaalm/ca.crt" }}
             {{- end }}
-            {{- if .Values.controller.probeCA.configMap }}
+            {{- if .Values.gateway.upstreamCA.configMap }}
+            {{- $probeCAs = append $probeCAs "/var/run/kaalm/upstream-ca.crt" }}
+            {{- end }}
+            {{- if include "kaalm.controllerProbeCAProjected" . }}
             {{- $probeCAs = append $probeCAs "/var/run/kaalm/probe-ca.crt" }}
             {{- end }}
             {{- if $probeCAs }}
@@ -145,11 +152,21 @@ spec:
                   name: kaalm-ca-system
                   items:
                     - { key: ca.crt, path: ca.crt }
-              {{- with .Values.controller.probeCA.configMap }}
+              {{- with .Values.gateway.upstreamCA.configMap }}
+              # The gateway's upstream bundle, so provider health probes trust
+              # what forwarding trusts. Same filename as in the gateway.
               - configMap:
                   name: {{ . }}
                   items:
-                    - { key: {{ $.Values.controller.probeCA.key }}, path: probe-ca.crt }
+                    - { key: {{ $.Values.gateway.upstreamCA.key }}, path: upstream-ca.crt }
+              {{- end }}
+              {{- if include "kaalm.controllerProbeCAProjected" . }}
+              # Deprecated controller.probeCA, kept while values files move to
+              # gateway.upstreamCA.
+              - configMap:
+                  name: {{ .Values.controller.probeCA.configMap }}
+                  items:
+                    - { key: {{ .Values.controller.probeCA.key }}, path: probe-ca.crt }
               {{- end }}
 ---
 apiVersion: v1

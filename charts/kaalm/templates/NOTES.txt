@@ -18,6 +18,18 @@ repository's config/samples/ has a manifest per kind), then name it:
   helm upgrade {{ .Release.Name }} <the chart you installed> -n {{ .Release.Namespace }} \
     --set standardAgentClass.allowedProviders={YOUR-PROVIDER-NAME}
 {{- end }}
+{{- if .Values.controller.trustClusterCAForProbes }}
+
+WARNING: controller.trustClusterCAForProbes is deprecated. Set
+gateway.trustClusterCAForUpstream instead: provider health probes trust what
+the gateway's forwarding path trusts. The old value is still honored.
+{{- end }}
+{{- if .Values.controller.probeCA.configMap }}
+
+WARNING: controller.probeCA is deprecated. Set gateway.upstreamCA instead:
+provider health probes trust what the gateway's forwarding path trusts. The
+old value is still honored.
+{{- end }}
 
 Prerequisites (the chart does NOT install these):
   1. cert-manager, running with --enable-certificate-owner-ref=true

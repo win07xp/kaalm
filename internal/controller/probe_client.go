@@ -28,10 +28,11 @@ import (
 )
 
 // NewProbeClient builds the HTTP client both health checkers use when the
-// chart configures probe CA trust (docs/src/operations/deployment.md,
-// controller.trustClusterCAForProbes and controller.probeCA): the given
-// bundles are merged into the system roots, mirroring the gateway's
-// upstream trust pool. The client carries no Timeout of its own; each probe
+// chart configures probe CA trust (docs/src/operations/deployment.md): the
+// chart passes the gateway's upstream trust (gateway.trustClusterCAForUpstream
+// and gateway.upstreamCA, plus the deprecated controller.trustClusterCAForProbes
+// and controller.probeCA), and the given bundles are merged into the system
+// roots, so probes trust what the gateway's forwarding path trusts. The client carries no Timeout of its own; each probe
 // is bounded by its healthCheck.timeoutSeconds context.
 func NewProbeClient(caFiles []string) *http.Client {
 	return &http.Client{
