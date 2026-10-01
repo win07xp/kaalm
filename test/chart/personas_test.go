@@ -264,7 +264,8 @@ func TestPersonas_RoleRules(t *testing.T) {
 func TestPersonas_DeveloperExec(t *testing.T) {
 	base := renderRBAC(t, "--set", "rbac.personas.enabled=true")
 	r := renderRBAC(t, "--set", "rbac.personas.enabled=true", "--set", "rbac.personas.developerExec=true")
-	want := sorted(ruleSet(base.clusterRoles["kaalm-developer"].Rules), rulesFor("", []string{"pods/exec"}, "get", "create"))
+	execRule := rulesFor("", []string{"pods/exec"}, "get", "create")
+	want := sorted(ruleSet(base.clusterRoles["kaalm-developer"].Rules), execRule)
 	if got := ruleSet(r.clusterRoles["kaalm-developer"].Rules); !reflect.DeepEqual(got, want) {
 		t.Errorf("kaalm-developer rules with developerExec =\n  %v\nwant\n  %v", got, want)
 	}
@@ -331,9 +332,15 @@ rbac:
 		role     string
 		subjects []rbacv1.Subject
 	}{
-		releaseNamespace + "/kaalm-secrets-admin": {"kaalm-secrets-admin", []rbacv1.Subject{{Kind: "User", APIGroup: "rbac.authorization.k8s.io", Name: "alice"}}},
-		"team-a/kaalm-developer":                  {"kaalm-developer", []rbacv1.Subject{group("team-a-devs")}},
-		"team-b/kaalm-developer":                  {"kaalm-developer", []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ci", Namespace: "team-b"}}},
+		releaseNamespace + "/kaalm-secrets-admin": {
+			"kaalm-secrets-admin",
+			[]rbacv1.Subject{{Kind: "User", APIGroup: "rbac.authorization.k8s.io", Name: "alice"}},
+		},
+		"team-a/kaalm-developer": {"kaalm-developer", []rbacv1.Subject{group("team-a-devs")}},
+		"team-b/kaalm-developer": {
+			"kaalm-developer",
+			[]rbacv1.Subject{{Kind: "ServiceAccount", Name: "ci", Namespace: "team-b"}},
+		},
 	} {
 		rb, ok := r.roleBindings[key]
 		if !ok {
@@ -382,7 +389,8 @@ rbac:
 	if err == nil {
 		t.Fatalf("helm template succeeded with developers as a list\n%s", out)
 	}
-	if msg := "rbac.personas.developers must be a map of namespace to a list of subjects"; !strings.Contains(string(out), msg) {
+	msg := "rbac.personas.developers must be a map of namespace to a list of subjects"
+	if !strings.Contains(string(out), msg) {
 		t.Errorf("helm template output lacks %q:\n%s", msg, out)
 	}
 }
