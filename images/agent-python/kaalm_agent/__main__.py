@@ -175,8 +175,8 @@ class Agent:
         """Report AgentTask completion, retrying the 409 stale_pod rejection
         and transport errors.
 
-        Bounded backoff of 100ms, 500ms, 2s (contract item 6); a
-        TaskAlreadyCompleted 403 is terminal and raises
+        Four attempts: immediately, then after 100ms, 500ms, 2s (contract
+        item 6). A TaskAlreadyCompleted 403 is terminal and raises
         kaalm.TaskAlreadyCompleted, as does any call after a report was
         accepted (without sending). Any other answer raises
         CompletionRejected. Bound as kaalm.complete_task.
