@@ -29,6 +29,27 @@ var staleRetrySchedule = []time.Duration{100 * time.Millisecond, 500 * time.Mill
 // terminal phase, so the caller should log and exit rather than retry.
 var ErrTaskAlreadyCompleted = errors.New("task already completed")
 
+// completionRejected is the error CompleteTask returns for any other answer
+// it does not retry: the status code and the (capped) body the gateway sent.
+type completionRejected struct {
+	status int
+	body   string
+}
+
+func (e *completionRejected) Error() string {
+	return fmt.Sprintf("task completion failed: %d %s", e.status, e.body)
+}
+
+// isTaskNotAgentReported reports whether err is the gateway's 403
+// TaskNotAgentReported: the task completes via container exit (exitCode), so
+// it has no completion mailbox and every report gets the same answer.
+func isTaskNotAgentReported(err error) bool {
+	var rejected *completionRejected
+	return errors.As(err, &rejected) &&
+		rejected.status == http.StatusForbidden &&
+		strings.Contains(rejected.body, "TaskNotAgentReported")
+}
+
 // CompleteTask reports completion for an AgentTask (contract item 6),
 // retrying the 409 stale_pod rejection on a bounded schedule and returning
 // ErrTaskAlreadyCompleted on the terminal 403. Only meaningful in task mode;
@@ -63,7 +84,7 @@ func (a *Agent) CompleteTask(ctx context.Context, status, message string, artifa
 		case resp.StatusCode == http.StatusForbidden && strings.Contains(string(respBody), "TaskAlreadyCompleted"):
 			return ErrTaskAlreadyCompleted
 		default:
-			return fmt.Errorf("task completion failed: %d %s", resp.StatusCode, respBody)
+			return &completionRejected{status: resp.StatusCode, body: string(respBody)}
 		}
 	}
 	return fmt.Errorf("task completion exhausted retries: %w", lastErr)

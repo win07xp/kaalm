@@ -1,0 +1,20 @@
+# An agentReported AgentTask on the Python reference base image (the locally
+# built image `make e2e-images` imports as kaalm-agent-python:e2e). No handler
+# is mounted: the KAALM_TASK_AUTOCOMPLETE hook reports success at startup.
+apiVersion: kaalm.io/v1beta1
+kind: AgentTask
+metadata:
+  name: e2e-task-python
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: e2e-standard
+  image: registry.test/agents/kaalm-agent-python:e2e
+  env:
+    - name: KAALM_TASK_AUTOCOMPLETE
+      value: success
+  completion:
+    condition: agentReported
+    timeout: 2m
+    onTimeout: Fail
+  ttlSecondsAfterFinished: 30

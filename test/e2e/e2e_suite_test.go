@@ -41,6 +41,7 @@ var _ = AfterSuite(func() {
 		"test/e2e/testdata/s17-hard-budget.yaml",
 		"test/e2e/testdata/base-image.yaml",
 		"test/e2e/testdata/agenttask.yaml",
+		"test/e2e/testdata/agenttask-python.yaml",
 		"test/e2e/testdata/teardown.yaml",
 		"test/e2e/testdata/session_callback.yaml",
 		"test/e2e/testdata/hibernation.yaml",

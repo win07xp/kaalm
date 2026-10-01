@@ -22,9 +22,11 @@ append-only within a minor release series:
   OpenTelemetry SDK continue the trace from these values. Since v0.5.0.
 - ``await kaalm.complete_task(status, message="", artifacts=None)``: reports
   AgentTask completion (contract item 6). It is the runtime's own completion
-  coroutine, so it retries the 409 stale_pod rejection on the bounded
-  schedule and raises ``kaalm.TaskAlreadyCompleted`` on the terminal 403,
-  like agentruntime's CompleteTask and ErrTaskAlreadyCompleted.
+  coroutine, so it retries the 409 stale_pod rejection and transport errors
+  on the bounded schedule and raises ``kaalm.TaskAlreadyCompleted`` on the
+  terminal 403, like agentruntime's CompleteTask and ErrTaskAlreadyCompleted.
+  Once any report was accepted, it raises ``kaalm.TaskAlreadyCompleted``
+  without sending. Any other answer raises a RuntimeError.
 - ``kaalm.TaskAlreadyCompleted``: the exception class for that terminal 403.
   It is a plain class, usable without a running runtime.
 

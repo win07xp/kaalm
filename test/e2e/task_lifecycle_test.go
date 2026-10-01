@@ -23,6 +23,16 @@ var _ = Describe("Task lifecycle", Ordered, func() {
 		}, "180s", "5s").Should(Equal("Succeeded"))
 	})
 
+	It("runs an agentReported AgentTask on the Python base image to Succeeded", func() {
+		// The Python image's KAALM_TASK_AUTOCOMPLETE hook reports through
+		// the same /v1/task/complete path as the Go starter above.
+		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/agenttask-python.yaml")
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() (string, error) {
+			return utils.ResourceField("agenttask", "e2e", "e2e-task-python", "{.status.phase}")
+		}, "180s", "5s").Should(Equal("Succeeded"))
+	})
+
 	It("created the per-task completion mailbox ConfigMap and Role", func() {
 		// agentReported tasks get a completion mailbox ConfigMap
 		// (<task>-completion) and a per-task Role
