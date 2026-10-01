@@ -52,6 +52,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | AgentChannel | `SystemNamespaceForbidden`, `AgentNotFound`, and every other `Ready=False` reason `validateChannel` returns (`AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `ChildConflict`, `InvalidReference`, `CredentialsMissing`, and the other Secret and callback reasons) | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | AgentClass | `FQDNPolicyUnsupported` | Warning | the `FQDNPolicySupported` condition first turns `False`: `allowedHosts` is set on a CNI without FQDN egress, so the hosts are ignored |
 | AgentClass | `BelowRestrictedBaseline` | Warning | the `SecurityBaseline` condition first turns `False` because a `security` field falls below the restricted Pod Security Standard |
+| AgentClass | `DeprecatedFieldSet` | Warning | the `DeprecatedFields` condition first turns `True` because the class sets a deprecated field (`network.allowHostNetwork: true`); a steady finding sends nothing |
 | AgentClass | `InvalidReference`, `InvalidCIDR` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason, when the reason first appears on `Ready` |
 | ModelProvider, ToolProvider, AgentClass | `DeletionBlocked` | Warning | the finalizer's delete hold first appears, naming a referrer ([Cluster-scoped resources](finalizers.md#cluster-scoped-resources)) |
 

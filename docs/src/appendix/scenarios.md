@@ -8,7 +8,7 @@ Priya installs the Kaalm operator into her cluster with the Helm chart. The char
 
 ## S2: Offer a sandboxed class for code-execution agents
 
-Priya creates a second `AgentClass` named `sandboxed` for agents that execute untrusted code. This class requires the `gvisor` RuntimeClass, permits persistence with a size ceiling that workloads opt into, and enforces a stricter resource cap. Host networking is never granted: as shipped the class field `allowHostNetwork` is read by nothing, and no Pod Kaalm creates has it. Developers working on coding agents use this class; the security team is satisfied that LLM-generated code cannot escape the sandbox. The e2e suite carries such a class as a fixture; the chart ships none.
+Priya creates a second `AgentClass` named `sandboxed` for agents that execute untrusted code. This class requires the `gvisor` RuntimeClass, permits persistence with a size ceiling that workloads opt into, and enforces a stricter resource cap. Host networking is never granted: no Pod Kaalm creates uses it, and the deprecated class field `allowHostNetwork` has no effect. Developers working on coding agents use this class; the security team is satisfied that LLM-generated code cannot escape the sandbox. The repository's `config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml` is such a class, and the chart ships none ([Deployment](../operations/deployment.md)).
 
 ## S3: Provision a shared Anthropic provider with a per-namespace budget
 
