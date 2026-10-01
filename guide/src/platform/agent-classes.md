@@ -142,22 +142,23 @@ event.
 
 The repository's `config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml` is
 a starting point. It names the class `sandboxed` and runs its Pods under the
-`gvisor` RuntimeClass (handler `runsc`). It has these settings:
+`gvisor` RuntimeClass (handler `runsc`). The class gives you:
 
-- One `allowedImages` repository, with `allowHandlerMounts` left at `false`.
-- Default resources of 250m CPU and 512Mi memory requested and 1 CPU and 1Gi
-  limited, with `maxLimits` of 2 CPU and 2Gi.
-- Persistence enabled with `defaultSizeGi` 1, `maxSizeGi` 10, and
-  `pvcRetention` `Delete`.
-- `allowedProviders` of `anthropic-shared`.
+- One allowed image repository, with `allowHandlerMounts` left at `false`.
+- Default resource requests and limits, and a maximum limit above which a
+  workload cannot go.
+- Opt-in persistence with a storage size cap.
+- `anthropic-shared` as the only allowed provider.
 - No `network` block, so egress is the gateway and cluster DNS only.
 - The restricted security baseline, written out.
-- `defaultTaskTimeout` of `1h` and `maxTaskTimeout` of `6h`.
+- A default and a maximum task timeout.
 
-The cluster must provide the `gvisor` RuntimeClass before any workload
-selects the class, because the apiserver rejects a Pod that names a missing
-RuntimeClass. Check with `kubectl get runtimeclass gvisor`. The file is not
-in `config/samples/kustomization.yaml`, so apply it on its own:
+The sample file holds the exact values. Replace the image repository with
+yours before you apply it.
+
+Before you apply the sample, confirm that the cluster has the `gvisor`
+RuntimeClass with `kubectl get runtimeclass gvisor`. The file is not in
+`config/samples/kustomization.yaml`, so apply it on its own:
 
 ```bash
 kubectl apply -f config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml
