@@ -1,0 +1,178 @@
+{{/*
+Roles for people (docs/src/security/rbac.md, Roles for people). Off renders
+nothing: a default install creates none of these objects. With
+rbac.personas.enabled the chart installs four ClusterRoles, plus a binding for
+each subject list that is not empty. kaalm-developer and kaalm-secrets-admin
+are only ever bound with RoleBindings, so they grant in one namespace at a
+time. rbac.aggregateToDefaultRoles is a separate switch that adds the
+namespaced Kaalm kinds to the built-in view, edit and admin roles.
+*/}}
+{{- $rbac := .Values.rbac | default dict }}
+{{- $p := $rbac.personas | default dict }}
+{{- if $p.enabled }}
+{{- if and $p.developers (not (kindIs "map" $p.developers)) }}
+{{- fail "kaalm: rbac.personas.developers must be a map of namespace to a list of subjects" }}
+{{- end }}
+---
+# Owns the cluster-wide catalog; reads the namespaced kinds everywhere.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaalm-platform-admin
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agentclasses", "modelproviders", "toolproviders"]
+    verbs: ["*"]
+  - apiGroups: ["kaalm.io"]
+    resources: ["agents", "agenttasks", "agentchannels"]
+    verbs: ["get", "list", "watch"]
+---
+# Reads the catalog, so a developer can see which classes and providers exist.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaalm-catalog-reader
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agentclasses", "modelproviders", "toolproviders"]
+    verbs: ["get", "list", "watch"]
+---
+# Runs agents in a team namespace. Only ever bound with RoleBindings, so it
+# grants in the bound namespace only. No Secrets and no catalog writes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaalm-developer
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agents", "agenttasks", "agentchannels"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["pods", "persistentvolumeclaims", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  {{- if $p.developerExec }}
+  # kubectl exec is authorized as get over WebSockets and as create over SPDY
+  # (or with AuthorizePodWebsocketUpgradeCreatePermission), so both are needed.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["get", "create"]
+  {{- end }}
+---
+# Manages the Secrets that hold provider and channel credentials. Only ever
+# bound with RoleBindings.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaalm-secrets-admin
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- with $p.platformAdmins }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kaalm-platform-admin
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kaalm-platform-admin
+subjects:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with $p.catalogReaders }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kaalm-catalog-reader
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kaalm-catalog-reader
+subjects:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with $p.secretsAdmins }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kaalm-secrets-admin
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kaalm-secrets-admin
+subjects:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- range $ns, $subjects := $p.developers }}
+{{- if $subjects }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kaalm-developer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kaalm-developer
+subjects:
+  {{- toYaml $subjects | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $rbac.aggregateToDefaultRoles }}
+{{/*
+Catalog kinds (AgentClass, ModelProvider, ToolProvider) and Secrets are never
+aggregated: edit and admin are routinely bound per namespace to tenants, and a
+catalog write is cluster-wide policy.
+*/}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaalm-aggregate-to-view
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agents", "agenttasks", "agentchannels"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaalm-aggregate-to-edit
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+  - apiGroups: ["kaalm.io"]
+    resources: ["agents", "agenttasks", "agentchannels"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+{{- end }}
