@@ -178,7 +178,23 @@ kind, name, and namespace. The chart can render these objects:
 
 The common cases are a hand-written ClusterRole `kaalm-catalog-reader`, its
 ClusterRoleBinding if you also named it `kaalm-catalog-reader`, and a
-RoleBinding `kaalm-developer`. Delete the object, or adopt it into the release:
+RoleBinding `kaalm-developer`.
+
+A binding's `roleRef` cannot change after you create the binding, and the API
+server rejects any update to it. The chart renders every binding with
+`roleRef` kind `ClusterRole`: each RoleBinding `kaalm-developer` points at
+ClusterRole `kaalm-developer`, RoleBinding `kaalm-secrets-admin` points at
+ClusterRole `kaalm-secrets-admin`, and each ClusterRoleBinding points at the
+ClusterRole of the same name. Choose by what the existing object references:
+
+- **A ClusterRole, or a binding whose `roleRef` already matches the chart's:**
+  delete the object, or adopt it into the release.
+- **A binding whose `roleRef` differs from the chart's:** delete it. Adopting it
+  makes the upgrade fail with `cannot change roleRef`. The main case is a
+  RoleBinding `kaalm-developer` that references a namespaced Role
+  `kaalm-developer` (`roleRef` kind `Role`).
+
+To adopt an object, add the Helm label and the release annotations:
 
 ```bash
 kubectl label clusterrole kaalm-catalog-reader \
@@ -187,9 +203,25 @@ kubectl annotate clusterrole kaalm-catalog-reader \
   meta.helm.sh/release-name=kaalm meta.helm.sh/release-namespace=kaalm-system
 ```
 
-For a binding, run the same two commands on `clusterrolebinding NAME`, or on
-`rolebinding NAME` with `-n NAMESPACE`. A namespaced Role named `kaalm-developer`
-does not collide with the ClusterRole.
+For a binding with a matching `roleRef`, run the same two commands on
+`clusterrolebinding NAME`, or on `rolebinding NAME` with `-n NAMESPACE`.
+
+To remove a binding that references a namespaced Role, delete it, then run the
+upgrade again. Replace `NAMESPACE` with the binding's namespace:
+
+```bash
+kubectl delete rolebinding kaalm-developer -n NAMESPACE
+```
+
+Nothing then references the namespaced Role `kaalm-developer`, so you can
+delete it too:
+
+```bash
+kubectl delete role kaalm-developer -n NAMESPACE
+```
+
+A namespaced Role named `kaalm-developer` does not collide with the
+ClusterRole.
 
 ## Auditing with kubectl alone
 
