@@ -45,13 +45,16 @@ any of your code enters the picture.
 ## 2. Supply your handler
 
 Write `handler.py` defining `handle_message(envelope)`, sync or async. The
-runtime binds five members before your handler is imported, reached with
+runtime binds seven members before your handler is imported, reached with
 `import kaalm`: `kaalm.gateway` (a preconfigured mTLS client for LLM calls
 through the gateway), `kaalm.memory` (persistent key-value state, backed by
 the agent's volume when persistence is enabled), `kaalm.http_client()` and
 `kaalm.http_async_client()` (httpx clients carrying the Pod's identity, for
-framework SDKs), and `kaalm.trace_context()` (the current message's trace
-headers).
+framework SDKs), `kaalm.trace_context()` (the current message's trace
+headers), `kaalm.complete_task` (reports an AgentTask's result), and
+`kaalm.TaskAlreadyCompleted` (the exception `complete_task` raises when the
+task is already finished or has already reported). The last two matter only for tasks; see
+[Running tasks](running-tasks.md).
 
 ```python
 import kaalm

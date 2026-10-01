@@ -1,13 +1,18 @@
 # Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
-"""complete_task against a scripted gateway: the 409 stale_pod rejection is
-retried on the bounded schedule, TaskAlreadyCompleted is final, and any other
-non-200 (a 403 included) fails at once (contract item 6)."""
+"""complete_task against a scripted gateway: the 409 stale_pod rejection and
+transport errors are retried on the bounded schedule, TaskAlreadyCompleted
+raises kaalm.TaskAlreadyCompleted at once, and any other non-200 (a 403
+included) fails at once (contract item 6). Once a report is accepted, a
+later call raises kaalm.TaskAlreadyCompleted without sending."""
 
 from __future__ import annotations
 
 import asyncio
 
+import aiohttp
 import pytest
+
+import kaalm
 
 from kaalm_agent.__main__ import Agent
 from kaalm_agent.gateway import GatewayReply
@@ -22,14 +27,22 @@ OK = GatewayReply(200, "")
 
 
 class ScriptedGateway:
-    def __init__(self, *replies: GatewayReply):
+    """Answers each post with the next scripted reply; an exception in the
+    script is raised instead, as a transport error would be."""
+
+    def __init__(self, *replies: GatewayReply | Exception):
         self.replies = list(replies)
         self.calls = 0
+        self.bodies: list = []
 
     async def post(self, path, json=None):
         assert path == "/v1/task/complete"
         self.calls += 1
-        return self.replies.pop(0)
+        self.bodies.append(json)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
 
 @pytest.fixture(autouse=True)
@@ -57,10 +70,32 @@ async def test_stale_pod_exhausts_the_schedule():
     assert gw.calls == 4
 
 
-async def test_already_completed_is_final():
+async def test_already_completed_raises_and_is_final():
     gw = ScriptedGateway(DONE)
-    await mk_agent(gw).complete_task("success", "done")
+    agent = mk_agent(gw)
+    with pytest.raises(kaalm.TaskAlreadyCompleted):
+        await agent.complete_task("success", "done")
     assert gw.calls == 1
+    assert agent.task_reported
+
+
+async def test_success_marks_the_task_reported():
+    agent = mk_agent(ScriptedGateway(OK))
+    assert not agent.task_reported
+    await agent.complete_task("success")
+    assert agent.task_reported
+
+
+async def test_message_and_artifacts_are_optional():
+    gw = ScriptedGateway(OK)
+    await mk_agent(gw).complete_task("failure")
+    assert gw.bodies == [{"status": "failure", "message": "", "artifacts": {}}]
+
+
+async def test_artifacts_are_sent():
+    gw = ScriptedGateway(OK)
+    await mk_agent(gw).complete_task("success", "done", {"report": "s3://bucket/r.md"})
+    assert gw.bodies[0]["artifacts"] == {"report": "s3://bucket/r.md"}
 
 
 async def test_a_403_is_not_retried():
@@ -68,4 +103,32 @@ async def test_a_403_is_not_retried():
         "type": "access_denied", "message": "StalePodCompletion: old form"}}))
     with pytest.raises(RuntimeError, match="403"):
         await mk_agent(gw).complete_task("success", "done")
+    assert gw.calls == 1
+
+
+async def test_transport_errors_are_retried_then_succeed():
+    """Like agentruntime's CompleteTask, an error before any answer (a refused
+    or reset connection) is retried within the same bounded attempts."""
+    gw = ScriptedGateway(
+        aiohttp.ClientConnectionError("connection refused"),
+        aiohttp.ClientConnectionError("connection reset"),
+        OK,
+    )
+    await mk_agent(gw).complete_task("success", "done")
+    assert gw.calls == 3
+
+
+async def test_transport_errors_exhaust_the_schedule():
+    gw = ScriptedGateway(*([aiohttp.ClientConnectionError("connection refused")] * 4))
+    with pytest.raises(RuntimeError, match="exhausted.*connection refused"):
+        await mk_agent(gw).complete_task("success", "done")
+    assert gw.calls == 4
+
+
+async def test_no_report_is_sent_after_an_accepted_one():
+    gw = ScriptedGateway(OK)
+    agent = mk_agent(gw)
+    await agent.complete_task("success")
+    with pytest.raises(kaalm.TaskAlreadyCompleted):
+        await agent.complete_task("failure", "second thoughts")
     assert gw.calls == 1

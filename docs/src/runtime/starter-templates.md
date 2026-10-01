@@ -23,9 +23,9 @@ A custom image has to satisfy every item of the contract. The templates satisfy 
 - **The `/v1/message` handler skeleton**, which decodes the envelope, deduplicates on `messageId` over a persisted window of 1024 ids, and calls the single function the developer writes (items 4 and 7).
 - **Trace-context propagation** on every gateway call made while handling a message (item 8).
 - **The heartbeat loop**, every 30s in Agent mode only; see [The heartbeat toggle and hibernation](#the-heartbeat-toggle-and-hibernation) (item 5).
-- **The task-completion helper** in Go, `CompleteTask`, with the bounded retry on `409 stale_pod` (`StalePodCompletion`) and `TaskAlreadyCompleted` treated as final (item 6). The Python `kaalm` module has no completion member as shipped, so a Python task posts to `/v1/task/complete` through `kaalm.gateway` itself; issue #235 tracks the helper ([Task mode](base-images.md#task-mode)).
+- **The task-completion helper**, `CompleteTask` in Go and `kaalm.complete_task` in Python, with one bounded retry for transport errors (errors raised before the gateway answers) and `409 stale_pod` (`StalePodCompletion`): four attempts, immediately and then after 100ms, 500ms, and 2s. `TaskAlreadyCompleted` is final (item 6). The Python runtime also runs an optional `run_task` entry point and reports its outcome; see [Task mode](base-images.md#task-mode).
 
-What a template does not do: choose an LLM client library, persist conversation state, or implement the agent's logic. The handler function is the single extension point.
+What a template does not do: choose an LLM client library, persist conversation state, or implement the agent's logic. The handler function is the single extension point, and the Python template adds an optional `async def run_task()` task entry point.
 
 ### Why the watch is on the directory, not the file
 

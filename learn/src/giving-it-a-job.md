@@ -6,8 +6,7 @@ happened, and goes away.
 
 Same class, entirely different lifecycle. The image changes too, to the Go
 sibling of the Python image your agent runs: a task brings its whole program rather
-than a mounted handler, and the Go reference image has a tutorial shortcut
-built in that you will use in a moment.
+than a mounted handler.
 
 ## Run one
 
@@ -40,10 +39,10 @@ by calling the gateway to report a result. That distinction matters for real
 work: a coding agent that opens a pull request wants to hand back the URL, not
 an exit code alone.
 
-The Go reference image has a shortcut for this tutorial:
-`KAALM_TASK_AUTOCOMPLETE` makes it report `success` as soon as it starts, so
-you get to watch the lifecycle without writing any logic. A real task image
-carries code that does the work and reports its own result.
+Both reference images have a shortcut for this tutorial:
+`KAALM_TASK_AUTOCOMPLETE` makes the task report `success` as soon as it
+starts, so you get to watch the lifecycle without writing any logic. A real
+task image carries code that does the work and reports its own result.
 
 `timeout: 2m` with `onTimeout: Fail` bounds it, and `ttlSecondsAfterFinished`
 is how long the finished task and its pod are kept before Kaalm deletes them.

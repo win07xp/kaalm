@@ -247,12 +247,21 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 // a smoke/e2e hook: a real task reports completion from its own work.
 // Completing at pod startup can race the gateway's source-IP check (its Pod
 // informer may not have indexed this pod's IP yet), so it retries briefly.
+// An already-terminal task and an exitCode task (403 TaskNotAgentReported)
+// answer every later report the same way, so those end the attempts.
 func (a *Agent) autocomplete(ctx context.Context, status string) {
 	const attempts = 6
 	for attempt := 1; attempt <= attempts; attempt++ {
 		err := a.CompleteTask(ctx, status, "auto-complete on startup", nil)
-		if err == nil {
+		switch {
+		case err == nil:
 			log.Printf("task auto-complete reported %q (attempt %d)", status, attempt)
+			return
+		case errors.Is(err, ErrTaskAlreadyCompleted):
+			log.Printf("task auto-complete: task already completed; status %q not reported", status)
+			return
+		case isTaskNotAgentReported(err):
+			log.Printf("task auto-complete: this task completes via container exit (exitCode); status %q not reported", status)
 			return
 		}
 		log.Printf("task auto-complete attempt %d failed: %v", attempt, err)

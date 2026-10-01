@@ -28,11 +28,83 @@ spec:
   ttlSecondsAfterFinished: 300
 ```
 
-`KAALM_TASK_AUTOCOMPLETE` is a test hook in the Go base image and the
-Go starter template: the container reports the given status at startup
-instead of doing work. The Python image ignores it. Your task image reports completion itself, from
-its own code. The e2e suite's fixture, `test/e2e/testdata/agenttask.yaml`,
-has the same fields.
+`KAALM_TASK_AUTOCOMPLETE` is a test hook in both base images and in the
+starter templates. In a task, any non-empty value is sent as the completion
+status shortly after the container starts, and the gateway accepts only
+`success` or `failure`. The hook
+reports alongside whatever else the task does and does not replace it. Your
+task image reports completion itself, from its own code. The e2e suite's
+fixture, `test/e2e/testdata/agenttask.yaml`, has the same fields. The
+[Reference base images](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-kaalm_task_autocomplete-hook)
+page has the hook's retry rules.
+
+## Writing a task in Python
+
+A Python task is an image built `FROM` the Python base image, with a
+`handler.py` that defines `run_task`. Set `KAALM_HANDLER_PATH` in the
+Dockerfile, because the controller sets it only for Agents with
+`spec.handler`, and `spec.handler` stays Agent-only:
+
+```dockerfile
+FROM ghcr.io/win07xp/kaalm-agent-python:1.0.0
+COPY handler.py /opt/kaalm/handler/handler.py
+ENV KAALM_HANDLER_PATH=/opt/kaalm/handler
+```
+
+```python
+import kaalm
+
+
+def handle_message(envelope):
+    # Required, but a task receives no messages.
+    return {"content": ""}
+
+
+async def run_task():
+    report_url = await do_the_work()
+    try:
+        await kaalm.complete_task("success", "done", {"report-url": report_url})
+    except kaalm.TaskAlreadyCompleted:
+        pass  # something else already settled the task
+```
+
+The runtime starts `run_task` once, after its HTTPS server is listening, and
+only when the container runs as an AgentTask. `handle_message` is still
+required.
+
+- `kaalm.complete_task(status, message="", artifacts=None)` reports the
+  result. `status` is `"success"` or `"failure"`, and `artifacts` is a dict
+  of strings. It retries transport errors and the `409 stale_pod` answer for
+  you, within four attempts. Any other refusal raises `RuntimeError`.
+- If `run_task` returns without reporting, the runtime reports `success`
+  with an empty message and no artifacts. A task that declares
+  `spec.artifacts` must call `kaalm.complete_task` itself with them;
+  otherwise the gateway rejects the automatic `success` with `400`, and the
+  runtime logs that once and does not retry.
+- If `run_task` raises, the runtime reports `failure` with the exception
+  text, or the exception type name when the text is empty, cut to 4 KiB.
+  That includes an exception from `kaalm.complete_task` inside `run_task`.
+- Once the gateway accepts a report, no other report is sent.
+  `kaalm.complete_task` then raises `kaalm.TaskAlreadyCompleted` without
+  sending, and so does a call after the gateway answers that the task is
+  already finished. Do not retry; let the error end the run or catch it
+  and return.
+- In an `exitCode` task, the container's exit is the verdict, and the
+  gateway refuses every report with `403 TaskNotAgentReported`. The runtime
+  then exits for you: 0 when `run_task` returned, 1 when it raised. Do not
+  call `kaalm.complete_task` there. The refusal raises `RuntimeError`
+  (`task completion failed: 403 ...TaskNotAgentReported...`), not
+  `kaalm.TaskAlreadyCompleted`, so the `except` clause in the example above
+  does not catch it. If the error escapes `run_task`, it counts as a raise:
+  no report is sent and the container exits 1, even when the work
+  succeeded. Return from `run_task` to succeed and raise to fail. The
+  example above fits `agentReported` tasks.
+- A `run_task` that is not `async def`, or that takes required arguments,
+  stops the container at startup with an error in its log.
+
+The [Reference base images](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-run_task-entry-point)
+page has the full reporting and retry rules. In Go, your code provides `main()`
+and calls `CompleteTask` itself.
 
 ## The two completion modes
 
@@ -44,7 +116,9 @@ has the same fields.
   you.
 - **`exitCode`**: the container's exit status is the verdict; zero succeeds.
   Use this for agents that behave like batch jobs. Artifacts cannot be
-  declared in this mode; there is nobody to report them.
+  declared in this mode; there is nobody to report them. A Python
+  task on the base image gets its exit code from the runtime; see
+  [Writing a task in Python](#writing-a-task-in-python).
 
 `completion.timeout` bounds the run either way. If you leave it unset, the
 class's default timeout applies; under the chart's `standard` class, that's
@@ -88,8 +162,9 @@ omits one is rejected with `400 invalid_request` naming the missing artifact,
 and the task stays `Running` until it reports again or times out. A `failure`
 report may carry any subset. The first completion call a Pod makes can also be
 refused with `409 Conflict` and `error.type: stale_pod`
-while the gateway's Pod index catches up; the base images retry that on their
-own, and a task image of your own must too (runtime contract item 6).
+while the gateway's Pod index catches up; `CompleteTask` in Go and
+`kaalm.complete_task` in Python retry that on their own, and a task image of
+your own must too (runtime contract item 6).
 
 ## Cleanup and retries
 

@@ -99,17 +99,21 @@ different combination:
 - **`examples/langgraph-task/`**: a run-to-completion summarize, critique,
   refine graph as an AgentTask (next section).
 
-## Task mode is the custom-image rung
+## Task mode: a built image, either way
 
 An AgentTask's work is its whole program, not a resident message loop, so
-the handler mount is deliberately not its extension point. The
-`langgraph-task` example implements the slice of the contract a task needs: it
-reads its goal from its own `spec.env` (Kaalm injects no goal variables),
-runs the graph, and reports through `POST /v1/task/complete` with
-`status: "success"` and the artifacts declared in `spec.artifacts`,
-retrying only the retryable rejection (`409 stale_pod`, on 100ms,
-500ms, 2s) and treating `TaskAlreadyCompleted` as done. See
-[Running tasks](running-tasks.md) for the task lifecycle itself.
+the handler mount is deliberately not its extension point. A Python task can
+be a `FROM`-built base image whose `handler.py` defines `async def
+run_task()`; the runtime runs it and reports the outcome. See
+[Running tasks](running-tasks.md) for that path and the task lifecycle.
+
+The `langgraph-task` example is the custom-image alternative. It implements
+the slice of the contract a task needs: it reads its goal from its own
+`spec.env` (Kaalm injects no goal variables), runs the graph, and reports
+through `POST /v1/task/complete` with `status: "success"` and the artifacts
+declared in `spec.artifacts`, retrying only the retryable rejection
+(`409 stale_pod`, on 100ms, 500ms, 2s) and treating `TaskAlreadyCompleted`
+as done.
 
 ## Errors your graph will see
 
