@@ -132,7 +132,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: kaalm-developer
-  namespace: {{ $ns }}
+  namespace: {{ $ns | quote }}
   labels:
     {{- include "kaalm.labels" $ | nindent 4 }}
 roleRef:

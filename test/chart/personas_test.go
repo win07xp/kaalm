@@ -308,6 +308,14 @@ rbac:
           name: ci
           namespace: team-b
       team-c: []
+      "123":
+        - kind: Group
+          apiGroup: rbac.authorization.k8s.io
+          name: digits-devs
+      "on":
+        - kind: Group
+          apiGroup: rbac.authorization.k8s.io
+          name: on-devs
 `)...)
 	group := func(name string) rbacv1.Subject {
 		return rbacv1.Subject{Kind: "Group", APIGroup: "rbac.authorization.k8s.io", Name: name}
@@ -341,6 +349,9 @@ rbac:
 			"kaalm-developer",
 			[]rbacv1.Subject{{Kind: "ServiceAccount", Name: "ci", Namespace: "team-b"}},
 		},
+		// Namespace names that YAML reads as an int or a bool stay strings.
+		"123/kaalm-developer": {"kaalm-developer", []rbacv1.Subject{group("digits-devs")}},
+		"on/kaalm-developer":  {"kaalm-developer", []rbacv1.Subject{group("on-devs")}},
 	} {
 		rb, ok := r.roleBindings[key]
 		if !ok {
