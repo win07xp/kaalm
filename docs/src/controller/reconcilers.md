@@ -103,9 +103,9 @@ Probe TLS trust is the system roots plus the gateway's upstream trust, so probes
 
 The pool is additive and follows rotation without a restart. The same pool serves the ModelProvider and ToolProvider probes, including the Vertex token request. An in-cluster endpoint under a private CA can therefore probe `Healthy` instead of failing every handshake.
 
-When the flag is set, the probe transport is a clone of Go's `http.DefaultTransport` with only the trust pool changed. It honors `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` from the controller's environment, and it keeps the default HTTP/2 support, 30s dial timeout, and 10s TLS handshake timeout.
-
 The chart passes the bundle paths to the controller as `--probe-ca`, a comma-separated list of CA bundle paths added to the system roots. When the flag is empty, probes use the system roots only. The deprecated `controller.trustClusterCAForProbes` and `controller.probeCA` values still feed the same flag; see [Deployment](../operations/deployment.md#configuration-reference).
+
+The probe transport is Go's `http.DefaultTransport`. With `--probe-ca` set, it is a clone with only the trust pool changed. Either way, probes honor `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` from the controller's environment, and they keep HTTP/2, the 30s dial timeout, and the 10s TLS handshake timeout.
 
 ### Budget reconciliation
 

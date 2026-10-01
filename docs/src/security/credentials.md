@@ -46,9 +46,9 @@ Channel credentials are namespace-scoped so that each namespace holds only the c
 
 ## Health probes are a second credential egress
 
-The rule that the gateway is the only component that uses a credential covers the data path only. The controller's health probes also send the provider key or tool credential to the provider's configured endpoint, in or outside the cluster. Kaalm does not route the probes through the gateway, so the controller is a second credential egress.
+The rule that the gateway is the only component that uses a credential covers the data path only. The controller's health probes also send a credential to the provider's configured endpoint, in or outside the cluster. Most probes send the provider key or tool credential itself. A `google-vertex` probe sends an assertion signed with the key, and a token minted from it. Kaalm does not route the probes through the gateway, so the controller is a second credential egress.
 
-Each probe sends the credential only to these hosts:
+Each probe is bounded as follows:
 
 - **`anthropic`, `openai`, and `openai-compatible` ModelProviders, and ToolProviders:** the credential goes to `spec.endpoint` and nowhere else. A ToolProvider with no `credentialsRef` sends no credential.
 - **`google-vertex`:** the probe makes two requests. It sends a JWT assertion, signed with the service-account key's private key, to the key's `token_uri`, and then sends the minted access token to `spec.endpoint`. The private key is never sent. The bound is `spec.endpoint` plus the key's `token_uri`, and the gateway sends this credential nowhere.
