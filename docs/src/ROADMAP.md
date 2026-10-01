@@ -98,8 +98,7 @@ The milestone after it is **v1.2.0**, the isolation milestone: the
 ([#167](https://github.com/win07xp/kaalm/issues/167)). It starts when the
 upstream conditions the issue lists hold. One of them is a quarter of
 stable releases on upstream's v1beta1 line, so the start is no earlier than
-late November 2026. Hostname egress on Calico Enterprise
-([#273](https://github.com/win07xp/kaalm/issues/273)) is on the same
+late November 2026. The full list is on the
 [milestone](https://github.com/win07xp/kaalm/milestone/9).
 
 ## Beyond

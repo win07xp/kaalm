@@ -150,8 +150,8 @@ type AgentClassEgress struct {
 	// implements standard NetworkPolicy.
 	// +optional
 	AllowedCIDRs []string `json:"allowedCIDRs,omitempty"`
-	// AllowedHosts are DNS names permitted for egress, enforced only on CNIs that
-	// support FQDN policies (Cilium, Calico Enterprise).
+	// AllowedHosts are DNS names permitted for egress, enforced only on Cilium,
+	// which supports FQDN policies.
 	// +optional
 	AllowedHosts []string `json:"allowedHosts,omitempty"`
 }
