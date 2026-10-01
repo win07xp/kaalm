@@ -64,15 +64,97 @@ func mkChannel(t *testing.T, name, agentName, path string, mutate func(*kaalmv1b
 	}
 }
 
+// mkChannelSecret creates a channel Secret that opts in to channel use
+// (rule 45).
 func mkChannelSecret(t *testing.T, name string) {
 	t.Helper()
+	mkDefaultSecret(t, name, channelCredentialLabels(), nil, map[string][]byte{"token": []byte("hook-token")})
+}
+
+// mkUnlabeledChannelSecret creates a Secret with a token key but without the
+// rule 45 opt-in label.
+func mkUnlabeledChannelSecret(t *testing.T, name string) {
+	t.Helper()
+	mkDefaultSecret(t, name, nil, nil, map[string][]byte{"token": []byte("hook-token")})
+}
+
+// mkCallbackSecret creates an opted-in Secret whose kaalm.io/callback-hosts
+// annotation lists hosts (rule 46).
+func mkCallbackSecret(t *testing.T, name, hosts string, data map[string][]byte) {
+	t.Helper()
+	mkDefaultSecret(t, name, channelCredentialLabels(),
+		map[string]string{kaalmv1beta1.AnnotationCallbackHosts: hosts}, data)
+}
+
+func channelCredentialLabels() map[string]string {
+	return map[string]string{kaalmv1beta1.LabelChannelCredential: kaalmv1beta1.AnnotationTrue}
+}
+
+func mkDefaultSecret(t *testing.T, name string, labels, annotations map[string]string, data map[string][]byte) {
+	t.Helper()
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Data:       map[string][]byte{"token": []byte("hook-token")},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: labels, Annotations: annotations},
+		Data:       data,
 	}
 	if err := testClient.Create(ctxT(), sec); err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("create channel secret: %v", err)
+		t.Fatalf("create secret %s: %v", name, err)
 	}
+}
+
+// editSecret applies mutate to a Secret in default, retrying on conflict.
+func editSecret(t *testing.T, name string, mutate func(*corev1.Secret)) {
+	t.Helper()
+	eventually(t, func() error {
+		var sec corev1.Secret
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &sec); err != nil {
+			return err
+		}
+		mutate(&sec)
+		return testClient.Update(ctxT(), &sec)
+	})
+}
+
+// touchChannel annotates a channel so it reconciles now: the reconciler
+// watches no Secrets, so a Secret change shows on its own only at the next
+// one-minute pass.
+func touchChannel(t *testing.T, name, value string) {
+	t.Helper()
+	eventually(t, func() error {
+		var ch kaalmv1beta1.AgentChannel
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
+			return err
+		}
+		if ch.Annotations == nil {
+			ch.Annotations = map[string]string{}
+		}
+		ch.Annotations["test/touch"] = value
+		return testClient.Update(ctxT(), &ch)
+	})
+}
+
+// getRole reads a Role in default.
+func getRole(name string) (*rbacv1.Role, error) {
+	var role rbacv1.Role
+	err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &role)
+	return &role, err
+}
+
+// credsRoleNames returns the Secret names the gateway-facing -creds Role
+// grants, or nil when it has no rules.
+func credsRoleNames(channel string) ([]string, error) {
+	role, err := getRole("kaalm-channel-" + channel + "-creds")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, r := range role.Rules {
+		if len(r.ResourceNames) == 0 {
+			return nil, errString("a -creds rule with no resourceNames grants every Secret")
+		}
+		names = append(names, r.ResourceNames...)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func expectChannelReady(t *testing.T, name string, want metav1.ConditionStatus, reason string) {
@@ -124,6 +206,9 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-ok-creds-gateway"}, &rb); err != nil {
 		t.Errorf("gateway RoleBinding missing: %v", err)
 	}
+	// The controller-only check Role lists the Secret too (rule 45 reads its
+	// label), bound to the controller alone.
+	assertCheckRole(t, "ch-ok", []string{"ch-ok-secret"})
 	// Phase reduces from the Agent (Pending and transients are Active).
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
@@ -472,7 +557,8 @@ func TestChannel_InvalidCallbackURL(t *testing.T) {
 func TestChannel_UnresolvableCallbackHostWarns(t *testing.T) {
 	mkWorkloadClass(t, "chc-nxcb", nil)
 	mkWorkloadAgent(t, "ch-agent-nxcb", "chc-nxcb", nil)
-	mkChannelSecret(t, "ch-nxcb-secret")
+	mkCallbackSecret(t, "ch-nxcb-secret", "kaalm-callback-typo.invalid",
+		map[string][]byte{"token": []byte("hook-token")})
 	cbURL := "https://kaalm-callback-typo.invalid/hook" // .invalid never resolves (RFC 6761)
 	mkChannel(t, "ch-nxcb", "ch-agent-nxcb", "/channels/default/ch-nxcb", func(ch *kaalmv1beta1.AgentChannel) {
 		ch.Spec.Webhook.CallbackURL = &cbURL
@@ -815,7 +901,7 @@ func TestChannel_CallbackAuthKeyMissing(t *testing.T) {
 	mkWorkloadClass(t, "chc-cbkey", nil)
 	mkWorkloadAgent(t, "ch-agent-cbkey", "chc-cbkey", nil)
 	mkChannelSecret(t, "ch-cbkey-secret")
-	mkPlatformSecret(t, "ch-cbkey-callback", map[string][]byte{"other": []byte("x")})
+	mkCallbackSecret(t, "ch-cbkey-callback", "example.com", map[string][]byte{"other": []byte("x")})
 	mkCallbackChannel(t, "ch-cbkey", "ch-agent-cbkey", "ch-cbkey-callback")
 	expectChannelReady(t, "ch-cbkey", metav1.ConditionFalse, kaalmv1beta1.ReasonCallbackAuthMissing)
 }
@@ -824,7 +910,7 @@ func TestChannel_CallbackAuthKeyEmpty(t *testing.T) {
 	mkWorkloadClass(t, "chc-cbempty", nil)
 	mkWorkloadAgent(t, "ch-agent-cbempty", "chc-cbempty", nil)
 	mkChannelSecret(t, "ch-cbempty-secret")
-	mkPlatformSecret(t, "ch-cbempty-callback", map[string][]byte{"token": {}})
+	mkCallbackSecret(t, "ch-cbempty-callback", "example.com", map[string][]byte{"token": {}})
 	mkCallbackChannel(t, "ch-cbempty", "ch-agent-cbempty", "ch-cbempty-callback")
 	expectChannelReady(t, "ch-cbempty", metav1.ConditionFalse, kaalmv1beta1.ReasonCallbackAuthInvalid)
 }
@@ -833,7 +919,7 @@ func TestChannel_CallbackAuthKeyEmpty(t *testing.T) {
 // CEL rejects it at apply, so this drives validateSecrets directly.
 func TestValidateSecrets_CallbackAuthMalformed(t *testing.T) {
 	inbound := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "in", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "in", Namespace: "default", Labels: channelCredentialLabels()},
 		Data:       map[string][]byte{"token": []byte("t")},
 	}
 	r := &AgentChannelReconciler{Client: fake.NewClientBuilder().WithObjects(inbound).Build()}
@@ -848,7 +934,7 @@ func TestValidateSecrets_CallbackAuthMalformed(t *testing.T) {
 			CallbackAuth: &kaalmv1beta1.ChannelAuth{Type: "hmac"},
 		}},
 	}
-	if reason, _ := r.validateSecrets(ctxT(), ch); reason != kaalmv1beta1.ReasonCallbackAuthInvalid {
+	if reason, _, _ := r.validateSecrets(ctxT(), ch); reason != kaalmv1beta1.ReasonCallbackAuthInvalid {
 		t.Errorf("reason = %q, want %q", reason, kaalmv1beta1.ReasonCallbackAuthInvalid)
 	}
 }
@@ -1195,15 +1281,10 @@ func TestAuthSecretNames_DedupAndHMAC(t *testing.T) {
 // A valid Ed25519 public key in hex: 32 bytes.
 const testDiscordPublicKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+// mkPlatformSecret creates an opted-in Secret (rule 45) with data.
 func mkPlatformSecret(t *testing.T, name string, data map[string][]byte) {
 	t.Helper()
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Data:       data,
-	}
-	if err := testClient.Create(ctxT(), sec); err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("create platform secret: %v", err)
-	}
+	mkDefaultSecret(t, name, channelCredentialLabels(), nil, data)
 }
 
 func mkDiscordChannel(t *testing.T, name, agentName, path, secretName string) {
@@ -1472,4 +1553,300 @@ func TestChannel_UnownedCredentialRoleIsChildConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectChannelReady(t, "ch-own-role", metav1.ConditionTrue, "")
+}
+
+// ---- Rules 45 and 46: channel Secrets opt in, bearer callbacks bind hosts ----
+
+// assertCheckRole waits for the controller-only check Role of a channel to
+// list exactly names, bound to the controller's ServiceAccount alone.
+func assertCheckRole(t *testing.T, channel string, names []string) {
+	t.Helper()
+	name := "kaalm-channel-" + channel + "-check"
+	eventually(t, func() error {
+		role, err := getRole(name)
+		if err != nil {
+			return err
+		}
+		if len(role.Rules) != 1 {
+			return errString(fmt.Sprintf("check Role has %d rules, want 1", len(role.Rules)))
+		}
+		got := append([]string(nil), role.Rules[0].ResourceNames...)
+		sort.Strings(got)
+		if strings.Join(got, ",") != strings.Join(names, ",") {
+			return errString(fmt.Sprintf("check Role lists %v, want %v", got, names))
+		}
+		var rb rbacv1.RoleBinding
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rb); err != nil {
+			return err
+		}
+		if len(rb.Subjects) != 1 || rb.Subjects[0].Name != controllerServiceAccount {
+			return errString(fmt.Sprintf("check RoleBinding subjects %+v, want the controller only", rb.Subjects))
+		}
+		return nil
+	})
+}
+
+// expectCredsRole waits for the -creds Role to grant exactly names (none
+// means a Role with no rules).
+func expectCredsRole(t *testing.T, channel string, names []string) {
+	t.Helper()
+	eventually(t, func() error {
+		got, err := credsRoleNames(channel)
+		if err != nil {
+			return err
+		}
+		if strings.Join(got, ",") != strings.Join(names, ",") {
+			return errString(fmt.Sprintf("-creds Role grants %v, want %v", got, names))
+		}
+		return nil
+	})
+}
+
+// readyMessage returns the channel's Ready condition message.
+func readyMessage(t *testing.T, name string) string {
+	t.Helper()
+	var ch kaalmv1beta1.AgentChannel
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
+		t.Fatal(err)
+	}
+	if c := condition(ch.Status.Conditions, kaalmv1beta1.ConditionReady); c != nil {
+		return c.Message
+	}
+	return ""
+}
+
+// Rule 45: a Secret without the opt-in label leaves the channel not Ready
+// and out of the gateway's Role; labeling it brings the channel up.
+func TestChannel_UnlabeledSecretNotOptedIn(t *testing.T) {
+	mkWorkloadClass(t, "chc-nolabel", nil)
+	mkWorkloadAgent(t, "ch-agent-nolabel", "chc-nolabel", nil)
+	mkUnlabeledChannelSecret(t, "ch-nolabel-secret")
+	mkChannel(t, "ch-nolabel", "ch-agent-nolabel", "/channels/default/ch-nolabel", nil)
+
+	expectChannelReady(t, "ch-nolabel", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+	if msg := readyMessage(t, "ch-nolabel"); !strings.Contains(msg, kaalmv1beta1.LabelChannelCredential) {
+		t.Errorf("message %q does not name the label", msg)
+	}
+	expectCredsRole(t, "ch-nolabel", nil)
+	assertCheckRole(t, "ch-nolabel", []string{"ch-nolabel-secret"})
+
+	editSecret(t, "ch-nolabel-secret", func(s *corev1.Secret) { s.Labels = channelCredentialLabels() })
+	touchChannel(t, "ch-nolabel", "labeled")
+	expectChannelReady(t, "ch-nolabel", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+	expectCredsRole(t, "ch-nolabel", []string{"ch-nolabel-secret"})
+}
+
+// Rule 45 covers the callbackAuth Secret: the inbound Secret is granted, the
+// unlabeled callback Secret is not, and the message says which reference.
+func TestChannel_CallbackAuthSecretNotOptedIn(t *testing.T) {
+	mkWorkloadClass(t, "chc-cbnolabel", nil)
+	mkWorkloadAgent(t, "ch-agent-cbnolabel", "chc-cbnolabel", nil)
+	mkChannelSecret(t, "ch-cbnolabel-secret")
+	mkUnlabeledChannelSecret(t, "ch-cbnolabel-callback")
+	mkCallbackChannel(t, "ch-cbnolabel", "ch-agent-cbnolabel", "ch-cbnolabel-callback")
+
+	expectChannelReady(t, "ch-cbnolabel", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+	if msg := readyMessage(t, "ch-cbnolabel"); !strings.HasPrefix(msg, "callbackAuth: ") {
+		t.Errorf("message %q, want the callbackAuth: prefix", msg)
+	}
+	expectCredsRole(t, "ch-cbnolabel", []string{"ch-cbnolabel-secret"})
+	assertCheckRole(t, "ch-cbnolabel", []string{"ch-cbnolabel-callback", "ch-cbnolabel-secret"})
+}
+
+// Rule 45 runs before the key checks of rule 40: an unlabeled platform Secret
+// with a missing or malformed key reports SecretNotOptedIn and names no key.
+func TestChannel_DiscordSecretNotOptedIn(t *testing.T) {
+	mkWorkloadClass(t, "chc-dcnl", nil)
+	mkWorkloadAgent(t, "ch-agent-dcnl", "chc-dcnl", nil)
+	mkDefaultSecret(t, "ch-dcnl-creds", nil, nil, map[string][]byte{"publicKey": []byte("not-hex")})
+	mkDiscordChannel(t, "ch-dcnl", "ch-agent-dcnl", "/channels/default/ch-dcnl", "ch-dcnl-creds")
+
+	expectChannelReady(t, "ch-dcnl", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+	if msg := readyMessage(t, "ch-dcnl"); strings.Contains(msg, "publicKey") {
+		t.Errorf("message %q names a key of an unlabeled Secret", msg)
+	}
+	expectCredsRole(t, "ch-dcnl", nil)
+}
+
+func TestChannel_WhatsAppSecretNotOptedIn(t *testing.T) {
+	mkWorkloadClass(t, "chc-wanl", nil)
+	mkWorkloadAgent(t, "ch-agent-wanl", "chc-wanl", nil)
+	mkDefaultSecret(t, "ch-wanl-creds", nil, nil, map[string][]byte{"verifyToken": []byte("v")})
+	ch := &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch-wanl", Namespace: "default"},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-agent-wanl"},
+			Type:     kaalmv1beta1.ChannelTypeWhatsApp,
+			WhatsApp: &kaalmv1beta1.AgentChannelWhatsApp{
+				Path:           "/channels/default/ch-wanl",
+				CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: "ch-wanl-creds"},
+				PhoneNumberID:  "106540352242922",
+			},
+		},
+	}
+	if err := testClient.Create(ctxT(), ch); err != nil {
+		t.Fatalf("create whatsapp channel: %v", err)
+	}
+	expectChannelReady(t, "ch-wanl", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+	msg := readyMessage(t, "ch-wanl")
+	for _, key := range []string{"verifyToken", "appSecret", "accessToken"} {
+		if strings.Contains(msg, key) {
+			t.Errorf("message %q names the key %s of an unlabeled Secret", msg, key)
+		}
+	}
+	expectCredsRole(t, "ch-wanl", nil)
+}
+
+// Removing the label from a Secret a Ready channel uses shrinks the gateway's
+// Role to nothing and reports SecretNotOptedIn. This is also the upgrade
+// case: a -creds Role written by the previous release starts populated.
+func TestChannel_LabelRemovedShrinksGatewayRole(t *testing.T) {
+	mkWorkloadClass(t, "chc-unlabel", nil)
+	mkWorkloadAgent(t, "ch-agent-unlabel", "chc-unlabel", nil)
+	mkChannelSecret(t, "ch-unlabel-secret")
+	mkChannel(t, "ch-unlabel", "ch-agent-unlabel", "/channels/default/ch-unlabel", nil)
+	expectChannelReady(t, "ch-unlabel", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+	expectCredsRole(t, "ch-unlabel", []string{"ch-unlabel-secret"})
+
+	editSecret(t, "ch-unlabel-secret", func(s *corev1.Secret) {
+		delete(s.Labels, kaalmv1beta1.LabelChannelCredential)
+	})
+	touchChannel(t, "ch-unlabel", "unlabeled")
+	expectChannelReady(t, "ch-unlabel", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+	expectCredsRole(t, "ch-unlabel", nil)
+	// The bindings stay; they grant nothing while the Role has no rules.
+	var rb rbacv1.RoleBinding
+	if err := testClient.Get(ctxT(),
+		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-unlabel-creds-gateway"}, &rb); err != nil {
+		t.Errorf("gateway RoleBinding removed: %v", err)
+	}
+}
+
+// Rule 46: a bearer callbackAuth Secret must list the callbackUrl host in
+// kaalm.io/callback-hosts. Listing it brings the channel up; moving the
+// callbackUrl to another host takes it down again.
+func TestChannel_CallbackHostNotApproved(t *testing.T) {
+	mkWorkloadClass(t, "chc-cbhost", nil)
+	mkWorkloadAgent(t, "ch-agent-cbhost", "chc-cbhost", nil)
+	mkChannelSecret(t, "ch-cbhost-secret")
+	mkCallbackSecret(t, "ch-cbhost-callback", "other.invalid", map[string][]byte{"token": []byte("t")})
+	// .invalid never resolves (RFC 6761): a channel that passes rule 46 stays
+	// Ready with only the CallbackHostUnresolved Warning.
+	cbURL := "https://kaalm-cbhost.invalid:8443/hook"
+	mkChannel(t, "ch-cbhost", "ch-agent-cbhost", "/channels/default/ch-cbhost", func(ch *kaalmv1beta1.AgentChannel) {
+		ch.Spec.Webhook.CallbackURL = &cbURL
+		ch.Spec.Webhook.CallbackAuth = &kaalmv1beta1.ChannelAuth{
+			Type:      "bearer",
+			SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "ch-cbhost-callback", Key: "token"},
+		}
+	})
+	expectChannelReady(t, "ch-cbhost", metav1.ConditionFalse, kaalmv1beta1.ReasonCallbackHostNotApproved)
+	if msg := readyMessage(t, "ch-cbhost"); !strings.Contains(msg, "kaalm-cbhost.invalid") ||
+		!strings.HasPrefix(msg, "callbackAuth: ") {
+		t.Errorf("message %q, want the callbackAuth: prefix and the host", msg)
+	}
+
+	// Listed in another case, port ignored.
+	editSecret(t, "ch-cbhost-callback", func(s *corev1.Secret) {
+		s.Annotations[kaalmv1beta1.AnnotationCallbackHosts] = "other.invalid, KAALM-CBHOST.invalid"
+	})
+	touchChannel(t, "ch-cbhost", "approved")
+	expectChannelReady(t, "ch-cbhost", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	// Editing the callbackUrl to an unlisted host is caught too.
+	eventually(t, func() error {
+		var ch kaalmv1beta1.AgentChannel
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-cbhost"}, &ch); err != nil {
+			return err
+		}
+		moved := "https://kaalm-elsewhere.invalid/hook"
+		ch.Spec.Webhook.CallbackURL = &moved
+		return testClient.Update(ctxT(), &ch)
+	})
+	expectChannelReady(t, "ch-cbhost", metav1.ConditionFalse, kaalmv1beta1.ReasonCallbackHostNotApproved)
+}
+
+// validateSecrets in isolation: the order of rules 45 and 46 against the key
+// checks, the HMAC exemption from rule 46, and the opted-in set it returns.
+func TestValidateSecrets_OptInAndCallbackHosts(t *testing.T) {
+	labeled := channelCredentialLabels()
+	sec := func(name string, labels, annotations map[string]string, data map[string][]byte) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: labels, Annotations: annotations},
+			Data:       data,
+		}
+	}
+	token := map[string][]byte{"token": []byte("t")}
+	hosts := func(h string) map[string]string { return map[string]string{kaalmv1beta1.AnnotationCallbackHosts: h} }
+	objs := []client.Object{
+		sec("in", labeled, nil, token),
+		sec("in-bad-label", map[string]string{kaalmv1beta1.LabelChannelCredential: "True"}, nil, token),
+		sec("cb-ok", labeled, hosts("hooks.example.com"), token),
+		sec("cb-nohosts", labeled, nil, token),
+		sec("cb-unlabeled-nokey", nil, hosts("hooks.example.com"), map[string][]byte{"other": []byte("x")}),
+		sec("cb-nokey", labeled, hosts("other.example.com"), map[string][]byte{"other": []byte("x")}),
+	}
+	r := &AgentChannelReconciler{Client: fake.NewClientBuilder().WithObjects(objs...).Build()}
+	channel := func(inbound, cbType, cbSecret, cbURL string) *kaalmv1beta1.AgentChannel {
+		ch := &kaalmv1beta1.AgentChannel{
+			ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "default"},
+			Spec: kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{
+				Auth: kaalmv1beta1.ChannelAuth{
+					Type: "bearer", SecretRef: &kaalmv1beta1.SecretKeyReference{Name: inbound, Key: "token"},
+				},
+			}},
+		}
+		if cbSecret == "" {
+			return ch
+		}
+		ch.Spec.Webhook.CallbackURL = &cbURL
+		ref := kaalmv1beta1.SecretKeyReference{Name: cbSecret, Key: "token"}
+		if cbType == "hmac" {
+			ch.Spec.Webhook.CallbackAuth = &kaalmv1beta1.ChannelAuth{
+				Type: "hmac", HMAC: &kaalmv1beta1.ChannelHMAC{Header: "X-Sig", SecretRef: ref},
+			}
+		} else {
+			ch.Spec.Webhook.CallbackAuth = &kaalmv1beta1.ChannelAuth{Type: "bearer", SecretRef: &ref}
+		}
+		return ch
+	}
+	cases := []struct {
+		name        string
+		ch          *kaalmv1beta1.AgentChannel
+		wantReason  string
+		wantOptedIn []string
+		notInMsg    string
+	}{
+		{"labeled inbound", channel("in", "", "", ""), "", []string{"in"}, ""},
+		{"label value not exactly true", channel("in-bad-label", "", "", ""),
+			kaalmv1beta1.ReasonSecretNotOptedIn, nil, ""},
+		{"bearer callback, host listed", channel("in", "bearer", "cb-ok", "https://HOOKS.example.com:8443/cb"),
+			"", []string{"cb-ok", "in"}, ""},
+		{"bearer callback, no hosts annotation", channel("in", "bearer", "cb-nohosts", "https://hooks.example.com/cb"),
+			kaalmv1beta1.ReasonCallbackHostNotApproved, []string{"cb-nohosts", "in"}, ""},
+		{"bearer callback, host not listed", channel("in", "bearer", "cb-ok", "https://evil.example.com/cb"),
+			kaalmv1beta1.ReasonCallbackHostNotApproved, []string{"cb-ok", "in"}, ""},
+		{"hmac callback needs no hosts", channel("in", "hmac", "cb-nohosts", "https://hooks.example.com/cb"),
+			"", []string{"cb-nohosts", "in"}, ""},
+		{"non-https callbackUrl is left to rule 22", channel("in", "bearer", "cb-nohosts", "http://hooks.example.com/cb"),
+			"", []string{"cb-nohosts", "in"}, ""},
+		{"unlabeled callback reports no keys", channel("in", "bearer", "cb-unlabeled-nokey", "https://hooks.example.com/cb"),
+			kaalmv1beta1.ReasonSecretNotOptedIn, []string{"in"}, `"token"`},
+		{"host check precedes key checks", channel("in", "bearer", "cb-nokey", "https://hooks.example.com/cb"),
+			kaalmv1beta1.ReasonCallbackHostNotApproved, []string{"cb-nokey", "in"}, `"token"`},
+		{"missing callback Secret is not opted in", channel("in", "bearer", "cb-absent", "https://hooks.example.com/cb"),
+			kaalmv1beta1.ReasonCallbackAuthMissing, []string{"in"}, ""},
+	}
+	for _, c := range cases {
+		reason, msg, optedIn := r.validateSecrets(ctxT(), c.ch)
+		if reason != c.wantReason {
+			t.Errorf("%s: reason %q (%s), want %q", c.name, reason, msg, c.wantReason)
+		}
+		if strings.Join(optedIn, ",") != strings.Join(c.wantOptedIn, ",") {
+			t.Errorf("%s: opted in %v, want %v", c.name, optedIn, c.wantOptedIn)
+		}
+		if c.notInMsg != "" && strings.Contains(msg, c.notInMsg) {
+			t.Errorf("%s: message %q names %s", c.name, msg, c.notInMsg)
+		}
+	}
 }

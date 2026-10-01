@@ -279,6 +279,121 @@ func TestPersonas_DeveloperExec(t *testing.T) {
 	}
 }
 
+// developerSecrets adds full Secret management to kaalm-developer only.
+func TestPersonas_DeveloperSecrets(t *testing.T) {
+	base := renderRBAC(t, "--set", "rbac.personas.enabled=true")
+	r := renderRBAC(t, "--set", "rbac.personas.enabled=true", "--set", "rbac.personas.developerSecrets=true")
+	secretsRule := rulesFor("", []string{"secrets"}, "get", "list", "watch", "create", "update", "patch", "delete")
+	want := sorted(ruleSet(base.clusterRoles["kaalm-developer"].Rules), secretsRule)
+	if got := ruleSet(r.clusterRoles["kaalm-developer"].Rules); !reflect.DeepEqual(got, want) {
+		t.Errorf("kaalm-developer rules with developerSecrets =\n  %v\nwant\n  %v", got, want)
+	}
+	for _, name := range personaRoles {
+		if name == "kaalm-developer" {
+			continue
+		}
+		if got, w := ruleSet(r.clusterRoles[name].Rules), ruleSet(base.clusterRoles[name].Rules); !reflect.DeepEqual(got, w) {
+			t.Errorf("developerSecrets changed %s: %v, want %v", name, got, w)
+		}
+	}
+}
+
+// namespaceSecretsAdmins binds kaalm-secrets-admin in each team namespace
+// with a non-empty list, next to the release-namespace binding from
+// secretsAdmins.
+func TestPersonas_NamespaceSecretsAdmins(t *testing.T) {
+	r := renderRBAC(t, valuesFile(t, `
+rbac:
+  personas:
+    enabled: true
+    secretsAdmins:
+      - kind: User
+        apiGroup: rbac.authorization.k8s.io
+        name: alice
+    namespaceSecretsAdmins:
+      team-a:
+        - kind: Group
+          apiGroup: rbac.authorization.k8s.io
+          name: team-a-credentials
+      team-c: []
+      "123":
+        - kind: ServiceAccount
+          name: vault-sync
+          namespace: "123"
+`)...)
+	const rbacGroup = "rbac.authorization.k8s.io"
+	ref := rbacv1.RoleRef{APIGroup: rbacGroup, Kind: "ClusterRole", Name: "kaalm-secrets-admin"}
+	for key, subjects := range map[string][]rbacv1.Subject{
+		releaseNamespace + "/kaalm-secrets-admin": {{Kind: "User", APIGroup: rbacGroup, Name: "alice"}},
+		"team-a/kaalm-secrets-admin":              {{Kind: "Group", APIGroup: rbacGroup, Name: "team-a-credentials"}},
+		"123/kaalm-secrets-admin":                 {{Kind: "ServiceAccount", Name: "vault-sync", Namespace: "123"}},
+	} {
+		rb, ok := r.roleBindings[key]
+		if !ok {
+			t.Errorf("RoleBinding %s missing", key)
+			continue
+		}
+		if rb.RoleRef != ref || !reflect.DeepEqual(rb.Subjects, subjects) {
+			t.Errorf("RoleBinding %s = %v %v, want %v %v", key, rb.RoleRef, rb.Subjects, ref, subjects)
+		}
+		if rb.Labels["app.kubernetes.io/name"] != "kaalm" {
+			t.Errorf("RoleBinding %s labels = %v, want the kaalm labels", key, rb.Labels)
+		}
+	}
+	for key := range r.roleBindings {
+		if strings.HasPrefix(key, "team-c/") {
+			t.Errorf("RoleBinding %s rendered for an empty subject list", key)
+		}
+	}
+	for name, crb := range r.clusterRoleBindings {
+		if crb.RoleRef.Name == "kaalm-secrets-admin" {
+			t.Errorf("ClusterRoleBinding %s binds kaalm-secrets-admin cluster-wide", name)
+		}
+	}
+}
+
+// renderFails renders the chart with values and wants the render to fail
+// with msg.
+func renderFails(t *testing.T, values, msg string) {
+	t.Helper()
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	out, err := runFullTemplate(valuesFile(t, values)...)
+	if err == nil {
+		t.Fatalf("helm template succeeded, want %q\n%s", msg, out)
+	}
+	if !strings.Contains(string(out), msg) {
+		t.Errorf("helm template output lacks %q:\n%s", msg, out)
+	}
+}
+
+// namespaceSecretsAdmins must be a map of namespace to subjects.
+func TestPersonas_NamespaceSecretsAdminsMustBeAMap(t *testing.T) {
+	renderFails(t, `
+rbac:
+  personas:
+    enabled: true
+    namespaceSecretsAdmins:
+      - kind: Group
+        name: team-a-credentials
+`, "rbac.personas.namespaceSecretsAdmins must be a map of namespace to a list of subjects")
+}
+
+// The release namespace belongs to secretsAdmins; naming it in
+// namespaceSecretsAdmins would render a second kaalm-secrets-admin there.
+func TestPersonas_NamespaceSecretsAdminsRejectsReleaseNamespace(t *testing.T) {
+	renderFails(t, `
+rbac:
+  personas:
+    enabled: true
+    namespaceSecretsAdmins:
+      `+releaseNamespace+`:
+        - kind: Group
+          name: platform-credentials
+`, "rbac.personas.namespaceSecretsAdmins must not list the release namespace; use rbac.personas.secretsAdmins")
+}
+
 // Bindings come from the subject lists in values; developers get one
 // RoleBinding per namespace and secrets admins one in the release namespace.
 func TestPersonas_BindingsFromValues(t *testing.T) {

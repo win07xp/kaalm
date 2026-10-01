@@ -48,6 +48,8 @@ kind: Secret
 metadata:
   name: s22-discord-creds
   namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   # ed25519.NewKeyFromSeed("kaalm-e2e-mock-discord-seed-0001").Public()

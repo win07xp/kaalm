@@ -125,6 +125,13 @@ type fakeStore struct {
 	livePodsByIP map[string]*corev1.Pod
 	channels     map[string]*kaalmv1beta1.AgentChannel // key: webhook path
 	secrets      map[string]string                     // key: ns/name/key
+	// callbackHosts backs CallbackSecretValue: the approved hosts of each
+	// Secret (key: ns/name), as the kaalm.io/callback-hosts annotation.
+	callbackHosts map[string]string
+	// callbackChecks counts CallbackSecretValue calls; refuseCallbackAfter,
+	// when positive, refuses every call after that many.
+	callbackChecks      int
+	refuseCallbackAfter int
 
 	toolProviders map[string]*kaalmv1beta1.ToolProvider
 	toolCreds     map[string]string
@@ -141,6 +148,8 @@ func newFakeStore() *fakeStore {
 		livePodsByIP: map[string]*corev1.Pod{},
 		channels:     map[string]*kaalmv1beta1.AgentChannel{},
 		secrets:      map[string]string{},
+
+		callbackHosts: map[string]string{},
 
 		toolProviders: map[string]*kaalmv1beta1.ToolProvider{},
 		toolCreds:     map[string]string{},
@@ -209,6 +218,19 @@ func (f *fakeStore) SecretValue(_ context.Context, ns, name, key string) (string
 		return "", fmt.Errorf("secret %s/%s key %s not found", ns, name, key)
 	}
 	return v, nil
+}
+
+// CallbackSecretValue applies rule 46 over callbackHosts, then SecretValue.
+func (f *fakeStore) CallbackSecretValue(ctx context.Context, ns, name, key, host string) (string, error) {
+	f.callbackChecks++
+	if f.refuseCallbackAfter > 0 && f.callbackChecks > f.refuseCallbackAfter {
+		return "", fmt.Errorf("secret %s/%s no longer approves host %s", ns, name, host)
+	}
+	annotations := map[string]string{kaalmv1beta1.AnnotationCallbackHosts: f.callbackHosts[ns+"/"+name]}
+	if !kaalmv1beta1.CallbackHostApproved(annotations, host) {
+		return "", fmt.Errorf("secret %s/%s does not approve host %s", ns, name, host)
+	}
+	return f.SecretValue(ctx, ns, name, key)
 }
 
 // ---- harness ----

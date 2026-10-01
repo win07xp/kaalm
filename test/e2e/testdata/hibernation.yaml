@@ -67,6 +67,8 @@ kind: Secret
 metadata:
   name: s7-hook
   namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   token: s7-webhook-bearer-token
@@ -114,6 +116,8 @@ kind: Secret
 metadata:
   name: s14-hook
   namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   token: s14-webhook-bearer-token

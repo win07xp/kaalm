@@ -1007,18 +1007,6 @@ func TestDeref(t *testing.T) {
 	}
 }
 
-func TestEqualStrings(t *testing.T) {
-	if !equalStrings([]string{"a", "b"}, []string{"a", "b"}) {
-		t.Error("equal slices must compare equal")
-	}
-	if equalStrings([]string{"a"}, []string{"a", "b"}) {
-		t.Error("different lengths must not be equal")
-	}
-	if equalStrings([]string{"a", "x"}, []string{"a", "b"}) {
-		t.Error("differing elements must not be equal")
-	}
-}
-
 // ---- cost helpers ----
 
 func TestCheapestModel(t *testing.T) {

@@ -197,6 +197,72 @@ func TestSendCallback_Rejections(t *testing.T) {
 	}
 }
 
+// Rule 46, gateway half: a bearer callback token goes only to a host its
+// Secret approves. The check runs before every attempt, so a host the
+// credential manager removes between retries stops the delivery.
+func TestSendCallback_BearerHostBinding(t *testing.T) {
+	base := func(rawURL string) *kaalmv1beta1.AgentChannel {
+		return &kaalmv1beta1.AgentChannel{
+			ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "team-a"},
+			Spec: kaalmv1beta1.AgentChannelSpec{Webhook: &kaalmv1beta1.AgentChannelWebhook{
+				Path:        "/channels/team-a/hook",
+				CallbackURL: &rawURL,
+				CallbackAuth: &kaalmv1beta1.ChannelAuth{
+					Type:      authTypeBearer,
+					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "cb", Key: "token"},
+				},
+			}},
+		}
+	}
+	newServer := func() (*Server, *fakeStore) {
+		store := newFakeStore()
+		store.secrets["team-a/cb/token"] = "tok"
+		store.callbackHosts["team-a/cb"] = "hooks.example.com"
+		return &Server{Store: store, ChannelHealth: NewChannelHealthStore(0)}, store
+	}
+
+	// Host not listed: invalid before any resolution or dial.
+	s, store := newServer()
+	if got := s.sendCallback(context.Background(), base("https://evil.example.com/cb"), "r1", []byte(`{}`)); got != callbackInvalid {
+		t.Errorf("unapproved host outcome = %q, want %q", got, callbackInvalid)
+	}
+	if store.callbackChecks != 1 {
+		t.Errorf("callback checks = %d, want 1", store.callbackChecks)
+	}
+	entry := s.ChannelHealth.Snapshot("team-a").Channels["/channels/team-a/hook"]
+	if entry.Reason == nil || *entry.Reason != healthReasonCallbackInvalid {
+		t.Errorf("health after an unapproved host = %+v, want %s", entry, healthReasonCallbackInvalid)
+	}
+
+	// Approved, but the approval is gone by the second attempt: the first
+	// attempt fails to resolve (.invalid never resolves, RFC 6761) and is
+	// retried; the second is refused before it resolves or dials.
+	s, store = newServer()
+	store.callbackHosts["team-a/cb"] = "kaalm-cb.invalid"
+	store.refuseCallbackAfter = 1
+	s.Config.CallbackBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	if got := s.sendCallback(context.Background(), base("https://kaalm-cb.invalid:8443/cb"), "r2", []byte(`{}`)); got != callbackInvalid {
+		t.Errorf("approval removed between attempts: outcome = %q, want %q", got, callbackInvalid)
+	}
+	if store.callbackChecks != 2 {
+		t.Errorf("callback checks = %d, want 2 (one per attempt)", store.callbackChecks)
+	}
+
+	// An HMAC callback sends a signature, never the key: no host binding.
+	s, store = newServer()
+	hmacCh := base("https://kaalm-cb.invalid/cb")
+	hmacCh.Spec.Webhook.CallbackAuth = &kaalmv1beta1.ChannelAuth{
+		Type: authTypeHMAC,
+		HMAC: &kaalmv1beta1.ChannelHMAC{Header: "X-Sig", SecretRef: kaalmv1beta1.SecretKeyReference{Name: "cb", Key: "token"}},
+	}
+	if got := s.sendCallback(context.Background(), hmacCh, "r3", []byte(`{}`)); got != callbackExhausted {
+		t.Errorf("hmac callback to an unresolvable host = %q, want %q", got, callbackExhausted)
+	}
+	if store.callbackChecks != 0 {
+		t.Errorf("hmac callback ran %d host checks, want 0", store.callbackChecks)
+	}
+}
+
 func TestPollRetryAfter(t *testing.T) {
 	cases := []struct {
 		elapsed time.Duration

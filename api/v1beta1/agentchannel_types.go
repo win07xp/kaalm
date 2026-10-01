@@ -17,6 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -81,7 +83,8 @@ type AgentChannelDiscord struct {
 	// CredentialsRef names a Secret in the channel's namespace carrying
 	// publicKey (required; the application's Ed25519 public key, hex) and
 	// botToken (optional; lets replies outlive the 15-minute interaction
-	// token). Rule 40.
+	// token). Rule 40. The Secret must carry the label
+	// kaalm.io/channel-credential: "true" (rule 45).
 	// +kubebuilder:validation:Required
 	CredentialsRef LocalObjectReference `json:"credentialsRef"`
 	// GuildID, when set, restricts the channel to interactions from one guild;
@@ -114,7 +117,8 @@ type AgentChannelWhatsApp struct {
 	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/v1/')",message="whatsapp.path must not use the reserved /v1/ prefix"
 	Path string `json:"path"`
 	// CredentialsRef names a Secret in the channel's namespace carrying
-	// verifyToken, appSecret, and accessToken, all required. Rule 40.
+	// verifyToken, appSecret, and accessToken, all required. Rule 40. The
+	// Secret must carry the label kaalm.io/channel-credential: "true" (rule 45).
 	// +kubebuilder:validation:Required
 	CredentialsRef LocalObjectReference `json:"credentialsRef"`
 	// PhoneNumberID is the business phone number this channel answers as.
@@ -154,6 +158,8 @@ type AgentChannelWebhook struct {
 	// +optional
 	CallbackURL *string `json:"callbackUrl,omitempty"`
 	// CallbackAuth signs outbound callbacks. Required when callbackUrl is set.
+	// A bearer callbackAuth Secret must also list the callbackUrl host in its
+	// kaalm.io/callback-hosts annotation (rule 46).
 	// +optional
 	CallbackAuth *ChannelAuth `json:"callbackAuth,omitempty"`
 	// MaxPendingAsyncResponses caps concurrent in-flight async responses.
@@ -170,7 +176,8 @@ type ChannelAuth struct {
 	// +kubebuilder:validation:Enum=bearer;hmac
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
-	// SecretRef holds the bearer token. Required for bearer.
+	// SecretRef holds the bearer token. Required for bearer. The Secret must
+	// carry the label kaalm.io/channel-credential: "true" (rule 45).
 	// +optional
 	SecretRef *SecretKeyReference `json:"secretRef,omitempty"`
 	// HMAC configures signature verification. Required for hmac.
@@ -188,7 +195,8 @@ type ChannelHMAC struct {
 	// +kubebuilder:default=sha256
 	// +optional
 	Algorithm string `json:"algorithm,omitempty"`
-	// SecretRef holds the signing key.
+	// SecretRef holds the signing key. The Secret must carry the label
+	// kaalm.io/channel-credential: "true" (rule 45).
 	// +kubebuilder:validation:Required
 	SecretRef SecretKeyReference `json:"secretRef"`
 	// SignaturePrefix is stripped from the header value before comparison.
@@ -268,4 +276,30 @@ type AgentChannelList struct {
 
 func init() {
 	SchemeBuilder.Register(&AgentChannel{}, &AgentChannelList{})
+}
+
+// ChannelCredentialOptedIn reports whether a Secret with these labels opts in
+// to AgentChannel use: LabelChannelCredential set to exactly AnnotationTrue
+// (rule 45). The reconciler and the gateway both call it, so the two checks
+// cannot drift apart.
+func ChannelCredentialOptedIn(labels map[string]string) bool {
+	return labels[LabelChannelCredential] == AnnotationTrue
+}
+
+// CallbackHostApproved reports whether a Secret with these annotations may be
+// sent as a bearer callback token to host (rule 46). AnnotationCallbackHosts
+// is a comma-separated list of hostnames; an entry matches when it equals
+// host, compared without case and after trimming spaces. There are no
+// wildcards and no suffix matches. host is the callbackUrl hostname without a
+// port: the port plays no part.
+func CallbackHostApproved(annotations map[string]string, host string) bool {
+	if host == "" {
+		return false
+	}
+	for _, entry := range strings.Split(annotations[AnnotationCallbackHosts], ",") {
+		if entry = strings.TrimSpace(entry); entry != "" && strings.EqualFold(entry, host) {
+			return true
+		}
+	}
+	return false
 }

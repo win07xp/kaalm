@@ -123,6 +123,8 @@ const (
 	ReasonCallbackAuthMissing        = "CallbackAuthMissing"
 	ReasonCallbackAuthInvalid        = "CallbackAuthInvalid"
 	ReasonCallbackHostUnresolved     = "CallbackHostUnresolved"
+	ReasonSecretNotOptedIn           = "SecretNotOptedIn"        // rule 45
+	ReasonCallbackHostNotApproved    = "CallbackHostNotApproved" // rule 46
 	ReasonAgentReachable             = "AgentReachable"
 	ReasonWebhookReady               = "WebhookReady"
 	ReasonNoRecentTraffic            = "NoRecentTraffic"
@@ -228,6 +230,15 @@ const (
 
 	LabelChannelNamespace = "kaalm.io/channel-namespace" // on kaalm-async-* ConfigMaps, for the label-selector sweep
 	LabelChannelName      = "kaalm.io/channel-name"
+
+	// LabelChannelCredential opts a Secret in to AgentChannel use when its
+	// value is AnnotationTrue (rule 45). An AgentChannel may reference only
+	// Secrets that carry it; the reconciler and the gateway both check it.
+	LabelChannelCredential = "kaalm.io/channel-credential"
+	// AnnotationCallbackHosts lists, comma-separated, the hostnames a Secret's
+	// credential manager approves as callbackUrl hosts when the Secret is a
+	// bearer callbackAuth token (rule 46).
+	AnnotationCallbackHosts = "kaalm.io/callback-hosts"
 )
 
 // SessionNamespaceUUID is the fixed UUIDv5 namespace used to derive an
