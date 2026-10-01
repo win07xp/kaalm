@@ -1,6 +1,6 @@
 # ModelProvider
 
-ModelProvider is a cluster-scoped resource that defines a managed LLM provider. It holds a reference to a Secret with credentials, a model catalog, budgets, a request rate limit, a fallback list, and the namespace tenancy gate. The gateway enforces the catalog, the budgets, the rate limit, and the fallback walk on every request it routes; the controller validates the spec, probes the upstream, and folds spend into status.
+ModelProvider is a cluster-scoped resource that defines a managed LLM provider. It holds a reference to a Secret with credentials, a model catalog, budgets, request and token rate limits, a fallback list, and the namespace tenancy gate. The gateway enforces the catalog, the budgets, the rate limit, and the fallback walk on every request it routes; the controller validates the spec, probes the upstream, and folds spend into status.
 
 Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, and only the namespaces listed in `spec.allowedNamespaces` may do so. `allowedNamespaces` is the tenancy check that applies to every caller, in both adoption tiers ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
 
@@ -85,7 +85,10 @@ spec:
     # Cluster-wide ceiling per (namespace, model); each replica enforces its
     # share.
     requestsPerMinute: 300
-    # Accepted by the schema and not enforced (#202).
+    # Cluster-wide ceiling on input plus output tokens per minute, per
+    # (namespace, model). A request is admitted while the token bucket is
+    # above 0, and the call's tokens are debited when it ends. Unset or 0
+    # means no token limit.
     tokensPerMinute: 500000
 
   # Providers tried when this one fails, each with its own fallback list,
