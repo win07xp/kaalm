@@ -32,11 +32,156 @@ func rlProvider(rpm int32) *kaalmv1beta1.ModelProvider {
 	}
 }
 
+// allowLLM is Allow without the Retry-After, for tests that count admissions.
+func allowLLM(rl *RateLimiter, p *kaalmv1beta1.ModelProvider, namespace, model string) bool {
+	ok, _ := rl.Allow(p, namespace, model)
+	return ok
+}
+
+func rlTokenProvider(rpm, tpm int32) *kaalmv1beta1.ModelProvider {
+	p := rlProvider(rpm)
+	p.Spec.RateLimits.TokensPerMinute = tpm
+	return p
+}
+
+// TestRateLimiter_TokenDebitBlocksNextRequest: a large debit drives the
+// token bucket below zero, so the next request is refused with a
+// Retry-After computed from the debt, and admitted again once the bucket
+// refills above zero (#202).
+func TestRateLimiter_TokenDebitBlocksNextRequest(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 1 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 1000)
+
+	if ok, _ := rl.Allow(p, "team-a", "m1"); !ok {
+		t.Fatal("a full token bucket must admit")
+	}
+	rl.DebitTokens(p, "team-a", "m1", 1500) // 1000 - 1500 = -500
+	ok, retry := rl.Allow(p, "team-a", "m1")
+	if ok {
+		t.Fatal("a bucket in debt must refuse the next request")
+	}
+	if retry != 30 { // 500 tokens at 1000/min is 30s
+		t.Errorf("Retry-After = %d, want 30", retry)
+	}
+	// Another namespace and another model hold their own buckets.
+	if !allowLLM(rl, p, "team-b", "m1") || !allowLLM(rl, p, "team-a", "m2") {
+		t.Error("each (namespace, model) must have its own token bucket")
+	}
+	// At exactly zero the bucket still refuses, with the 1s floor.
+	now = now.Add(30 * time.Second)
+	ok, retry = rl.Allow(p, "team-a", "m1")
+	if ok || retry != 1 {
+		t.Errorf("at zero tokens: ok=%v retry=%d, want refused with 1", ok, retry)
+	}
+	now = now.Add(time.Second)
+	if !allowLLM(rl, p, "team-a", "m1") {
+		t.Error("a bucket refilled above zero must admit")
+	}
+}
+
+// TestRateLimiter_TokenAdmitsAboveZero: admission needs the bucket above
+// zero, not a whole token.
+func TestRateLimiter_TokenAdmitsAboveZero(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 1 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 1000)
+
+	rl.DebitTokens(p, "team-a", "m1", 1000) // 0 left
+	now = now.Add(30 * time.Millisecond)    // refills half a token
+	if !allowLLM(rl, p, "team-a", "m1") {
+		t.Error("half a token left must admit (admission is tokens > 0)")
+	}
+}
+
+// TestRateLimiter_TokenDebtClampedAtOneBurst: one huge call blocks for at
+// most about one refill window.
+func TestRateLimiter_TokenDebtClampedAtOneBurst(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 1 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 1000)
+
+	rl.DebitTokens(p, "team-a", "m1", 1_000_000)
+	ok, retry := rl.Allow(p, "team-a", "m1")
+	if ok || retry != 60 { // the debt clamps at -1000, a minute at 1000/min
+		t.Errorf("after a huge debit: ok=%v retry=%d, want refused with 60", ok, retry)
+	}
+}
+
+// TestRateLimiter_TokensDivideByReplicas: the token ceiling splits across
+// live replicas like the request ceiling.
+func TestRateLimiter_TokensDivideByReplicas(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 4 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 4000) // per replica 1000
+
+	rl.DebitTokens(p, "team-a", "m1", 1500)
+	ok, retry := rl.Allow(p, "team-a", "m1")
+	if ok || retry != 30 {
+		t.Errorf("per-replica 1000 after a 1500 debit: ok=%v retry=%d, want refused with 30", ok, retry)
+	}
+}
+
+// TestRateLimiter_NoTokenLimitIgnoresDebits: an unset tokensPerMinute keeps
+// the request-only behavior.
+func TestRateLimiter_NoTokenLimitIgnoresDebits(t *testing.T) {
+	rl := NewRateLimiter(nil)
+	p := rlTokenProvider(0, 0)
+	rl.DebitTokens(p, "team-a", "m1", 1_000_000)
+	if !allowLLM(rl, p, "team-a", "m1") {
+		t.Error("with no tokensPerMinute a debit must not block")
+	}
+}
+
+// TestRateLimiter_TokenRefusalKeepsRequestToken: a request the token bucket
+// refuses does not spend a request token.
+func TestRateLimiter_TokenRefusalKeepsRequestToken(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 1 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(1, 60) // 1 request/min, 1 token/s
+
+	rl.DebitTokens(p, "team-a", "m1", 61) // -1
+	for i := 0; i < 3; i++ {
+		if allowLLM(rl, p, "team-a", "m1") {
+			t.Fatal("a bucket in debt must refuse")
+		}
+	}
+	now = now.Add(2 * time.Second) // tokens back to +1; requests still full
+	if !allowLLM(rl, p, "team-a", "m1") {
+		t.Error("the request token must survive the token refusals")
+	}
+}
+
+// TestRateLimiter_RequestRetryAfter: a request refusal carries the time
+// until the next request token.
+func TestRateLimiter_RequestRetryAfter(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 1 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlProvider(2) // one request per 30s
+
+	allowLLM(rl, p, "team-a", "m1")
+	allowLLM(rl, p, "team-a", "m1")
+	ok, retry := rl.Allow(p, "team-a", "m1")
+	if ok || retry != 30 {
+		t.Errorf("drained 2/min bucket: ok=%v retry=%d, want refused with 30", ok, retry)
+	}
+	now = now.Add(15 * time.Second)
+	if _, retry = rl.Allow(p, "team-a", "m1"); retry != 15 {
+		t.Errorf("half refilled: retry=%d, want 15", retry)
+	}
+}
+
 func TestRateLimiter_UnlimitedAllows(t *testing.T) {
 	rl := NewRateLimiter(nil)
 	p := rlProvider(0)
 	for i := 0; i < 100; i++ {
-		if !rl.Allow(p, "team-a", "m1") {
+		if !allowLLM(rl, p, "team-a", "m1") {
 			t.Fatal("a provider with no limit must always allow")
 		}
 	}
@@ -51,7 +196,7 @@ func TestRateLimiter_EnforcesCeiling(t *testing.T) {
 	// The bucket starts full at the per-replica ceiling (5).
 	allowed := 0
 	for i := 0; i < 10; i++ {
-		if rl.Allow(p, "team-a", "m1") {
+		if allowLLM(rl, p, "team-a", "m1") {
 			allowed++
 		}
 	}
@@ -59,7 +204,7 @@ func TestRateLimiter_EnforcesCeiling(t *testing.T) {
 		t.Errorf("allowed %d of 10, want 5 (the ceiling)", allowed)
 	}
 	// A different (namespace, model) has its own bucket.
-	if !rl.Allow(p, "team-b", "m1") {
+	if !allowLLM(rl, p, "team-b", "m1") {
 		t.Error("a different namespace must have a fresh bucket")
 	}
 }
@@ -71,17 +216,17 @@ func TestRateLimiter_RefillsOverTime(t *testing.T) {
 	p := rlProvider(60) // 1 token/sec
 
 	for i := 0; i < 60; i++ {
-		rl.Allow(p, "team-a", "m1")
+		allowLLM(rl, p, "team-a", "m1")
 	}
-	if rl.Allow(p, "team-a", "m1") {
+	if allowLLM(rl, p, "team-a", "m1") {
 		t.Fatal("bucket should be empty after draining the ceiling")
 	}
 	// 2 seconds later, ~2 tokens have refilled.
 	now = now.Add(2 * time.Second)
-	if !rl.Allow(p, "team-a", "m1") {
+	if !allowLLM(rl, p, "team-a", "m1") {
 		t.Error("first refilled token should be available")
 	}
-	if !rl.Allow(p, "team-a", "m1") {
+	if !allowLLM(rl, p, "team-a", "m1") {
 		t.Error("second refilled token should be available")
 	}
 }
@@ -95,7 +240,7 @@ func TestRateLimiter_DividesByReplicas(t *testing.T) {
 
 	allowed := 0
 	for i := 0; i < 10; i++ {
-		if rl.Allow(p, "team-a", "m1") {
+		if allowLLM(rl, p, "team-a", "m1") {
 			allowed++
 		}
 	}

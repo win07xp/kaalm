@@ -176,15 +176,21 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limit per (namespace, model), sharing the configured ceiling
-	// across live replicas.
-	if !s.RateLimiter.Allow(provider, c.Namespace, modelID) {
+	// Rate limit per (namespace, model), sharing the configured ceilings
+	// across live replicas. The settled tokens are debited after the call
+	// from the bucket that admitted it: the primary's limits and this
+	// model, even when a fallback serves the request.
+	if ok, retryAfter := s.RateLimiter.Allow(provider, c.Namespace, modelID); !ok {
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "rate_limited")
 		spanError(ctx, errRateLimited)
 		writeError(w, http.StatusTooManyRequests, errorBody{
 			Type: errRateLimited, Provider: providerName, Retryable: true,
-			Message: fmt.Sprintf("rate limit exceeded for namespace %s on model %s", c.Namespace, modelID)}, 1)
+			Message: fmt.Sprintf("rate limit exceeded for namespace %s on model %s", c.Namespace, modelID)}, retryAfter)
 		return
+	}
+	admittedModel := modelID
+	debitTokens := func(u Usage) {
+		s.RateLimiter.DebitTokens(provider, c.Namespace, admittedModel, u.InputTokens+u.OutputTokens)
 	}
 
 	// Strip the provider prefix so the upstream sees the raw model ID, and
@@ -264,17 +270,19 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, body, retryAfter)
 		return
 	}
-	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered)
+	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered, debitTokens)
 }
 
 // writeWalkResult relays the winning attempt: a non-fallbackable failure
 // verbatim (in the caller's envelope shape when the candidate crossed
 // formats), a stream through the relay (translated event by event when it
 // crossed), or a buffered body with usage read by the serving candidate's
-// adapter and, when it crossed, the body translated back.
+// adapter and, when it crossed, the body translated back. debitTokens takes
+// the settled usage off the token rate limit that admitted the request.
 func (s *Server) writeWalkResult(
 	ctx context.Context, w http.ResponseWriter, res forwardResult, adapter providerAdapter,
 	inboundFormat llmtranslate.Format, namespace, workload string, modelID, answered *string,
+	debitTokens func(Usage),
 ) {
 	defer func() { _ = res.resp.Body.Close() }()
 	*answered = res.provider
@@ -318,11 +326,11 @@ func (s *Server) writeWalkResult(
 			translator = llmtranslate.NewStream(res.format, inboundFormat, *modelID)
 		}
 		s.relayStream(w, res.resp, servingAdapter, translator, formatForType(adapter.formatName()),
-			namespace, workload, res.chosen, *modelID, res.settle)
+			namespace, workload, res.chosen, *modelID, res.settle, debitTokens)
 		return
 	}
 	if usage, ok := servingAdapter.extractUsage(res.body); ok {
-		s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle)
+		s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle, debitTokens)
 	} else {
 		s.usageMissing(namespace, res.provider, *modelID)
 		if res.settle != nil {
@@ -498,11 +506,19 @@ func (s *Server) applyBudgetDecision(
 	return true
 }
 
-// settleUsage folds token usage into spend, budget, and metrics. When the
-// request holds a boundary admission slot (hard enforcement), the cost lands
-// through its settle so the slot frees and the cost records in one atomic
-// step; otherwise it lands through the plain ledger Add.
-func (s *Server) settleUsage(provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string, usage Usage, settle func(float64)) {
+// settleUsage folds token usage into the token rate limit, spend, budget, and
+// metrics. When the request holds a boundary admission slot (hard
+// enforcement), the cost lands through its settle so the slot frees and the
+// cost records in one atomic step; otherwise it lands through the plain
+// ledger Add. debitTokens (nil for none) charges the input plus output
+// tokens to the token bucket that admitted the request.
+func (s *Server) settleUsage(
+	provider *kaalmv1beta1.ModelProvider, namespace, workload, modelID string, usage Usage,
+	settle func(float64), debitTokens func(Usage),
+) {
+	if debitTokens != nil {
+		debitTokens(usage)
+	}
 	cost := costOf(provider, modelID, usage)
 	s.Spend.Record(namespace, provider.Name, modelID, usage)
 	if settle != nil {
@@ -556,8 +572,8 @@ func isSSE(resp *http.Response) bool {
 }
 
 // relayStream forwards SSE chunks as they arrive with no buffering, folding
-// usage out of the events the adapter recognizes. Spend is recorded after the
-// stream ends. A stream that ends without usage settles at zero spend and is
+// usage out of the events the adapter recognizes. Spend is recorded, and the
+// tokens debited from the token rate limit, after the stream ends. A stream that ends without usage settles at zero spend and is
 // reported by usageMissing. When the upstream read fails after the status is
 // sent (the idle bound passed, or the connection broke), the relay ends the
 // stream with one error event in the caller's format, so the agent can tell a
@@ -565,7 +581,7 @@ func isSSE(resp *http.Response) bool {
 func (s *Server) relayStream(
 	w http.ResponseWriter, resp *http.Response, adapter providerAdapter, translator llmtranslate.Stream,
 	callerFormat llmtranslate.Format, namespace, workload string, provider *kaalmv1beta1.ModelProvider,
-	modelID string, settle func(float64),
+	modelID string, settle func(float64), debitTokens func(Usage),
 ) {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -578,7 +594,7 @@ func (s *Server) relayStream(
 	// admission slot must always free.
 	defer func() {
 		if !usage.isZero() {
-			s.settleUsage(provider, namespace, workload, modelID, usage, settle)
+			s.settleUsage(provider, namespace, workload, modelID, usage, settle, debitTokens)
 			return
 		}
 		s.usageMissing(namespace, provider.Name, modelID)
