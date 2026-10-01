@@ -1,6 +1,6 @@
 # ModelProvider
 
-ModelProvider is a cluster-scoped resource that defines a managed LLM provider. It holds a reference to a Secret with credentials, a model catalog, budgets, request and token rate limits, a fallback list, and the namespace tenancy gate. The gateway enforces the catalog, the budgets, the rate limit, and the fallback walk on every request it routes; the controller validates the spec, probes the upstream, and folds spend into status.
+ModelProvider is a cluster-scoped resource that defines a managed LLM provider. It holds a reference to a Secret with credentials, a model catalog, budgets, request and token rate limits, a fallback list, and the namespace tenancy gate. The gateway enforces the catalog, the budgets, the rate limits, and the fallback walk on every request it routes; the controller validates the spec, probes the upstream, and folds spend into status.
 
 Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, and only the namespaces listed in `spec.allowedNamespaces` may do so. `allowedNamespaces` is the tenancy check that applies to every caller, in both adoption tiers ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
 
@@ -178,6 +178,8 @@ There is no pre-request cost estimation: a request's cost is knowable only after
 ### Rate limit scope
 
 Both `rateLimits` fields are cluster-wide ceilings per (namespace, model), so N namespaces, or N models in one namespace, each get the full ceiling. `tokensPerMinute` therefore does not keep a shared provider key under the provider's own tokens-per-minute limit. The token limit is enforced after the call, so a large call blocks the next request, not itself ([Rate limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting)).
+
+The gateway divides each ceiling across its replicas, so the split is approximate. When `requestsPerMinute` is lower than the replica count, each replica still admits one request for each (namespace, model), then refuses until its bucket refills, and cluster-wide admission can run slightly over the limit ([Request limits below the replica count](../gateways/llm/budgets-and-rate-limits.md#request-limits-below-the-replica-count)).
 
 ### Glob semantics in `allowedNamespaces`
 

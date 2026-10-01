@@ -193,20 +193,26 @@ The gateway computes `Retry-After` from how far the refused bucket is from admit
 | Token bucket | `ceil(-tokens / per_replica_tokens_per_minute * 60)` |
 | Request bucket | The time until the next request token |
 
-For example, with `requestsPerMinute: 2` and one replica, the third request in a burst gets `Retry-After: 30`. Tool-plane and heartbeat `rate_limited` responses still send `Retry-After: 1`.
+For example, with `requestsPerMinute: 2` and one replica, the third request in a burst gets `Retry-After: 30`. Tool-plane and heartbeat `rate_limited` responses send `Retry-After: 1`.
 
 ### Limits of the token limit
 
 - **Concurrent long streams all pass.** The debit lands only when each stream ends, so streams that start while the bucket is positive are all admitted.
 - **The split is approximate.** The per-replica split is approximate, the same as for requests ([Dividing by live replica count](#dividing-by-live-replica-count)), and the debit lands only on the replica that served the call.
 - **Only input plus output tokens count.** The count is what the gateway reads from the provider's usage. Cache tokens are not counted. A response with no usage debits nothing. It is the same case the gateway already logs and counts as `kaalm_llm_usage_missing_total` ([Streaming responses](request-handling.md#streaming-responses)).
-- **Each key gets the full ceiling.** Buckets are per (namespace, model), so N namespaces, or N models in one namespace, each get the full `tokensPerMinute`. The limit does not keep a shared provider key under the provider's own tokens-per-minute limit.
+- **Each key gets the full ceiling.** Buckets are per (namespace, model), so N namespaces, or N models in one namespace, each get the full `requestsPerMinute` and the full `tokensPerMinute`. Together, tenants can still reach the provider's own rate limit, so these limits do not keep a shared provider key under it.
 
 ### Dividing by live replica count
 
-Each gateway replica divides each configured limit by the number of active gateway replicas, counted from its Pod informer by the gateway label selector and refreshed at most every few seconds rather than on every request. Each bucket's burst equals that per-replica share. When replicas scale up or down, each replica resizes its local buckets within that refresh and the next refill cycle, so the configured value represents the intended cluster-wide limit regardless of replica count.
+Each gateway replica divides each configured limit by the number of active gateway replicas, counted from its Pod informer by the gateway label selector and refreshed at most every few seconds rather than on every request. Each bucket's burst equals that per-replica share, except the request bucket, which always holds at least one request ([Request limits below the replica count](#request-limits-below-the-replica-count)). The token bucket's burst is exactly `tokensPerMinute / number_of_replicas`, with no floor. When replicas scale up or down, each replica resizes its local buckets within that refresh and the next refill cycle, so the configured value represents the intended cluster-wide limit regardless of replica count.
 
-Because each replica enforces its share independently, the effective cluster-wide limit is approximate. Transient bursts may exceed the configured ceiling by up to one replica's full bucket, `configured_limit / number_of_replicas`, the accepted trade for a coordination-free request path.
+Because each replica enforces its share independently, the effective cluster-wide limit is approximate. Transient bursts may exceed the configured ceiling by up to one replica's full bucket: `configured_limit / number_of_replicas`, or one request when the request share is below one. This is the accepted trade for a coordination-free request path.
+
+### Request limits below the replica count
+
+When `requestsPerMinute` is lower than the number of gateway replicas, each replica's share is less than one request per minute. The request bucket always has room for one request, so each replica admits one request for each (namespace, model), then refuses until the bucket refills at `requestsPerMinute / number_of_replicas` requests per minute. The limit does not cap how many requests run at once. For example, `requestsPerMinute: 2` on 3 replicas admits one request per replica every 90 seconds.
+
+Cluster-wide admission can therefore run slightly over the configured limit.
 
 ### Worst-case deviation during scaling events
 
