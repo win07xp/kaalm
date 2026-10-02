@@ -224,7 +224,10 @@ the last reference clears.
 ## ModelProvider `Ready=False`
 
 `kubectl describe modelprovider PROVIDER_NAME`, or `kubectl describe
-toolprovider PROVIDER_NAME` for a ToolProvider, which reports the same
+toolprovider PROVIDER_NAME` for a ToolProvider. A ToolProvider reports only
+the credential reasons: `CredentialsMissing`, `CredentialsInvalid`,
+`SecretNotOptedIn`, and `EndpointHostNotApproved`. It reports the last two
+only when `credentialsRef` is set. A ModelProvider reports all of these
 reasons:
 
 - `CredentialsMissing` or `CredentialsInvalid`: the Secret named by

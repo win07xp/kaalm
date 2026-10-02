@@ -192,7 +192,12 @@ returns `503 tool_unavailable`, until you fix the Secret.
    kubectl get toolproviders -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.endpoint}{"\t"}{.spec.credentialsRef.name}{"\n"}{end}'
    ```
 
-2. Label each Secret in `kaalm-system`:
+2. Review each Secret. A provider can name any Secret in `kaalm-system`, so
+   confirm that each one was created as the credential of the provider or
+   tool server that names it. Never label `kaalm-gateway-session-key` or a
+   cert-manager `*-tls` Secret: the label opts the Secret in, which defeats
+   rule 49.
+3. Label only the Secrets created as provider credentials:
 
    ```bash
    kubectl label secret SECRET_NAME -n kaalm-system kaalm.io/provider-credential=true
@@ -200,7 +205,7 @@ returns `503 tool_unavailable`, until you fix the Secret.
 
    Replace `SECRET_NAME` with the Secret's name. Only the exact value `true`
    counts.
-3. Annotate each Secret with the hostnames of the endpoints that use it:
+4. Annotate each labeled Secret with the hostnames of the endpoints that use it:
 
    ```bash
    kubectl annotate secret SECRET_NAME -n kaalm-system kaalm.io/provider-hosts=HOSTS --overwrite
