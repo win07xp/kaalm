@@ -267,12 +267,16 @@ class Checker:
         return self.spec_cache
 
     def scenario_ids(self) -> list[int]:
-        """The S-numbers of the '## S<n>: title' headings in SCENARIOS."""
+        """The S-numbers of the '## S<n>: title' headings in SCENARIOS.
+
+        Only level-2 headings count, so a '### S7: ...' subheading is not a
+        scenario.
+        """
         lines = (ROOT / SCENARIOS).read_text(encoding="utf-8").splitlines()
         ids = []
         for _, line in strip_fences(lines):
             h = HEADING.match(line)
-            s = SCENARIO_HEADING.match(h.group(2)) if h else None
+            s = SCENARIO_HEADING.match(h.group(2)) if h and h.group(1) == "##" else None
             if s:
                 ids.append(int(s.group(1)))
         if not ids:
