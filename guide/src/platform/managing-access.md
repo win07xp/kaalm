@@ -54,10 +54,12 @@ Prefer exact namespace names in `allowedNamespaces`; use globs like
 
 ## Keep a class to some teams
 
-RBAC cannot limit which AgentClass a developer names in `agentClassRef`,
-because developers must read every class to name one. To keep a class to
-chosen teams, list their namespaces in the class's `allowedNamespaces`. Each
-entry is a `path.Match` glob, such as `team-*`:
+RBAC cannot limit which AgentClass a developer names in `agentClassRef`.
+RBAC authorizes creating an Agent or AgentTask, not the names its spec
+references, so a create grant cannot limit `agentClassRef`. Removing a
+developer's read access to a class does not stop them naming it either. To keep
+a class to chosen teams, list their namespaces in the class's
+`allowedNamespaces`. Each entry is a `path.Match` glob, such as `team-*`:
 
 ```bash
 kubectl patch agentclass restricted --type=merge \

@@ -87,7 +87,7 @@ AgentTask has no `Degraded` phase. Where an Agent would degrade, the task settle
 
 | Task state at the edit | Effect |
 |---|---|
-| has a Pod (`Provisioning` with a Pod, `Running`, `Completing`) | none; the task finishes under the class snapshot its Pod was created from. If the edit removes the task's namespace from `allowedNamespaces` (rule 47), the gateway refuses the task's LLM and tool calls |
+| has a Pod (`Provisioning` with a Pod, `Running`, `Completing`) | none; the task finishes under the class snapshot its Pod was created from. If the edit removes the task's namespace from the class's `allowedNamespaces` (rule 47) or from a referenced provider's `allowedNamespaces`, the gateway refuses the task's LLM and tool calls |
 | no Pod yet (`Pending`, or `Provisioning` before creation), or retrying from `Failed` | the pre-Pod class check runs against the new class; a violation settles the task `Failed` at once, whatever `backoffLimit` remains |
 | terminal (`Succeeded`, `Failed`, `TimedOut`) | none; the task proceeds to TTL cleanup |
 
