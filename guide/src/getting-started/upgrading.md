@@ -168,8 +168,13 @@ The design book states both rules, 45 and 46, on
 **TLS Secret names.** An Agent or AgentTask created after the upgrade writes
 its certificate to a Secret named `{name}-tls-` plus the first eight characters
 of the workload's UID, such as `support-assistant-tls-3f9c2a1e`. The
-Certificate is still named `{name}-tls`. A workload that existed before the
-upgrade keeps `{name}-tls`, and the upgrade doesn't replace its Pods.
+Certificate is still named `{name}-tls`. A workload whose Certificate existed
+before the upgrade keeps its `{name}-tls` Secret, and the upgrade doesn't
+replace its Pods. A workload that had no Certificate yet, such as an Agent that
+has been `Degraded` since it was created or an AgentTask still `Pending`, gets
+the UID-suffixed name when the controller creates its Certificate. An Agent that
+became `Degraded` later, for example from `Running`, already has its
+Certificate and keeps `{name}-tls`.
 
 A script or Pod that reads a workload's TLS Secret by name should read
 `spec.secretName` from the workload's Certificate instead:
