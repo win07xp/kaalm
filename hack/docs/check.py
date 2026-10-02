@@ -74,7 +74,8 @@ SCENARIOS = "docs/src/appendix/scenarios.md"
 # Applied to the text of a HEADING match: "S7: title" gives 7.
 SCENARIO_HEADING = re.compile(r"^S(\d+):")
 TOP_LEVEL_PREFIX = re.compile(r"var\s+_\s*=\s*")
-# Top-level e2e and upgrade containers that prove no row of the coverage map.
+# Top-level e2e and upgrade containers that no row of the coverage map covers.
+# Each key is a container label; each value is the reason it has no row.
 NON_SCENARIO_SPECS = {
     "Mock LLM provider": "test infrastructure; it checks the in-cluster mock upstream that the LLM scenarios use",
     "Metric catalog on the wire (#97)": "the metric catalog, not an acceptance scenario",
@@ -231,12 +232,12 @@ class Checker:
         Returns (labels, numbered, top): labels maps each label to its first
         'path:line'; numbered holds (n, label, enclosing Describe, 'path:line')
         for each S-number a label carries; top holds (label, 'path:line') for
-        each top-level container, a Describe, Context, When, or DescribeTable
-        on a line that starts with `var _ =`. A nested container is not
-        top-level. The glob is not recursive, so the
-        mock servers' plain Go tests under test/e2e/mock* are skipped. The
-        enclosing Describe is the nearest preceding Describe in the file; no
-        spec file nests Describes.
+        each top-level container, which is a Describe, Context, When, or
+        DescribeTable on a line that starts with `var _ =`. A nested container
+        is not top-level. The glob is not recursive, so the mock servers'
+        plain Go tests under test/e2e/mock* are skipped. The enclosing
+        Describe is the nearest preceding Describe in the file; no spec file
+        nests Describes.
         """
         if self.spec_cache is not None:
             return self.spec_cache
@@ -447,7 +448,8 @@ class Checker:
             if name not in top_labels:
                 self.problems.append(
                     f'hack/docs/check.py: NON_SCENARIO_SPECS lists "{name}", '
-                    "which is not a top-level Describe in test/e2e or test/upgrade"
+                    "which is not a top-level container (Describe, Context, "
+                    "When, or DescribeTable) in test/e2e or test/upgrade"
                 )
 
     def check_diagrams(self) -> None:
