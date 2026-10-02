@@ -4,7 +4,7 @@
 
 **Caller.** The task's agent container, presenting the per-task client certificate whose SAN carries the AgentTask kind, name, and namespace.
 
-**Effect.** A `200` means the completion payload is in the task's `{taskName}-completion` ConfigMap. The [AgentTaskReconciler](../../controller/reconcilers.md#agenttaskreconciler) observes the write and moves the task to `Completing`. The gateway never writes `AgentTask.status` itself.
+**Effect.** A `200` means the completion payload is in the task's `{taskName}-completion` ConfigMap. The [AgentTaskReconciler](../../controller/reconcilers/agenttask.md) observes the write and moves the task to `Completing`. The gateway never writes `AgentTask.status` itself.
 
 ## How completion is recorded
 

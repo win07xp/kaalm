@@ -1,6 +1,6 @@
 # Change propagation
 
-Two kinds of change reach an Agent's provisioned child resources: edits to the Agent's own spec, and edits to the AgentClass, ModelProvider, or ToolProvider it references. This page defines both paths. It is the canonical description of class-change propagation; the [AgentReconciler](reconcilers.md#agentreconciler) and the [child resources](../runtime/child-resources.md) page both defer here.
+Two kinds of change reach an Agent's provisioned child resources: edits to the Agent's own spec, and edits to the AgentClass, ModelProvider, or ToolProvider it references. This page defines both paths. It is the canonical description of class-change propagation; the [AgentReconciler](reconcilers/agent.md) and the [child resources](../runtime/child-resources.md) page both defer here.
 
 ## Spec change handling
 
@@ -23,7 +23,7 @@ A spec edit's effect is guaranteed visible only after `status.phase` next settle
 
 ### Drift replacements are capped per class
 
-A drifted Agent does not replace its Pod the moment it detects drift. It first asks its class for one of the `lifecycle.maxUnavailableOnDrift` slots: an integer of at least 1, or a percentage of the class's Agents, hibernated ones included, from 1% to 100%, rounded up and never below 1. A class with no `lifecycle.maxUnavailableOnDrift`, including one with no `lifecycle` block at all, gets 25% ([rule 44](../resources/validation-and-defaulting.md#the-rules)).
+A drifted Agent does not replace its Pod the moment it detects drift. It first asks its class for one of the `lifecycle.maxUnavailableOnDrift` slots: an integer of at least 1, or a percentage of the class's Agents, hibernated ones included, from 1% to 100%, rounded up and never below 1. A class with no `lifecycle.maxUnavailableOnDrift`, including one with no `lifecycle` block at all, gets 25% ([rule 44](../resources/validation/class-policy.md)).
 
 A granted Agent's `PodUpToDate` condition becomes `False, reason=Replacing`, its old Pod is deleted, and a new one is created from the current spec. The slot frees after the new Pod is Ready on that spec (`PodUpToDate` turns `True, reason=Current`), or the Agent is deleted. A refused Agent's `PodUpToDate` condition becomes `False, reason=ReplacementPending`, and its current Pod keeps serving: `status.phase` and the `Ready` condition still come from that Pod. A refused Agent is re-queued as soon as another Agent of the class leaves `Replacing`, with a 30-second fallback retry. When both an Idle and a non-Idle Agent of the class wait for a slot, the Idle one is replaced first.
 
@@ -42,7 +42,7 @@ As a result, an AgentClass edit made before the upgrade to a field that version 
 
 ## AgentClass change handling
 
-When an AgentClass, ModelProvider, or ToolProvider spec changes, the [AgentReconciler](reconcilers.md#agentreconciler) re-enqueues every Agent referencing it through three indexed watches (`agentClassRef.name`, `providers[].providerRef.name`, `tools[].providerRef.name`), so propagation is event-driven rather than waiting for a periodic requeue. The [AgentTaskReconciler](reconcilers.md#agenttaskreconciler) watches AgentClass only. Each watch is gated so that status-only writes never fan out: a class or tool provider fires on a spec generation change, and a model provider on a spec change, a change to its `Ready` status or reason, or a change to the set of namespaces its budget blocks.
+When an AgentClass, ModelProvider, or ToolProvider spec changes, the [AgentReconciler](reconcilers/agent.md) re-enqueues every Agent referencing it through three indexed watches (`agentClassRef.name`, `providers[].providerRef.name`, `tools[].providerRef.name`), so propagation is event-driven rather than waiting for a periodic requeue. The [AgentTaskReconciler](reconcilers/agenttask.md) watches AgentClass only. Each watch is gated so that status-only writes never fan out: a class or tool provider fires on a spec generation change, and a model provider on a spec change, a change to its `Ready` status or reason, or a change to the set of namespaces its budget blocks.
 
 A change propagates along one of three paths, decided in this order: does it exclude the Agent's stored spec (bucket 2), does it change the Pod spec hash (bucket 1), or neither (bucket 3, or an in-place child update).
 

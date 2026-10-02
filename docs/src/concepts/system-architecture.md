@@ -68,12 +68,12 @@ The controller runs as a Deployment in `kaalm-system` and hosts six reconcilers,
 
 | Reconciler | Watches | Does |
 |---|---|---|
-| [Agent](../controller/reconcilers.md#agentreconciler) | Agent | Provisions the [child-resource set](../runtime/child-resources.md) and drives the [Agent lifecycle](../controller/agent-lifecycle.md): idle detection, hibernation, wake |
-| [AgentTask](../controller/reconcilers.md#agenttaskreconciler) | AgentTask | Provisions the task's child set, watches the [completion condition](../controller/task-lifecycle.md), and settles the task |
-| [ModelProvider](../controller/reconcilers.md#modelproviderreconciler) | ModelProvider | Validates the spec, resolves the credential, probes the upstream, folds spend into status |
-| [ToolProvider](../controller/reconcilers.md#toolproviderreconciler) | ToolProvider | Resolves the optional credential and probes the server with MCP |
-| [AgentClass](../controller/reconcilers.md#agentclassreconciler) | AgentClass | Validates references and egress entries and counts the workloads in use |
-| [AgentChannel](../controller/reconcilers.md#agentchannelreconciler) | AgentChannel | Validates the channel and sets `Ready`, which gates routing; reduces the gateway's health observations into `PlatformConnected` |
+| [Agent](../controller/reconcilers/agent.md) | Agent | Provisions the [child-resource set](../runtime/child-resources.md) and drives the [Agent lifecycle](../controller/agent-lifecycle.md): idle detection, hibernation, wake |
+| [AgentTask](../controller/reconcilers/agenttask.md) | AgentTask | Provisions the task's child set, watches the [completion condition](../controller/task-lifecycle.md), and settles the task |
+| [ModelProvider](../controller/reconcilers/modelprovider.md) | ModelProvider | Validates the spec, resolves the credential, probes the upstream, folds spend into status |
+| [ToolProvider](../controller/reconcilers/toolprovider.md) | ToolProvider | Resolves the optional credential and probes the server with MCP |
+| [AgentClass](../controller/reconcilers/agentclass.md) | AgentClass | Validates references and egress entries and counts the workloads in use |
+| [AgentChannel](../controller/reconcilers/agentchannel.md) | AgentChannel | Validates the channel and sets `Ready`, which gates routing; reduces the gateway's health observations into `PlatformConnected` |
 
 Leader election is on, so the reconcilers run on one replica and the Deployment survives a replica loss. Three listeners run on every replica, leader or not: the activator on `:9443`, the CRD conversion webhook on `:9444`, and metrics on `:8080`; a plain-HTTP probe listener on `:8081` serves the kubelet ([The binary](../controller/overview.md#the-binary)).
 
