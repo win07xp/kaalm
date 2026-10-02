@@ -17,11 +17,15 @@ limitations under the License.
 // Package cel exercises the CRD schema validation (CEL and structural) against a
 // real apiserver via envtest. Every fixture under test/fixtures/valid must apply;
 // every fixture under test/fixtures/invalid must be rejected. This is the
-// apply-time half of docs/src/resources/validation-and-defaulting.md.
+// apply-time half of docs/src/resources/validation-and-defaulting.md. Every
+// manifest under config/samples must also apply, with strict field validation.
 package cel
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +33,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -113,16 +118,74 @@ func TestValidFixturesApply(t *testing.T) {
 	}
 }
 
-// TestSandboxedSampleApplies asserts the sandboxed AgentClass sample passes
-// the CRD schema and CEL rules. It is not in the samples kustomization, so
-// no other check applies it.
-func TestSandboxedSampleApplies(t *testing.T) {
+// decodeDocs splits a multi-document YAML file into one object per document.
+// Empty documents are skipped. A document without apiVersion or kind fails the
+// test, because a file in config/samples must hold resources only.
+func decodeDocs(t *testing.T, path string) []*unstructured.Unstructured {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var docs []*unstructured.Unstructured
+	dec := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
+	for i := 0; ; i++ {
+		m := map[string]any{}
+		if err := dec.Decode(&m); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatalf("decode %s document %d: %v", path, i+1, err)
+		}
+		if len(m) == 0 {
+			continue
+		}
+		u := &unstructured.Unstructured{Object: m}
+		if u.GetAPIVersion() == "" || u.GetKind() == "" {
+			t.Fatalf("%s document %d: missing apiVersion or kind; not a resource", path, i+1)
+		}
+		if u.GetNamespace() == "" && namespaced(u.GetKind()) {
+			u.SetNamespace("default")
+		}
+		docs = append(docs, u)
+	}
+	if len(docs) == 0 {
+		t.Fatalf("%s: no resources", path)
+	}
+	return docs
+}
+
+// TestSamplesApply asserts every manifest in config/samples, including the
+// ones not listed in the samples kustomization, passes the CRD schema and CEL
+// rules and has no field the schema does not know. Strict field validation
+// rejects unknown fields, which the default dry-run only prunes with a warning.
+func TestSamplesApply(t *testing.T) {
 	c := newClient(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	u := decode(t, "../../config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml")
-	if err := c.Create(ctx, u, client.DryRunAll); err != nil {
-		t.Fatalf("expected accept, got: %v", err)
+	all, err := filepath.Glob(filepath.Join("..", "..", "config", "samples", "*.yaml"))
+	if err != nil {
+		t.Fatalf("glob samples: %v", err)
+	}
+	var files []string
+	for _, f := range all {
+		// kustomization.yaml is a kustomize config, not a resource.
+		if filepath.Base(f) != "kustomization.yaml" {
+			files = append(files, f)
+		}
+	}
+	if len(files) == 0 {
+		t.Fatalf("no samples in config/samples")
+	}
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			for i, u := range decodeDocs(t, f) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				err := c.Create(ctx, u, client.DryRunAll, client.FieldValidation("Strict"))
+				cancel()
+				if err != nil {
+					t.Errorf("document %d (%s %s): expected accept, got: %v", i+1, u.GetKind(), u.GetName(), err)
+				}
+			}
+		})
 	}
 }
 
