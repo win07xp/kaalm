@@ -2,7 +2,7 @@
 
 An [AgentTask](../resources/agenttask.md) is a run-to-completion workload: the operator provisions a Pod, the Pod does its work, and the operator records the result; the Pod is removed with the task when its TTL expires. Unlike an Agent, which is long-lived and hibernates between requests, an AgentTask always settles in a terminal phase.
 
-This page covers the AgentTask state machine, how the operator decides a task is done, how artifacts get from the container into `status`, and what happens on a retry. The order in which one reconcile pass runs these steps is under [AgentTaskReconciler](reconcilers.md#agenttaskreconciler); the wire contract of the completion call is [POST /v1/task/complete](../gateways/api/task-complete.md).
+This page covers the AgentTask state machine, how the operator decides a task is done, how artifacts get from the container into `status`, and what happens on a retry. The order in which one reconcile pass runs these steps is under [AgentTaskReconciler](reconcilers/agenttask.md); the wire contract of the completion call is [POST /v1/task/complete](../gateways/api/task-complete.md).
 
 ## State machine
 
@@ -70,7 +70,7 @@ Clearing the UID before resetting the mailbox is what closes the stale-write win
 
 A retry re-runs the pre-Pod class check against the class as it now stands. A violation there settles the task as terminal `Failed` at once, whatever `backoffLimit` remains, and the increment already spent is not refunded. To retry a task against a class you have since aligned, delete and recreate the task: a `kubectl apply` of the same spec does not reset `status.retries`, since status is controller-owned and apply patches only `spec`.
 
-A retry also re-runs the env Secret gate ([rule 48](../resources/validation-and-defaulting.md#cross-resource-validation)). That gate is not terminal: a task whose env Secret is missing or has lost the label waits in `Provisioning` with `Ready=False, reason=SecretNotOptedIn`, creates no Pod, and counts no further retry. Labeling the Secret lets the next pass, within 30 seconds, create the Pod. A task that has a Pod or has finished is not checked.
+A retry also re-runs the env Secret gate ([rule 48](../resources/validation/references-and-access.md)). That gate is not terminal: a task whose env Secret is missing or has lost the label waits in `Provisioning` with `Ready=False, reason=SecretNotOptedIn`, creates no Pod, and counts no further retry. Labeling the Secret lets the next pass, within 30 seconds, create the Pod. A task that has a Pod or has finished is not checked.
 
 ## Event reasons
 

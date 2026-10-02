@@ -13,7 +13,7 @@ The container serves two health endpoints on `$KAALM_HEALTH_PORT` (default 8080)
 | `GET /readyz` | Readiness | `200` when the container can accept a message, `503` otherwise |
 | `GET /livez` | Liveness | `200` when the process is healthy |
 
-The controller injects probes for both paths on an Agent Pod ([AgentReconciler step 9](../controller/reconcilers.md#agentreconciler)); an AgentTask Pod gets no probes. The container serves TLS on this port with the per-workload certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, so the injected probes use `httpGet.scheme: HTTPS`. Kubernetes does not verify certificates on `httpGet` probes, so the probe needs no CA configuration.
+The controller injects probes for both paths on an Agent Pod ([AgentReconciler step 9](../controller/reconcilers/agent.md)); an AgentTask Pod gets no probes. The container serves TLS on this port with the per-workload certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, so the injected probes use `httpGet.scheme: HTTPS`. Kubernetes does not verify certificates on `httpGet` probes, so the probe needs no CA configuration.
 
 In both reference runtimes, the container can accept a message when two things hold: the handler is loaded, and the certificate reloader holds a certificate that is not past its expiry. An expired certificate fails every gateway handshake, so until a rotation replaces it, `/readyz` answers `503` and the Pod leaves the Service endpoints. `/livez` does not depend on readiness, so an expired certificate makes the Pod unready but does not restart it.
 
@@ -122,7 +122,7 @@ The same-`messageId` case comes from the gateway's own delivery schedule: four a
 The schedule applies to every Agent, hibernated or not, so every Agent deduplicates on `messageId`: it buffers received ids and returns the cached response for a duplicate without reprocessing.
 
 - An in-memory window is enough for an Agent that never hibernates.
-- An Agent with `hibernationEnabled: true` persists the buffer across Pod restarts, so a wake-replacement Pod still recognizes a `messageId` delivered before the restart. A PVC is always available, because `hibernationEnabled: true` requires `spec.persistence.enabled: true` ([rule 29](../resources/validation-and-defaulting.md#cross-resource-validation)).
+- An Agent with `hibernationEnabled: true` persists the buffer across Pod restarts, so a wake-replacement Pod still recognizes a `messageId` delivered before the restart. A PVC is always available, because `hibernationEnabled: true` requires `spec.persistence.enabled: true` ([rule 29](../resources/validation/class-policy.md)).
 
 The reference runtimes keep a window of the last 1024 ids with their responses in the memory directory ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
 

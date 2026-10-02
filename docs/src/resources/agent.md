@@ -168,7 +168,7 @@ The Agent spec exposes no general-purpose volume mount, and `spec.handler` does 
 
 ### `spec.env` Secrets must opt in
 
-Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the Agent's namespace and carry the label `kaalm.io/workload-secret: "true"`. An Agent that fails the check shows `Ready=False, reason=SecretNotOptedIn` and gets no new Pod. A Pod that already runs stays in place, and the Agent keeps its phase: while the check fails, the Agent makes no idle or hibernation transition ([Ready gates](../controller/reconcilers.md#ready-gates)). The exact check and the gate's timing are under [rule 48](validation-and-defaulting.md#cross-resource-validation). The Agent spec has no `envFrom` field, so `valueFrom.secretKeyRef` is the only Secret source.
+Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the Agent's namespace and carry the label `kaalm.io/workload-secret: "true"`. An Agent that fails the check shows `Ready=False, reason=SecretNotOptedIn` and gets no new Pod. A Pod that already runs stays in place, and the Agent keeps its phase: while the check fails, the Agent makes no idle or hibernation transition ([Ready gates](../controller/reconcilers/agent.md#ready-gates)). The exact check and the gate's timing are under [rule 48](validation/references-and-access.md). The Agent spec has no `envFrom` field, so `valueFrom.secretKeyRef` is the only Secret source.
 
 ### `service`
 

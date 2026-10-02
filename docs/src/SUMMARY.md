@@ -21,6 +21,12 @@
 - [AgentTask](resources/agenttask.md)
 - [AgentChannel](resources/agentchannel.md)
 - [Validation and defaulting](resources/validation-and-defaulting.md)
+  - [Reference and access rules](resources/validation/references-and-access.md)
+  - [Class policy rules](resources/validation/class-policy.md)
+  - [Name, namespace, and task rules](resources/validation/names-and-tasks.md)
+  - [Channel rules](resources/validation/channels.md)
+  - [Provider rules](resources/validation/providers.md)
+  - [Schema validation and defaulting](resources/validation/schema-and-defaulting.md)
 
 # Agent Runtime
 
@@ -59,6 +65,12 @@
 
 - [Operator structure](controller/overview.md)
 - [Reconcilers](controller/reconcilers.md)
+  - [AgentClassReconciler](controller/reconcilers/agentclass.md)
+  - [ModelProviderReconciler](controller/reconcilers/modelprovider.md)
+  - [ToolProviderReconciler](controller/reconcilers/toolprovider.md)
+  - [AgentReconciler](controller/reconcilers/agent.md)
+  - [AgentTaskReconciler](controller/reconcilers/agenttask.md)
+  - [AgentChannelReconciler](controller/reconcilers/agentchannel.md)
 - [Agent lifecycle](controller/agent-lifecycle.md)
 - [Hibernation and wake](controller/hibernation-and-wake.md)
 - [Change propagation](controller/change-propagation.md)

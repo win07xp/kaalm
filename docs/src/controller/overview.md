@@ -44,7 +44,7 @@ Every replica serves `/metrics` from its own cache. controller-runtime's reconci
 
 ### Activator handler (served on every replica)
 
-The `POST /v1/activate/{namespace}/{agentName}` handler runs on every replica, not only the leader. It authenticates the caller by SAN, patches `kaalm.io/wake=true` and `kaalm.io/wake-trigger=channel` onto the Agent in one merge patch through the apiserver, and answers `202`. It doesn't read the Agent first, so a wake costs one API call; a missing Agent answers `404` because the patch returns NotFound. The leader's Agent watch fires and the [AgentReconciler](reconcilers.md#agentreconciler) handles the annotations as its first step. The wake reaches the leader because it is written into the Agent: the apiserver, not the replica that took the call, is the message bus, so the Service needs no leader-aware endpoint selection, and a non-leader needs only the patch access the controller ServiceAccount already has. The gateway side of the call is under [The activator](../gateways/user/activation-and-activity.md#the-activator).
+The `POST /v1/activate/{namespace}/{agentName}` handler runs on every replica, not only the leader. It authenticates the caller by SAN, patches `kaalm.io/wake=true` and `kaalm.io/wake-trigger=channel` onto the Agent in one merge patch through the apiserver, and answers `202`. It doesn't read the Agent first, so a wake costs one API call; a missing Agent answers `404` because the patch returns NotFound. The leader's Agent watch fires and the [AgentReconciler](reconcilers/agent.md) handles the annotations as its first step. The wake reaches the leader because it is written into the Agent: the apiserver, not the replica that took the call, is the message bus, so the Service needs no leader-aware endpoint selection, and a non-leader needs only the patch access the controller ServiceAccount already has. The gateway side of the call is under [The activator](../gateways/user/activation-and-activity.md#the-activator).
 
 ## No admission webhooks
 
@@ -64,8 +64,8 @@ Every reconciler runs on events first; each also requeues on a cadence of its ow
 |---|---|
 | Agent | every 15 seconds while `Running` or `Idle` (the activity cache window); every 30 seconds while a Ready gate holds or a restarted gateway defers the idle decision; backing off from 30 seconds to 5 minutes while no gateway replica answers ([Gateway unavailability](hibernation-and-wake.md#when-activity-data-is-missing)); every 5 seconds while waiting on the Certificate |
 | AgentTask | every 5 seconds while waiting on the Certificate or for the Pod to become Ready; every 30 seconds while a pull Secret is missing or an env Secret is missing or unlabeled; at `startTime + timeout` while `Running`; at TTL expiry once terminal |
-| ModelProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers.md#probe-backoff)); every minute for a provider with a budget period when the probe is disabled; the budget ConfigMap watch fires the fold between passes |
-| ToolProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers.md#probe-backoff)) |
+| ModelProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers/modelprovider.md#probe-backoff)); every minute for a provider with a budget period when the probe is disabled; the budget ConfigMap watch fires the fold between passes |
+| ToolProvider | at `healthCheck.intervalSeconds` (default 60) when the probe is enabled and healthy, backing off while it fails ([Probe backoff](reconcilers/modelprovider.md#probe-backoff)) |
 | AgentChannel | every minute |
 | AgentClass | on events only |
 

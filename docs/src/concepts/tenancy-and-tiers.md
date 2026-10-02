@@ -71,7 +71,7 @@ The rule set is on [Child resources](../runtime/child-resources.md#what-the-synt
 
 ### Webhook path namespace-prefixing
 
-An AgentChannel path must begin with `/channels/{namespace}/` for its own namespace, so cross-tenant path collisions are impossible at the routing layer: a tenant cannot register a path that captures another tenant's inbound traffic. The rule is enforced at reconcile time (`Ready=False, reason=InvalidPath`) and checked again by the gateway on every request it resolves ([rule 15](../resources/validation-and-defaulting.md#cross-resource-validation)); CEL cannot express it, because CEL cannot read `metadata.namespace`. `AgentChannel.spec.agentRef` is name-only and binds to an Agent in the channel's own namespace; there is no cross-namespace binding ([AgentChannel](../resources/agentchannel.md)).
+An AgentChannel path must begin with `/channels/{namespace}/` for its own namespace, so cross-tenant path collisions are impossible at the routing layer: a tenant cannot register a path that captures another tenant's inbound traffic. The rule is enforced at reconcile time (`Ready=False, reason=InvalidPath`) and checked again by the gateway on every request it resolves ([rule 15](../resources/validation/channels.md)); CEL cannot express it, because CEL cannot read `metadata.namespace`. `AgentChannel.spec.agentRef` is name-only and binds to an Agent in the channel's own namespace; there is no cross-namespace binding ([AgentChannel](../resources/agentchannel.md)).
 
 ### Tenant-level resource limits
 

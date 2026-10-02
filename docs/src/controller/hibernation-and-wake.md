@@ -73,7 +73,7 @@ The rule "absence of data is not evidence of inactivity" is the first row. Unrea
 
 Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. The Service remains (with no endpoints) while the Agent is hibernated. Wake is triggered by the [User Gateway](../gateways/user/activation-and-activity.md#the-activator) (on channel message arrival) or manual annotation, not by traffic to the Service.
 
-Hibernation presupposes the PVC: `spec.lifecycle.hibernationEnabled: true` with `spec.persistence.enabled: false` is refused at reconcile time (`Degraded, reason=HibernationRequiresPersistence`, [rule 29](../resources/validation-and-defaulting.md#cross-resource-validation)). Without a PVC there is nothing to carry state, including the dedup buffer that [the runtime contract](../runtime/contract.md) item 7 requires, across the delete and recreate cycle.
+Hibernation presupposes the PVC: `spec.lifecycle.hibernationEnabled: true` with `spec.persistence.enabled: false` is refused at reconcile time (`Degraded, reason=HibernationRequiresPersistence`, [rule 29](../resources/validation/class-policy.md)). Without a PVC there is nothing to carry state, including the dedup buffer that [the runtime contract](../runtime/contract.md) item 7 requires, across the delete and recreate cycle.
 
 ## Wake trigger
 
@@ -118,4 +118,4 @@ A `kaalm.io/wake-trigger` annotation left on an Agent with no `kaalm.io/wake=tru
 
 A wake requested during the transient `Hibernating` phase, by hand or by a channel message, is therefore not lost: the Agent passes through `Hibernated` and then resumes. The gateway calls the activator for a `Hibernating` Agent for this reason (see [The activator](../gateways/user/activation-and-activity.md#the-activator)).
 
-See [AgentReconciler](reconcilers.md#agentreconciler) step 1 for the implementation detail.
+See [AgentReconciler](reconcilers/agent.md) step 1 for the implementation detail.

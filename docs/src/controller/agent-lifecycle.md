@@ -8,7 +8,7 @@ The happy path is a straight line: an Agent is admitted (`Pending`), its child r
 - **Re-provisioning.** Spec drift or an involuntary Pod disruption sends a live Agent back through `Provisioning` for a Pod replacement.
 - **Trouble.** `Degraded` for a mismatch the developer can fix, `Failed` for a Pod that cannot run, `Terminating` for deletion.
 
-This page is the state machine itself: the figure, the table of every transition and its trigger, and the mechanics of the Degraded and Failed phases. The mechanics behind the other transitions live on their own pages: [Activity detection](hibernation-and-wake.md#activity-detection) (how the controller knows an Agent is idle), [Hibernation mechanics](hibernation-and-wake.md#hibernation-mechanics), [Wake trigger](hibernation-and-wake.md#wake-trigger), and [AgentClass change handling](change-propagation.md#agentclass-change-handling) (how a class edit propagates to provisioned Agents). For what the reconciler does on each pass, see [AgentReconciler](reconcilers.md#agentreconciler).
+This page is the state machine itself: the figure, the table of every transition and its trigger, and the mechanics of the Degraded and Failed phases. The mechanics behind the other transitions live on their own pages: [Activity detection](hibernation-and-wake.md#activity-detection) (how the controller knows an Agent is idle), [Hibernation mechanics](hibernation-and-wake.md#hibernation-mechanics), [Wake trigger](hibernation-and-wake.md#wake-trigger), and [AgentClass change handling](change-propagation.md#agentclass-change-handling) (how a class edit propagates to provisioned Agents). For what the reconciler does on each pass, see [AgentReconciler](reconcilers/agent.md).
 
 ## State diagram
 
@@ -41,7 +41,7 @@ The table lists every transition in the order the reconciler evaluates them. Row
 
 ### Waiting on the Certificate
 
-Provisioning waits on the per-Agent `Certificate` before creating the Pod, so the Pod never hangs on a missing projected Secret. While cert-manager issues it the phase is `Provisioning` with `Ready=False, reason=CertificateNotReady`, requeued every five seconds. See [AgentReconciler](reconcilers.md#agentreconciler) step 7.
+Provisioning waits on the per-Agent `Certificate` before creating the Pod, so the Pod never hangs on a missing projected Secret. While cert-manager issues it the phase is `Provisioning` with `Ready=False, reason=CertificateNotReady`, requeued every five seconds. See [AgentReconciler](reconcilers/agent.md) step 7.
 
 ### Involuntary Pod disruption
 

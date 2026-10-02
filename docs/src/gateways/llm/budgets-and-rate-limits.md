@@ -6,7 +6,7 @@ Rate limits, and budgets in their default **soft** mode, are approximate: the de
 
 ## Budget state management
 
-Budget counters live in the gateway process. Each replica keeps an in-memory spend counter per (provider, namespace, period) tuple and updates it synchronously on every LLM call. Replicas never talk to each other. They exchange spend through a ConfigMap in `kaalm-system` named `kaalm-budget-{providerName}`, and the [ModelProviderReconciler](../../controller/reconcilers.md#modelproviderreconciler) is the reducer over what they write. This avoids a Prometheus dependency and works with the gateway's existing ConfigMap RBAC ([Gateway ServiceAccount permissions](../../security/rbac.md#gateway-serviceaccount-permissions)).
+Budget counters live in the gateway process. Each replica keeps an in-memory spend counter per (provider, namespace, period) tuple and updates it synchronously on every LLM call. Replicas never talk to each other. They exchange spend through a ConfigMap in `kaalm-system` named `kaalm-budget-{providerName}`, and the [ModelProviderReconciler](../../controller/reconcilers/modelprovider.md) is the reducer over what they write. This avoids a Prometheus dependency and works with the gateway's existing ConfigMap RBAC ([Gateway ServiceAccount permissions](../../security/rbac.md#gateway-serviceaccount-permissions)).
 
 ### The budget counter exchange
 
@@ -222,7 +222,7 @@ Per-replica division is the design point. A shared bucket coordinated through a 
 
 ## Related
 
-- [ModelProviderReconciler](../../controller/reconcilers.md#modelproviderreconciler): the reducer that sums partials, prunes stale keys, and writes `_canonical` and `status.budgetUsage`.
+- [ModelProviderReconciler](../../controller/reconcilers/modelprovider.md): the reducer that sums partials, prunes stale keys, and writes `_canonical` and `status.budgetUsage`.
 - [ModelProvider](../../resources/modelprovider.md): where `spec.rateLimits` and the budget configuration are declared.
 - [Streaming responses](request-handling.md#streaming-responses): why streamed spend is invisible until the stream completes.
 - [LLM Gateway error responses](../api/errors.md#llm-gateway-error-responses): the structured error schema and status code mapping, including budget exhaustion and 429 responses.

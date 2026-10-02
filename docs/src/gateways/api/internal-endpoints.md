@@ -6,7 +6,7 @@ All four are served on the cluster listener, `:8443`, never on the Ingress-front
 
 ## GET /v1/activity
 
-The [AgentReconciler](../../controller/reconcilers.md#agentreconciler) reads per-namespace last-activity timestamps here for idle and hibernation transitions. The caller presents `kaalm-controller-tls`, whose SAN is the controller Service DNS.
+The [AgentReconciler](../../controller/reconcilers/agent.md) reads per-namespace last-activity timestamps here for idle and hibernation transitions. The caller presents `kaalm-controller-tls`, whose SAN is the controller Service DNS.
 
 **Request:**
 
@@ -45,7 +45,7 @@ Both sources are always returned. The controller applies `Agent.spec.lifecycle.a
 
 ## GET /v1/channels/health
 
-The [AgentChannelReconciler](../../controller/reconcilers.md#agentchannelreconciler) reads per-channel health observations here to set `status.conditions[type=PlatformConnected]`. The caller presents `kaalm-controller-tls`.
+The [AgentChannelReconciler](../../controller/reconcilers/agentchannel.md) reads per-channel health observations here to set `status.conditions[type=PlatformConnected]`. The caller presents `kaalm-controller-tls`.
 
 **Request:**
 

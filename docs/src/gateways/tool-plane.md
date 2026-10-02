@@ -143,7 +143,7 @@ Three wire rules follow from the request-scoped design. JSON-RPC batch arrays ar
 
 The same as the LLM path: inbound auth material is stripped, and the ToolProvider's credential is sent upstream as `Authorization: Bearer`. A ToolProvider without `credentialsRef` sends no `Authorization` header.
 
-The broker reads a credential only from a Secret that passes [rules 49 and 50](../resources/validation-and-defaulting.md#provider-credentials): the label `kaalm.io/provider-credential: "true"`, then the endpoint host in the `kaalm.io/provider-hosts` annotation, then the key. The check runs once per brokered call, with or without the Secret watcher, and follows the same terms as the LLM path ([Credential handling](llm/provider-routing.md#credential-handling)). A refusal returns `503 tool_unavailable`, retryable, with the fixed message `tool provider credential is unavailable`. The reason goes to the gateway log as `mcp credential unavailable`, never to the caller, and the error text never carries a credential value.
+The broker reads a credential only from a Secret that passes [rules 49 and 50](../resources/validation/providers.md#provider-credentials): the label `kaalm.io/provider-credential: "true"`, then the endpoint host in the `kaalm.io/provider-hosts` annotation, then the key. The check runs once per brokered call, with or without the Secret watcher, and follows the same terms as the LLM path ([Credential handling](llm/provider-routing.md#credential-handling)). A refusal returns `503 tool_unavailable`, retryable, with the fixed message `tool provider credential is unavailable`. The reason goes to the gateway log as `mcp credential unavailable`, never to the caller, and the error text never carries a credential value.
 
 No credential-bearing byte leaves `kaalm-system`, and the e2e proof obligation carries over from the LLM plane: the tool credential is absent from the agent pod, by inspection.
 
@@ -220,7 +220,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Session id bound to another caller | `403 access_denied`; the audit record names the mismatch |
 | Credential Secret unreadable, unlabeled, or not approving the endpoint host | `503 tool_unavailable`, retryable |
 | Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, retryable, `Retry-After: 1` |
-| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable, with a `Warning` event, `reason=CredentialsInvalid`, recorded on the ToolProvider for the rejected call. The health probe separately sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid` ([ToolProviderReconciler](../controller/reconcilers.md#toolproviderreconciler)) |
+| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable, with a `Warning` event, `reason=CredentialsInvalid`, recorded on the ToolProvider for the rejected call. The health probe separately sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid` ([ToolProviderReconciler](../controller/reconcilers/toolprovider.md)) |
 | `tools/list` response the broker cannot parse | `503 tool_unavailable`, not retryable |
 | Tool call exceeds the upstream timeout | `504 tool_timeout`, retryable |
 | Other protocol-level 4xx from the server | relayed verbatim (an expired session's 404, for example), so MCP session semantics survive the broker |

@@ -8,13 +8,13 @@ Every state machine in Kaalm is drawn once, on the page that specifies it. This 
 |---|---|---|
 | Agent | `Pending`, `Provisioning`, `Running`, the idle cycle `Idle`, `Hibernating`, `Hibernated`, `Resuming`, and the any-phase branches to `Degraded`, `Failed`, and `Terminating` | [Agent lifecycle](../controller/agent-lifecycle.md), with every transition trigger |
 | AgentTask | `Pending`, `Provisioning`, `Running`, `Completing`, then `Succeeded` or `TimedOut`, which are terminal, or `Failed`, which is terminal only after the reconciler sets `completionTime` (a `Failed` task with retries left returns to `Provisioning`); plus `Terminating`. No `Degraded`: an irreconcilable task fails | [AgentTask lifecycle](../controller/task-lifecycle.md) |
-| AgentChannel | `Active` and `Degraded` are a memoryless reduction of the bound Agent's phase, recomputed every pass; `Failed` means `agentRef` does not resolve; `Terminating` is set once by the delete path; unset before the first reconcile | [Channel phase reduction](../controller/reconcilers.md#channel-phase-reduction) |
+| AgentChannel | `Active` and `Degraded` are a memoryless reduction of the bound Agent's phase, recomputed every pass; `Failed` means `agentRef` does not resolve; `Terminating` is set once by the delete path; unset before the first reconcile | [Channel phase reduction](../controller/reconcilers/agentchannel.md#channel-phase-reduction) |
 
 The CRD schema does not constrain `status.phase`: the field is a plain string with no enum, because only the reconcilers write it.
 
 ## Platform resources without a phase
 
-`AgentClass`, `ModelProvider`, and `ToolProvider` have no `status.phase`: they are configuration, not workloads, so nothing about them starts, idles, or terminates. Their observed state is carried by conditions: `Ready` on all three; `FQDNPolicySupported` on AgentClass ([AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler)); `Healthy` on both providers; `GatewayReachable` and `BoundaryMarginRaised` on ModelProvider ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler), [ModelProvider status](../resources/modelprovider.md#status)).
+`AgentClass`, `ModelProvider`, and `ToolProvider` have no `status.phase`: they are configuration, not workloads, so nothing about them starts, idles, or terminates. Their observed state is carried by conditions: `Ready` on all three; `FQDNPolicySupported` on AgentClass ([AgentClassReconciler](../controller/reconcilers/agentclass.md)); `Healthy` on both providers; `GatewayReachable` and `BoundaryMarginRaised` on ModelProvider ([ModelProviderReconciler](../controller/reconcilers/modelprovider.md), [ModelProvider status](../resources/modelprovider.md#status)).
 
 ModelProvider carries one state machine, per namespace and period: the budget state `Normal`, `Throttled`, `Blocked`, monotonic within a period and reset only by the rollover, drawn under [ModelProvider status](../resources/modelprovider.md#status).
 

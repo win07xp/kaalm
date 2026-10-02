@@ -317,7 +317,7 @@ kubectl delete certificate WORKLOAD_NAME-tls -n NAMESPACE
 
 The v1.0.0 controller then re-creates the Certificate with the old Secret name.
 The design book states the naming rule on
-[Agent certificate](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers.md#agent-certificate).
+[Agent certificate](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agent.md#agent-certificate).
 
 ---
 
