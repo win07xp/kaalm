@@ -44,7 +44,7 @@ func callerFrom(ctx context.Context) *caller {
 // weakest link; every real decision lives here. A routing bug in this file
 // would let agent-cert holders reach controller-only paths, so this mapping
 // is the most security-load-bearing detail in the gateway.
-// See docs/src/gateways/llm/listener-tls.md.
+// See docs/src/gateways/listener-tls.md.
 type Authenticator struct {
 	Store             Store
 	Tokens            *TokenAuthenticator

@@ -6,7 +6,9 @@ Checks, per book:
 - every relative link and image target exists and stays inside the book,
   and every `#anchor` names a heading on the target page (mdBook slug
   rules). Inline links, links wrapped across lines, reference-style links,
-  and HTML `href` and `src` attributes are all resolved;
+  and HTML `href` and `src` attributes are all resolved. A link to this
+  repository's own files on GitHub (`BLOB_URL`, the guide's links into the
+  design book) is resolved against the local file the same way;
 - every page under src/ is listed in SUMMARY.md;
 - no em dash (U+2014) or en dash (U+2013) anywhere in a page;
 - no relative-time or future-promise wording outside TIME_ALLOWLIST (see
@@ -52,6 +54,8 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+# A link to this repository's own file on GitHub: (path, anchor).
+BLOB_URL = re.compile(r"^https://github\.com/win07xp/kaalm/blob/main/([^#?]+)(?:#([\w-]+))?$")
 BOOKS = ["docs", "guide", "learn"]
 
 FENCE = re.compile(r"^(```|~~~)")
@@ -337,6 +341,14 @@ class Checker:
         self.check_wording(rel, prose)
 
     def check_link(self, src: pathlib.Path, page: pathlib.Path, rel: str, n: int, target: str) -> None:
+        blob = BLOB_URL.match(target)
+        if blob:
+            dest = ROOT / blob.group(1)
+            if not dest.exists():
+                self.problems.append(f"{rel}:{n}: link target does not exist: {target}")
+            elif blob.group(2) and dest.suffix == ".md" and blob.group(2) not in self.anchors(dest):
+                self.problems.append(f"{rel}:{n}: no heading for anchor: {target}")
+            return
         if re.match(r"^[a-z]+:", target):
             return  # http, https, mailto
         path_part, _, anchor = target.partition("#")
