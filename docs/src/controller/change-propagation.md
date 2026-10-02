@@ -65,7 +65,7 @@ Class fields outside the hash reach a running Agent by other routes or not at al
 
 ### Bucket 2: degrade-when-irreconcilable
 
-Some changes exclude the Agent's spec rather than constrain its derived Pod spec. The reconciler does not touch the Pod for these; it moves the Agent to `phase=Degraded` with a `reason` naming the mismatch and a message naming the offending field. A class or provider change can newly introduce any of these:
+Some changes exclude the Agent rather than constrain its derived Pod spec. The reconciler does not touch the Pod for these; it moves the Agent to `phase=Degraded` with a `reason` naming the mismatch and a message naming the offending field. A class or provider change can newly introduce any of these:
 
 1. The Agent's `spec.image` no longer matches `image.allowedImages` (rule 2).
 2. A `spec.providers` entry is no longer in `allowedProviders`, has been deleted, or its own `allowedNamespaces` no longer includes the Agent's namespace (rules 3 to 5). Rule 4, a provider dropping the namespace, is the canonical case ([scenario S5](../appendix/scenarios.md)).
@@ -73,6 +73,7 @@ Some changes exclude the Agent's spec rather than constrain its derived Pod spec
 4. `spec.persistence.enabled: true` while the class has `persistence.enabled: false` (rule 24).
 5. `spec.lifecycle.hibernationEnabled: true` while the class has `lifecycle.hibernationAllowed: false` (rule 26).
 6. `spec.handler` set while the class has `image.allowHandlerMounts: false` (rule 30).
+7. The class sets `allowedNamespaces` and none of its patterns matches the Agent's namespace (rule 47). The Pod keeps running, but the gateway refuses the Agent's LLM and tool calls, as it does when a provider drops the namespace. Adding the namespace back, or removing the field, restores the prior phase. Rule 47 is the first check, so it is the reported reason when several mismatches exist.
 
 The reasons, the `preDegradedPhase` bookkeeping, per-mismatch recovery, and what happens to the Pod meanwhile are specified under [Degraded](agent-lifecycle.md#degraded). Either side of the mismatch can be aligned, the workload spec or the class or provider, and the controller restores the prior phase on the next pass after every mismatch has cleared. Recoverable runtime issues (a transient provider outage, budget exhaustion) are a different bucket: they set a `Degraded` condition without changing the phase, see [Error handling](operations.md#error-handling).
 
@@ -86,7 +87,7 @@ AgentTask has no `Degraded` phase. Where an Agent would degrade, the task settle
 
 | Task state at the edit | Effect |
 |---|---|
-| has a Pod (`Provisioning` with a Pod, `Running`, `Completing`) | none; the task finishes under the class snapshot its Pod was created from |
+| has a Pod (`Provisioning` with a Pod, `Running`, `Completing`) | none; the task finishes under the class snapshot its Pod was created from. If the edit removes the task's namespace from the class's `allowedNamespaces` (rule 47) or from a referenced provider's `allowedNamespaces`, the gateway refuses the task's LLM and tool calls |
 | no Pod yet (`Pending`, or `Provisioning` before creation), or retrying from `Failed` | the pre-Pod class check runs against the new class; a violation settles the task `Failed` at once, whatever `backoffLimit` remains |
 | terminal (`Succeeded`, `Failed`, `TimedOut`) | none; the task proceeds to TTL cleanup |
 

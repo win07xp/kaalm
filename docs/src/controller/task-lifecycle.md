@@ -15,7 +15,7 @@ The other lifecycles in the system are indexed on [Lifecycles at a glance](../ap
 | From | To | Trigger |
 |---|---|---|
 | `Pending` | `Provisioning` | The pre-Pod checks pass and the Certificate exists; the task holds in `Provisioning` until the Certificate is Ready. |
-| `Pending`, `Provisioning` | `Failed` (terminal) | A class-versus-spec violation under rules 2, 4, 5, 24, or 35 to 38: `ClassConstraintViolation`, `PersistenceNotAllowed`, or `ToolNotInCatalog`. Checked whenever no Pod exists, so a retry is validated against the class as it now stands. Not retried. |
+| `Pending`, `Provisioning` | `Failed` (terminal) | A class-versus-spec violation under rules 2, 4, 5, 24, 35 to 38, or 47: `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, or `NamespaceNotAllowed` (the class does not admit the task's namespace, and the first check run). Checked whenever no Pod exists, so a retry is validated against the class as it now stands. Not retried. |
 | `Provisioning` | `Running` | The Pod reports Ready. The same status write sets `status.startTime`, and the timeout clock starts. |
 | `Provisioning` | `Failed` | The container image name is invalid or can never be pulled (`InvalidImageName`, `ErrImageNeverPull`); the Pod reaches a terminal phase before Ready (`PodStartFailed`); or the Pod is not Ready five minutes after creation, whatever the cause (`ProvisioningDeadlineExceeded`). Retryable. An `exitCode` task whose Pod exits 0 before Ready goes to `Completing` instead. |
 | `Running` | `Completing` | The completion mailbox holds a payload (`agentReported`), the container exits (`exitCode`), or the timeout elapses. |
@@ -79,7 +79,7 @@ A retry re-runs the pre-Pod class check against the class as it now stands. A vi
 | `TimeoutExceeded`, `TimeoutSucceeded` | Warning, Normal | the task settles `TimedOut`, or `Succeeded` under `onTimeout: Succeed` |
 | `PodStartFailed`, `ProvisioningDeadlineExceeded`, `InvalidImageName`, `ErrImageNeverPull` | Warning | a provisioning failure settles or retries |
 | `PodDisrupted` | Warning | the Pod was lost mid-run or before completion settled |
-| `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog` | Warning | the pre-Pod class check settles the task `Failed` |
+| `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, `NamespaceNotAllowed` | Warning | the pre-Pod class check settles the task `Failed` |
 | `ChildConflict` | Warning | a child object that the task would own already exists and is not owned by it, when the reason or its message first appears on `Ready` |
 | `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing` | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason, when the reason first appears on `Ready`, not on each pass that finds the problem again |
 

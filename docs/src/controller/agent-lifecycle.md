@@ -54,10 +54,11 @@ Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the recon
 
 ### Degraded
 
-`Degraded` is the phase for a mismatch between the Agent's spec and the AgentClass and providers that admit it. The developer, not the controller, can fix it. The reconciler evaluates every mismatch together at the top of each pass, before the hibernation branch, the Ready gates, and the Pod, so a Degraded Agent's Pod is neither created nor deleted while it is Degraded: a Running Agent keeps running, and a Hibernated one stays asleep.
+`Degraded` is the phase for a mismatch between the Agent and the AgentClass and providers that admit it. The developer, not the controller, can fix it. The reconciler evaluates every mismatch together at the top of each pass, before the hibernation branch, the Ready gates, and the Pod, so a Degraded Agent's Pod is neither created nor deleted while it is Degraded: a Running Agent keeps running, and a Hibernated one stays asleep.
 
 | `reason` | Rule | Mismatch |
 |---|---|---|
+| `NamespaceNotAllowed` | 47 | the class sets `allowedNamespaces` and none of its patterns matches the Agent's namespace; the first check, so it is the reported reason when several mismatches exist |
 | `ClassConstraintViolation` | 2 | `spec.image` not in the class's `image.allowedImages` |
 | `ClassConstraintViolation` | 4, 5 | a `spec.providers` entry not in `allowedProviders`, not existing, or not admitting the Agent's namespace |
 | `ClassConstraintViolation` | 35 to 37 | a `spec.tools` entry not resolving, not admitting the namespace, or not in `allowedToolProviders` |

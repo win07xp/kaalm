@@ -45,6 +45,14 @@ type AgentClassSpec struct {
 	// be granted (rule 37). An empty list allows none.
 	// +optional
 	AllowedToolProviders []LocalObjectReference `json:"allowedToolProviders,omitempty"`
+	// AllowedNamespaces lists the namespaces whose Agents and AgentTasks may
+	// use this class, as path.Match glob patterns such as "team-*". Unset
+	// admits every namespace. An empty list is rejected: omit the field to
+	// admit every namespace. This differs from ModelProvider and ToolProvider
+	// allowedNamespaces, where an empty list admits none (rule 47).
+	// +kubebuilder:validation:XValidation:rule="size(self) > 0",message="allowedNamespaces must list at least one pattern; omit the field to admit every namespace (rule 47)"
+	// +optional
+	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 	// Network governs egress and ingress policy synthesized per workload.
 	// +optional
 	Network AgentClassNetwork `json:"network,omitempty"`

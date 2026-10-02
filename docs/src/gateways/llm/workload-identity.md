@@ -20,7 +20,7 @@ A request that presents neither a client certificate nor an `Authorization: Bear
 | Verified by | The TLS handshake against `kaalm-ca`, then the SAN parser | A `TokenReview` against the apiserver, cached per token |
 | Identity yielded | Namespace, workload name, and workload kind, from the SAN | Namespace only, from `status.user.username` |
 | Rejections | A handshake failure, with no HTTP response; `403 invalid_cert` for a SAN that fails the shape or label-count rule | `401` for a missing token, a Kaalm-managed source Pod, or a rejected token; `503 internal_unavailable` when the apiserver is unreachable |
-| Provider routing consults | The workload's `spec.providers`, its AgentClass's `allowedProviders`, then the ModelProvider's `allowedNamespaces` and `models` | The ModelProvider's `allowedNamespaces` and `models` only |
+| Provider routing consults | The workload's `spec.providers`, its AgentClass's `allowedNamespaces` and `allowedProviders`, then the ModelProvider's `allowedNamespaces` and `models` | The ModelProvider's `allowedNamespaces` and `models` only |
 
 Both modes use the gateway's TLS listener, so every caller must also verify the gateway's serving certificate against the Kaalm CA. Kaalm-managed Pods find the bundle at `$KAALM_CA_CERT` (`/var/run/kaalm/ca.crt`); gateway-only workloads mount the `kaalm-ca` ConfigMap themselves (see [Caller-side setup](#caller-side-setup)). See [The runtime contract](../../runtime/contract.md).
 

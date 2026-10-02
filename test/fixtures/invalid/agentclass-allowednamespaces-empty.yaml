@@ -1,0 +1,6 @@
+# allowedNamespaces must not be an empty list (rule 47)
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata: {name: no-namespaces}
+spec:
+  allowedNamespaces: []

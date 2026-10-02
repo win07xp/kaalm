@@ -536,6 +536,99 @@ func TestAgent_ProviderNamespaceDeniedDegrades(t *testing.T) {
 	expectAgentReadyReason(t, "prov-agent", kaalmv1beta1.ReasonClassConstraintViolation)
 }
 
+// Rule 47: a class whose allowedNamespaces does not admit the Agent's
+// namespace degrades it with NamespaceNotAllowed before any child or Pod.
+func TestAgent_ClassNamespaceDeniedDegrades(t *testing.T) {
+	mkWorkloadClass(t, "wc-ns-deny", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedNamespaces = []string{"team-*"}
+	})
+	mkWorkloadAgent(t, "ns-deny-agent", "wc-ns-deny", nil)
+	// The agent's namespace (default) does not match team-*.
+	expectAgentPhase(t, "ns-deny-agent", kaalmv1beta1.AgentDegraded)
+	expectAgentReadyReason(t, "ns-deny-agent", kaalmv1beta1.ReasonNamespaceNotAllowed)
+	var cert cmapi.Certificate
+	err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ns-deny-agent-tls"}, &cert)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("Certificate get err = %v, want NotFound", err)
+	}
+	if pod := agentPod(t, "ns-deny-agent"); pod != nil {
+		t.Errorf("Pod %s created for a namespace the class does not admit", pod.Name)
+	}
+}
+
+// Rule 47: a matching pattern and an unset field both admit the namespace.
+func TestAgent_ClassNamespaceAllowedProvisions(t *testing.T) {
+	mkWorkloadClass(t, "wc-ns-glob", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedNamespaces = []string{"def*"}
+	})
+	mkWorkloadClass(t, "wc-ns-unset", nil)
+	for _, c := range []struct{ agent, class string }{
+		{"ns-glob-agent", "wc-ns-glob"},
+		{"ns-unset-agent", "wc-ns-unset"},
+	} {
+		mkWorkloadAgent(t, c.agent, c.class, nil)
+		markCertReady(t, c.agent)
+		eventually(t, func() error {
+			if pod := agentPod(t, c.agent); pod == nil {
+				return errString(c.agent + ": no pod yet")
+			}
+			return nil
+		})
+		if ag := getWorkloadAgent(t, c.agent); ag.Status.Phase == kaalmv1beta1.AgentDegraded {
+			t.Errorf("%s Degraded under class %s", c.agent, c.class)
+		}
+	}
+}
+
+// Rule 47: a class that drops a running Agent's namespace degrades it and
+// leaves its Pod alone; removing the field restores the prior phase.
+func TestAgent_ClassDropsNamespaceKeepsPodAndRecovers(t *testing.T) {
+	mkWorkloadClass(t, "wc-ns-drop", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedNamespaces = []string{"default"}
+	})
+	mkWorkloadAgent(t, "ns-drop-agent", "wc-ns-drop", nil)
+	markCertReady(t, "ns-drop-agent")
+	eventually(t, func() error {
+		if pod := agentPod(t, "ns-drop-agent"); pod == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	markPodReady(t, agentPod(t, "ns-drop-agent"))
+	expectAgentPhase(t, "ns-drop-agent", kaalmv1beta1.AgentRunning)
+	podUID := agentPod(t, "ns-drop-agent").UID
+
+	setClassNamespaces := func(patterns []string) {
+		eventually(t, func() error {
+			var ac kaalmv1beta1.AgentClass
+			if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-ns-drop"}, &ac); err != nil {
+				return err
+			}
+			ac.Spec.AllowedNamespaces = patterns
+			return testClient.Update(ctxT(), &ac)
+		})
+	}
+
+	setClassNamespaces([]string{"team-*"})
+	expectAgentPhase(t, "ns-drop-agent", kaalmv1beta1.AgentDegraded)
+	expectAgentReadyReason(t, "ns-drop-agent", kaalmv1beta1.ReasonNamespaceNotAllowed)
+	if ag := getWorkloadAgent(t, "ns-drop-agent"); ag.Status.PreDegradedPhase != kaalmv1beta1.AgentRunning {
+		t.Errorf("preDegradedPhase = %q, want Running", ag.Status.PreDegradedPhase)
+	}
+	if pod := agentPod(t, "ns-drop-agent"); pod == nil || pod.UID != podUID {
+		t.Fatalf("Pod replaced or removed on degrade: %v", pod)
+	}
+
+	setClassNamespaces(nil)
+	expectAgentPhase(t, "ns-drop-agent", kaalmv1beta1.AgentRunning)
+	if ag := getWorkloadAgent(t, "ns-drop-agent"); ag.Status.PreDegradedPhase != "" {
+		t.Errorf("preDegradedPhase = %q, want cleared", ag.Status.PreDegradedPhase)
+	}
+	if pod := agentPod(t, "ns-drop-agent"); pod == nil || pod.UID != podUID {
+		t.Errorf("Pod replaced or removed on recovery: %v", pod)
+	}
+}
+
 func TestAgent_PersistenceNotAllowedDegradesAndRecovers(t *testing.T) {
 	mkWorkloadClass(t, "wc-per", nil) // persistence disabled on the class
 	mkWorkloadAgent(t, "per-agent", "wc-per", func(ag *kaalmv1beta1.Agent) {

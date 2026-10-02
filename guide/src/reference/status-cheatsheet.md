@@ -20,7 +20,7 @@ Phases, in lifecycle order:
 | `Hibernating` | Pod being torn down, PVC retained |
 | `Hibernated` | No Pod; storage and identity parked |
 | `Resuming` | Waking: Pod recreating after a wake trigger, until it is Ready |
-| `Degraded` | The spec fails a class gate (image, provider or tool grant revoked, deleted, or narrowed); the Pod keeps running |
+| `Degraded` | The Agent fails a class gate (image, provider or tool grant revoked, deleted, or narrowed, or a namespace the class no longer admits); the Pod keeps running |
 | `Failed` | Crash-looping, or the image cannot be pulled |
 | `Terminating` | Deletion in progress, finalizer running |
 
@@ -44,7 +44,9 @@ keeps running). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
 changes the phase.
 
 `Ready=False` reasons that move the phase to `Degraded` (the message names
-the failed gate): `ClassConstraintViolation` (an image, provider, or tool
+the failed gate): `NamespaceNotAllowed` (the class sets `allowedNamespaces`
+and none of its patterns matches the Agent's namespace; it is checked first,
+so it is the reason shown when several gates fail), `ClassConstraintViolation` (an image, provider, or tool
 grant does not pass its class or allowlist gate), `ToolNotInCatalog` (a
 granted tool is outside the ToolProvider's declared catalog),
 `PersistenceNotAllowed`, `HibernationNotAllowed`,
@@ -73,8 +75,9 @@ with event reason `WakeIgnored`.
 Phases: `Pending`, `Provisioning`, `Running`, `Completing` (result being
 recorded), then one of `Succeeded`, `Failed`, `TimedOut`; `Terminating` on
 delete. There is no Degraded: a task that cannot run fails, including a
-task whose provider or tool grant fails a gate at provisioning (same
-reasons as the Agent's Degraded, but terminal here).
+task whose provider or tool grant fails a gate, or whose namespace the
+class does not admit, at provisioning (same reasons as the Agent's Degraded,
+but terminal here).
 
 Conditions: `Ready` (provisioning gate; `ChildConflict` holds a task
 without a Pod, as it holds an Agent) and `Completed` (terminal verdict,

@@ -56,7 +56,7 @@ The gateway runs as `kaalm-system/kaalm-gateway` and holds the ClusterRole `kaal
 |---|---|---|
 | `tokenreviews.authentication.k8s.io` | `create` | Validates projected ServiceAccount tokens from the gateway-only tier ([Mode 2](../gateways/llm/workload-identity.md#mode-2-serviceaccount-bearer-token)). `TokenReview` is a virtual, cluster-scoped resource with no name to scope to |
 | `Agent`, `AgentTask` | `get, list, watch` | Resolves the workload named by a client certificate's SAN, in the SAN's namespace, on every request: `spec.providers` and `agentClassRef` for routing, `status.currentPodUID` and `status.phase` for the [task-complete identity gate](../gateways/api/task-complete.md) |
-| `AgentClass`, `ModelProvider`, `ToolProvider` | `get, list, watch` | `allowedProviders` on the class, `allowedNamespaces` and the model catalog on the provider, budgets, fallback edges, and the tool broker's grant chain |
+| `AgentClass`, `ModelProvider`, `ToolProvider` | `get, list, watch` | `allowedNamespaces` and `allowedProviders` on the class, `allowedNamespaces` and the model catalog on the provider, budgets, fallback edges, and the tool broker's grant chain |
 | `AgentChannel` | `get, list, watch, patch` | Routes channel messages to an Agent and manages platform connections; `patch` writes only the `kaalm.io/channel-disconnected` annotation during the [delete handshake](../controller/finalizers.md#agentchannel) |
 | `Pods` | `get, list, watch` | The source-IP to Pod cross-check on every request and the Mode 2 precheck |
 | `Services` | `get` | Resolves an Agent's Service for message delivery. Services carry no secret material, so the cluster-wide reach is harmless |
@@ -109,6 +109,8 @@ The grants on the Kaalm kinds are in the `kaalm.io` API group. Four properties h
 - Only `kaalm-secrets-admin` grants Secrets, with one exception: `rbac.personas.developerSecrets` adds Secret management to `kaalm-developer`. By default developers get no Secret access, and `kaalm-platform-admin` has none because a ClusterRoleBinding would hand it out in every namespace.
 - `kaalm-developer` grants no catalog kind, so developers cannot write the catalog.
 - None of the four carries an `aggregate-to` label. [Aggregation into the built-in roles](#aggregation-into-the-built-in-roles) is a separate switch.
+
+RBAC cannot restrict which AgentClass a developer names in `agentClassRef`, because it authorizes the `create` verb on an Agent or AgentTask, not the names its spec references. Removing read access to a class does not stop anyone naming it, because the controller resolves `agentClassRef` under its own identity. `kaalm-catalog-reader` exists so developers can look classes up, not to gate which class they name. To keep a class to chosen teams, set its `allowedNamespaces`, which the controller and the gateway both check ([AgentClass](../resources/agentclass.md#allowednamespaces-keeps-a-class-to-some-teams)).
 
 `kaalm-secrets-admin` lists `patch` because `kubectl apply` on an existing Secret needs it, and `list` because `kubectl get secrets` without a name needs it. `get` already exposes every Secret by name, so `list` widens nothing in the namespace where the role is bound.
 

@@ -33,8 +33,8 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   the `RuntimeClass` does not trigger a retry. For the full behavior, see
   [Security model and isolation](https://github.com/win07xp/kaalm/blob/main/docs/src/security/model.md#runtimeclass).
 
-An image the class does not allow is not a `Provisioning` symptom: the Agent
-goes `Degraded` instead.
+An image or namespace the class does not allow is not a `Provisioning`
+symptom: the Agent goes `Degraded` instead.
 
 ## Agent shows `Degraded`
 
@@ -44,6 +44,14 @@ goes `Degraded` instead.
   agent's *phase* goes to `Degraded`, reason `ClassConstraintViolation` (see
   S5 in the scenarios); the Pod keeps running and LLM calls return `403`
   until the class or the Agent changes back.
+- **Namespace not admitted by the class**: reason `NamespaceNotAllowed`, with
+  the message `namespace "NAMESPACE" is not in AgentClass "CLASS"
+  allowedNamespaces`. A new Agent gets no Pod. A running Agent keeps its Pod,
+  and its LLM and tool calls return `403`. This reason shows first when
+  several gates fail. Ask your platform team to add the namespace to the
+  class ([Keep a class to some
+  teams](../platform/managing-access.md#keep-a-class-to-some-teams)), or
+  point the Agent at another class.
 - **Budget exhausted**: the agent keeps its phase but carries a `Degraded`
   *condition*, reason `BudgetExhausted` (see S10). LLM calls return
   `429 budget_exhausted` and the provider status shows `state: Blocked` for
@@ -156,9 +164,11 @@ a hibernation-enabled agent.
 
 ## LLM call returns `403 access_denied`
 
-One of the three gates denied; the error message names which:
+One of the gates denied; the error message names which:
 
 - not in the workload's `spec.providers`,
+- namespace not in the AgentClass `allowedNamespaces` (the class sets the
+  field),
 - not in the AgentClass `allowedProviders`,
 - namespace not in the provider's `allowedNamespaces`.
 

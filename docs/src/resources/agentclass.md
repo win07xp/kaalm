@@ -2,7 +2,7 @@
 
 AgentClass is a cluster-scoped policy resource. It describes the runtime configuration, isolation, resource defaults, and allowed providers for a category of agents. It is analogous to StorageClass: developers reference an AgentClass by name in their Agent or AgentTask spec, and the platform team controls what each class permits.
 
-This split is the core of Kaalm's governance model. Developers pick a class; the class decides what images may run, how much compute they get, where their traffic may go, and which LLM providers and tool servers they may call. When a live AgentClass is edited, the change propagates to running workloads along the paths in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling). The reconciler is [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).
+This split is the core of Kaalm's governance model. Developers pick a class; the class decides which namespaces may use it, what images may run, how much compute they get, where their traffic may go, and which LLM providers and tool servers they may call. When a live AgentClass is edited, the change propagates to running workloads along the paths in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling). The reconciler is [AgentClassReconciler](../controller/reconcilers.md#agentclassreconciler).
 
 ## Spec
 
@@ -73,6 +73,12 @@ spec:
   # Empty list: none.
   allowedToolProviders:
     - name: search-tools
+
+  # Namespaces whose Agents and AgentTasks may use this class, as path.Match
+  # globs. Unset: every namespace. An empty list is rejected at apply, so omit
+  # the field to admit every namespace; rule 47.
+  allowedNamespaces:
+    - "team-*"
 
   network:
     egress:
@@ -181,7 +187,7 @@ status:
 | `DeprecatedFields` | Advisory, and present only once the class sets a deprecated field. `True, reason: DeprecatedFieldSet` while it does, with a message naming each such field, joined with `; `. The only deprecated field is `network.allowHostNetwork` (see [Deprecation policy](../operations/api-versioning.md#deprecation-policy)), so the message is `network.allowHostNetwork is deprecated and has no effect: no Pod Kaalm creates uses host networking`. A `Warning` event of reason `DeprecatedFieldSet` and the same message follows the status write each time the condition turns `True`. After the field is removed, the condition is `False, reason: NoDeprecatedFields` with the message `the class sets no deprecated field`, and no event is sent. A class that never set a deprecated field has no such condition. It never affects `Ready` or any workload. |
 | `CertificateCleanup` | A cluster capability, set on every class like `FQDNPolicySupported`: whether cert-manager runs with `--enable-certificate-owner-ref=true` ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `True, reason: OwnerRefEnabled` when the flag is set, so deleting an Agent or AgentTask deletes its TLS Secret. `False, reason: OwnerRefDisabled` when it is not, so a deleted workload's TLS Secret is orphaned; setting the flag later flips this to `True` without recreating workloads ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `Unknown, reason: ControllerSecretNotFound` when the controller's own `kaalm-controller-tls` Secret is missing. It never affects `Ready` and emits no Event; the controller logs the result once at startup and again only when it changes. |
 
-`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid spec-drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` under the `Replacing` column.
+`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. They still count a workload whose namespace the class does not admit, because it still references the class. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid spec-drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` under the `Replacing` column.
 
 ## Design notes
 
@@ -237,6 +243,28 @@ An invalid `allowedCIDRs` entry makes the class `Ready=False` (rule 19). Every A
 ### Provider access gates
 
 `allowedProviders` is one gate in a chain. For a full-lifecycle Agent or AgentTask, the workload's own `spec.providers`, this class's `allowedProviders`, and the target `ModelProvider.allowedNamespaces` must all admit the request, and the model must exist in the provider's catalog. In the gateway-only tier the class layer does not exist: those callers reference no AgentClass, and `ModelProvider.allowedNamespaces` is the only tenancy check they face. The enforced chain, with the error each gate produces, is on [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating). The tool chain is the same, gate for gate, with `allowedToolProviders` (rule 37) in this class's place ([Grants](../gateways/tool-plane.md#grants)).
+
+### `allowedNamespaces` keeps a class to some teams
+
+RBAC cannot restrict which AgentClass a developer names in `agentClassRef` ([Persona roles](../security/rbac.md#persona-roles)). `allowedNamespaces` does: it lists `path.Match` glob patterns, such as `team-*`, for the namespaces whose Agents and AgentTasks may use the class (rule 47). The field has the same schema and CEL rule at `v1beta1` and `v1alpha1`.
+
+The field reads differently from the provider fields of the same name:
+
+- **Unset admits every namespace.** Existing classes and the chart's `standard` class behave as before. `["*"]` admits every namespace explicitly.
+- **An empty list is rejected at apply**, by the CRD CEL rule `size(self) > 0`, with the message `allowedNamespaces must list at least one pattern; omit the field to admit every namespace (rule 47)`. On a ModelProvider or ToolProvider, an empty `allowedNamespaces` admits none. A JSON patch that removes the last entry leaves `[]` and is rejected, so remove the field instead.
+- **A malformed pattern matches nothing**, such as `[`, as it does on a provider.
+
+When the class does not admit a workload's namespace:
+
+- **An Agent goes `Degraded`** (`Ready=False`, a `Warning` event, `preDegradedPhase` kept) with `reason: NamespaceNotAllowed` and the message `namespace "NAMESPACE" is not in AgentClass "CLASS" allowedNamespaces`. This is the first Degraded check, so it is the reported reason when several mismatches exist. No Certificate, child, or Pod is created for a new Agent, and a running Agent keeps its Pod. Adding the namespace back, or removing the field, restores the prior phase. Rules 28 and 1 run earlier and keep priority ([Degraded](../controller/agent-lifecycle.md#degraded)).
+- **An AgentTask with no Pod**, in `Pending` or `Provisioning` or retrying, settles terminal `Failed` (`Completed=False` and `Ready=False`, `reason: NamespaceNotAllowed`, and a `Warning` event), whatever `backoffLimit` remains. This is the first pre-Pod check. A task that already has a Pod keeps running, and a terminal task is unaffected ([AgentTask lifecycle](../controller/task-lifecycle.md#transition-triggers)).
+- **The gateway answers `403 access_denied`** with the same message on LLM and MCP tool calls from a Kaalm-managed workload, before it checks the class's `allowedProviders` or `allowedToolProviders`. Gateway-only callers have no class and are not affected ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
+
+The list check is CEL because it reads one field. The namespace match is reconcile time because CEL cannot read `metadata.namespace`.
+
+Removing a team's namespace from a class has the same effect as removing it from a provider: `Degraded`, a gateway `403`, and Pods kept.
+
+A CRD, controller, or gateway that predates the field ignores it, so a downgrade drops the restriction silently. During a chart upgrade, a component still on the old version ignores the field until both the controller and the gateway run the new version.
 
 ### `imagePullSecrets` namespace resolution
 

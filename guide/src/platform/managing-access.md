@@ -11,14 +11,16 @@ with its client certificate), every LLM request passes:
 
 1. **The workload's own list**: the provider must appear in the workload's
    `spec.providers`.
-2. **The class gate**: the provider must appear in the workload's AgentClass
-   `allowedProviders`.
+2. **The class gate**: the workload's AgentClass must admit the calling
+   namespace in `allowedNamespaces` (when the class sets the field), and the
+   provider must appear in its `allowedProviders`.
 3. **The provider's namespace allowlist**: the calling namespace must match
    `allowedNamespaces` (globs supported).
 
-All three failures return `403` with error type `access_denied` and a message
-naming the failed gate. The namespace gate is checked before model existence,
-so a namespace without access never learns which models a provider hosts.
+Every failure returns `403` with error type `access_denied` and a message
+naming the failed gate. The provider's namespace gate is checked before model
+existence, so a namespace without access never learns which models a provider
+hosts.
 
 Existing (non-Kaalm) workloads calling the gateway with a ServiceAccount
 token face only gate 3 plus the model catalog; they have no workload spec or
@@ -36,16 +38,54 @@ third.
      -p='[{"op":"add","path":"/spec/allowedNamespaces/-","value":"team-new"}]'
    ```
 
-2. Confirm the class allows the provider (once per provider, not per team):
+2. Confirm the class allows the provider (once per provider, not per team),
+   and, if the class sets `allowedNamespaces`, that it admits the team's
+   namespace ([Keep a class to some teams](#keep-a-class-to-some-teams)):
 
    ```bash
    kubectl get agentclass standard -o jsonpath='{.spec.allowedProviders}'
+   kubectl get agentclass standard -o jsonpath='{.spec.allowedNamespaces}'
    ```
 
 3. The team lists the provider in their Agent's `spec.providers`.
 
 Prefer exact namespace names in `allowedNamespaces`; use globs like
 `team-*` only when your namespace naming convention makes them safe.
+
+## Keep a class to some teams
+
+RBAC cannot limit which AgentClass a developer names in `agentClassRef`,
+because it authorizes creating an Agent or AgentTask, not the names its spec
+references. Removing a
+developer's read access to a class does not stop them naming it either. To keep
+a class to chosen teams, list their namespaces in the class's
+`allowedNamespaces`. Each entry is a `path.Match` glob, such as `team-*`:
+
+```bash
+kubectl patch agentclass restricted --type=merge \
+  -p='{"spec":{"allowedNamespaces":["team-new","team-data-*"]}}'
+```
+
+The controller and the gateway both check the list. An Agent whose namespace
+the class does not admit goes `Degraded` with reason `NamespaceNotAllowed`, no
+Pod is created for a new Agent, and the gateway answers `403 access_denied` to
+its LLM and tool calls. A malformed pattern, such as `[`, matches nothing.
+
+The field behaves differently from the provider allowlists:
+
+- **Unset admits every namespace.** Existing classes, and the chart's
+  `standard` class, behave as before. To admit every namespace explicitly,
+  list `"*"`.
+- **An empty list is rejected.** The API server refuses `[]` and tells you to
+  omit the field to admit every namespace. On a provider, an empty list admits
+  no namespace.
+- **To open the class to everyone again, remove the field.** A JSON patch that
+  removes the last entry leaves `[]`, which the API server rejects:
+
+  ```bash
+  kubectl patch agentclass restricted --type=json \
+    -p='[{"op":"remove","path":"/spec/allowedNamespaces"}]'
+  ```
 
 ## Revoking a team
 
@@ -65,6 +105,14 @@ you delete the namespace.
 An AgentTask denied at provisioning time (rather than mid-run) fails
 terminally instead of degrading; there is no point retrying a gate that will
 not open.
+
+Removing a team's namespace from a class's `allowedNamespaces` has the same
+effect, with reason `NamespaceNotAllowed`: the gateway denies the next LLM and
+tool call, the controller degrades the namespace's Agents, and their Pods keep
+running. A new AgentTask of that class fails terminally with the same reason.
+A task that already has a Pod keeps running, but the gateway refuses its calls.
+To restore access, add the namespace back or remove the field, and the Agents
+return to their earlier phase.
 
 ## Kubernetes roles for a team
 
@@ -126,9 +174,9 @@ binding, and subject values are ignored while `enabled` is `false`.
 Each list does one job:
 
 - `catalogReaders` binds the catalog read role cluster-wide. Add every
-  developer group to it, because the namespace binding cannot grant the
-  cluster-scoped AgentClasses and ModelProviders a developer names in a
-  manifest.
+  developer group to it, so developers can look up the cluster-scoped
+  AgentClasses and ModelProviders they name in a manifest; a namespace binding
+  cannot grant cluster-scoped kinds.
 - `developers` maps a namespace to the subjects who work in it. Each namespace
   must already exist, or the upgrade fails with `namespace not found`. Create a
   team's namespace first, and add its entry when you onboard the team. For a
@@ -263,6 +311,9 @@ ClusterRole.
 # Who may use this provider?
 kubectl get modelprovider anthropic-shared -o jsonpath='{.spec.allowedNamespaces}'
 
+# Which teams may use this class? (no output: every namespace)
+kubectl get agentclass restricted -o jsonpath='{.spec.allowedNamespaces}'
+
 # How much is each class used?
 kubectl get agentclasses          # Agents and Tasks columns count live users
 
@@ -273,6 +324,7 @@ kubectl get agents -A | grep Degraded
 ---
 
 *How this works: design book pages Concepts, Multi-tenancy and adoption tiers (the gate
-order and which error each returns), Resources, ModelProvider (glob
+order and which error each returns), Resources, AgentClass (the
+`allowedNamespaces` design note) and ModelProvider (glob
 semantics), Controller, Change propagation (how a provider edit reaches
 Agent status), and Security, RBAC and authentication (the persona roles).*

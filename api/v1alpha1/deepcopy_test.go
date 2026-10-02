@@ -317,6 +317,7 @@ func newFullAgentClass() *AgentClass {
 			},
 			AllowedProviders:     []LocalObjectReference{{Name: "provider-a"}},
 			AllowedToolProviders: []LocalObjectReference{{Name: "search-tools"}},
+			AllowedNamespaces:    []string{"team-*"},
 			Network: AgentClassNetwork{
 				Egress: AgentClassEgress{
 					AllowedCIDRs: []string{"10.0.0.0/8"},
@@ -736,6 +737,7 @@ func TestNestedTypesDirectDeepCopy(t *testing.T) {
 		*s.Persistence.StorageClassName = mutatedStr
 		s.AllowedProviders[0].Name = mutatedStr
 		s.AllowedToolProviders[0].Name = mutatedStr
+		s.AllowedNamespaces[0] = mutatedStr
 		s.Network.Egress.AllowedCIDRs[0] = mutatedStr
 		*s.Security.PodSecurityContext.RunAsNonRoot = false
 		*s.Lifecycle.TerminationGracePeriodSeconds = 0

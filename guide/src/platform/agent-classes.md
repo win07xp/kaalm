@@ -55,6 +55,10 @@ The decisions that matter:
 - **`allowedProviders`** narrows which ModelProviders workloads of this class
   may use. This gate stacks with the provider's own namespace allowlist: a
   request must pass both.
+- **`allowedNamespaces`** keeps the class to chosen team namespaces, as
+  `path.Match` globs such as `team-*`. Unset admits every namespace, and an
+  empty list is rejected. See [Keep a class to some
+  teams](managing-access.md#keep-a-class-to-some-teams).
 - **`persistence`** sets the default and ceiling for agent PVCs, and
   `pvcRetention` decides whether state survives agent deletion.
 - **`lifecycle`** sets idle-timeout defaults and whether hibernation is
@@ -246,11 +250,12 @@ Which class fields reach a running agent depends on the field:
   does not skip any agent Pod, so edit a shared class only when the restarts
   are acceptable. Hibernated agents pick up the change on their next wake.
 
-Tightening `allowedImages` or `allowedProviders` does not stop a running
-agent: the Agent goes `Degraded` with `ClassConstraintViolation` at once, its
-Pod keeps running, and it recovers when the class or the Agent changes back.
-An AgentTask that has no Pod yet settles `Failed`. Plan tightening as a
-deprecation, not an eviction.
+Tightening `allowedImages`, `allowedProviders`, or `allowedNamespaces` does not
+stop a running agent: the Agent goes `Degraded` at once (with
+`ClassConstraintViolation`, or `NamespaceNotAllowed` when the class no longer
+admits its namespace), its Pod keeps running, and it recovers when the class
+or the Agent changes back. An AgentTask that has no Pod yet settles `Failed`.
+Plan tightening as a deprecation, not an eviction.
 
 ![Flowchart of what a class or provider edit does to a provisioned Agent, as one cascade. If the stored spec is no longer admitted by the class and providers, the Agent becomes Degraded with the Pod untouched. Otherwise, if the Pod spec hash is unchanged, the children are converged in place with no restart. Otherwise a Hibernated Agent applies the change on its next wake, and any other Agent goes to Provisioning, where the Pod is deleted and created from the new spec.](../diagrams/agentclass-propagation.svg)
 

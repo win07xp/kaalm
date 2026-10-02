@@ -19,7 +19,7 @@ if (Pod at the source IP in that namespace?) then (no)
   kill
 endif
 if (caller has a workload?) then (yes)
-  if (**Gate A**: workload and class exist, and\nproviderRef in spec.providers and in\nAgentClass allowedProviders?) then (no)
+  if (**Gate A**: workload and class exist,\nproviderRef in spec.providers,\nclass allowedNamespaces admits the\nnamespace, and providerRef in\nclass allowedProviders?) then (no)
     :**403** access_denied; <<#FFCDD2>>
     kill
   endif

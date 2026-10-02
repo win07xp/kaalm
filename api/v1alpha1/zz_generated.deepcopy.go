@@ -554,6 +554,11 @@ func (in *AgentClassSpec) DeepCopyInto(out *AgentClassSpec) {
 		*out = make([]LocalObjectReference, len(*in))
 		copy(*out, *in)
 	}
+	if in.AllowedNamespaces != nil {
+		in, out := &in.AllowedNamespaces, &out.AllowedNamespaces
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	in.Network.DeepCopyInto(&out.Network)
 	in.Security.DeepCopyInto(&out.Security)
 	in.Lifecycle.DeepCopyInto(&out.Lifecycle)

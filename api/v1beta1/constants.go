@@ -159,6 +159,7 @@ const (
 	ReasonIdleDetectionDisabled      = "Disabled" // IdleDetection: no effective idle timeout
 	ReasonSpecDriftPending           = "SpecDriftPending"
 	ReasonDeletionBlocked            = "DeletionBlocked"
+	ReasonNamespaceNotAllowed        = "NamespaceNotAllowed" // rule 47: AgentClass allowedNamespaces
 )
 
 // ConditionBoundaryMarginRaised reports that a hard-enforcement gateway

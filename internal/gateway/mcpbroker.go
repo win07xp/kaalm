@@ -232,6 +232,11 @@ func (s *Server) authorizeToolRoute(
 		return nil, &routeDenial{http.StatusForbidden, errAccessDenied,
 			fmt.Sprintf("AgentClass %q not found", className)}
 	}
+	// Rule 47: the class admits the workload's namespace.
+	if !class.AdmitsNamespace(c.Namespace) {
+		return nil, &routeDenial{http.StatusForbidden, errAccessDenied,
+			fmt.Sprintf("namespace %q is not in AgentClass %q allowedNamespaces", c.Namespace, className)}
+	}
 	allowed := false
 	for _, ref := range class.Spec.AllowedToolProviders {
 		if ref.Name == tp.Name {
