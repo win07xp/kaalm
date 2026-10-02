@@ -12,7 +12,7 @@ Priya creates a second `AgentClass` named `sandboxed` for agents that execute un
 
 ## S3: Provision a shared Anthropic provider with a per-namespace budget
 
-Priya creates a cluster-scoped `ModelProvider` named `anthropic-shared` referencing a Secret with the company's Anthropic API key. She sets a monthly budget of $500 per namespace and configures the enforcement policy to degrade from Opus to Sonnet when 80% of the budget is consumed, and to hard-stop at 100%. She restricts the provider's `allowedNamespaces` to the teams that have signed off on the AI usage policy.
+Priya creates a cluster-scoped `ModelProvider` named `anthropic-shared` referencing a Secret with the company's Anthropic API key. The Secret carries the label `kaalm.io/provider-credential: "true"` and lists `api.anthropic.com` in its `kaalm.io/provider-hosts` annotation, which is what lets the provider use it and send the key to that host ([rules 49 and 50](../resources/validation-and-defaulting.md#provider-credentials)). She sets a monthly budget of $500 per namespace and configures the enforcement policy to degrade from Opus to Sonnet when 80% of the budget is consumed, and to hard-stop at 100%. She restricts the provider's `allowedNamespaces` to the teams that have signed off on the AI usage policy.
 
 ## S4: Add a fallback provider for availability
 
@@ -84,7 +84,7 @@ The month ends, the period rolls over, and the namespace flows freely again. Pri
 
 ## S18: Grant an agent a governed tool
 
-Priya's teams want their agents searching the web and querying internal services, and today that means every team pasting the search vendor's API key into its own pods and Priya adding CIDR exceptions she cannot audit. She registers a `ToolProvider` named `search-tools`: the MCP server's endpoint, its credential in a Secret in `kaalm-system`, and an `allowedNamespaces` list. She adds `search-tools` to the `standard` class's `allowedToolProviders`.
+Priya's teams want their agents searching the web and querying internal services, and today that means every team pasting the search vendor's API key into its own pods and Priya adding CIDR exceptions she cannot audit. She registers a `ToolProvider` named `search-tools`: the MCP server's endpoint, its credential in a labeled Secret in `kaalm-system` that lists the server's host ([rules 49 and 50](../resources/validation-and-defaulting.md#provider-credentials)), and an `allowedNamespaces` list. She adds `search-tools` to the `standard` class's `allowedToolProviders`.
 
 Dev adds a `tools` entry to his agent naming `search-tools` and narrowing it to the `web_search` tool. His agent's MCP client points at the gateway's `/v1/mcp/search-tools` route instead of the vendor. When it lists tools, it sees exactly `web_search`; when it calls one, the gateway checks the grant chain, injects the credential upstream, and forwards ([The broker](../gateways/tool-plane.md#the-broker)). No search credential exists anywhere in Dev's namespace: the Pod spec references neither the Secret nor its value. Every call leaves an audit record naming the agent, the tool, and the outcome.
 
@@ -111,6 +111,8 @@ Priya's cluster runs a release from before the API graduation, with a dozen team
 Afterwards nothing is recreated. Dev's support agent is still Running in the same Pod with the same volume; the hibernated one is still hibernated and wakes on its next message as before; yesterday's finished task still shows `Succeeded` with its artifacts; every channel still answers. `kubectl get agents` now prints `v1beta1` objects, `kubectl get crd agents.kaalm.io -o jsonpath='{.status.storedVersions}'` answers `["v1beta1"]`, and the platform repository keeps syncing at `v1alpha1`, each apply printing one deprecation warning that names the version to move to. She changes the `apiVersion` line as each manifest is next touched, at her own pace, because the schema is the same ([API versioning and deprecation](../operations/api-versioning.md)).
 
 The upgrade notes also ask her to label each channel's Secret `kaalm.io/channel-credential: "true"` before she upgrades ([rule 45](../resources/validation-and-defaulting.md#cross-resource-validation)). She labels the Secrets she reviewed. A channel whose Secret she missed shows `Ready=False, reason=SecretNotOptedIn` and stops receiving traffic, and it is `Ready=True` again on the next pass after she labels the Secret.
+
+The notes ask for the same on provider Secrets: label each one `kaalm.io/provider-credential: "true"` and annotate it with `kaalm.io/provider-hosts` listing its providers' endpoint hosts ([rules 49 and 50](../resources/validation-and-defaulting.md#provider-credentials)). Enforcement is on with no switch, and the previous release ignores both, so she sets them first. A provider whose Secret she missed shows `Ready=False`: `SecretNotOptedIn` for a Secret without the label, then `EndpointHostNotApproved` once it is labeled and does not list the host. LLM calls fall back or return `503 provider_unavailable`, and tool calls return `503 tool_unavailable`. Once the Secret has both, the provider is `Ready=True` on the next pass, with no edit to the provider, for a ModelProvider and a ToolProvider alike.
 
 ## S22: Talk to an agent from a Discord slash command
 

@@ -104,12 +104,16 @@ func TestKubeStore_Credential(t *testing.T) {
 	prov := &kaalmv1beta1.ModelProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "prov"},
 		Spec: kaalmv1beta1.ModelProviderSpec{
+			Endpoint:       "https://api.example.com",
 			CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "prov-secret", Key: "api-key"},
 		},
 	}
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "prov-secret", Namespace: "kaalm-system"},
-		Data:       map[string][]byte{"api-key": []byte("sk-live")},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "prov-secret", Namespace: "kaalm-system",
+			Labels: providerLabels(), Annotations: providerHosts("api.example.com"),
+		},
+		Data: map[string][]byte{"api-key": []byte("sk-live")},
 	}
 	k := &KubeStore{Reader: kubeClientWith(t, prov, secret), OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
@@ -135,8 +139,11 @@ func TestKubeStore_Credential(t *testing.T) {
 
 	// Empty value is treated as missing.
 	emptySec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "empty", Namespace: "kaalm-system"},
-		Data:       map[string][]byte{"api-key": {}},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "empty", Namespace: "kaalm-system",
+			Labels: providerLabels(), Annotations: providerHosts("api.example.com"),
+		},
+		Data: map[string][]byte{"api-key": {}},
 	}
 	k2 := &KubeStore{Reader: kubeClientWith(t, emptySec), OperatorNamespace: "kaalm-system"}
 	provEmpty := prov.DeepCopy()
@@ -409,12 +416,20 @@ func optedIn(sec *corev1.Secret) *corev1.Secret {
 	return sec
 }
 
+// providerOptedIn adds the rule 49 label and the rule 50 host list a
+// provider credential Secret carries.
+func providerOptedIn(sec *corev1.Secret, hosts string) *corev1.Secret {
+	sec.Labels = providerLabels()
+	sec.Annotations = providerHosts(hosts)
+	return sec
+}
+
 func TestKubeStoreReadsSecretsThroughTheWatcher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := kubefake.NewSimpleClientset(
-		secretObj("kaalm-system", "openai-key", "sk-live"),
-		secretObj("kaalm-system", "tool-key", "tool-live"),
+		providerOptedIn(secretObj("kaalm-system", "openai-key", "sk-live"), "api.openai.com"),
+		providerOptedIn(secretObj("kaalm-system", "tool-key", "tool-live"), "mcp.example.com"),
 		optedIn(secretObj("team-a", "hook", "hook-live")),
 	)
 	store := &KubeStore{
@@ -423,12 +438,14 @@ func TestKubeStoreReadsSecretsThroughTheWatcher(t *testing.T) {
 		Secrets:           secretwatch.New(ctx, cs),
 	}
 	provider := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
+		Endpoint:       "https://api.openai.com",
 		CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "openai-key", Key: "token"},
 	}}
 	if got, err := store.Credential(ctx, provider); err != nil || got != "sk-live" {
 		t.Fatalf("Credential = %q, %v", got, err)
 	}
 	tool := &kaalmv1beta1.ToolProvider{Spec: kaalmv1beta1.ToolProviderSpec{
+		Endpoint:       "https://mcp.example.com",
 		CredentialsRef: &kaalmv1beta1.SecretKeyReference{Name: "tool-key", Key: "token"},
 	}}
 	if got, err := store.ToolCredential(ctx, tool); err != nil || got != "tool-live" {
@@ -440,4 +457,171 @@ func TestKubeStoreReadsSecretsThroughTheWatcher(t *testing.T) {
 	if _, err := store.SecretValue(ctx, "team-a", "hook", "missing"); err == nil {
 		t.Fatal("missing key must error")
 	}
+}
+
+// providerCredSecret builds a kaalm-system Secret with a "token" key and the
+// given labels and annotations.
+func providerCredSecret(name string, labels, annotations map[string]string, data map[string][]byte) *corev1.Secret {
+	if data == nil {
+		data = map[string][]byte{"token": []byte("sk-secret-value")}
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "kaalm-system", Labels: labels, Annotations: annotations,
+		},
+		Data: data,
+	}
+}
+
+func providerLabels() map[string]string {
+	return map[string]string{kaalmv1beta1.LabelProviderCredential: kaalmv1beta1.AnnotationTrue}
+}
+
+func providerHosts(hosts string) map[string]string {
+	return map[string]string{kaalmv1beta1.AnnotationProviderHosts: hosts}
+}
+
+// providerCredentialReaders returns a Credential reader and a ToolCredential
+// reader for a provider at endpoint whose credentialsRef names the "token"
+// key of secret.
+func providerCredentialReaders(k *KubeStore, endpoint, secret string) map[string]func() (string, error) {
+	const key = "token"
+	ctx := context.Background()
+	mp := &kaalmv1beta1.ModelProvider{Spec: kaalmv1beta1.ModelProviderSpec{
+		Endpoint: endpoint, CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: secret, Key: key},
+	}}
+	tp := &kaalmv1beta1.ToolProvider{Spec: kaalmv1beta1.ToolProviderSpec{
+		Endpoint: endpoint, CredentialsRef: &kaalmv1beta1.SecretKeyReference{Name: secret, Key: key},
+	}}
+	return map[string]func() (string, error){
+		"Credential":     func() (string, error) { return k.Credential(ctx, mp) },
+		"ToolCredential": func() (string, error) { return k.ToolCredential(ctx, tp) },
+	}
+}
+
+// Rule 49: the gateway refuses a provider credential Secret without the
+// kaalm.io/provider-credential label, before it looks at any key, and the
+// error never carries the value.
+func TestKubeStore_CredentialRefusesUnlabeledSecret(t *testing.T) {
+	hosts := providerHosts("api.example.com")
+	k := &KubeStore{Reader: kubeClientWith(t,
+		providerCredSecret("unlabeled", nil, hosts, nil),
+		providerCredSecret("unlabeled-nokey", nil, hosts, map[string][]byte{}),
+		providerCredSecret("label-True", map[string]string{kaalmv1beta1.LabelProviderCredential: "True"}, hosts, nil),
+		providerCredSecret("channel-only", optInLabels("true"), hosts, nil),
+	), OperatorNamespace: "kaalm-system"}
+	for _, name := range []string{"unlabeled", "unlabeled-nokey", "label-True", "channel-only"} {
+		for method, read := range providerCredentialReaders(k, "https://api.example.com", name) {
+			v, err := read()
+			if err == nil || v != "" {
+				t.Fatalf("%s %s: %q err=%v, want a refusal", method, name, v, err)
+			}
+			if !strings.Contains(err.Error(), kaalmv1beta1.LabelProviderCredential) {
+				t.Errorf("%s %s: error %q does not name the label", method, name, err)
+			}
+			if strings.Contains(err.Error(), "sk-secret-value") || strings.Contains(err.Error(), "token") {
+				t.Errorf("%s %s: error %q carries the value or a key", method, name, err)
+			}
+		}
+	}
+}
+
+// Rule 50: the gateway returns a provider credential only for an endpoint
+// host its Secret lists in kaalm.io/provider-hosts.
+func TestKubeStore_CredentialRefusesUnapprovedEndpointHost(t *testing.T) {
+	k := &KubeStore{Reader: kubeClientWith(t,
+		providerCredSecret("approved", providerLabels(), providerHosts("other.example.com, API.example.com"), nil),
+		providerCredSecret("no-hosts", providerLabels(), nil, nil),
+		providerCredSecret("other-host", providerLabels(), providerHosts("other.example.com"), nil),
+		providerCredSecret("callback-only", providerLabels(),
+			map[string]string{kaalmv1beta1.AnnotationCallbackHosts: "api.example.com"}, nil),
+	), OperatorNamespace: "kaalm-system"}
+
+	for _, endpoint := range []string{"https://api.example.com", "https://api.example.com:8443/v1"} {
+		for method, read := range providerCredentialReaders(k, endpoint, "approved") {
+			if v, err := read(); err != nil || v != "sk-secret-value" {
+				t.Fatalf("%s at %s: %q err=%v, want the value", method, endpoint, v, err)
+			}
+		}
+	}
+	refused := []struct{ secret, endpoint string }{
+		{"no-hosts", "https://api.example.com"},
+		{"other-host", "https://api.example.com"},
+		{"callback-only", "https://api.example.com"},
+		{"approved", "https://evil.example.com"},
+		{"approved", "https://"},
+	}
+	for _, c := range refused {
+		for method, read := range providerCredentialReaders(k, c.endpoint, c.secret) {
+			v, err := read()
+			if err == nil || v != "" {
+				t.Fatalf("%s %s at %s: %q err=%v, want a refusal", method, c.secret, c.endpoint, v, err)
+			}
+			if !strings.Contains(err.Error(), kaalmv1beta1.AnnotationProviderHosts) {
+				t.Errorf("%s %s: error %q does not name the annotation", method, c.secret, err)
+			}
+			if strings.Contains(err.Error(), "sk-secret-value") {
+				t.Errorf("%s %s: error %q carries the value", method, c.secret, err)
+			}
+		}
+	}
+	// The host error names the host it refused.
+	_, err := providerCredentialReaders(k, "https://evil.example.com", "approved")["Credential"]()
+	if err == nil || !strings.Contains(err.Error(), `"evil.example.com"`) {
+		t.Errorf("error %v does not name the endpoint host", err)
+	}
+
+	// A ToolProvider without credentialsRef reads no Secret.
+	if v, err := k.ToolCredential(context.Background(), &kaalmv1beta1.ToolProvider{}); err != nil || v != "" {
+		t.Errorf("nil credentialsRef: %q err=%v, want no credential and no error", v, err)
+	}
+}
+
+// The rule 49 and 50 checks run on every read through the watcher, so a
+// label or annotation removed takes effect on the next request.
+func TestKubeStoreProviderCredentialFollowsTheSecretThroughTheWatcher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cs := kubefake.NewSimpleClientset(
+		providerCredSecret("live", providerLabels(), providerHosts("api.example.com"), nil),
+	)
+	store := &KubeStore{
+		Reader:            kubeClientWith(t),
+		OperatorNamespace: "kaalm-system",
+		Secrets:           secretwatch.New(ctx, cs),
+	}
+	readers := providerCredentialReaders(store, "https://api.example.com", "live")
+	for method, read := range readers {
+		if v, err := read(); err != nil || v != "sk-secret-value" {
+			t.Fatalf("%s = %q, %v", method, v, err)
+		}
+	}
+	update := func(sec *corev1.Secret) {
+		t.Helper()
+		if _, err := cs.CoreV1().Secrets("kaalm-system").Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor := func(want string) {
+		t.Helper()
+		for method, read := range readers {
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				_, err := read()
+				if err != nil && strings.Contains(err.Error(), want) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("%s never refused with %q (last err %v)", method, want, err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+
+	update(providerCredSecret("live", providerLabels(), nil, nil))
+	waitFor(kaalmv1beta1.AnnotationProviderHosts)
+
+	update(providerCredSecret("live", nil, providerHosts("api.example.com"), nil))
+	waitFor(kaalmv1beta1.LabelProviderCredential)
 }

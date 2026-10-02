@@ -112,6 +112,10 @@ kind: Secret
 metadata:
   name: load-mock-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: mock-provider.load.svc
 type: Opaque
 stringData:
   token: dummy-mock-credential

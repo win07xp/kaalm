@@ -130,13 +130,17 @@ names the host, so `kubectl describe agentchannel` shows the typo.
 `kubectl get modelproviders` columns: `Type`, `Ready`, `Healthy`, `Age`.
 
 - `Ready`: spec valid and credentials resolve. False reasons:
-  `CredentialsMissing`, `CredentialsInvalid`, `InvalidDegradeTarget`,
+  `CredentialsMissing`, `SecretNotOptedIn` (the credential Secret lacks the
+  label `kaalm.io/provider-credential: "true"`), `EndpointHostNotApproved`
+  (the Secret's `kaalm.io/provider-hosts` annotation does not list the
+  `spec.endpoint` host), `CredentialsInvalid`, `InvalidDegradeTarget`,
   `FallbackIneligible`, `InvalidModelMap`, `HardBudgetUnpriced` (hard
   enforcement requires a fully priced model catalog), `DeletionBlocked`
   (a delete is held by a referrer; see [Deleting a provider, tool
   provider, or class never finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
   Each of these reasons fires a `Warning` event the first time `Ready` turns
-  `False` with it.
+  `False` with it. The fixes for the two Secret reasons are in
+  [Troubleshooting](troubleshooting.md#modelprovider-readyfalse).
 - `Healthy`: the periodic upstream probe, run against every provider type
   (`UpstreamReachable` when good, `ProviderUnhealthy` when not, or
   `CredentialsInvalid` when the probe itself is refused). A probe that keeps
@@ -174,7 +178,13 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 
 - `Ready`: the spec is valid and, when `credentialsRef` is set, the Secret
   resolves in `kaalm-system`; a provider with no credential is Ready. False
-  reasons: `CredentialsMissing`, `CredentialsInvalid` (the server rejected
+  reasons: `CredentialsMissing`, `SecretNotOptedIn` and
+  `EndpointHostNotApproved` (the Secret lacks the label
+  `kaalm.io/provider-credential: "true"` or does not list the endpoint host
+  in `kaalm.io/provider-hosts`; both apply only when `credentialsRef` is
+  set, and the fixes are in
+  [Troubleshooting](troubleshooting.md#modelprovider-readyfalse)),
+  `CredentialsInvalid` (the server rejected
   the injected credential), `DeletionBlocked` (a delete is held by a
   referrer; see [Deleting a provider, tool provider, or class never
   finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).

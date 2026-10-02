@@ -18,12 +18,28 @@ kind: Secret
 metadata:
   name: search-tools-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: mcp-search.tools.svc
 type: Opaque
 stringData:
   token: TOOL_SERVER_TOKEN
 ```
 
-Replace `TOOL_SERVER_TOKEN` with the tool server's API token.
+Replace `TOOL_SERVER_TOKEN` with the tool server's API token, and the
+annotation value with the host of the server's endpoint.
+
+The label opts the Secret in to provider use, and the annotation lists the
+host the token may be sent to. The annotation is a comma-separated list of
+bare hostnames, and it must include the host of the ToolProvider's
+`endpoint`. A Secret that several providers share lists every one of their
+hosts. Without the label the provider reports `Ready=False` with reason
+`SecretNotOptedIn`, and without the host it reports `EndpointHostNotApproved`.
+Both stop the gateway from using the token, and a brokered call returns
+`503 tool_unavailable`. Set them on the Secret before you create the
+provider, and set them again if a rotation re-creates the Secret. The fixes
+are in [Troubleshooting](../reference/troubleshooting.md#modelprovider-readyfalse).
 
 If the server needs no authentication, skip this step and omit
 `credentialsRef` below.
@@ -157,8 +173,8 @@ kubectl get toolproviders
 ```
 
 The columns read as ModelProvider's do: `Ready` means the spec is valid and
-the credential Secret, when one is named, resolves; `Healthy` reports the
-periodic probe. Ready
+the credential Secret, when one is named, resolves and carries the label and
+host annotation from step 1; `Healthy` reports the periodic probe. Ready
 without Healthy means valid config, unreachable server, and it recovers on
 its own when the probe succeeds again.
 
@@ -166,5 +182,6 @@ its own when the probe succeeds again.
 
 *How this works: design book pages Gateways, The tool plane (the broker,
 the grant chain, and every enforcement point), Security, Credential handling (why
-the token lives only in kaalm-system), and Operations, Observability (the
-metric catalog and its cardinality rules).*
+the token lives only in kaalm-system), Operations, Observability (the
+metric catalog and its cardinality rules), and Resources, Validation and
+defaulting (rules 49 and 50, the label and the host annotation).*

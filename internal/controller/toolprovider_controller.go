@@ -18,12 +18,10 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -165,27 +163,16 @@ func (r *ToolProviderReconciler) referrers(ctx context.Context, name string) ([]
 		referrerIndexes{agent: IndexToolProviderRef, task: IndexToolProviderRef, class: IndexAllowedToolProviders})
 }
 
-// credential resolves the referenced Secret key from the operator namespace
-// only, never from a tenant namespace, and returns the credential value plus
-// the condition reason.
+// credential resolves the provider's credential from the operator namespace
+// only, never from a tenant namespace, through resolveProviderCredential: the
+// Secret must exist, carry the rule 49 label, list spec.endpoint's host in its
+// rule 50 annotation, and hold the key, in that order. It returns the value
+// plus the Ready reason and message. The caller runs it only when
+// credentialsRef is set.
 func (r *ToolProviderReconciler) credential(
 	ctx context.Context, tp *kaalmv1beta1.ToolProvider,
 ) (string, string, string) {
-	var sec corev1.Secret
-	key := types.NamespacedName{Namespace: r.OperatorNamespace, Name: tp.Spec.CredentialsRef.Name}
-	if err := r.Get(ctx, key, &sec); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", kaalmv1beta1.ReasonCredentialsMissing,
-				fmt.Sprintf("Secret %s not found", key)
-		}
-		return "", kaalmv1beta1.ReasonCredentialsMissing, err.Error()
-	}
-	val, ok := sec.Data[tp.Spec.CredentialsRef.Key]
-	if !ok || len(val) == 0 {
-		return "", kaalmv1beta1.ReasonCredentialsMissing,
-			fmt.Sprintf("key %q missing or empty in Secret %s", tp.Spec.CredentialsRef.Key, key)
-	}
-	return string(val), kaalmv1beta1.ReasonCredentialsValid, ""
+	return resolveProviderCredential(ctx, r.Client, r.OperatorNamespace, tp.Spec.Endpoint, *tp.Spec.CredentialsRef)
 }
 
 func (r *ToolProviderReconciler) interval(tp *kaalmv1beta1.ToolProvider) time.Duration {

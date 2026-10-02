@@ -301,7 +301,10 @@ spec:
                 description: |-
                   CredentialsRef points at the Secret key holding the server credential,
                   resolved only from the operator namespace, never from a tenant
-                  namespace. Omit it for servers that require no authentication.
+                  namespace. Omit it for servers that require no authentication. When
+                  set, the Secret must carry the label kaalm.io/provider-credential:
+                  "true" (rule 49) and list the endpoint host in its
+                  kaalm.io/provider-hosts annotation (rule 50).
                 properties:
                   key:
                     description: Key within the Secret's data.
@@ -318,7 +321,9 @@ spec:
               endpoint:
                 description: |-
                   Endpoint is the tool server base URL. Must be HTTPS; in-cluster and
-                  external endpoints are equally valid.
+                  external endpoints are equally valid. When credentialsRef is set, its
+                  hostname must be listed in the credential Secret's
+                  kaalm.io/provider-hosts annotation (rule 50).
                 pattern: ^https://
                 type: string
               healthCheck:

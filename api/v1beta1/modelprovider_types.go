@@ -28,12 +28,16 @@ type ModelProviderSpec struct {
 	// +kubebuilder:validation:Enum=anthropic;openai;google-vertex;openai-compatible
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
-	// Endpoint is the provider base URL. Must be HTTPS.
+	// Endpoint is the provider base URL. Must be HTTPS. Its hostname must be
+	// listed in the credential Secret's kaalm.io/provider-hosts annotation
+	// (rule 50).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^https://`
 	Endpoint string `json:"endpoint"`
 	// CredentialsRef points at the Secret key holding the provider credential,
-	// read by the gateway in the operator namespace.
+	// read by the gateway in the operator namespace. The Secret must carry
+	// the label kaalm.io/provider-credential: "true" (rule 49) and list the
+	// endpoint host in its kaalm.io/provider-hosts annotation (rule 50).
 	// +kubebuilder:validation:Required
 	CredentialsRef SecretKeyReference `json:"credentialsRef"`
 	// Models is the catalog this provider serves, keyed by id.

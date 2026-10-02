@@ -38,6 +38,10 @@ The credential type is adapter-specific: for Anthropic, OpenAI, and OpenAI-compa
 
 When a credential Secret is updated, the gateway's Secret watcher picks up the change and refreshes the in-memory credential without a restart.
 
+The gateway reads a credential only from a Secret that passes [rules 49 and 50](../../resources/validation-and-defaulting.md#provider-credentials). On every read, in this order, the Secret must carry the label `kaalm.io/provider-credential: "true"`, list the host of the provider's `spec.endpoint` in its `kaalm.io/provider-hosts` annotation, and hold the key. The checks run with or without the Secret watcher, once per forwarding attempt, so each fallback candidate is checked against its own Secret and host. They add one URL parse, one map lookup, and one scan of the annotation, with no API call, lock, or watch. A label or annotation removed takes effect on the next request, and in-flight requests finish with the credential they already read. Each gateway replica checks against its own watch, so right after an edit one replica can still see the old Secret.
+
+A refused credential is a connect-class failure, which the fallback walk treats like an unreachable provider ([Fallback triggers](fallback.md#fallback-triggers)): it tries the next candidate with that candidate's own Secret and host. When every attempt fails at the connect layer, the caller gets `503 provider_unavailable`. The store's error is `secret NAMESPACE/NAME does not carry the label kaalm.io/provider-credential: "true"` or `secret NAMESPACE/NAME does not list the endpoint host "HOST" in its kaalm.io/provider-hosts annotation`. It never carries a credential value, and the caller's response body does not include it.
+
 ## Provider adapters
 
 The gateway supports multiple upstream provider types through an adapter interface. Each adapter carries the per-provider knowledge the shared proxy depends on:

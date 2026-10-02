@@ -34,12 +34,15 @@ type Store interface {
 	TaskByName(ctx context.Context, namespace, name string) (*kaalmv1beta1.AgentTask, bool)
 	ClassByName(ctx context.Context, name string) (*kaalmv1beta1.AgentClass, bool)
 	ProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ModelProvider, bool)
-	// Credential resolves the provider's credential Secret key value.
+	// Credential resolves the provider's credential Secret key value. It
+	// refuses a Secret without the rule 49 label, or whose rule 50
+	// annotation does not list the host of the provider's spec.endpoint.
 	Credential(ctx context.Context, provider *kaalmv1beta1.ModelProvider) (string, error)
 	// ToolProviderByName looks up a ToolProvider for the MCP broker.
 	ToolProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ToolProvider, bool)
 	// ToolCredential resolves the tool provider's credential Secret key
-	// value. A nil credentialsRef (an unauthenticated server) yields "".
+	// value, with the same rule 49 and 50 refusals as Credential. A nil
+	// credentialsRef (an unauthenticated server) yields "".
 	ToolCredential(ctx context.Context, provider *kaalmv1beta1.ToolProvider) (string, error)
 	// PodByIP resolves a source IP to a live Pod. The Pod is read-only: an
 	// implementation may hand back an object shared with its cache.

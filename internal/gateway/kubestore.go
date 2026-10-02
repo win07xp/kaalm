@@ -122,38 +122,49 @@ func (k *KubeStore) ToolProviderByName(ctx context.Context, name string) (*kaalm
 }
 
 // ToolCredential reads the tool provider's credential Secret key from the
-// operator namespace, exactly as Credential does for ModelProvider. A nil
-// credentialsRef is an unauthenticated server: no credential, no error.
+// operator namespace, with the rule 49 and 50 checks, exactly as Credential
+// does for ModelProvider. A nil credentialsRef is an unauthenticated server:
+// no credential, no error.
 func (k *KubeStore) ToolCredential(ctx context.Context, provider *kaalmv1beta1.ToolProvider) (string, error) {
 	ref := provider.Spec.CredentialsRef
 	if ref == nil {
 		return "", nil
 	}
-	sec, err := k.secret(ctx, k.OperatorNamespace, ref.Name)
-	if err != nil {
-		return "", err
-	}
-	val, ok := sec.Data[ref.Key]
-	if !ok || len(val) == 0 {
-		return "", fmt.Errorf("key %q missing in Secret %s/%s", ref.Key, k.OperatorNamespace, ref.Name)
-	}
-	return string(val), nil
+	return k.providerCredential(ctx, provider.Spec.Endpoint, ref.Name, ref.Key)
 }
 
 // Credential reads the provider's credential Secret key from the operator
-// namespace. With a secretwatch.Watcher the read is served from the Secret's own
-// watch, so a rotation is visible on the next request without a GET.
+// namespace, with the rule 49 and 50 checks. With a secretwatch.Watcher the
+// read is served from the Secret's own watch, so a rotation is visible on the
+// next request without a GET.
 func (k *KubeStore) Credential(ctx context.Context, provider *kaalmv1beta1.ModelProvider) (string, error) {
 	ref := provider.Spec.CredentialsRef
-	sec, err := k.secret(ctx, k.OperatorNamespace, ref.Name)
+	return k.providerCredential(ctx, provider.Spec.Endpoint, ref.Name, ref.Key)
+}
+
+// providerCredential reads one provider credential Secret from the operator
+// namespace and returns its key only when the Secret carries the rule 49
+// label and its rule 50 annotation lists the host of endpoint, the provider's
+// spec.endpoint that the caller dials. The checks run on every read, through
+// the watcher or the Reader path, so a label or annotation removed takes
+// effect on the next request. They add no API call: the Secret is already in
+// memory, and the host match walks the annotation without allocating.
+func (k *KubeStore) providerCredential(ctx context.Context, endpoint, name, key string) (string, error) {
+	ns := k.OperatorNamespace
+	sec, err := k.secret(ctx, ns, name)
 	if err != nil {
 		return "", err
 	}
-	val, ok := sec.Data[ref.Key]
-	if !ok || len(val) == 0 {
-		return "", fmt.Errorf("key %q missing in Secret %s/%s", ref.Key, k.OperatorNamespace, ref.Name)
+	if !kaalmv1beta1.ProviderCredentialOptedIn(sec.Labels) {
+		return "", fmt.Errorf("secret %s/%s does not carry the label %s: %q",
+			ns, name, kaalmv1beta1.LabelProviderCredential, kaalmv1beta1.AnnotationTrue)
 	}
-	return string(val), nil
+	host := kaalmv1beta1.EndpointHost(endpoint)
+	if !kaalmv1beta1.ProviderHostApproved(sec.Annotations, host) {
+		return "", fmt.Errorf("secret %s/%s does not list the endpoint host %q in its %s annotation",
+			ns, name, host, kaalmv1beta1.AnnotationProviderHosts)
+	}
+	return secretKey(sec, ns, name, key)
 }
 
 // ChannelByPath resolves path to the Ready AgentChannel registered at it,
@@ -247,7 +258,8 @@ func (k *KubeStore) CallbackSecretValue(ctx context.Context, namespace, name, ke
 	return secretKey(sec, namespace, name, key)
 }
 
-// secretKey returns one non-empty key of a channel credential Secret.
+// secretKey returns one non-empty key of a channel or provider credential
+// Secret.
 func secretKey(sec *corev1.Secret, namespace, name, key string) (string, error) {
 	val, ok := sec.Data[key]
 	if !ok || len(val) == 0 {

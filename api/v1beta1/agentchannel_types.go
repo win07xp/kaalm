@@ -293,10 +293,21 @@ func ChannelCredentialOptedIn(labels map[string]string) bool {
 // wildcards and no suffix matches. host is the callbackUrl hostname without a
 // port: the port plays no part.
 func CallbackHostApproved(annotations map[string]string, host string) bool {
+	return hostListed(annotations[AnnotationCallbackHosts], host)
+}
+
+// hostListed reports whether the comma-separated list names host. Entries
+// are trimmed and compared without case; empty entries are ignored, there
+// are no wildcards or suffix matches, and an empty host never matches. Rules
+// 46 and 50 both match hosts through it. It walks the list without
+// allocating, since the gateway calls it on every provider request.
+func hostListed(list, host string) bool {
 	if host == "" {
 		return false
 	}
-	for _, entry := range strings.Split(annotations[AnnotationCallbackHosts], ",") {
+	for rest := list; rest != ""; {
+		var entry string
+		entry, rest, _ = strings.Cut(rest, ",")
 		if entry = strings.TrimSpace(entry); entry != "" && strings.EqualFold(entry, host) {
 			return true
 		}

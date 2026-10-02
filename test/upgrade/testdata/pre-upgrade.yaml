@@ -7,7 +7,12 @@
 # what users actually run. The channel Secret up-hook is left without the
 # kaalm.io/channel-credential label on purpose: the spec checks that the
 # upgraded controller reports SecretNotOptedIn and recovers once it is
-# labeled, the step the upgrade notes ask for.
+# labeled, the step the upgrade notes ask for. The provider Secret
+# up-provider-key is left without the kaalm.io/provider-credential label and
+# the kaalm.io/provider-hosts annotation on purpose, for the same reason: the
+# spec checks that the upgraded controller reports SecretNotOptedIn, then
+# EndpointHostNotApproved once it is labeled, and recovers once it is
+# annotated.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -21,6 +26,41 @@ metadata:
 type: Opaque
 stringData:
   token: up-webhook-bearer-token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: up-provider-key
+  namespace: kaalm-system
+type: Opaque
+stringData:
+  token: up-provider-credential
+---
+# A model provider and a tool provider on the unlabeled, unannotated Secret.
+# Nothing references them. The probes stay on: a failing probe sets
+# Healthy=False and leaves Ready=True, so Ready shows only the credential
+# checks.
+apiVersion: kaalm.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: up-provider
+spec:
+  type: openai
+  endpoint: https://up-provider.invalid
+  credentialsRef:
+    name: up-provider-key
+    key: token
+---
+apiVersion: kaalm.io/v1alpha1
+kind: ToolProvider
+metadata:
+  name: up-tools
+spec:
+  type: mcp
+  endpoint: https://up-tools.invalid
+  credentialsRef:
+    name: up-provider-key
+    key: token
 ---
 # The class for the agent that keeps running and for the finished task. No
 # hibernation: the keeper must sit in Running across the whole upgrade.

@@ -191,26 +191,14 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	return r.Update(ctx, mp)
 }
 
-// credential resolves the referenced Secret key and returns the credential value
-// plus the condition reason.
+// credential resolves the provider's credential through
+// resolveProviderCredential: the Secret must exist, carry the rule 49 label,
+// list spec.endpoint's host in its rule 50 annotation, and hold the key, in
+// that order. It returns the value plus the Ready reason and message.
 func (r *ModelProviderReconciler) credential(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider,
 ) (string, string, string) {
-	var sec corev1.Secret
-	key := types.NamespacedName{Namespace: r.OperatorNamespace, Name: mp.Spec.CredentialsRef.Name}
-	if err := r.Get(ctx, key, &sec); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", kaalmv1beta1.ReasonCredentialsMissing,
-				fmt.Sprintf("Secret %s not found", key)
-		}
-		return "", kaalmv1beta1.ReasonCredentialsMissing, err.Error()
-	}
-	val, ok := sec.Data[mp.Spec.CredentialsRef.Key]
-	if !ok || len(val) == 0 {
-		return "", kaalmv1beta1.ReasonCredentialsMissing,
-			fmt.Sprintf("key %q missing or empty in Secret %s", mp.Spec.CredentialsRef.Key, key)
-	}
-	return string(val), kaalmv1beta1.ReasonCredentialsValid, ""
+	return resolveProviderCredential(ctx, r.Client, r.OperatorNamespace, mp.Spec.Endpoint, mp.Spec.CredentialsRef)
 }
 
 // validationProblem is one failed config check: the Ready=False reason the
