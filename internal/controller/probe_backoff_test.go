@@ -112,7 +112,7 @@ func probedProvider(name string, healthy metav1.ConditionStatus, since time.Time
 
 func providerKey(name string) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name + "-key", Namespace: testOperatorNamespace},
+		ObjectMeta: providerCredentialMeta(name+"-key", testOperatorNamespace),
 		Data:       map[string][]byte{"token": []byte("sk-test")},
 	}
 }

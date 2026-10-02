@@ -7,6 +7,10 @@ kind: Secret
 metadata:
   name: s5-mock-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: mock-provider.e2e.svc
 type: Opaque
 stringData:
   token: dummy-s5-credential

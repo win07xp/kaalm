@@ -119,13 +119,14 @@ func TestToolProvider_MissingSecretRecoversWhenCreated(t *testing.T) {
 
 func TestToolProvider_TenantNamespaceSecretDoesNotResolve(t *testing.T) {
 	// The credential invariant: a same-named Secret outside the operator
-	// namespace must never satisfy the ref.
+	// namespace must never satisfy the ref, even one that passes rules 49
+	// and 50, so the namespace is what makes it miss.
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tp-tenant"}}
 	if err := testClient.Create(ctxT(), ns); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("create namespace: %v", err)
 	}
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "tp-sneaky-key", Namespace: "tp-tenant"},
+		ObjectMeta: providerCredentialMeta("tp-sneaky-key", "tp-tenant"),
 		Data:       map[string][]byte{"token": []byte("sk-tenant")},
 	}
 	if err := testClient.Create(ctxT(), sec); err != nil {
@@ -138,7 +139,7 @@ func TestToolProvider_TenantNamespaceSecretDoesNotResolve(t *testing.T) {
 
 func TestToolProvider_EmptySecretKeyIsNotReady(t *testing.T) {
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "tp-empty-key", Namespace: testOperatorNamespace},
+		ObjectMeta: providerCredentialMeta("tp-empty-key", testOperatorNamespace),
 		Data:       map[string][]byte{"other": []byte("x")},
 	}
 	if err := testClient.Create(ctxT(), sec); err != nil {
@@ -548,4 +549,68 @@ func TestToolProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
 	if got := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonProviderUnhealthy); len(got) != 3 {
 		t.Fatalf("three failing probes emitted %d ProviderUnhealthy events, want 3", len(got))
 	}
+}
+
+// Rule 49 for a ToolProvider with credentialsRef: an unlabeled Secret keeps
+// it not Ready, and the probe never carries the credential until the label is
+// set; removing the label takes it out again.
+func TestToolProvider_UnlabeledSecretIsNotOptedIn(t *testing.T) {
+	const name = "tp-optin"
+	mkBareSecret(t, name+"-key", nil,
+		map[string]string{kaalmv1beta1.AnnotationProviderHosts: "mcp.example.com"})
+	mkToolProvider(t, name, nil)
+	get := toolProviderConditions(name)
+	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+	want := `Secret "tp-optin-key" does not carry the label kaalm.io/provider-credential: "true"; ` +
+		`a provider may use only Secrets with that label`
+	if c := condition(get(), kaalmv1beta1.ConditionReady); c.Message != want {
+		t.Fatalf("Ready message = %q, want %q", c.Message, want)
+	}
+	expectEvent(t, "ToolProvider", "", name, kaalmv1beta1.ReasonSecretNotOptedIn, corev1.EventTypeWarning, name+"-key")
+	if n := fakeToolHealth.count(name); n != 0 {
+		t.Fatalf("probe ran %d times for a provider whose Secret is not opted in", n)
+	}
+
+	patchSecretMeta(t, name+"-key", map[string]any{kaalmv1beta1.LabelProviderCredential: "true"}, nil)
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
+	eventually(t, func() error {
+		if got := fakeToolHealth.credential(name); got != "sk-test" {
+			return errString("probe has not carried the credential yet")
+		}
+		return nil
+	})
+
+	patchSecretMeta(t, name+"-key", map[string]any{kaalmv1beta1.LabelProviderCredential: nil}, nil)
+	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
+}
+
+// Rule 50 for a ToolProvider with credentialsRef: the Secret must list the
+// endpoint host; the probe never carries the credential before it does.
+func TestToolProvider_EndpointHostMustBeApproved(t *testing.T) {
+	const name = "tp-hosts"
+	mkBareSecret(t, name+"-key", map[string]string{kaalmv1beta1.LabelProviderCredential: "true"},
+		map[string]string{kaalmv1beta1.AnnotationProviderHosts: "other.example.com"})
+	mkToolProvider(t, name, nil)
+	get := toolProviderConditions(name)
+	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonEndpointHostNotApproved)
+	want := `Secret "tp-hosts-key" does not list the endpoint host "mcp.example.com" ` +
+		`in its kaalm.io/provider-hosts annotation`
+	if c := condition(get(), kaalmv1beta1.ConditionReady); c.Message != want {
+		t.Fatalf("Ready message = %q, want %q", c.Message, want)
+	}
+	expectEvent(t, "ToolProvider", "", name, kaalmv1beta1.ReasonEndpointHostNotApproved,
+		corev1.EventTypeWarning, "mcp.example.com")
+	if n := fakeToolHealth.count(name); n != 0 {
+		t.Fatalf("probe ran %d times for a provider whose endpoint host is not approved", n)
+	}
+
+	patchSecretMeta(t, name+"-key", nil,
+		map[string]any{kaalmv1beta1.AnnotationProviderHosts: "other.example.com, MCP.example.com"})
+	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
+	eventually(t, func() error {
+		if got := fakeToolHealth.credential(name); got != "sk-test" {
+			return errString("probe has not carried the credential yet")
+		}
+		return nil
+	})
 }

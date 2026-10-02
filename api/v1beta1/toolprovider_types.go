@@ -33,13 +33,18 @@ type ToolProviderSpec struct {
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 	// Endpoint is the tool server base URL. Must be HTTPS; in-cluster and
-	// external endpoints are equally valid.
+	// external endpoints are equally valid. When credentialsRef is set, its
+	// hostname must be listed in the credential Secret's
+	// kaalm.io/provider-hosts annotation (rule 50).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^https://`
 	Endpoint string `json:"endpoint"`
 	// CredentialsRef points at the Secret key holding the server credential,
 	// resolved only from the operator namespace, never from a tenant
-	// namespace. Omit it for servers that require no authentication.
+	// namespace. Omit it for servers that require no authentication. When
+	// set, the Secret must carry the label kaalm.io/provider-credential:
+	// "true" (rule 49) and list the endpoint host in its
+	// kaalm.io/provider-hosts annotation (rule 50).
 	// +optional
 	CredentialsRef *SecretKeyReference `json:"credentialsRef,omitempty"`
 	// AllowedNamespaces are glob patterns; a caller's namespace must match one.

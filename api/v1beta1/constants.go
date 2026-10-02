@@ -123,8 +123,9 @@ const (
 	ReasonCallbackAuthMissing        = "CallbackAuthMissing"
 	ReasonCallbackAuthInvalid        = "CallbackAuthInvalid"
 	ReasonCallbackHostUnresolved     = "CallbackHostUnresolved"
-	ReasonSecretNotOptedIn           = "SecretNotOptedIn"        // rule 45
+	ReasonSecretNotOptedIn           = "SecretNotOptedIn"        // rules 45 and 49
 	ReasonCallbackHostNotApproved    = "CallbackHostNotApproved" // rule 46
+	ReasonEndpointHostNotApproved    = "EndpointHostNotApproved" // rule 50
 	ReasonAgentReachable             = "AgentReachable"
 	ReasonWebhookReady               = "WebhookReady"
 	ReasonNoRecentTraffic            = "NoRecentTraffic"
@@ -240,6 +241,15 @@ const (
 	// credential manager approves as callbackUrl hosts when the Secret is a
 	// bearer callbackAuth token (rule 46).
 	AnnotationCallbackHosts = "kaalm.io/callback-hosts"
+	// LabelProviderCredential opts a Secret in the operator namespace in to
+	// ModelProvider and ToolProvider credentialsRef use when its value is
+	// AnnotationTrue (rule 49). The provider reconcilers and the gateway both
+	// check it.
+	LabelProviderCredential = "kaalm.io/provider-credential"
+	// AnnotationProviderHosts lists, comma-separated, the hostnames a provider
+	// credential Secret's credential manager approves as provider
+	// spec.endpoint hosts (rule 50).
+	AnnotationProviderHosts = "kaalm.io/provider-hosts"
 )
 
 // SessionNamespaceUUID is the fixed UUIDv5 namespace used to derive an

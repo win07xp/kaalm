@@ -209,6 +209,42 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		}, "120s", "5s").Should(Equal("True"))
 	})
 
+	It("holds providers until their credential Secret is labeled and approves the endpoint host", func() {
+		readyField := func(kind, name, field string) func() string {
+			return func() string {
+				out, _ := utils.Kubectl("get", kind, name,
+					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].`+field+`}`)
+				return lastLine(out)
+			}
+		}
+		providers := [][2]string{{"modelprovider", "up-provider"}, {"toolprovider", "up-tools"}}
+
+		By("rule 49: the unlabeled provider Secret leaves both providers not Ready")
+		for _, p := range providers {
+			Eventually(readyField(p[0], p[1], "reason"), "120s", "5s").Should(Equal("SecretNotOptedIn"))
+		}
+
+		By("the upgrade notes' step: label the reviewed provider Secret")
+		_, err := utils.Kubectl("label", "secret", "up-provider-key", "-n", "kaalm-system",
+			"kaalm.io/provider-credential=true")
+		Expect(err).NotTo(HaveOccurred())
+
+		By("rule 50: the Secret does not list the endpoint hosts yet")
+		for _, p := range providers {
+			Eventually(readyField(p[0], p[1], "reason"), "120s", "5s").Should(Equal("EndpointHostNotApproved"))
+		}
+
+		By("the upgrade notes' step: annotate the Secret with its providers' endpoint hosts")
+		_, err = utils.Kubectl("annotate", "secret", "up-provider-key", "-n", "kaalm-system",
+			"kaalm.io/provider-hosts=up-provider.invalid,up-tools.invalid")
+		Expect(err).NotTo(HaveOccurred())
+
+		By("both providers are Ready again on a later pass")
+		for _, p := range providers {
+			Eventually(readyField(p[0], p[1], "status"), "120s", "5s").Should(Equal("True"))
+		}
+	})
+
 	It("kept every workload: nothing recreated, nothing lost", func() {
 		By("the keeper is still Running in the same Pod")
 		Expect(phase("agent", "up-keeper")).To(Equal("Running"))

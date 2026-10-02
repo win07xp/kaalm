@@ -76,6 +76,10 @@ kind: Secret
 metadata:
   name: mcp-modern-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: mock-mcp-modern.e2e.svc
 type: Opaque
 stringData:
   token: modern-tool-credential

@@ -91,10 +91,26 @@ func mkAgent(t *testing.T, name, className string, providers ...string) {
 	}
 }
 
+// testProviderHosts is the rule 50 host list the shared provider credential
+// fixtures approve: the endpoints mkProvider and mkToolProvider use.
+const testProviderHosts = "api.example.com,mcp.example.com"
+
+// providerCredentialMeta is the metadata a provider credential Secret needs
+// to pass rules 49 and 50 for the test endpoints.
+func providerCredentialMeta(name, namespace string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name: name, Namespace: namespace,
+		Labels:      map[string]string{kaalmv1beta1.LabelProviderCredential: kaalmv1beta1.AnnotationTrue},
+		Annotations: map[string]string{kaalmv1beta1.AnnotationProviderHosts: testProviderHosts},
+	}
+}
+
+// mkSecret creates a provider credential Secret in the operator namespace
+// that passes rules 49 and 50 for the test endpoints.
 func mkSecret(t *testing.T, name string) {
 	t.Helper()
 	s := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testOperatorNamespace},
+		ObjectMeta: providerCredentialMeta(name, testOperatorNamespace),
 		Data:       map[string][]byte{"token": []byte("sk-test")},
 	}
 	if err := testClient.Create(ctxT(), s); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -476,9 +492,9 @@ func TestModelProviderIsReferenced_ByAgentAndTask(t *testing.T) {
 // ---- ModelProvider credential: key present but missing/empty ----
 
 func TestModelProvider_CredentialKeyMissing(t *testing.T) {
-	// Secret exists but lacks the referenced key.
+	// Secret exists and passes rules 49 and 50 but lacks the referenced key.
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "mp-wrongkey-secret", Namespace: testOperatorNamespace},
+		ObjectMeta: providerCredentialMeta("mp-wrongkey-secret", testOperatorNamespace),
 		Data:       map[string][]byte{"other": []byte("x")},
 	}
 	if err := testClient.Create(ctxT(), sec); err != nil && !apierrors.IsAlreadyExists(err) {

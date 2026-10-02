@@ -79,6 +79,10 @@ kind: Secret
 metadata:
   name: e2e-tool-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: mock-mcp.e2e.svc
 type: Opaque
 stringData:
   token: e2e-tool-credential
