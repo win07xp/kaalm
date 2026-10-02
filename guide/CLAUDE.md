@@ -11,6 +11,10 @@ and the developer deploying an agent. Build with `make books` (which runs
 - Every page answers "how do I do X", not "how does X work". The design book
   (`docs/`) owns internals; when a page touches a concept the design book
   documents, link there instead of restating it.
+- A page gives what the reader needs to do the task and check the result: the
+  commands, the values to write, the status to expect, and what to do when it
+  fails. It leaves out how the system works inside; link to the design book for
+  that. Apply "What to include" from the docs-clarity skill.
 - Uses the stock mdBook theme (no custom CSS). Do not copy the design book's
   theme or wide-figure conventions.
 - Figures are copies of design-book renders, never sources of their own: list
