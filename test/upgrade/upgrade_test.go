@@ -80,6 +80,21 @@ func keeperPod() string {
 	return lastLine(out)
 }
 
+// certSecretName reads the Secret name a workload's Certificate {name}-tls
+// writes (spec.secretName).
+func certSecretName(workload string) string {
+	out, _ := utils.Kubectl("get", "certificate.cert-manager.io", workload+"-tls", "-n", ns,
+		"-o", "jsonpath={.spec.secretName}")
+	return lastLine(out)
+}
+
+// tlsVolumeSecret reads the Secret a Pod's kaalm-tls projected volume names.
+func tlsVolumeSecret(pod string) string {
+	out, _ := utils.Kubectl("get", "pod", pod, "-n", ns,
+		"-o", `jsonpath={.spec.volumes[?(@.name=="kaalm-tls")].projected.sources[0].secret.name}`)
+	return lastLine(out)
+}
+
 func podUID(pod string) string {
 	out, _ := utils.Kubectl("get", "pod", pod, "-n", ns, "-o", "jsonpath={.metadata.uid}")
 	return lastLine(out)
@@ -209,6 +224,11 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 			"the upgrade must rewrite the hash of a v1-hashed Pod instead of replacing it")
 		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID))
 
+		By("the keeper's Certificate keeps its Secret name and the Pod still mounts it")
+		Expect(certSecretName("up-keeper")).To(Equal("up-keeper-tls"),
+			"the upgrade must not rewrite an existing Certificate's spec.secretName")
+		Expect(tlsVolumeSecret(keeperPodName)).To(Equal("up-keeper-tls"))
+
 		By("the marker is still on the volume")
 		out, err := utils.Kubectl("exec", "-n", ns, keeperPodName, "--",
 			"cat", "/var/agent/memory/upgrade-marker")
@@ -294,6 +314,13 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(json.Unmarshal([]byte(payload), &record)).To(Succeed())
 		Expect(record.Error.Type).To(BeEmpty(), "wake should succeed, not error")
 		Expect(record.Response.Content).To(ContainSubstring("upgraded greeter"))
+
+		By("the woken Pod mounts the Secret its pre-upgrade Certificate names")
+		Expect(certSecretName("up-sleeper")).To(Equal("up-sleeper-tls"))
+		out, err := utils.Kubectl("get", "pod", "-n", ns, "-l", "kaalm.io/agent=up-sleeper",
+			"-o", "jsonpath={.items[0].metadata.name}")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tlsVolumeSecret(lastLine(out))).To(Equal("up-sleeper-tls"))
 	})
 })
 

@@ -175,13 +175,14 @@ func isAgentReported(task *kaalmv1beta1.AgentTask) bool {
 
 // desiredTaskCertificate is the per-task client certificate: a single SAN in
 // the non-Service task shape and client auth only, since tasks have no inbound
-// listener. See docs/src/security/tls.md.
+// listener. It writes to the Secret certificateSecretName names. See
+// docs/src/security/tls.md.
 func desiredTaskCertificate(task *kaalmv1beta1.AgentTask, lifetime CertLifetime) *cmapi.Certificate {
 	duration, renewBefore := lifetime.resolve()
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: taskCertificateName(task.Name), Namespace: task.Namespace},
 		Spec: cmapi.CertificateSpec{
-			SecretName: taskCertificateName(task.Name),
+			SecretName: certificateSecretName(task.Name, task.UID),
 			IssuerRef:  cmmeta.ObjectReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
 			DNSNames: []string{
 				fmt.Sprintf("%s.%s.%s", task.Name, task.Namespace, kaalmv1beta1.TaskSANSuffix),
@@ -262,8 +263,9 @@ func desiredCompletionRoleBinding(task *kaalmv1beta1.AgentTask, operatorNamespac
 // desiredTaskPod derives the task Pod: restartPolicy Never (Kaalm owns
 // retries via backoffLimit, and exitCode completion depends on terminal Pod
 // phases), no kubelet probes, and the same injected env and TLS volume as an
-// Agent Pod.
-func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operatorNamespace string) *corev1.Pod {
+// Agent Pod. The TLS volume projects tlsSecret, the Secret the task's
+// Certificate names in spec.secretName.
+func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operatorNamespace, tlsSecret string) *corev1.Pod {
 	labels := map[string]string{}
 	for k, v := range eff.PodLabels {
 		labels[k] = v
@@ -292,7 +294,7 @@ func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operato
 			Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{
 					{Secret: &corev1.SecretProjection{
-						LocalObjectReference: corev1.LocalObjectReference{Name: taskCertificateName(task.Name)},
+						LocalObjectReference: corev1.LocalObjectReference{Name: tlsSecret},
 						Items: []corev1.KeyToPath{
 							{Key: tlsCertKey, Path: tlsCertKey},
 							{Key: tlsKeyKey, Path: tlsKeyKey},

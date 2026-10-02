@@ -55,8 +55,7 @@ var _ = Describe("MCP 2026-07-28 revision (S18, dual-era)", Ordered, func() {
 			return utils.ResourceField("agent", "e2e", "mcp-modern-agent", "{.status.phase}")
 		}, "180s", "5s").Should(Equal("Running"))
 
-		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/mcp-modern-caller.yaml")
-		Expect(err).NotTo(HaveOccurred())
+		applyWithAgentTLS("test/e2e/testdata/mcp-modern-caller.yaml", "e2e", "mcp-modern-agent")
 		Eventually(func() (string, error) {
 			return utils.ResourceField("pod", "e2e", "mcp-modern-caller", "{.status.phase}")
 		}, "180s", "5s").Should(Equal("Succeeded"))

@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -373,8 +374,15 @@ func (h *harness) runGateway(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = h.k.c.Delete(context.Background(), agent) }()
-	mtlsSecret := loadgenAgentName + "-tls"
+	// The agent's TLS Secret is the one its Certificate names in spec.secretName.
+	var mtlsSecret string
 	if err := pollUntil(ctx, 3*time.Minute, 2*time.Second, func() (bool, error) {
+		var cert cmapi.Certificate
+		key := client.ObjectKey{Namespace: h.cfg.Namespace, Name: loadgenAgentName + "-tls"}
+		if err := h.k.c.Get(ctx, key, &cert); err != nil || cert.Spec.SecretName == "" {
+			return false, nil //nolint:nilerr // absent until the controller creates it
+		}
+		mtlsSecret = cert.Spec.SecretName
 		sec, err := h.k.cs.CoreV1().Secrets(h.cfg.Namespace).Get(ctx, mtlsSecret, metav1.GetOptions{})
 		if err != nil {
 			return false, nil //nolint:nilerr // absent until cert-manager issues it

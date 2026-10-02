@@ -46,6 +46,7 @@ var _ = Describe("Metric catalog on the wire (#97)", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 		}
 		Expect(utils.WaitRollout("e2e", "mock-provider", "120s")).To(Succeed())
+		applyWithAgentTLS("test/e2e/testdata/spend-callers.yaml", "console-e2e", "spend-a", "spend-b")
 		for _, pod := range []string{"spend-caller-a", "spend-caller-b"} {
 			Eventually(func() (string, error) {
 				return utils.ResourceField("pod", "console-e2e", pod, "{.status.phase}")

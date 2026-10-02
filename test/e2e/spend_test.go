@@ -41,6 +41,7 @@ var _ = Describe("Per-workload spend (#100)", Ordered, func() {
 				return utils.ResourceField("agent", "console-e2e", agent, "{.status.phase}")
 			}, "180s", "5s").Should(Equal("Running"))
 		}
+		applyWithAgentTLS("test/e2e/testdata/spend-callers.yaml", "console-e2e", "spend-a", "spend-b")
 	})
 
 	It("the callers complete their attested LLM calls", func() {

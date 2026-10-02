@@ -5,6 +5,8 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -22,6 +24,30 @@ func markerLine(logs, step string) string {
 		}
 	}
 	return ""
+}
+
+// applyWithAgentTLS applies a caller fixture that mounts Agents' TLS Secrets.
+// Each Agent's Secret name is read from spec.secretName of its Certificate
+// {agent}-tls and replaces __TLS_SECRET_{agent}__ in the fixture.
+func applyWithAgentTLS(fixture, namespace string, agents ...string) {
+	GinkgoHelper()
+	raw, err := os.ReadFile(fixture)
+	Expect(err).NotTo(HaveOccurred())
+	out := string(raw)
+	for _, agent := range agents {
+		var secret string
+		Eventually(func() (string, error) {
+			v, err := utils.ResourceField("certificate.cert-manager.io", namespace, agent+"-tls", "{.spec.secretName}")
+			secret = strings.TrimSpace(v)
+			return secret, err
+		}, "180s", "3s").ShouldNot(BeEmpty(), agent)
+		out = strings.ReplaceAll(out, "__TLS_SECRET_"+agent+"__", secret)
+	}
+	Expect(out).NotTo(ContainSubstring("__TLS_SECRET_"), "fixture %s names an Agent not passed in", fixture)
+	rendered := filepath.Join(GinkgoT().TempDir(), filepath.Base(fixture))
+	Expect(os.WriteFile(rendered, []byte(out), 0o600)).To(Succeed())
+	_, err = utils.Kubectl("apply", "-f", rendered)
+	Expect(err).NotTo(HaveOccurred())
 }
 
 // S18: the tool plane proven on a real cluster. A mock MCP server that
@@ -81,8 +107,7 @@ var _ = Describe("Governed tool access (S18)", Ordered, func() {
 	})
 
 	It("lists filtered tools, calls through the broker, and is denied per grant", func() {
-		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/s18-caller.yaml")
-		Expect(err).NotTo(HaveOccurred())
+		applyWithAgentTLS("test/e2e/testdata/s18-caller.yaml", "e2e", "s18-agent")
 		Eventually(func() (string, error) {
 			return utils.ResourceField("pod", "e2e", "s18-caller", "{.status.phase}")
 		}, "180s", "5s").Should(Equal("Succeeded"))

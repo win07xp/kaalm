@@ -238,7 +238,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Step 7: ensure the Certificate and gate Pod creation on its readiness.
-	certReady, err := r.ensureCertificate(ctx, &agent)
+	tlsSecret, certReady, err := r.ensureCertificate(ctx, &agent)
 	if err != nil {
 		return r.childConflict(ctx, &agent, statusBefore, err)
 	}
@@ -259,7 +259,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Step 9: converge the Pod and derive the phase from it.
-	driftWaiting, err := r.convergePod(ctx, &agent, &class, eff)
+	driftWaiting, err := r.convergePod(ctx, &agent, &class, eff, tlsSecret)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -817,28 +817,38 @@ func (r *AgentReconciler) reconcileProvidersCondition(
 	apimeta.SetStatusCondition(&agent.Status.Conditions, cond)
 }
 
-func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1beta1.Agent) (bool, error) {
+// ensureCertificate creates the Agent's Certificate when it is missing and
+// reports whether it is Ready. Once the Certificate exists and the Agent
+// controls it, it also returns the Secret name the Certificate writes
+// (spec.secretName), which the Pod mounts. An existing Certificate is never
+// updated, so it keeps the Secret name it was created with.
+func (r *AgentReconciler) ensureCertificate(ctx context.Context, agent *kaalmv1beta1.Agent) (string, bool, error) {
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: agent.Namespace, Name: agentCertificateName(agent.Name)}
 	if err := r.Get(ctx, key, &cert); err != nil {
 		if !apierrors.IsNotFound(err) {
-			return false, err
+			return "", false, err
 		}
 		desired := desiredCertificate(agent, r.CertLifetime)
 		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
-			return false, err
+			return "", false, err
 		}
-		return false, createControlled(ctx, r.Client, agent, desired)
+		return "", false, createControlled(ctx, r.Client, agent, desired)
 	}
 	if err := requireControlled(r.Scheme(), agent, &cert); err != nil {
-		return false, err
+		return "", false, err
 	}
+	return cert.Spec.SecretName, certificateReady(&cert), nil
+}
+
+// certificateReady reports whether the Certificate's Ready condition is True.
+func certificateReady(cert *cmapi.Certificate) bool {
 	for _, c := range cert.Status.Conditions {
 		if c.Type == cmapi.CertificateConditionReady && c.Status == cmmeta.ConditionTrue {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 // ensureChildren converges the ServiceAccount, Service, PVC, NetworkPolicy,
@@ -981,9 +991,12 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // Agent stays Resuming and any other Agent is Provisioning (podPendingPhase).
 // A Pod-creation error returns without a phase change, so the pass requeues
 // with Ready=False. It reports whether the Agent has drifted and waits for a
-// slot, so the caller can schedule a retry.
+// slot, so the caller can schedule a retry. A Pod it creates mounts tlsSecret,
+// the Secret the Agent's Certificate names; drift compares only the spec hash,
+// which excludes that name.
 func (r *AgentReconciler) convergePod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
+	tlsSecret string,
 ) (bool, error) {
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
@@ -991,7 +1004,7 @@ func (r *AgentReconciler) convergePod(
 	}
 
 	if pod == nil {
-		desired := desiredPod(agent, eff, r.OperatorNamespace)
+		desired := desiredPod(agent, eff, r.OperatorNamespace, tlsSecret)
 		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 			return false, err
 		}

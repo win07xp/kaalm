@@ -36,6 +36,8 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -225,6 +227,20 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 		}
 	}
 	expectAgentPhase(t, "run-agent", kaalmv1beta1.AgentProvisioning)
+
+	// The Certificate writes a Secret named for the Agent's UID, and the Pod
+	// mounts the name the Certificate holds.
+	var cert cmapi.Certificate
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-tls"}, &cert); err != nil {
+		t.Fatalf("get certificate: %v", err)
+	}
+	wantSecret := "run-agent-tls-" + string(getWorkloadAgent(t, "run-agent").UID)[:8]
+	if cert.Spec.SecretName != wantSecret {
+		t.Errorf("certificate secretName = %q, want %q", cert.Spec.SecretName, wantSecret)
+	}
+	if got := tlsSecretOf(agentPod(t, "run-agent")); got != wantSecret {
+		t.Errorf("pod TLS volume names %q, want %q", got, wantSecret)
+	}
 
 	// Kubelet brings the Pod up; the Agent goes Running.
 	markPodReady(t, agentPod(t, "run-agent"))
@@ -1436,12 +1452,12 @@ func TestCertLifetime_ReachesCertificateSpec(t *testing.T) {
 
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "lifetime-agent", Namespace: "default", UID: "u-agent"}}
 	ar := &AgentReconciler{Client: testClient, OperatorNamespace: testSystemNamespace, CertLifetime: lifetime}
-	if _, err := ar.ensureCertificate(ctx, agent); err != nil {
+	if _, _, err := ar.ensureCertificate(ctx, agent); err != nil {
 		t.Fatalf("ensureCertificate: %v", err)
 	}
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "lifetime-task", Namespace: "default", UID: "u-task"}}
 	tr := &AgentTaskReconciler{Client: testClient, OperatorNamespace: testSystemNamespace, CertLifetime: lifetime}
-	if _, err := tr.ensureTaskCertificate(ctx, task); err != nil {
+	if _, _, err := tr.ensureTaskCertificate(ctx, task); err != nil {
 		t.Fatalf("ensureTaskCertificate: %v", err)
 	}
 
@@ -1485,11 +1501,11 @@ func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 	}
 	// The Certificate does not exist yet, so ensureCertificate takes the create
 	// path and surfaces the failure.
-	if _, err := ar.ensureCertificate(ctx, agent); err == nil {
+	if _, _, err := ar.ensureCertificate(ctx, agent); err == nil {
 		t.Error("ensureCertificate must surface a create error")
 	}
 	// convergePod finds no Pod and fails to create one.
-	if _, err := ar.convergePod(ctx, agent, class, eff); err == nil {
+	if _, err := ar.convergePod(ctx, agent, class, eff, "a-tls"); err == nil {
 		t.Error("convergePod must surface a create error")
 	}
 
@@ -1498,7 +1514,60 @@ func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 	if err := tr.ensureTaskChildren(ctx, task, class, effectiveTaskSpec{PersistenceOn: true, PVCSizeGi: 1}); err == nil {
 		t.Error("ensureTaskChildren must surface a create error")
 	}
-	if _, err := tr.ensureTaskCertificate(ctx, task); err == nil {
+	if _, _, err := tr.ensureTaskCertificate(ctx, task); err == nil {
 		t.Error("ensureTaskCertificate must surface a create error")
+	}
+}
+
+// A Certificate that already exists keeps its spec.secretName: ensureCertificate
+// returns that name without updating the Certificate, and a Pod created
+// afterwards mounts it.
+func TestEnsureCertificate_KeepsExistingSecretName(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{
+		Name: "legacy", Namespace: "default", UID: "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+	}}
+	cert := desiredCertificate(agent, CertLifetime{})
+	cert.Spec.SecretName = "legacy-tls"
+	cert.Status.Conditions = []cmapi.CertificateCondition{{
+		Type: cmapi.CertificateConditionReady, Status: cmmeta.ConditionTrue, Reason: "Issued",
+	}}
+	if err := controllerutil.SetControllerReference(agent, cert, scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cert).WithStatusSubresource(cert).Build()
+	key := client.ObjectKeyFromObject(cert)
+	var before cmapi.Certificate
+	if err := c.Get(ctx, key, &before); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system"}
+	name, ready, err := r.ensureCertificate(ctx, agent)
+	if err != nil || !ready || name != "legacy-tls" {
+		t.Fatalf("ensureCertificate = (%q, %v, %v), want (legacy-tls, true, nil)", name, ready, err)
+	}
+	var after cmapi.Certificate
+	if err := c.Get(ctx, key, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.ResourceVersion != before.ResourceVersion || !equality.Semantic.DeepEqual(after.Spec, before.Spec) {
+		t.Errorf("ensureCertificate changed the existing Certificate: %+v", after.Spec)
+	}
+
+	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, ServicePort: 8080}
+	if _, err := r.convergePod(ctx, agent, &kaalmv1beta1.AgentClass{}, eff, name); err != nil {
+		t.Fatalf("convergePod: %v", err)
+	}
+	var pods corev1.PodList
+	if err := c.List(ctx, &pods, client.InNamespace("default"), client.MatchingLabels(agentPodLabels(agent))); err != nil {
+		t.Fatal(err)
+	}
+	if len(pods.Items) != 1 {
+		t.Fatalf("want 1 Pod, got %d", len(pods.Items))
+	}
+	if got := tlsSecretOf(&pods.Items[0]); got != "legacy-tls" {
+		t.Errorf("Pod TLS volume names %q, want legacy-tls", got)
 	}
 }

@@ -165,9 +165,41 @@ To find a channel that is held back, see [Troubleshooting](../reference/troubles
 The design book states both rules, 45 and 46, on
 [Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
 
+**TLS Secret names.** An Agent or AgentTask created after the upgrade writes
+its certificate to a Secret named `{name}-tls-` plus the first eight characters
+of the workload's UID, such as `support-assistant-tls-3f9c2a1e`. The
+Certificate is still named `{name}-tls`. A workload whose Certificate existed
+before the upgrade keeps its `{name}-tls` Secret, and the upgrade doesn't
+replace its Pods. A workload that had no Certificate yet, such as an Agent that
+has been `Degraded` since it was created or an AgentTask still `Pending`, gets
+the UID-suffixed name when the controller creates its Certificate. An Agent that
+became `Degraded` later, for example from `Running`, already has its
+Certificate and keeps `{name}-tls`.
+
+A script or Pod that reads a workload's TLS Secret by name should read
+`spec.secretName` from the workload's Certificate instead:
+
+```bash
+kubectl get certificate WORKLOAD_NAME-tls -n NAMESPACE -o jsonpath='{.spec.secretName}'
+```
+
+Replace `WORKLOAD_NAME` with the name of the Agent or AgentTask and
+`NAMESPACE` with its namespace.
+
+If you roll the controller back to v1.0.0, a workload created after the
+upgrade can't start a new Pod until you delete its Certificate:
+
+```bash
+kubectl delete certificate WORKLOAD_NAME-tls -n NAMESPACE
+```
+
+The v1.0.0 controller then re-creates the Certificate with the old Secret name.
+The design book states the naming rule on
+[Agent certificate](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers.md#agent-certificate).
+
 ---
 
 *How this works: design book pages Operations, API versioning and deprecation
 (the storage migration, the conversion webhook, and the deprecation policy);
 Operations, Deployment (the rolling upgrade order); Resources, Validation and
-defaulting (rules 45 and 46).*
+defaulting (rules 45 and 46); Controller, Reconcilers (the Agent certificate).*
