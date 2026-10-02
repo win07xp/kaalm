@@ -22,6 +22,9 @@ The controller provisions six resources for each Agent, all in the Agent's names
 | Certificate | `{name}-tls` | Always | Agent | Kept | Deleted |
 | Secret | `{name}-tls-{uid}`, with `{uid}` the first eight characters of the workload's UID ([Agent certificate](../controller/reconcilers.md#agent-certificate)) | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Kept | Deleted one hop after the Certificate |
 | Role and RoleBinding | `kaalm-agent-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | Agent | Kept | Deleted |
+| Role and RoleBinding | `kaalm-agent-{name}-envsecrets` | `spec.env` reads a Secret through `valueFrom.secretKeyRef` | Agent | Kept | Deleted |
+
+**The pull-Secret and env-Secret Roles serve the operator, not the Pod.** Each pair binds the operator alone and grants `get` and `watch` on the Secrets it names, so the operator can check them before it creates the Pod (the grants are under [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)). The env pair is removed on the next pass when `spec.env` names no Secret. A Role or RoleBinding of either name that the workload does not control sets `Ready=False, reason=ChildConflict` and is never changed.
 
 **The Pod is the only child that tracks phase.** The controller creates it while the Agent is `Provisioning`, moves the Agent to `Running` when the Pod is Ready, and deletes it in `Hibernating`, settling `Hibernated` once the Pod is gone. Every other child is provisioned on the first reconcile and survives hibernation, so a wake recreates the Pod against unchanged identity, storage, and TLS material ([Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics)).
 
@@ -103,6 +106,7 @@ An AgentTask gets a similar set, adjusted for a short-lived workload that takes 
 | ConfigMap | `{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | AgentTask | Deleted |
+| Role and RoleBinding | `kaalm-task-{name}-envsecrets` | `spec.env` reads a Secret through `valueFrom.secretKeyRef` | AgentTask | Deleted |
 
 Every child carries an ownerRef, so cascade GC removes all of them and the task finalizer only terminates the Pod gracefully; unlike the Agent and AgentChannel finalizers, it sweeps nothing and rewrites no ownerRef. The only object whose ownerRef does not name the task is, as for an Agent, the Secret cert-manager writes; its ownerRef names the Certificate.
 

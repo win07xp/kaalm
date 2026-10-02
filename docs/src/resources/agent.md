@@ -21,7 +21,10 @@ spec:
   image: "registry.internal.corp/agents/support:v2.3.1"
   command: []            # optional entrypoint override
   args: []               # optional args override
-  env:                   # merged with the injected KAALM_* set
+  # Merged with the injected KAALM_* set. Each Secret read through
+  # secretKeyRef must carry the label kaalm.io/workload-secret: "true"
+  # (rule 48, reconcile time).
+  env:
     - name: LOG_LEVEL
       value: "info"
 
@@ -111,7 +114,7 @@ status:
 | Field | Meaning |
 |---|---|
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Idle`, `Hibernating`, `Hibernated`, `Resuming`, `Degraded`, `Failed`, `Terminating`. The transitions are on [Agent lifecycle](../controller/agent-lifecycle.md). |
-| `Ready` | `True` with `reason: PodRunning`. `False` with a reason naming what blocks the Pod: a validation rule's reason (`InvalidReference`, `ImagePullSecretMissing`, `ExistingClaimNotFound`, `HandlerConfigMapNotFound`, `SystemNamespaceForbidden`), `ChildConflict` (a child's name is taken by an object the Agent does not control), `CertificateNotReady`, `PodProvisioning`, `PodNotReady`, `PodDisrupted`, `SpecDrift`, `Hibernated`, `Woken`, or the container's own waiting reason. |
+| `Ready` | `True` with `reason: PodRunning`. `False` with a reason naming what blocks the Pod: a validation rule's reason (`InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `ExistingClaimNotFound`, `HandlerConfigMapNotFound`, `SystemNamespaceForbidden`), `ChildConflict` (a child's name is taken by an object the Agent does not control), `CertificateNotReady`, `PodProvisioning`, `PodNotReady`, `PodDisrupted`, `SpecDrift`, `Hibernated`, `Woken`, or the container's own waiting reason. |
 | `GatewayReachable` | Whether the gateway answered the activity fan-out: `True` with `GatewayReady`, else `False` with `GatewayUnavailable` and idle transitions deferred. Present only while the controller evaluates activity for the Agent, which is when it is `Running` or `Idle` with a nonzero effective `idleTimeout`. The controller removes it otherwise ([Gateway unavailability](../controller/hibernation-and-wake.md#when-activity-data-is-missing)). |
 | `IdleDetection` | Present only while idle detection is off: `False` with `reason: Disabled` when neither the Agent's `spec.lifecycle.idleTimeout` nor the class `defaultIdleTimeout` sets a nonzero value, so the Agent never goes `Idle` or `Hibernating` on its own. The controller removes it once an idle timeout applies. See [Timing knobs](../controller/hibernation-and-wake.md#timing-knobs). |
 | `Degraded` | A recoverable condition, distinct from the phase: `True` with `reason: BudgetExhausted` while a referenced provider's budget is blocked for this namespace ([Error handling](../controller/operations.md#error-handling)). |
@@ -168,6 +171,10 @@ Mounts a pre-existing PVC instead of provisioning one. It is the enabler for pro
 ### `spec.handler` is a reference, not a volume mount
 
 The Agent spec exposes no general-purpose volume mount, and `spec.handler` does not change that. It is a single-purpose reference consumed by the [reference base images](../runtime/base-images.md#the-handler-mount): the reconciler mounts the named ConfigMap read-only at `/opt/kaalm/handler`, injects `$KAALM_HANDLER_PATH`, and does nothing else with it. The class must allow it (rule 30, `Degraded` with `reason=HandlerMountNotAllowed`), and the ConfigMap must exist (rule 31, `Ready=False, reason=HandlerConfigMapNotFound`). Content is read at container start and not tracked; repointing the name is the redeploy path ([Handler update semantics](../runtime/base-images.md#handler-update-semantics)). The field exists only on the Agent schema.
+
+### `spec.env` Secrets must opt in
+
+Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the Agent's namespace and carry the label `kaalm.io/workload-secret: "true"`. An Agent that fails the check shows `Ready=False, reason=SecretNotOptedIn` and gets no new Pod. A Pod that already runs stays in place, and the Agent keeps its phase. The exact check, the message, and the gate's timing are under [rule 48](validation-and-defaulting.md#cross-resource-validation). The Agent spec has no `envFrom` field, so `valueFrom.secretKeyRef` is the only Secret source.
 
 ### `service`
 

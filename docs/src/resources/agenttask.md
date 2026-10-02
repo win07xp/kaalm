@@ -20,7 +20,9 @@ spec:
   # Must match the class allowlist (rule 2). Defaults from the class.
   image: "registry.internal.corp/agents/coder:v1.0.0"
   # Merged with the injected KAALM_* set. There is no command or args
-  # override on a task; the image's entrypoint is the task.
+  # override on a task; the image's entrypoint is the task. Each Secret read
+  # through secretKeyRef must carry the label kaalm.io/workload-secret: "true"
+  # (rule 48, reconcile time).
   env:
     - name: TASK_GOAL
       value: "Fix GitHub issue #342 in repo acme/widgets and open a PR"
@@ -108,6 +110,7 @@ status:
 | Field | Meaning |
 |---|---|
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
+| `Ready` | `False` with the reason of a gate that holds the task without failing it: `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `SystemNamespaceForbidden`, `ChildConflict`, or `CertificateNotReady`. For `SecretNotOptedIn`, see [Env Secrets must opt in](#env-secrets-must-opt-in). |
 | `Completed` | `True` with `reason: TaskSucceeded` or `TaskFailed` once the task settles; the message is the agent's reported message, the container's exit summary, or the validation failure. |
 | `startTime` | Set in the status write that moves the task to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
 | `completionTime` | Set when the task settles. |
@@ -123,6 +126,10 @@ status:
 ### Task names must be DNS-1123 labels
 
 `metadata.name` carries the same root-scoped rule as the Agent schema (rule 21), for the same reason: the task name becomes one DNS label in the `{name}.{namespace}.task.kaalm.io` SAN, and the gateway reads the namespace by position ([Name validation](agent.md#name-validation-dns-1123-label-enforced-at-the-schema-root)).
+
+### Env Secrets must opt in
+
+Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`. The check runs only while the task has no Pod, so it covers the first attempt and every `backoffLimit` retry. A task that fails it is not `Failed`: it keeps its phase with `Ready=False, reason=SecretNotOptedIn`, makes no Pod, and re-checks every 30 seconds. A task that has a Pod or has finished is not checked. The exact check, the message, and the gate's timing are under [rule 48](validation-and-defaulting.md#cross-resource-validation).
 
 ### Completion modes
 

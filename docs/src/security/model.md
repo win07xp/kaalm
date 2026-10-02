@@ -8,7 +8,7 @@ Kaalm assumes four trust tiers:
 
 1. **Cluster administrator**: trusted to install Kaalm, manage CRDs, and deploy the operator.
 2. **Platform engineer**: trusted to create AgentClasses, ModelProviders, and ToolProviders, and to manage the provider and tool credentials in `kaalm-system`. Keep this role distinct from agent developers. Each team's channel credentials belong to that team's credential manager, not to this tier ([Roles for people](rbac.md#roles-for-people)).
-3. **Agent developer**: trusted to deploy workloads in their namespace within the guardrails the platform team sets. Not trusted with cross-namespace access, and with credentials only where the platform team sets `rbac.personas.developerSecrets`.
+3. **Agent developer**: trusted to deploy workloads in their namespace within the guardrails the platform team sets. Not trusted with cross-namespace access, and with credentials only where the platform team sets `rbac.personas.developerSecrets`. A workload's env reaches only Secrets that someone with Secret write access has labeled `kaalm.io/workload-secret: "true"` ([rule 48](../resources/validation-and-defaulting.md#cross-resource-validation)), and a channel only Secrets labeled `kaalm.io/channel-credential: "true"` (rule 45).
 4. **Agent container**: not trusted. Even a developer-authored agent may execute LLM-generated code, so the container is treated as adversarial.
 
 Most controls on the following pages exist because of tier 4.

@@ -309,8 +309,9 @@ rbac:
     developerExec: false
     # Adds get, list, watch, create, update, patch, and delete on Secrets to
     # kaalm-developer, in every namespace where it is bound. A channel still
-    # uses only Secrets labeled kaalm.io/channel-credential: "true". No effect
-    # while personas.enabled is false.
+    # uses only Secrets labeled kaalm.io/channel-credential: "true", and a
+    # workload's env only Secrets labeled kaalm.io/workload-secret: "true".
+    # No effect while personas.enabled is false.
     developerSecrets: false
   # Adds Agent, AgentTask, and AgentChannel to the built-in view, edit, and
   # admin roles. Works without personas.enabled. Never adds the catalog kinds

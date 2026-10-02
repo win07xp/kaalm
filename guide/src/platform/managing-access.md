@@ -221,6 +221,27 @@ in every namespace, whoever creates the Secret. Developers need no Secret
 access to use the channel. [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved)
 shows what a channel reports when a Secret lacks the label.
 
+### Label the Secrets a workload reads
+
+An Agent or AgentTask can read a Secret in its `spec.env` through
+`valueFrom.secretKeyRef` only when the Secret exists in the workload's
+namespace and carries the label `kaalm.io/workload-secret` with the value
+`true`. Whoever manages Secrets in the namespace sets it:
+
+```bash
+kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/workload-secret=true
+```
+
+Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with the
+workload's namespace. The label is separate from
+`kaalm.io/channel-credential` and `kaalm.io/provider-credential`: each label
+covers one use, so a Secret used two ways needs both labels. There is no
+switch to turn the check off, and it applies in every namespace. Developers
+need no Secret access to use a labeled Secret.
+[Troubleshooting](../reference/troubleshooting.md#workload-is-readyfalse-with-secretnotoptedin)
+shows what a workload reports when a Secret lacks the label. For the rule, see
+[Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
+
 ### Label provider Secrets
 
 The people in `secretsAdmins` own the provider and tool credentials in
@@ -251,8 +272,8 @@ loop, set `rbac.personas.developerSecrets: true`. The developer role then
 grants `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
 Secrets in every namespace where `kaalm-developer` is bound. The other roles
 do not change. The setting has no effect while `enabled` is `false`.
-Developers still label the Secrets they create, because the channel rule has
-no exception.
+Developers still label the Secrets they create, because the channel rule and
+the workload rule have no exception.
 
 ### Let developers exec into agents
 

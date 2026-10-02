@@ -38,7 +38,7 @@ partition "5 to 7: hibernation, gates, Certificate" {
   if (Hibernating or\nHibernated?) then (yes)
     :drive or hold,\npass ends;
     kill
-  elseif (class CIDRs valid; image,\nexistingClaim, pull Secrets,\nhandler ConfigMap present?) then (no)
+  elseif (class CIDRs valid; image,\nexistingClaim, pull Secrets,\nenv Secrets, handler\nConfigMap present?) then (no)
     :Ready=False; requeue 30s\nfor an unwatched object;
     kill
   elseif (Certificate Ready?) then (no)

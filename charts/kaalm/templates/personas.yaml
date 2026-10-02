@@ -79,7 +79,8 @@ rules:
   {{- if $p.developerSecrets }}
   # Full Secret management, for teams whose developers own their channel
   # credentials. A channel still uses only Secrets that carry the label
-  # kaalm.io/channel-credential: "true".
+  # kaalm.io/channel-credential: "true", and a workload's env only Secrets
+  # that carry kaalm.io/workload-secret: "true".
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
