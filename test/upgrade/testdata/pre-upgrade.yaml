@@ -4,7 +4,10 @@
 # previous release, and the deliberate old-manifest shape), and __PREV__ is
 # substituted with PREV_CHART_VERSION at apply time so the workloads run the
 # previous release's published base images, because the scenario upgrades
-# what users actually run.
+# what users actually run. The channel Secret up-hook is left without the
+# kaalm.io/channel-credential label on purpose: the spec checks that the
+# upgraded controller reports SecretNotOptedIn and recovers once it is
+# labeled, the step the upgrade notes ask for.
 apiVersion: v1
 kind: Namespace
 metadata:

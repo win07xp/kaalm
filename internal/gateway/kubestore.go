@@ -205,12 +205,50 @@ func channelPathAllowed(ch *kaalmv1beta1.AgentChannel) bool {
 	return strings.HasPrefix(ch.Spec.Path(), "/channels/"+ch.Namespace+"/")
 }
 
-// SecretValue reads one Secret key from a user namespace.
-func (k *KubeStore) SecretValue(ctx context.Context, namespace, name, key string) (string, error) {
+// channelCredential reads one channel credential Secret from a user namespace
+// and refuses it unless it carries the rule 45 opt-in label. The check runs
+// on every read, even when a Role still grants the Secret: the reconciler
+// shrinks the Role only on its next pass, and a watch established before the
+// shrink can outlive it.
+func (k *KubeStore) channelCredential(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
 	sec, err := k.secret(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if !kaalmv1beta1.ChannelCredentialOptedIn(sec.Labels) {
+		return nil, fmt.Errorf("secret %s/%s does not carry the label %s: %q",
+			namespace, name, kaalmv1beta1.LabelChannelCredential, kaalmv1beta1.AnnotationTrue)
+	}
+	return sec, nil
+}
+
+// SecretValue reads one key of a channel credential Secret in a user
+// namespace. It refuses a Secret without the rule 45 opt-in label before it
+// looks at any key.
+func (k *KubeStore) SecretValue(ctx context.Context, namespace, name, key string) (string, error) {
+	sec, err := k.channelCredential(ctx, namespace, name)
 	if err != nil {
 		return "", err
 	}
+	return secretKey(sec, namespace, name, key)
+}
+
+// CallbackSecretValue reads a bearer callback token: SecretValue, plus rule
+// 46, the Secret's kaalm.io/callback-hosts annotation must list host.
+func (k *KubeStore) CallbackSecretValue(ctx context.Context, namespace, name, key, host string) (string, error) {
+	sec, err := k.channelCredential(ctx, namespace, name)
+	if err != nil {
+		return "", err
+	}
+	if !kaalmv1beta1.CallbackHostApproved(sec.Annotations, host) {
+		return "", fmt.Errorf("secret %s/%s does not list the callbackUrl host %q in its %s annotation",
+			namespace, name, host, kaalmv1beta1.AnnotationCallbackHosts)
+	}
+	return secretKey(sec, namespace, name, key)
+}
+
+// secretKey returns one non-empty key of a channel credential Secret.
+func secretKey(sec *corev1.Secret, namespace, name, key string) (string, error) {
 	val, ok := sec.Data[key]
 	if !ok || len(val) == 0 {
 		return "", fmt.Errorf("key %q missing in Secret %s/%s", key, namespace, name)

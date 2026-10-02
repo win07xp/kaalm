@@ -16,8 +16,8 @@ rectangle "**Role** kaalm-controller-leader-election in kaalm-system" as nssys #
 rectangle "**Role** kaalm-controller-credentials in kaalm-system" as nscred #line:0D47A1;line.dashed;text:0a2540 {
   rectangle "Secrets in kaalm-system: get, list, watch" as syssec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
-rectangle "**Role** kaalm-channel-{name}-creds in the AgentChannel's namespace" as nsuser #line:7a3f00;line.dashed;text:3a1f00 {
-  rectangle "Secrets named by the channel: get, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
+rectangle "**Roles** kaalm-channel-{name}-check and -creds in the AgentChannel's namespace" as nsuser #line:7a3f00;line.dashed;text:3a1f00 {
+  rectangle "check: every Secret it names\ncreds: labeled Secrets it names\nboth get, watch" as chsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00
 }
 rectangle "**Role** kaalm-agent-{name}-pullsecrets or kaalm-task-{name}-pullsecrets in the workload's namespace" as nspull #line:7a3f00;line.dashed;text:3a1f00 {
   rectangle "Pull Secrets named by the class: get, watch" as pullsec #back:FFD580;line:7a3f00;line.bold;text:3a1f00

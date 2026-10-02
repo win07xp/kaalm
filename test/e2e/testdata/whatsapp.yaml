@@ -48,6 +48,8 @@ kind: Secret
 metadata:
   name: s23-whatsapp-creds
   namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   verifyToken: e2e-verify-token

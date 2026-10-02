@@ -72,4 +72,4 @@ A leader-only runnable, separate from the reconcilers, runs one pass when its re
 
 A record whose channel exists is left to that channel's own expiry prune and finalizer sweep, even while the channel is being deleted. A failed pass is logged and retried on the next tick; it never stops the manager. So a stray record left behind by the race above lingers at most about 10 minutes past its expiry.
 
-The Role and RoleBinding the reconciler created for the channel are owner-referenced and cascade-delete with it; see [Per-channel credential Role](reconcilers.md#per-channel-credential-role).
+The Roles and RoleBindings the reconciler created for the channel are owner-referenced and cascade-delete with it; see [Per-channel credential Roles](reconcilers.md#per-channel-credential-roles).

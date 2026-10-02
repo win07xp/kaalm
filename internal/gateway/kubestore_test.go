@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,12 +146,25 @@ func TestKubeStore_Credential(t *testing.T) {
 	}
 }
 
-func TestKubeStore_SecretValue(t *testing.T) {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "chan-secret", Namespace: "team-a"},
+// channelSecret builds a Secret in team-a with a token key.
+func channelSecret(name string, labels, annotations map[string]string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", Labels: labels, Annotations: annotations},
 		Data:       map[string][]byte{"token": []byte("hunter2")},
 	}
-	k := &KubeStore{Reader: kubeClientWith(t, secret), OperatorNamespace: "kaalm-system"}
+}
+
+func optInLabels(value string) map[string]string {
+	return map[string]string{kaalmv1beta1.LabelChannelCredential: value}
+}
+
+func TestKubeStore_SecretValue(t *testing.T) {
+	k := &KubeStore{Reader: kubeClientWith(t,
+		channelSecret("chan-secret", optInLabels("true"), nil),
+		channelSecret("unlabeled", nil, nil),
+		channelSecret("label-True", optInLabels("True"), nil),
+		channelSecret("label-false", optInLabels("false"), nil),
+	), OperatorNamespace: "kaalm-system"}
 	ctx := context.Background()
 
 	if v, err := k.SecretValue(ctx, "team-a", "chan-secret", "token"); err != nil || v != "hunter2" {
@@ -161,6 +175,48 @@ func TestKubeStore_SecretValue(t *testing.T) {
 	}
 	if _, err := k.SecretValue(ctx, "team-a", "ghost", "token"); err == nil {
 		t.Error("missing Secret must error")
+	}
+	// Rule 45: a Secret that did not opt in is refused even when readable.
+	for _, name := range []string{"unlabeled", "label-True", "label-false"} {
+		v, err := k.SecretValue(ctx, "team-a", name, "token")
+		if err == nil || v != "" {
+			t.Errorf("%s: SecretValue = %q err=%v, want a refusal", name, v, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), kaalmv1beta1.LabelChannelCredential) {
+			t.Errorf("%s: error %q does not name the label", name, err)
+		}
+	}
+}
+
+// Rule 46: a bearer callback token is returned only for a host its Secret
+// lists, on top of the rule 45 label.
+func TestKubeStore_CallbackSecretValue(t *testing.T) {
+	hosts := map[string]string{kaalmv1beta1.AnnotationCallbackHosts: "a.example.com, Hooks.Example.com"}
+	k := &KubeStore{Reader: kubeClientWith(t,
+		channelSecret("cb", optInLabels("true"), hosts),
+		channelSecret("cb-nohosts", optInLabels("true"), nil),
+		channelSecret("cb-unlabeled", nil, hosts),
+	), OperatorNamespace: "kaalm-system"}
+	ctx := context.Background()
+
+	if v, err := k.CallbackSecretValue(ctx, "team-a", "cb", "token", "hooks.example.com"); err != nil || v != "hunter2" {
+		t.Fatalf("approved host: %q err=%v", v, err)
+	}
+	refused := []struct{ name, host string }{
+		{"cb", "evil.example.com"},
+		{"cb", "example.com"},
+		{"cb", ""},
+		{"cb-nohosts", "hooks.example.com"},
+		{"cb-unlabeled", "hooks.example.com"},
+		{"ghost", "hooks.example.com"},
+	}
+	for _, c := range refused {
+		if v, err := k.CallbackSecretValue(ctx, "team-a", c.name, "token", c.host); err == nil || v != "" {
+			t.Errorf("%s for %q: %q err=%v, want a refusal", c.name, c.host, v, err)
+		}
+	}
+	if _, err := k.CallbackSecretValue(ctx, "team-a", "cb", "absent", "hooks.example.com"); err == nil {
+		t.Error("missing key must error")
 	}
 }
 
@@ -347,13 +403,19 @@ func secretObj(ns, name, value string) *corev1.Secret {
 	}
 }
 
+// optedIn adds the rule 45 label a channel credential Secret carries.
+func optedIn(sec *corev1.Secret) *corev1.Secret {
+	sec.Labels = optInLabels(kaalmv1beta1.AnnotationTrue)
+	return sec
+}
+
 func TestKubeStoreReadsSecretsThroughTheWatcher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := kubefake.NewSimpleClientset(
 		secretObj("kaalm-system", "openai-key", "sk-live"),
 		secretObj("kaalm-system", "tool-key", "tool-live"),
-		secretObj("team-a", "hook", "hook-live"),
+		optedIn(secretObj("team-a", "hook", "hook-live")),
 	)
 	store := &KubeStore{
 		Reader:            kubeClientWith(t),

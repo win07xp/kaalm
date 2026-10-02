@@ -86,13 +86,15 @@ func getSecretLive(ctx context.Context, reader client.Reader, key types.Namespac
 	return err
 }
 
-// ensurePullSecretAccess keeps the Role and RoleBinding that let the operator
-// confirm rule 23 for one workload: get and watch on exactly the Secrets the
-// class names (watch lets the controller's per-Secret watch sync), bound to the operator's ServiceAccount, owned by the workload. With
-// no names the pair is removed, so a class edit that drops its pull Secrets
-// leaves no grant behind. A Role or RoleBinding of that name the workload does
-// not control is a ChildConflictError, never updated or deleted.
-func ensurePullSecretAccess(
+// ensureControllerSecretAccess keeps a controller-only Role and RoleBinding,
+// both named roleName and owned by owner: get and watch on exactly the named
+// Secrets (watch lets the controller's per-Secret watch sync), bound to the
+// operator's ServiceAccount alone. With no names the pair is removed, so an
+// edit that drops its Secret references leaves no grant behind. A Role or
+// RoleBinding of that name the owner does not control is a ChildConflictError,
+// never updated or deleted. It serves the rule 23 pull-Secret check of Agents
+// and AgentTasks and the rule 45 label check of AgentChannels.
+func ensureControllerSecretAccess(
 	ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object,
 	roleName, operatorNamespace string, refs []corev1.LocalObjectReference,
 ) error {

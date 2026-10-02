@@ -1,3 +1,5 @@
+# Both referenced Secrets (webhook-secret and callback-secret) must carry the
+# label kaalm.io/channel-credential: "true", or the channel stays not Ready.
 apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:

@@ -202,8 +202,9 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 // validateChannel runs steps 2 and 3: service enabled, path shape, path
-// conflict, the per-channel credential Role, and Secret validation. Returns a
-// non-empty reason on the first failure.
+// conflict, the per-channel check and credential Roles, Secret validation
+// (rules 25, 40, 45, and 46), and rule 22. Returns a non-empty reason on the
+// first failure.
 func (r *AgentChannelReconciler) validateChannel(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent,
 ) (string, string) {
@@ -242,15 +243,31 @@ func (r *AgentChannelReconciler) validateChannel(
 			}
 		}
 	}
-	// Step 3: the scoped Role must exist BEFORE any Secret read: it is what
-	// grants the reconciler (and the gateway) access to exactly these Secrets.
-	if err := r.ensureCredentialRole(ctx, channel); err != nil {
+	// Step 3: the controller-only check Role must exist BEFORE any Secret
+	// read: the operator has no standing Secret read in user namespaces, and
+	// RBAC has no label-scoped grant, so it needs get and watch on every
+	// referenced name to see the rule 45 label. The gateway's Role follows
+	// the reads and lists only the Secrets that opted in.
+	names := authSecretNames(channel)
+	refs := make([]corev1.LocalObjectReference, 0, len(names))
+	for _, n := range names {
+		refs = append(refs, corev1.LocalObjectReference{Name: n})
+	}
+	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), channel, channelCheckRoleName(channel.Name),
+		r.OperatorNamespace, refs); err != nil {
+		if _, ok := asChildConflict(err); ok {
+			return kaalmv1beta1.ReasonChildConflict, err.Error()
+		}
+		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential check Role failed: " + err.Error()
+	}
+	reason, msg, optedIn := r.validateSecrets(ctx, channel)
+	if err := r.ensureCredentialRole(ctx, channel, optedIn); err != nil {
 		if _, ok := asChildConflict(err); ok {
 			return kaalmv1beta1.ReasonChildConflict, err.Error()
 		}
 		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential Role failed: " + err.Error()
 	}
-	if reason, msg := r.validateSecrets(ctx, channel); reason != "" {
+	if reason != "" {
 		return reason, msg
 	}
 	// Rule 22: callbackUrl must be HTTPS and must not point into internal
@@ -357,19 +374,33 @@ func authSecretNames(channel *kaalmv1beta1.AgentChannel) []string {
 
 func channelRoleName(channelName string) string { return "kaalm-channel-" + channelName + "-creds" }
 
-// ensureCredentialRole creates or updates the per-channel Role (get, watch,
-// resourceNames-scoped; list deliberately omitted since resourceNames cannot
-// constrain it) and its two RoleBindings (gateway and controller SAs).
-func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, channel *kaalmv1beta1.AgentChannel) error {
-	names := authSecretNames(channel)
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: channelRoleName(channel.Name), Namespace: channel.Namespace},
-		Rules: []rbacv1.PolicyRule{{
+// channelCheckRoleName names the controller-only Role that lets the reconciler
+// read every Secret the channel references, to check the rule 45 label.
+func channelCheckRoleName(channelName string) string {
+	return "kaalm-channel-" + channelName + "-check"
+}
+
+// ensureCredentialRole creates or updates the per-channel gateway-facing Role
+// (get, watch, resourceNames-scoped; list deliberately omitted since
+// resourceNames cannot constrain it) and its two RoleBindings (gateway and
+// controller SAs). The Role lists only names, the referenced Secrets that
+// carry the rule 45 label; with none it has no rules at all, never one rule
+// with empty resourceNames, which would grant every Secret.
+func (r *AgentChannelReconciler) ensureCredentialRole(
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, names []string,
+) error {
+	var rules []rbacv1.PolicyRule
+	if len(names) > 0 {
+		rules = []rbacv1.PolicyRule{{
 			APIGroups:     []string{""},
 			Resources:     []string{"secrets"},
 			ResourceNames: names,
 			Verbs:         []string{"get", "watch"},
-		}},
+		}}
+	}
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: channelRoleName(channel.Name), Namespace: channel.Namespace},
+		Rules:      rules,
 	}
 	if err := controllerutil.SetControllerReference(channel, role, r.Scheme()); err != nil {
 		return err
@@ -385,10 +416,10 @@ func (r *AgentChannelReconciler) ensureCredentialRole(ctx context.Context, chann
 		}
 	} else if err := requireControlled(r.Scheme(), channel, &current); err != nil {
 		return err
-	} else if len(current.Rules) != 1 || !equalStrings(current.Rules[0].ResourceNames, names) {
-		// Secret refs changed: shrink or grow the grant so no stale access
-		// is retained.
-		current.Rules = role.Rules
+	} else if !equality.Semantic.DeepEqual(current.Rules, rules) {
+		// Secret refs or labels changed: shrink or grow the grant so no
+		// stale access is retained.
+		current.Rules = rules
 		if err := r.Update(ctx, &current); err != nil {
 			return err
 		}
@@ -445,31 +476,88 @@ func (r *AgentChannelReconciler) updateStatusIfChanged(
 	return r.Status().Update(ctx, channel)
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+// channelSecretRead is one referenced Secret as this pass read it.
+type channelSecretRead struct {
+	sec *corev1.Secret
+	err error
 }
 
-// validateSecrets confirms every referenced Secret and key exists. The inbound
-// auth Secret reports the shared CredentialsMissing reason; the outbound
-// callbackAuth Secret (rule 25) reports CallbackAuthMissing when the Secret or
-// key is absent and CallbackAuthInvalid when the key is empty or the block
-// names no Secret for its type.
-func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *kaalmv1beta1.AgentChannel) (string, string) {
-	check := func(ref *kaalmv1beta1.SecretKeyReference, missing, empty string) (string, string) {
+// readChannelSecrets reads every Secret the channel references exactly once
+// and returns the reads by name, plus the sorted names that carry the rule 45
+// label. A read that failed, for any reason, is not opted in.
+func (r *AgentChannelReconciler) readChannelSecrets(
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel,
+) (map[string]channelSecretRead, []string) {
+	reads := map[string]channelSecretRead{}
+	var optedIn []string
+	reader := liveSecretReader(r.SecretReader, r.Client)
+	for _, name := range authSecretNames(channel) {
 		var sec corev1.Secret
-		if err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
-			types.NamespacedName{Namespace: channel.Namespace, Name: ref.Name}, &sec); err != nil {
-			return missing, secretReadMessage(err, ref.Name, channel.Namespace)
+		err := getSecretLive(ctx, reader, types.NamespacedName{Namespace: channel.Namespace, Name: name}, &sec)
+		if err != nil {
+			reads[name] = channelSecretRead{err: err}
+			continue
 		}
-		v, ok := sec.Data[ref.Key]
+		reads[name] = channelSecretRead{sec: &sec}
+		if kaalmv1beta1.ChannelCredentialOptedIn(sec.Labels) {
+			optedIn = append(optedIn, name)
+		}
+	}
+	return reads, optedIn // authSecretNames is sorted, so optedIn is too
+}
+
+// notOptedInMessage words a rule 45 failure. It names the Secret and the label
+// only: nothing about the keys of a Secret that did not opt in.
+func notOptedInMessage(name string) string {
+	return fmt.Sprintf("Secret %q does not carry the label %s: %q; a channel may use only Secrets with that label",
+		name, kaalmv1beta1.LabelChannelCredential, kaalmv1beta1.AnnotationTrue)
+}
+
+// validateSecrets reads every referenced Secret once and checks each
+// reference in order: the Secret is readable, it carries the rule 45 label,
+// a bearer callbackAuth Secret approves the callbackUrl host (rule 46), and
+// then the key checks. The inbound auth Secret reports the shared
+// CredentialsMissing reason; the outbound callbackAuth Secret (rule 25)
+// reports CallbackAuthMissing when the Secret or key is absent and
+// CallbackAuthInvalid when the key is empty or the block names no Secret for
+// its type. It also returns the names that carry the label, for the
+// gateway's Role.
+func (r *AgentChannelReconciler) validateSecrets(
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel,
+) (reason, msg string, optedIn []string) {
+	reads, optedIn := r.readChannelSecrets(ctx, channel)
+	reason, msg = checkChannelSecrets(channel, reads)
+	return reason, msg, optedIn
+}
+
+// readOf returns the pass's read of one Secret. Every name authSecretNames
+// returns was read; any other name reads as not found.
+func readOf(reads map[string]channelSecretRead, name string) channelSecretRead {
+	if read, ok := reads[name]; ok {
+		return read
+	}
+	return channelSecretRead{err: apierrors.NewNotFound(corev1.Resource("secrets"), name)}
+}
+
+// checkChannelSecrets runs the ordered checks of validateSecrets over the
+// pass's reads.
+func checkChannelSecrets(channel *kaalmv1beta1.AgentChannel, reads map[string]channelSecretRead) (string, string) {
+	// check runs one reference. host is the callbackUrl host a bearer
+	// callback token must be approved for, or "" when rule 46 does not apply.
+	check := func(ref *kaalmv1beta1.SecretKeyReference, missing, empty, host string) (string, string) {
+		read := readOf(reads, ref.Name)
+		if read.err != nil {
+			return missing, secretReadMessage(read.err, ref.Name, channel.Namespace)
+		}
+		if !kaalmv1beta1.ChannelCredentialOptedIn(read.sec.Labels) {
+			return kaalmv1beta1.ReasonSecretNotOptedIn, notOptedInMessage(ref.Name)
+		}
+		if host != "" && !kaalmv1beta1.CallbackHostApproved(read.sec.Annotations, host) {
+			return kaalmv1beta1.ReasonCallbackHostNotApproved,
+				fmt.Sprintf("Secret %q does not list the callbackUrl host %q in its %s annotation",
+					ref.Name, host, kaalmv1beta1.AnnotationCallbackHosts)
+		}
+		v, ok := read.sec.Data[ref.Key]
 		if !ok {
 			return missing, fmt.Sprintf("key %q missing in Secret %q", ref.Key, ref.Name)
 		}
@@ -480,17 +568,19 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 	}
 	switch {
 	case channel.Spec.Discord != nil && channelType(channel) == kaalmv1beta1.ChannelTypeDiscord:
-		return r.validatePlatformSecret(ctx, channel, channel.Spec.Discord.CredentialsRef.Name,
+		name := channel.Spec.Discord.CredentialsRef.Name
+		return validatePlatformSecret(readOf(reads, name), channel.Namespace, name,
 			[]string{discordKeyPublicKey}, validateDiscordPublicKey)
 	case channel.Spec.WhatsApp != nil && channelType(channel) == kaalmv1beta1.ChannelTypeWhatsApp:
-		return r.validatePlatformSecret(ctx, channel, channel.Spec.WhatsApp.CredentialsRef.Name,
+		name := channel.Spec.WhatsApp.CredentialsRef.Name
+		return validatePlatformSecret(readOf(reads, name), channel.Namespace, name,
 			[]string{whatsAppKeyVerifyToken, whatsAppKeyAppSecret, whatsAppKeyAccessToken}, nil)
 	case channel.Spec.Webhook == nil:
 		return "", ""
 	}
 	inbound := &channel.Spec.Webhook.Auth
 	for _, ref := range authSecretRefs(inbound) {
-		if reason, msg := check(ref, kaalmv1beta1.ReasonCredentialsMissing, kaalmv1beta1.ReasonCredentialsMissing); reason != "" {
+		if reason, msg := check(ref, kaalmv1beta1.ReasonCredentialsMissing, kaalmv1beta1.ReasonCredentialsMissing, ""); reason != "" {
 			return reason, msg
 		}
 	}
@@ -500,16 +590,36 @@ func (r *AgentChannelReconciler) validateSecrets(ctx context.Context, channel *k
 	}
 	// CRD CEL requires the ref the type names; the reconciler repeats the
 	// check so a block that slips past it reads as malformed, not as valid.
-	if (callback.Type == "bearer" && callback.SecretRef == nil) || (callback.Type == "hmac" && callback.HMAC == nil) {
+	if (callback.Type == authTypeBearer && callback.SecretRef == nil) || (callback.Type == "hmac" && callback.HMAC == nil) {
 		return kaalmv1beta1.ReasonCallbackAuthInvalid,
 			fmt.Sprintf("callbackAuth type %q names no Secret", callback.Type)
 	}
+	// Rule 46 binds a bearer callback token to the hosts its Secret approves.
+	// An HMAC callback sends a signature, never the key, so it is exempt. A
+	// callbackUrl that is not a valid https URL is left to rule 22.
+	host := ""
+	if callback.Type == authTypeBearer {
+		host = callbackHost(*channel.Spec.Webhook.CallbackURL)
+	}
 	for _, ref := range authSecretRefs(callback) {
-		if reason, msg := check(ref, kaalmv1beta1.ReasonCallbackAuthMissing, kaalmv1beta1.ReasonCallbackAuthInvalid); reason != "" {
+		if reason, msg := check(ref, kaalmv1beta1.ReasonCallbackAuthMissing, kaalmv1beta1.ReasonCallbackAuthInvalid, host); reason != "" {
 			return reason, "callbackAuth: " + msg
 		}
 	}
 	return "", ""
+}
+
+// authTypeBearer is the ChannelAuth type that sends the Secret value itself.
+const authTypeBearer = "bearer"
+
+// callbackHost returns the hostname of an https callbackUrl, without its
+// port, or "" when raw is not a valid https URL (rule 22 reports that).
+func callbackHost(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != schemeHTTPS {
+		return ""
+	}
+	return parsed.Hostname()
 }
 
 // authSecretRefs lists the Secret references one auth block carries.
@@ -545,20 +655,23 @@ func secretReadMessage(err error, name, namespace string) string {
 	return fmt.Sprintf("Secret %q in namespace %q is not readable: %v", name, namespace, err)
 }
 
-// validatePlatformSecret is rule 40 for one platform channel: the Secret
-// exists, carries every required key, and (when a shape check is given) the
-// key the adapter builds its verifier from is well-formed. A malformed key is
-// CredentialsInvalid rather than CredentialsMissing, because the operator's
-// fix is different: the value is there, it is wrong.
-func (r *AgentChannelReconciler) validatePlatformSecret(
-	ctx context.Context, channel *kaalmv1beta1.AgentChannel, name string, required []string,
+// validatePlatformSecret is rules 45 and 40 for one platform channel: the
+// Secret exists, carries the opt-in label, carries every required key, and
+// (when a shape check is given) the key the adapter builds its verifier from
+// is well-formed. A malformed key is CredentialsInvalid rather than
+// CredentialsMissing, because the operator's fix is different: the value is
+// there, it is wrong. A Secret without the label gets no key messages.
+func validatePlatformSecret(
+	read channelSecretRead, namespace, name string, required []string,
 	shape func(data map[string][]byte) string,
 ) (string, string) {
-	var sec corev1.Secret
-	if err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
-		types.NamespacedName{Namespace: channel.Namespace, Name: name}, &sec); err != nil {
-		return kaalmv1beta1.ReasonCredentialsMissing, secretReadMessage(err, name, channel.Namespace)
+	if read.err != nil {
+		return kaalmv1beta1.ReasonCredentialsMissing, secretReadMessage(read.err, name, namespace)
 	}
+	if !kaalmv1beta1.ChannelCredentialOptedIn(read.sec.Labels) {
+		return kaalmv1beta1.ReasonSecretNotOptedIn, notOptedInMessage(name)
+	}
+	sec := read.sec
 	for _, key := range required {
 		if v, ok := sec.Data[key]; !ok || len(v) == 0 {
 			return kaalmv1beta1.ReasonCredentialsMissing,

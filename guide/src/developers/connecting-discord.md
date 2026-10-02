@@ -17,7 +17,10 @@ to Discord: the gateway only answers requests Discord makes.
   [Discord Developer Portal](https://discord.com/developers/applications), add
   a bot to it, and invite it to your server with the `applications.commands`
   scope.
-- Permission to create Secrets in your agent's namespace.
+- Permission to create and label Secrets in your agent's namespace. Your
+  team's credential manager has it, and you have it when the platform team sets
+  `rbac.personas.developerSecrets`. Otherwise, ask the credential manager to run
+  the commands under Store the credentials.
 
 ## Register a slash command
 
@@ -53,7 +56,13 @@ answer; see [Slow agents](#slow-agents).
 kubectl create secret generic support-discord-creds \
   --namespace team-support \
   --from-literal=publicKey=PUBLIC_KEY
+kubectl label secret support-discord-creds \
+  --namespace team-support \
+  kaalm.io/channel-credential=true
 ```
+
+The label opts the Secret in to channel use; a channel may use only Secrets
+that carry it.
 
 ## Create the channel
 
@@ -85,10 +94,11 @@ as a webhook channel: it starts with `/channels/{namespace}/` and never with
 kubectl get agentchannel support-discord -n team-support
 ```
 
-A channel whose Secret is missing the key, or whose key is not a valid
-Ed25519 public key, reports `Ready=False` with reason `CredentialsMissing` or
-`CredentialsInvalid`. Fix the Secret; the reconciler re-checks within a
-minute.
+A channel whose Secret lacks the label reports `Ready=False` with reason
+`SecretNotOptedIn`. One whose Secret is missing the key, or whose key is not a
+valid Ed25519 public key, reports `CredentialsMissing` or `CredentialsInvalid`.
+Fix the Secret; the reconciler re-checks within a minute. See
+[Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 
 ## Point Discord at the channel
 
@@ -121,14 +131,22 @@ design book's Discord channel page lists every envelope field.
 ## Slow agents
 
 Discord's reply token lasts 15 minutes from the command. If your agent can
-take longer, add `botToken` to the credential Secret:
+take longer, add `botToken` to the credential Secret. Patch the existing
+Secret in place, and replace `BOT_TOKEN` with the bot's token from the portal:
 
 ```bash
-kubectl create secret generic support-discord-creds \
+kubectl patch secret support-discord-creds \
   --namespace team-support \
-  --from-literal=publicKey=PUBLIC_KEY \
-  --from-literal=botToken=BOT_TOKEN
+  --type merge \
+  -p '{"stringData":{"botToken":"BOT_TOKEN"}}'
 ```
+
+The merge patch keeps `publicKey` and the `kaalm.io/channel-credential` label.
+Don't re-create the Secret. `kubectl create` fails with `AlreadyExists` while
+the Secret exists. If you delete it first, the new Secret has no label, and the
+channel reports `Ready=False` with reason `SecretNotOptedIn` until you label it
+again. The gateway reads `botToken` from the same Secret and checks the label
+on every read.
 
 When the token has expired, the gateway posts the reply as a normal message
 in the channel, mentioning the person who asked. Without `botToken`, a late

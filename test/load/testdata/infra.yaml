@@ -21,6 +21,8 @@ kind: Secret
 metadata:
   name: load-hook
   namespace: load
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   token: load-webhook-bearer-token
@@ -31,6 +33,8 @@ kind: Secret
 metadata:
   name: load-callback-hmac
   namespace: load
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   key: load-callback-hmac-key

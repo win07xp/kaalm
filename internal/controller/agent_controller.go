@@ -555,7 +555,7 @@ func (r *AgentReconciler) readyGates(
 	}
 	// Rule 23 reads Secrets in the Agent's namespace, where the operator
 	// holds no standing read: the scoped Role comes first.
-	if err := ensurePullSecretAccess(ctx, r.Client, r.Scheme(), agent, agentPullSecretRoleName(agent.Name),
+	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), agent, agentPullSecretRoleName(agent.Name),
 		r.OperatorNamespace, eff.ImagePullSecrets); err != nil {
 		return false, ctrl.Result{}, err
 	}

@@ -591,7 +591,8 @@ spec:
                       CredentialsRef names a Secret in the channel's namespace carrying
                       publicKey (required; the application's Ed25519 public key, hex) and
                       botToken (optional; lets replies outlive the 15-minute interaction
-                      token). Rule 40.
+                      token). Rule 40. The Secret must carry the label
+                      kaalm.io/channel-credential: "true" (rule 45).
                     properties:
                       name:
                         description: Name of the referenced object.
@@ -666,7 +667,9 @@ spec:
                             description: Header carrying the signature.
                             type: string
                           secretRef:
-                            description: SecretRef holds the signing key.
+                            description: |-
+                              SecretRef holds the signing key. The Secret must carry the label
+                              kaalm.io/channel-credential: "true" (rule 45).
                             properties:
                               key:
                                 description: Key within the Secret's data.
@@ -689,8 +692,9 @@ spec:
                         - secretRef
                         type: object
                       secretRef:
-                        description: SecretRef holds the bearer token. Required for
-                          bearer.
+                        description: |-
+                          SecretRef holds the bearer token. Required for bearer. The Secret must
+                          carry the label kaalm.io/channel-credential: "true" (rule 45).
                         properties:
                           key:
                             description: Key within the Secret's data.
@@ -719,8 +723,10 @@ spec:
                       rule: (self.type == 'bearer' && has(self.secretRef)) || (self.type
                         == 'hmac' && has(self.hmac))
                   callbackAuth:
-                    description: CallbackAuth signs outbound callbacks. Required when
-                      callbackUrl is set.
+                    description: |-
+                      CallbackAuth signs outbound callbacks. Required when callbackUrl is set.
+                      A bearer callbackAuth Secret must also list the callbackUrl host in its
+                      kaalm.io/callback-hosts annotation (rule 46).
                     properties:
                       hmac:
                         description: HMAC configures signature verification. Required
@@ -744,7 +750,9 @@ spec:
                             description: Header carrying the signature.
                             type: string
                           secretRef:
-                            description: SecretRef holds the signing key.
+                            description: |-
+                              SecretRef holds the signing key. The Secret must carry the label
+                              kaalm.io/channel-credential: "true" (rule 45).
                             properties:
                               key:
                                 description: Key within the Secret's data.
@@ -767,8 +775,9 @@ spec:
                         - secretRef
                         type: object
                       secretRef:
-                        description: SecretRef holds the bearer token. Required for
-                          bearer.
+                        description: |-
+                          SecretRef holds the bearer token. Required for bearer. The Secret must
+                          carry the label kaalm.io/channel-credential: "true" (rule 45).
                         properties:
                           key:
                             description: Key within the Secret's data.
@@ -878,7 +887,8 @@ spec:
                   credentialsRef:
                     description: |-
                       CredentialsRef names a Secret in the channel's namespace carrying
-                      verifyToken, appSecret, and accessToken, all required. Rule 40.
+                      verifyToken, appSecret, and accessToken, all required. Rule 40. The
+                      Secret must carry the label kaalm.io/channel-credential: "true" (rule 45).
                     properties:
                       name:
                         description: Name of the referenced object.

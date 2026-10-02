@@ -279,8 +279,21 @@ rbac:
     # Bound with ClusterRoleBinding kaalm-catalog-reader. Add the developer
     # groups here so developers can read the catalog.
     catalogReaders: []
-    # Bound with RoleBinding kaalm-secrets-admin in the release namespace only.
+    # Bound with RoleBinding kaalm-secrets-admin in the release namespace only:
+    # the LLM and tool credentials.
     secretsAdmins: []
+    # A map of namespace to subject list. Each namespace with a non-empty list
+    # gets RoleBinding kaalm-secrets-admin there, so that team's credential
+    # manager owns that namespace's channel credentials. The namespace must
+    # already exist, and it must not be the release namespace (use
+    # secretsAdmins). A value that is not a map fails the render. Ignored while
+    # personas.enabled is false. Example:
+    #   namespaceSecretsAdmins:
+    #     team-support:
+    #       - kind: Group
+    #         name: team-support-credentials
+    #         apiGroup: rbac.authorization.k8s.io
+    namespaceSecretsAdmins: {}
     # A map of namespace to subject list. Each namespace with a non-empty list
     # gets RoleBinding kaalm-developer there. The namespace must already exist,
     # or helm install and upgrade fail with namespace not found. A value that
@@ -294,6 +307,11 @@ rbac:
     # Adds get and create on pods/exec to kaalm-developer. No effect while
     # personas.enabled is false.
     developerExec: false
+    # Adds get, list, watch, create, update, patch, and delete on Secrets to
+    # kaalm-developer, in every namespace where it is bound. A channel still
+    # uses only Secrets labeled kaalm.io/channel-credential: "true". No effect
+    # while personas.enabled is false.
+    developerSecrets: false
   # Adds Agent, AgentTask, and AgentChannel to the built-in view, edit, and
   # admin roles. Works without personas.enabled. Never adds the catalog kinds
   # (AgentClass, ModelProvider, ToolProvider) or Secrets.

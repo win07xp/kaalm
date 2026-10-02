@@ -11,6 +11,8 @@ kind: Secret
 metadata:
   name: s12-hook
   namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   token: s12-webhook-bearer-token
@@ -60,6 +62,8 @@ kind: Secret
 metadata:
   name: s15-hook
   namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   token: s15-webhook-bearer-token
@@ -69,6 +73,8 @@ kind: Secret
 metadata:
   name: s15-cb-secret
   namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
   key: s15-callback-hmac-key

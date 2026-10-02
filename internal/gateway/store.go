@@ -54,9 +54,16 @@ type Store interface {
 	// ChannelByPath resolves a webhook path to its AgentChannel. Only
 	// channels with Ready=True are returned: Ready gates routing admission.
 	ChannelByPath(ctx context.Context, path string) (*kaalmv1beta1.AgentChannel, bool)
-	// SecretValue reads one key of a Secret in a user namespace (the
-	// per-channel scoped Role is what grants this in production).
+	// SecretValue reads one key of a channel credential Secret in a user
+	// namespace (the per-channel scoped Role is what grants this in
+	// production). It refuses a Secret without the label
+	// kaalm.io/channel-credential: "true" (rule 45), even when the Role still
+	// grants the read.
 	SecretValue(ctx context.Context, namespace, name, key string) (string, error)
+	// CallbackSecretValue reads a bearer callbackAuth token: SecretValue, and
+	// the Secret's kaalm.io/callback-hosts annotation must list host, the
+	// callbackUrl hostname (rule 46).
+	CallbackSecretValue(ctx context.Context, namespace, name, key, host string) (string, error)
 }
 
 // isKaalmManagedPod reports whether the Pod belongs to an Agent or AgentTask

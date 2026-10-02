@@ -107,10 +107,15 @@ a platform refused the reply).
 credential Secret is absent or lacks a required key), `CredentialsInvalid`
 (the Discord public key is not a valid Ed25519 key), `CallbackAuthMissing`
 (the `callbackAuth` Secret or key does not exist), `CallbackAuthInvalid`
-(the `callbackAuth` key is empty), and `ChildConflict` (a Role or RoleBinding
-with the channel's credential Role name exists and the channel does not own
-it; the channel re-checks every 30 seconds, so removing that object clears
-the conflict).
+(the `callbackAuth` key is empty), `SecretNotOptedIn` (a referenced Secret
+lacks the label `kaalm.io/channel-credential: "true"`),
+`CallbackHostNotApproved` (a Secret used as a `bearer` `callbackAuth` token
+does not list the `callbackUrl` host in its `kaalm.io/callback-hosts`
+annotation), and `ChildConflict` (a Role or RoleBinding with the name of one
+of the channel's credential Roles exists and the channel does not own it; the
+channel re-checks every 30 seconds, so removing that object clears the
+conflict). The fixes for the two Secret reasons are in
+[Troubleshooting](troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 
 A `callbackUrl` host that does not resolve leaves the channel `Ready=True`,
 because the gateway checks the host again before every delivery. The

@@ -113,8 +113,61 @@ removal before it happens.
 your manifests; if you must roll back, reinstall the old version fresh and
 reapply them.
 
+## Upgrading across v1.1.0
+
+From v1.1.0, an AgentChannel may use only Secrets that carry the label
+`kaalm.io/channel-credential: "true"`. Enforcement is on with no switch. After
+the upgrade, a channel whose Secret has no label shows `Ready=False` with the
+reason `SecretNotOptedIn` and a `Warning` event, and the gateway stops routing
+to it until you label the Secret. The previous release ignores the label, so
+label the Secrets before you upgrade and no channel goes down.
+
+1. List the Secrets that AgentChannels reference. Each row shows the
+   namespace, the channel, and the Secret names from the inbound `auth`
+   Secret (`secretRef`, then `hmac`), the `callbackAuth` Secret (`secretRef`,
+   then `hmac`), the Discord Secret, and the WhatsApp Secret. A channel
+   leaves the columns it does not use empty:
+
+   ```bash
+   kubectl get agentchannels -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.spec.webhook.auth.secretRef.name}{"\t"}{.spec.webhook.auth.hmac.secretRef.name}{"\t"}{.spec.webhook.callbackAuth.secretRef.name}{"\t"}{.spec.webhook.callbackAuth.hmac.secretRef.name}{"\t"}{.spec.discord.credentialsRef.name}{"\t"}{.spec.whatsapp.credentialsRef.name}{"\n"}{end}'
+   ```
+
+2. Review each Secret. A channel can name any Secret in its namespace, so
+   confirm that each one was created for the channel.
+3. Label only the Secrets created for a channel:
+
+   ```bash
+   kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/channel-credential=true
+   ```
+
+   Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with its
+   namespace. Only the exact value `true` counts.
+4. For a channel whose `callbackAuth` is `bearer`, also list the host of its
+   `callbackUrl` on the Secret:
+
+   ```bash
+   kubectl annotate secret SECRET_NAME -n NAMESPACE kaalm.io/callback-hosts=HOST
+   ```
+
+   Replace `HOST` with the bare hostname, such as `receiver.example.com`. For
+   more than one host, separate the names with commas. HMAC callbacks need no
+   annotation.
+5. Run the two upgrade steps.
+
+On its first pass after the upgrade, the controller shrinks each channel's
+`-creds` Role to the labeled Secrets and creates a controller-only `-check`
+Role and RoleBinding beside it. No `roleRef` changes. A channel that fails a
+check is re-checked every minute, so a Secret you label after the upgrade
+brings its channel back to `Ready=True` within a minute, or at once when you
+edit the channel.
+
+To find a channel that is held back, see [Troubleshooting](../reference/troubleshooting.md).
+The design book states both rules, 45 and 46, on
+[Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
+
 ---
 
 *How this works: design book pages Operations, API versioning and deprecation
 (the storage migration, the conversion webhook, and the deprecation policy);
-Operations, Deployment (the rolling upgrade order).*
+Operations, Deployment (the rolling upgrade order); Resources, Validation and
+defaulting (rules 45 and 46).*

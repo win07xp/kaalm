@@ -173,6 +173,27 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Expect(out).To(ContainSubstring("kaalm.io/v1alpha1 AgentClass is deprecated; use kaalm.io/v1beta1"))
 	})
 
+	It("holds a channel whose Secret lacks the opt-in label until the Secret is labeled", func() {
+		readyReason := func() string {
+			out, _ := utils.Kubectl("get", "agentchannel", "up-channel", "-n", ns,
+				"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].reason}`)
+			return lastLine(out)
+		}
+		By("rule 45: the unlabeled channel Secret leaves the channel not Ready")
+		Eventually(readyReason, "120s", "5s").Should(Equal("SecretNotOptedIn"))
+
+		By("the upgrade notes' step: label the reviewed channel Secret")
+		_, err := utils.Kubectl("label", "secret", "up-hook", "-n", ns, "kaalm.io/channel-credential=true")
+		Expect(err).NotTo(HaveOccurred())
+
+		By("the channel is Ready again on a later pass")
+		Eventually(func() string {
+			out, _ := utils.Kubectl("get", "agentchannel", "up-channel", "-n", ns,
+				"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+			return lastLine(out)
+		}, "120s", "5s").Should(Equal("True"))
+	})
+
 	It("kept every workload: nothing recreated, nothing lost", func() {
 		By("the keeper is still Running in the same Pod")
 		Expect(phase("agent", "up-keeper")).To(Equal("Running"))

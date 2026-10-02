@@ -25,7 +25,8 @@ spec:
     # (rule 16, apply time).
     path: /channels/team-support/support-assistant
     # Required. "bearer" needs secretRef; "hmac" needs the hmac block
-    # (apply time).
+    # (apply time). Every Secret named in this spec must carry the label
+    # kaalm.io/channel-credential: "true" (rule 45, reconcile time).
     auth:
       type: bearer
       secretRef: { name: webhook-secret, key: token }
@@ -51,8 +52,10 @@ spec:
     # "sync" (schema default) | "async".
     responseMode: sync
     # Async only. HTTPS, not internal address space (rule 22, reconcile
-    # time), and callbackAuth is required with it (rule 25). Omitted in
-    # async mode means responses are stored for polling.
+    # time), and callbackAuth is required with it (rule 25). A bearer
+    # callbackAuth Secret must also list the callbackUrl host in its
+    # kaalm.io/callback-hosts annotation (rule 46). Omitted in async mode
+    # means responses are stored for polling.
     # callbackUrl: "https://my-service.example.com/agent-responses"
     # callbackAuth:
     #   type: hmac
@@ -90,8 +93,8 @@ Two platform adapters exist beside the generic webhook: `discord` and `whatsapp`
 What the two types share:
 
 - **One inbound route.** A platform channel's `path` follows the same rules as a webhook path (rules 15 and 16). The gateway serves every type on the same route, resolves the channel per request, picks the adapter by `spec.type`, and routes only `Ready=True` channels.
-- **One credential Secret.** `credentialsRef: {name}` names a Secret in the channel's namespace whose keys are fixed by the type (rule 40). The reconciler scopes the per-channel credential Role to it as it does for webhook auth Secrets, and the gateway holds the material in memory.
-- **Reply through the platform, no record.** The platform is the caller, and neither platform keeps an inbound request open for the answer, so every reply goes back out through the platform's API. There is no `responseMode`, no `callbackUrl`, no polling record, and `maxPendingAsyncResponses` does not apply. As shipped the polling endpoint still accepts a platform channel's path as `channelPath` and fails on the missing webhook block; issue #238 tracks it.
+- **One credential Secret.** `credentialsRef: {name}` names a Secret in the channel's namespace whose keys are fixed by the type (rule 40). The Secret must carry the opt-in label (rule 45). The reconciler scopes the per-channel credential Role to it as it does for webhook auth Secrets, and the gateway holds the material in memory.
+- **Reply through the platform, no record.** The platform is the caller, and neither platform keeps an inbound request open for the answer, so every reply goes back out through the platform's API. There is no `responseMode`, no `callbackUrl`, no polling record, and `maxPendingAsyncResponses` does not apply. The polling endpoint answers `401` for a platform channel's path, the same as for an unregistered path.
 - **The platform API base URL is a gateway-level value**, `gateway.platforms.discord.apiBaseUrl` and `gateway.platforms.whatsapp.apiBaseUrl` in the chart ([Helm chart contents](../operations/deployment.md#helm-chart-contents)), so a tenant cannot aim the gateway and a bearer token at a host of their choosing.
 - **The envelope.** `channelType` is the type; `channelId` is the channel's `path`, so the session derivation is the same function of the same inputs; `userId` is the platform user; `attachments` carries platform media as references, never bytes; `metadata` carries the platform's identifiers. What the adapter needs to reply stays in the gateway's memory and never reaches the agent. The exact fields are on [Discord channel](../gateways/api/channel-discord.md#normalization) and [WhatsApp channel](../gateways/api/channel-whatsapp.md#normalization).
 - **Text replies.** The adapter sends the agent's `content` as plain text, split at the platform's message length limit. Components and interactive messages are out of scope.
@@ -113,8 +116,9 @@ spec:
     # Rules 15 and 16. Register https://INGRESS_HOST/channels/team-support/support-discord
     # as the application's Interactions Endpoint URL.
     path: /channels/team-support/support-discord
-    # Secret in this namespace. Keys: publicKey (required; the Ed25519
-    # public key, hex), botToken (optional; see Replies).
+    # Secret in this namespace, labeled kaalm.io/channel-credential: "true"
+    # (rule 45). Keys: publicKey (required; the Ed25519 public key, hex),
+    # botToken (optional; see Replies).
     credentialsRef:
       name: discord-app-credentials
     # Optional scoping. Snowflakes: the schema pattern ^[0-9]{17,20}$.
@@ -150,9 +154,10 @@ spec:
     # Rules 15 and 16. Register https://INGRESS_HOST/channels/team-support/support-whatsapp
     # as the app's webhook callback URL, subscribed to the messages field.
     path: /channels/team-support/support-whatsapp
-    # Secret in this namespace. Keys, all required: verifyToken (echoed in
-    # the verification GET), appSecret (signs every event), accessToken
-    # (bearer for the Graph API reply).
+    # Secret in this namespace, labeled kaalm.io/channel-credential: "true"
+    # (rule 45). Keys, all required: verifyToken (echoed in the verification
+    # GET), appSecret (signs every event), accessToken (bearer for the Graph
+    # API reply).
     credentialsRef:
       name: whatsapp-app-credentials
     # Required. The business number this channel answers as; events for
@@ -190,7 +195,7 @@ status:
 | Field | Meaning |
 |---|---|
 | `phase` | `Active`, `Degraded`, `Failed`, or `Terminating`. Unset until the first reconcile. Reflects the bound Agent: `Degraded` while the Agent is `Degraded` or `Failed`, `Failed` when `agentRef` does not resolve (rule 13) or the channel is in the operator namespace (rule 28). |
-| `Ready` | `True` with `reason: AgentReachable` and the message `channel is valid` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, `SystemNamespaceForbidden`, `ChildConflict` when the per-channel credential Role or one of its RoleBindings already exists in the channel's namespace and the channel does not control it, or `InvalidReference` when the per-channel credential Role cannot be written. A `ChildConflict` channel re-checks every 30 seconds, not every minute, because the conflicting object raises no watch event ([Child ownership](../controller/reconcilers.md#child-ownership)). The gateway routes only `Ready=True` channels. A `callbackUrl` host that does not resolve leaves the channel `Ready=True` and raises a `Warning` event, `reason=CallbackHostUnresolved` ([rule 22](validation-and-defaulting.md#cross-resource-validation)). |
+| `Ready` | `True` with `reason: AgentReachable` and the message `channel is valid` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, `SecretNotOptedIn` when a referenced Secret lacks the label `kaalm.io/channel-credential: "true"` ([rule 45](validation-and-defaulting.md#cross-resource-validation)), `CallbackHostNotApproved` when a bearer `callbackAuth` Secret does not list the `callbackUrl` host in its `kaalm.io/callback-hosts` annotation (rule 46), `SystemNamespaceForbidden`, `ChildConflict` when a per-channel Role or one of its RoleBindings already exists in the channel's namespace and the channel does not control it, or `InvalidReference` when a per-channel Role cannot be written. A `ChildConflict` channel re-checks every 30 seconds, not every minute, because the conflicting object raises no watch event ([Child ownership](../controller/reconcilers.md#child-ownership)). The gateway routes only `Ready=True` channels. A `callbackUrl` host that does not resolve leaves the channel `Ready=True` and raises a `Warning` event, `reason=CallbackHostUnresolved` ([rule 22](validation-and-defaulting.md#cross-resource-validation)). |
 | `PlatformConnected` | The tri-state in the next section. |
 
 ### The PlatformConnected tri-state
@@ -214,10 +219,10 @@ The two are independent axes. `phase` follows the Agent; `PlatformConnected` fol
 ### Scope and ownership
 
 - **Three types, all inbound HTTP.** What a type adds is knowledge of the platform's signature scheme, payload, and reply API; the path rules, the routing gate, the envelope, the session rule, and the health condition are the same.
-- **AgentChannel has no child Pods.** The gateway watches AgentChannels and resolves each inbound request against them; the reconciler validates, scopes the credential Role, and reports status.
+- **AgentChannel has no child Pods.** The gateway watches AgentChannels and resolves each inbound request against them; the reconciler validates, scopes the credential Roles, and reports status.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have several channels; each is a separate resource.
 - **The target is an Agent with a Service.** Tasks have no stable endpoint, and the gateway delivers through the ClusterIP Service (rules 13 and 14).
-- **Credentials stay in the channel's namespace.** Unlike provider credentials in `kaalm-system`, webhook and platform Secrets live beside the channel. The gateway reads them under a per-channel Role scoped to those names and holds them in memory ([Dynamic per-namespace grants](../security/rbac.md#dynamic-per-namespace-grants-channel-credentials)).
+- **Credentials stay in the channel's namespace, and a Secret opts in.** Unlike provider credentials in `kaalm-system`, webhook and platform Secrets live beside the channel, and the team's credential manager owns them ([Roles for people](../security/rbac.md#roles-for-people)). A channel may reference only Secrets that carry the label `kaalm.io/channel-credential: "true"` (rule 45). The gateway reads the labeled Secrets under a per-channel Role scoped to those names and holds them in memory ([Dynamic per-namespace grants](../security/rbac.md#dynamic-per-namespace-grants-channel-credentials)).
 
 ### Authentication
 

@@ -475,6 +475,9 @@ func TestWebhook_AsyncCallbackDelivery(t *testing.T) {
 		Type:      authTypeBearer,
 		SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "hook-secret", Key: "token"},
 	}
+	// The Secret approves the host (rule 46), so the delivery reaches the
+	// rule 22 pre-dial check this test is about.
+	h.store.callbackHosts["team-a/hook-secret"] = "127.0.0.1"
 	// The callback target is the loopback test server: it would be blocked
 	// by the deny ranges. Verify the block first, then use polling instead.
 	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))

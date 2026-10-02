@@ -334,15 +334,7 @@ func (s *Server) sendCallback(
 		s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackInvalid, "callbackUrl is not https")
 		return callbackInvalid
 	}
-	secret := ""
-	if channel.Spec.Webhook.CallbackAuth != nil {
-		secret, err = s.channelSecret(ctx, channel.Namespace, channel.Spec.Webhook.CallbackAuth)
-		if err != nil {
-			s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackInvalid,
-				"callbackAuth secret unavailable: "+err.Error())
-			return callbackInvalid
-		}
-	}
+	host := parsed.Hostname()
 
 	backoff := append([]time.Duration{0}, s.Config.CallbackBackoff...)
 	for _, delay := range backoff {
@@ -354,10 +346,19 @@ func (s *Server) sendCallback(
 			}
 		}
 
+		// Read the callbackAuth Secret before every attempt, so rule 45 and,
+		// for a bearer token, rule 46 hold for the Secret as it is now, not
+		// as it was when the delivery began.
+		secret, err := s.callbackSecret(ctx, channel, host)
+		if err != nil {
+			s.ChannelHealth.RecordFailure(channel.Spec.Path(), healthReasonCallbackInvalid,
+				"callbackAuth secret unavailable: "+err.Error())
+			return callbackInvalid
+		}
+
 		// Re-resolve and range-check immediately before every dial; the dial
 		// is pinned to the checked IP so an independent re-resolution cannot
 		// be rebound to a blocked address.
-		host := parsed.Hostname()
 		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 		if err != nil || len(ips) == 0 {
 			continue // resolution failure: retried bucket
@@ -391,6 +392,23 @@ func (s *Server) sendCallback(
 		// is the retried bucket.
 	}
 	return callbackExhausted
+}
+
+// callbackSecret resolves the callbackAuth Secret value for one attempt. A
+// bearer token is the Secret value itself, sent to the callback host, so it
+// is read through CallbackSecretValue and only for a host the Secret lists
+// (rule 46). An HMAC key only signs, and goes through channelSecret.
+func (s *Server) callbackSecret(ctx context.Context, channel *kaalmv1beta1.AgentChannel, host string) (string, error) {
+	auth := channel.Spec.Webhook.CallbackAuth
+	switch {
+	case auth == nil:
+		return "", nil
+	case auth.Type != authTypeBearer:
+		return s.channelSecret(ctx, channel.Namespace, auth)
+	case auth.SecretRef == nil:
+		return "", fmt.Errorf("bearer auth without secretRef")
+	}
+	return s.Store.CallbackSecretValue(ctx, channel.Namespace, auth.SecretRef.Name, auth.SecretRef.Key, host)
 }
 
 // pinnedAddrKey carries the range-checked IP:port a callback attempt must

@@ -162,7 +162,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		// Rule 23 reads Secrets in the task's namespace, where the operator
 		// holds no standing read: the scoped Role comes first.
-		if err := ensurePullSecretAccess(ctx, r.Client, r.Scheme(), &task, taskPullSecretRoleName(task.Name),
+		if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), &task, taskPullSecretRoleName(task.Name),
 			r.OperatorNamespace, eff.ImagePullSecrets); err != nil {
 			return r.childConflict(ctx, &task, err)
 		}

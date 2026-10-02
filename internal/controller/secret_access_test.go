@@ -103,8 +103,12 @@ func TestValidateSecrets_RepeatedPassesReadFromTheWatcher(t *testing.T) {
 	defer cancel()
 	secret := func(name string) *corev1.Secret {
 		return &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"},
-			Data:       map[string][]byte{"token": []byte("t")},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "team-a",
+				Labels:      map[string]string{kaalmv1beta1.LabelChannelCredential: kaalmv1beta1.AnnotationTrue},
+				Annotations: map[string]string{kaalmv1beta1.AnnotationCallbackHosts: "example.com"},
+			},
+			Data: map[string][]byte{"token": []byte("t")},
 		}
 	}
 	cs := kubefake.NewSimpleClientset(secret("in"), secret("cb"))
@@ -127,7 +131,7 @@ func TestValidateSecrets_RepeatedPassesReadFromTheWatcher(t *testing.T) {
 		}},
 	}
 	for pass := 0; pass < 20; pass++ {
-		if reason, msg := r.validateSecrets(ctx, ch); reason != "" {
+		if reason, msg, _ := r.validateSecrets(ctx, ch); reason != "" {
 			t.Fatalf("pass %d: %s: %s", pass, reason, msg)
 		}
 	}
@@ -153,7 +157,7 @@ func TestValidateSecrets_MissingSecretThroughTheWatcher(t *testing.T) {
 			},
 		}},
 	}
-	if reason, _ := r.validateSecrets(ctx, ch); reason != kaalmv1beta1.ReasonCredentialsMissing {
+	if reason, _, _ := r.validateSecrets(ctx, ch); reason != kaalmv1beta1.ReasonCredentialsMissing {
 		t.Fatalf("reason = %q, want %q", reason, kaalmv1beta1.ReasonCredentialsMissing)
 	}
 }

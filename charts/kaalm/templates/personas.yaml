@@ -4,14 +4,23 @@ nothing: a default install creates none of these objects. With
 rbac.personas.enabled the chart installs four ClusterRoles, plus a binding for
 each subject list that is not empty. kaalm-developer and kaalm-secrets-admin
 are only ever bound with RoleBindings, so they grant in one namespace at a
-time. rbac.aggregateToDefaultRoles is a separate switch that adds the
-namespaced Kaalm kinds to the built-in view, edit and admin roles.
+time: kaalm-secrets-admin in the release namespace (secretsAdmins, provider
+and tool credentials) and in each team namespace of namespaceSecretsAdmins
+(that team's channel credentials). rbac.aggregateToDefaultRoles is a separate
+switch that adds the namespaced Kaalm kinds to the built-in view, edit and
+admin roles.
 */}}
 {{- $rbac := .Values.rbac | default dict }}
 {{- $p := $rbac.personas | default dict }}
 {{- if $p.enabled }}
 {{- if and $p.developers (not (kindIs "map" $p.developers)) }}
 {{- fail "kaalm: rbac.personas.developers must be a map of namespace to a list of subjects" }}
+{{- end }}
+{{- if and $p.namespaceSecretsAdmins (not (kindIs "map" $p.namespaceSecretsAdmins)) }}
+{{- fail "kaalm: rbac.personas.namespaceSecretsAdmins must be a map of namespace to a list of subjects" }}
+{{- end }}
+{{- if and $p.namespaceSecretsAdmins (get $p.namespaceSecretsAdmins .Release.Namespace) }}
+{{- fail "kaalm: rbac.personas.namespaceSecretsAdmins must not list the release namespace; use rbac.personas.secretsAdmins" }}
 {{- end }}
 ---
 # Owns the cluster-wide catalog; reads the namespaced kinds everywhere.
@@ -42,7 +51,8 @@ rules:
     verbs: ["get", "list", "watch"]
 ---
 # Runs agents in a team namespace. Only ever bound with RoleBindings, so it
-# grants in the bound namespace only. No Secrets and no catalog writes.
+# grants in the bound namespace only. No catalog writes, and no Secrets unless
+# rbac.personas.developerSecrets is set.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -66,9 +76,19 @@ rules:
     resources: ["pods/exec"]
     verbs: ["get", "create"]
   {{- end }}
+  {{- if $p.developerSecrets }}
+  # Full Secret management, for teams whose developers own their channel
+  # credentials. A channel still uses only Secrets that carry the label
+  # kaalm.io/channel-credential: "true".
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
 ---
-# Manages the Secrets that hold provider and channel credentials. Only ever
-# bound with RoleBindings.
+# Manages credential Secrets: provider and tool credentials in the release
+# namespace (secretsAdmins), and channel credentials in each team namespace
+# (namespaceSecretsAdmins, that team's credential manager). Only ever bound
+# with RoleBindings.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -124,6 +144,24 @@ roleRef:
   name: kaalm-secrets-admin
 subjects:
   {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- range $ns, $subjects := $p.namespaceSecretsAdmins }}
+{{- if $subjects }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kaalm-secrets-admin
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "kaalm.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kaalm-secrets-admin
+subjects:
+  {{- toYaml $subjects | nindent 2 }}
+{{- end }}
 {{- end }}
 {{- range $ns, $subjects := $p.developers }}
 {{- if $subjects }}

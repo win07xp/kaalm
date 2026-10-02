@@ -19,7 +19,10 @@ one Graph API call per reply.
   `whatsapp_business_messaging` permission. Meta's
   [Cloud API getting started](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started)
   covers that setup.
-- Permission to create Secrets in your agent's namespace.
+- Permission to create and label Secrets in your agent's namespace. Your
+  team's credential manager has it, and you have it when the platform team sets
+  `rbac.personas.developerSecrets`. Otherwise, ask the credential manager to run
+  the commands under Store the credentials.
 
 You need three values from the app: the **app secret** (App settings, Basic),
 the **phone number ID** (WhatsApp, API Setup), and the **access token**. You
@@ -34,11 +37,17 @@ kubectl create secret generic support-whatsapp-creds \
   --from-literal=verifyToken=VERIFY_TOKEN \
   --from-literal=appSecret=APP_SECRET \
   --from-literal=accessToken=ACCESS_TOKEN
+kubectl label secret support-whatsapp-creds \
+  --namespace team-support \
+  kaalm.io/channel-credential=true
 ```
 
 Replace `VERIFY_TOKEN` with a string you choose, and `APP_SECRET` and
 `ACCESS_TOKEN` with the values from the app. All three keys are required; a channel whose Secret is missing one reports
-`Ready=False` with reason `CredentialsMissing`.
+`Ready=False` with reason `CredentialsMissing`. The label opts the Secret in
+to channel use, and a channel whose Secret lacks it reports `Ready=False`
+with reason `SecretNotOptedIn`; see
+[Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 
 ## Create the channel
 
