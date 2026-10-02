@@ -15,7 +15,14 @@ Checks, per book:
   `<!-- docs-check: allow-time -->` on that same line;
 - none of the words the prose rules ban (see WORDING_PATTERNS) outside code;
 - every cited `config/samples/...` or `test/e2e/testdata/...` path exists;
-- the scenario coverage map lists S1 to S24 once each;
+- the '## S<n>:' headings of docs/src/appendix/scenarios.md run S1 to S<N>
+  once each, and the scenario coverage map has exactly one row for each;
+- every top-level container (a Describe, Context, When, or DescribeTable at
+  `var _ =`) in test/e2e or test/upgrade is quoted as a spec in some row of
+  the map, or is listed in NON_SCENARIO_SPECS. Every entry of that list is
+  such a container;
+- a nested container, or an It with no S-number, may be quoted in any row or
+  none. Only its top-level container is checked;
 - every spec label the map's e2e column quotes is a Describe or It label in
   test/e2e or test/upgrade. A label is the cell's first code span, a span
   after ' + ', or a span that starts with a capital letter and contains a
@@ -63,6 +70,20 @@ DASHES = re.compile("[–—]")
 # spec labels quoted on other pages.
 SPEC_DIRS = ("test/e2e", "test/upgrade")
 COVERAGE_MAP = "docs/src/appendix/scenario-coverage.md"
+SCENARIOS = "docs/src/appendix/scenarios.md"
+# Applied to the text of a HEADING match: "S7: title" gives 7.
+SCENARIO_HEADING = re.compile(r"^S(\d+):")
+TOP_LEVEL_PREFIX = re.compile(r"var\s+_\s*=\s*")
+# Top-level e2e and upgrade containers that prove no row of the coverage map.
+NON_SCENARIO_SPECS = {
+    "Mock LLM provider": "test infrastructure; it checks the in-cluster mock upstream that the LLM scenarios use",
+    "Metric catalog on the wire (#97)": "the metric catalog, not an acceptance scenario",
+    "Per-workload spend (#100)": "per-workload spend attribution, not an acceptance scenario",
+    "FQDN egress on a Cilium CNI": (
+        "runs only under `make e2e-cilium`, which selects it with -ginkgo.focus=\"FQDN\"; "
+        "the map's prose describes it. A rename must keep \"FQDN\" or update the Makefile focus"
+    ),
+}
 SPEC_NODE = re.compile(
     r'\b[FPX]?(Describe|Context|When|It|Specify|DescribeTable)\(\s*(?:"((?:[^"\\]|\\.)*)"|`([^`]*)`)'
 )
@@ -193,19 +214,26 @@ class Checker:
         self.time_report = time_report
         self.ratchet_report = ratchet_report
         self.anchor_cache: dict[pathlib.Path, set[str]] = {}
-        self.spec_cache: tuple[dict[str, str], list[tuple[int, str, str, str]]] | None = None
+        self.spec_cache: (
+            tuple[dict[str, str], list[tuple[int, str, str, str]], list[tuple[str, str]]] | None
+        ) = None
 
     def anchors(self, path: pathlib.Path) -> set[str]:
         if path not in self.anchor_cache:
             self.anchor_cache[path] = page_anchors(path.read_text(encoding="utf-8").splitlines())
         return self.anchor_cache[path]
 
-    def spec_labels(self) -> tuple[dict[str, str], list[tuple[int, str, str, str]]]:
+    def spec_labels(
+        self,
+    ) -> tuple[dict[str, str], list[tuple[int, str, str, str]], list[tuple[str, str]]]:
         """The Ginkgo node labels in SPEC_DIRS.
 
-        Returns (labels, numbered): labels maps each label to its first
+        Returns (labels, numbered, top): labels maps each label to its first
         'path:line'; numbered holds (n, label, enclosing Describe, 'path:line')
-        for each S-number a label carries. The glob is not recursive, so the
+        for each S-number a label carries; top holds (label, 'path:line') for
+        each top-level container, a Describe, Context, When, or DescribeTable
+        on a line that starts with `var _ =`. A nested container is not
+        top-level. The glob is not recursive, so the
         mock servers' plain Go tests under test/e2e/mock* are skipped. The
         enclosing Describe is the nearest preceding Describe in the file; no
         spec file nests Describes.
@@ -214,6 +242,7 @@ class Checker:
             return self.spec_cache
         labels: dict[str, str] = {}
         numbered: list[tuple[int, str, str, str]] = []
+        top: list[tuple[str, str]] = []
         for d in SPEC_DIRS:
             for f in sorted((ROOT / d).glob("*_test.go")):
                 rel = f.relative_to(ROOT).as_posix()
@@ -226,10 +255,33 @@ class Checker:
                     if kind in ("Describe", "DescribeTable"):
                         describe = label
                     labels.setdefault(label, where)
+                    line_start = text.rfind("\n", 0, m.start()) + 1
+                    if kind in ("Describe", "Context", "When", "DescribeTable") and TOP_LEVEL_PREFIX.fullmatch(
+                        text[line_start : m.start()]
+                    ):
+                        top.append((label, where))
                     for s in SPEC_SNUM.finditer(label):
                         numbered.append((int(s.group(1) or s.group(2)), label, describe, where))
-        self.spec_cache = (labels, numbered)
+        self.spec_cache = (labels, numbered, top)
         return self.spec_cache
+
+    def scenario_ids(self) -> list[int]:
+        """The S-numbers of the '## S<n>: title' headings in SCENARIOS."""
+        lines = (ROOT / SCENARIOS).read_text(encoding="utf-8").splitlines()
+        ids = []
+        for _, line in strip_fences(lines):
+            h = HEADING.match(line)
+            s = SCENARIO_HEADING.match(h.group(2)) if h else None
+            if s:
+                ids.append(int(s.group(1)))
+        if not ids:
+            self.problems.append(f"{SCENARIOS}: no scenario headings of the form '## S<n>: title'")
+            return []
+        if sorted(ids) != list(range(1, len(ids) + 1)):
+            self.problems.append(
+                f"{SCENARIOS}: scenario headings are S{sorted(ids)}, not S1 to S{len(ids)} once each"
+            )
+        return sorted(set(ids))
 
     def check_book(self, book: str) -> None:
         src = ROOT / book / "src"
@@ -344,12 +396,12 @@ class Checker:
         text = path.read_text(encoding="utf-8")
         rows = re.findall(r"^\|\s*S(\d+)\b", text, re.MULTILINE)
         ids = sorted(int(r) for r in rows)
-        expected = list(range(1, 25))
-        if ids != expected:
+        expected = self.scenario_ids()
+        if expected and ids != expected:
             self.problems.append(
-                f"{COVERAGE_MAP}: rows are S{ids} not S1 to S24 once each"
+                f"{COVERAGE_MAP}: rows are S{ids}, but {SCENARIOS} heads S{expected}; each scenario needs exactly one row"
             )
-        labels, numbered = self.spec_labels()
+        labels, numbered, top = self.spec_labels()
         quoted: dict[int, set[str]] = {}
         for n, line in enumerate(text.splitlines(), 1):
             row = re.match(r"^\|\s*S(\d+)\b", line)
@@ -383,6 +435,20 @@ class Checker:
             elif label not in quoted[sid] and describe not in quoted[sid]:
                 quotes = "does not quote it" if label == describe else f'quotes neither it nor its Describe "{describe}"'
                 self.problems.append(f'{where}: spec "{label}" carries S{sid}, but the S{sid} row of {COVERAGE_MAP} {quotes}')
+        mapped: set[str] = set().union(*quoted.values())
+        for label, where in top:
+            if label not in mapped and label not in NON_SCENARIO_SPECS:
+                self.problems.append(
+                    f'{where}: top-level spec "{label}" is quoted in no row of {COVERAGE_MAP} '
+                    "and is not listed in NON_SCENARIO_SPECS in hack/docs/check.py"
+                )
+        top_labels = {label for label, _ in top}
+        for name in NON_SCENARIO_SPECS:
+            if name not in top_labels:
+                self.problems.append(
+                    f'hack/docs/check.py: NON_SCENARIO_SPECS lists "{name}", '
+                    "which is not a top-level Describe in test/e2e or test/upgrade"
+                )
 
     def check_diagrams(self) -> None:
         result = subprocess.run(
