@@ -39,7 +39,7 @@ GET /v1/activity?namespace=team-support
 | `gatewayTraffic` | timestamp or null | The last LLM proxy request or delivered channel message this replica observed for the agent, test chats included. Tool calls do not count. `null` if none since the replica started. |
 | `heartbeat` | timestamp or null | The last `POST /v1/agent/heartbeat` this replica received from the agent. `null` if none since the replica started. |
 
-Both sources are always returned. The controller applies `Agent.spec.lifecycle.activitySource` after merging timestamps across replicas. The per-Pod-IP fan-out and the `ServerName` override it needs are on [Activity tracking API](../user/activation-and-activity.md#activity-tracking-api).
+Both sources are always returned. The controller applies `Agent.spec.lifecycle.activitySource` after merging timestamps across replicas.
 
 **Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. `405 invalid_request` with `Allow: GET` when the method is not `GET`.
 
@@ -72,7 +72,7 @@ GET /v1/channels/health?namespace=team-support
       "timestamp": "2026-04-29T12:46:02Z",
       "lastError": "webhook auth validation failed: 401 Unauthorized"
     },
-    "/channels/team-support/new-channel": {
+    "/channels/team-support/quiet-channel": {
       "state": "empty",
       "reason": null,
       "timestamp": null,
@@ -84,15 +84,15 @@ GET /v1/channels/health?namespace=team-support
 
 | Field | Type | Description |
 |---|---|---|
-| `windowSeconds` | int | The rolling window this replica observes, from the Helm value `gateway.channelHealthWindow` (default `5m`, reported as `300`). Echoed so the controller needs no separate channel for the value. |
+| `windowSeconds` | int | The rolling window this replica observes, from the Helm value `gateway.channelHealthWindow` (default `5m`, reported as `300`). |
 | `replicaStartedAt` | timestamp | When this replica started. The controller uses it to tell "no in-window traffic" from "the replica has not been up for a full window" when `state` is `empty`. |
-| `channels` | map | Keys are the channel paths registered on this gateway; values are per-channel records as observed by this replica |
+| `channels` | map | Keys are the channel paths this replica has recorded an observation for since it started; values are per-channel records as observed by this replica. The controller reads a path with no key as `empty`. |
 | `state` | string | `success` when any in-window observation succeeded; `failure` when the in-window list is non-empty and holds only failures; `empty` when this replica has no in-window observation |
 | `reason` | string or null | For `success`, the most recent success's reason (`WebhookReady`). For `failure`, the most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected`. `null` when `empty`. |
 | `timestamp` | timestamp or null | The most recent in-window observation behind `state`. `null` when `empty`. |
 | `lastError` | string or null | The most recent in-window failure's message, when there is one. It is set on a `success` record too when a failure also fell inside the window. |
 
-The third channel in the example shows `state: "empty"`: this replica has no in-window observation for that path. The controller decides whether the channel is silent (`Unknown` with `reason=NoRecentTraffic`) or observation is incomplete (the existing condition is kept) by comparing `replicaStartedAt` with the window and consulting the other replicas ([Channel health tracking](../user/platform-adapters.md#channel-health-tracking)).
+The third channel in the example shows `state: "empty"`: this replica recorded observations for that path, and all of them have aged out of the window. How the controller turns that into `Unknown` with `reason=NoRecentTraffic`, or keeps the existing condition, is in [Channel health tracking](../user/platform-adapters.md#channel-health-tracking).
 
 **Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. `405 invalid_request` with `Allow: GET` when the method is not `GET`. Only channels whose path is under `/channels/{namespace}/` for the requested namespace are returned.
 
@@ -134,7 +134,7 @@ The gateway builds a [`POST /v1/message` envelope](agent-endpoints.md#request-bo
 
 ## GET /v1/spend
 
-The optional [console](../../console/overview.md) reads one namespace's current-period spend by workload here. The caller presents `kaalm-console-tls`, as for test-chat. Any single replica answers authoritatively: each holds the folded union of its own live counters and every peer's latest published partial, current to within one publish interval ([Per-workload spend](../llm/budgets-and-rate-limits.md#per-workload-spend)).
+The optional [console](../../console/overview.md) reads one namespace's current-period spend by workload here. The caller presents `kaalm-console-tls`, as for test-chat. Any single replica answers authoritatively, with figures current to within one publish interval ([Per-workload spend](../llm/budgets-and-rate-limits.md#per-workload-spend)).
 
 **Request:**
 

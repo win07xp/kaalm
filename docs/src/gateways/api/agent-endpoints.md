@@ -9,9 +9,9 @@ Both are for Pods backed by an Agent resource. AgentTask Pods are rejected on th
 
 ## POST /v1/agent/heartbeat
 
-An Agent container calls this to signal liveness for idle detection. Authentication is mTLS with the Agent's certificate under the [agent-report regime](../listener-tls.md#per-path-client-auth-enforcement): the certificate must be present, its SAN must be an Agent identity, and the source IP must resolve to a Pod in that namespace. Any method other than `POST` is rejected with `405`.
+An Agent container calls this to signal liveness for idle detection. Authentication is mTLS with the Agent's certificate under the [agent-report regime](../listener-tls.md#per-path-client-auth-enforcement): the certificate must be present, its SAN must be an Agent identity, and the source IP must resolve to a Pod in that namespace.
 
-The gateway records every heartbeat as the agent's last-activity timestamp in its in-memory activity store, with no API server write. It does not consult the Agent's [`spec.lifecycle.activitySource`](../../resources/agent.md): the controller applies that filter when it merges the per-replica timestamps ([Activity detection](../../controller/hibernation-and-wake.md#activity-detection)), so a heartbeat from an agent set to `gatewayTraffic` is recorded and then ignored. An image that heartbeats on a timer therefore keeps an agent set to `agentHeartbeat` or `both` from ever going idle; the starter templates heartbeat on a timer and are meant for the default `gatewayTraffic` ([The heartbeat toggle and hibernation](../../runtime/starter-templates.md#the-heartbeat-toggle-and-hibernation)).
+The gateway records each accepted heartbeat as the agent's last-activity timestamp. It does not consult the Agent's [`spec.lifecycle.activitySource`](../../resources/agent.md): the controller applies that filter when it merges the per-replica timestamps ([Activity detection](../../controller/hibernation-and-wake.md#activity-detection)), so a heartbeat from an agent set to `gatewayTraffic` is recorded and then ignored. An image that heartbeats on a timer therefore keeps an agent set to `agentHeartbeat` or `both` from ever going idle; the starter templates heartbeat on a timer and are meant for the default `gatewayTraffic` ([The heartbeat toggle and hibernation](../../runtime/starter-templates.md#the-heartbeat-toggle-and-hibernation)).
 
 **Request body:** empty or `{}`.
 
@@ -21,9 +21,9 @@ The gateway records every heartbeat as the agent's last-activity timestamp in it
 
 | Status | `error.type` | Raised when |
 |---|---|---|
-| `401` | `unauthorized` | No client certificate, or the source IP does not resolve to a Pod in the SAN's namespace in the gateway's informer cache |
+| `401` | `unauthorized` | No client certificate, or the source IP does not resolve to a Pod in the SAN's namespace |
 | `403` | `invalid_cert` | The certificate's SAN is not an Agent or AgentTask identity |
-| `403` | `access_denied` | The certificate is an AgentTask identity. The message is `AgentTask callers are not accepted on this path`. |
+| `403` | `access_denied` | The certificate is an AgentTask identity |
 | `405` | `invalid_request` | The method is not `POST`. The response carries `Allow: POST`. |
 | `429` | `rate_limited` | The Agent is over the heartbeat cap. The response carries `Retry-After: 1`, and `retryable` is `true`. |
 
@@ -39,8 +39,8 @@ This endpoint is served by the agent container, not by the gateway. The User Gat
 
 The agent is the server, so the [runtime contract](../../runtime/contract.md) puts three obligations on it:
 
-- Serve TLS on `$KAALM_HEALTH_PORT` with the certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, and reload it on rotation ([item 4](../../runtime/contract.md#4-message-endpoint)).
-- Verify the gateway's client certificate per path, not at the handshake: `401 Unauthorized` when no client certificate was presented, `403 Forbidden` when its SAN is not the gateway Service DNS (`kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `kaalm-gateway.{operatorNamespace}.svc`, built from the injected `$KAALM_OPERATOR_NAMESPACE`). [Client-certificate verification](../../runtime/contract.md#client-certificate-verification-on-v1message) says why the handshake cannot do it.
+- Serve TLS on `$KAALM_HEALTH_PORT` and reload the certificate on rotation ([item 4](../../runtime/contract.md#4-message-endpoint)).
+- Verify the gateway's client certificate per path, not at the handshake: `401` when no client certificate was presented, `403` when its SAN is not the gateway Service DNS ([Client-certificate verification](../../runtime/contract.md#client-certificate-verification-on-v1message)).
 - Deduplicate on `messageId`, and persist the dedup buffer across Pod restarts when hibernation is enabled ([item 7](../../runtime/contract.md#7-message-deduplication)).
 
 ### How the gateway calls it
@@ -51,10 +51,8 @@ The agent is the server, so the [runtime contract](../../runtime/contract.md) pu
 | Client certificate | `kaalm-gateway-tls` |
 | Headers | `Content-Type: application/json`; `traceparent` and `tracestate` when tracing is enabled ([item 8](../../runtime/contract.md#8-trace-context-propagation)). No `Authorization` header. |
 | Attempts | Four: immediately, then after 1s, 5s, and 25s |
-| Per-attempt bound | The delivery context: the sync deadline in sync mode, the async pipeline bound in async mode |
+| Per-attempt bound | `gateway.agentReadTimeout` (default 10s). The whole delivery is also bounded: by the sync deadline in sync mode, by the async pipeline bound in async mode. |
 | Response cap | `gateway.maxResponseBodyBytes` (default 900 KiB). A reply over the cap is `response_too_large` and is not retried. |
-
-A connection error, a non-2xx status, or a `2xx` with an unusable envelope is retried on the schedule. The same `messageId` is sent on every attempt.
 
 ### Request body (sent by the gateway)
 
@@ -91,10 +89,10 @@ A connection error, a non-2xx status, or a `2xx` with an unusable envelope is re
 When `AgentChannel.spec.session.enabled` is `true`, the gateway computes a deterministic `sessionId` for each message:
 
 ```
-sessionId = UUIDv5(namespace: f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d, name: channelId + ":" + userId)
+sessionId = UUIDv5(namespace: SESSION_NAMESPACE_UUID, name: channelId + ":" + userId)
 ```
 
-The namespace constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d` is a purpose-generated UUID published as part of the Kaalm API. It is identical across installations and versions and never changes: a change would invalidate the session state agents key by `sessionId` in their PVCs.
+`SESSION_NAMESPACE_UUID` is the constant `f6a7d3c2-1b4e-5f8a-9c0d-2e3f4a5b6c7d`, published as part of the Kaalm API. It is identical across installations and versions and never changes: a change would invalidate the session state agents key by `sessionId` in their PVCs.
 
 Because the derivation is a pure function of `channelId` and `userId`, the id is stable across gateway replicas and restarts, and the gateway holds no session state. Session expiry and rotation are the agent's responsibility. When `session.enabled` is `false`, the envelope carries no `sessionId`.
 
@@ -116,6 +114,6 @@ Because the derivation is a pure function of `channelId` and `userId`, the id is
 
 ### What the gateway does with the answer
 
-`200 OK` with a JSON envelope whose `content` is a string is a delivery. Anything else, a non-2xx status, a connection error, an unparseable body, or a `200` with a missing or non-string `content`, is one failed attempt, and the schedule above continues. A `3xx` is a non-2xx status like any other: the gateway never follows a redirect from an agent, because following one would carry its client certificate and the message to another address. After the fourth failure the message is `delivery_failed`.
+A `2xx` with a JSON envelope whose `content` is a string is a delivery. Anything else, a non-2xx status, a connection error, an unparseable body, or a `2xx` with a missing or non-string `content`, is one failed attempt, and the schedule above continues. A `3xx` is a non-2xx status like any other: the gateway never follows a redirect from an agent, because following one would carry its client certificate and the message to another address. After the fourth failure the message is `delivery_failed`.
 
 In sync mode the webhook caller then receives `502 delivery_failed`, though under default settings `504 sync_deadline_exceeded` fires first ([Reachability under default config](channel-webhook.md#reachability-under-default-config)). In async mode the same payload is sent by callback or stored for polling, and a platform channel sends it as the reply text. Each outcome is recorded as a channel-health observation.

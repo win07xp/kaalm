@@ -110,11 +110,10 @@ The `:8080` listener raises these on `/channels/*`, in sync mode as the response
 
 Notes on the rows:
 
-- **`401 unauthorized`.** Every cause in the row answers with the same status and the same body, message `auth failed or path not registered` included, so a caller cannot tell a registered path from any other. The listener writes no `403`.
+- **`401 unauthorized`.** Every cause in the row answers with the same status and the same body, message included, so a caller cannot tell a registered path from any other. The listener writes no `403`.
 - **`413 request_too_large`.** The cap is applied to the raw `POST` body before the path is resolved, so an oversized `POST` to any path under `/channels/` answers `413` whether or not the path exists. A `GET` has no body and is not capped.
-- **`502 delivery_failed`.** With an Agent present, the gateway made the initial attempt and three retries at 1s, 5s, and 25s, and each failed with a connection error, a non-2xx status, or a `200` with an unusable envelope. With no Agent, no attempt is made and the message is `referenced Agent not found`.
-- **`503` on async accept.** Both triggers run before the `202`, so a `202` always implies a polling record exists. The pending cap is `spec.webhook.maxPendingAsyncResponses` (default 100).
-- **`504 controller_unavailable`.** Wake-on-demand needs the controller's activator. The gateway answers this both when the activator call fails and when no activator endpoint is configured.
+- **`502 delivery_failed`.** With an Agent present, all four attempts failed ([What the gateway does with the answer](agent-endpoints.md#what-the-gateway-does-with-the-answer)). With no Agent, no attempt is made.
+- **`503` on async accept.** The pending cap is `spec.webhook.maxPendingAsyncResponses` (default 100).
 - **`504 sync_deadline_exceeded`.** Sync-only: async mode has no sync deadline. Under default settings this fires before `wake_timeout` or `delivery_failed` can ([Sync-mode reachability](async-responses.md#sync-mode-reachability)).
 
 The polling endpoint additionally answers `404` with type `invalid_request` for a malformed `requestId`, `400` for a missing `channelPath`, and an empty-body `404` for an unknown, expired, or foreign record ([Polling fallback](async-responses.md#polling-fallback)).

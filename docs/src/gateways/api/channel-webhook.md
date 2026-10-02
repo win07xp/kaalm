@@ -33,7 +33,7 @@ The gateway does not validate or rewrite the payload. It extracts `userId` and `
 
 Two edge cases:
 
-- When `spec.webhook.content` is unset, `content` is the raw body as a JSON string. The raw body must be valid UTF-8; otherwise the request is `400 invalid_request` and the message names the offending byte offset.
+- When `spec.webhook.content` is unset, `content` is the raw body as a JSON string. The raw body must be valid UTF-8; otherwise the request is `400 invalid_request`.
 - A sender with a binary payload must set `spec.webhook.content`, usually `fromHeader`, so the gateway never decodes the body.
 
 **Body size.** A `POST` body above `gateway.maxMessageBodyBytes` (default 1 MiB) answers `413 request_too_large`. The cap is applied to the raw body before the path is resolved, so an oversized `POST` to any path under `/channels/` answers `413` whether or not the path exists, and an attacker cannot tell a registered path from an unregistered one by sending oversized bodies.
@@ -53,13 +53,13 @@ Sync mode (`spec.webhook.responseMode: sync`, the default) answers `200` with th
 | 504 | `controller_unavailable` | The Agent is hibernated and the activator is unreachable or not configured; `Retry-After: 5` |
 | 504 | `sync_deadline_exceeded` | The request outlived `gateway.syncDeliveryDeadline` |
 
-The `401` body is the same on every branch: the message is `auth failed or path not registered` whether no channel is registered on the path, the method is not `POST`, or the credential is wrong. A caller cannot enumerate registered paths from it.
+The `401` body is identical on every branch, message included: no channel on the path, a method other than `POST`, or a wrong credential. A caller cannot enumerate registered paths from it.
 
 ### Reachability under default config
 
 `gateway.syncDeliveryDeadline` (default 30s) is shorter than the delivery retry budget (1s, 5s, and 25s between four attempts) and the default `wakeTimeout` (120s). Under defaults, a sync caller therefore sees `504 sync_deadline_exceeded` before `502 delivery_failed` or `504 wake_timeout` can fire. The arithmetic is drawn on one time axis in [Sync-mode reachability](async-responses.md#sync-mode-reachability).
 
-This is the intended positioning. Sync mode suits a `Running` agent that replies within seconds. A channel that backs a hibernated agent, a slow-starting image, or long processing belongs in `responseMode: async`, where no sync deadline applies and `delivery_failed` and `wake_timeout` arrive as [error payloads](async-responses.md#error-payloads) with their causes.
+Sync mode suits a `Running` agent that replies within seconds. A channel that backs a hibernated agent, a slow-starting image, or long processing belongs in `responseMode: async`, where no sync deadline applies and `delivery_failed` and `wake_timeout` arrive as [error payloads](async-responses.md#error-payloads) with their causes.
 
 `retryable: true` on `sync_deadline_exceeded` covers transient slowness. When it persists, the agent has a structural problem (crash loop, broken image, slow startup): switch the channel to async mode to see the diagnosable type, and read `status.conditions[type=PlatformConnected]` for the cause.
 
@@ -69,6 +69,6 @@ Async mode (`spec.webhook.responseMode: async`) answers `202 Accepted` with a `r
 
 Before the `202`, the inbound `POST` behaves as in sync mode:
 
-- The `400`, `401`, and `413 request_too_large` rows apply unchanged. Auth, the body cap, and `fromBody` parsing run on every request.
+- The `400`, `401`, and `413 request_too_large` rows apply unchanged, and so does the `502` for an Agent that does not exist. Auth, the body cap, `fromBody` parsing, and the Agent lookup run on every request.
 - Two checks run after normalization and can answer `503 internal_unavailable` with `Retry-After: 5`: the channel already holds `spec.webhook.maxPendingAsyncResponses` (default 100) pending responses, or the polling record could not be created. A `202` therefore always implies a record a poll can find.
-- `413 response_too_large`, `502`, and the `504` rows cannot reach the inbound caller, because the Agent has not been contacted when the `202` is sent. They are delivered later by callback or polling.
+- `413 response_too_large`, the `502` for failed delivery attempts, and the `504` rows cannot reach the inbound caller, because the Agent has not been contacted when the `202` is sent. They are delivered later by callback or polling.
