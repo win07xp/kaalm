@@ -19,7 +19,7 @@ Isolation is layered. The RuntimeClass decides how strongly the kernel is separa
 
 ### RuntimeClass
 
-An AgentClass may set `spec.runtime.runtimeClassName`, naming a Kubernetes `RuntimeClass` that must already exist on the cluster; the controller copies it onto every Pod of that class. Pod admission fails with `RuntimeClass not found` otherwise. Stock clusters (kubeadm, EKS, GKE, AKS) define none, and there is no built-in RuntimeClass named `runc`: leaving the field unset is what selects the cluster's default runtime. The chart's `standard` class leaves it unset.
+An AgentClass may set `spec.runtime.runtimeClassName`, naming a Kubernetes `RuntimeClass` that must already exist on the cluster; the controller copies it onto every Pod of that class. Kaalm does not check that the named `RuntimeClass` exists, and the AgentClass stays `Ready`. The apiserver's RuntimeClass admission rejects each Pod create of the class with `pod rejected: RuntimeClass "NAME" not found`. Stock clusters (kubeadm, EKS, GKE, AKS) define none, and there is no built-in RuntimeClass named `runc`: leaving the field unset is what selects the cluster's default runtime. The chart's `standard` class leaves it unset.
 
 | `runtimeClassName` | Isolation | Use when |
 |---|---|---|
@@ -27,6 +27,13 @@ An AgentClass may set `spec.runtime.runtimeClassName`, naming a Kubernetes `Runt
 | `gvisor` or `runsc` | Userspace kernel with syscall filtering | The agent executes untrusted code |
 | `kata` | A lightweight VM per Pod | Strong multi-tenancy is required |
 | `firecracker` (through Kata or Agent Sandbox) | microVM isolation | The strongest available boundary is required |
+
+A class that names a missing `RuntimeClass` has these effects:
+
+- An Agent of the class gets no Pod and does not go `Degraded`. The controller retries the Pod create with backoff ([Error handling](../controller/operations.md#error-handling)). No condition or event names the `RuntimeClass`; the rejection shows only in the controller log.
+- An AgentTask likewise gets no Pod and stays `Provisioning`. The rejection spends no `backoffLimit` retry, and the completion timeout does not start, because it counts from `startTime`, which is set only at `Running`.
+- If a class in use is edited to name a missing `RuntimeClass`, each Agent that gets a drift slot deletes its Pod, cannot create the replacement, and keeps its slot. At most `maxUnavailableOnDrift` of the class's Agents lose their Pod; the rest keep their old Pods ([Drift replacements are capped per class](../controller/change-propagation.md#drift-replacements-are-capped-per-class)).
+- Once the `RuntimeClass` exists or the class is changed, the next retry creates the Pod. Kaalm does not watch `RuntimeClass` objects, so creating one does not trigger a retry; an edit to the Agent or AgentTask retries at once.
 
 Platform teams create one AgentClass per isolation tier (`standard` with the field unset, `sandboxed` requiring gVisor, and so on), and developers pick a class.
 
