@@ -17,12 +17,15 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -175,7 +178,7 @@ func TestDesiredPod_SetsHashVersion(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
 	eff := classDerivedBase()
 	eff.PodAnnotations[annotationPodSpecHashVersion] = "1"
-	pod := desiredPod(agent, eff, "kaalm-system")
+	pod := desiredPod(agent, eff, "kaalm-system", "x-tls")
 	if got := pod.Annotations[annotationPodSpecHashVersion]; got != podSpecHashVersion {
 		t.Errorf("hash version annotation = %q, want %q", got, podSpecHashVersion)
 	}
@@ -184,7 +187,7 @@ func TestDesiredPod_SetsHashVersion(t *testing.T) {
 func TestPodSpecHash_WrittenHashIgnoresOwnAnnotation(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
 	eff := classDerivedBase()
-	pod := desiredPod(agent, eff, "kaalm-system")
+	pod := desiredPod(agent, eff, "kaalm-system", "x-tls")
 	// Re-deriving from the same spec must match what desiredPod wrote, so a
 	// steady-state Agent never sees drift.
 	if got := pod.Annotations[annotationPodSpecHash]; got != podSpecHash(eff) {
@@ -335,8 +338,9 @@ func TestDesiredPod_ContractInjection(t *testing.T) {
 		},
 	}
 	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, Env: agent.Spec.Env, PersistenceOn: true}
-	pod := desiredPod(agent, eff, "kaalm-system")
+	pod := desiredPod(agent, eff, "kaalm-system", "sup-tls-0f1e2d3c")
 
+	expectTLSProjection(t, pod, "sup-tls-0f1e2d3c")
 	envMap := map[string]string{}
 	for _, e := range pod.Spec.Containers[0].Env {
 		envMap[e.Name] = e.Value
@@ -387,8 +391,8 @@ func TestDesiredPods_InjectOperatorNamespace(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
 	pods := map[string]*corev1.Pod{
-		"agent": desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-ops"),
-		"task":  desiredTaskPod(task, effectiveTaskSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-ops"),
+		"agent": desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-ops", "x-tls"),
+		"task":  desiredTaskPod(task, effectiveTaskSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-ops", "x-tls"),
 	}
 	for kind, pod := range pods {
 		envMap := map[string]string{}
@@ -416,8 +420,8 @@ func TestDesiredPods_NoServiceAccountToken(t *testing.T) {
 		class := &kaalmv1beta1.AgentClass{}
 		class.Spec.Security.AutomountServiceAccountToken = optIn
 		pods := map[string]*corev1.Pod{
-			"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops"),
-			"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops"),
+			"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops", "x-tls"),
+			"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops", "x-tls"),
 		}
 		for kind, pod := range pods {
 			if a := pod.Spec.AutomountServiceAccountToken; a == nil || *a != optIn {
@@ -438,8 +442,8 @@ func TestDesiredPods_ClassAllowHostNetworkHasNoEffect(t *testing.T) {
 		class := &kaalmv1beta1.AgentClass{}
 		class.Spec.Network.AllowHostNetwork = allow
 		pods := map[string]*corev1.Pod{
-			"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops"),
-			"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops"),
+			"agent": desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-ops", "x-tls"),
+			"task":  desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-ops", "x-tls"),
 		}
 		for kind, pod := range pods {
 			if pod.Spec.HostNetwork {
@@ -487,10 +491,12 @@ func TestCertLifetime_Validate(t *testing.T) {
 }
 
 func TestDesiredCertificate_Shape(t *testing.T) {
-	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{
+		Name: "sup", Namespace: "team-a", UID: "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+	}}
 	cert := desiredCertificate(agent, CertLifetime{})
-	if cert.Name != "sup-tls" || cert.Spec.SecretName != "sup-tls" {
-		t.Errorf("cert naming wrong: %s / %s", cert.Name, cert.Spec.SecretName)
+	if cert.Name != "sup-tls" || cert.Spec.SecretName != "sup-tls-0f1e2d3c" {
+		t.Errorf("cert naming wrong: %s / %s, want sup-tls / sup-tls-0f1e2d3c", cert.Name, cert.Spec.SecretName)
 	}
 	wantSANs := []string{"sup.team-a.svc.cluster.local", "sup.team-a.svc", "sup.team-a"}
 	if len(cert.Spec.DNSNames) != 3 {
@@ -582,7 +588,7 @@ func TestDesiredPod_MergesClassPodMetadata(t *testing.T) {
 		PodLabels:      map[string]string{"team": "search"},
 		PodAnnotations: map[string]string{"vault.io/inject": "false"},
 	}
-	pod := desiredPod(agent, eff, "kaalm-system")
+	pod := desiredPod(agent, eff, "kaalm-system", "x-tls")
 	if pod.Labels["team"] != "search" || pod.Labels["kaalm.io/agent"] != "sup" {
 		t.Errorf("class labels not merged with identity labels: %v", pod.Labels)
 	}
@@ -628,7 +634,7 @@ func TestDesiredPod_HandlerMount(t *testing.T) {
 	// With a handler: the ConfigMap volume, its read-only mount at the
 	// contract path, and KAALM_HANDLER_PATH must all be present.
 	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, HandlerConfigMap: "greeter-handler"}
-	pod := desiredPod(agent, eff, "kaalm-system")
+	pod := desiredPod(agent, eff, "kaalm-system", "x-tls")
 
 	var vol *corev1.Volume
 	for i := range pod.Spec.Volumes {
@@ -658,7 +664,7 @@ func TestDesiredPod_HandlerMount(t *testing.T) {
 
 	// Without a handler: none of the three may appear. The env var's absence
 	// is the default-handler signal for base images.
-	pod = desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-system")
+	pod = desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-system", "x-tls")
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == handlerVolumeName {
 			t.Error("handler volume present on a handler-less Agent")
@@ -685,7 +691,7 @@ func TestDesiredPod_MemoryDir(t *testing.T) {
 	// A custom mountPath: the runtimes must be pointed at the mounted volume,
 	// or hibernation loses everything the handler stored there.
 	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, PersistenceOn: true, MountPath: "/data"}
-	pod := desiredPod(agent, eff, "kaalm-system")
+	pod := desiredPod(agent, eff, "kaalm-system", "x-tls")
 	if got := env(pod)["KAALM_MEMORY_DIR"]; got != "/data" {
 		t.Errorf("KAALM_MEMORY_DIR = %q, want %q", got, "/data")
 	}
@@ -702,14 +708,14 @@ func TestDesiredPod_MemoryDir(t *testing.T) {
 	// An unset mountPath resolves to the same default both runtimes already
 	// use, so the variable names the directory the volume is mounted at.
 	eff.MountPath = ""
-	pod = desiredPod(agent, eff, "kaalm-system")
+	pod = desiredPod(agent, eff, "kaalm-system", "x-tls")
 	if got := env(pod)["KAALM_MEMORY_DIR"]; got != defaultMemoryMountPath {
 		t.Errorf("KAALM_MEMORY_DIR = %q, want %q", got, defaultMemoryMountPath)
 	}
 
 	// Without persistence there is no volume to name, and the runtime's own
 	// default applies.
-	pod = desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-system")
+	pod = desiredPod(agent, effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}, "kaalm-system", "x-tls")
 	for _, e := range pod.Spec.Containers[0].Env {
 		if e.Name == "KAALM_MEMORY_DIR" {
 			t.Error("KAALM_MEMORY_DIR injected on an Agent without persistence")
@@ -718,7 +724,7 @@ func TestDesiredPod_MemoryDir(t *testing.T) {
 
 	// An Agent's own spec.env still wins: injected values are appended first.
 	eff.Env = []corev1.EnvVar{{Name: "KAALM_MEMORY_DIR", Value: "/elsewhere"}}
-	pod = desiredPod(agent, eff, "kaalm-system")
+	pod = desiredPod(agent, eff, "kaalm-system", "x-tls")
 	last := ""
 	for _, e := range pod.Spec.Containers[0].Env {
 		if e.Name == "KAALM_MEMORY_DIR" {
@@ -761,4 +767,81 @@ func TestPodSpecHash_HandlerRepoint(t *testing.T) {
 	if podSpecHash(base) != podSpecHash(effectiveAgentSpec{Image: "img:v1"}) {
 		t.Error("handler-less hash not stable")
 	}
+}
+
+func TestCertificateSecretName(t *testing.T) {
+	const uid = types.UID("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")
+	longest := strings.Repeat("a", 63) // the CEL limit on an Agent or AgentTask name
+	got := certificateSecretName(longest, uid)
+	if len(got) > 253 {
+		t.Errorf("secret name is %d characters, over the 253 limit", len(got))
+	}
+	if errs := validation.IsDNS1123Subdomain(got); len(errs) != 0 {
+		t.Errorf("secret name %q is not a DNS-1123 subdomain: %v", got, errs)
+	}
+	if got := certificateSecretName("sup", uid); got != "sup-tls-0f1e2d3c" {
+		t.Errorf("certificateSecretName = %q, want sup-tls-0f1e2d3c", got)
+	}
+	first, again := certificateSecretName("sup", uid), certificateSecretName("sup", types.UID(string(uid)))
+	if first != again {
+		t.Error("the same name and UID must give the same Secret name")
+	}
+	if certificateSecretName("sup", uid) == certificateSecretName("sup", "1f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0") {
+		t.Error("UIDs that differ in the first 8 characters must give different Secret names")
+	}
+	if got := certificateSecretName("sup", "u-agent"); got != "sup-tls-u-agent" {
+		t.Errorf("short UID: got %q, want sup-tls-u-agent", got)
+	}
+}
+
+// The TLS Secret name comes from the Certificate and is not a hash input, so a
+// Certificate that keeps an older name never makes a Pod drift.
+func TestDesiredPod_TLSSecretNotHashed(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
+	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080}
+	legacy := desiredPod(agent, eff, "kaalm-system", "sup-tls")
+	current := desiredPod(agent, eff, "kaalm-system", "sup-tls-0f1e2d3c")
+	if legacy.Annotations[annotationPodSpecHash] != current.Annotations[annotationPodSpecHash] {
+		t.Error("the TLS Secret name must not change the pod-spec hash")
+	}
+}
+
+// expectTLSProjection checks that the Pod's kaalm-tls volume projects
+// tls.crt and tls.key from the named Secret.
+func expectTLSProjection(t *testing.T, pod *corev1.Pod, secret string) {
+	t.Helper()
+	for _, v := range pod.Spec.Volumes {
+		if v.Name != tlsVolumeName || v.Projected == nil {
+			continue
+		}
+		for _, src := range v.Projected.Sources {
+			if src.Secret == nil {
+				continue
+			}
+			if src.Secret.Name != secret {
+				t.Errorf("TLS volume names Secret %q, want %q", src.Secret.Name, secret)
+			}
+			if len(src.Secret.Items) != 2 || src.Secret.Items[0].Key != tlsCertKey || src.Secret.Items[1].Key != tlsKeyKey {
+				t.Errorf("TLS volume items = %v, want tls.crt and tls.key", src.Secret.Items)
+			}
+			return
+		}
+	}
+	t.Error("TLS volume has no Secret source")
+}
+
+// tlsSecretOf returns the Secret the Pod's kaalm-tls projected volume names,
+// or "" when the volume or its Secret source is missing.
+func tlsSecretOf(pod *corev1.Pod) string {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name != tlsVolumeName || v.Projected == nil {
+			continue
+		}
+		for _, src := range v.Projected.Sources {
+			if src.Secret != nil {
+				return src.Secret.Name
+			}
+		}
+	}
+	return ""
 }

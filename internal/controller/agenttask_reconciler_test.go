@@ -23,16 +23,20 @@ import (
 	"testing"
 	"time"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	nodev1 "k8s.io/api/node/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -175,6 +179,17 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	}
 	if pod.Spec.Containers[0].ReadinessProbe != nil {
 		t.Error("task pod must carry no probes")
+	}
+	var cert cmapi.Certificate
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-run-tls"}, &cert); err != nil {
+		t.Fatalf("get certificate: %v", err)
+	}
+	wantSecret := "t-run-tls-" + string(getTask(t, "t-run").UID)[:8]
+	if cert.Spec.SecretName != wantSecret {
+		t.Errorf("certificate secretName = %q, want %q", cert.Spec.SecretName, wantSecret)
+	}
+	if got := tlsSecretOf(pod); got != wantSecret {
+		t.Errorf("pod TLS volume names %q, want %q", got, wantSecret)
 	}
 
 	// UID set before Running.
@@ -1437,5 +1452,42 @@ func TestAgentTask_EventsFollowTheStatusWrite(t *testing.T) {
 				t.Fatalf("a pass over the stored state emitted %q again", got)
 			}
 		})
+	}
+}
+
+// A task Certificate that already exists keeps its spec.secretName:
+// ensureTaskCertificate returns that name without updating the Certificate.
+func TestEnsureTaskCertificate_KeepsExistingSecretName(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{
+		Name: "legacy-task", Namespace: "default", UID: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+	}}
+	cert := desiredTaskCertificate(task, CertLifetime{})
+	cert.Spec.SecretName = "legacy-task-tls"
+	cert.Status.Conditions = []cmapi.CertificateCondition{{
+		Type: cmapi.CertificateConditionReady, Status: cmmeta.ConditionTrue, Reason: "Issued",
+	}}
+	if err := controllerutil.SetControllerReference(task, cert, scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cert).WithStatusSubresource(cert).Build()
+	key := client.ObjectKeyFromObject(cert)
+	var before cmapi.Certificate
+	if err := c.Get(ctx, key, &before); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system"}
+	name, ready, err := r.ensureTaskCertificate(ctx, task)
+	if err != nil || !ready || name != "legacy-task-tls" {
+		t.Fatalf("ensureTaskCertificate = (%q, %v, %v), want (legacy-task-tls, true, nil)", name, ready, err)
+	}
+	var after cmapi.Certificate
+	if err := c.Get(ctx, key, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.ResourceVersion != before.ResourceVersion || !equality.Semantic.DeepEqual(after.Spec, before.Spec) {
+		t.Errorf("ensureTaskCertificate changed the existing Certificate: %+v", after.Spec)
 	}
 }

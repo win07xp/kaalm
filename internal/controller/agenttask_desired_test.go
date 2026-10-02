@@ -30,8 +30,9 @@ import (
 func TestDesiredTaskPod_Shape(t *testing.T) {
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
 	eff := effectiveTaskSpec{Image: "img:v1", HealthPort: 8080, PersistenceOn: true}
-	pod := desiredTaskPod(task, eff, "kaalm-system")
+	pod := desiredTaskPod(task, eff, "kaalm-system", "fix-42-tls-9a8b7c6d")
 
+	expectTLSProjection(t, pod, "fix-42-tls-9a8b7c6d")
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Error("task pods must have restartPolicy Never")
 	}
@@ -61,8 +62,13 @@ func TestDesiredTaskPod_Shape(t *testing.T) {
 }
 
 func TestDesiredTaskCertificate_Shape(t *testing.T) {
-	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{
+		Name: "fix-42", Namespace: "team-a", UID: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+	}}
 	cert := desiredTaskCertificate(task, CertLifetime{})
+	if cert.Name != "fix-42-tls" || cert.Spec.SecretName != "fix-42-tls-9a8b7c6d" {
+		t.Errorf("cert naming wrong: %s / %s, want fix-42-tls / fix-42-tls-9a8b7c6d", cert.Name, cert.Spec.SecretName)
+	}
 	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != "fix-42.team-a.task.kaalm.io" {
 		t.Errorf("task SAN wrong: %v", cert.Spec.DNSNames)
 	}
@@ -288,7 +294,7 @@ func TestDesiredTaskPod_MergesClassPodMetadata(t *testing.T) {
 		PodLabels:      map[string]string{"team": "payments", "tier": "batch"},
 		PodAnnotations: map[string]string{"prometheus.io/scrape": "true"},
 	}
-	pod := desiredTaskPod(task, eff, "kaalm-system")
+	pod := desiredTaskPod(task, eff, "kaalm-system", "x-tls")
 
 	// Class-level pod labels merge with the task's identity labels.
 	if pod.Labels["team"] != "payments" || pod.Labels["tier"] != "batch" {

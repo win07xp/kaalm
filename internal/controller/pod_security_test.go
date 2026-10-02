@@ -43,8 +43,8 @@ func TestDesiredPods_RestrictedBaseline(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "team-a"}}
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "team-a"}}
 	pods := []*corev1.Pod{
-		desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-system"),
-		desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-system"),
+		desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-system", "x-tls"),
+		desiredTaskPod(task, deriveEffectiveTaskSpec(task, class), "kaalm-system", "x-tls"),
 	}
 	for _, pod := range pods {
 		ps, cs := pod.Spec.SecurityContext, pod.Spec.Containers[0].SecurityContext
@@ -76,7 +76,7 @@ func TestDesiredPod_ClassSecurityOverridesPerField(t *testing.T) {
 			},
 		}}
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "team-a"}}
-	pod := desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-system")
+	pod := desiredPod(agent, deriveEffectiveSpec(agent, class), "kaalm-system", "x-tls")
 	ps, cs := pod.Spec.SecurityContext, pod.Spec.Containers[0].SecurityContext
 	if ps.RunAsUser == nil || *ps.RunAsUser != uid || ps.RunAsNonRoot == nil || !*ps.RunAsNonRoot {
 		t.Errorf("declared runAsUser lost or baseline runAsNonRoot missing: %+v", ps)

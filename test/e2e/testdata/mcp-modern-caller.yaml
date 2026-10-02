@@ -1,7 +1,10 @@
 # The modern-era caller: mcp-modern-agent's identity walking the 2026-07-28
 # beats against the broker. Every request carries the revision's mandatory
 # headers; one deliberately mismatches Mcp-Name to prove the broker's
-# HeaderMismatch rejection. Sibling of s18-caller, same MARKER pattern.
+# HeaderMismatch rejection. Sibling of s18-caller, same MARKER pattern. The
+# spec applies it with applyWithAgentTLS, which fills
+# __TLS_SECRET_mcp-modern-agent__ with the Secret name the Agent's Certificate
+# holds in spec.secretName.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -61,7 +64,7 @@ spec:
   volumes:
     - name: agent-tls
       secret:
-        secretName: mcp-modern-agent-tls
+        secretName: __TLS_SECRET_mcp-modern-agent__
     - name: ca
       configMap:
         name: kaalm-ca

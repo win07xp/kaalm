@@ -38,6 +38,19 @@ for f in namespace.yaml mockprovider.yaml console.yaml spend.yaml; do
   kubectl apply -f "$ROOT/test/e2e/testdata/$f" >/dev/null
 done
 kubectl -n e2e rollout status deploy/mock-provider --timeout=120s >/dev/null
+# The callers mount the Secret each Agent's Certificate names in spec.secretName.
+callers=$(cat "$ROOT/test/e2e/testdata/spend-callers.yaml")
+for agent in spend-a spend-b; do
+  secret=""
+  for _ in $(seq 1 60); do
+    secret=$(kubectl -n console-e2e get certificate.cert-manager.io "$agent-tls" -o jsonpath='{.spec.secretName}' 2>/dev/null || true)
+    [ -n "$secret" ] && break
+    sleep 3
+  done
+  [ -n "$secret" ] || fail "Certificate $agent-tls has no spec.secretName"
+  callers=${callers//__TLS_SECRET_${agent}__/$secret}
+done
+printf '%s\n' "$callers" | kubectl apply -f - >/dev/null
 for pod in spend-caller-a spend-caller-b; do
   for _ in $(seq 1 60); do
     [ "$(kubectl -n console-e2e get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null)" = "Succeeded" ] && break

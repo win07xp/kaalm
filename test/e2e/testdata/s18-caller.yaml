@@ -4,7 +4,9 @@
 # IS the agent as far as the gateway is concerned) and walks the scenario's
 # beats against the broker, echoing a MARKER line per step for the spec to
 # assert on. The initialize loop retries through the gateway's source-IP
-# startup race exactly as llm-caller does.
+# startup race exactly as llm-caller does. The spec applies it with
+# applyWithAgentTLS, which fills __TLS_SECRET_s18-agent__ with the Secret name
+# the Agent's Certificate holds in spec.secretName.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -72,7 +74,7 @@ spec:
   volumes:
     - name: agent-tls
       secret:
-        secretName: s18-agent-tls
+        secretName: __TLS_SECRET_s18-agent__
     - name: ca
       configMap:
         name: kaalm-ca

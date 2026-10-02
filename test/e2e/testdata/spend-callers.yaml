@@ -1,0 +1,101 @@
+# Callers for the per-workload spend e2e (#100): curl pods that mount the
+# certificate Secret each Agent in spend.yaml uses, an attested agent-identity
+# LLM call without teaching the starter handler to speak to providers. Each
+# Agent's Secret name is the spec.secretName of its Certificate {name}-tls, so
+# the specs apply this file with applyWithAgentTLS once the Certificates
+# exist, which fills in __TLS_SECRET_spend-a__ and __TLS_SECRET_spend-b__.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spend-caller-a
+  namespace: console-e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # 1 successful call(s) with the agent's own mTLS identity. The
+        # retry loop absorbs the gateway's source-IP startup race exactly as
+        # the token caller fixture does; each success is counted once.
+        - |
+          done=0
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+              --cert /var/run/kaalm/tls.crt --key /var/run/kaalm/tls.key \
+              --cacert /var/run/ca/ca.crt \
+              -H "Content-Type: application/json" \
+              -d '{"model":"console-spend/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              done=$((done+1))
+              if [ "$done" -ge 1 ]; then echo "made $done calls"; exit 0; fi
+            fi
+            sleep 3
+          done
+          echo "gave up with $done calls"; exit 1
+      volumeMounts:
+        - name: tls
+          mountPath: /var/run/kaalm
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: tls
+      secret:
+        secretName: __TLS_SECRET_spend-a__
+    - name: ca
+      configMap:
+        name: kaalm-ca
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spend-caller-b
+  namespace: console-e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        # 2 successful call(s) with the agent's own mTLS identity. The
+        # retry loop absorbs the gateway's source-IP startup race exactly as
+        # the token caller fixture does; each success is counted once.
+        - |
+          done=0
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' \
+              --cert /var/run/kaalm/tls.crt --key /var/run/kaalm/tls.key \
+              --cacert /var/run/ca/ca.crt \
+              -H "Content-Type: application/json" \
+              -d '{"model":"console-spend/mock-model","messages":[{"role":"user","content":"hi"}]}' \
+              https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions) || true
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              done=$((done+1))
+              if [ "$done" -ge 2 ]; then echo "made $done calls"; exit 0; fi
+            fi
+            sleep 3
+          done
+          echo "gave up with $done calls"; exit 1
+      volumeMounts:
+        - name: tls
+          mountPath: /var/run/kaalm
+          readOnly: true
+        - name: ca
+          mountPath: /var/run/ca
+          readOnly: true
+  volumes:
+    - name: tls
+      secret:
+        secretName: __TLS_SECRET_spend-b__
+    - name: ca
+      configMap:
+        name: kaalm-ca

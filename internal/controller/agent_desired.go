@@ -31,6 +31,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -331,7 +332,9 @@ func namespaceAllowed(ns string, allowed []string) bool {
 // (the ConfigMap name, never its content), and every Pod input the AgentClass
 // controls. The class inputs are the derived values (the restricted security
 // baseline already merged in), so a change to the baseline itself also rolls
-// Pods. Only these fields participate in drift detection.
+// Pods. Only these fields participate in drift detection. The TLS Secret name
+// is not a hash input, because it comes from the Certificate, so a Certificate
+// that keeps an older name never causes drift.
 type hashableSpec struct {
 	Image     string                      `json:"image"`
 	Command   []string                    `json:"command,omitempty"`
@@ -442,20 +445,40 @@ func agentServiceAccountName(agentName string) string {
 	return "agent-" + agentName
 }
 
+// certSecretUIDChars is how many leading characters of the workload's UID
+// end the output Secret name of a new per-workload Certificate.
+const certSecretUIDChars = 8
+
+// certificateSecretName is the output Secret name of a new per-workload
+// Certificate: the workload name, "-tls-", and the first certSecretUIDChars
+// characters of the workload's UID. The UID suffix makes the name unique to
+// this workload object, so it cannot name a Secret that existed before the
+// workload, and a workload re-created with the same name gets a new one. An
+// existing Certificate keeps whatever spec.secretName it carries. A UID
+// shorter than the suffix is used whole.
+func certificateSecretName(workloadName string, uid types.UID) string {
+	u := string(uid)
+	if len(u) > certSecretUIDChars {
+		u = u[:certSecretUIDChars]
+	}
+	return workloadName + "-tls-" + u
+}
+
 func gatewayEndpoint(operatorNamespace string) string {
 	return fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", gatewayServiceName, operatorNamespace, gatewayPort)
 }
 
 // desiredCertificate builds the per-Agent cert-manager Certificate: Service DNS
-// SANs, server+client auth, issued from the kaalm-ca-issuer ClusterIssuer.
-// See docs/src/security/tls.md.
+// SANs, server+client auth, issued from the kaalm-ca-issuer ClusterIssuer,
+// written to the Secret certificateSecretName names. See
+// docs/src/security/tls.md.
 func desiredCertificate(agent *kaalmv1beta1.Agent, lifetime CertLifetime) *cmapi.Certificate {
 	name, ns := agent.Name, agent.Namespace
 	duration, renewBefore := lifetime.resolve()
 	return &cmapi.Certificate{
 		ObjectMeta: metav1.ObjectMeta{Name: agentCertificateName(name), Namespace: ns},
 		Spec: cmapi.CertificateSpec{
-			SecretName: agentCertificateName(name),
+			SecretName: certificateSecretName(name, agent.UID),
 			IssuerRef:  cmmeta.ObjectReference{Name: clusterIssuerName, Kind: "ClusterIssuer"},
 			DNSNames: []string{
 				fmt.Sprintf("%s.%s.svc.cluster.local", name, ns),
@@ -533,8 +556,9 @@ func agentPodLabels(agent *kaalmv1beta1.Agent) map[string]string {
 
 // desiredPod derives the agent Pod: injected env and probes per the runtime
 // contract, the single projected TLS volume at /var/run/kaalm, and the
-// drift-detection hash annotation.
-func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNamespace string) *corev1.Pod {
+// drift-detection hash annotation. The TLS volume projects tlsSecret, the
+// Secret the Agent's Certificate names in spec.secretName.
+func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNamespace, tlsSecret string) *corev1.Pod {
 	labels := map[string]string{}
 	for k, v := range eff.PodLabels {
 		labels[k] = v
@@ -584,7 +608,7 @@ func desiredPod(agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, operatorNames
 			Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{
 					{Secret: &corev1.SecretProjection{
-						LocalObjectReference: corev1.LocalObjectReference{Name: agentCertificateName(agent.Name)},
+						LocalObjectReference: corev1.LocalObjectReference{Name: tlsSecret},
 						Items: []corev1.KeyToPath{
 							{Key: tlsCertKey, Path: tlsCertKey},
 							{Key: tlsKeyKey, Path: tlsKeyKey},

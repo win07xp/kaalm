@@ -23,7 +23,6 @@ import (
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -226,7 +225,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 	eff effectiveTaskSpec, pod *corev1.Pod,
 ) (ctrl.Result, error) {
 	if pod == nil {
-		certReady, err := r.ensureTaskCertificate(ctx, task)
+		tlsSecret, certReady, err := r.ensureTaskCertificate(ctx, task)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -243,7 +242,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		if err := r.ensureTaskChildren(ctx, task, class, eff); err != nil {
 			return ctrl.Result{}, err
 		}
-		desired := desiredTaskPod(task, eff, r.OperatorNamespace)
+		desired := desiredTaskPod(task, eff, r.OperatorNamespace, tlsSecret)
 		if err := controllerutil.SetControllerReference(task, desired, r.Scheme()); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -665,28 +664,28 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 	return nil
 }
 
-func (r *AgentTaskReconciler) ensureTaskCertificate(ctx context.Context, task *kaalmv1beta1.AgentTask) (bool, error) {
+// ensureTaskCertificate creates the task's Certificate when it is missing and
+// reports whether it is Ready. Once the Certificate exists and the task
+// controls it, it also returns the Secret name the Certificate writes
+// (spec.secretName), which the Pod mounts. An existing Certificate is never
+// updated, so it keeps the Secret name it was created with.
+func (r *AgentTaskReconciler) ensureTaskCertificate(ctx context.Context, task *kaalmv1beta1.AgentTask) (string, bool, error) {
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: task.Namespace, Name: taskCertificateName(task.Name)}
 	if err := r.Get(ctx, key, &cert); err != nil {
 		if !apierrors.IsNotFound(err) {
-			return false, err
+			return "", false, err
 		}
 		desired := desiredTaskCertificate(task, r.CertLifetime)
 		if err := controllerutil.SetControllerReference(task, desired, r.Scheme()); err != nil {
-			return false, err
+			return "", false, err
 		}
-		return false, createControlled(ctx, r.Client, task, desired)
+		return "", false, createControlled(ctx, r.Client, task, desired)
 	}
 	if err := requireControlled(r.Scheme(), task, &cert); err != nil {
-		return false, err
+		return "", false, err
 	}
-	for _, c := range cert.Status.Conditions {
-		if c.Type == cmapi.CertificateConditionReady && c.Status == cmmeta.ConditionTrue {
-			return true, nil
-		}
-	}
-	return false, nil
+	return cert.Spec.SecretName, certificateReady(&cert), nil
 }
 
 func (r *AgentTaskReconciler) readMailbox(ctx context.Context, task *kaalmv1beta1.AgentTask) (completionPayload, error) {
