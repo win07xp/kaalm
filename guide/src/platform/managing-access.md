@@ -54,9 +54,9 @@ Prefer exact namespace names in `allowedNamespaces`; use globs like
 
 ## Keep a class to some teams
 
-RBAC cannot limit which AgentClass a developer names in `agentClassRef`.
-RBAC authorizes creating an Agent or AgentTask, not the names its spec
-references, so a create grant cannot limit `agentClassRef`. Removing a
+RBAC cannot limit which AgentClass a developer names in `agentClassRef`,
+because it authorizes creating an Agent or AgentTask, not the names its spec
+references. Removing a
 developer's read access to a class does not stop them naming it either. To keep
 a class to chosen teams, list their namespaces in the class's
 `allowedNamespaces`. Each entry is a `path.Match` glob, such as `team-*`:
@@ -174,9 +174,9 @@ binding, and subject values are ignored while `enabled` is `false`.
 Each list does one job:
 
 - `catalogReaders` binds the catalog read role cluster-wide. Add every
-  developer group to it, because the namespace binding cannot grant the
-  cluster-scoped AgentClasses and ModelProviders a developer names in a
-  manifest.
+  developer group to it, so developers can look up the cluster-scoped
+  AgentClasses and ModelProviders they name in a manifest; a namespace binding
+  cannot grant cluster-scoped kinds.
 - `developers` maps a namespace to the subjects who work in it. Each namespace
   must already exist, or the upgrade fails with `namespace not found`. Create a
   team's namespace first, and add its entry when you onboard the team. For a
