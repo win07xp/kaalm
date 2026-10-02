@@ -182,7 +182,10 @@ edit the channel.
 After the upgrade, an Agent whose `spec.env` names a Secret without the
 workload label shows `Ready=False` with the reason `SecretNotOptedIn` and a
 `Warning` event. The Agent keeps its phase and its running Pod, and the
-controller makes no replacement Pod until you label the Secret. A finished
+controller makes no replacement Pod until you label the Secret. While the
+label is missing, the controller also makes no idle or hibernation transition
+for the Agent and does not update its phase from the Pod, so the Pod keeps
+running. A finished
 AgentTask needs nothing. A pending or retrying AgentTask waits without
 failing.
 
@@ -203,6 +206,15 @@ failing.
 
    Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with its
    namespace. Only the exact value `true` counts.
+
+A Secret that fails the review is one that a workload reads but that was not
+created for workloads. Do not label it. Treat it as exposed, because the
+workload's Pod already holds its value in the environment:
+
+1. Remove the `spec.env` entry that reads the Secret. The spec change replaces
+   an Agent's Pod. If the Pod stays, delete it. For an AgentTask that has a
+   Pod, delete the task.
+2. Rotate the Secret.
 
 On its first pass after the upgrade, the controller creates a controller-only
 Role and RoleBinding pair for each workload that reads a Secret, named

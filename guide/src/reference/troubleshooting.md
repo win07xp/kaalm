@@ -105,13 +105,18 @@ kubectl get secret SECRET_NAME -n NAMESPACE --show-labels
 ```
 
 - If the Secret is missing, create it in the workload's namespace.
-- If the Secret exists, confirm that it was created for workloads, then label
-  it. Only the exact value `true` counts; `True`, `yes`, and an empty value do
-  not.
+- If the Secret exists and was created for workloads, label it. Only the exact
+  value `true` counts; `True`, `yes`, and an empty value do not.
 
   ```bash
   kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/workload-secret=true
   ```
+
+- If the Secret exists but was not created for workloads, do not label it.
+  Treat it as exposed, because a Pod that already runs holds its value in the
+  environment. Remove the `spec.env` entry that reads it. The spec change
+  replaces an Agent's Pod; if the Pod stays, delete it. For an AgentTask that
+  has a Pod, delete the task. Then rotate the Secret.
 
 An optional reference (`optional: true`) is checked too, so a missing optional
 Secret also blocks the workload. A `secretKeyRef` with no name gives reason
@@ -124,7 +129,8 @@ The workload re-checks every 30 seconds, so it recovers on the next pass after
 you label the Secret. An Agent that already has a running Pod keeps the Pod and
 its phase while `Ready` is `False`, and the controller makes no replacement Pod
 (for a spec change, a lost Pod, or a wake) until you label the Secret or remove
-the reference. A `Pending` or retrying AgentTask waits without failing, and a
+the reference. It also makes no idle or hibernation transition and does not
+update the phase from the Pod, so the Pod keeps running. A `Pending` or retrying AgentTask waits without failing, and a
 finished AgentTask needs no label. Who may label a Secret depends on your
 platform team: see [Managing team access](../platform/managing-access.md#label-the-secrets-a-workload-reads).
 
