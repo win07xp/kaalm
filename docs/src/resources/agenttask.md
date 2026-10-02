@@ -112,7 +112,7 @@ status:
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
 | `Ready` | `False` with the reason of a gate that holds the task without failing it: `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `SystemNamespaceForbidden`, `ChildConflict`, or `CertificateNotReady`. For `SecretNotOptedIn`, see [Env Secrets must opt in](#env-secrets-must-opt-in). |
 | `Completed` | `True` with `reason: TaskSucceeded` or `TaskFailed` once the task settles; the message is the agent's reported message, the container's exit summary, or the validation failure. |
-| `startTime` | Set in the status write that moves the task to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
+| `startTime` | Set when the task moves to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
 | `completionTime` | Set when the task settles. |
 | `podName` | The current Pod. |
 | `currentPodUID` | For an `agentReported` task, the UID of the Pod allowed to report completion, set on every Pod creation and cleared during a retry reset. Never set for an `exitCode` task. |
@@ -129,7 +129,7 @@ status:
 
 ### Env Secrets must opt in
 
-Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`. The check runs only while the task has no Pod, so it covers the first attempt and every `backoffLimit` retry. A task that fails it is not `Failed`: it keeps its phase with `Ready=False, reason=SecretNotOptedIn`, makes no Pod, and re-checks every 30 seconds. A task that has a Pod or has finished is not checked. The exact check, the message, and the gate's timing are under [rule 48](validation-and-defaulting.md#cross-resource-validation).
+Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`. The check runs only while the task has no Pod, so it covers the first attempt and every `backoffLimit` retry. A task that fails it is not `Failed`: it keeps its phase with `Ready=False, reason=SecretNotOptedIn`, makes no Pod, and re-checks every 30 seconds. The exact check and the gate's timing are under [rule 48](validation-and-defaulting.md#cross-resource-validation).
 
 ### Completion modes
 
@@ -141,7 +141,7 @@ Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist i
 
 ### The class bounds timeout and retention
 
-The reconciler derives the effective `completion.timeout` and `ttlSecondsAfterFinished` on every pass, the same way it derives an Agent's lifecycle timings (rules 42 and 43):
+The effective `completion.timeout` and `ttlSecondsAfterFinished` are derived the way an Agent's lifecycle timings are (rules 42 and 43):
 
 1. The task's own value applies when the task sets one.
 2. When the task omits it, the class default applies: `lifecycle.defaultTaskTimeout` or `lifecycle.defaultTTLSecondsAfterFinished`.
@@ -151,26 +151,26 @@ The stored spec doesn't change, and a clamp sets no condition or event.
 
 When neither the task nor its class sets a value, the value is unbounded. With no timeout, the task runs until it reports or exits, so an `agentReported` task whose container never reports holds its Pod, PVC, and certificate indefinitely. With no TTL, a settled task and its children are kept until you delete them. The chart's `standard` class sets a default timeout and no default TTL ([Helm chart contents](../operations/deployment.md#helm-chart-contents)).
 
-The reconciler reads the class bounds from `status.classBounds`, not from the live class. It records the class's four task fields there in the status write that follows each Pod creation, including a retry's new Pod, so each attempt uses the class as it stood when its Pod was created. A task that settles before any Pod exists, such as one that fails the pre-Pod class check, records them in its settling write instead, so the class default TTL still cleans it up. The results:
+The reconciler reads the class bounds from `status.classBounds`, not from the live class. It records the class's four task fields there when each Pod is created, including a retry's new Pod, so each attempt uses the class as it stood when its Pod was created. A task that settles before any Pod exists, such as one that fails the pre-Pod class check, records them in its settling write instead, so the class default TTL still cleans it up. The results:
 
 - A later class edit doesn't reach the task. [AgentTask handling](../controller/change-propagation.md#agenttask-handling-no-degraded-phase) lists what a class edit does to a task in each state.
 - An edit to the task's own `completion.timeout` or `ttlSecondsAfterFinished` applies on the next pass, within the recorded bounds. For example, to keep a settled task long enough to snapshot its PVC ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)), raise its `ttlSecondsAfterFinished`, up to the recorded `maxTTLSecondsAfterFinished`.
-- A task with no `classBounds`, because it was created before the field existed, uses its own values with no bounds. An upgrade therefore changes no running or finished task.
+- A task whose Pod was created by a controller that does not record `classBounds` has none; it uses its own values with no bounds, so an upgrade changes no running or finished task.
 
 ### Artifact collection
 
 Artifacts are declared by name; the container reports values keyed by name. The gateway validates the names against `spec.artifacts` and the per-artifact and total size caps before writing the completion mailbox, and answers synchronously so the container can log and exit non-zero ([Task completion](../gateways/api/task-complete.md)). The reconciler re-validates when it reads the mailbox. Large outputs are externalized (object storage, Git) and referenced by URL in the value; there is no spill into ConfigMaps.
 
-This payload-based design has no race, needs no `pods/exec` RBAC, and keeps the artifact contract small.
+This payload-based design has no race and needs no `pods/exec` RBAC.
 
 ### The completion protocol: data channel and identity gate
 
 The gateway and the reconciler coordinate completion through two mechanisms:
 
 - The per-task `{taskName}-completion` ConfigMap is the data channel. The gateway writes the completion payload; the reconciler watches it ([The completion mailbox](../runtime/child-resources.md#the-completion-mailbox)).
-- `status.currentPodUID` is the identity gate. The reconciler sets it on every Pod creation of an `agentReported` task and clears it during the retry-reset window; the gateway rejects a report from any other Pod with `409 stale_pod` and a `StalePodCompletion` message, and a report against a settled task with `403 access_denied` and `TaskAlreadyCompleted`.
+- `status.currentPodUID` is the identity gate, set as the Status table describes. The gateway rejects a report from any other Pod with `409 stale_pod` and a `StalePodCompletion` message, and a report against a settled task with `403 access_denied` and `TaskAlreadyCompleted`.
 
-The wire-level contract is on [Task completion](../gateways/api/task-complete.md), and the clear, reset, create, and set order on [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
+The wire-level contract is on [Task completion](../gateways/api/task-complete.md), and the retry reset on [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 
 ### Concurrency
 

@@ -84,21 +84,20 @@ spec:
 | `fromBody` | A dotted path into the JSON body: names of `[a-zA-Z_][a-zA-Z0-9_]*` joined by `.`, with no leading dot and no array indexing (`user.id`, `message.text`). The schema pattern rejects anything else at apply time. |
 | `fallback` | Used when the header is absent, the path does not resolve, or the resolved value is the empty string |
 
-At most one of `fromHeader` and `fromBody` may be set (apply time). What each outcome produces on the wire, including the raw-body path when `content` is unset, the UTF-8 requirement, and the `400` for a body `fromBody` cannot parse, is on [Channel webhook](../gateways/api/channel-webhook.md#request-body). When `userId` yields nothing and no `fallback` is set, the empty string is used, and with `session.enabled` every unattributed request then shares one session.
+At most one of `fromHeader` and `fromBody` may be set (apply time). What each outcome produces on the wire, including the raw-body path, is on [Channel webhook](../gateways/api/channel-webhook.md#request-body). A body that is not valid JSON while `fromBody` is set, and a raw body that is not valid UTF-8, answer `400 invalid_request`. When `userId` yields nothing and no `fallback` is set, the empty string is used, and with `session.enabled` every unattributed request then shares one session.
 
 ## Platform types
 
-Two platform adapters exist beside the generic webhook: `discord` and `whatsapp`. Both are inbound HTTP. Discord delivers slash-command interactions to a registered URL and the gateway answers through the interaction's follow-up webhook; WhatsApp delivers Cloud API events to a registered URL and the gateway answers through the Graph API. Neither needs a persistent connection, which is what lets a stateless, multi-replica gateway serve them. Free-text bots that need the Discord Gateway WebSocket are not designed ([Beyond](../ROADMAP.md#beyond)).
+Two platform adapters exist beside the generic webhook: `discord` and `whatsapp`. Discord delivers slash-command interactions to a registered URL and the gateway answers through the interaction's follow-up webhook; WhatsApp delivers Cloud API events to a registered URL and the gateway answers through the Graph API. Neither needs a persistent connection, which is what lets a stateless, multi-replica gateway serve them. Free-text bots that need the Discord Gateway WebSocket are not designed ([Beyond](../ROADMAP.md#beyond)).
 
 What the two types share:
 
-- **One inbound route.** A platform channel's `path` follows the same rules as a webhook path (rules 15 and 16). The gateway serves every type on the same route, resolves the channel per request, picks the adapter by `spec.type`, and routes only `Ready=True` channels.
-- **One credential Secret.** `credentialsRef: {name}` names a Secret in the channel's namespace whose keys are fixed by the type (rule 40). The Secret must carry the opt-in label (rule 45). The reconciler scopes the per-channel credential Role to it as it does for webhook auth Secrets, and the gateway holds the material in memory.
+- **One inbound route.** A platform channel's `path` follows the same rules as a webhook path (rules 15 and 16).
+- **One credential Secret.** `credentialsRef: {name}` names a Secret in the channel's namespace whose keys are fixed by the type (rule 40). The Secret must carry the opt-in label (rule 45).
 - **Reply through the platform, no record.** The platform is the caller, and neither platform keeps an inbound request open for the answer, so every reply goes back out through the platform's API. There is no `responseMode`, no `callbackUrl`, no polling record, and `maxPendingAsyncResponses` does not apply. The polling endpoint answers `401` for a platform channel's path, the same as for an unregistered path.
 - **The platform API base URL is a gateway-level value**, `gateway.platforms.discord.apiBaseUrl` and `gateway.platforms.whatsapp.apiBaseUrl` in the chart ([Helm chart contents](../operations/deployment.md#helm-chart-contents)), so a tenant cannot aim the gateway and a bearer token at a host of their choosing.
 - **The envelope.** `channelType` is the type; `channelId` is the channel's `path`, so the session derivation is the same function of the same inputs; `userId` is the platform user; `attachments` carries platform media as references, never bytes; `metadata` carries the platform's identifiers. What the adapter needs to reply stays in the gateway's memory and never reaches the agent. The exact fields are on [Discord channel](../gateways/api/channel-discord.md#normalization) and [WhatsApp channel](../gateways/api/channel-whatsapp.md#normalization).
-- **Text replies.** The adapter sends the agent's `content` as plain text, split at the platform's message length limit. Components and interactive messages are out of scope.
-- **Errors reach the person.** When delivery ends in an error, the adapter sends `{error.type}: {error.message}` as the reply text, so the person who asked sees a failure rather than silence.
+- **Text replies.** The adapter sends the agent's `content` as plain text, split at the platform's message length limit. When delivery ends in an error, the error type and message go out as the reply text, so the person who asked sees a failure rather than silence. Components and interactive messages are out of scope.
 
 ### Discord
 
@@ -195,18 +194,18 @@ status:
 | Field | Meaning |
 |---|---|
 | `phase` | `Active`, `Degraded`, `Failed`, or `Terminating`. Unset until the first reconcile. Reflects the bound Agent: `Degraded` while the Agent is `Degraded` or `Failed`, `Failed` when `agentRef` does not resolve (rule 13) or the channel is in the operator namespace (rule 28). |
-| `Ready` | `True` with `reason: AgentReachable` and the message `channel is valid` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, `SecretNotOptedIn` when a referenced Secret lacks the label `kaalm.io/channel-credential: "true"` ([rule 45](validation-and-defaulting.md#cross-resource-validation)), `CallbackHostNotApproved` when a bearer `callbackAuth` Secret does not list the `callbackUrl` host in its `kaalm.io/callback-hosts` annotation (rule 46), `SystemNamespaceForbidden`, `ChildConflict` when a per-channel Role or one of its RoleBindings already exists in the channel's namespace and the channel does not control it, or `InvalidReference` when a per-channel Role cannot be written. A `ChildConflict` channel re-checks every 30 seconds, not every minute, because the conflicting object raises no watch event ([Child ownership](../controller/reconcilers.md#child-ownership)). The gateway routes only `Ready=True` channels. A `callbackUrl` host that does not resolve leaves the channel `Ready=True` and raises a `Warning` event, `reason=CallbackHostUnresolved` ([rule 22](validation-and-defaulting.md#cross-resource-validation)). |
+| `Ready` | `True` with `reason: AgentReachable` when every rule passes. `False` with the failing rule's reason: `AgentNotFound`, `AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, `SecretNotOptedIn` when a referenced Secret lacks the label `kaalm.io/channel-credential: "true"` ([rule 45](validation-and-defaulting.md#cross-resource-validation)), `CallbackHostNotApproved` when a bearer `callbackAuth` Secret does not list the `callbackUrl` host in its `kaalm.io/callback-hosts` annotation (rule 46), `SystemNamespaceForbidden`, `ChildConflict` when a per-channel Role or one of its RoleBindings already exists in the channel's namespace and the channel does not control it, or `InvalidReference` when a per-channel Role cannot be written. A `ChildConflict` channel re-checks every 30 seconds, not every minute, because the conflicting object raises no watch event ([Child ownership](../controller/reconcilers.md#child-ownership)). The gateway routes only `Ready=True` channels. A `callbackUrl` host that does not resolve leaves the channel `Ready=True` and raises a `Warning` event, `reason=CallbackHostUnresolved` ([rule 22](validation-and-defaulting.md#cross-resource-validation)). |
 | `PlatformConnected` | The tri-state in the next section. |
 
 ### The PlatformConnected tri-state
 
 `PlatformConnected` is the gateway's view of the channel's recent inbound delivery health over a rolling window (`gateway.channelHealthWindow`, default `5m`), reduced across replicas by the reconciler:
 
-| Status | Reason | Message |
-|---|---|---|
-| `True` | `WebhookReady` | `webhook delivery succeeded within the health window` |
-| `False` | The most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected` | The replica's last error text |
-| `Unknown` | `NoRecentTraffic` | `no webhook traffic observed within the health window` |
+| Status | Reason |
+|---|---|
+| `True` | `WebhookReady` |
+| `False` | The most recent failure's reason: `WebhookAuthFailed`, `AgentNotReady`, `DispatchFailed`, `CallbackInvalid`, or `CallbackRejected`. The message is that failure's error text. |
+| `Unknown` | `NoRecentTraffic` |
 
 The reason names are shared across channel types: `WebhookReady` means the inbound path works whatever the platform. The observations behind each reason, and the reduction, are on [Channel health tracking](../gateways/user/platform-adapters.md#channel-health-tracking).
 
@@ -218,7 +217,7 @@ The two are independent axes. `phase` follows the Agent; `PlatformConnected` fol
 
 ### Scope and ownership
 
-- **Three types, all inbound HTTP.** What a type adds is knowledge of the platform's signature scheme, payload, and reply API; the path rules, the routing gate, the envelope, the session rule, and the health condition are the same.
+- **Three types, shared rules.** What a type adds is knowledge of the platform's signature scheme, payload, and reply API; the path rules, the routing gate, the envelope, the session rule, and the health condition are the same.
 - **AgentChannel has no child Pods.** The gateway watches AgentChannels and resolves each inbound request against them; the reconciler validates, scopes the credential Roles, and reports status.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have several channels; each is a separate resource.
 - **The target is an Agent with a Service.** Tasks have no stable endpoint, and the gateway delivers through the ClusterIP Service (rules 13 and 14).
@@ -238,7 +237,7 @@ With `session.enabled`, the gateway derives a deterministic `sessionId` from the
 
 ### Async delivery
 
-`responseMode: async` is for agents that take minutes to answer. The gateway answers `202` with a `requestId`, delivers in the background, and returns the reply to `callbackUrl` or stores it for polling. `maxPendingAsyncResponses` (default 100) caps a channel's in-flight responses: the gateway counts the channel's live records from its informer and answers `503` at the cap, an approximate bound under concurrent bursts and an exact enough guardrail for etcd. The full contract, the callback signing, the deny ranges and allowlist behind rule 22, and the record lifecycle are on [Async webhook responses](../gateways/api/async-responses.md). A hibernated Agent is woken before delivery in either mode ([The activator](../gateways/user/activation-and-activity.md#the-activator)).
+`responseMode: async` is for agents that take minutes to answer. The gateway answers `202` with a `requestId`, delivers in the background, and returns the reply to `callbackUrl` or stores it for polling. `maxPendingAsyncResponses` (default 100) caps a channel's in-flight responses: the gateway counts the channel's live records and answers `503` at the cap. The count is approximate under concurrent bursts, which is enough to protect etcd. The full contract, the callback signing, the deny ranges and allowlist behind rule 22, and the record lifecycle are on [Async webhook responses](../gateways/api/async-responses.md). A hibernated Agent is woken before delivery in either mode ([The activator](../gateways/user/activation-and-activity.md#the-activator)).
 
 ### Observability
 
