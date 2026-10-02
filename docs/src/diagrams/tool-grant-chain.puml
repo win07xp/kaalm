@@ -23,6 +23,9 @@ partition "workload grant (mTLS callers; the bearer tier skips this row)" {
   elseif (ToolProvider in workload\nspec.tools[].providerRef?) then (no)
     :**403** access_denied;
     kill
+  elseif (AgentClass allowedNamespaces\nadmits the namespace?) then (no)
+    :**403** access_denied;
+    kill
   elseif (ToolProvider in AgentClass\nallowedToolProviders?) then (no)
     :**403** access_denied;
     kill

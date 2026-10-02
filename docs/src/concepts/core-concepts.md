@@ -8,7 +8,7 @@ Kaalm has two kinds of workload. An **Agent** is a long-lived workload that the 
 
 | Kind | Scope | Tier | Purpose |
 |---|---|---|---|
-| AgentClass | Cluster | Full lifecycle only (the chart ships one in both) | Policy template: runtime, isolation, allowed providers, network egress |
+| AgentClass | Cluster | Full lifecycle only (the chart ships one in both) | Policy template: runtime, isolation, allowed providers, allowed namespaces, network egress |
 | ModelProvider | Cluster | Both | LLM provider: credential Secret, allowed namespaces, budgets, fallback tree |
 | ToolProvider | Cluster | Both | External tool server: endpoint, credential Secret, tool catalog, allowed namespaces |
 | Agent | Namespace | Full lifecycle only | Long-lived agent workload |
@@ -17,7 +17,7 @@ Kaalm has two kinds of workload. An **Agent** is a long-lived workload that the 
 
 In plain language:
 
-- **AgentClass** is a platform-team policy resource, analogous to StorageClass: it decides how a category of agents is allowed to run, not what any one agent does.
+- **AgentClass** is a platform-team policy resource, analogous to StorageClass: it decides how a category of agents is allowed to run, and optionally which team namespaces may use it, not what any one agent does.
 - **ModelProvider** wraps one LLM provider: it holds the API key Secret so individual teams never do, and says which namespaces may use the provider.
 - **ToolProvider** wraps one external tool server the same way, so agents call tools through the gateway the way they call models.
 - **Agent** is the developer's resource for one long-running agent: its image, its persistence, which AgentClass governs it, and which providers and tools it may call.
