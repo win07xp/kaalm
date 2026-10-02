@@ -842,8 +842,9 @@ spec:
                 format: int32
                 type: integer
               conditions:
-                description: Conditions report class validity (Ready) and CNI FQDN
-                  support.
+                description: |-
+                  Conditions report whether the class is valid (Ready) and the results of
+                  advisory checks. See docs/src/resources/agentclass.md#status for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -1741,8 +1742,9 @@ spec:
                 format: int32
                 type: integer
               conditions:
-                description: Conditions report class validity (Ready) and CNI FQDN
-                  support.
+                description: |-
+                  Conditions report whether the class is valid (Ready) and the results of
+                  advisory checks. See docs/src/resources/agentclass.md#status for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

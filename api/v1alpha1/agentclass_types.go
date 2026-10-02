@@ -238,7 +238,8 @@ type AgentClassStatus struct {
 	// ObservedGeneration is the .metadata.generation last reconciled.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// Conditions report class validity (Ready) and CNI FQDN support.
+	// Conditions report whether the class is valid (Ready) and the results of
+	// advisory checks. See docs/src/resources/agentclass.md#status for each condition.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
