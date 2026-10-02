@@ -177,10 +177,14 @@ The Certificate is named `{agentName}-tls` in the Agent's namespace, owned by th
 | Field | Value |
 |---|---|
 | `spec.issuerRef` | `{ name: "kaalm-ca-issuer", kind: "ClusterIssuer" }` |
-| `spec.secretName` | `{agentName}-tls`, the output Secret cert-manager creates in the Agent's namespace |
+| `spec.secretName` | `{agentName}-tls-{uid}`, the output Secret cert-manager creates in the Agent's namespace. `{uid}` is the first eight characters of the Agent's `metadata.uid`, so the Secret for `support-assistant` is named like `support-assistant-tls-3f9c2a1e`. |
 | `spec.dnsNames` | `{agentName}.{namespace}.svc.cluster.local`, `{agentName}.{namespace}.svc`, `{agentName}.{namespace}` |
 | `spec.duration`, `spec.renewBefore` | `2160h` (90 days), `720h` (30 days) by default, from the chart values `controller.certificate.duration` and `controller.certificate.renewBefore` |
 | `spec.usages` | `server auth`, `client auth`: the same cert is the agent's serving cert and its mTLS client cert |
+
+The Secret name depends only on the Agent's name and UID, so it is the same on every pass. An Agent deleted and re-created with the same name gets a different Secret name. At the longest allowed name (63 characters), the Secret name is 76 characters. An AgentTask's Certificate follows the same rule ([AgentTask certificate](#agenttask-certificate)).
+
+The Pod's `kaalm-tls` volume, projected at `/var/run/kaalm` with the items `tls.crt` and `tls.key`, mounts the Secret that the Certificate's `spec.secretName` names. The reconciler reads that value from the Certificate on every pass before it creates a Pod. It never updates an existing Certificate, so a Certificate that carries another `secretName` keeps it, and so do the Pods created from it, including after a wake or a drift replacement. The Secret name is not part of the Pod spec hash, so it never causes drift. An AgentTask's Pods behave the same way across retries.
 
 A `ClusterIssuer` is used because cert-manager does not resolve a namespaced `Issuer` across namespaces; the chart installs `kaalm-ca-issuer` sourcing from the `kaalm-ca` Secret in cert-manager's cluster resource namespace (chart value `certManager.clusterResourceNamespace`, default `cert-manager`). Pod creation is gated on `Certificate.status.conditions[type=Ready]` so the Pod never hangs on its projected Secret mount. Rotation is transparent: cert-manager renews per `renewBefore`, kubelet propagates the new Secret contents into the projected volume, and the agent reloads through the file-watch pattern ([Starter templates](../runtime/starter-templates.md)). The trust chain is under [In-cluster TLS](../security/tls.md#in-cluster-tls).
 

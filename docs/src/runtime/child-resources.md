@@ -20,7 +20,7 @@ The controller provisions six resources for each Agent, all in the Agent's names
 | PVC | `{name}-memory` | `spec.persistence.enabled` is `true` and no `existingClaim` is set | Agent, unless the class sets `pvcRetention: Retain`, which strips the ownerRef | Kept | Deleted, or kept under `Retain` |
 | PVC (pre-existing) | `spec.persistence.existingClaim` | `existingClaim` is set | Nothing: referenced, no ownerRef | Kept | Kept |
 | Certificate | `{name}-tls` | Always | Agent | Kept | Deleted |
-| Secret | `{name}-tls` | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Kept | Deleted one hop after the Certificate |
+| Secret | `{name}-tls-{uid}`, with `{uid}` the first eight characters of the workload's UID ([Agent certificate](../controller/reconcilers.md#agent-certificate)) | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Kept | Deleted one hop after the Certificate |
 | Role and RoleBinding | `kaalm-agent-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | Agent | Kept | Deleted |
 
 **The Pod is the only child that tracks phase.** The controller creates it while the Agent is `Provisioning`, moves the Agent to `Running` when the Pod is Ready, and deletes it in `Hibernating`, settling `Hibernated` once the Pod is gone. Every other child is provisioned on the first reconcile and survives hibernation, so a wake recreates the Pod against unchanged identity, storage, and TLS material ([Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics)).
@@ -99,7 +99,7 @@ An AgentTask gets a similar set, adjusted for a short-lived workload that takes 
 | CiliumNetworkPolicy | `{name}-fqdn` | The class sets `network.egress.allowedHosts` and the CNI supports it | AgentTask | Deleted |
 | PVC | `{name}-workspace` | `spec.persistence.enabled` is `true` | AgentTask | Deleted |
 | Certificate | `{name}-tls` | Always | AgentTask | Deleted |
-| Secret | `{name}-tls` | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Deleted one hop after the Certificate |
+| Secret | `{name}-tls-{uid}`, with `{uid}` the first eight characters of the workload's UID ([Agent certificate](../controller/reconcilers.md#agent-certificate)) | Written by cert-manager from the Certificate | The Certificate (set by cert-manager) | Deleted one hop after the Certificate |
 | ConfigMap | `{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-completion` | `completion.condition` is `agentReported` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | AgentTask | Deleted |
