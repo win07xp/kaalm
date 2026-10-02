@@ -183,7 +183,9 @@ Each list does one job:
   namespace you cannot list in advance, bind ClusterRole `kaalm-developer`
   with a RoleBinding in that namespace yourself.
 - `secretsAdmins` binds the Secret role in `kaalm-system` only, for the LLM
-  and tool credentials.
+  and tool credentials. These people also label each provider Secret and list
+  its endpoint hosts. See
+  [Label provider Secrets](#label-provider-secrets).
 - `namespaceSecretsAdmins` maps a team namespace to that team's credential
   managers, who own its channel credentials. See
   [Keep channel credentials in team namespaces](#keep-channel-credentials-in-team-namespaces).
@@ -218,6 +220,29 @@ approved hosts in the `kaalm.io/callback-hosts` annotation. The label applies
 in every namespace, whoever creates the Secret. Developers need no Secret
 access to use the channel. [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved)
 shows what a channel reports when a Secret lacks the label.
+
+### Label provider Secrets
+
+The people in `secretsAdmins` own the provider and tool credentials in
+`kaalm-system`. A provider may use only a Secret that carries the label
+`kaalm.io/provider-credential: "true"` and lists the host of its `endpoint` in
+the annotation `kaalm.io/provider-hosts`:
+
+```bash
+kubectl label secret SECRET_NAME -n kaalm-system kaalm.io/provider-credential=true
+kubectl annotate secret SECRET_NAME -n kaalm-system kaalm.io/provider-hosts=HOSTS
+```
+
+Replace `SECRET_NAME` with the Secret's name and `HOSTS` with the bare
+hostnames of the endpoints that use it, separated by commas. The platform
+team that writes providers holds no Secret rights, so it cannot point a
+provider at another Secret in `kaalm-system`, such as the gateway's session
+key, or send a credential to a host the credential manager did not approve.
+[Providing LLM access](llm-access.md#1-create-the-credential-secret) and
+[Providing tool access](tool-access.md#1-create-the-credential-secret) show the
+Secrets, and
+[Troubleshooting](../reference/troubleshooting.md#modelprovider-readyfalse)
+shows what a provider reports when a Secret lacks either.
 
 ### Let developers manage Secrets
 

@@ -7,7 +7,10 @@ spec:
   # In-cluster and external https endpoints are equally valid.
   endpoint: https://mcp-search.tools.svc:8443
   # Resolved only from the operator namespace (kaalm-system). Omit the block
-  # entirely for a server that requires no authentication.
+  # entirely for a server that requires no authentication. When set, the
+  # Secret must carry the label kaalm.io/provider-credential: "true" and list
+  # the endpoint host (mcp-search.tools.svc) in its kaalm.io/provider-hosts
+  # annotation.
   credentialsRef:
     name: search-tools-key
     key: token

@@ -223,12 +223,42 @@ the last reference clears.
 
 ## ModelProvider `Ready=False`
 
-`kubectl describe modelprovider PROVIDER_NAME`:
+`kubectl describe modelprovider PROVIDER_NAME`, or `kubectl describe
+toolprovider PROVIDER_NAME` for a ToolProvider, which reports the same
+reasons:
 
 - `CredentialsMissing` or `CredentialsInvalid`: the Secret named by
   `credentialsRef` is absent in `kaalm-system` or lacks the key, or the
-  provider rejected the key on the probe. ToolProvider reports both the
-  same way.
+  provider rejected the key on the probe.
+- `SecretNotOptedIn`: the message says `Secret "NAME" does not carry the
+  label kaalm.io/provider-credential: "true"`. A provider may use only a
+  Secret with that label. Only the exact value `true` counts; `True`, `yes`,
+  an empty value, and the misspelled `kaalm.io/provider-credentials` do not.
+  The channel label `kaalm.io/channel-credential` does not count either.
+
+  ```bash
+  kubectl label secret SECRET_NAME -n kaalm-system kaalm.io/provider-credential=true
+  ```
+
+- `EndpointHostNotApproved`: the Secret carries the label but its
+  `kaalm.io/provider-hosts` annotation does not list the host of the
+  provider's `spec.endpoint`. The annotation is a comma-separated list of
+  bare hostnames. An entry must equal the hostname, ignoring case and
+  surrounding spaces, with no wildcards and no suffixes, and the port and
+  path of the endpoint play no part. List an IP address bare. The
+  `kaalm.io/callback-hosts` annotation of channels does not count.
+
+  ```bash
+  kubectl annotate secret SECRET_NAME -n kaalm-system kaalm.io/provider-hosts=HOSTS --overwrite
+  ```
+
+  Replace `HOSTS` with the hostname, or with a comma-separated list that
+  keeps the hosts the Secret already lists. A Secret shared by several
+  providers lists every one of their hosts.
+  The message `spec.endpoint "ENDPOINT" has no hostname that Secret "NAME"
+  could approve` means the endpoint holds no hostname, as in `https://` or
+  `https://:8443`; fix `spec.endpoint`.
+
 - `InvalidDegradeTarget`: a budget policy's `degradeTo` is not in
   `spec.models`.
 - `FallbackIneligible`: a fallback provider is missing, has a type the
@@ -240,6 +270,15 @@ the last reference clears.
 
 Each of these reasons also fires a `Warning` event with the same reason the
 first time `Ready` turns `False` with it.
+
+The checks run in a fixed order: the Secret exists, then the label, then the
+host, then the key. An unlabeled Secret reports only `SecretNotOptedIn`, even
+when it also lacks the annotation or the key, so fix the reasons one at a
+time. The provider recovers on its own as soon as you set the label or the
+annotation, with no edit to the provider. The gateway applies the same checks
+on every call, so until the Secret passes, an LLM call falls back to the next
+provider or returns `503 provider_unavailable`, and a tool call returns
+`503 tool_unavailable`.
 
 A `FallbackIneligible` `Warning` event with `Ready` still `True` is
 different: the reconciler's eligibility scan found a fallback candidate that

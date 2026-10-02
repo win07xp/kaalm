@@ -16,12 +16,26 @@ kind: Secret
 metadata:
   name: anthropic-api-key
   namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: api.anthropic.com
 type: Opaque
 stringData:
   token: API_KEY
 ```
 
 Replace `API_KEY` with the provider's API key.
+
+The label opts the Secret in to provider use, and the annotation lists the
+host the key may be sent to. The annotation is a comma-separated list of
+bare hostnames, and it must include the host of the provider's `endpoint`. A
+Secret that several providers share lists every one of their hosts. Without
+the label the provider reports `Ready=False` with reason `SecretNotOptedIn`,
+and without the host it reports `EndpointHostNotApproved`. Both stop the
+gateway from using the key. Set them on the Secret before you create the
+provider, and set them again if a rotation re-creates the Secret. The fixes
+are in [Troubleshooting](../reference/troubleshooting.md#modelprovider-readyfalse).
 
 ## 2. Create the ModelProvider
 
@@ -78,7 +92,7 @@ kubectl get modelproviders
 ```
 
 The two columns to read: `Ready` means the spec is valid and the credential
-resolves; `Healthy` reports the periodic upstream probe. A provider can be
+resolves, including the label and the host annotation from step 1; `Healthy` reports the periodic upstream probe. A provider can be
 Ready but Unhealthy (endpoint down); it recovers on its own when the probe
 succeeds again. A key the provider rejects is different: the probe reports
 it as `Ready=False` with reason `CredentialsInvalid` and a `Warning` event, and the provider stays
@@ -121,6 +135,7 @@ private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.
 ---
 
 *How this works: design book pages Resources, ModelProvider (every field and
-the status fields), Security, Credential handling (why keys live only in
+the status fields), Resources, Validation and defaulting (rules 49 and 50,
+the label and the host annotation), Security, Credential handling (why keys live only in
 kaalm-system), Gateways, LLM Gateway (how the proxy injects the credential),
 and Controller, Reconcilers (the probe backoff and the google-vertex probe).*

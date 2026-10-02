@@ -22,13 +22,16 @@ spec:
   type: anthropic
 
   # Required. The schema pattern ^https:// rejects any other scheme: the
-  # gateway forwards the credential to this URL.
+  # gateway forwards the credential to this URL. Its hostname must be listed
+  # in the credential Secret's kaalm.io/provider-hosts annotation (rule 50).
   endpoint: "https://api.anthropic.com"
 
   # Required. A Secret key in the operator namespace, read by the gateway
   # there; credentials never reach agent containers. For google-vertex the
   # value is a GCP service-account JSON key, not a static API key (see The
-  # google-vertex probe on Reconcilers).
+  # google-vertex probe on Reconcilers). The Secret must carry the label
+  # kaalm.io/provider-credential: "true" (rule 49) and list the endpoint host
+  # in its kaalm.io/provider-hosts annotation (rule 50).
   credentialsRef:
     name: anthropic-api-key
     key: api-key
@@ -145,7 +148,7 @@ status:
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), `HardBudgetUnpriced` (rule 33), or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). Each reason sends a `Warning` event with the same reason when it first appears on `Ready` ([Event emission](../controller/operations.md#event-emission)). |
+| `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `SecretNotOptedIn` (the Secret lacks the label `kaalm.io/provider-credential: "true"`, rule 49), `EndpointHostNotApproved` (the Secret's `kaalm.io/provider-hosts` annotation omits the `spec.endpoint` host, rule 50), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), `HardBudgetUnpriced` (rule 33), or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). Each reason sends a `Warning` event with the same reason when it first appears on `Ready` ([Event emission](../controller/operations.md#event-emission)). |
 | `Healthy` | The periodic upstream probe, run against every provider type including `google-vertex`. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event on every failing pass, or with `CredentialsInvalid` when the probe itself is refused. |
 | `GatewayReachable` | `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. Set on every pass and refreshed at once on a gateway Pod readiness change ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)). The same value is mirrored onto every ModelProvider. |
 | `FallbackIneligible` | Advisory; never affects `Ready`. `True` with `reason: FallbackIneligible` when the reconcile-time scan finds a fallback candidate that a caller's namespace or model can never reach; `False` with `AllCandidatesEligible` once the findings clear. A `Warning` event with the same reason names each finding when it is added. A provider with no findings carries no such condition ([Reconcile-time fallback eligibility scan](../controller/reconcilers.md#reconcile-time-fallback-eligibility-scan)). |
@@ -165,7 +168,7 @@ The state is derived from `percentUsed` and the highest policy threshold at or b
 
 ### Credential scoping
 
-Credentials are referenced from the operator's namespace and read directly by the gateway there. They never leave that namespace or reach agent containers: an agent that wants to call an LLM goes through the gateway, which attaches the credential server-side ([Credential handling](../security/credentials.md)).
+Credentials are referenced from the operator's namespace and read directly by the gateway there. They never leave that namespace or reach agent containers: an agent that wants to call an LLM goes through the gateway, which attaches the credential server-side ([Credential handling](../security/credentials.md)). Only a Secret that carries the label `kaalm.io/provider-credential: "true"` and lists the endpoint host in its `kaalm.io/provider-hosts` annotation may serve as a credential, so a provider cannot name an arbitrary Secret in `kaalm-system` or send a credential to a host that the credential manager did not approve ([Provider credentials](validation-and-defaulting.md#provider-credentials)).
 
 ### Budget accounting
 

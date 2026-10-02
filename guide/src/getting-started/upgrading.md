@@ -115,12 +115,25 @@ reapply them.
 
 ## Upgrading across v1.1.0
 
-From v1.1.0, an AgentChannel may use only Secrets that carry the label
-`kaalm.io/channel-credential: "true"`. Enforcement is on with no switch. After
-the upgrade, a channel whose Secret has no label shows `Ready=False` with the
-reason `SecretNotOptedIn` and a `Warning` event, and the gateway stops routing
-to it until you label the Secret. The previous release ignores the label, so
-label the Secrets before you upgrade and no channel goes down.
+From v1.1.0, two Secret checks are on, with no switch and no grandfathering,
+and nothing is rejected at apply:
+
+- An AgentChannel may use only Secrets that carry the label
+  `kaalm.io/channel-credential: "true"`.
+- A ModelProvider may use only a Secret that carries the label
+  `kaalm.io/provider-credential: "true"` and lists the host of its `endpoint`
+  in the annotation `kaalm.io/provider-hosts`. A ToolProvider follows the
+  same rule when it sets `credentialsRef`.
+
+The previous release ignores the labels and the annotations, so set them
+before you upgrade and nothing goes down. The first part covers channels, the
+second covers providers.
+
+### Channel Secrets
+
+After the upgrade, a channel whose Secret has no label shows `Ready=False`
+with the reason `SecretNotOptedIn` and a `Warning` event, and the gateway
+stops routing to it until you label the Secret.
 
 1. List the Secrets that AgentChannels reference. Each row shows the
    namespace, the channel, and the Secret names from the inbound `auth`
@@ -152,7 +165,6 @@ label the Secrets before you upgrade and no channel goes down.
    Replace `HOST` with the bare hostname, such as `receiver.example.com`. For
    more than one host, separate the names with commas. HMAC callbacks need no
    annotation.
-5. Run the two upgrade steps.
 
 On its first pass after the upgrade, the controller shrinks each channel's
 `-creds` Role to the labeled Secrets and creates a controller-only `-check`
@@ -161,8 +173,55 @@ check is re-checked every minute, so a Secret you label after the upgrade
 brings its channel back to `Ready=True` within a minute, or at once when you
 edit the channel.
 
-To find a channel that is held back, see [Troubleshooting](../reference/troubleshooting.md).
-The design book states both rules, 45 and 46, on
+### Provider and tool Secrets
+
+After the upgrade, a provider whose Secret has no label shows `Ready=False`
+with the reason `SecretNotOptedIn`. A provider whose Secret has the label but
+does not list the endpoint host shows `Ready=False` with the reason
+`EndpointHostNotApproved`. Each reason comes with a `Warning` event. The
+gateway applies the same checks on every call, so an LLM call falls back to
+the next provider or returns `503 provider_unavailable`, and a tool call
+returns `503 tool_unavailable`, until you fix the Secret.
+
+1. List each ModelProvider with its endpoint and its Secret, then each
+   ToolProvider the same way. A ToolProvider with no `credentialsRef` leaves
+   the Secret column empty and needs nothing:
+
+   ```bash
+   kubectl get modelproviders -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.endpoint}{"\t"}{.spec.credentialsRef.name}{"\n"}{end}'
+   kubectl get toolproviders -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.endpoint}{"\t"}{.spec.credentialsRef.name}{"\n"}{end}'
+   ```
+
+2. Label each Secret in `kaalm-system`:
+
+   ```bash
+   kubectl label secret SECRET_NAME -n kaalm-system kaalm.io/provider-credential=true
+   ```
+
+   Replace `SECRET_NAME` with the Secret's name. Only the exact value `true`
+   counts.
+3. Annotate each Secret with the hostnames of the endpoints that use it:
+
+   ```bash
+   kubectl annotate secret SECRET_NAME -n kaalm-system kaalm.io/provider-hosts=HOSTS --overwrite
+   ```
+
+   Replace `HOSTS` with the hostname from each endpoint, without the scheme,
+   port, or path, such as `api.anthropic.com` for `https://api.anthropic.com`.
+   For more than one host, separate the names with commas. A Secret that
+   several providers share, including a ModelProvider and a ToolProvider,
+   lists every one of their hosts.
+
+A provider that fails a check recovers on its own: setting the label or the
+annotation on the Secret brings it back to `Ready=True` on the next pass,
+with no edit to the provider. If you re-create a Secret later, by delete and
+create or through External Secrets, keep both.
+
+With both parts done, run the two upgrade steps at the top of this page.
+
+To find a channel or a provider that is held back, see
+[Troubleshooting](../reference/troubleshooting.md). The design book states the
+rules, 45, 46, 49, and 50, on
 [Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
 
 **TLS Secret names.** An Agent or AgentTask created after the upgrade writes
@@ -202,4 +261,4 @@ The design book states the naming rule on
 *How this works: design book pages Operations, API versioning and deprecation
 (the storage migration, the conversion webhook, and the deprecation policy);
 Operations, Deployment (the rolling upgrade order); Resources, Validation and
-defaulting (rules 45 and 46); Controller, Reconcilers (the Agent certificate).*
+defaulting (rules 45, 46, 49, and 50); Controller, Reconcilers (the Agent certificate).*

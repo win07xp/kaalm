@@ -15,10 +15,14 @@ end box
 participant "**LLM provider**" as LLM #FFE4B5
 == Stored ==
 PE -> SEC : create kaalm-system/anthropic-api-key
+PE -> SEC : label provider-credential=true
+PE -> SEC : annotate provider-hosts with the endpoint hosts
 == Loaded ==
 GW -> SEC : get, then watch, on first use
 SEC -> GW : key, held in process memory
+GW -> GW : use the key only if the Secret is labeled and lists the host
 OP -> SEC : get on each ModelProvider pass, through the cached client
+OP -> OP : check label, then host, then key
 OP -> LLM : GET /v1/models with the key
 == Used ==
 AG -> GW : LLM request over mTLS, no credential

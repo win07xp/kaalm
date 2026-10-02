@@ -5,6 +5,9 @@ metadata:
 spec:
   type: anthropic
   endpoint: https://api.anthropic.com
+  # The Secret must carry the label kaalm.io/provider-credential: "true" and
+  # list the endpoint host (api.anthropic.com) in its kaalm.io/provider-hosts
+  # annotation.
   credentialsRef:
     name: anthropic-api-key
     key: token
