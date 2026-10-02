@@ -154,7 +154,7 @@ An agent may have no meaningful LLM traffic (polling, waiting on webhooks), so `
 
 ### `persistence.existingClaim`
 
-Mounts a pre-existing PVC instead of provisioning one. It is the enabler for promoting a finished AgentTask's workspace to a persistent Agent ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)): restore a snapshot of the task PVC to a PVC, and reference it here. Constraints:
+Mounts a pre-existing PVC instead of provisioning one. It is the enabler for promoting a finished AgentTask's workspace to a persistent Agent ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)): snapshot the task PVC with a `VolumeSnapshot` before its TTL cleanup deletes it, restore the snapshot to a PVC, and reference it here. Constraints:
 
 - Mutually exclusive with `sizeGi` (rule 27, apply time), and the claim must exist in the Agent's namespace at reconcile time (`Ready=False, reason=ExistingClaimNotFound`).
 - `AgentClass.spec.persistence.enabled: true` is still required (rule 24).
