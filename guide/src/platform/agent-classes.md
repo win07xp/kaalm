@@ -134,7 +134,9 @@ has installed, a tighter image allowlist, and lower storage ceilings. Offer it
 as a second class, for example `sandboxed`, rather than loosening `standard`;
 a class is one object and teams pick by name. Pin a `RuntimeClass` only where
 it exists: a class that names one the cluster lacks makes the apiserver reject
-every Pod that selects it, with `RuntimeClass not found`.
+every Pod of the class, so its Agents and AgentTasks never start. For what
+their status shows, see
+[Security model and isolation](https://github.com/win07xp/kaalm/blob/main/docs/src/security/model.md#runtimeclass).
 The class field `network.allowHostNetwork` is deprecated and has no effect:
 no Pod Kaalm creates uses host networking, whatever its value. A class that
 sets it to `true` reports the `DeprecatedFields` condition and a `Warning`
