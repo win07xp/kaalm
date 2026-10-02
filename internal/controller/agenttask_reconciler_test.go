@@ -23,6 +23,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	nodev1 "k8s.io/api/node/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -188,6 +190,68 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 	if task := getTask(t, "t-run"); task.Status.StartTime == nil {
 		t.Error("startTime not set on Running")
 	}
+}
+
+// A class naming a RuntimeClass the cluster lacks: the apiserver rejects the
+// task's Pod create, so the task stays Provisioning with no Pod, spends no
+// backoffLimit retry, and never starts the completion timeout.
+func TestTask_MissingRuntimeClassLeavesNoPod(t *testing.T) {
+	rcName := "absent-sandbox-task"
+	mkWorkloadClass(t, "wc-missing-rc-task", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Runtime.RuntimeClassName = &rcName
+	})
+	mkTask(t, "missing-rc-task", "wc-missing-rc-task", nil)
+	eventually(t, func() error { return markCertReadyErr("missing-rc-task") })
+
+	// The NetworkPolicy comes from ensureTaskChildren, right before the Pod
+	// create, so its presence means the create has been attempted.
+	eventually(t, func() error {
+		var np networkingv1.NetworkPolicy
+		return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-task"}, &np)
+	})
+	task := getTask(t, "missing-rc-task")
+	if task.Status.Phase != kaalmv1beta1.TaskProvisioning {
+		t.Fatalf("phase = %s, want Provisioning", task.Status.Phase)
+	}
+	if task.Status.Retries != 0 {
+		t.Fatalf("retries = %d, want 0", task.Status.Retries)
+	}
+	if task.Status.StartTime != nil {
+		t.Fatalf("startTime = %v, want unset", task.Status.StartTime)
+	}
+	if task.Status.PodName != "" {
+		t.Fatalf("podName = %q, want empty", task.Status.PodName)
+	}
+	if p := taskPod(t, "missing-rc-task"); p != nil {
+		t.Fatalf("pod %s exists, want none", p.Name)
+	}
+
+	// Recovery: once the RuntimeClass exists, an edit to the task retries.
+	rc := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: rcName}, Handler: "runsc"}
+	if err := testClient.Create(ctxT(), rc); err != nil {
+		t.Fatalf("create runtimeclass: %v", err)
+	}
+	eventually(t, func() error {
+		var got kaalmv1beta1.AgentTask
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-task"}, &got); err != nil {
+			return err
+		}
+		if got.Annotations == nil {
+			got.Annotations = map[string]string{}
+		}
+		got.Annotations["test.kaalm.io/touch"] = time.Now().Format(time.RFC3339Nano)
+		return testClient.Update(ctxT(), &got)
+	})
+	eventually(t, func() error {
+		p := taskPod(t, "missing-rc-task")
+		if p == nil {
+			return errString("no pod yet")
+		}
+		if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != rcName {
+			t.Fatalf("pod runtimeClassName = %v, want %s", p.Spec.RuntimeClassName, rcName)
+		}
+		return nil
+	})
 }
 
 func TestTask_SystemNamespaceForbidden(t *testing.T) {

@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -841,6 +842,72 @@ func TestAgent_ClassSecurityAndRuntimeChangeReplacesPod(t *testing.T) {
 	if sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != uid {
 		t.Fatalf("replacement container securityContext = %+v, want runAsUser %d", sc, uid)
 	}
+}
+
+// A class naming a RuntimeClass the cluster lacks: the apiserver rejects the
+// Pod create, the Agent gets no Pod, and it stays Provisioning rather than
+// going Degraded. Installing the RuntimeClass lets the next pass create it.
+func TestAgent_MissingRuntimeClassLeavesNoPod(t *testing.T) {
+	const rcName = "absent-sandbox"
+	rcRef := rcName
+	mkWorkloadClass(t, "wc-missing-rc", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Runtime.RuntimeClassName = &rcRef
+	})
+	mkWorkloadAgent(t, "missing-rc-agent", "wc-missing-rc", nil)
+	markCertReady(t, "missing-rc-agent")
+
+	// The apiserver's RuntimeClass admission is what rejects the Pod.
+	probe := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "missing-rc-probe", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			RuntimeClassName: &rcRef,
+			Containers:       []corev1.Container{{Name: "c", Image: "registry.test/agents/demo:v1"}},
+		},
+	}
+	err := testClient.Create(ctxT(), probe)
+	if !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), `RuntimeClass "`+rcName+`" not found`) {
+		t.Fatalf("pod create with missing RuntimeClass: err = %v, want Forbidden RuntimeClass not found", err)
+	}
+
+	// The NetworkPolicy comes from step 8, after the certificate gate, so
+	// its presence means the Pod create step has run.
+	eventually(t, func() error {
+		var np networkingv1.NetworkPolicy
+		return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-agent"}, &np)
+	})
+	ag := getWorkloadAgent(t, "missing-rc-agent")
+	if ag.Status.Phase != kaalmv1beta1.AgentProvisioning {
+		t.Fatalf("phase = %s, want Provisioning", ag.Status.Phase)
+	}
+	if c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionReady); c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %+v, want False", c)
+	}
+	if c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionDegraded); c != nil {
+		t.Fatalf("Degraded condition = %+v, want none", c)
+	}
+	if ag.Status.PodName != "" {
+		t.Fatalf("podName = %q, want empty", ag.Status.PodName)
+	}
+	if p := agentPod(t, "missing-rc-agent"); p != nil {
+		t.Fatalf("pod %s exists, want none", p.Name)
+	}
+
+	// Recovery: once the RuntimeClass exists, an edit to the Agent retries.
+	rc := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: rcName}, Handler: "runsc"}
+	if err := testClient.Create(ctxT(), rc); err != nil {
+		t.Fatalf("create runtimeclass: %v", err)
+	}
+	touchAgent(t, "missing-rc-agent")
+	eventually(t, func() error {
+		p := agentPod(t, "missing-rc-agent")
+		if p == nil {
+			return errString("no pod yet")
+		}
+		if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != rcName {
+			t.Fatalf("pod runtimeClassName = %v, want %s", p.Spec.RuntimeClassName, rcName)
+		}
+		return nil
+	})
 }
 
 // writeAsV1 rewrites a live Pod's annotations the way a v1.0.0 controller
