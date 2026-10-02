@@ -15,38 +15,31 @@ Both target Kaalm-managed Agent and AgentTask Pods with mTLS. Gateway-only-tier 
 
 A custom image has to satisfy every item of the contract. The templates satisfy all of them by consuming the runtime the base images are built from, so the developer replaces the agent logic without rebuilding the contract:
 
-- **HTTPS serving on `$KAALM_HEALTH_PORT`** with the certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, and `/readyz` and `/livez` on the same port (items 1 and 4).
+- **HTTPS serving on `$KAALM_HEALTH_PORT`**, with `/readyz` and `/livez` on the same port (items 1 and 4).
 - **Graceful SIGTERM**: in-flight requests drain before exit (item 2).
-- **mTLS on every gateway call** through a preconfigured client that presents the same certificate and trusts `$KAALM_CA_CERT` (item 3).
-- **Certificate watch and reload** on the mount directory, rebuilding both trust pools on a CA-bundle change; see [Why the watch is on the directory, not the file](#why-the-watch-is-on-the-directory-not-the-file) (item 4).
-- **Per-path client-certificate verification on `/v1/message`**: `401` with no peer certificate, `403` unless the SAN is the gateway Service DNS (item 4).
-- **The `/v1/message` handler skeleton**, which decodes the envelope, deduplicates on `messageId` over a persisted window of 1024 ids, and calls the single function the developer writes (items 4 and 7).
+- **mTLS on every gateway call** through a preconfigured client that presents the workload certificate and trusts `$KAALM_CA_CERT` (item 3).
+- **Certificate watch and reload** on the mount directory; see [Why the watch is on the directory, not the file](#why-the-watch-is-on-the-directory-not-the-file) (item 4).
+- **Per-path client-certificate verification on `/v1/message`** (item 4).
+- **The `/v1/message` handler skeleton**, which decodes the envelope, deduplicates on `messageId`, and calls the single function the developer writes (items 4 and 7).
 - **Trace-context propagation** on every gateway call made while handling a message (item 8).
 - **The heartbeat loop**, every 30s in Agent mode only; see [The heartbeat toggle and hibernation](#the-heartbeat-toggle-and-hibernation) (item 5).
-- **The task-completion helper**, `CompleteTask` in Go and `kaalm.complete_task` in Python, with one bounded retry for transport errors (errors raised before the gateway answers) and `409 stale_pod` (`StalePodCompletion`): four attempts, immediately and then after 100ms, 500ms, and 2s. `TaskAlreadyCompleted` is final (item 6). The Python runtime also runs an optional `run_task` entry point and reports its outcome; see [Task mode](base-images.md#task-mode).
+- **The task-completion helper**, `CompleteTask` in Go and `kaalm.complete_task` in Python, with the bounded retry of item 6. The Python runtime also runs an optional `run_task` entry point and reports its outcome; see [Task mode](base-images.md#task-mode).
 
 What a template does not do: choose an LLM client library, persist conversation state, or implement the agent's logic. The handler function is the single extension point, and the Python template adds an optional `async def run_task()` task entry point.
 
 ### Why the watch is on the directory, not the file
 
-This is the part most likely to be broken by a well-intentioned rewrite.
-
 The kubelet rotates projected Secret and ConfigMap volumes by renaming the `..data` symlink under the mount directory; the layout is drawn under [TLS material layout](contract.md#tls-material-layout). The leaf files `tls.crt`, `tls.key`, and `ca.crt` are symlinks and are never written in place. A watcher attached to a leaf path never sees a modification on rotation, misses every rotation, and keeps serving an expired certificate until the process restarts.
 
-The runtimes watch the mount directory instead, `/var/run/kaalm/`, for the create and rename events on the `..data` entry: fsnotify in Go, `watchdog` in Python, both anchored to the parent directory. On each event the runtime re-reads the leaf files and reloads:
-
-- A certificate or key change reloads the inbound serving certificate and the outbound client certificate.
-- A CA-bundle change rebuilds both the inbound `ClientCAs` pool (Go: `tls.Config.GetConfigForClient` returns a config with the fresh pool; Python: the server SSL context is swapped) and the outbound trust pool.
-
-Both reloads are needed. cert-manager rotates leaf certificates on its schedule ([Rotation defaults](../security/tls.md#rotation-defaults)), and trust-manager re-projects the CA ConfigMap whenever the CA renews or a re-key adds or removes bundle sources. Without the CA-bundle reload, a re-key breaks both directions once gateway leaves are re-issued under the new key: outbound calls stop trusting the gateway's serving certificate, and the inbound pool rejects the gateway's client certificate on `/v1/message` ([CA renewal and re-key](../security/tls.md#ca-renewal-and-re-key)).
+The runtimes watch the mount directory instead, `/var/run/kaalm/`, for the create and rename events on the `..data` entry. On each event the runtime re-reads the leaf files and reloads the serving and client certificates and both trust pools, as [Certificate reload on rotation](contract.md#certificate-reload-on-rotation) requires.
 
 ### The heartbeat toggle and hibernation
 
-**The heartbeat is unconditional.** In Agent mode it fires every 30s for the lifetime of the process, whether or not the agent is doing useful work. That is compatible only with the default [`Agent.spec.lifecycle.activitySource: gatewayTraffic`](../resources/agent.md), where the controller ignores heartbeats for idle detection. The gateway still records them, but they play no part in the [`Idle` and `Hibernated` transitions](../controller/agent-lifecycle.md).
+**The heartbeat is unconditional.** In Agent mode it fires every 30s for the lifetime of the process, whether or not the agent is doing useful work. That is compatible only with the default [`Agent.spec.lifecycle.activitySource: gatewayTraffic`](../resources/agent.md), where heartbeats play no part in the [`Idle` and `Hibernated` transitions](../controller/agent-lifecycle.md).
 
-With `activitySource: agentHeartbeat` or `both`, the unconditional heartbeat keeps the last-activity timestamp younger than any `idleTimeout`, and the Agent never goes `Idle` or `Hibernated`. Either leave `activitySource` at the default, or set the toggle below to `off` and emit heartbeats from the handler only while real work is in flight. The field is intended for images that emit a meaningful liveness signal.
+With `activitySource: agentHeartbeat` or `both`, the unconditional heartbeat keeps the last-activity timestamp younger than any `idleTimeout`, and the Agent never goes `Idle` or `Hibernated`. Either leave `activitySource` at the default, or set the toggle below to `off` and emit heartbeats from the handler only while real work is in flight.
 
-**Heartbeats are Agent-only.** `/v1/agent/heartbeat` rejects an AgentTask certificate with `403` ([POST /v1/agent/heartbeat](../gateways/api/agent-endpoints.md#post-v1agentheartbeat)). The runtime detects task mode from the certificate it already loads for mTLS: an AgentTask's SAN is `{name}.{namespace}.task.kaalm.io`, an Agent's is `{name}.{namespace}.svc.cluster.local` ([Workload identity](../gateways/llm/workload-identity.md)). A template image run as an AgentTask emits no heartbeats and never sees the `403`. Task liveness is governed by the task timeout, not idle detection.
+**Heartbeats are Agent-only.** `/v1/agent/heartbeat` rejects an AgentTask certificate with `403` ([POST /v1/agent/heartbeat](../gateways/api/agent-endpoints.md#post-v1agentheartbeat)). The runtime detects task mode from the SAN of the certificate it already loads for mTLS ([Workload identity](../gateways/llm/workload-identity.md)), so a template image run as an AgentTask emits no heartbeats and never sees the `403`. Task liveness is governed by the task timeout, not idle detection.
 
 `KAALM_TEMPLATE_HEARTBEAT` overrides the detection:
 
@@ -55,33 +48,16 @@ With `activitySource: agentHeartbeat` or `both`, the unconditional heartbeat kee
 | `auto` (default) | Emit every 30s in Agent mode. Emit nothing in AgentTask mode. |
 | `off` | Never emit, in either mode. Use this when the image gates emission itself, which is the prerequisite for a non-default `activitySource`. |
 
-There is no value that forces heartbeats on in task mode, because the endpoint rejects task callers and the only effect would be a `403` every 30 seconds.
+No value forces heartbeats on in task mode, because the endpoint rejects task callers.
 
 ## Layout
 
-```
-examples/
-  starter-go/
-    Dockerfile         # compiles the program, layers it onto kaalm-agent-go
-    go.mod             # no require line: go.work resolves the module in-repo; run go mod tidy in your copy
-    main.go            # wiring only: New() + Run(ctx, handler(a))
-    handler.go         # the developer-owned handler, replace this
-    handler_test.go    # a unit test for the handler, replace it with yours
-    README.md
-  starter-python/
-    Dockerfile         # FROM kaalm-agent-python + COPY handler.py + ENV
-    handler.py         # handle_message(envelope), replace this
-    README.md
-```
+Each template directory holds a `Dockerfile` and a `README.md` beside the files listed above.
 
-The Python template's image is `FROM ghcr.io/win07xp/kaalm-agent-python` (source in `images/agent-python/`), and the Go template imports the [`agentruntime` module](base-images.md#the-go-image) (source in `agentruntime/`). Inside the repository the module is resolved through the repository's `go.work`, so the template's `go.mod` carries no `require` line; a copy outside the repository runs `go mod tidy` once to pin the published version.
+Inside the repository the Go template resolves the [`agentruntime` module](base-images.md#the-go-image) (source in `agentruntime/`) through the repository's `go.work`, so its `go.mod` carries no `require` line; a copy outside the repository runs `go mod tidy` once to pin the published version. The Python base image's source is in `images/agent-python/`.
 
-Each README contains the `kubectl apply` manifests to deploy a test Agent from the template image, the environment variables the image expects (the `$KAALM_*` set the controller injects, plus `KAALM_TEMPLATE_HEARTBEAT`), and a "what to change" checklist pointing at the handler.
+Each README has a `kubectl apply` manifest to deploy a test Agent from the template image and a "What you change" section pointing at the handler.
 
 ## Relationship to the reference base images
 
-The contract runtime is single-sourced in the base images' source, and the templates are thin consumers of it rather than copies. The Python template is a `FROM` build whose own code is `handler.py` and the Dockerfile: the worked example of the `FROM` rung, for extra dependencies or a handler past the ConfigMap size cap. The Go template imports the published runtime module: the worked example of restructuring the program while keeping the contract.
-
-A contract fix therefore lands once, in the runtime source, and reaches mount-and-run users on the next image pull, `FROM` users on their next rebuild, and template users on their next module update. The full on-ramp ladder, and when to step down it, is the table in [Reference base images](base-images.md#relationship-to-the-starter-templates).
-
-The contract is the invariant across every rung: one envelope in, one response out, whether the handler is Python's `handle_message(envelope)` or Go's `Handler` function.
+The templates are thin consumers of the base images' runtime, not copies. The Python template is a `FROM` build whose own code is `handler.py` and the Dockerfile: the worked example of the `FROM` rung, for extra dependencies or a handler past the ConfigMap size cap. The Go template imports the published runtime module: the worked example of restructuring the program while keeping the contract. The full on-ramp ladder, and when to step down it, is the table in [Reference base images](base-images.md#relationship-to-the-starter-templates).

@@ -6,7 +6,7 @@ The two workload kinds get different sets, and the difference follows from what 
 
 ## Agent child resources
 
-The controller provisions six resources for each Agent, all in the Agent's namespace and all named after it. The figure shows which object each child's ownerRef names, which decides what cleans it up; the table states when each exists and what happens to it on hibernation and deletion.
+Every child lives in the Agent's namespace. The figure shows which object each child's ownerRef names, which decides what cleans it up; the table states when each exists and what happens to it on hibernation and deletion.
 
 ![An Agent with six children linked to it by ownerRef: Pod, Service, ServiceAccount, NetworkPolicy, PVC, and Certificate. Two edges break that pattern. The Certificate points on to a Secret whose ownerRef names the Certificate, set by cert-manager, and a pre-existing existingClaim PVC is linked by a grey dashed reference edge that carries no ownerRef.](../diagrams/child-resource-ownership-agent.svg)
 
@@ -24,19 +24,19 @@ The controller provisions six resources for each Agent, all in the Agent's names
 | Role and RoleBinding | `kaalm-agent-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | Agent | Kept | Deleted |
 | Role and RoleBinding | `kaalm-agent-{name}-envsecrets` | `spec.env` reads a Secret through `valueFrom.secretKeyRef` | Agent | Kept | Deleted |
 
-**The pull-Secret and env-Secret Roles serve the operator, not the Pod.** Each pair binds the operator alone and grants `get` and `watch` on the Secrets it names, so the operator can check them before it creates the Pod (the grants are under [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)). The env pair is removed on the next pass when `spec.env` names no Secret. A Role or RoleBinding of either name that the workload does not control sets `Ready=False, reason=ChildConflict` and is never changed.
+**The pull-Secret and env-Secret Roles serve the operator, not the Pod.** Each pair binds the operator alone, so the operator can check the Secrets before it creates the Pod (the grants are under [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount)). The env pair is removed on the next pass when `spec.env` names no Secret. A Role or RoleBinding of either name that the workload does not control sets `Ready=False, reason=ChildConflict` and is never changed.
 
-**The Pod is the only child that tracks phase.** The controller creates it while the Agent is `Provisioning`, moves the Agent to `Running` when the Pod is Ready, and deletes it in `Hibernating`, settling `Hibernated` once the Pod is gone. Every other child is provisioned on the first reconcile and survives hibernation, so a wake recreates the Pod against unchanged identity, storage, and TLS material ([Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics)).
+**The Pod is the only child that tracks phase.** Every other child is provisioned on the first reconcile and survives hibernation, so a wake recreates the Pod against unchanged identity, storage, and TLS material ([Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics)).
 
 What each child is for:
 
 - **The Pod** runs the agent container under the [RuntimeClass](../security/model.md#runtimeclass) its AgentClass names, or the cluster's default runtime when the class names none.
 - **The Service** exposes the agent's HTTPS endpoint inside the cluster. The gateway delivers channel messages through it with [`POST /v1/message`](../gateways/api/agent-endpoints.md#post-v1message); exposing it outside the cluster is the developer's responsibility. An Agent with the Service disabled is outbound-only and cannot be referenced by an AgentChannel (`Ready=False, reason=AgentServiceDisabled` on the channel).
 - **The ServiceAccount** carries no RoleBindings, and the Pod does not mount its token unless the class sets `security.automountServiceAccountToken`, so by default the agent has no Kubernetes API access ([Agent Pod ServiceAccount](../security/rbac.md#agent-pod-serviceaccount)).
-- **The NetworkPolicy** is synthesized from the AgentClass network policy plus the gateway's egress and ingress rules ([AgentReconciler](../controller/reconcilers.md#agentreconciler), step 8). Why it matters is the next section.
+- **The NetworkPolicy** is synthesized from the AgentClass network policy plus the gateway's egress and ingress rules ([AgentReconciler](../controller/reconcilers.md#agentreconciler), step 8).
 - **The CiliumNetworkPolicy** carries the class's `allowedHosts`, which standard NetworkPolicy cannot express ([FQDN egress policy](#fqdn-egress-policy)).
-- **The PVC** is mounted into the agent container at `spec.persistence.mountPath`, default `/var/agent/memory` ([Agent spec](../resources/agent.md#spec)), and the controller injects `$KAALM_MEMORY_DIR` with that path. The reference runtimes keep their state file on the volume under any `mountPath` ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
-- **The Certificate** is a per-agent TLS certificate with `server auth` and `client auth` usages, signed by the Kaalm CA `ClusterIssuer` and rotated by cert-manager ([Lifecycle of an Agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)). The same certificate serves the agent's HTTPS listener and is presented on every call to the gateway. The CA bundle reaches the Pod through trust-manager.
+- **The PVC** is mounted into the agent container at `spec.persistence.mountPath`, default `/var/agent/memory` ([Agent spec](../resources/agent.md#spec)), and the controller injects `$KAALM_MEMORY_DIR` with that path ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
+- **The Certificate** is a per-agent TLS certificate with `server auth` and `client auth` usages, signed by the Kaalm CA `ClusterIssuer` and rotated by cert-manager ([Lifecycle of an Agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)). The same certificate serves the agent's HTTPS listener and is presented on every call to the gateway.
 
 ### What the synthesized NetworkPolicy protects
 
@@ -68,16 +68,16 @@ When the class lists `network.egress.allowedHosts` and the CNI is Cilium, the co
 | DNS, through Cilium's DNS proxy with `matchPattern: "*"` | The cluster DNS Pods that `controller.networkPolicy.dnsSelector` selects, the same Pods as the NetworkPolicy DNS rule | 53, any protocol |
 | `toFQDNs` with one `matchName` per host, sorted | Each host in `allowedHosts` | Any |
 
-Cilium learns the addresses behind a host name only from DNS answers its proxy sees, which is why the policy carries its own DNS rule. Cilium allows the union of this policy and the NetworkPolicy, so the workload keeps its gateway, DNS, and `allowedCIDRs` egress. For an Agent, the controller converges the policy on every pass: it updates the policy when the host list changes and deletes it when the list becomes empty. For an AgentTask, the controller writes the policy when it creates the task's Pod. On a CNI without FQDN support, the controller writes no policy and the class reports `FQDNPolicySupported=False` ([AgentClass](../resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts)).
+Cilium learns the addresses behind a host name only from DNS answers its proxy sees, which is why the policy carries its own DNS rule. Cilium allows the union of this policy and the NetworkPolicy, so the workload keeps its gateway, DNS, and `allowedCIDRs` egress. For an Agent, a change to the host list updates the policy, and an empty list deletes it. For an AgentTask, the controller writes the policy when it creates the task's Pod. On a CNI without FQDN support, the controller writes no policy and the class reports `FQDNPolicySupported=False` ([AgentClass](../resources/agentclass.md#network-egress-allowedcidrs-and-allowedhosts)).
 
 ### Ownership and deletion
 
 Deleting an Agent removes its children through cascade garbage collection, because each one carries an ownerRef back to the Agent. Two objects sit outside that rule, and the figure draws each with its own edge style:
 
 - **A PVC referenced by `existingClaim`** is never given an ownerRef, so it survives Agent deletion. [`pvcRetention`](../resources/agentclass.md) does not govern it either; that field applies to Kaalm-provisioned PVCs only.
-- **The Secret cert-manager writes** for the per-Agent Certificate carries an ownerRef to the Certificate, set by cert-manager, not one to the Agent ([AgentReconciler](../controller/reconcilers.md#agentreconciler)). It is still removed on Agent deletion, one hop later: cascade GC deletes the Certificate, then the Secret that names it. That second hop requires cert-manager to run with `--enable-certificate-owner-ref=true`, which is not its default ([In-cluster TLS](../security/tls.md#in-cluster-tls)); the [certificate lifecycle figure](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate) draws the sequence. Every `AgentClass`'s `CertificateCleanup` condition ([AgentClass status](../resources/agentclass.md#status)) reports whether the flag is set, so check that condition instead of inspecting the cert-manager Deployment.
+- **The Secret cert-manager writes** for the per-Agent Certificate carries an ownerRef to the Certificate, set by cert-manager, not one to the Agent ([AgentReconciler](../controller/reconcilers.md#agentreconciler)). It is still removed on Agent deletion, one hop later: cascade GC deletes the Certificate, then the Secret that names it. That second hop requires cert-manager to run with `--enable-certificate-owner-ref=true`, which is not its default ([In-cluster TLS](../security/tls.md#in-cluster-tls)); the [certificate lifecycle figure](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate) draws the sequence. Every `AgentClass`'s `CertificateCleanup` condition ([AgentClass status](../resources/agentclass.md#status)) reports whether the flag is set.
 
-A third object looks like a child and is not one. The handler ConfigMap named by [`Agent.spec.handler`](../resources/agent.md) is developer-owned: the controller never creates it, mounts it read-only, and gives it no ownerRef, exactly like an `existingClaim` PVC. It survives Agent deletion, and its content is not tracked, so an in-place edit reaches the container only on the next Pod creation, a wake from hibernation included ([Handler update semantics](base-images.md#handler-update-semantics); rule 31 in [Cross-resource validation](../resources/validation-and-defaulting.md#cross-resource-validation)).
+A third object looks like a child and is not one. The handler ConfigMap named by [`Agent.spec.handler`](../resources/agent.md) is developer-owned: the controller never creates it and gives it no ownerRef, exactly like an `existingClaim` PVC, so it survives Agent deletion ([Handler update semantics](base-images.md#handler-update-semantics)).
 
 ### What Kaalm does not create
 
@@ -86,7 +86,7 @@ A third object looks like a child and is not one. The handler ConfigMap named by
 
 ### AgentClass changes
 
-An AgentClass change reaches existing Agents along one of three paths, depending on whether it constrains the derived Pod spec, excludes the Agent's stored spec, or only affects per-request routing. Which children are re-derived and which are preserved on each path is in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling).
+Which children are re-derived and which are preserved when an AgentClass changes is in [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling).
 
 ## AgentTask child resources
 
@@ -108,7 +108,7 @@ An AgentTask gets a similar set, adjusted for a short-lived workload that takes 
 | Role and RoleBinding | `kaalm-task-{name}-pullsecrets` | The class sets `image.imagePullSecrets` | AgentTask | Deleted |
 | Role and RoleBinding | `kaalm-task-{name}-envsecrets` | `spec.env` reads a Secret through `valueFrom.secretKeyRef` | AgentTask | Deleted |
 
-Every child carries an ownerRef, so cascade GC removes all of them and the task finalizer only terminates the Pod gracefully; unlike the Agent and AgentChannel finalizers, it sweeps nothing and rewrites no ownerRef. The only object whose ownerRef does not name the task is, as for an Agent, the Secret cert-manager writes; its ownerRef names the Certificate.
+Every child carries an ownerRef, so cascade GC removes all of them and the task finalizer only terminates the Pod gracefully. The only object whose ownerRef does not name the task is, as for an Agent, the Secret cert-manager writes; its ownerRef names the Certificate.
 
 What differs from an Agent:
 
@@ -119,9 +119,9 @@ What differs from an Agent:
 
 ### The completion mailbox
 
-When [`completion.condition: agentReported`](../controller/task-lifecycle.md), the controller also provisions a per-task ConfigMap, pre-created with `data: {}`, where the gateway writes the completion payload, and a per-task Role and RoleBinding that grant the gateway ServiceAccount name-scoped `update` and `patch` on that one ConfigMap. The ConfigMap is a completion channel, not configuration delivery.
+When [`completion.condition: agentReported`](../controller/task-lifecycle.md), the controller also provisions a per-task ConfigMap, pre-created with `data: {}`, where the gateway writes the completion payload, and a per-task Role and RoleBinding that grant the gateway ServiceAccount name-scoped `update` and `patch` on that one ConfigMap. The ConfigMap is a completion channel, not configuration delivery. The controller pre-creates it because RBAC cannot scope `create` to one name, so the Role carries no `create` verb ([Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions)).
 
-For an `agentReported` task, the reconciler writes the Pod's UID to `status.currentPodUID` on every Pod creation, initial and retry, and clears it during the retry-reset window; a task in `containerExit` mode never has the field set. The gateway reads the field from its cluster-wide AgentTask watch and rejects a completion from any other Pod at `/v1/task/complete` with `409 stale_pod` and a `StalePodCompletion` message. The order in which a retry clears and rewrites the field is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
+For an `agentReported` task, the reconciler writes the Pod's UID to `status.currentPodUID` on every Pod creation, initial and retry; a task in `exitCode` mode never has the field set. The gateway rejects a completion from any other Pod at `/v1/task/complete` with `409 stale_pod`. The order in which a retry clears and rewrites the field is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 
 ## Async response ConfigMaps are swept by label, not owned
 
@@ -134,7 +134,7 @@ An ownerReference cannot cross a namespace boundary. The garbage collector resol
 Because cascade GC never sees them, cleanup is three explicit paths, and this is the only child that needs a finalizer sweep:
 
 - **On every pass**, the AgentChannelReconciler prunes expired entries by label selector.
-- **On deletion**, the channel finalizer sweeps the whole label-matched set after the gateway confirms the channel is disconnected.
-- **Every 10 minutes**, the async orphan pruner deletes an expired entry whose channel no longer exists, for the rare record a gateway replica creates after the finalizer sweep.
+- **On deletion**, the channel finalizer sweeps the whole label-matched set.
+- **Every 10 minutes**, the async orphan pruner deletes an expired entry whose channel no longer exists.
 
-All three paths are specified in [Async webhook responses](../gateways/api/async-responses.md), and the deletion handshake and the orphan pruner in [Finalizers](../controller/finalizers.md#agentchannel).
+The paths are specified in [Async webhook responses](../gateways/api/async-responses.md) and [Finalizers](../controller/finalizers.md#agentchannel).
