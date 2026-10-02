@@ -25,7 +25,7 @@ The e2e column is the acceptance surface: every scenario names the spec that pro
 | Scenario | e2e spec | Also covered by |
 |---|---|---|
 | S1 Install and standard class | `Deployment` (six CRDs) + `Golden path` (AgentClass to Ready) | Envtest `TestAgentClass_*` |
-| S2 Sandboxed class (RuntimeClass, allowlist) | `Sandboxed class (S2)` (runtimeClassName passthrough; image-allowlist rejection) | Unit `TestDeriveEffectiveSpec_*`, `TestDesiredPod_*`, `TestAgentClassSample_Sandboxed` (the sample's gVisor runtime, allowlist, limits, baseline, and closed egress); `TestSandboxedSampleApplies` in `test/cel` also dry-runs the sample against the CRD schema and CEL |
+| S2 Sandboxed class (RuntimeClass, allowlist) | `Sandboxed class (S2)` (runtimeClassName passthrough; image-allowlist rejection) | Unit `TestDeriveEffectiveSpec_*`, `TestDesiredPod_*`, `TestAgentClassSample_Sandboxed` (the sample's gVisor runtime, allowlist, limits, baseline, and closed egress); `TestSamplesApply` in `test/cel` dry-runs every manifest in `config/samples/`, the sandboxed sample included, against the CRD schema and CEL with strict field validation, so unknown fields are rejected |
 | S3 Shared provider and per-namespace budget | `Golden path` (ModelProvider to Ready) + `Fallback and budget` (S10 block) | Unit `TestBudgetLedger_EnforceThresholds`, `TestProxy_BudgetDegradeAndBlock` |
 | S4 Fallback chain for availability | `Fallback and budget` (S4: walks to the fallback provider) | Unit `TestFallback_*`, `TestIntegration_FallbackChainWalksToBackup` |
 | S5 Revoke a team | `Access revocation (S5)` (403 + Agent `Degraded`, Pod kept) | Unit `TestProxy_TenancyDenialsInOrder`; envtest `TestAgent_ProviderNamespaceDeniedDegrades` |
