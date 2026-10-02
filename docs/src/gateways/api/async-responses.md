@@ -22,7 +22,7 @@ The webhook caller receives an immediate 202 response:
 | `status` | string | yes | Always `"accepted"` for the immediate 202. |
 | `message` | string | no | Human-readable acknowledgement. |
 
-The gateway creates the polling record before it returns the 202, so a returned 202 always means a queryable record exists. A `GET /v1/channels/responses/{requestId}` issued immediately afterward returns `202` until the agent's response or an error payload is ready, then `200`. If the record's `Create` fails (a transient apiserver failure), the inbound caller sees `503` and no `requestId`. Callers must not retain a `requestId` from any non-`202` response. A 202 that is later lost in flight is the separate case described under [Replica failure](#replica-failure).
+The gateway creates the polling record before it returns the 202, so a returned 202 always means a queryable record exists. A `GET /v1/channels/responses/{requestId}` issued immediately afterward returns `202` until the agent's response or an error payload is ready, then `200`. If the record's `Create` fails (a transient apiserver failure), the inbound caller sees `503` with `Retry-After: 5` and no `requestId`. Callers must not retain a `requestId` from any non-`202` response. A 202 that is later lost in flight is the separate case described under [Replica failure](#replica-failure).
 
 ## Callback delivery and retries
 
@@ -53,7 +53,7 @@ The four outcomes are the values of the `status` label on `kaalm_channel_callbac
 |---|---|---|---|---|
 | `delivered` | HTTP `2xx` | no | nothing | none |
 | `rejected` | HTTP `401`, `403`, `404`, `405`, `410`, `415` | no | the payload | `Warning` event, `reason=CallbackRejected` |
-| `exhausted` | DNS resolution failure, TCP connect error, TLS handshake failure, read timeout (`gateway.callbackReadTimeout`, default 10s), HTTP `408`, `429`, `422`, or any `5xx`, on all four attempts | 1s, 5s, 25s | the payload | metric only |
+| `exhausted` | DNS resolution failure, TCP connect error, TLS handshake failure, a `3xx` redirect (the gateway never follows one), read timeout (`gateway.callbackReadTimeout`, default 10s), HTTP `408`, `429`, `422`, or any `5xx`, on all four attempts | 1s, 5s, 25s | the payload | metric only |
 | `invalid` | A pre-dial check fails: the host resolves to a blocked range or outside the allowlist, or the `callbackAuth` Secret cannot be read, lacks the opt-in label (rule 45), or, for a bearer token, does not list the `callbackUrl` host (rule 46) | no | the payload, never a `callback_invalid` envelope | `Warning` event, `reason=CallbackInvalid` |
 
 The retried class covers receivers that are transiently misconfigured: auth-secret rotation drift, an in-progress deploy, or overload. `422` is retried on purpose, because a schema deploy on the receiver can briefly change the body it accepts, and four attempts cover a typical rollout. The terminal class covers receivers that permanently reject the POST: `401`, `403`, `404`, and `410` say the credential or route is wrong, and `405` and `415` say the receiver refuses a JSON POST at that URL. Retrying either would change nothing. The `invalid` outcome never reaches a receiver, so nothing is signed and nothing is POSTed.
@@ -260,6 +260,7 @@ A caller that always waits the hinted delay follows this curve without rolling i
 | 400 | no | Missing `channelPath` query parameter |
 | 401 | no | Auth failed (missing or malformed credentials, signature mismatch, clock skew over 300s on HMAC polls), or `channelPath` not registered to any AgentChannel |
 | 404 | no | Unknown `requestId`, response expired (1-hour TTL from 202-acceptance), or the stored `requestId` originated by a different channel than `channelPath`, whether the record holds a placeholder or a payload |
+| 503 | yes | Reading the polling record failed (`error.type: internal_unavailable`). `Retry-After: 1` |
 
 The `401` response carries the structured `{ "error": { "type", "message", "retryable" } }` envelope from [User Gateway error responses](errors.md#user-gateway-error-responses), with the same `unauthorized` type and the same generic message as the inbound-webhook `401`, for the reason given under [Poll authentication](#poll-authentication). The `400` response carries the same envelope with `error.type: invalid_request`, the type name from the [LLM Gateway error responses](errors.md#llm-gateway-error-responses) table. A `404` has an empty body, except for a `requestId` that is not a single path segment, which carries the `invalid_request` envelope.
 

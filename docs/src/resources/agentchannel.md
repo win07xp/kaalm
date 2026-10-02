@@ -237,7 +237,7 @@ With `session.enabled`, the gateway derives a deterministic `sessionId` from the
 
 ### Async delivery
 
-`responseMode: async` is for agents that take minutes to answer. The gateway answers `202` with a `requestId`, delivers in the background, and returns the reply to `callbackUrl` or stores it for polling. `maxPendingAsyncResponses` (default 100) caps a channel's in-flight responses: the gateway counts the channel's live records and answers `503` at the cap. The count is approximate under concurrent bursts, which is enough to protect etcd. The full contract, the callback signing, the deny ranges and allowlist behind rule 22, and the record lifecycle are on [Async webhook responses](../gateways/api/async-responses.md). A hibernated Agent is woken before delivery in either mode ([The activator](../gateways/user/activation-and-activity.md#the-activator)).
+`responseMode: async` is for agents that take minutes to answer. The gateway answers `202` with a `requestId`, delivers in the background, and returns the reply to `callbackUrl` or stores it for polling. `maxPendingAsyncResponses` (default 100) caps a channel's in-flight responses: the gateway counts the channel's live records and answers `503` at the cap. The count is approximate under concurrent bursts, which is enough to protect etcd. The full contract, the callback signing, and the record lifecycle are on [Async webhook responses](../gateways/api/async-responses.md); the deny ranges and allowlist are in [rule 22](validation/channels.md). A hibernated Agent is woken before delivery in either mode ([The activator](../gateways/user/activation-and-activity.md#the-activator)).
 
 ### Observability
 
