@@ -266,8 +266,8 @@ func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 	unlimited := &kaalmv1beta1.ToolProvider{}
 	unlimited.Name = "open"
 	for i := 0; i < 5; i++ {
-		if !rl.AllowTool(unlimited, "team-a") {
-			t.Fatal("a ToolProvider with no rate limit must always allow")
+		if ok, wait := rl.AllowTool(unlimited, "team-a"); !ok || wait != 0 {
+			t.Fatalf("a ToolProvider with no rate limit must always allow, got (%v, %d)", ok, wait)
 		}
 	}
 
@@ -276,8 +276,14 @@ func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 	tp.Spec.RateLimits.RequestsPerMinute = 2
 	allowed := 0
 	for i := 0; i < 5; i++ {
-		if rl.AllowTool(tp, "team-a") {
+		ok, wait := rl.AllowTool(tp, "team-a")
+		switch {
+		case ok && wait != 0:
+			t.Errorf("an admitted call returned wait %d, want 0", wait)
+		case ok:
 			allowed++
+		case wait < 1:
+			t.Errorf("a refused call returned wait %d, want at least 1", wait)
 		}
 	}
 	if allowed != 2 {
@@ -286,14 +292,36 @@ func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 	// A different namespace holds its own bucket. (Cross-plane collisions
 	// are unreachable by construction: the "mcp:" prefix contains a
 	// character no namespace name can, so no LLM key can equal a tool key.)
-	if !rl.AllowTool(tp, "team-b") {
+	if ok, _ := rl.AllowTool(tp, "team-b"); !ok {
 		t.Error("second namespace must carry its own bucket")
+	}
+}
+
+// TestAllowTool_RetryAfterFromBucket: a refused call reports the seconds
+// until the tool bucket holds a call again, computed as for the LLM request
+// bucket (#346).
+func TestAllowTool_RetryAfterFromBucket(t *testing.T) {
+	rl := NewRateLimiter(nil)
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	tp := &kaalmv1beta1.ToolProvider{}
+	tp.Name = "search"
+	tp.Spec.RateLimits.RequestsPerMinute = 2 // one call every 30s
+
+	for i := 0; i < 2; i++ {
+		if ok, _ := rl.AllowTool(tp, "team-a"); !ok {
+			t.Fatalf("call %d must fit the burst of 2", i+1)
+		}
+	}
+	if ok, wait := rl.AllowTool(tp, "team-a"); ok || wait != 30 {
+		t.Errorf("third call = (%v, %d), want (false, 30)", ok, wait)
 	}
 }
 
 // TestAllowTool_FewerCallsThanReplicas: with requestsPerMinute below the
 // replica count, the tool bucket still holds one whole call, so the key is
-// admitted once per refill instead of refused forever (#345).
+// admitted once per refill instead of refused forever (#345), and a refusal
+// reports the wait until the next call fits (#346).
 func TestAllowTool_FewerCallsThanReplicas(t *testing.T) {
 	rl := NewRateLimiter(func() int { return 3 })
 	now := time.Now()
@@ -302,19 +330,21 @@ func TestAllowTool_FewerCallsThanReplicas(t *testing.T) {
 	tp.Name = "search"
 	tp.Spec.RateLimits.RequestsPerMinute = 2 // 2/3 call per minute per replica
 
-	if !rl.AllowTool(tp, "team-a") {
+	if ok, _ := rl.AllowTool(tp, "team-a"); !ok {
 		t.Fatal("a fresh bucket must admit one call even when the share is below 1")
 	}
-	if rl.AllowTool(tp, "team-a") {
-		t.Fatal("a drained bucket must refuse the next call")
+	if ok, wait := rl.AllowTool(tp, "team-a"); ok || wait != 90 {
+		t.Fatalf("drained bucket = (%v, %d), want (false, 90)", ok, wait)
 	}
 	now = now.Add(60 * time.Second)
-	if rl.AllowTool(tp, "team-a") {
-		t.Error("after 60s only about 0.67 of a call has refilled; must refuse")
+	// About 0.67 of a call has refilled, so a third of a call (30s) is
+	// missing. Float rounding can push the ceiling to 31.
+	if ok, wait := rl.AllowTool(tp, "team-a"); ok || wait < 30 || wait > 31 {
+		t.Errorf("after 60s = (%v, %d), want (false, 30 or 31)", ok, wait)
 	}
 	now = now.Add(30 * time.Second)
-	if !rl.AllowTool(tp, "team-a") {
-		t.Error("a bucket refilled to one call (90s at 2/3 per minute) must admit")
+	if ok, wait := rl.AllowTool(tp, "team-a"); !ok || wait != 0 {
+		t.Errorf("a bucket refilled to one call (90s at 2/3 per minute) = (%v, %d), want (true, 0)", ok, wait)
 	}
 }
 

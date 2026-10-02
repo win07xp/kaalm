@@ -363,9 +363,9 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.RateLimiter.AllowTool(tp, c.Namespace) {
+	if ok, retryAfter := s.RateLimiter.AllowTool(tp, c.Namespace); !ok {
 		deny(http.StatusTooManyRequests, errRateLimited,
-			fmt.Sprintf("rate limit exceeded for namespace %s on tool provider %s", c.Namespace, tp.Name), true, 1, "", "")
+			fmt.Sprintf("rate limit exceeded for namespace %s on tool provider %s", c.Namespace, tp.Name), true, retryAfter, "", "")
 		return
 	}
 

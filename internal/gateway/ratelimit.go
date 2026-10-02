@@ -134,13 +134,15 @@ func retryAfterSeconds(deficit, perMinute float64) int {
 	return secs
 }
 
-// AllowTool is the brokered-call analog, keyed per (namespace, ToolProvider)
+// AllowTool reports whether a brokered call may proceed and, when it may not,
+// the Retry-After in seconds until the bucket holds a call again, computed as
+// for the LLM request bucket. It is keyed per (namespace, ToolProvider)
 // under a prefix no namespace name can produce (":" is not a DNS label
 // character), so tool buckets never collide with LLM model buckets. Its
 // bucket holds at least one call, as the LLM request bucket does, so a
 // ceiling below the replica count still admits one call per refill on each
 // replica.
-func (r *RateLimiter) AllowTool(tp *kaalmv1beta1.ToolProvider, namespace string) bool {
+func (r *RateLimiter) AllowTool(tp *kaalmv1beta1.ToolProvider, namespace string) (bool, int) {
 	return r.allow(tp.Spec.RateLimits.RequestsPerMinute, "mcp:"+namespace+"/"+tp.Name)
 }
 
@@ -157,12 +159,13 @@ const (
 // Agent) under a prefix no namespace name can produce, so heartbeat buckets
 // never collide with model or tool buckets.
 func (r *RateLimiter) AllowHeartbeat(namespace, agent string) bool {
-	return r.take("hb:"+namespace+"/"+agent, heartbeatPerMinute, heartbeatBurst)
+	ok, _ := r.take("hb:"+namespace+"/"+agent, heartbeatPerMinute, heartbeatBurst)
+	return ok
 }
 
-func (r *RateLimiter) allow(limit int32, key string) bool {
+func (r *RateLimiter) allow(limit int32, key string) (bool, int) {
 	if limit <= 0 {
-		return true
+		return true, 0
 	}
 	share := perReplica(limit, r.replicas())
 	return r.take(key, share, requestBurst(share))
@@ -189,16 +192,18 @@ func perReplica(limit int32, replicas int) float64 {
 func requestBurst(share float64) float64 { return math.Max(share, 1) }
 
 // take consumes one token from key's bucket, which refills at perMinute and
-// holds at most burst tokens.
-func (r *RateLimiter) take(key string, perMinute, burst float64) bool {
+// holds at most burst tokens, and returns (true, 0). When the bucket holds
+// less than one token it consumes nothing and returns false with the whole
+// seconds until it holds one, at least 1.
+func (r *RateLimiter) take(key string, perMinute, burst float64) (bool, int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	b := r.refilled(key, perMinute, burst)
 	if b.tokens >= 1 {
 		b.tokens--
-		return true
+		return true, 0
 	}
-	return false
+	return false, retryAfterSeconds(1-b.tokens, perMinute)
 }
 
 // refilled returns key's bucket, created full when missing, after adding
