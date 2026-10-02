@@ -191,9 +191,9 @@ The gateway computes `Retry-After` from how far the refused bucket is from admit
 | Refused by | `Retry-After` (seconds) |
 |---|---|
 | Token bucket | `ceil(-tokens / per_replica_tokens_per_minute * 60)` |
-| Request bucket | The time until the next request token |
+| Request bucket, including the tool-plane (namespace, ToolProvider) bucket | `ceil((1 - tokens) / per_replica_requests_per_minute * 60)` |
 
-For example, with `requestsPerMinute: 2` and one replica, the third request in a burst gets `Retry-After: 30`. Tool-plane and heartbeat `rate_limited` responses send `Retry-After: 1`.
+For example, with `requestsPerMinute: 2` and one replica, the third request in a burst gets `Retry-After: 30`. Tool-plane `rate_limited` responses compute `Retry-After` the same way from the tool bucket. For example, `requestsPerMinute: 2` on 3 replicas gives `Retry-After: 90` after the first call. A limit at or above the replica count, such as 300 on 3, gives `Retry-After: 1`. Heartbeat `rate_limited` responses send `Retry-After: 1`.
 
 ### Limits of the token limit
 
