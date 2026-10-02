@@ -15,10 +15,10 @@ limitations under the License.
 */
 
 // Package cel exercises the CRD schema validation (CEL and structural) against a
-// real apiserver via envtest. Every fixture under test/fixtures/valid must apply;
-// every fixture under test/fixtures/invalid must be rejected. This is the
-// apply-time half of docs/src/resources/validation-and-defaulting.md. Every
-// manifest under config/samples must also apply, with strict field validation.
+// real apiserver via envtest. Every fixture under test/fixtures/valid and every
+// manifest under config/samples must apply with strict field validation; every
+// fixture under test/fixtures/invalid must be rejected. This is the apply-time
+// half of docs/src/resources/validation-and-defaulting.md.
 package cel
 
 import (
@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +70,37 @@ func newClient(t *testing.T) client.Client {
 	return c
 }
 
+// dryRunCreate dry-runs the create of u against the CRD schema and CEL rules
+// and rejects any field the schema does not know. Default field validation only
+// prunes such a field with a warning, so a stale or misspelled field would pass.
+func dryRunCreate(ctx context.Context, c client.Client, u *unstructured.Unstructured) error {
+	return c.Create(ctx, u, client.DryRunAll, client.FieldValidation("Strict"))
+}
+
+// TestDryRunCreateRejectsUnknownField guards dryRunCreate: an object with a
+// misspelled field must be rejected, not accepted with the field pruned.
+func TestDryRunCreateRejectsUnknownField(t *testing.T) {
+	c := newClient(t)
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kaalm.io/v1beta1",
+		"kind":       "Agent",
+		"metadata":   map[string]any{"name": "unknown-field-probe", "namespace": "default"},
+		"spec": map[string]any{
+			"agentClassRef": map[string]any{"name": "standard"},
+			"imagee":        "ghcr.io/win07xp/agent:latest",
+		},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := dryRunCreate(ctx, c, u)
+	if err == nil {
+		t.Fatal("the apiserver accepted an unknown field; the dry-run must use strict field validation")
+	}
+	if !strings.Contains(err.Error(), `unknown field "spec.imagee"`) {
+		t.Fatalf("expected an unknown field error for spec.imagee, got: %v", err)
+	}
+}
+
 func decode(t *testing.T, path string) *unstructured.Unstructured {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -103,15 +135,17 @@ func fixtures(t *testing.T, dir string) []string {
 	return entries
 }
 
-// TestValidFixturesApply asserts every valid fixture is accepted by the apiserver.
-// A server-side dry-run exercises CEL and structural validation without persisting.
+// TestValidFixturesApply asserts every valid fixture is accepted by the apiserver
+// with strict field validation, so a stale or misspelled field fails the test
+// instead of being pruned with a warning. A server-side dry-run exercises CEL and
+// structural validation without persisting.
 func TestValidFixturesApply(t *testing.T) {
 	c := newClient(t)
 	for _, f := range fixtures(t, "valid") {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := c.Create(ctx, decode(t, f), client.DryRunAll); err != nil {
+			if err := dryRunCreate(ctx, c, decode(t, f)); err != nil {
 				t.Fatalf("expected accept, got: %v", err)
 			}
 		})
@@ -179,7 +213,7 @@ func TestSamplesApply(t *testing.T) {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			for i, u := range decodeDocs(t, f) {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				err := c.Create(ctx, u, client.DryRunAll, client.FieldValidation("Strict"))
+				err := dryRunCreate(ctx, c, u)
 				cancel()
 				if err != nil {
 					t.Errorf("document %d (%s %s): expected accept, got: %v", i+1, u.GetKind(), u.GetName(), err)
