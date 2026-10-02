@@ -125,9 +125,13 @@ func (r *RateLimiter) DebitTokens(provider *kaalmv1beta1.ModelProvider, namespac
 func tokenKey(namespace, model string) string { return "tpm:" + namespace + "/" + model }
 
 // retryAfterSeconds is the whole seconds until a bucket refilling at
-// perMinute gains deficit tokens, at least 1.
+// perMinute gains deficit tokens, at least 1. The wait is rounded to the
+// nearest nanosecond, the clock's resolution, before the ceiling is taken,
+// so float error in an exact wait (30.000000000000007s) does not add a
+// second, while a real fraction of a second still rounds up.
 func retryAfterSeconds(deficit, perMinute float64) int {
-	secs := int(math.Ceil(deficit / perMinute * 60))
+	wait := time.Duration(math.Round(deficit / perMinute * float64(time.Minute)))
+	secs := int((wait + time.Second - 1) / time.Second)
 	if secs < 1 {
 		return 1
 	}
