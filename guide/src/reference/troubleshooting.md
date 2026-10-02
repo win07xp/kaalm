@@ -16,6 +16,22 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   cert-manager logs.
 - **PVC unbound** (`Provisioning`): `kubectl get pvc -n NAMESPACE`; usually a
   StorageClass problem.
+- **RuntimeClass missing**: the Agent's class names a `RuntimeClass` the
+  cluster lacks, so the apiserver rejects every Pod create of the class with
+  `pod rejected: RuntimeClass "NAME" not found`. The Agent has no Pod, and no
+  condition names the cause, even after its certificate is issued. The error
+  appears only in the controller log. To check, read the name from the class,
+  then look for it on the cluster:
+
+  ```bash
+  kubectl get agentclass CLASS_NAME -o jsonpath='{.spec.runtime.runtimeClassName}'
+  kubectl get runtimeclass RUNTIMECLASS_NAME
+  ```
+
+  To fix it, create the `RuntimeClass` or change the class. Then edit the
+  Agent (for example, add an annotation) to retry at once, because creating
+  the `RuntimeClass` does not trigger a retry. For the full behavior, see
+  [Security model and isolation](https://github.com/win07xp/kaalm/blob/main/docs/src/security/model.md#runtimeclass).
 
 An image the class does not allow is not a `Provisioning` symptom: the Agent
 goes `Degraded` instead.
