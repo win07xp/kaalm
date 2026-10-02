@@ -1,6 +1,6 @@
 # Reconcilers
 
-The operator hosts six reconcilers, one per CRD. This page is the implementation spec for each: what it watches, and what every reconciliation pass does, in the order it does it.
+The operator hosts six reconcilers, one per CRD. This page lists what each one watches. The pages under it specify what each reconciliation pass does.
 
 Read them in dependency order. `AgentClassReconciler`, `ModelProviderReconciler`, and `ToolProviderReconciler` validate the platform-level resources that the workload reconcilers depend on. `AgentReconciler` is the most complex: it creates and reconciles the full child-resource tree for a persistent agent. `AgentTaskReconciler` mirrors it for one-shot work, and `AgentChannelReconciler` creates no Pods at all: it validates, scopes credential access, and reports status.
 
@@ -19,9 +19,11 @@ For the state machines these reconcilers drive, see [Agent lifecycle](agent-life
 
 The cert-manager output Secret of a Certificate carries an ownerRef to the Certificate, set by cert-manager, never to the Agent or AgentTask. The predicates on the Agent watches limit the fan-out: a class or tool provider re-enqueues its Agents only when its spec generation changes, and a model provider only when its spec, its set of blocked namespaces, or its `Ready` status or reason changes, so the spend counters the gateway publishes every ten seconds and the in-use counts the class reconciler writes do not re-enqueue the fleet. The AgentChannel path watch works the same way: an update that keeps the channel's path, such as a status write, re-enqueues nothing.
 
-- [AgentClassReconciler](reconcilers/agentclass.md)
-- [ModelProviderReconciler](reconcilers/modelprovider.md)
-- [ToolProviderReconciler](reconcilers/toolprovider.md)
-- [AgentReconciler](reconcilers/agent.md)
-- [AgentTaskReconciler](reconcilers/agenttask.md)
-- [AgentChannelReconciler](reconcilers/agentchannel.md)
+Each reconciler's pass is specified on its own page:
+
+- [AgentClassReconciler](reconcilers/agentclass.md): validating a class, counting its users, and the CNI probe for FQDN egress support.
+- [ModelProviderReconciler](reconcilers/modelprovider.md): credential checks, configuration validation, the liveness probe, budget reconciliation, and fallback validation.
+- [ToolProviderReconciler](reconcilers/toolprovider.md): credential checks and the MCP liveness probe.
+- [AgentReconciler](reconcilers/agent.md): the full pass for a persistent agent, from the degrade gate through the Certificate, child resources, and Pod to activity detection.
+- [AgentTaskReconciler](reconcilers/agenttask.md): the pass for one-shot work, including the pre-Pod checks, the Certificate, and the completion mailbox.
+- [AgentChannelReconciler](reconcilers/agentchannel.md): validation, the per-channel credential Roles, the health poll, phase reduction, and pruning of async records.

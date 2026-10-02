@@ -1,5 +1,7 @@
 # AgentChannelReconciler
 
+This page specifies the AgentChannelReconciler: what one pass does, and its credential Roles, health poll, phase reduction, and pruning of async records. What it watches is in [Reconcilers](../reconcilers.md#what-each-reconciler-watches).
+
 The reconciler creates no Pods. It validates the channel, scopes credential access, reduces the gateway's health and the bound Agent's phase into status, and prunes the channel's async records. One pass:
 
 1. **Guard.** A channel in the operator namespace sets `status.phase: Failed` and `Ready=False, reason=SystemNamespaceForbidden`, and the pass ends.

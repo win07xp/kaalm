@@ -1,5 +1,7 @@
 # AgentClassReconciler
 
+This page specifies the AgentClassReconciler: what one pass does, and the CNI probe behind the `FQDNPolicySupported` condition. What it watches is in [Reconcilers](../reconcilers.md#what-each-reconciler-watches).
+
 AgentClass has no owned child resources, so a pass validates the class, counts its users, checks certificate cleanup, and writes status.
 
 1. Validate references and network fields, collecting every problem: a listed `allowedProviders` or `allowedToolProviders` entry that does not exist, an `allowedCIDRs` entry that does not parse ([rule 19](../../resources/validation/class-policy.md)), and an `allowedHosts` entry that is not a valid DNS name (rule 20). Any problem sets `Ready=False` with a message listing them all, sorted. The reason is `InvalidCIDR` when an `allowedCIDRs` entry is malformed, since that problem sorts first, and `InvalidReference` otherwise.

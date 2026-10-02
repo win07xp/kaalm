@@ -1,10 +1,12 @@
-# Rules: references and access
+# Reference and access rules
+
+This page states the rules that make a reference resolve (rules 1, 3, 13, 23, 27, 31, 35, and 48) and the access gates on providers and tools (rules 4, 5, 36, 37, and 38). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
 
 ## Referenced objects must exist
 
 **Rule 1: Class references must resolve.** `Agent.spec.agentClassRef` and `AgentTask.spec.agentClassRef` must name an existing AgentClass. *Reconcile time; `Ready=False, reason=InvalidReference`.*
 
-**Rule 3: Provider references must resolve.** Every `providers[].providerRef` on an Agent or AgentTask must name an existing ModelProvider. *Reconcile time; the class-mismatch handling, `reason=ClassConstraintViolation`.* It shares its outcome with rules 4 and 5 because a provider that vanishes and a provider that stops admitting the workload look the same to the workload.
+**Rule 3: Provider references must resolve.** Every `providers[].providerRef` on an Agent or AgentTask must name an existing ModelProvider. *Reconcile time; the [class-mismatch handling](../validation-and-defaulting.md#cross-resource-validation), `reason=ClassConstraintViolation`.* It shares its outcome with rules 4 and 5 because a provider that vanishes and a provider that stops admitting the workload look the same to the workload.
 
 **Rule 13: Channel targets must resolve.** `AgentChannel.spec.agentRef` must name an existing Agent in the channel's namespace. *Reconcile time; `phase=Failed`, `Ready=False, reason=AgentNotFound`.*
 

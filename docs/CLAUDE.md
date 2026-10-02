@@ -6,7 +6,8 @@ reader is a contributor or an operator. It is the spec for the contract
 (resources and fields, validation rules, the runtime contract, observable
 behavior), not an account of the code line by line; the code is the source for
 that. The reference pages state each contract in full:
-`src/resources/validation-and-defaulting.md`, `src/runtime/contract.md`, the
+`src/resources/validation-and-defaulting.md` (the rules index) and the rule
+pages under `src/resources/validation/`, `src/runtime/contract.md`, the
 resource pages under `src/resources/`, and the HTTP API pages under
 `src/gateways/api/`. Every page applies "What to include" from the docs-clarity
 skill.

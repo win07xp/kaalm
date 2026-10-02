@@ -1,5 +1,7 @@
 # ModelProviderReconciler
 
+This page specifies the ModelProviderReconciler: what one pass does, and its liveness probe, budget reconciliation, fallback validation, and cost check. What it watches is in [Reconcilers](../reconcilers.md#what-each-reconciler-watches).
+
 1. **Credentials.** Read the Secret named by `spec.credentialsRef` from the operator namespace only. A missing Secret sets `Ready=False, reason=CredentialsMissing`. A Secret without the label `kaalm.io/provider-credential: "true"` sets `reason=SecretNotOptedIn` (rule 49). A Secret whose `kaalm.io/provider-hosts` annotation does not list the `spec.endpoint` host sets `reason=EndpointHostNotApproved` (rule 50). A missing or empty key sets `reason=CredentialsMissing`. Any of these ends the pass before the rest of the steps; [Provider credentials](../../resources/validation/providers.md#provider-credentials) states the rules and what the early end protects. A change to the Secret, including its label or annotation, re-evaluates every provider that names it at once.
 2. **Configuration validation.** Three checks can set `Ready=False` and end the pass. The message lists every problem found, and the reason is `InvalidDegradeTarget` if any degrade target is bad, else `HardBudgetUnpriced`, else `InvalidModelMap`, else `FallbackIneligible`.
     - The fallback chain ([Fallback chain validation](#fallback-chain-validation)): a violation of rule 11 or 12 gives `reason=FallbackIneligible`, and a violation of rule 41 gives `reason=InvalidModelMap`.

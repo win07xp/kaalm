@@ -1,5 +1,7 @@
 # Schema validation and defaulting
 
+This page lists the field-level schema checks and the defaults applied to each kind. The numbered rules, and where each check is enforced, are on [Validation and defaulting](../validation-and-defaulting.md).
+
 ## Schema validation
 
 Field-level checks the apiserver enforces from the CRD schema, without a rule number. Each rejects the write at apply time.

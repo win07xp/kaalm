@@ -1,6 +1,8 @@
 # ToolProviderReconciler
 
-Reconciliation is the ModelProviderReconciler's pass without budgets, fallback, and the gateway mirror:
+This page specifies the ToolProviderReconciler: what one pass does. What it watches is in [Reconcilers](../reconcilers.md#what-each-reconciler-watches).
+
+Reconciliation is the [ModelProviderReconciler](modelprovider.md)'s pass without budgets, fallback, and the gateway mirror:
 
 1. **Credentials.** Resolve `spec.credentialsRef` only when set, and only from the operator namespace: a same-named Secret in a tenant namespace never satisfies the ref. The Secret passes the same credential checks as on ModelProvider (rules 49 and 50, [Provider credentials](../../resources/validation/providers.md#provider-credentials)), and a failure ends the pass before the probe. A nil ref is valid, since unauthenticated servers exist; the probe then carries no credential, and the Ready message says so.
 2. **Liveness probe**, when `healthCheck.enabled` (a nil block defaults to enabled, as on ModelProvider), bounded by `healthCheck.timeoutSeconds` (default 10s). The probe connects to `spec.endpoint` with the tool credential as `Authorization: Bearer <credential>`, and never follows a redirect. It speaks MCP in whichever revision the server does ([Protocol revisions](../../gateways/tool-plane.md#protocol-revisions)). Success sets `Healthy=True, reason=UpstreamReachable` and records the negotiated revision in `status.mcpRevision`; a failed probe keeps the last recorded revision. Failures, events, and requeue follow the [ModelProvider probe table](modelprovider.md#liveness-probe): a `401` or `403` anywhere in the sequence sets `CredentialsInvalid` and ends the pass, and any other failure sets `ProviderUnhealthy`. The probe backs off while it fails ([Probe backoff](modelprovider.md#probe-backoff)) and uses the ModelProvider's trust pool ([Probe TLS trust](modelprovider.md#probe-tls-trust)).

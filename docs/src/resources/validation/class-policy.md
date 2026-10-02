@@ -1,8 +1,10 @@
-# Rules: class policy
+# Class policy rules
+
+This page states the rules that compare a workload with its AgentClass: what the class allows (rules 2, 24, 26, 29, 30, and 47), the caps and limits it sets (rules 6 to 10 and 42 to 44), and its egress entries (rules 19 and 20). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
 
 ## What the class allows
 
-Each of these compares a workload against its AgentClass, so none of the workload checks can be CRD CEL. A violation follows the class-mismatch handling: the Agent moves to `phase=Degraded` with `preDegradedPhase` set and its Pod is not created (or not recreated, when class drift introduced the conflict), and it returns to its prior phase when the specs align. Rules 26, 29, and 30 are Agent-only, because hibernation and handler mounts do not apply to one-shot tasks; for rules 2, 24, and 47 an AgentTask moves to `phase=Failed` instead.
+Each of these compares a workload against its AgentClass, so none of the workload checks can be CRD CEL. A violation follows the [class-mismatch handling](../validation-and-defaulting.md#cross-resource-validation): the Agent moves to `phase=Degraded` with `preDegradedPhase` set and its Pod is not created (or not recreated, when class drift introduced the conflict), and it returns to its prior phase when the specs align. Rules 26, 29, and 30 are Agent-only, because hibernation and handler mounts do not apply to one-shot tasks; for rules 2, 24, and 47 an AgentTask moves to `phase=Failed` instead.
 
 **Rule 2: The workload image must be on the class allowlist.** `Agent.spec.image` and `AgentTask.spec.image` must match at least one pattern in `AgentClass.spec.image.allowedImages` when the list is non-empty. *`reason=ClassConstraintViolation`.*
 

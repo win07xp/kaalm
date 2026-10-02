@@ -1,4 +1,6 @@
-# Rules: providers
+# Provider rules
+
+This page states the ModelProvider rules for fallback and budgets (rules 11, 12, 18, 32 to 34, and 41) and the credential rules for ModelProvider and ToolProvider (rules 49 and 50). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
 
 ## Providers: fallback and budgets
 

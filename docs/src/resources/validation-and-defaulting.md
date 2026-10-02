@@ -2,6 +2,8 @@
 
 Kaalm runs no admission webhook server, validating or mutating. Every check is enforced by the apiserver at apply time, from the CRD schema, or by a reconciler, which reports a violation as status. That keeps the control plane free of a webhook availability dependency, and it lets rules that span resources surface on existing objects as recoverable status rather than blocked writes.
 
+This page explains where each check is enforced and indexes the numbered rules. The pages under it state the rules, the schema checks, and the defaults.
+
 ## Cross-resource validation
 
 A check is enforced in one of three places:
@@ -24,7 +26,7 @@ The class-mismatch arm is the only one that recovers: the Agent keeps `preDegrad
 
 ### Where each rule is enforced
 
-Other pages cite rules by number, so the numbering never changes. This table is the index, and [The rules](#the-rules) states each one. The numbered rules cover cross-resource and semantic checks; [Schema validation](validation/schema-and-defaulting.md#schema-validation) lists the field-level checks.
+Other pages cite rules by number, so the numbering never changes. This table is the index: each rule number links to the page that states the rule, and [The rules](#the-rules) lists those pages. The numbered rules cover cross-resource and semantic checks; [Schema validation](validation/schema-and-defaulting.md#schema-validation) lists the field-level checks.
 
 | Rule | Guards | Enforced by | On violation |
 |---|---|---|---|
@@ -85,11 +87,11 @@ Two reconcile-time outcomes carry no number. A failure to write either per-chann
 
 ### The rules
 
-Each rule states what must hold, where it is enforced, and why. They are grouped by what they protect.
+Each rule states what must hold, where it is enforced, and why. The rule pages group them by what they protect, and the [rules index](#where-each-rule-is-enforced) links each rule number to its page.
 
-- [Rules: references and access](validation/references-and-access.md)
-- [Rules: class policy](validation/class-policy.md)
-- [Rules: names, namespaces, and tasks](validation/names-and-tasks.md)
-- [Rules: channels](validation/channels.md)
-- [Rules: providers](validation/providers.md)
-- [Schema validation and defaulting](validation/schema-and-defaulting.md)
+- [Reference and access rules](validation/references-and-access.md): references that must resolve, and the access gates on providers and tools.
+- [Class policy rules](validation/class-policy.md): what the class allows, the caps it sets, and its egress entries.
+- [Name, namespace, and task rules](validation/names-and-tasks.md): workload names, the system namespace, and task artifacts.
+- [Channel rules](validation/channels.md): the target Agent, the channel path, callbacks, and channel credentials.
+- [Provider rules](validation/providers.md): fallback, budgets, and provider credentials.
+- [Schema validation and defaulting](validation/schema-and-defaulting.md): the field-level schema checks without a rule number, and the defaults.

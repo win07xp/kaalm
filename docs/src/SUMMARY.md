@@ -21,11 +21,11 @@
 - [AgentTask](resources/agenttask.md)
 - [AgentChannel](resources/agentchannel.md)
 - [Validation and defaulting](resources/validation-and-defaulting.md)
-  - [Rules: references and access](resources/validation/references-and-access.md)
-  - [Rules: class policy](resources/validation/class-policy.md)
-  - [Rules: names, namespaces, and tasks](resources/validation/names-and-tasks.md)
-  - [Rules: channels](resources/validation/channels.md)
-  - [Rules: providers](resources/validation/providers.md)
+  - [Reference and access rules](resources/validation/references-and-access.md)
+  - [Class policy rules](resources/validation/class-policy.md)
+  - [Name, namespace, and task rules](resources/validation/names-and-tasks.md)
+  - [Channel rules](resources/validation/channels.md)
+  - [Provider rules](resources/validation/providers.md)
   - [Schema validation and defaulting](resources/validation/schema-and-defaulting.md)
 
 # Agent Runtime

@@ -1,4 +1,6 @@
-# Rules: channels
+# Channel rules
+
+This page states the AgentChannel rules: the target Agent's Service (rule 14), the channel path (rules 15 and 16), callbacks (rules 22, 25, and 46), the type and its configuration block (rule 39), and credentials (rules 40 and 45). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
 
 ## Channels
 
