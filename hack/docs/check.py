@@ -16,6 +16,14 @@ Checks, per book:
 - none of the words the prose rules ban (see WORDING_PATTERNS) outside code;
 - every cited `config/samples/...` or `test/e2e/testdata/...` path exists;
 - the scenario coverage map lists S1 to S24 once each;
+- every spec label the map's e2e column quotes is a Describe or It label in
+  test/e2e or test/upgrade. A label is the cell's first code span, a span
+  after ' + ', or a span that starts with a capital letter and contains a
+  space;
+- every Describe or It label that carries an S-number, as '(S<n>' or a
+  leading 'S<n>:', is quoted in that S-number's row, as itself or as its
+  Describe;
+- on any other page, a code span that contains '(S<n>' names a real label;
 - every figure the guide embeds is listed in guide/src/diagrams/SOURCES, every
   listed figure is a byte-exact copy of its design-book source, and nothing
   else sits in guide/src/diagrams.
@@ -51,6 +59,15 @@ LINK_TARGET = re.compile(r"\]\([^)]*\)")
 HTML_TAG = re.compile(r"<[^>]+>")
 CITED_PATH = re.compile(r"\b((?:config/samples|test/e2e/testdata)/[\w./-]+\.ya?ml)\b")
 DASHES = re.compile("[–—]")
+# Ginkgo node labels, checked against the scenario coverage map and against
+# spec labels quoted on other pages.
+SPEC_DIRS = ("test/e2e", "test/upgrade")
+COVERAGE_MAP = "docs/src/appendix/scenario-coverage.md"
+SPEC_NODE = re.compile(
+    r'\b[FPX]?(Describe|Context|When|It|Specify|DescribeTable)\(\s*(?:"((?:[^"\\]|\\.)*)"|`([^`]*)`)'
+)
+SPEC_SNUM = re.compile(r"\(S(\d+)\b|^S(\d+):")
+QUOTED_LABEL = re.compile(r"\(S\d+\b")
 GUIDE_EMBED = re.compile(r"\]\((?:\.\./)+diagrams/([\w-]+\.svg)\)")
 ALLOW_TIME = "docs-check: allow-time"
 
@@ -176,11 +193,43 @@ class Checker:
         self.time_report = time_report
         self.ratchet_report = ratchet_report
         self.anchor_cache: dict[pathlib.Path, set[str]] = {}
+        self.spec_cache: tuple[dict[str, str], list[tuple[int, str, str, str]]] | None = None
 
     def anchors(self, path: pathlib.Path) -> set[str]:
         if path not in self.anchor_cache:
             self.anchor_cache[path] = page_anchors(path.read_text(encoding="utf-8").splitlines())
         return self.anchor_cache[path]
+
+    def spec_labels(self) -> tuple[dict[str, str], list[tuple[int, str, str, str]]]:
+        """The Ginkgo node labels in SPEC_DIRS.
+
+        Returns (labels, numbered): labels maps each label to its first
+        'path:line'; numbered holds (n, label, enclosing Describe, 'path:line')
+        for each S-number a label carries. The glob is not recursive, so the
+        mock servers' plain Go tests under test/e2e/mock* are skipped. The
+        enclosing Describe is the nearest preceding Describe in the file; no
+        spec file nests Describes.
+        """
+        if self.spec_cache is not None:
+            return self.spec_cache
+        labels: dict[str, str] = {}
+        numbered: list[tuple[int, str, str, str]] = []
+        for d in SPEC_DIRS:
+            for f in sorted((ROOT / d).glob("*_test.go")):
+                rel = f.relative_to(ROOT).as_posix()
+                text = f.read_text(encoding="utf-8")
+                describe = ""
+                for m in SPEC_NODE.finditer(text):
+                    kind = m.group(1)
+                    label = m.group(2) if m.group(2) is not None else m.group(3)
+                    where = f"{rel}:{text.count(chr(10), 0, m.start()) + 1}"
+                    if kind in ("Describe", "DescribeTable"):
+                        describe = label
+                    labels.setdefault(label, where)
+                    for s in SPEC_SNUM.finditer(label):
+                        numbered.append((int(s.group(1) or s.group(2)), label, describe, where))
+        self.spec_cache = (labels, numbered)
+        return self.spec_cache
 
     def check_book(self, book: str) -> None:
         src = ROOT / book / "src"
@@ -217,6 +266,15 @@ class Checker:
             for cited in CITED_PATH.findall(line):
                 if not (ROOT / cited).exists():
                     self.problems.append(f"{rel}:{n}: cited file does not exist: {cited}")
+        if rel != COVERAGE_MAP:
+            labels = self.spec_labels()[0]
+            for m in INLINE_CODE.finditer(joined.text):
+                inner = " ".join(m.group(0)[1:-1].split())
+                if QUOTED_LABEL.search(inner) and inner not in labels:
+                    self.problems.append(
+                        f"{rel}:{joined.line_at(m.start())}: quotes spec label `{inner}`, "
+                        "which no Describe or It in test/e2e or test/upgrade carries"
+                    )
         if rel not in TIME_ALLOWLIST:
             self.check_time(rel, prose)
         self.check_wording(rel, prose)
@@ -282,14 +340,49 @@ class Checker:
                         self.problems.append(f"{rel}:{n}: embeds {name}, which is not listed in guide/src/diagrams/SOURCES")
 
     def check_coverage_map(self) -> None:
-        path = ROOT / "docs/src/appendix/scenario-coverage.md"
-        rows = re.findall(r"^\|\s*S(\d+)\b", path.read_text(encoding="utf-8"), re.MULTILINE)
+        path = ROOT / COVERAGE_MAP
+        text = path.read_text(encoding="utf-8")
+        rows = re.findall(r"^\|\s*S(\d+)\b", text, re.MULTILINE)
         ids = sorted(int(r) for r in rows)
         expected = list(range(1, 25))
         if ids != expected:
             self.problems.append(
-                f"docs/src/appendix/scenario-coverage.md: rows are S{ids} not S1 to S24 once each"
+                f"{COVERAGE_MAP}: rows are S{ids} not S1 to S24 once each"
             )
+        labels, numbered = self.spec_labels()
+        quoted: dict[int, set[str]] = {}
+        for n, line in enumerate(text.splitlines(), 1):
+            row = re.match(r"^\|\s*S(\d+)\b", line)
+            if not row:
+                continue
+            sid = int(row.group(1))
+            parts = line.split("|")
+            if len(parts) < 4:
+                self.problems.append(f"{COVERAGE_MAP}:{n}: S{sid} row does not have three cells")
+                continue
+            cell = parts[2]
+            seen = quoted.setdefault(sid, set())
+            for m in re.finditer(r"`([^`]*)`", cell):
+                # A code span names a spec when it opens the cell, follows the
+                # ' + ' joiner, or starts with a capital and holds a space. A
+                # non-label span of that last form (`Authorization: Bearer`)
+                # fails as a missing label; reword the cell to fix it.
+                before = cell[: m.start()].strip()
+                span = m.group(1)
+                if not (before == "" or before.endswith("+") or (span[:1].isupper() and " " in span)):
+                    continue
+                seen.add(span)
+                if span not in labels:
+                    self.problems.append(
+                        f"{COVERAGE_MAP}:{n}: S{sid} names spec `{span}`, "
+                        "which no Describe or It in test/e2e or test/upgrade carries"
+                    )
+        for sid, label, describe, where in numbered:
+            if sid not in quoted:
+                self.problems.append(f'{where}: spec "{label}" carries S{sid}, which has no row in {COVERAGE_MAP}')
+            elif label not in quoted[sid] and describe not in quoted[sid]:
+                quotes = "does not quote it" if label == describe else f'quotes neither it nor its Describe "{describe}"'
+                self.problems.append(f'{where}: spec "{label}" carries S{sid}, but the S{sid} row of {COVERAGE_MAP} {quotes}')
 
     def check_diagrams(self) -> None:
         result = subprocess.run(
