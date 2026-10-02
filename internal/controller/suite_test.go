@@ -407,6 +407,23 @@ func eventually(t *testing.T, fn func() error) {
 	t.Fatalf("condition not met within %s: %v", timeout, last)
 }
 
+// consistently polls fn for the whole of d and fails the first time it
+// returns an error. It pins a state that must hold across several
+// reconcile passes, not just at one read.
+func consistently(t *testing.T, d time.Duration, fn func() error) {
+	t.Helper()
+	start := time.Now()
+	for {
+		if err := fn(); err != nil {
+			t.Fatalf("condition broke after %s: %v", time.Since(start).Round(time.Millisecond), err)
+		}
+		if time.Since(start) >= d {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func condition(conds []metav1.Condition, condType string) *metav1.Condition {
 	return apimeta.FindStatusCondition(conds, condType)
 }

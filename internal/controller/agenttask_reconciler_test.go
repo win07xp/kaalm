@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -203,28 +204,35 @@ func TestTask_MissingRuntimeClassLeavesNoPod(t *testing.T) {
 	mkTask(t, "missing-rc-task", "wc-missing-rc-task", nil)
 	eventually(t, func() error { return markCertReadyErr("missing-rc-task") })
 
-	// The NetworkPolicy comes from ensureTaskChildren, right before the Pod
-	// create, so its presence means the create has been attempted.
+	// The NetworkPolicy comes from ensureTaskChildren. It shows a pass
+	// reached the step just before the Pod create, not that the create ran,
+	// so the state is held across several backoff retries below.
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
 		return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-task"}, &np)
 	})
-	task := getTask(t, "missing-rc-task")
-	if task.Status.Phase != kaalmv1beta1.TaskProvisioning {
-		t.Fatalf("phase = %s, want Provisioning", task.Status.Phase)
-	}
-	if task.Status.Retries != 0 {
-		t.Fatalf("retries = %d, want 0", task.Status.Retries)
-	}
-	if task.Status.StartTime != nil {
-		t.Fatalf("startTime = %v, want unset", task.Status.StartTime)
-	}
-	if task.Status.PodName != "" {
-		t.Fatalf("podName = %q, want empty", task.Status.PodName)
-	}
-	if p := taskPod(t, "missing-rc-task"); p != nil {
-		t.Fatalf("pod %s exists, want none", p.Name)
-	}
+	consistently(t, time.Second, func() error {
+		var task kaalmv1beta1.AgentTask
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-task"}, &task); err != nil {
+			return err
+		}
+		if task.Status.Phase != kaalmv1beta1.TaskProvisioning {
+			return fmt.Errorf("phase = %s, want Provisioning", task.Status.Phase)
+		}
+		if task.Status.Retries != 0 {
+			return fmt.Errorf("retries = %d, want 0", task.Status.Retries)
+		}
+		if task.Status.StartTime != nil {
+			return fmt.Errorf("startTime = %v, want unset", task.Status.StartTime)
+		}
+		if task.Status.PodName != "" {
+			return fmt.Errorf("podName = %q, want empty", task.Status.PodName)
+		}
+		if p := taskPod(t, "missing-rc-task"); p != nil {
+			return fmt.Errorf("pod %s exists, want none", p.Name)
+		}
+		return nil
+	})
 
 	// Recovery: once the RuntimeClass exists, an edit to the task retries.
 	rc := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: rcName}, Handler: "runsc"}

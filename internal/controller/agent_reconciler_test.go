@@ -869,28 +869,35 @@ func TestAgent_MissingRuntimeClassLeavesNoPod(t *testing.T) {
 		t.Fatalf("pod create with missing RuntimeClass: err = %v, want Forbidden RuntimeClass not found", err)
 	}
 
-	// The NetworkPolicy comes from step 8, after the certificate gate, so
-	// its presence means the Pod create step has run.
+	// The NetworkPolicy comes from step 8, after the certificate gate. It
+	// shows a pass reached the step just before the Pod create, not that the
+	// create ran, so the state is held across several backoff retries below.
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
 		return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-agent"}, &np)
 	})
-	ag := getWorkloadAgent(t, "missing-rc-agent")
-	if ag.Status.Phase != kaalmv1beta1.AgentProvisioning {
-		t.Fatalf("phase = %s, want Provisioning", ag.Status.Phase)
-	}
-	if c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionReady); c == nil || c.Status != metav1.ConditionFalse {
-		t.Fatalf("Ready = %+v, want False", c)
-	}
-	if c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionDegraded); c != nil {
-		t.Fatalf("Degraded condition = %+v, want none", c)
-	}
-	if ag.Status.PodName != "" {
-		t.Fatalf("podName = %q, want empty", ag.Status.PodName)
-	}
-	if p := agentPod(t, "missing-rc-agent"); p != nil {
-		t.Fatalf("pod %s exists, want none", p.Name)
-	}
+	consistently(t, time.Second, func() error {
+		var ag kaalmv1beta1.Agent
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-agent"}, &ag); err != nil {
+			return err
+		}
+		if ag.Status.Phase != kaalmv1beta1.AgentProvisioning {
+			return fmt.Errorf("phase = %s, want Provisioning", ag.Status.Phase)
+		}
+		if c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionReady); c == nil || c.Status != metav1.ConditionFalse {
+			return fmt.Errorf("ready = %+v, want False", c)
+		}
+		if c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionDegraded); c != nil {
+			return fmt.Errorf("degraded condition = %+v, want none", c)
+		}
+		if ag.Status.PodName != "" {
+			return fmt.Errorf("podName = %q, want empty", ag.Status.PodName)
+		}
+		if p := agentPod(t, "missing-rc-agent"); p != nil {
+			return fmt.Errorf("pod %s exists, want none", p.Name)
+		}
+		return nil
+	})
 
 	// Recovery: once the RuntimeClass exists, an edit to the Agent retries.
 	rc := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: rcName}, Handler: "runsc"}
