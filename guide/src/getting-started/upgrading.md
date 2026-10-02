@@ -229,7 +229,9 @@ To find a channel or a provider that is held back, see
 rules, 45, 46, 49, and 50, on
 [Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
 
-**TLS Secret names.** An Agent or AgentTask created after the upgrade writes
+### TLS Secret names
+
+An Agent or AgentTask created after the upgrade writes
 its certificate to a Secret named `{name}-tls-` plus the first eight characters
 of the workload's UID, such as `support-assistant-tls-3f9c2a1e`. The
 Certificate is still named `{name}-tls`. A workload whose Certificate existed
