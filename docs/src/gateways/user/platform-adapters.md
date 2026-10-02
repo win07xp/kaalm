@@ -8,7 +8,7 @@ This page covers the adapter interface, the three adapters, and the health signa
 
 Three adapters: the **generic webhook adapter** (inbound HTTP POST with configurable auth), the **Discord adapter** (the Interactions endpoint), and the **WhatsApp adapter** (the Cloud API webhook).
 
-All three are inbound HTTP, the pattern the User Gateway is built around: authenticate a caller, normalize a payload, deliver it to an agent, return or dispatch the reply. The one Discord mode that needs a persistent connection, the Gateway WebSocket that free-text message bots use, is not designed (see [the roadmap](../../ROADMAP.md#beyond)): it would need one replica to hold each bot's connection, sharding and resume logic, and connection-event health, none of which the HTTP adapters need.
+All three are inbound HTTP: authenticate a caller, normalize a payload, deliver it to an agent, return or dispatch the reply. The Discord Gateway WebSocket that free-text message bots use needs a persistent connection, which this pattern has no place for, and is not designed (see [the roadmap](../../ROADMAP.md#beyond)).
 
 ## The platform adapter interface
 
@@ -24,16 +24,19 @@ type platformAdapter interface {
     // The reply half: text (the agent's content, or an error rendered as
     // text) out through the platform API. Returns the callback outcome.
     SendReply(ctx, channel, message, text) string
+    // The most platform API requests SendReply makes for text. The async
+    // pipeline bound counts one callback schedule per request.
+    ReplyRequests(text) int
 }
 ```
 
-The Discord and WhatsApp adapters implement it. The generic webhook adapter predates the interface and stays inline in the route: its inbound half is [Request flow](overview.md#request-flow) steps 4 and 5, and its reply half is the async callback of step 10, which applies the `callbackUrl` re-check and the `callbackAuth` signing that platform replies skip (see [Reply delivery](#reply-delivery)). Each message an adapter returns runs its own pipeline (wake, deliver, reply) in the background, with no `kaalm-async` record because nobody polls for it. The platform adapters have no sync mode: neither platform keeps an inbound request open for the answer.
+The Discord and WhatsApp adapters implement it. The generic webhook adapter does not implement it and stays inline in the route: its inbound half is [Request flow](overview.md#request-flow) steps 4 and 5, and its reply half is the async callback of step 10, which applies the `callbackUrl` re-check and the `callbackAuth` signing that platform replies skip (see [Reply delivery](#reply-delivery)). Each message an adapter returns runs its own pipeline (wake, deliver, reply) in the background, with no `kaalm-async` record because nobody polls for it.
 
 ---
 
 ## The platform adapters
 
-The Discord and WhatsApp adapters share one design: verify the platform's signature, answer the platform at once, and deliver the reply later through the platform's API. The AgentChannel fields are in [Platform types](../../resources/agentchannel.md#platform-types); the wire contracts are [Discord channel](../api/channel-discord.md) and [WhatsApp channel](../api/channel-whatsapp.md). This section is the mechanism.
+The Discord and WhatsApp adapters share one design: verify the platform's signature, answer the platform at once, and deliver the reply later through the platform's API. The AgentChannel fields are in [Platform types](../../resources/agentchannel.md#platform-types); the wire contracts are [Discord channel](../api/channel-discord.md) and [WhatsApp channel](../api/channel-whatsapp.md).
 
 ### Inbound
 
@@ -41,8 +44,8 @@ The Discord and WhatsApp adapters share one design: verify the platform's signat
 
 The acknowledgement divides the flow. Everything before it happens with the platform waiting (Discord allows 3 seconds, WhatsApp expects a prompt `200`); everything after it happens with the platform gone, which is why both adapters are async only and why an error at the end of the pipeline travels back as a reply rather than as a status code.
 
-1. **Size check and routing gate**, unchanged from [Request flow](overview.md#request-flow), steps 2 and 3: `413` above `gateway.maxMessageBodyBytes`, `401` for a path not registered to a `Ready=True` channel. The adapter is chosen by the channel's `spec.type`.
-2. **Verification handshakes.** A WhatsApp verification `GET` is answered with its `hub.challenge` when `hub.mode` is `subscribe` and `hub.verify_token` matches the channel's `verifyToken`, else `401`. A Discord `PING` (interaction type 1) is answered with `PONG` after its signature is checked, so a `PING` with a bad signature is `401`, which Discord sends on purpose during URL registration and expects rejected. Both prove the URL to the platform when the operator saves it and go no further: no envelope, and no health observation unless verification fails, which is recorded like any inbound auth failure.
+1. **Size check and routing gate**, unchanged from [Request flow](overview.md#request-flow), steps 2 and 3: `413` above `gateway.maxMessageBodyBytes`, `401` for a path not registered to a `Ready=True` channel.
+2. **Verification handshakes.** A WhatsApp verification `GET` is answered with its `hub.challenge` when `hub.mode` is `subscribe` and `hub.verify_token` matches the channel's `verifyToken`, else `401`. A Discord `PING` (interaction type 1) is answered with `PONG` after its signature is checked. During URL registration Discord also sends a `PING` with a bad signature on purpose and expects `401`. Both prove the URL to the platform when the operator saves it and go no further: no envelope, and no health observation unless verification fails, which is recorded like any inbound auth failure.
 3. **Authenticate.** Discord: Ed25519 verification of `X-Signature-Ed25519` over `X-Signature-Timestamp` concatenated with the raw body, using the channel's `publicKey`; a timestamp more than 300s from the gateway's clock is rejected, the same replay bound the [polling endpoint](../api/async-responses.md#polling-fallback) uses. WhatsApp: HMAC-SHA256 over the raw body with `appSecret`, compared in constant time against `X-Hub-Signature-256` after stripping `sha256=`; it is the webhook adapter's `hmac` path with the header, prefix, and encoding fixed. Failures are `401` and a `failure` observation with `reason: WebhookAuthFailed`. A body that does not parse is `400`.
 4. **Kind.** Only a Discord application command (type 2) and a WhatsApp message produce an envelope. A Discord component interaction gets a deferred update, an autocomplete gets an empty choice list, and a modal submit gets a fixed ephemeral refusal; none is an observation.
 5. **Scope and filter.** Discord: with `guildId` or `allowedChannelIds` set, a command from elsewhere is answered at once with a fixed ephemeral message and produces no envelope. WhatsApp: `statuses` entries, events for a `phone_number_id` other than the channel's, and messages without a sender are acknowledged and dropped. Neither is a health observation; each counts on `kaalm_channel_messages_total` with `status="rejected"`.
@@ -70,19 +73,19 @@ The two adapters differ only in what a reply is:
 - **Discord** edits the interaction's original deferred message with the first 2000 characters of the reply (`PATCH .../messages/@original`) and posts each further 2000-character chunk as a follow-up. The interaction token is valid for 15 minutes. Past that window, or on a `404` from the first request, the adapter switches the whole reply to channel messages posted with the bot token from the credential Secret's `botToken` key, each chunk prefixed with a mention of the user and each run on the same schedule. Without `botToken` the switch is a terminal refusal.
 - **WhatsApp** posts one text message per 4096-character chunk to `/{phoneNumberId}/messages` with the `accessToken` as bearer, in order, each delivered before the next is sent. An unreadable `accessToken` is a terminal refusal.
 
-An error from the async pipeline (`delivery_failed`, `wake_timeout`, `controller_unavailable`, `response_too_large`) is sent as the text `"{error.type}: {error.message}"` through the same path, so the person sees a failure rather than silence. The message is fixed for each type, because the person is outside the cluster and a transport error names Services and Pod IPs; the detail is on channel health and in the gateway log. `wake_timeout` carries the effective `wakeTimeout`. An empty agent reply is sent as `(empty reply)`. Neither counts as a success on channel health; the failure that produced it was already recorded.
+An error from the async pipeline (`delivery_failed`, `wake_timeout`, `controller_unavailable`, `response_too_large`) is sent as text that starts with the error type, through the same path, so the person sees a failure rather than silence. The rest of the text is fixed for each type, because the person is outside the cluster and a transport error names Services and Pod IPs; the detail is on channel health and in the gateway log. An empty agent reply is sent as a short placeholder. Neither counts as a success on channel health; the failure that produced it was already recorded.
 
 ---
 
 ## Channel health tracking
 
-The gateway keeps per-channel delivery health in memory, per replica, from inbound requests on channels of every type and from outbound reply attempts (callback POSTs for async webhook channels with `callbackUrl` set, platform replies for Discord and WhatsApp channels). The controller reads it with [GET /v1/channels/health](../api/internal-endpoints.md#get-v1channelshealth) to set `status.conditions[type=PlatformConnected]` on each AgentChannel. No etcd write happens per request.
+The gateway keeps per-channel delivery health in memory, per replica, from inbound requests on channels of every type and from outbound reply attempts (callback POSTs for async webhook channels with `callbackUrl` set, platform replies for Discord and WhatsApp channels), so no request writes to etcd. The controller reads it with [GET /v1/channels/health](../api/internal-endpoints.md#get-v1channelshealth) to set `status.conditions[type=PlatformConnected]` on each AgentChannel.
 
 `PlatformConnected` is a **rolling-window** condition, not a last-result condition: it reflects what the channel has done in the last `gateway.channelHealthWindow` (default `5m`). A long-silent channel therefore never looks healthy on the strength of a delivery hours or days ago.
 
 ### What a replica records
 
-Each replica keeps a list of in-window observations per registered channel path, at most 256, each `{ result: success | failure, reason, timestamp, lastError? }`. Entries older than the window are dropped on insertion and ignored on read.
+Each replica keeps the in-window observations per registered channel path, at most the newest 256, each `{ result: success | failure, reason, timestamp, lastError? }`.
 
 | Reason | Result | Recorded when |
 |---|---|---|
@@ -90,10 +93,10 @@ Each replica keeps a list of in-window observations per registered channel path,
 | `WebhookAuthFailed` | failure | inbound auth failed: webhook bearer or HMAC, a Discord signature or timestamp, a WhatsApp signature or verify token |
 | `AgentNotReady` | failure | the referenced Agent does not exist, or the activator is unreachable or not configured |
 | `DispatchFailed` | failure | the delivery retry schedule was exhausted |
-| `CallbackInvalid` | failure | a webhook `callbackUrl` failed the pre-dial check, or its `callbackAuth` Secret could not be read, lacks the label `kaalm.io/channel-credential: "true"` ([rule 45](../../resources/validation/channels.md)), or, for a bearer token, does not list the `callbackUrl` host in `kaalm.io/callback-hosts` (rule 46). The message for a Secret refusal starts `callbackAuth secret unavailable:` |
+| `CallbackInvalid` | failure | a webhook `callbackUrl` failed the pre-dial check, or its `callbackAuth` Secret could not be read, lacks the label `kaalm.io/channel-credential: "true"` ([rule 45](../../resources/validation/channels.md)), or, for a bearer token, does not list the `callbackUrl` host in `kaalm.io/callback-hosts` (rule 46) |
 | `CallbackRejected` | failure | a callback POST was terminally refused (`401`, `403`, `404`, `405`, `410`, `415`), or a platform reply was terminally refused or exhausted its retries |
 
-Not recorded: a verification handshake that passes (it proves the URL, not delivery), Discord's save-time verification probe (a badly signed `PING` that the gateway still answers `401`, because a channel with the wrong public key already fails the valid `PING` and Discord refuses to save the URL), a scope refusal (the platform sent something the channel is configured not to accept), a queued-but-undelivered message, and a callback attempt that is still being retried. Only the delivered `2xx` is a success, so a channel whose messages are accepted but never reach the agent reports `DispatchFailed`, not success. `CallbackInvalid` cannot occur for a platform channel: its reply destination is operator-set and never re-checked against the deny ranges.
+Not recorded: a verification handshake that passes (it proves the URL, not delivery), Discord's save-time verification probe (a badly signed `PING` that the gateway still answers `401`; a wrong public key already fails the valid `PING`, so Discord refuses to save the URL), a scope refusal (the platform sent something the channel is configured not to accept), a queued-but-undelivered message, and a callback attempt that is still being retried. Only the delivered `2xx` is a success, so a channel whose messages are accepted but never reach the agent reports `DispatchFailed`, not success.
 
 From its list, each replica reports one state per channel:
 
@@ -107,7 +110,7 @@ Each response also carries `replicaStartedAt`. A replica younger than the window
 
 ### How the controller reduces it
 
-The `AgentChannelReconciler` queries every gateway Pod IP in parallel, with the same per-Pod-IP TLS handling (`ServerName` set to the gateway Service DNS) and the same unreachable-replica skip as the [activity-API fan-out](activation-and-activity.md#activity-tracking-api), then tries four rules in order.
+The `AgentChannelReconciler` queries every gateway Pod IP in parallel, with the same per-Pod-IP TLS handling and unreachable-replica skip as the [activity-API fan-out](activation-and-activity.md#activity-tracking-api), then tries four rules in order.
 
 ![Flowchart of the reduction from per-replica health states to the PlatformConnected condition, as two rows. Collect: if no replica is reachable, keep the existing condition; otherwise collect state and replicaStartedAt from each reachable replica. Reduce, in order: any replica reports success, so True with reason WebhookReady; else any replica reports failure, so False with the newest failure's reason; else one replica has been up a full window and every replica is empty, so Unknown with reason NoRecentTraffic; else keep the existing condition.](../../diagrams/channel-health-reduction.svg)
 
@@ -118,4 +121,4 @@ The `AgentChannelReconciler` queries every gateway Pod IP in parallel, with the 
 | 3 | else at least one reachable replica has been up the full window, and every reachable replica reports `empty` | `Unknown`, `reason=NoRecentTraffic` |
 | 4 | else, including when no replica is reachable | nothing; the existing condition stays |
 
-Rule 3 needs both halves because an `empty` from a young replica proves nothing. Rule 4 writes nothing on purpose: it is the all-replicas-unreachable path too, and writing a state there would flap the condition on every coordinated gateway restart. Nothing in the reduction is type-specific, and the reason names are shared: `WebhookReady` is the inbound-works signal for every channel type. A persistent-connection adapter would be the case that adds connection-event observations (handshake completed, disconnect with reason); the HTTP adapters have no connection to observe.
+Rule 3 needs both halves because an `empty` from a young replica proves nothing. Rule 4 writes nothing on purpose: it is the all-replicas-unreachable path too, and writing a state there would flap the condition on every coordinated gateway restart. Nothing in the reduction is type-specific, and the reason names are shared: `WebhookReady` is the inbound-works signal for every channel type.
