@@ -70,6 +70,20 @@ spec:
               AgentClassSpec is a platform-owned policy template that governs how a category
               of Agents and AgentTasks may run. See docs/src/resources/agentclass.md.
             properties:
+              allowedNamespaces:
+                description: |-
+                  AllowedNamespaces lists the namespaces whose Agents and AgentTasks may
+                  use this class, as path.Match glob patterns such as "team-*". Unset
+                  admits every namespace. An empty list is rejected: omit the field to
+                  admit every namespace. This differs from ModelProvider and ToolProvider
+                  allowedNamespaces, where an empty list admits none (rule 47).
+                items:
+                  type: string
+                type: array
+                x-kubernetes-validations:
+                - message: allowedNamespaces must list at least one pattern; omit
+                    the field to admit every namespace (rule 47)
+                  rule: size(self) > 0
               allowedProviders:
                 description: |-
                   AllowedProviders lists the ModelProviders workloads of this class may use.
@@ -970,6 +984,20 @@ spec:
               AgentClassSpec is a platform-owned policy template that governs how a category
               of Agents and AgentTasks may run. See docs/src/resources/agentclass.md.
             properties:
+              allowedNamespaces:
+                description: |-
+                  AllowedNamespaces lists the namespaces whose Agents and AgentTasks may
+                  use this class, as path.Match glob patterns such as "team-*". Unset
+                  admits every namespace. An empty list is rejected: omit the field to
+                  admit every namespace. This differs from ModelProvider and ToolProvider
+                  allowedNamespaces, where an empty list admits none (rule 47).
+                items:
+                  type: string
+                type: array
+                x-kubernetes-validations:
+                - message: allowedNamespaces must list at least one pattern; omit
+                    the field to admit every namespace (rule 47)
+                  rule: size(self) > 0
               allowedProviders:
                 description: |-
                   AllowedProviders lists the ModelProviders workloads of this class may use.

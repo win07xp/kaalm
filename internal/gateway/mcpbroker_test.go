@@ -210,6 +210,15 @@ func TestMCPBroker_EnforcementMatrix(t *testing.T) {
 	expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
 	h.store.classes["std"].Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "search"}}
 
+	// Class namespace miss (rule 47).
+	h.store.classes["std"].Spec.AllowedNamespaces = []string{"prod-only"}
+	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	msg = expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
+	if !strings.Contains(msg, "allowedNamespaces") {
+		t.Errorf("message = %q, want the class allowedNamespaces explanation", msg)
+	}
+	h.store.classes["std"].Spec.AllowedNamespaces = nil
+
 	// Narrowing miss: fetch_page is cataloged but not granted.
 	resp = postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("fetch_page"), nil)
 	expectMCPError(t, resp, http.StatusForbidden, errToolDenied)

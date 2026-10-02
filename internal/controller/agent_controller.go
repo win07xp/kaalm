@@ -624,6 +624,12 @@ func (r *AgentReconciler) degradedReasons(
 		out = append(out, metav1.Condition{Reason: reason, Message: msg})
 	}
 
+	// Rule 47: the class admits the Agent's namespace. First, so it is the
+	// reported reason when several mismatches exist.
+	if !class.AdmitsNamespace(agent.Namespace) {
+		add(kaalmv1beta1.ReasonNamespaceNotAllowed,
+			fmt.Sprintf("namespace %q is not in AgentClass %q allowedNamespaces", agent.Namespace, class.Name))
+	}
 	// Rule 2: image allowlist.
 	if eff.Image != "" && !imageAllowed(eff.Image, class.Spec.Image.AllowedImages) {
 		add(kaalmv1beta1.ReasonClassConstraintViolation,

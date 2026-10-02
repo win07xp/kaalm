@@ -571,6 +571,11 @@ func (r *AgentTaskReconciler) handleTTL(ctx context.Context, task *kaalmv1beta1.
 func (r *AgentTaskReconciler) taskViolation(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
 ) (string, string) {
+	// Rule 47: the class admits the task's namespace.
+	if !class.AdmitsNamespace(task.Namespace) {
+		return kaalmv1beta1.ReasonNamespaceNotAllowed,
+			fmt.Sprintf("namespace %q is not in AgentClass %q allowedNamespaces", task.Namespace, class.Name)
+	}
 	if eff.Image != "" && !imageAllowed(eff.Image, class.Spec.Image.AllowedImages) {
 		return kaalmv1beta1.ReasonClassConstraintViolation,
 			fmt.Sprintf("image %q does not match AgentClass %q allowedImages", eff.Image, class.Name)

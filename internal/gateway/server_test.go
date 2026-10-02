@@ -913,3 +913,67 @@ func TestUpstreamTransportPoolsConnectionsPerHost(t *testing.T) {
 		t.Errorf("per-host pool %d is no larger than the default %d", tr.MaxIdleConnsPerHost, http.DefaultMaxIdleConnsPerHost)
 	}
 }
+
+// TestProxy_ClassNamespaceGate covers rule 47 on the LLM path: a workload
+// whose AgentClass allowedNamespaces does not admit its namespace gets 403
+// access_denied; a matching pattern or an unset field lets the call through.
+func TestProxy_ClassNamespaceGate(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"r","usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	})
+	h.seedRoute()
+	h.store.tasks["team-a/fix-42"] = &kaalmv1beta1.AgentTask{
+		ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"},
+		Spec: kaalmv1beta1.AgentTaskSpec{
+			AgentClassRef: kaalmv1beta1.LocalObjectReference{Name: "std"},
+			Providers: []kaalmv1beta1.AgentProviderReference{
+				{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "prov"}},
+			},
+		},
+	}
+	agentC := agentCert(t, h.ca)
+	taskC := h.ca.issue(t, "fix-42.team-a.task.kaalm.io")
+	body := map[string]any{"model": "prov/m1", "messages": []any{}}
+
+	expectDenied := func(t *testing.T, cert *tls.Certificate) {
+		t.Helper()
+		resp := postJSON(t, h.client(cert), h.url("/v1/chat/completions"), body, nil)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("status %d, want 403", resp.StatusCode)
+		}
+		var envelope struct {
+			Error errorBody `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Error.Type != errAccessDenied {
+			t.Errorf("error type %q, want %q", envelope.Error.Type, errAccessDenied)
+		}
+		if !strings.Contains(envelope.Error.Message, "allowedNamespaces") ||
+			!strings.Contains(envelope.Error.Message, `"std"`) {
+			t.Errorf("message %q must name allowedNamespaces and the class", envelope.Error.Message)
+		}
+	}
+	expectForwarded := func(t *testing.T, cert *tls.Certificate) {
+		t.Helper()
+		resp := postJSON(t, h.client(cert), h.url("/v1/chat/completions"), body, nil)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			raw, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status %d, want 200 (%s)", resp.StatusCode, raw)
+		}
+	}
+
+	h.store.classes["std"].Spec.AllowedNamespaces = []string{"prod-*"}
+	t.Run("agent denied", func(t *testing.T) { expectDenied(t, &agentC) })
+	t.Run("task denied", func(t *testing.T) { expectDenied(t, &taskC) })
+
+	h.store.classes["std"].Spec.AllowedNamespaces = []string{"team-*"}
+	t.Run("agent admitted by glob", func(t *testing.T) { expectForwarded(t, &agentC) })
+
+	h.store.classes["std"].Spec.AllowedNamespaces = nil
+	t.Run("agent admitted when unset", func(t *testing.T) { expectForwarded(t, &agentC) })
+}

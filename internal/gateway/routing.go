@@ -67,6 +67,11 @@ func (s *Server) authorizeRoute(
 			return nil, &routeDenial{403, errAccessDenied,
 				fmt.Sprintf("AgentClass %q not found", classRef)}
 		}
+		// Rule 47: the class admits the workload's namespace.
+		if !class.AdmitsNamespace(c.Namespace) {
+			return nil, &routeDenial{403, errAccessDenied,
+				fmt.Sprintf("namespace %q is not in AgentClass %q allowedNamespaces", c.Namespace, classRef)}
+		}
 		allowed := false
 		for _, ap := range class.Spec.AllowedProviders {
 			if ap.Name == providerName {

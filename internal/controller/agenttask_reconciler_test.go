@@ -883,6 +883,49 @@ func TestTask_ProviderNamespaceDeniedIsTerminalFailed(t *testing.T) {
 	expectTaskPhase(t, "t-provns-task", kaalmv1beta1.TaskFailed)
 }
 
+// Rule 47: a class whose allowedNamespaces does not admit the task's
+// namespace settles it terminal Failed with NamespaceNotAllowed, no Pod.
+func TestTask_ClassNamespaceDeniedIsTerminalFailed(t *testing.T) {
+	mkWorkloadClass(t, "tc-ns-deny", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedNamespaces = []string{"team-*"}
+	})
+	mkTask(t, "t-ns-deny", "tc-ns-deny", nil)
+	// The task's namespace (default) does not match team-*.
+	expectTaskPhase(t, "t-ns-deny", kaalmv1beta1.TaskFailed)
+	task := getTask(t, "t-ns-deny")
+	c := condition(task.Status.Conditions, kaalmv1beta1.ConditionCompleted)
+	if c == nil || c.Reason != kaalmv1beta1.ReasonNamespaceNotAllowed {
+		t.Errorf("Completed condition wrong: %+v", c)
+	}
+	if taskPod(t, "t-ns-deny") != nil {
+		t.Error("no Pod may be created for a namespace the class does not admit")
+	}
+}
+
+// Rule 47: a matching pattern and an unset field both admit the namespace.
+func TestTask_ClassNamespaceAllowedProvisions(t *testing.T) {
+	mkWorkloadClass(t, "tc-ns-exact", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.AllowedNamespaces = []string{"default"}
+	})
+	mkWorkloadClass(t, "tc-ns-unset", nil)
+	for _, c := range []struct{ task, class string }{
+		{"t-ns-exact", "tc-ns-exact"},
+		{"t-ns-unset", "tc-ns-unset"},
+	} {
+		mkTask(t, c.task, c.class, nil)
+		eventually(t, func() error { return markCertReadyErr(c.task) })
+		eventually(t, func() error {
+			if taskPod(t, c.task) == nil {
+				return errString(c.task + ": no pod yet")
+			}
+			return nil
+		})
+		if got := getTask(t, c.task).Status.Phase; got == kaalmv1beta1.TaskFailed {
+			t.Errorf("%s Failed under class %s", c.task, c.class)
+		}
+	}
+}
+
 func TestTask_ImagePullSecretMissingGates(t *testing.T) {
 	mkWorkloadClass(t, "tc-pull", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "tc-pull-creds"}}
