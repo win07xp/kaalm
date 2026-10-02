@@ -25,8 +25,7 @@ spec:
   endpoint: https://mcp-search.tools.svc:8443
 
   # Optional, unlike ModelProvider's. A Secret key in the operator
-  # namespace, never a tenant namespace, injected by the gateway per
-  # brokered call. Omit it for a server that requires no authentication;
+  # namespace. Omit it for a server that requires no authentication;
   # the probe and the broker then send no Authorization header. When set,
   # the Secret must carry the label kaalm.io/provider-credential: "true"
   # (rule 49) and list the endpoint host in its kaalm.io/provider-hosts
@@ -83,16 +82,16 @@ status:
 | Field | Meaning |
 |---|---|
 | `mcpRevision` | The MCP protocol revision the probe last negotiated (`2026-07-28`, or `2025-03-26` for a server on the handshake era). Empty until the first successful probe; it keeps its last value after a failed probe and when the probe is disabled. |
-| `Ready` | Whether the credential resolves. `True` with `reason: CredentialsValid`, and the message `provider is valid (no credential configured)` when there is no `credentialsRef`. `False` with `CredentialsMissing` when the Secret or key is absent or empty, `SecretNotOptedIn` when the Secret lacks the label `kaalm.io/provider-credential: "true"` (rule 49), `EndpointHostNotApproved` when its `kaalm.io/provider-hosts` annotation omits the `spec.endpoint` host (rule 50), `CredentialsInvalid` when the server answers the probe with a 401 or 403, or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). `CredentialsMissing`, `SecretNotOptedIn`, `EndpointHostNotApproved`, and `CredentialsInvalid` each send a `Warning` event with the same reason when it first appears on `Ready`, not on every pass while it holds ([Event emission](../controller/operations.md#event-emission)). |
+| `Ready` | Whether the credential resolves. `True` with `reason: CredentialsValid`, also when there is no `credentialsRef`. `False` with `CredentialsMissing` when the Secret or key is absent or empty, `SecretNotOptedIn` when the Secret lacks the label `kaalm.io/provider-credential: "true"` (rule 49), `EndpointHostNotApproved` when its `kaalm.io/provider-hosts` annotation omits the `spec.endpoint` host (rule 50), `CredentialsInvalid` when the server answers the probe with a 401 or 403, or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). `CredentialsMissing`, `SecretNotOptedIn`, `EndpointHostNotApproved`, and `CredentialsInvalid` each send a `Warning` event with the same reason when it first appears on `Ready`, not on every pass while it holds ([Event emission](../controller/operations.md#event-emission)). |
 | `Healthy` | The periodic probe. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event on every failing pass for a network or protocol failure, which does not affect `Ready`; `False` with `CredentialsInvalid` on a 401 or 403, which also sets `Ready=False`. The `CredentialsInvalid` event follows `Ready`, as the `Ready` row describes. |
 
-`healthCheck.enabled: false` disables the probe; `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each probe sequence. A failing probe requeues on a backoff instead of the plain interval, the same one ModelProvider uses ([Probe backoff](../controller/reconcilers.md#probe-backoff)). The reconciler writes status only when it changes, so a pass that finds nothing new leaves the object untouched.
+`healthCheck.enabled: false` disables the probe; `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each probe sequence. A failing probe requeues on a backoff instead of the plain interval, the same one ModelProvider uses ([Probe backoff](../controller/reconcilers.md#probe-backoff)).
 
 ## Design notes
 
 ### Credential scoping, and why the ref is optional
 
-Credentials are referenced from the operator's namespace and read only there, the same invariant as LLM credentials ([Credential handling](../security/credentials.md)). They never reach agent containers: a workload that wants to call a tool goes through the gateway, which attaches the credential server-side. Unlike on a ModelProvider, `credentialsRef` is optional. LLM providers require keys; tool servers do not always (an in-cluster MCP server behind NetworkPolicy is a legitimate unauthenticated deployment), and requiring a placeholder Secret would force a Secret that holds no real credential. A ToolProvider without `credentialsRef` reads no Secret, so rules 49 and 50 do not apply and `Ready` stays `True`. When `credentialsRef` is set, the Secret must carry the label `kaalm.io/provider-credential: "true"` and list the endpoint host in its `kaalm.io/provider-hosts` annotation ([Provider credentials](validation-and-defaulting.md#provider-credentials)).
+Credentials are referenced from the operator's namespace and read only there, the same invariant as LLM credentials ([Credential handling](../security/credentials.md)). They never reach agent containers: a workload that wants to call a tool goes through the gateway, which attaches the credential server-side. Unlike on a ModelProvider, `credentialsRef` is optional. LLM providers require keys; tool servers do not always (an in-cluster MCP server behind NetworkPolicy is a legitimate unauthenticated deployment), and requiring a placeholder Secret would force a Secret that holds no real credential. A ToolProvider without `credentialsRef` reads no Secret, so rules 49 and 50 do not apply and `Ready` stays `True`; with one, they do ([Provider credentials](validation-and-defaulting.md#provider-credentials)).
 
 ### The probe speaks MCP
 

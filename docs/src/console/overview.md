@@ -45,9 +45,6 @@ It is deliberately not a third listener on the gateway:
   it means the component that holds provider and tool credentials gains no new
   human-facing surface, and disabling the console removes the surface
   entirely.
-- The per-Agent synthesized NetworkPolicy admits ingress from the gateway
-  only. Because the gateway delivers test-chat ([Test-chat](#test-chat)), the
-  console needs no rule of its own.
 - The console can crash, restart, or be replaced without touching a single
   request in flight.
 
@@ -101,8 +98,7 @@ per-workload resolution lives here.
 
 The console serves the pages and the read API on one TLS listener, `:8443`,
 and the kubelet probes on a second TLS listener (`console.healthPort`, default
-`8081`) with no client auth. The pages and the JSON API under `/api/v1` are two
-faces over one data layer.
+`8081`) with no client auth.
 
 | Method and path | Returns |
 |---|---|
@@ -117,9 +113,8 @@ faces over one data layer.
 The three routes marked "limited" take a `limit` query parameter: 100 rows
 by default, and up to 1000. A larger value is clamped to 1000 rather than
 rejected; a value that isn't a positive integer answers `400
-invalid_request`. Each response holds the newest `limit` rows by creation
-time (ties broken by name), in the same order the unlimited response used.
-Alongside the rows, the response carries `total` (how many objects the
+invalid_request`. Each response holds the `limit` newest objects by creation
+time; the limit chooses which rows appear, not their order. Alongside the rows, the response carries `total` (how many objects the
 namespace holds of that kind) and `truncated` (`true` when `total` is
 greater than the number of rows returned). Spend and the single-agent route
 take no `limit`.
@@ -129,9 +124,7 @@ Errors use the gateway's envelope, `{"error": {"type", "message"}}`, with
 `413 request_too_large` on the chat route when the request body exceeds the
 console's own body cap ([Test-chat](#test-chat)), and `502` or `503
 internal_unavailable`; the chat route otherwise relays the gateway's own
-status. The pages have routes of their own: `GET /login` and `POST /login`,
-`POST /logout`, `GET /`, `GET /ns/{ns}`, `GET /ns/{ns}/agents/{name}`, and
-`POST /ns/{ns}/agents/{name}/chat`.
+status. The page routes are not part of the API.
 
 Responses are console-owned summaries, not raw CRD objects. A fleet row looks
 like:
@@ -160,8 +153,8 @@ fields and endpoints can be added, never renamed or removed.
 The HTML pages and the JSON API are two views over one data layer. Inside the
 binary, every page template renders exactly the objects the corresponding
 `/api/v1` endpoint serves; the template layer adds presentation and nothing
-else. The presentation is minimal: Go `html/template`, no JavaScript, and no
-static assets; the chat panel is an ordinary form POST.
+else. The presentation is minimal: no JavaScript and no static assets; the chat
+panel is an ordinary form POST.
 
 The rule is a one-sentence contract: **a richer frontend replaces the
 templates, never the API.** A client-side application is written against
@@ -185,30 +178,25 @@ The console authenticates humans with the cluster's own `TokenReview` and
    `SameSite=Strict`) with a 24-hour lifetime. The console re-reviews the
    stored token every five minutes and forgets the session when the review
    fails, so a session outlives a revoked token by at most five minutes.
-   `POST /logout` ends it. JSON API callers skip sessions and send
+   `POST /logout` ends it. A session and its stored token live only in
+   console memory. A session past the 24-hour cap leaves memory within five
+   minutes, even if the browser never returns. JSON API callers skip sessions and send
    `Authorization: Bearer` on every request; those reviews are cached for
-   five minutes, keyed by the token's hash.
+   five minutes, so a revoked token works for up to five minutes.
 3. **Authorization.** Every namespace-scoped read is gated by a
    `SubjectAccessReview`: the caller must be allowed to `list`
    `agents.kaalm.io` in the namespace to see any of its panels. Test-chat is
    gated separately: the caller must be allowed to `create`
    `agentchannels.kaalm.io` in the namespace, because an AgentChannel is the
-   standing form of what test-chat does once. Results are cached per
-   (username, namespace, verb and resource) for five minutes. To build the
-   namespace list, the console first asks one cluster-wide
-   `SubjectAccessReview`: can this caller `list` `agents.kaalm.io` with no
-   namespace given? A yes makes every namespace visible with no further
-   reviews. Only a no falls back to one `SubjectAccessReview` per namespace.
-   The cluster-wide answer is cached the same way, for five minutes. If a
-   review fails, the namespace list request answers `503` instead of
-   silently dropping the namespace.
+   standing form of what test-chat does once. Results are cached for five
+   minutes, so a changed grant takes up to five minutes to show. The
+   namespace list shows every namespace when the caller may `list`
+   `agents.kaalm.io` cluster-wide, and otherwise only the namespaces where
+   the caller may. If a review fails, the namespace list request answers
+   `503` instead of silently dropping the namespace.
 4. **The reads' identity.** The `SubjectAccessReview` is the gate; the reads
    themselves run under the console's ServiceAccount. The console does not
    impersonate the caller.
-
-A background sweep clears the `SubjectAccessReview` cache, the token-review
-cache, and login sessions past their 24-hour cap every five minutes, so an
-expired entry leaves memory even when nobody looks it up again.
 
 `ModelProvider` is cluster-scoped, but the spend panel shows only the budget
 rows of the namespace being viewed, and the namespace gate covers them.
@@ -225,17 +213,16 @@ gateway's cluster listener, authenticated the same way the controller calls
 the activity API: mTLS, authorized by the console's SAN
 ([Internal endpoint authentication](../security/rbac.md#internal-endpoint-authentication)).
 The gateway then treats the message exactly like a sync channel message: if
-the agent is hibernated it wakes it through the activator, delivers with
-`POST /v1/message` with the standard envelope, and returns the agent's reply.
+the agent is hibernated it wakes it through the activator, delivers the
+message, and returns the agent's reply.
 Choosing this path over a direct dial is what makes the following true by
 construction:
 
-- **The NetworkPolicy stays closed.** Per-Agent ingress admits the gateway
-  only; the console needs no rule of its own.
-- **A hibernated agent works.** Wake-on-demand is the gateway's
-  activator path, and test-chat uses it. The consequence: a test chat counts
-  as activity, so test-chatting a hibernated agent wakes it and resets its
-  idle clock.
+- **The NetworkPolicy stays closed.** The per-Agent NetworkPolicy admits
+  ingress from the gateway only; the console needs no rule of its own.
+- **A hibernated agent works.** Test-chat uses the gateway's wake-on-demand
+  path, so a test chat counts as activity: it wakes a hibernated agent and
+  resets its idle clock.
 - **The message is governed.** Any LLM or tool calls the agent makes while
   answering are metered, budgeted, and audited exactly as if a user had
   messaged it. The console cannot bypass the budget.
@@ -253,34 +240,27 @@ channel session is possible, because real channel identifiers begin with
 
 Limits: plain text only (`attachments` is always empty). Both the console's
 chat routes and the gateway's `POST /v1/test-chat` cap the request body at
-`gateway.maxMessageBodyBytes`, so a single chart value bounds both hops:
-`POST /api/v1/namespaces/{ns}/agents/{name}/chat` reads the body through
-`http.MaxBytesReader` and, above the cap, answers `413 request_too_large`
-with the message "request body exceeds N bytes" without reading the rest of
-the body and without calling the gateway; the page form route,
-`POST /ns/{ns}/agents/{name}/chat`, enforces the same cap and answers `413`
-as plain text. The console reads its cap from `--max-message-body-bytes`
-(default 1 MiB), the flag the chart sets from `gateway.maxMessageBodyBytes`,
-the same value the gateway itself applies. The gateway also caps the reply
-as it does a sync webhook reply, and bounds the call by
+`gateway.maxMessageBodyBytes`, so a single chart value bounds both hops. Above
+the cap, the chat API route answers `413 request_too_large` without calling
+the gateway, and the page form answers `413` as plain text. The gateway also
+caps the reply as it does a sync webhook reply, and bounds the call by
 `gateway.syncDeliveryDeadline`; the console's client gives up after two
 minutes.
 
 ## Console observability
 
-The console writes structured JSON logs to stdout and serves kubelet probes;
-it has no metrics and no pprof listener. The PII rule binds fully: test-chat
-message and reply bodies are never logged
-([PII safety](../operations/observability.md#pii-safety)). Console logs carry
-the authenticated identity, the namespace, the path, and the outcome.
+The console has no metrics and no pprof listener. Its logs carry the
+authenticated identity, the namespace, the path, and the outcome. The PII
+rule binds fully: test-chat message and reply bodies are never logged
+([PII safety](../operations/observability.md#pii-safety)).
 
 ## Acceptance
 
 Scenario
 [S19](../appendix/scenarios.md#s19-see-the-fleet-without-kubectl) covers this
 chapter: enable, log in, see the fleet, read spend, test-chat a hibernated
-agent, and watch an unauthorized token see nothing. Its e2e spec is
-`Operator console (S19)` ([Scenario coverage](../appendix/scenario-coverage.md)).
+agent, and watch an unauthorized token see nothing. [Scenario
+coverage](../appendix/scenario-coverage.md) names its e2e spec.
 
 ## See also
 

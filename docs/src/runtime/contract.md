@@ -1,6 +1,6 @@
 # The runtime contract
 
-Kaalm is BYO-image: any container can run as an Agent or AgentTask, provided it implements a small contract. This page specifies that contract. It is the minimum a container image must satisfy to take part in the lifecycle: HTTPS health endpoints on the injected port, graceful SIGTERM handling, authenticated TLS calls to the injected gateway endpoint, a `POST /v1/message` handler when an AgentChannel is in use, and `messageId` deduplication on that handler.
+Kaalm is BYO-image: any container can run as an Agent or AgentTask, provided it implements a small contract. This page specifies that contract, the minimum a container image must satisfy to take part in the lifecycle.
 
 The contract has eight numbered items. Other pages cite them by number, so the numbering is stable. For the surrounding system, see [System architecture](../concepts/system-architecture.md). The [reference base images](base-images.md) implement every item, and the [starter templates](starter-templates.md) consume that implementation.
 
@@ -48,7 +48,7 @@ Two requirements apply to every call to `$KAALM_GATEWAY_ENDPOINT`.
 
 | Mode | Applies to | The container presents |
 |---|---|---|
-| mTLS | Kaalm-managed Pods, the only mode accepted for them | The certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, issued per workload by cert-manager. Its SAN is `{name}.{namespace}.svc.cluster.local` for an Agent and `{name}.{namespace}.task.kaalm.io` for an AgentTask. The task form avoids implying a Service the task does not have. |
+| mTLS | Kaalm-managed Pods, the only mode accepted for them | The certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, issued per workload by cert-manager. |
 | ServiceAccount bearer token | Gateway-only-tier workloads, which no Agent resource manages | A projected ServiceAccount token in `Authorization: Bearer {jwt}`, validated by `TokenReview`. No client certificate. |
 
 The reference runtimes implement the mTLS mode. The bearer-token mode is for existing images configured per [Tiered on-ramp](../operations/deployment.md#tiered-on-ramp), with an audience-bound projected token and a manual `kaalm-ca` ConfigMap mount; the controller injects nothing into gateway-only Pods.
@@ -74,13 +74,11 @@ The container watches the certificate, key, and CA bundle for changes and reload
 - A certificate or key change reloads the serving certificate and the outbound client certificate.
 - A CA-bundle change rebuilds both trust pools: the inbound `ClientCAs` pool used for the verification below, and the outbound pool that verifies the gateway.
 
-The both-pools rule matters during a CA re-key. A stale `ClientCAs` pool rejects the gateway's re-issued client certificate and breaks delivery, exactly as a stale outbound pool breaks gateway calls. The dual-trust window is finite, so a container that misses the CA-bundle reload breaks in both directions once gateway leaves are re-issued under the new key ([CA renewal and re-key](../security/tls.md#ca-renewal-and-re-key)).
-
-In Go, a `tls.Config.GetCertificate` callback plus `GetConfigForClient` returning a config with the fresh `ClientCAs` pool covers both, since each is consulted on every handshake. In Python, an `SSLContext` swap on the watch event does the same.
+Both pools matter during a CA re-key: a stale `ClientCAs` pool rejects the gateway's re-issued client certificate and breaks delivery, and a stale outbound pool breaks gateway calls. The dual-trust window is finite, so a container that misses the CA-bundle reload breaks in both directions once gateway leaves are re-issued under the new key ([CA renewal and re-key](../security/tls.md#ca-renewal-and-re-key)).
 
 ### Client-certificate verification on /v1/message
 
-The handler verifies the gateway's client certificate. Enforcement is per path, not at the handshake: the listener shares `$KAALM_HEALTH_PORT` with `/readyz` and `/livez`, and the kubelet presents no certificate on a probe, so the TLS layer requests a client certificate but does not require one. In Go that is `tls.Config.ClientAuth = tls.VerifyClientCertIfGiven` with `ClientCAs` from `$KAALM_CA_CERT`.
+The handler verifies the gateway's client certificate. Enforcement is per path, not at the handshake: the listener shares `$KAALM_HEALTH_PORT` with `/readyz` and `/livez`, and the kubelet presents no certificate on a probe, so the TLS layer requests a client certificate but does not require one.
 
 | Request | Answer |
 |---|---|
@@ -89,7 +87,7 @@ The handler verifies the gateway's client certificate. Enforcement is per path, 
 | `POST /v1/message` with a certificate whose SAN is not the gateway Service DNS | `403 Forbidden` |
 | `POST /v1/message` with the gateway's certificate | Handled |
 
-The gateway Service DNS is `kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `kaalm-gateway.{operatorNamespace}.svc`. Both names are on the gateway's certificate, so either one identifies it. The controller injects the operator namespace as `$KAALM_OPERATOR_NAMESPACE`; both reference runtimes build the two names from that variable and fall back to `kaalm-system`, the chart's default release namespace, when it is absent.
+The gateway Service DNS is `kaalm-gateway.{operatorNamespace}.svc.cluster.local` or `kaalm-gateway.{operatorNamespace}.svc`. Both names are on the gateway's certificate, so either one identifies it. The controller injects the operator namespace as `$KAALM_OPERATOR_NAMESPACE`, and the container builds both names from it.
 
 ![Sequence diagram of the agent as a server. The kubelet GETs /readyz and /livez over HTTPS with no client certificate and gets 200 when healthy. The gateway POSTs /v1/message over mTLS with its client certificate, and the agent answers 401 Unauthorized when no peer certificate was presented, 403 Forbidden when the SAN is not the gateway Service DNS, 400 when the body is not an envelope, 500 when the handler fails, and 200 with a response envelope otherwise.](../diagrams/agent-inbound-calls.svg)
 
@@ -97,7 +95,7 @@ The gateway Service DNS is `kaalm-gateway.{operatorNamespace}.svc.cluster.local`
 
 ## 5. Activity signal (Agent only)
 
-This item is optional. An Agent may report liveness by calling `POST /v1/agent/heartbeat` on the gateway, which records the timestamp in memory with no API server write. The gateway also infers activity from LLM requests and delivered messages, and the Agent's `spec.lifecycle.activitySource` decides which signals the controller counts. Under the default `gatewayTraffic`, heartbeats are recorded and then ignored; an image that heartbeats on a timer must not be paired with `agentHeartbeat` or `both`, or the Agent never goes idle ([The heartbeat toggle and hibernation](starter-templates.md#the-heartbeat-toggle-and-hibernation)).
+This item is optional. An Agent may report liveness by calling `POST /v1/agent/heartbeat` on the gateway. The gateway also infers activity from LLM requests and delivered messages, and the Agent's `spec.lifecycle.activitySource` decides which signals the controller counts. Under the default `gatewayTraffic`, heartbeats are recorded and then ignored; an image that heartbeats on a timer must not be paired with `agentHeartbeat` or `both`, or the Agent never goes idle ([The heartbeat toggle and hibernation](starter-templates.md#the-heartbeat-toggle-and-hibernation)).
 
 Heartbeats are meaningful only for Agents: idle detection does not apply to one-shot tasks, and the endpoint rejects an AgentTask certificate with `403` ([The :8443 listener profile](../gateways/overview.md#the-8443-listener-profile)). A task image must not run a heartbeat loop.
 
@@ -105,7 +103,7 @@ Heartbeats are meaningful only for Agents: idle detection does not apply to one-
 
 This item is optional. An AgentTask in `completion.condition: agentReported` mode reports its result with `POST /v1/task/complete`, with a status and an optional set of artifacts ([Task completion](../gateways/api/task-complete.md)).
 
-The report can race the status update in which the reconciler writes the new Pod's UID to `AgentTask.status.currentPodUID`, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `409 Conflict`, `error.type: stale_pod`, `retryable: true`, and a message beginning `StalePodCompletion:`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
+The report can race the status update in which the reconciler writes the new Pod's UID to `AgentTask.status.currentPodUID`, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `409 Conflict`, `error.type: stale_pod`, and `retryable: true`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
 
 `403 access_denied` with a message beginning `TaskAlreadyCompleted:` is final. The task has reached `Succeeded`, `Failed`, or `TimedOut`, and further reports are rejected; the container logs and exits.
 
@@ -115,7 +113,7 @@ This item is required for every Agent that implements `POST /v1/message`. Each d
 
 ### Where duplicates come from
 
-Caller retries are not the source of same-`messageId` redelivery. In sync mode, when a wake outlives the webhook caller's own timeout, the caller commonly retries, and the gateway delivers that retry as a new message with a fresh `messageId` ([The activator](../gateways/user/activation-and-activity.md#the-activator)).
+Caller retries are not the source of same-`messageId` redelivery: the gateway delivers a caller's retry as a new message with a fresh `messageId` ([The activator](../gateways/user/activation-and-activity.md#the-activator)).
 
 The same-`messageId` case comes from the gateway's own delivery schedule: four attempts, with 1s, 5s, and 25s between them ([Agent endpoints](../gateways/api/agent-endpoints.md#post-v1message)). When an earlier attempt reached the Agent and started work, but the gateway's read of the response failed, the next attempt redelivers the same `messageId`.
 
@@ -126,7 +124,7 @@ The schedule applies to every Agent, hibernated or not, so every Agent deduplica
 - An in-memory window is enough for an Agent that never hibernates.
 - An Agent with `hibernationEnabled: true` persists the buffer across Pod restarts, so a wake-replacement Pod still recognizes a `messageId` delivered before the restart. A PVC is always available, because `hibernationEnabled: true` requires `spec.persistence.enabled: true` ([rule 29](../resources/validation-and-defaulting.md#cross-resource-validation)).
 
-The reference runtimes keep a window of the last 1024 ids with their responses in a state file under the memory directory, backed by the PVC when one is mounted there and held in memory otherwise ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
+The reference runtimes keep a window of the last 1024 ids with their responses in the memory directory ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
 
 `messageId` dedup covers gateway-retry duplicates only. External replay of the inbound webhook ([Channels and webhooks](../security/threat-model.md#channels-and-webhooks)) produces a fresh `messageId` per delivery. An Agent whose inbound actions are not idempotent also deduplicates on a caller-supplied idempotency key or a content hash.
 
@@ -134,8 +132,8 @@ The reference runtimes keep a window of the last 1024 ids with their responses i
 
 This item is required for every Agent that implements `POST /v1/message`, and it is a header copy, not an SDK obligation. The gateway's delivery request may carry the W3C `traceparent` and `tracestate` headers. While handling that message, the Agent attaches the same values to every call it makes to the gateway. A delivery without the headers obligates nothing, and the Agent never invents trace context of its own.
 
-Both reference runtimes implement the item without handler involvement: the Go module carries the values on the handler's `ctx` (readable through `agentruntime.TraceContext`) and injects them in its gateway client, and the Python image captures them in a context variable around the handler call and injects them through `kaalm.gateway` and the `kaalm.http_client()` and `kaalm.http_async_client()` factories, exposing them as `kaalm.trace_context()` for frameworks that run their own OpenTelemetry SDK ([Tracing](../operations/observability.md#tracing)).
+Both reference runtimes implement the item without handler involvement. For frameworks that run their own OpenTelemetry SDK, they expose the values as `agentruntime.TraceContext` in Go and `kaalm.trace_context()` in Python ([Tracing](../operations/observability.md#tracing)).
 
 ## Starter templates
 
-Two starter templates ship under `examples/starter-go/` and `examples/starter-python/`. Neither carries contract code of its own: the Python template is a `FROM` build on the Python base image, and the Go template imports the `agentruntime` module. Each is a handler plus the build and startup files around it, and each README lists the manifests to deploy it. The templates target Kaalm-managed workloads; gateway-only-tier images are configured per [Tiered on-ramp](../operations/deployment.md#tiered-on-ramp). See [Starter templates](starter-templates.md).
+Two starter templates ship under `examples/starter-go/` and `examples/starter-python/`. Neither carries contract code of its own: the Python template is a `FROM` build on the Python base image, and the Go template imports the `agentruntime` module. The templates target Kaalm-managed workloads; gateway-only-tier images are configured per [Tiered on-ramp](../operations/deployment.md#tiered-on-ramp). See [Starter templates](starter-templates.md).

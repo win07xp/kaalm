@@ -125,20 +125,14 @@ status:
 | `lastActivityTime` | The merged last-activity timestamp the controller read from the gateway. |
 | `phaseTransitionTime` | Set on every phase change, in the same status write. The condition `lastTransitionTime` values move on non-phase events too, so this field is the witness for "when did the phase last change". |
 | `hibernatedAt` | Set on entry to `Hibernated`, cleared on wake. |
-| `preDegradedPhase` | The phase to restore when a class-mismatch `Degraded` clears. |
+| `preDegradedPhase` | The phase the Agent was in before it went `Degraded`. The Agent returns to that phase, and the field clears, once every mismatch has cleared ([Degraded](../controller/agent-lifecycle.md#degraded)). |
 | `effectiveWakeTimeout` | The `wakeTimeout` the gateway applies to a wake: the Agent's own value, or the class `defaultWakeTimeout` when unset, clamped to the class `maxWakeTimeout` (rule 9). Unset when neither the Agent nor the class gives a value, and the gateway then uses 120 seconds. |
 
 ## Design notes
 
 ### Name validation: DNS-1123 label, enforced at the schema root
 
-`metadata.name` must be a DNS-1123 label: lowercase alphanumerics and `-`, no dots, starting and ending with an alphanumeric, at most 63 characters (rule 21). Validation rules are not allowed under `metadata`, and `metadata.name` is the only metadata field reachable from the object root, so the rule is a root-scoped CEL rule on the Agent schema:
-
-```yaml
-x-kubernetes-validations:
-  - rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') && size(self.metadata.name) <= 63"
-    message: "metadata.name must be a DNS-1123 label: lowercase alphanumerics and hyphens, no dots, at most 63 characters"
-```
+`metadata.name` must be a DNS-1123 label: lowercase alphanumerics and `-`, no dots, starting and ending with an alphanumeric, at most 63 characters (rule 21, apply time). Validation rules are not allowed under `metadata`, and `metadata.name` is the only metadata field reachable from the object root, so the rule is a root-scoped CEL rule on the Agent schema.
 
 Both halves matter. The name is used verbatim as one DNS label in the certificate SAN and as the Service name, both capped at 63, where Kubernetes would otherwise allow 253. And the no-dots restriction is a security requirement: the gateway reads an agent's namespace by splitting the `{name}.{namespace}.svc.cluster.local` SAN on dots, so a name such as `admin.svc` would shift which label is read as the namespace. The gateway's label-count check is defense in depth against the same pattern ([Workload identity](../gateways/llm/workload-identity.md)). The AgentTask schema carries the same rule.
 
@@ -160,7 +154,7 @@ An agent may have no meaningful LLM traffic (polling, waiting on webhooks), so `
 
 ### `persistence.existingClaim`
 
-Mounts a pre-existing PVC instead of provisioning one. It is the enabler for promoting a finished AgentTask's workspace to a persistent Agent ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)): snapshot the task PVC with a `VolumeSnapshot` before TTL cleanup, restore it to a PVC, and reference it here. Constraints:
+Mounts a pre-existing PVC instead of provisioning one. It is the enabler for promoting a finished AgentTask's workspace to a persistent Agent ([S9](../appendix/scenarios.md#s9-promote-a-task-agent-to-persistent-for-human-takeover)): snapshot the task PVC with a `VolumeSnapshot` before its TTL cleanup deletes it, restore the snapshot to a PVC, and reference it here. Constraints:
 
 - Mutually exclusive with `sizeGi` (rule 27, apply time), and the claim must exist in the Agent's namespace at reconcile time (`Ready=False, reason=ExistingClaimNotFound`).
 - `AgentClass.spec.persistence.enabled: true` is still required (rule 24).
@@ -170,11 +164,11 @@ Mounts a pre-existing PVC instead of provisioning one. It is the enabler for pro
 
 ### `spec.handler` is a reference, not a volume mount
 
-The Agent spec exposes no general-purpose volume mount, and `spec.handler` does not change that. It is a single-purpose reference consumed by the [reference base images](../runtime/base-images.md#the-handler-mount): the reconciler mounts the named ConfigMap read-only at `/opt/kaalm/handler`, injects `$KAALM_HANDLER_PATH`, and does nothing else with it. The class must allow it (rule 30, `Degraded` with `reason=HandlerMountNotAllowed`), and the ConfigMap must exist (rule 31, `Ready=False, reason=HandlerConfigMapNotFound`). Content is read at container start and not tracked; repointing the name is the redeploy path ([Handler update semantics](../runtime/base-images.md#handler-update-semantics)). The field exists only on the Agent schema.
+The Agent spec exposes no general-purpose volume mount, and `spec.handler` does not change that. It is a single-purpose reference consumed by the [reference base images](../runtime/base-images.md#the-handler-mount), and the reconciler mounts the named ConfigMap read-only at `/opt/kaalm/handler`, injects `$KAALM_HANDLER_PATH`, and does nothing else with it. The class must allow it (rule 30, `Degraded` with `reason=HandlerMountNotAllowed`), and the ConfigMap must exist (rule 31, `Ready=False, reason=HandlerConfigMapNotFound`). Content is read at container start and not tracked; repointing the name is the redeploy path ([Handler update semantics](../runtime/base-images.md#handler-update-semantics)). The field exists only on the Agent schema.
 
 ### `spec.env` Secrets must opt in
 
-Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the Agent's namespace and carry the label `kaalm.io/workload-secret: "true"`. An Agent that fails the check shows `Ready=False, reason=SecretNotOptedIn` and gets no new Pod. A Pod that already runs stays in place, and the Agent keeps its phase: while the check fails, the Agent makes no idle or hibernation transition ([Ready gates](../controller/reconcilers.md#ready-gates)). The exact check, the message, and the gate's timing are under [rule 48](validation-and-defaulting.md#cross-resource-validation). The Agent spec has no `envFrom` field, so `valueFrom.secretKeyRef` is the only Secret source.
+Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the Agent's namespace and carry the label `kaalm.io/workload-secret: "true"`. An Agent that fails the check shows `Ready=False, reason=SecretNotOptedIn` and gets no new Pod. A Pod that already runs stays in place, and the Agent keeps its phase: while the check fails, the Agent makes no idle or hibernation transition ([Ready gates](../controller/reconcilers.md#ready-gates)). The exact check and the gate's timing are under [rule 48](validation-and-defaulting.md#cross-resource-validation). The Agent spec has no `envFrom` field, so `valueFrom.secretKeyRef` is the only Secret source.
 
 ### `service`
 

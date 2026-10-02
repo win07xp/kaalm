@@ -15,4 +15,4 @@ All resources live in one API group, `kaalm.io`, served at two versions. `v1beta
 | `AgentTask` | `at` | Namespace | Developer | [AgentTask](agenttask.md) |
 | `AgentChannel` | `ach` | Namespace | Developer | [AgentChannel](agentchannel.md) |
 
-The Owner column is the intended split of responsibility. Platform teams manage the cluster-scoped policy resources, and developers create the namespaced workload resources that reference them. What each kind is for, and which tier uses it, is on [Core concepts](../concepts/core-concepts.md#the-custom-resources), together with the reference graph that shows which spec field carries each reference.
+The Owner column is the intended split of responsibility: developers' namespaced resources reference the platform team's cluster-scoped ones. What each kind is for, and which tier uses it, is on [Core concepts](../concepts/core-concepts.md#the-custom-resources), together with the reference graph that shows which spec field carries each reference.

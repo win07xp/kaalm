@@ -16,7 +16,7 @@ Existing workloads call the gateway with projected ServiceAccount tokens and get
 
 Because there is no Agent, AgentTask, or AgentClass to consult, provider access is gated by `ModelProvider.allowedNamespaces` alone.
 
-**Egress is the platform team's responsibility.** Kaalm synthesizes no NetworkPolicy for these Pods. Budgets, rate limits, and provider gating are enforced at the gateway, so they hold only if traffic goes through the gateway, and the platform team must write NetworkPolicies in those namespaces that deny egress to provider addresses except through it. Without them a Pod can call the provider directly and every gateway-side control is bypassed.
+**Egress is the platform team's responsibility.** Kaalm synthesizes no NetworkPolicy for these Pods. Budgets, rate limits, and provider gating are enforced at the gateway, so they hold only if traffic goes through the gateway, and the platform team must write NetworkPolicies in those namespaces that deny egress to provider addresses except through it.
 
 ### Full lifecycle tier
 
@@ -36,7 +36,7 @@ Tenant isolation is layered. No single layer is the boundary; they compose, and 
 
 ### RBAC layering
 
-The controller ServiceAccount holds the cluster-scoped surface: CRD watches and child-object management. The gateway ServiceAccount holds cluster-wide reads of the Kaalm kinds and Pods, but its credential reach is `kaalm-system` plus the per-channel and per-task Roles with `resourceNames`-bounded access in user namespaces ([RBAC and authentication](../security/rbac.md)).
+The controller ServiceAccount holds the cluster-scoped surface: CRD watches and child-object management. The gateway ServiceAccount's credential reach is `kaalm-system` plus the per-channel and per-task Roles with `resourceNames`-bounded access in user namespaces ([RBAC and authentication](../security/rbac.md)).
 
 ### Provider access gating
 
@@ -54,11 +54,11 @@ Separately, the requested model must exist in `ModelProvider.spec.models`. That 
 
 ![The gate chain the gateway applies to a request carrying a qualified model name, in the order it runs. Identify the caller from an mTLS certificate SAN (full lifecycle tier) or a TokenReview-verified bearer token (gateway-only tier), then cross-check the source IP against a Pod in that namespace (401 unauthorized). A caller with a workload passes Gate A: the workload and its class exist, the providerRef is in spec.providers, the class's allowedNamespaces admits the caller's namespace, and the providerRef is in the class's allowedProviders (403 access_denied); a gateway-only caller skips it. Then the providerRef must name a ModelProvider (400 invalid_request), Gate B checks the namespace against allowedNamespaces (403 access_denied), and Gate C resolves the model (400 invalid_request). Budget, rate limit, and forwarding follow.](../diagrams/provider-access-gates.svg)
 
-Gate A is the only gate that needs a workload and a class to read, so it is the only one a gateway-only caller skips, and it runs before the provider is looked up so that a full-lifecycle caller cannot learn which provider names exist without passing it. Gate A reads the class's `allowedNamespaces` before its `allowedProviders`, and runs once per request, before any fallback. Gates A and B are tenancy decisions and answer `403 access_denied`; an unknown provider name and Gate C are resolution failures and answer `400 invalid_request`. The tool plane applies the same chain, gate for gate, with the class's `allowedToolProviders` in place of `allowedProviders` ([Grants](../gateways/tool-plane.md#grants)). What follows the chain, budgets, the rate limiter, and the fallback walk, is on [Request handling](../gateways/llm/request-handling.md#request-flow).
+Gate A is the only gate that needs a workload and a class to read, so it is the only one a gateway-only caller skips, and it runs before the provider is looked up so that a full-lifecycle caller cannot learn which provider names exist without passing it. Gates A and B are tenancy decisions and answer `403 access_denied`; an unknown provider name and Gate C are resolution failures and answer `400 invalid_request`. The tool plane applies the same chain, gate for gate, with the class's `allowedToolProviders` in place of `allowedProviders` ([Grants](../gateways/tool-plane.md#grants)). What follows the chain, budgets, the rate limiter, and the fallback walk, is on [Request handling](../gateways/llm/request-handling.md#request-flow).
 
 ### Per-namespace throughput and spend isolation
 
-Gateway rate-limit buckets are keyed on (namespace, model) against the cluster-wide ceiling in `ModelProvider.spec.rateLimits`, and budget counters track spend per namespace, so one namespace cannot use another namespace's bucket or budget. Every rate-limit key gets the full ceiling, so tenants together can still reach the provider's own rate limit ([Each key gets the full ceiling](../gateways/llm/budgets-and-rate-limits.md#limits-of-the-token-limit)). Both controls apply to gateway-only-tier callers too, because both are enforced at the gateway from the namespace identified on every request, whichever auth mode identified it ([Workload identity](../gateways/llm/workload-identity.md)). Budget counters live in gateway replicas and are reconciled across them ([Multi-replica state](../gateways/overview.md#multi-replica-state)). Rate-limit buckets are not reconciled: each replica divides the ceiling by the live replica count ([Dividing by live replica count](../gateways/llm/budgets-and-rate-limits.md#dividing-by-live-replica-count)).
+Gateway rate-limit buckets are keyed on (namespace, model) against the cluster-wide ceiling in `ModelProvider.spec.rateLimits`, and budget counters track spend per namespace, so one namespace cannot use another namespace's bucket or budget. Every rate-limit key gets the full ceiling, so tenants together can still reach the provider's own rate limit ([Each key gets the full ceiling](../gateways/llm/budgets-and-rate-limits.md#limits-of-the-token-limit)). Both controls apply to gateway-only-tier callers too, because both are enforced at the gateway from the namespace identified on every request, whichever auth mode identified it ([Workload identity](../gateways/llm/workload-identity.md)).
 
 ### NetworkPolicy as the cross-tenant boundary
 

@@ -33,8 +33,7 @@ spec:
     # Whether Agents of this class may mount a handler ConfigMap into a
     # reference base image (Agent.spec.handler). Default false; rule 30.
     allowHandlerMounts: false
-    # Any string is accepted by the schema; an invalid value surfaces only
-    # when the kubelet rejects the Pod. See the design notes.
+    # Always | Never | IfNotPresent.
     pullPolicy: IfNotPresent
     # Resolved in the workload's namespace at Pod creation; rule 23.
     imagePullSecrets:
@@ -114,8 +113,7 @@ spec:
       readOnlyRootFilesystem: true
       capabilities: { drop: ["ALL"] }
     # Mounts the workload ServiceAccount token into every Pod of the class.
-    # Default false: the mTLS certificate is the only credential. Set it only
-    # when a Role bound to the workload's ServiceAccount must reach the API.
+    # Default false: the mTLS certificate is the only credential.
     automountServiceAccountToken: false
 
   lifecycle:
@@ -165,7 +163,7 @@ status:
       message: "class is valid"
       lastTransitionTime: "2026-04-05T12:00:00Z"
     - type: FQDNPolicySupported
-      status: "False"
+      status: "True"
       reason: NoHostsRequested
     - type: SecurityBaseline
       status: "True"
@@ -181,19 +179,19 @@ status:
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | `True` with `reason: AllReferencesResolved` when every `allowedProviders` and `allowedToolProviders` entry names an existing provider, every `allowedCIDRs` entry parses (rule 19), and every `allowedHosts` entry is a DNS name (rule 20). Otherwise `False` with a message listing every problem, sorted and joined with `; `. The reason is `InvalidCIDR` when an `allowedCIDRs` entry does not parse, which sorts first, and `InvalidReference` for a missing provider or tool provider or a malformed host. Provider health is not consulted. While a delete waits on a referrer, `Ready` is `False` with `reason: DeletionBlocked` instead ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). |
-| `FQDNPolicySupported` | Set on every pass: `reason: NoHostsRequested` while `allowedHosts` is empty; otherwise `FQDNPolicySupported` or `FQDNPolicyUnsupported` from the CNI probe described under the design notes, which also sends a `Warning` event of that reason when the condition first turns `False`. |
-| `SecurityBaseline` | Set on every pass: `True, reason: RestrictedBaseline` when no declared `security` field falls below the restricted Pod Security Standard; otherwise `False, reason: BelowRestrictedBaseline` with a message naming each relaxed field, and a `Warning` event of the same reason when the relaxation first appears. An unset field is never a deviation: it takes the baseline value. |
-| `DeprecatedFields` | Advisory, and present only once the class sets a deprecated field. `True, reason: DeprecatedFieldSet` while it does, with a message naming each such field, joined with `; `. The only deprecated field is `network.allowHostNetwork` (see [Deprecation policy](../operations/api-versioning.md#deprecation-policy)), so the message is `network.allowHostNetwork is deprecated and has no effect: no Pod Kaalm creates uses host networking`. A `Warning` event of reason `DeprecatedFieldSet` and the same message follows the status write each time the condition turns `True`. After the field is removed, the condition is `False, reason: NoDeprecatedFields` with the message `the class sets no deprecated field`, and no event is sent. A class that never set a deprecated field has no such condition. It never affects `Ready` or any workload. |
-| `CertificateCleanup` | A cluster capability, set on every class like `FQDNPolicySupported`: whether cert-manager runs with `--enable-certificate-owner-ref=true` ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `True, reason: OwnerRefEnabled` when the flag is set, so deleting an Agent or AgentTask deletes its TLS Secret. `False, reason: OwnerRefDisabled` when it is not, so a deleted workload's TLS Secret is orphaned; setting the flag later flips this to `True` without recreating workloads ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `Unknown, reason: ControllerSecretNotFound` when the controller's own `kaalm-controller-tls` Secret is missing. It never affects `Ready` and emits no Event; the controller logs the result once at startup and again only when it changes. |
+| `Ready` | `True` with `reason: AllReferencesResolved` when every `allowedProviders` and `allowedToolProviders` entry names an existing provider, every `allowedCIDRs` entry parses (rule 19), and every `allowedHosts` entry is a DNS name (rule 20). Otherwise `False`, and the message lists every problem. The reason is `InvalidCIDR` when any `allowedCIDRs` entry does not parse, else `InvalidReference` (a missing provider or tool provider, or a malformed host). Provider health is not consulted. While a delete waits on a referrer, `Ready` is `False` with `reason: DeletionBlocked` instead ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). |
+| `FQDNPolicySupported` | Present on every class: `reason: NoHostsRequested` while `allowedHosts` is empty; otherwise `FQDNPolicySupported` or `FQDNPolicyUnsupported` from the CNI probe described under the design notes, which also sends a `Warning` event of that reason when the condition first turns `False`. |
+| `SecurityBaseline` | Present on every class: `True, reason: RestrictedBaseline` when no declared `security` field falls below the restricted Pod Security Standard; otherwise `False, reason: BelowRestrictedBaseline` with a message naming each relaxed field, and a `Warning` event of the same reason when the relaxation first appears. An unset field is never a deviation: it takes the baseline value. |
+| `DeprecatedFields` | Advisory, and present only once the class sets a deprecated field. `True, reason: DeprecatedFieldSet` while it does, with a message naming each such field. The only deprecated field is `network.allowHostNetwork` (see [Deprecation policy](../operations/api-versioning.md#deprecation-policy)). A `Warning` event of reason `DeprecatedFieldSet` follows each time the condition turns `True`. After the field is removed, the condition is `False, reason: NoDeprecatedFields`, and no event is sent. A class that never set a deprecated field has no such condition. It never affects `Ready` or any workload. |
+| `CertificateCleanup` | A cluster capability, present on every class like `FQDNPolicySupported`: whether cert-manager runs with `--enable-certificate-owner-ref=true` ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `True, reason: OwnerRefEnabled` when the flag is set, so deleting an Agent or AgentTask deletes its TLS Secret. `False, reason: OwnerRefDisabled` when it is not, so a deleted workload's TLS Secret is orphaned; setting the flag later flips this to `True` without recreating workloads. `Unknown, reason: ControllerSecretNotFound` when the controller's own `kaalm-controller-tls` Secret is missing. It never affects `Ready` and emits no Event. |
 
-`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. They still count a workload whose namespace the class does not admit, because it still references the class. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid spec-drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` under the `Replacing` column.
+`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. They still count a workload whose namespace the class does not admit, because it still references the class. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid spec-drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` as the `Agents`, `Tasks`, and `Replacing` columns.
 
 ## Design notes
 
 ### An image allowlist is mandatory in practice
 
-An empty `allowedImages` means any image, and nothing warns about it. Leave it empty only in throwaway environments.
+An empty `allowedImages` admits any image with no warning, so leave it empty only in throwaway environments.
 
 ### Defaults and maxLimits
 
@@ -203,11 +201,11 @@ An empty `allowedImages` means any image, and nothing warns about it. Leave it e
 
 ### `pvcRetention`
 
-The field governs the PVC Kaalm provisions for an Agent. Under `Retain`, the Agent finalizer strips the PVC's ownerRef before the Agent is removed, so cascade garbage collection leaves the PVC behind ([Finalizers](../controller/finalizers.md)). Two cases are outside it: a PVC referenced by `Agent.spec.persistence.existingClaim` never carries an ownerRef and survives deletion under either value, and an AgentTask's workspace PVC is always removed with the task, whatever the class sets.
+The field governs the PVC Kaalm provisions for an Agent. Under `Retain`, the PVC survives the Agent's deletion ([Finalizers](../controller/finalizers.md)). Two cases are outside it: a PVC referenced by `Agent.spec.persistence.existingClaim` never carries an ownerRef and survives deletion under either value, and an AgentTask's workspace PVC is always removed with the task, whatever the class sets.
 
 ### `allowHandlerMounts` guards the image review boundary, not code execution
 
-Anyone who can create an Agent can already run arbitrary code: any image matching `allowedImages`. What a mounted handler ([`Agent.spec.handler`](agent.md), consumed by the [reference base images](../runtime/base-images.md)) adds is code that bypasses image review: the platform team approved `kaalm-agent-python`, not the handler source injected into it. The field therefore defaults to `false`, and enabling it is the class-level statement that ConfigMap authorship in a namespace is an acceptable code provenance for that category of workload. Classes for production fleets built from reviewed images leave it off; a starter or development class turns it on. Enforcement is rule 30, with the same recoverable `Degraded` handling as the persistence and hibernation gates, including on class drift. What the grant means in RBAC terms is stated once in the [threat model](../security/threat-model.md#workload-isolation).
+Anyone who can create an Agent can already run arbitrary code: any image matching `allowedImages`. What a mounted handler ([`Agent.spec.handler`](agent.md), consumed by the [reference base images](../runtime/base-images.md)) adds is code that bypasses image review: the platform team approved `kaalm-agent-python`, not the handler source injected into it. The field therefore defaults to `false`, and enabling it is the class-level statement that ConfigMap authorship in a namespace is an acceptable code provenance for that category of workload. Classes for production fleets built from reviewed images leave it off; a starter or development class turns it on. Enforcement is rule 30. What the grant means in RBAC terms is stated once in the [threat model](../security/threat-model.md#workload-isolation).
 
 ### `maxUnavailableOnDrift` paces spec-drift replacements
 
@@ -226,7 +224,7 @@ Patterns in `allowedImages` use Go's [`path.Match`](https://pkg.go.dev/path#Matc
 
 ### `image.pullPolicy` values
 
-The schema accepts `Always`, `Never`, or `IfNotPresent`, the three Kubernetes pull policies. The apiserver rejects any other value when you create or update the class.
+The schema accepts `Always`, `Never`, or `IfNotPresent`, the three Kubernetes pull policies, and rejects any other value at apply time.
 
 ### `security` starts from the restricted baseline
 
@@ -236,9 +234,9 @@ The controller applies the `restricted` Pod Security Standard to every workload 
 
 `allowedCIDRs` is the portable primitive. Each entry becomes a `NetworkPolicy` egress rule to that `ipBlock`, on every port, which every CNI that implements NetworkPolicy enforces. The full synthesized rule set is on [Child resources](../runtime/child-resources.md#what-the-synthesized-networkpolicy-protects).
 
-`allowedHosts` cannot be expressed in standard `NetworkPolicy`, so the controller writes it as a second, CNI-specific policy. The controller probes whether the cluster serves the `ciliumnetworkpolicies` resource in `cilium.io/v2` the first time a reconciler needs the answer, caches the answer for the process lifetime, and reports it in `FQDNPolicySupported`, with a `Warning` event when the class sets `allowedHosts` and the resource is not served ([CNI FQDN-policy probe](../controller/reconcilers.md#cni-fqdn-policy-probe)). When the CNI is Cilium, every Agent and AgentTask of the class gets a `CiliumNetworkPolicy` named `{name}-fqdn` with a `toFQDNs` rule for each host on every port, plus the DNS rule Cilium needs to learn the hosts' addresses ([Child resources](../runtime/child-resources.md#fqdn-egress-policy)). Cilium allows the union of this policy and the NetworkPolicy. The controller writes only Cilium's policy type: on a CNI without Cilium, `allowedHosts` has no effect and `allowedCIDRs` alone governs egress.
+`allowedHosts` cannot be expressed in standard `NetworkPolicy`, so the controller writes it as a second, CNI-specific policy. The controller checks once per process whether the API server serves the `ciliumnetworkpolicies` resource in `cilium.io/v2`, so installing Cilium later takes effect after a controller restart. It reports the answer in `FQDNPolicySupported`, with a `Warning` event when the class sets `allowedHosts` and the resource is not served ([CNI FQDN-policy probe](../controller/reconcilers.md#cni-fqdn-policy-probe)). When the CNI is Cilium, every Agent and AgentTask of the class gets a `CiliumNetworkPolicy` named `{name}-fqdn` with a `toFQDNs` rule for each host on every port, plus the DNS rule Cilium needs to learn the hosts' addresses ([Child resources](../runtime/child-resources.md#fqdn-egress-policy)). Cilium allows the union of this policy and the NetworkPolicy. On a CNI without Cilium, `allowedHosts` has no effect and `allowedCIDRs` alone governs egress.
 
-An invalid `allowedCIDRs` entry makes the class `Ready=False` (rule 19). Every Agent and new AgentTask under the class then reports `Ready=False, reason=InvalidReference` with a message naming the entry, and the reconciler writes no Certificate, NetworkPolicy, or Pod for it. A running Pod keeps running. Fixing the entry lets the workloads converge on their next pass.
+An invalid `allowedCIDRs` entry makes the class `Ready=False` (rule 19). Every Agent and new AgentTask under the class then reports `Ready=False, reason=InvalidReference`, and the reconciler writes no Certificate, NetworkPolicy, or Pod for it. A running Pod keeps running. Fixing the entry lets the workloads converge on their next pass.
 
 ### Provider access gates
 
@@ -246,25 +244,23 @@ An invalid `allowedCIDRs` entry makes the class `Ready=False` (rule 19). Every A
 
 ### `allowedNamespaces` keeps a class to some teams
 
-RBAC cannot restrict which AgentClass a developer names in `agentClassRef` ([Persona roles](../security/rbac.md#persona-roles)). `allowedNamespaces` does: it lists `path.Match` glob patterns, such as `team-*`, for the namespaces whose Agents and AgentTasks may use the class (rule 47). The field has the same schema and CEL rule at `v1beta1` and `v1alpha1`.
+RBAC cannot restrict which AgentClass a developer names in `agentClassRef` ([Persona roles](../security/rbac.md#persona-roles)). `allowedNamespaces` does: it lists `path.Match` glob patterns, such as `team-*`, for the namespaces whose Agents and AgentTasks may use the class (rule 47).
 
 The field reads differently from the provider fields of the same name:
 
-- **Unset admits every namespace.** Existing classes and the chart's `standard` class behave as before. `["*"]` admits every namespace explicitly.
-- **An empty list is rejected at apply**, by the CRD CEL rule `size(self) > 0`, with the message `allowedNamespaces must list at least one pattern; omit the field to admit every namespace (rule 47)`. On a ModelProvider or ToolProvider, an empty `allowedNamespaces` admits none. A JSON patch that removes the last entry leaves `[]` and is rejected, so remove the field instead.
+- **Unset admits every namespace.** `["*"]` admits every namespace explicitly.
+- **An empty list is rejected at apply**, by the CRD CEL rule `size(self) > 0`. On a ModelProvider or ToolProvider, an empty `allowedNamespaces` admits none. A JSON patch that removes the last entry leaves `[]` and is rejected, so remove the field instead.
 - **A malformed pattern matches nothing**, such as `[`, as it does on a provider.
 
 When the class does not admit a workload's namespace:
 
-- **An Agent goes `Degraded`** (`Ready=False`, a `Warning` event, `preDegradedPhase` kept) with `reason: NamespaceNotAllowed` and the message `namespace "NAMESPACE" is not in AgentClass "CLASS" allowedNamespaces`. This is the first Degraded check, so it is the reported reason when several mismatches exist. No Certificate, child, or Pod is created for a new Agent, and a running Agent keeps its Pod. Adding the namespace back, or removing the field, restores the prior phase. Rules 28 and 1 run earlier and keep priority ([Degraded](../controller/agent-lifecycle.md#degraded)).
+- **An Agent goes `Degraded`** (`Ready=False` and a `Warning` event) with `reason: NamespaceNotAllowed`. This is the first Degraded check, so it is the reported reason when several mismatches exist. No Certificate, child, or Pod is created for a new Agent, and a running Agent keeps its Pod. Adding the namespace back, or removing the field, restores the prior phase. Rules 28 and 1 run earlier and keep priority ([Degraded](../controller/agent-lifecycle.md#degraded)).
 - **An AgentTask with no Pod**, in `Pending` or `Provisioning` or retrying, settles terminal `Failed` (`Completed=False` and `Ready=False`, `reason: NamespaceNotAllowed`, and a `Warning` event), whatever `backoffLimit` remains. This is the first pre-Pod check. A task that already has a Pod keeps running, and a terminal task is unaffected ([AgentTask lifecycle](../controller/task-lifecycle.md#transition-triggers)).
-- **The gateway answers `403 access_denied`** with the same message on LLM and MCP tool calls from a Kaalm-managed workload, before it checks the class's `allowedProviders` or `allowedToolProviders`. Gateway-only callers have no class and are not affected ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
+- **The gateway answers `403 access_denied`** with a message naming the namespace and the class on LLM and MCP tool calls from a Kaalm-managed workload, before it checks the class's `allowedProviders` or `allowedToolProviders`. Gateway-only callers have no class and are not affected ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
 
 The list check is CEL because it reads one field. The namespace match is reconcile time because CEL cannot read `metadata.namespace`.
 
-Removing a team's namespace from a class has the same effect as removing it from a provider: `Degraded`, a gateway `403`, and Pods kept.
-
-A CRD, controller, or gateway that predates the field ignores it, so a downgrade drops the restriction silently. During a chart upgrade, a component still on the old version ignores the field until both the controller and the gateway run the new version.
+A downgrade, or a chart upgrade in progress, drops the restriction silently: a CRD, controller, or gateway that lacks the field ignores it.
 
 ### `imagePullSecrets` namespace resolution
 
@@ -272,4 +268,4 @@ AgentClass is cluster-scoped, but `imagePullSecrets[*].name` references a Secret
 
 ### `runtime.backend` accepts only `pod`
 
-The schema enum rejects any other value at apply time, so the author gets immediate feedback. The field exists so that another backend is an additive enum change on the frozen v1beta1 schema; isolation comes from `runtime.runtimeClassName` ([Runtime isolation](../concepts/system-architecture.md#runtime-isolation)).
+The schema enum rejects any other value at apply time, so the author gets immediate feedback. The field exists so that another backend is an additive enum change on the frozen v1beta1 schema. Isolation comes from `runtime.runtimeClassName` ([Runtime isolation](../concepts/system-architecture.md#runtime-isolation)).

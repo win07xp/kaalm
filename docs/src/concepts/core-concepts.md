@@ -54,7 +54,7 @@ The **User Gateway** is the inbound surface and its return path: it receives a m
 
 Kaalm can be adopted at two depths, and behavior throughout this book branches on the tier a workload belongs to.
 
-In the **gateway-only tier**, existing workloads keep their Deployments and point their LLM traffic at the gateway, authenticating with projected ServiceAccount tokens, to gain spend tracking and budgets. They have no Agent, AgentTask, or AgentChannel of their own, and only `ModelProvider.allowedNamespaces` gates their provider access.
+In the **gateway-only tier**, existing workloads keep their Deployments and point their LLM traffic at the gateway to gain spend tracking and budgets. They have no Agent, AgentTask, or AgentChannel of their own.
 
 In the **full lifecycle tier**, the operator manages Agents, AgentTasks, and AgentChannels, with hibernation, wake-on-demand, and per-Pod mTLS with cert-manager-issued certificates.
 
@@ -62,7 +62,7 @@ What each tier is responsible for, and what the gateway-only tier gives up, is o
 
 ## Workload identity in brief
 
-The gateway authenticates a calling workload in one of two modes, one per tier. **Mode 1** is an mTLS client certificate, the zero-config path for Kaalm-managed Pods: the gateway verifies it against the Kaalm CA and reads the namespace and workload from its SAN. **Mode 2** is a projected ServiceAccount bearer token, the path for gateway-only-tier workloads: the gateway validates it with `TokenReview` and takes the namespace from the validated username. Kaalm-managed Pods cannot use Mode 2. In both modes a source-IP cross-check confirms that the Pod at the request's source IP is in the namespace the credential identified. The SAN shapes and every enforcement rule are on [Workload identity](../gateways/llm/workload-identity.md).
+The gateway authenticates a calling workload in one of two modes, one per tier. **Mode 1** is an mTLS client certificate, the zero-config path for Kaalm-managed Pods: the gateway reads the namespace and workload from its SAN. **Mode 2** is a projected ServiceAccount bearer token, the path for gateway-only-tier workloads: the gateway validates it with `TokenReview`. The SAN shapes, the source-IP cross-check, and every enforcement rule are on [Workload identity](../gateways/llm/workload-identity.md).
 
 ## Lifecycle phases
 
@@ -74,4 +74,4 @@ The state machines, the transition triggers, and the edge cases are on [Agent li
 
 ## Response modes
 
-A webhook-type AgentChannel selects `spec.webhook.responseMode`: **sync** (the default), where the caller holds the connection open and receives the agent's reply in the HTTP response, or **async**, where the gateway answers `202 Accepted` with a `requestId` at once and returns the reply later by callback or polling ([Async webhook responses](../gateways/api/async-responses.md)). Discord and WhatsApp channels have no mode: the platform never waits, and every reply goes back through the platform's API.
+A webhook-type AgentChannel selects `spec.webhook.responseMode`: **sync** (the default), where the caller holds the connection open and receives the agent's reply in the HTTP response, or **async**, where the gateway answers `202 Accepted` at once and returns the reply later by callback or polling ([Async webhook responses](../gateways/api/async-responses.md)). Discord and WhatsApp channels have no mode: the platform never waits, and every reply goes back through the platform's API.

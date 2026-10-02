@@ -34,7 +34,7 @@ Seven endpoints are for Kaalm's own components. Every one requires a client cert
 | `POST /v1/test-chat`, `GET /v1/spend` | Gateway `:8443` | Console |
 | `POST /v1/activate/{namespace}/{agentName}` | Controller `:9443` | Gateway |
 
-One per-path middleware admits both SAN shapes, Agent and AgentTask, on the two report paths and checks the kind against the path, so an Agent calling `/v1/task/complete` is rejected with `403` before the handler runs. The path-to-regime table is [The :8443 listener profile](../gateways/overview.md#the-8443-listener-profile); the SAN shapes are on [Workload identity](../gateways/llm/workload-identity.md); the endpoints themselves are on [Internal endpoints](../gateways/api/internal-endpoints.md) and [The activator](../gateways/user/activation-and-activity.md#the-activator).
+An Agent calling `/v1/task/complete`, or an AgentTask calling `/v1/agent/heartbeat`, is rejected with `403`. The path-to-regime table is [The :8443 listener profile](../gateways/overview.md#the-8443-listener-profile); the SAN shapes are on [Workload identity](../gateways/llm/workload-identity.md); the endpoints themselves are on [Internal endpoints](../gateways/api/internal-endpoints.md) and [The activator](../gateways/user/activation-and-activity.md#the-activator).
 
 ## Deployment model
 
@@ -42,7 +42,7 @@ Kaalm ships as a Helm chart. cert-manager, trust-manager, and a CNI that enforce
 
 The chart deploys both the controller and the gateway in both [adoption tiers](tenancy-and-tiers.md#adoption-tiers). The install is the same; what differs is which custom resources the platform team creates, and therefore which reconcilers do work.
 
-- **Gateway-only tier.** Needs only ModelProviders and their Secrets in `kaalm-system`. The Agent, AgentTask, and AgentChannel reconcilers idle, the AgentClassReconciler reconciles only the chart's default class, and no per-workload certificate is issued.
+- **Gateway-only tier.** Needs only ModelProviders and their Secrets in `kaalm-system`. The Agent, AgentTask, and AgentChannel reconcilers have nothing to do, and no per-workload certificate is issued.
 - **Full lifecycle tier.** Adds AgentClasses, Agents, AgentTasks, and AgentChannels, which exercise those reconcilers and per-Pod mTLS with cert-manager-issued certificates.
 
 Both tiers depend on cert-manager for the gateway and controller serving certificates and on trust-manager for CA bundle projection, which is why the prerequisites are unconditional.
@@ -50,9 +50,9 @@ Both tiers depend on cert-manager for the gateway and controller serving certifi
 The chart deploys:
 
 - The six CRDs introduced under [The custom resources](core-concepts.md#the-custom-resources).
-- The controller and gateway Deployments, each at two replicas with a PodDisruptionBudget and a rolling-update strategy; the controller adds preferred pod anti-affinity. The chart refuses a replica count below two. The reasons differ per component and are on [The two Deployments](../operations/deployment.md#the-two-deployments).
-- A ServiceAccount, ClusterRole, and ClusterRoleBinding per Deployment, plus namespaced Roles in `kaalm-system` for the grants that stay there ([RBAC and authentication](../security/rbac.md)).
-- The cert-manager `ClusterIssuer`s (a self-signed root and the Kaalm CA issuer) and `Certificate`s for the gateway and controller serving certificates. Per-Agent and per-AgentTask certificates are issued at reconcile time, not by the chart.
+- The controller and gateway Deployments, each at two replicas. The chart refuses a lower count; the reasons are on [The two Deployments](../operations/deployment.md#the-two-deployments).
+- A ServiceAccount and the RBAC for each Deployment ([RBAC and authentication](../security/rbac.md)).
+- The cert-manager `ClusterIssuer`s and `Certificate`s for the gateway and controller serving certificates. Per-Agent and per-AgentTask certificates are issued at reconcile time, not by the chart.
 - A trust-manager `Bundle` projecting the Kaalm CA into every namespace.
 - One AgentClass, `standard`.
 
@@ -64,7 +64,7 @@ The full chart contents, the certificate inventory, the Helm values, and the per
 
 ## Control plane
 
-The controller is one Go binary built on `controller-runtime`, running as a Deployment in `kaalm-system`. It hosts six reconcilers, one per CRD, specified on [Reconcilers](../controller/reconcilers.md):
+The controller runs as a Deployment in `kaalm-system` and hosts six reconcilers, one per CRD, specified on [Reconcilers](../controller/reconcilers.md):
 
 | Reconciler | Watches | Does |
 |---|---|---|
@@ -83,17 +83,17 @@ The controller hosts no validating or mutating webhook. Field-level checks are C
 
 ### The activator endpoint
 
-The controller Service exposes `POST /v1/activate/{namespace}/{agentName}` on `:9443`, beside the conversion and metrics ports. The gateway calls it when a channel message arrives for a hibernated Agent. The listener admits only a client certificate whose SAN is the gateway Service DNS; the same listener answers `/healthz` and `/readyz` without a certificate, while the kubelet's probes target the separate `:8081` listener.
+The gateway calls `POST /v1/activate/{namespace}/{agentName}` on the controller's `:9443` when a channel message arrives for a hibernated Agent. The listener admits only a client certificate whose SAN is the gateway Service DNS; `/healthz` and `/readyz` on it need no certificate.
 
 The handler runs on every replica, not only the leader, because it does no wake work itself: it patches a wake annotation on the Agent and answers `202 Accepted`, and the leader's Agent watch does the rest. The gateway then watches for the Agent's Service to accept connections rather than waiting on the controller ([The activator](../gateways/user/activation-and-activity.md#the-activator), [Activator handler](../controller/overview.md#activator-handler-served-on-every-replica)).
 
 ### The activity API
 
-In the other direction, the AgentReconciler reads per-namespace last-activity timestamps from the gateway's `GET /v1/activity`, and the AgentChannelReconciler reads health observations from `GET /v1/channels/health`. Both are on the gateway's `:8443` listener, never the Ingress-fronted `:8080`, and admit only the controller's SAN. Because both stores are in memory per gateway replica, the controller dials every replica's Pod IP and merges; the Pod list comes from its `kaalm-system` Pod informer, which is why the controller holds a cluster-wide Pod watch ([Activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api), [Channel health tracking](../gateways/user/platform-adapters.md#channel-health-tracking)).
+In the other direction, the AgentReconciler reads per-namespace last-activity timestamps from the gateway's `GET /v1/activity`, and the AgentChannelReconciler reads health observations from `GET /v1/channels/health`. Both are on the gateway's `:8443` listener, never the Ingress-fronted `:8080`, and admit only the controller's SAN. Because both stores are in memory per gateway replica, the controller dials every replica's Pod IP and merges ([Activity tracking API](../gateways/user/activation-and-activity.md#activity-tracking-api), [Channel health tracking](../gateways/user/platform-adapters.md#channel-health-tracking)).
 
 ### RBAC surface
 
-The controller's ServiceAccount holds cluster-wide watches on the six CRDs, cluster-wide management of the child object kinds including Pods and ConfigMaps, and the per-channel, per-task, and per-workload Roles and RoleBindings it writes in user namespaces; two namespaced Roles in `kaalm-system` carry Leases and Events, and the read of provider credential Secrets. The full grant list and its reasoning are on [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount).
+The controller's ServiceAccount watches the six CRDs cluster-wide, manages the child objects, and mints the per-channel, per-task, and per-workload Roles and RoleBindings in user namespaces. Its only standing Secret read is in `kaalm-system`. The full grant list and its reasoning are on [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount).
 
 ## Integration points
 
@@ -101,7 +101,7 @@ Kaalm stops at four boundaries rather than reimplementing what the ecosystem pro
 
 ### Runtime isolation
 
-An AgentClass selects the workload backend with [`spec.runtime.backend`](../resources/agentclass.md#spec). `pod` is the only supported value, and the schema rejects anything else at apply time. Isolation comes from `spec.runtime.runtimeClassName`, which names a RuntimeClass the cluster provides: gVisor, Kata, and Kata-fronted microVMs are all RuntimeClasses, so the operator reimplements none of them. A Sandbox-backed backend is on the [roadmap](../ROADMAP.md#next).
+An AgentClass selects the workload backend with [`spec.runtime.backend`](../resources/agentclass.md#spec). `pod` is the only supported value. Isolation comes from `spec.runtime.runtimeClassName`, which names a RuntimeClass the cluster provides: gVisor, Kata, and Kata-fronted microVMs are all RuntimeClasses, so the operator reimplements none of them. A Sandbox-backed backend is on the [roadmap](../ROADMAP.md#next).
 
 ### MCP
 
@@ -109,7 +109,7 @@ Kaalm does not mandate MCP, but MCP is the tool protocol it brokers. The gateway
 
 ### LLM providers
 
-Any HTTP-based LLM provider works. Out of the box the gateway understands Anthropic, OpenAI, and OpenAI-compatible endpoints (Ollama, vLLM, and LiteLLM included); the `google-vertex` type is reserved in the enum and not served ([roadmap](../ROADMAP.md#beyond)). A new provider type is an adapter in the gateway ([Provider adapters](../gateways/llm/provider-routing.md#provider-adapters)).
+The gateway serves Anthropic, OpenAI, and OpenAI-compatible endpoints (Ollama, vLLM, and LiteLLM included); the `google-vertex` type is reserved in the enum and not served ([roadmap](../ROADMAP.md#beyond)). A new provider type is an adapter in the gateway ([Provider adapters](../gateways/llm/provider-routing.md#provider-adapters)).
 
 ### Channel platforms
 
