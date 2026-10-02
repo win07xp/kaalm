@@ -225,7 +225,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
-	// Step 6: Ready=False gates that block Pod creation without degrading.
+	// Step 6: Ready=False gates that block Pod creation without degrading,
+	// the rule 48 env-Secret gate among them.
 	gated, gateResult, err := r.readyGates(ctx, &agent, &class, eff)
 	if err != nil {
 		return r.childConflict(ctx, &agent, statusBefore, err)
@@ -522,7 +523,8 @@ func (r *AgentReconciler) evaluateActivity(
 
 // readyGates evaluates the Ready=False conditions that block Pod creation
 // without degrading: a malformed class allowedCIDRs entry (rule 19), a missing
-// image, a missing existingClaim, missing imagePullSecrets, and a missing
+// image, a missing existingClaim, missing imagePullSecrets, an env Secret
+// that is missing or lacks the workload label (rule 48), and a missing
 // handler ConfigMap (rule 31). It sets the condition on the Agent and reports
 // whether the pass is gated; Secrets, PVCs, and handler ConfigMaps are
 // unwatched, so gated results carry a requeue interval. Class spec changes are
@@ -570,6 +572,22 @@ func (r *AgentReconciler) readyGates(
 		} else if err != nil {
 			return false, ctrl.Result{}, err
 		}
+	}
+	// Rule 48: every Secret the env reads must opt in to workload use. The
+	// read runs under its own scoped Role, kept on every pass so a removed
+	// reference drops its grant. A running Pod is left in place; the gate
+	// blocks any replacement.
+	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), agent, agentEnvSecretRoleName(agent.Name),
+		r.OperatorNamespace, envSecretRefs(eff.Env)); err != nil {
+		return false, ctrl.Result{}, err
+	}
+	reason, msg, err := checkEnvSecrets(ctx, liveSecretReader(r.SecretReader, r.Client), agent.Namespace, eff.Env)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if reason != "" {
+		r.setReadyGate(agent, reason, msg)
+		return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 	}
 	// Rule 31: the handler ConfigMap must exist where the Agent runs. Checked
 	// pre-Pod so a bad reference surfaces as a condition, not a Pod wedged in

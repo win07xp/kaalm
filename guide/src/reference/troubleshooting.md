@@ -11,6 +11,8 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
 
 - **Image pull Secret missing** (`Pending`): reason `ImagePullSecretMissing`;
   the Agent waits before any child is created.
+- **Env Secret missing or unlabeled**: reason `SecretNotOptedIn`; see
+  [Workload is `Ready=False` with `SecretNotOptedIn`](#workload-is-readyfalse-with-secretnotoptedin).
 - **Certificate not issued** (`Provisioning`): the Pod is gated on its
   serving certificate. `kubectl get certificates -n NAMESPACE` and check
   cert-manager logs.
@@ -79,6 +81,58 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
 
 Hibernation also needs `hibernationEnabled` on the Agent and
 `hibernationAllowed` on the class; see [Hibernation, observed](../developers/lifecycle.md#hibernation-observed).
+
+## Workload is `Ready=False` with `SecretNotOptedIn`
+
+An Agent or AgentTask shows this when a Secret that its `spec.env` reads
+through `valueFrom.secretKeyRef` is missing from the workload's namespace, or
+exists without the label `kaalm.io/workload-secret: "true"`. The `Ready`
+condition's message names the env variable and the Secret:
+
+```bash
+kubectl get agent AGENT_NAME -n NAMESPACE \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
+```
+
+For an AgentTask, use `kubectl get agenttask TASK_NAME`. The message reads
+`env "ENV_NAME": Secret "SECRET" is not usable: a workload may use only a
+Secret in its namespace that carries the label kaalm.io/workload-secret:
+"true"`. A missing Secret and an unlabeled one give the same message, and it
+never names a key or a value. Check which case you have, then fix it:
+
+```bash
+kubectl get secret SECRET_NAME -n NAMESPACE --show-labels
+```
+
+- If the Secret is missing, create it in the workload's namespace.
+- If the Secret exists and was created for workloads, label it. Only the exact
+  value `true` counts; `True`, `yes`, and an empty value do not.
+
+  ```bash
+  kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/workload-secret=true
+  ```
+
+- If the Secret exists but was not created for workloads, do not label it.
+  Treat it as exposed, because a Pod that already runs holds its value in the
+  environment. Remove the `spec.env` entry that reads it. The spec change
+  replaces an Agent's Pod; if the Pod stays, delete it. For an AgentTask that
+  has a Pod, delete the task. Then rotate the Secret.
+
+An optional reference (`optional: true`) is checked too, so a missing optional
+Secret also blocks the workload. A `secretKeyRef` with no name gives reason
+`InvalidReference` and the message `env "ENV_NAME": secretKeyRef names no
+Secret`. When several entries fail, the message reports the first one in spec
+order. A labeled Secret that lacks the referenced key passes this check, and
+the Pod shows `CreateContainerConfigError`.
+
+The workload re-checks every 30 seconds, so it recovers on the next pass after
+you label the Secret. An Agent that already has a running Pod keeps the Pod and
+its phase while `Ready` is `False`, and the controller makes no replacement Pod
+(for a spec change, a lost Pod, or a wake) until you label the Secret or remove
+the reference. It also makes no idle or hibernation transition and does not
+update the phase from the Pod, so the Pod keeps running. A `Pending` or retrying AgentTask waits without failing, and a
+finished AgentTask needs no label. Who may label a Secret depends on your
+platform team: see [Managing team access](../platform/managing-access.md#label-the-secrets-a-workload-reads).
 
 ## Channel is `Ready=False` with `SecretNotOptedIn` or `CallbackHostNotApproved`
 
@@ -239,7 +293,8 @@ all of these reasons:
   label kaalm.io/provider-credential: "true"`. A provider may use only a
   Secret with that label. Only the exact value `true` counts; `True`, `yes`,
   an empty value, and the misspelled `kaalm.io/provider-credentials` do not.
-  The channel label `kaalm.io/channel-credential` does not count either.
+  The channel label `kaalm.io/channel-credential` and the workload label
+  `kaalm.io/workload-secret` do not count either.
 
   ```bash
   kubectl label secret SECRET_NAME -n kaalm-system kaalm.io/provider-credential=true

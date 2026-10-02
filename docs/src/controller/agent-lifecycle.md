@@ -22,7 +22,7 @@ The table lists every transition in the order the reconciler evaluates them. Row
 
 | From | To | Trigger |
 |---|---|---|
-| `Pending` | `Pending` (holds) | A Ready gate blocks: the operator namespace, a missing AgentClass, no image, a missing `existingClaim`, a missing `imagePullSecret`, or a missing handler ConfigMap. `Ready=False` names the gate. |
+| `Pending` | `Pending` (holds) | A Ready gate blocks: the operator namespace, a missing AgentClass, no image, a missing `existingClaim`, a missing `imagePullSecret`, an env Secret that is missing or lacks the workload label, or a missing handler ConfigMap. `Ready=False` names the gate. |
 | `Pending` | `Provisioning` | The per-Agent `Certificate` exists and the controller is waiting for it, or the Pod has been created. See [Waiting on the Certificate](#waiting-on-the-certificate). |
 | `Provisioning` | `Running` | The Pod reports Ready. |
 | `Running` | `Idle` | No activity for `idleTimeout`, measured from the later of the gateway's activity record and `status.lastActivityTime`. See [Activity detection](hibernation-and-wake.md#activity-detection). |

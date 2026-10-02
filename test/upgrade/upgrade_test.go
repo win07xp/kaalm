@@ -245,6 +245,32 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		}
 	})
 
+	// The label comes before "kept every workload": that It's hash-rewrite
+	// assertion needs the keeper past its Ready gates to reach convergePod.
+	It("holds a workload whose env Secret lacks the opt-in label, keeping its Pod, until it is labeled", func() {
+		keeperReady := func(field string) func() string {
+			return func() string {
+				out, _ := utils.Kubectl("get", "agent", "up-keeper", "-n", ns,
+					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].`+field+`}`)
+				return lastLine(out)
+			}
+		}
+		By("rule 48: the unlabeled env Secret leaves the keeper not Ready")
+		Eventually(keeperReady("reason"), "120s", "5s").Should(Equal("SecretNotOptedIn"))
+
+		By("the running Pod is left in place")
+		Expect(phase("agent", "up-keeper")).To(Equal("Running"))
+		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID),
+			"the env-Secret gate must not replace a running Pod")
+
+		By("the upgrade notes' step: label the reviewed workload Secret")
+		_, err := utils.Kubectl("label", "secret", "up-env", "-n", ns, "kaalm.io/workload-secret=true")
+		Expect(err).NotTo(HaveOccurred())
+
+		By("the keeper is Ready again on a later pass")
+		Eventually(keeperReady("status"), "120s", "5s").Should(Equal("True"))
+	})
+
 	It("kept every workload: nothing recreated, nothing lost", func() {
 		By("the keeper is still Running in the same Pod")
 		Expect(phase("agent", "up-keeper")).To(Equal("Running"))

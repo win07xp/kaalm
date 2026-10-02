@@ -40,3 +40,11 @@ type SecretKeyReference struct {
 	// +kubebuilder:validation:MinLength=1
 	Key string `json:"key"`
 }
+
+// WorkloadSecretOptedIn reports whether a Secret with these labels opts in to
+// use by an Agent's or AgentTask's env: LabelWorkloadSecret set to exactly
+// AnnotationTrue (rule 48). The channel label does not count; a Secret used by
+// both a channel and a workload carries both labels.
+func WorkloadSecretOptedIn(labels map[string]string) bool {
+	return labels[LabelWorkloadSecret] == AnnotationTrue
+}

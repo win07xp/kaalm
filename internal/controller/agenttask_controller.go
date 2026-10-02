@@ -179,6 +179,9 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, err
 			}
 		}
+		if handled, res, err := r.envSecretGate(ctx, &task, eff); handled {
+			return res, err
+		}
 		if eff.Image == "" {
 			return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
 				"no image: AgentTask.spec.image is empty and the AgentClass sets no defaultImage")
@@ -726,6 +729,32 @@ func (r *AgentTaskReconciler) ownedTaskPod(ctx context.Context, task *kaalmv1bet
 		candidate = p
 	}
 	return candidate, nil
+}
+
+// envSecretGate applies rule 48 before a task Pod is made: every Secret the
+// env reads must opt in to workload use, read under the task's own scoped
+// env-Secret Role. The gate is not terminal: labeling the Secret lets
+// provisioning continue on a later pass. handled reports whether the pass
+// ends here, with res and err as its result.
+func (r *AgentTaskReconciler) envSecretGate(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec,
+) (handled bool, res ctrl.Result, err error) {
+	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), task, taskEnvSecretRoleName(task.Name),
+		r.OperatorNamespace, envSecretRefs(eff.Env)); err != nil {
+		res, err := r.childConflict(ctx, task, err)
+		return true, res, err
+	}
+	reason, msg, err := checkEnvSecrets(ctx, liveSecretReader(r.SecretReader, r.Client), task.Namespace, eff.Env)
+	if err != nil {
+		return true, ctrl.Result{}, err
+	}
+	if reason == "" {
+		return false, ctrl.Result{}, nil
+	}
+	if err := r.gateTask(ctx, task, reason, msg); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
 // childConflict turns a ChildConflictError into Ready=False ChildConflict, a

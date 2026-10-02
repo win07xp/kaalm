@@ -115,21 +115,25 @@ reapply them.
 
 ## Upgrading across v1.1.0
 
-From v1.1.0, two Secret checks are on, with no switch and no grandfathering,
+From v1.1.0, three Secret checks are on, with no switch and no grandfathering,
 and nothing is rejected at apply:
 
 - An AgentChannel may use only Secrets that carry the label
   `kaalm.io/channel-credential: "true"`.
+- An Agent or AgentTask may read through `spec.env` only Secrets that carry the
+  label `kaalm.io/workload-secret: "true"`.
 - A ModelProvider may use only a Secret that carries the label
   `kaalm.io/provider-credential: "true"` and lists the host of its `endpoint`
   in the annotation `kaalm.io/provider-hosts`. A ToolProvider follows the
   same rule when it sets `credentialsRef`.
 
-The previous release ignores the labels and the annotations, so set them
-before you upgrade and nothing goes down. The first part covers channels, the
-second covers providers.
+Each label covers one use, so a Secret used two ways needs both labels. The
+previous release ignores the labels and the annotations, so set them before
+you upgrade and nothing goes down. The first three parts cover channels,
+workloads, and providers. The fourth runs the upgrade, and the last covers
+the TLS Secret names.
 
-### Channel Secrets
+### Label channel Secrets
 
 After the upgrade, a channel whose Secret has no label shows `Ready=False`
 with the reason `SecretNotOptedIn` and a `Warning` event, and the gateway
@@ -173,7 +177,52 @@ check is re-checked every minute, so a Secret you label after the upgrade
 brings its channel back to `Ready=True` within a minute, or at once when you
 edit the channel.
 
-### Provider and tool Secrets
+### Label workload Secrets
+
+After the upgrade, an Agent whose `spec.env` names a Secret without the
+workload label shows `Ready=False` with the reason `SecretNotOptedIn` and a
+`Warning` event. The Agent keeps its phase and its running Pod, and the
+controller makes no replacement Pod until you label the Secret. While the
+label is missing, the controller also makes no idle or hibernation transition
+for the Agent and does not update its phase from the Pod, so the Pod keeps
+running. A finished
+AgentTask needs nothing. A pending or retrying AgentTask waits without
+failing.
+
+1. List the Secrets that Agents and AgentTasks read in `spec.env`. Each row
+   shows the namespace, the workload, and the Secret names:
+
+   ```bash
+   kubectl get agents,agenttasks -A -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.spec.env[*].valueFrom.secretKeyRef.name}{"\n"}{end}'
+   ```
+
+2. Review each Secret. A workload can name any Secret in its namespace, so
+   confirm that each one was created for workloads.
+3. Label only the Secrets created for workloads:
+
+   ```bash
+   kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/workload-secret=true
+   ```
+
+   Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with its
+   namespace. Only the exact value `true` counts.
+
+A Secret that fails the review is one that a workload reads but that was not
+created for workloads. Do not label it. Treat it as exposed, because the
+workload's Pod already holds its value in the environment:
+
+1. Remove the `spec.env` entry that reads the Secret. The spec change replaces
+   an Agent's Pod. If the Pod stays, delete it. For an AgentTask that has a
+   Pod, delete the task.
+2. Rotate the Secret.
+
+On its first pass after the upgrade, the controller creates a controller-only
+Role and RoleBinding pair for each workload that reads a Secret, named
+`kaalm-agent-NAME-envsecrets` or `kaalm-task-NAME-envsecrets`. No existing
+object changes. A workload that fails the check is re-checked every 30 seconds,
+so a Secret you label after the upgrade clears the workload on the next pass.
+
+### Label provider and tool Secrets
 
 After the upgrade, a provider whose Secret has no label shows `Ready=False`
 with the reason `SecretNotOptedIn`. A provider whose Secret has the label but
@@ -222,11 +271,18 @@ annotation on the Secret brings it back to `Ready=True` on the next pass,
 with no edit to the provider. If you re-create a Secret later, by delete and
 create or through External Secrets, keep both.
 
-With both parts done, run the two upgrade steps at the top of this page.
+### Run the upgrade
 
-To find a channel or a provider that is held back, see
-[Troubleshooting](../reference/troubleshooting.md). The design book states the
-rules, 45, 46, 49, and 50, on
+With the Secrets labeled, run the two upgrade steps at the top of this page.
+
+To find a held-back channel, workload, or provider, see these sections of
+[Troubleshooting](../reference/troubleshooting.md):
+
+- [Channel is `Ready=False` with `SecretNotOptedIn` or `CallbackHostNotApproved`](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved)
+- [Workload is `Ready=False` with `SecretNotOptedIn`](../reference/troubleshooting.md#workload-is-readyfalse-with-secretnotoptedin)
+- [ModelProvider `Ready=False`](../reference/troubleshooting.md#modelprovider-readyfalse)
+
+The design book states the rules, 45, 46, 48, 49, and 50, on
 [Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
 
 ### TLS Secret names
@@ -268,4 +324,4 @@ The design book states the naming rule on
 *How this works: design book pages Operations, API versioning and deprecation
 (the storage migration, the conversion webhook, and the deprecation policy);
 Operations, Deployment (the rolling upgrade order); Resources, Validation and
-defaulting (rules 45, 46, 49, and 50); Controller, Reconcilers (the Agent certificate).*
+defaulting (rules 45, 46, 48, 49, and 50); Controller, Reconcilers (the Agent certificate).*

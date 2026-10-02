@@ -28,6 +28,13 @@ The certificate is your identity: the gateway authenticates you by its SAN,
 and it doubles as your serving certificate. Your `spec.env` entries are
 appended after these, so do not shadow the `KAALM_` names.
 
+A `spec.env` entry that reads a Secret through `valueFrom.secretKeyRef` works
+only when the Secret exists in the workload's namespace and carries the label
+`kaalm.io/workload-secret: "true"`. Until it does, the workload is
+`Ready=False` with reason `SecretNotOptedIn` and no new Pod starts. Ask whoever
+manages Secrets in your namespace to set the label; see
+[Workload is `Ready=False` with `SecretNotOptedIn`](../reference/troubleshooting.md#workload-is-readyfalse-with-secretnotoptedin).
+
 ## The contract as a checklist
 
 Numbered as in the design book (runtime contract items 1 to 8):

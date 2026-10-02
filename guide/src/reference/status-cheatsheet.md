@@ -56,7 +56,9 @@ does not allow handler mounts).
 `Ready=False` reasons that hold the Agent without degrading it:
 `InvalidReference` (no image, the class does not exist, or the class has a
 malformed `allowedCIDRs` entry),
-`ImagePullSecretMissing`, `ExistingClaimNotFound` (the adopted PVC is
+`ImagePullSecretMissing`, `SecretNotOptedIn` (an env Secret is missing or
+lacks the label `kaalm.io/workload-secret: "true"`; a running Pod stays in
+place and the phase is kept), `ExistingClaimNotFound` (the adopted PVC is
 missing), `HandlerConfigMapNotFound`, `CertificateNotReady`,
 `ChildConflict` (an object the Agent does not own already has the name of
 one of its children, such as its NetworkPolicy; the message names it, and
@@ -86,6 +88,12 @@ reason `TaskSucceeded`, `TaskFailed`, `TimeoutExceeded`, or
 `409 stale_pod` (retryable by the task), and one against a finished task
 with `403 access_denied` and the message prefix `TaskAlreadyCompleted`
 (final); neither is a condition.
+
+`Ready=False` with reason `SecretNotOptedIn` also holds a task without a Pod:
+an env Secret is missing or lacks the label `kaalm.io/workload-secret: "true"`.
+The task is not `Failed`, and the controller checks again every 30 seconds.
+The fix is in
+[Troubleshooting](troubleshooting.md#workload-is-readyfalse-with-secretnotoptedin).
 
 ## AgentChannel
 

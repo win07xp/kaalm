@@ -33,6 +33,9 @@ type AgentTaskSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 	// Env are extra environment variables merged with the injected KAALM_* set.
+	// Each valueFrom.secretKeyRef must name a Secret in the AgentTask's namespace
+	// labeled kaalm.io/workload-secret: "true" (rule 48); until it does, the
+	// AgentTask is Ready=False with reason SecretNotOptedIn and no new Pod is made.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 	// Providers lists the ModelProviders this task may call.

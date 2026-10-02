@@ -1571,3 +1571,207 @@ func TestEnsureCertificate_KeepsExistingSecretName(t *testing.T) {
 		t.Errorf("Pod TLS volume names %q, want legacy-tls", got)
 	}
 }
+
+// ---- Rule 48: workload env Secrets opt in ----
+
+// envFromSecret is an env entry that reads key from the Secret named secret.
+func envFromSecret(envName, secret string, optional bool) corev1.EnvVar {
+	return corev1.EnvVar{Name: envName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: "token", Optional: &optional,
+	}}}
+}
+
+// mkEnvSecret creates a Secret in default, labeled for workload use or not.
+func mkEnvSecret(t *testing.T, name string, labeled bool) {
+	t.Helper()
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("t")},
+	}
+	if labeled {
+		sec.Labels = map[string]string{kaalmv1beta1.LabelWorkloadSecret: kaalmv1beta1.AnnotationTrue}
+	}
+	if err := testClient.Create(ctxT(), sec); err != nil {
+		t.Fatalf("create secret %s: %v", name, err)
+	}
+}
+
+// setEnvSecretLabel adds or removes the workload label on a Secret.
+func setEnvSecretLabel(t *testing.T, name string, labeled bool) {
+	t.Helper()
+	eventually(t, func() error {
+		var sec corev1.Secret
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &sec); err != nil {
+			return err
+		}
+		if labeled {
+			sec.Labels = map[string]string{kaalmv1beta1.LabelWorkloadSecret: kaalmv1beta1.AnnotationTrue}
+		} else {
+			delete(sec.Labels, kaalmv1beta1.LabelWorkloadSecret)
+		}
+		return testClient.Update(ctxT(), &sec)
+	})
+}
+
+// expectNoAgentPod holds for a few reconcile passes and fails if a Pod appears.
+func expectNoAgentPod(t *testing.T, name string) {
+	t.Helper()
+	consistently(t, 2*time.Second, func() error {
+		if agentPod(t, name) != nil {
+			return errString("a Pod was created under the gate")
+		}
+		return nil
+	})
+}
+
+func TestAgent_EnvSecretNotOptedInGatesAndRecovers(t *testing.T) {
+	mkWorkloadClass(t, "wc-envsec", nil)
+	mkEnvSecret(t, "envsec-creds", false)
+	mkWorkloadAgent(t, "envsec-agent", "wc-envsec", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "envsec-creds", false)}
+	})
+	expectAgentReadyReason(t, "envsec-agent", kaalmv1beta1.ReasonSecretNotOptedIn)
+	expectEvent(t, "Agent", "default", "envsec-agent", kaalmv1beta1.ReasonSecretNotOptedIn,
+		corev1.EventTypeWarning, `Secret "envsec-creds"`)
+	expectNoAgentPod(t, "envsec-agent")
+
+	// Labeling the Secret clears the gate and provisioning continues.
+	setEnvSecretLabel(t, "envsec-creds", true)
+	expectAgentReadyReason(t, "envsec-agent", "CertificateNotReady")
+}
+
+// A missing Secret gates the same way, optional or not: a later unlabeled
+// Secret of that name must not reach a container start unchecked.
+func TestAgent_EnvSecretMissingGates(t *testing.T) {
+	mkWorkloadClass(t, "wc-envmiss", nil)
+	mkWorkloadAgent(t, "envmiss-agent", "wc-envmiss", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "envmiss-creds", true)}
+	})
+	expectAgentReadyReason(t, "envmiss-agent", kaalmv1beta1.ReasonSecretNotOptedIn)
+	expectNoAgentPod(t, "envmiss-agent")
+
+	mkEnvSecret(t, "envmiss-creds", false)
+	consistently(t, 2*time.Second, func() error {
+		c := condition(getWorkloadAgent(t, "envmiss-agent").Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Reason != kaalmv1beta1.ReasonSecretNotOptedIn {
+			return fmt.Errorf("an unlabeled Secret cleared the gate: %+v", c)
+		}
+		return nil
+	})
+	setEnvSecretLabel(t, "envmiss-creds", true)
+	expectAgentReadyReason(t, "envmiss-agent", "CertificateNotReady")
+}
+
+// The rule 48 read runs under its own Role, scoped to the Secret names the
+// env lists, and the pair goes away when the env names no Secret.
+func TestAgent_EnvSecretRoleScopedAndRemoved(t *testing.T) {
+	mkWorkloadClass(t, "wc-envrole", nil)
+	mkWorkloadAgent(t, "envrole-agent", "wc-envrole", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Env = []corev1.EnvVar{
+			envFromSecret("Z", "zz-env", false),
+			envFromSecret("A", "aa-env", false),
+			envFromSecret("A2", "aa-env", false),
+			{Name: "PLAIN", Value: "v"},
+		}
+	})
+	key := types.NamespacedName{Namespace: "default", Name: agentEnvSecretRoleName("envrole-agent")}
+
+	eventually(t, func() error {
+		var role rbacv1.Role
+		if err := testClient.Get(ctxT(), key, &role); err != nil {
+			return err
+		}
+		want := []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"secrets"},
+			ResourceNames: []string{"aa-env", "zz-env"}, Verbs: []string{"get", "watch"},
+		}}
+		if !equality.Semantic.DeepEqual(role.Rules, want) {
+			return fmt.Errorf("role rules = %+v", role.Rules)
+		}
+		if len(role.OwnerReferences) != 1 || role.OwnerReferences[0].Name != "envrole-agent" {
+			return fmt.Errorf("role owner = %+v", role.OwnerReferences)
+		}
+		var rb rbacv1.RoleBinding
+		if err := testClient.Get(ctxT(), key, &rb); err != nil {
+			return err
+		}
+		if len(rb.Subjects) != 1 || rb.Subjects[0].Name != controllerServiceAccount ||
+			rb.Subjects[0].Namespace != testSystemNamespace {
+			return fmt.Errorf("binding subjects = %+v", rb.Subjects)
+		}
+		return nil
+	})
+
+	eventually(t, func() error {
+		var ag kaalmv1beta1.Agent
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "envrole-agent"}, &ag); err != nil {
+			return err
+		}
+		ag.Spec.Env = []corev1.EnvVar{{Name: "PLAIN", Value: "v"}}
+		return testClient.Update(ctxT(), &ag)
+	})
+	eventually(t, func() error {
+		var role rbacv1.Role
+		if err := testClient.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("role still present: %v", err)
+		}
+		var rb rbacv1.RoleBinding
+		if err := testClient.Get(ctxT(), key, &rb); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("binding still present: %v", err)
+		}
+		return nil
+	})
+}
+
+// A running Pod is left in place when its Secret loses the label: the Agent
+// reports the gate and no replacement is made until the label is back.
+func TestAgent_EnvSecretGateLeavesRunningPod(t *testing.T) {
+	mkWorkloadClass(t, "wc-envrun", nil)
+	mkEnvSecret(t, "envrun-creds", true)
+	mkWorkloadAgent(t, "envrun-agent", "wc-envrun", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "envrun-creds", false)}
+	})
+	markCertReady(t, "envrun-agent")
+	eventually(t, func() error {
+		if agentPod(t, "envrun-agent") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	markPodReady(t, agentPod(t, "envrun-agent"))
+	expectAgentPhase(t, "envrun-agent", kaalmv1beta1.AgentRunning)
+	uid := agentPod(t, "envrun-agent").UID
+
+	// Secrets are unwatched: a Running Agent sees the change on its next
+	// periodic pass, which the touch brings forward.
+	setEnvSecretLabel(t, "envrun-creds", false)
+	touchAgent(t, "envrun-agent")
+	expectAgentReadyReason(t, "envrun-agent", kaalmv1beta1.ReasonSecretNotOptedIn)
+	consistently(t, 2*time.Second, func() error {
+		pod := agentPod(t, "envrun-agent")
+		if pod == nil || pod.UID != uid {
+			return errString("the running Pod was replaced or removed")
+		}
+		return nil
+	})
+	if ag := getWorkloadAgent(t, "envrun-agent"); ag.Status.Phase != kaalmv1beta1.AgentRunning {
+		t.Errorf("phase = %s, want Running", ag.Status.Phase)
+	}
+
+	setEnvSecretLabel(t, "envrun-creds", true)
+	expectAgentReadyReason(t, "envrun-agent", kaalmv1beta1.ReasonPodRunning)
+}
+
+func TestAgent_EnvSecretEmptyNameInvalidReference(t *testing.T) {
+	mkWorkloadClass(t, "wc-envempty", nil)
+	mkWorkloadAgent(t, "envempty-agent", "wc-envempty", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "", false)}
+	})
+	expectAgentReadyReason(t, "envempty-agent", kaalmv1beta1.ReasonInvalidReference)
+	expectNoAgentPod(t, "envempty-agent")
+	var role rbacv1.Role
+	key := types.NamespacedName{Namespace: "default", Name: agentEnvSecretRoleName("envempty-agent")}
+	if err := testClient.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
+		t.Errorf("an empty name minted an env-Secret Role: err=%v", err)
+	}
+}

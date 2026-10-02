@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -30,6 +31,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 const (
@@ -53,6 +56,83 @@ func agentPullSecretRoleName(agentName string) string {
 
 func taskPullSecretRoleName(taskName string) string {
 	return "kaalm-task-" + taskName + "-pullsecrets"
+}
+
+func agentEnvSecretRoleName(agentName string) string {
+	return "kaalm-agent-" + agentName + "-envsecrets"
+}
+
+func taskEnvSecretRoleName(taskName string) string {
+	return "kaalm-task-" + taskName + "-envsecrets"
+}
+
+// envSecretRefs lists the distinct Secret names a workload's env reads
+// through valueFrom.secretKeyRef, sorted. Literal values and the other
+// valueFrom sources name no Secret; an empty name is left out, so it never
+// reaches a Role (checkEnvSecrets reports it).
+func envSecretRefs(env []corev1.EnvVar) []corev1.LocalObjectReference {
+	seen := map[string]bool{}
+	var names []string
+	for _, e := range env {
+		if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil {
+			continue
+		}
+		name := e.ValueFrom.SecretKeyRef.Name
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	refs := make([]corev1.LocalObjectReference, 0, len(names))
+	for _, n := range names {
+		refs = append(refs, corev1.LocalObjectReference{Name: n})
+	}
+	return refs
+}
+
+// envSecretNotUsableMessage is the rule 48 status message. A missing Secret
+// and an unlabeled one read the same, so status never tells a developer
+// whether a Secret name exists, and it names no key or value.
+func envSecretNotUsableMessage(envName, secretName string) string {
+	return fmt.Sprintf("env %q: Secret %q is not usable: a workload may use only a Secret in its namespace "+
+		"that carries the label %s: %q", envName, secretName, kaalmv1beta1.LabelWorkloadSecret, kaalmv1beta1.AnnotationTrue)
+}
+
+// checkEnvSecrets enforces rule 48 on a workload's env: every Secret a
+// valueFrom.secretKeyRef names must exist in namespace and carry
+// LabelWorkloadSecret: "true", optional references included. It walks env in
+// spec order and reports the first failure as a status reason and message:
+// InvalidReference for an empty name, SecretNotOptedIn for a missing or
+// unlabeled Secret. Any other read error, a lasting Forbidden included, is
+// returned as err. Each distinct Secret is read once.
+func checkEnvSecrets(
+	ctx context.Context, reader client.Reader, namespace string, env []corev1.EnvVar,
+) (reason, msg string, err error) {
+	checked := map[string]bool{}
+	for _, e := range env {
+		if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil {
+			continue
+		}
+		name := e.ValueFrom.SecretKeyRef.Name
+		if name == "" {
+			return kaalmv1beta1.ReasonInvalidReference, fmt.Sprintf("env %q: secretKeyRef names no Secret", e.Name), nil
+		}
+		if checked[name] {
+			continue
+		}
+		var sec corev1.Secret
+		err := getSecretLive(ctx, reader, types.NamespacedName{Namespace: namespace, Name: name}, &sec)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return "", "", err
+		}
+		if err != nil || !kaalmv1beta1.WorkloadSecretOptedIn(sec.Labels) {
+			return kaalmv1beta1.ReasonSecretNotOptedIn, envSecretNotUsableMessage(e.Name, name), nil
+		}
+		checked[name] = true
+	}
+	return "", "", nil
 }
 
 // liveSecretReader picks the reader for a Secret outside the operator
@@ -93,7 +173,9 @@ func getSecretLive(ctx context.Context, reader client.Reader, key types.Namespac
 // edit that drops its Secret references leaves no grant behind. A Role or
 // RoleBinding of that name the owner does not control is a ChildConflictError,
 // never updated or deleted. It serves the rule 23 pull-Secret check of Agents
-// and AgentTasks and the rule 45 label check of AgentChannels.
+// and AgentTasks, the rule 48 env-Secret label check of Agents and
+// AgentTasks (a Role of its own, apart from the pull-Secret one), and the
+// rule 45 label check of AgentChannels.
 func ensureControllerSecretAccess(
 	ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object,
 	roleName, operatorNamespace string, refs []corev1.LocalObjectReference,

@@ -14,7 +14,7 @@ The other lifecycles in the system are indexed on [Lifecycles at a glance](../ap
 
 | From | To | Trigger |
 |---|---|---|
-| `Pending` | `Provisioning` | The pre-Pod checks pass and the Certificate exists; the task holds in `Provisioning` until the Certificate is Ready. |
+| `Pending` | `Provisioning` | The pre-Pod checks pass and the Certificate exists; the task holds in `Provisioning` until the Certificate is Ready. A task whose env Secret is missing or lacks the workload label stays in its phase with `Ready=False, reason=SecretNotOptedIn` (rule 48). |
 | `Pending`, `Provisioning` | `Failed` (terminal) | A class-versus-spec violation under rules 2, 4, 5, 24, 35 to 38, or 47: `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, or `NamespaceNotAllowed` (the class does not admit the task's namespace, and the first check run). Checked whenever no Pod exists, so a retry is validated against the class as it now stands. Not retried. |
 | `Provisioning` | `Running` | The Pod reports Ready. The same status write sets `status.startTime`, and the timeout clock starts. |
 | `Provisioning` | `Failed` | The container image name is invalid or can never be pulled (`InvalidImageName`, `ErrImageNeverPull`); the Pod reaches a terminal phase before Ready (`PodStartFailed`); or the Pod is not Ready five minutes after creation, whatever the cause (`ProvisioningDeadlineExceeded`). Retryable. An `exitCode` task whose Pod exits 0 before Ready goes to `Completing` instead. |
@@ -70,6 +70,8 @@ Clearing the UID before resetting the mailbox is what closes the stale-write win
 
 A retry re-runs the pre-Pod class check against the class as it now stands. A violation there settles the task as terminal `Failed` at once, whatever `backoffLimit` remains, and the increment already spent is not refunded. To retry a task against a class you have since aligned, delete and recreate the task: a `kubectl apply` of the same spec does not reset `status.retries`, since status is controller-owned and apply patches only `spec`.
 
+A retry also re-runs the env Secret gate ([rule 48](../resources/validation-and-defaulting.md#cross-resource-validation)). That gate is not terminal: a task whose env Secret is missing or has lost the label waits in `Provisioning` with `Ready=False, reason=SecretNotOptedIn`, creates no Pod, and counts no further retry. Labeling the Secret lets the next pass, within 30 seconds, create the Pod. A task that has a Pod or has finished is not checked.
+
 ## Event reasons
 
 | Reason | Type | When |
@@ -81,6 +83,6 @@ A retry re-runs the pre-Pod class check against the class as it now stands. A vi
 | `PodDisrupted` | Warning | the Pod was lost mid-run or before completion settled |
 | `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, `NamespaceNotAllowed` | Warning | the pre-Pod class check settles the task `Failed` |
 | `ChildConflict` | Warning | a child object that the task would own already exists and is not owned by it, when the reason or its message first appears on `Ready` |
-| `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing` | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason, when the reason first appears on `Ready`, not on each pass that finds the problem again |
+| `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn` | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason, when the reason first appears on `Ready`, not on each pass that finds the problem again |
 
 A retry emits the failure's reason with the message suffix `retrying (n/limit)`; the settled event fires once, after the status write that records the terminal phase, and a retry event follows the write that counts the retry.

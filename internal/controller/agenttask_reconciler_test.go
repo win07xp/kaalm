@@ -1534,3 +1534,89 @@ func TestEnsureTaskCertificate_KeepsExistingSecretName(t *testing.T) {
 		t.Errorf("ensureTaskCertificate changed the existing Certificate: %+v", after.Spec)
 	}
 }
+
+// ---- Rule 48: workload env Secrets opt in ----
+
+func taskReadyReason(name string) (string, error) {
+	var task kaalmv1beta1.AgentTask
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
+		return "", err
+	}
+	c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if c == nil {
+		return "", errString("no Ready condition yet")
+	}
+	return c.Reason, nil
+}
+
+func expectTaskReadyReason(t *testing.T, name, reason string) {
+	t.Helper()
+	eventually(t, func() error {
+		r, err := taskReadyReason(name)
+		if err != nil {
+			return err
+		}
+		if r != reason {
+			return errString("reason=" + r + " want " + reason)
+		}
+		return nil
+	})
+}
+
+func TestTask_EnvSecretNotOptedInGates(t *testing.T) {
+	mkWorkloadClass(t, "tc-envsec", nil)
+	mkEnvSecret(t, "t-envsec-creds", false)
+	mkTask(t, "t-envsec", "tc-envsec", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Env = []corev1.EnvVar{
+			envFromSecret("TOKEN", "t-envsec-creds", false),
+			envFromSecret("OTHER", "t-envsec-other", false),
+		}
+	})
+	expectTaskReadyReason(t, "t-envsec", kaalmv1beta1.ReasonSecretNotOptedIn)
+	expectEvent(t, "AgentTask", "default", "t-envsec", kaalmv1beta1.ReasonSecretNotOptedIn,
+		corev1.EventTypeWarning, `Secret "t-envsec-creds"`)
+	consistently(t, 2*time.Second, func() error {
+		if taskPod(t, "t-envsec") != nil {
+			return errString("a Pod was created under the gate")
+		}
+		if p := getTask(t, "t-envsec").Status.Phase; p == kaalmv1beta1.TaskFailed {
+			return errString("the gate is not terminal, phase=" + string(p))
+		}
+		return nil
+	})
+
+	key := types.NamespacedName{Namespace: "default", Name: taskEnvSecretRoleName("t-envsec")}
+	eventually(t, func() error {
+		var role rbacv1.Role
+		if err := testClient.Get(ctxT(), key, &role); err != nil {
+			return err
+		}
+		if len(role.Rules) != 1 ||
+			!equality.Semantic.DeepEqual(role.Rules[0].ResourceNames, []string{"t-envsec-creds", "t-envsec-other"}) {
+			return fmt.Errorf("role rules = %+v", role.Rules)
+		}
+		return nil
+	})
+
+	// Labeling both Secrets lets provisioning proceed.
+	setEnvSecretLabel(t, "t-envsec-creds", true)
+	mkEnvSecret(t, "t-envsec-other", true)
+	eventually(t, func() error { return markCertReadyErr("t-envsec") })
+	eventually(t, func() error {
+		if taskPod(t, "t-envsec") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+}
+
+func TestTask_EnvSecretMissingGates(t *testing.T) {
+	mkWorkloadClass(t, "tc-envmiss", nil)
+	mkTask(t, "t-envmiss", "tc-envmiss", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "t-envmiss-creds", false)}
+	})
+	expectTaskReadyReason(t, "t-envmiss", kaalmv1beta1.ReasonSecretNotOptedIn)
+	if taskPod(t, "t-envmiss") != nil {
+		t.Fatal("a Pod was created for a missing env Secret")
+	}
+}

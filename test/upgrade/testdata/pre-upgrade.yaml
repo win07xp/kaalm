@@ -12,7 +12,10 @@
 # the kaalm.io/provider-hosts annotation on purpose, for the same reason: the
 # spec checks that the upgraded controller reports SecretNotOptedIn, then
 # EndpointHostNotApproved once it is labeled, and recovers once it is
-# annotated.
+# annotated. The workload Secret up-env is left without the
+# kaalm.io/workload-secret label for the same reason: the keeper's and the
+# task's env read it, and the spec checks that the keeper reports
+# SecretNotOptedIn, keeps its Pod, and recovers once it is labeled.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -61,6 +64,15 @@ spec:
   credentialsRef:
     name: up-provider-key
     key: token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: up-env
+  namespace: up-e2e
+type: Opaque
+stringData:
+  token: up-env-token
 ---
 # The class for the agent that keeps running and for the finished task. No
 # hibernation: the keeper must sit in Running across the whole upgrade.
@@ -128,6 +140,12 @@ spec:
   agentClassRef:
     name: up-service
   image: ghcr.io/win07xp/kaalm-agent-python:__PREV__
+  env:
+    - name: UP_ENV_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: up-env
+          key: token
   handler:
     configMapRef:
       name: up-handler
@@ -195,6 +213,11 @@ spec:
   env:
     - name: KAALM_TASK_AUTOCOMPLETE
       value: success
+    - name: UP_ENV_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: up-env
+          key: token
   completion:
     condition: agentReported
     timeout: 5m

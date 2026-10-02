@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -184,4 +185,167 @@ func TestGetSecretLive_RetriesForbiddenThroughTheWatcher(t *testing.T) {
 	if err := getSecretLive(ctx, secretwatch.NewReader(w), key, &corev1.Secret{}); err != nil {
 		t.Fatalf("read after the grant lands = %v, want nil", err)
 	}
+}
+
+// envSecretRefs keeps only secretKeyRef names, once each, sorted, and leaves
+// out an empty name.
+func TestEnvSecretRefs(t *testing.T) {
+	ref := func(name string) *corev1.EnvVarSource {
+		return &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: "k",
+		}}
+	}
+	env := []corev1.EnvVar{
+		{Name: "PLAIN", Value: "v"},
+		{Name: "B", ValueFrom: ref("zz")},
+		{Name: "CM", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "cm"}, Key: "k",
+		}}},
+		{Name: "FIELD", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+		{Name: "RES", ValueFrom: &corev1.EnvVarSource{ResourceFieldRef: &corev1.ResourceFieldSelector{Resource: "limits.cpu"}}},
+		{Name: "A", ValueFrom: ref("aa")},
+		{Name: "A2", ValueFrom: ref("aa")},
+		{Name: "EMPTY", ValueFrom: ref("")},
+	}
+	got := envSecretRefs(env)
+	want := []corev1.LocalObjectReference{{Name: "aa"}, {Name: "zz"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("envSecretRefs = %+v, want %+v", got, want)
+	}
+	if got := envSecretRefs(nil); len(got) != 0 {
+		t.Errorf("envSecretRefs(nil) = %+v, want none", got)
+	}
+}
+
+// errReader answers every read with err.
+type errReader struct {
+	client.Reader
+	err error
+}
+
+func (e errReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return e.err
+}
+
+// Rule 48: a workload env may name only a Secret labeled for workload use.
+// Missing and unlabeled Secrets get one reason and one message, and the
+// message never names a key or a value.
+func TestCheckEnvSecrets(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	secret := func(name string, labels map[string]string) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", Labels: labels},
+			Data:       map[string][]byte{"hidden-key": []byte("hidden-value")},
+		}
+	}
+	optedIn := map[string]string{kaalmv1beta1.LabelWorkloadSecret: kaalmv1beta1.AnnotationTrue}
+	cs := kubefake.NewSimpleClientset(
+		secret("labeled", optedIn),
+		secret("unlabeled", nil),
+		secret("wrong-value", map[string]string{kaalmv1beta1.LabelWorkloadSecret: "True"}),
+		secret("channel-only", map[string]string{kaalmv1beta1.LabelChannelCredential: kaalmv1beta1.AnnotationTrue}),
+	)
+	reader := secretwatch.NewReader(secretwatch.New(ctx, cs))
+	envRef := func(envName, secretName string, optional bool) corev1.EnvVar {
+		return corev1.EnvVar{Name: envName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "hidden-key", Optional: &optional,
+		}}}
+	}
+
+	if reason, msg, err := checkEnvSecrets(ctx, reader, "team-a", []corev1.EnvVar{
+		{Name: "PLAIN", Value: "v"}, envRef("TOKEN", "labeled", false),
+	}); reason != "" || err != nil {
+		t.Fatalf("labeled Secret: reason=%q msg=%q err=%v, want a pass", reason, msg, err)
+	}
+
+	for _, tc := range []struct {
+		name, secret string
+		optional     bool
+	}{
+		{"unlabeled", "unlabeled", false},
+		{"wrong value", "wrong-value", false},
+		{"channel label only", "channel-only", false},
+		{"missing", "absent", false},
+		{"optional but missing", "absent", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, msg, err := checkEnvSecrets(ctx, reader, "team-a",
+				[]corev1.EnvVar{envRef("TOKEN", tc.secret, tc.optional)})
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if reason != kaalmv1beta1.ReasonSecretNotOptedIn {
+				t.Fatalf("reason = %q, want %q", reason, kaalmv1beta1.ReasonSecretNotOptedIn)
+			}
+			if want := envSecretNotUsableMessage("TOKEN", tc.secret); msg != want {
+				t.Errorf("msg = %q, want %q", msg, want)
+			}
+			for _, part := range []string{"TOKEN", tc.secret, kaalmv1beta1.LabelWorkloadSecret} {
+				if !strings.Contains(msg, part) {
+					t.Errorf("msg %q lacks %q", msg, part)
+				}
+			}
+			for _, leak := range []string{"hidden-key", "hidden-value"} {
+				if strings.Contains(msg, leak) {
+					t.Errorf("msg %q names %q", msg, leak)
+				}
+			}
+		})
+	}
+
+	// Missing and unlabeled read the same apart from the names in them.
+	_, missing, _ := checkEnvSecrets(ctx, reader, "team-a", []corev1.EnvVar{envRef("X", "s", false)})
+	if missing != envSecretNotUsableMessage("X", "s") {
+		t.Errorf("missing-Secret message = %q", missing)
+	}
+
+	reason, msg, err := checkEnvSecrets(ctx, reader, "team-a", []corev1.EnvVar{envRef("EMPTY", "", false)})
+	if err != nil || reason != kaalmv1beta1.ReasonInvalidReference || !strings.Contains(msg, "EMPTY") {
+		t.Errorf("empty name: reason=%q msg=%q err=%v, want InvalidReference", reason, msg, err)
+	}
+
+	// The first failing entry in spec order is reported.
+	_, msg, _ = checkEnvSecrets(ctx, reader, "team-a", []corev1.EnvVar{
+		envRef("OK", "labeled", false), envRef("FIRST", "unlabeled", false), envRef("SECOND", "absent", false),
+	})
+	if msg != envSecretNotUsableMessage("FIRST", "unlabeled") {
+		t.Errorf("msg = %q, want the first failing entry", msg)
+	}
+
+	// Any other read error is returned as an error, not a status reason.
+	boom := errors.New("boom")
+	reason, _, err = checkEnvSecrets(ctx, errReader{err: boom}, "team-a", []corev1.EnvVar{envRef("T", "labeled", false)})
+	if !errors.Is(err, boom) || reason != "" {
+		t.Errorf("read error: reason=%q err=%v, want the error", reason, err)
+	}
+}
+
+// Several entries naming one Secret cost one read.
+func TestCheckEnvSecrets_ReadsEachSecretOnce(t *testing.T) {
+	env := []corev1.EnvVar{}
+	for _, n := range []string{"A", "B", "C"} {
+		env = append(env, corev1.EnvVar{Name: n, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "shared"}, Key: n,
+		}}})
+	}
+	labeled := &labeledReader{}
+	if reason, _, err := checkEnvSecrets(context.Background(), labeled, "team-a", env); reason != "" || err != nil {
+		t.Fatalf("reason=%q err=%v", reason, err)
+	}
+	if labeled.calls != 1 {
+		t.Errorf("reads = %d, want 1", labeled.calls)
+	}
+}
+
+// labeledReader answers every Secret read with an opted-in Secret.
+type labeledReader struct {
+	client.Reader
+	calls int
+}
+
+func (l *labeledReader) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	l.calls++
+	obj.SetLabels(map[string]string{kaalmv1beta1.LabelWorkloadSecret: kaalmv1beta1.AnnotationTrue})
+	return nil
 }
