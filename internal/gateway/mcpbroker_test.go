@@ -505,11 +505,13 @@ func TestMCPBroker_RetryablePerCause(t *testing.T) {
 			status: http.StatusForbidden, errType: errToolDenied},
 		{name: "rate limited", upstream: okResult,
 			setup: func(t *testing.T, h *harness, cl *http.Client) {
+				now := time.Now()
+				h.server.RateLimiter.now = func() time.Time { return now }
 				h.store.toolProviders["search"].Spec.RateLimits = kaalmv1beta1.ToolProviderRateLimits{RequestsPerMinute: 1}
 				first := postJSON(t, cl, h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
 				_ = first.Body.Close()
 			},
-			status: http.StatusTooManyRequests, errType: errRateLimited, retryable: true, retryAfter: "1"},
+			status: http.StatusTooManyRequests, errType: errRateLimited, retryable: true, retryAfter: "60"},
 		{name: "credential unreadable", upstream: okResult,
 			setup:  func(_ *testing.T, h *harness, _ *http.Client) { delete(h.store.toolCreds, "search") },
 			status: http.StatusServiceUnavailable, errType: errToolUnavailable, retryable: true},
@@ -603,7 +605,12 @@ func TestMCPBroker_RateLimited(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{}}`)
 	})
 	h.seedToolRoute()
-	h.store.toolProviders["search"].Spec.RateLimits = kaalmv1beta1.ToolProviderRateLimits{RequestsPerMinute: 1}
+	// 2 calls per minute on 3 replicas: each replica's share is 2/3 call per
+	// minute, so a drained bucket holds a call again after 90 seconds (#346).
+	h.server.RateLimiter.Replicas = func() int { return 3 }
+	now := time.Now()
+	h.server.RateLimiter.now = func() time.Time { return now }
+	h.store.toolProviders["search"].Spec.RateLimits = kaalmv1beta1.ToolProviderRateLimits{RequestsPerMinute: 2}
 	cert := agentCert(t, h.ca)
 
 	first := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
@@ -612,9 +619,19 @@ func TestMCPBroker_RateLimited(t *testing.T) {
 		t.Fatalf("first call status %d", first.StatusCode)
 	}
 	second := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
-	expectMCPError(t, second, http.StatusTooManyRequests, errRateLimited)
-	if second.Header.Get("Retry-After") == "" {
-		t.Error("429 must carry Retry-After")
+	defer func() { _ = second.Body.Close() }()
+	var envelope struct {
+		Error errorBody `json:"error"`
+	}
+	_ = json.NewDecoder(second.Body).Decode(&envelope)
+	if second.StatusCode != http.StatusTooManyRequests || envelope.Error.Type != errRateLimited {
+		t.Fatalf("got %d %q, want 429 %q", second.StatusCode, envelope.Error.Type, errRateLimited)
+	}
+	if !envelope.Error.Retryable {
+		t.Error("a rate-limited call must be retryable")
+	}
+	if got := second.Header.Get("Retry-After"); got != "90" {
+		t.Errorf("Retry-After = %q, want the computed wait \"90\"", got)
 	}
 }
 

@@ -94,7 +94,7 @@ never on the message:
 | 403 | `access_denied` | no | A tenancy gate: namespace, class, or session ownership. The fix is in the specs, not your code |
 | 403 | `tool_denied` | no | The named tool is outside your grant, or the method is off the broker's allowlist |
 | 413 | `request_too_large`, `response_too_large` | no | The request or the server's response exceeded the broker's body cap |
-| 429 | `rate_limited` | after `Retry-After` | Your namespace hit the provider's `requestsPerMinute` ceiling |
+| 429 | `rate_limited` | after `Retry-After` | Your namespace hit the provider's `requestsPerMinute` ceiling. `Retry-After` is the seconds until your namespace's bucket admits a call again, at least 1. It can be minutes when the provider's `requestsPerMinute` is below the gateway replica count |
 | 503 | `tool_unavailable` | per `error.retryable` | The tool server is unreachable, refusing, rejected the injected credential, or sent a `tools/list` answer the broker cannot parse; a platform problem, not yours. The first two are retryable; the last two are not |
 | 504 | `tool_timeout` | yes | The call exceeded the broker's upstream timeout |
 

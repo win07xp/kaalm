@@ -116,7 +116,7 @@ The checks in step 3, in the order the broker runs them:
 | Namespace gate | `allowedNamespaces`, exact name or glob | both tiers | `403 access_denied` |
 | Workload grant | the Agent or AgentTask `spec.tools[].providerRef` | mTLS callers | `403 access_denied` |
 | Class allowlist | the AgentClass `allowedToolProviders` | mTLS callers | `403 access_denied` |
-| Rate limit | the token bucket for the (namespace, ToolProvider) pair | both tiers | `429 rate_limited`, `Retry-After: 1` |
+| Rate limit | the token bucket for the (namespace, ToolProvider) pair | both tiers | `429 rate_limited`, computed [`Retry-After`](llm/budgets-and-rate-limits.md#retry-after) |
 | Body cap | the request body against the broker's cap | both tiers | `413 request_too_large` |
 | Single message | the body is one JSON-RPC message, not a batch array | both tiers | `400 invalid_request` |
 | Method allowlist | the JSON-RPC `method` (see [Transport](#transport)) | both tiers | `403 tool_denied`, naming the method |
@@ -210,7 +210,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | JSON-RPC method outside the allowlist | `403 tool_denied`, naming the method |
 | Batch array, or not a JSON-RPC message | `400 invalid_request` |
 | Modern header missing or mismatched | `400` with JSON-RPC error `-32020` |
-| Rate limit exceeded | `429 rate_limited`, `Retry-After: 1` |
+| Rate limit exceeded | `429 rate_limited`, computed [`Retry-After`](llm/budgets-and-rate-limits.md#retry-after) |
 | Oversized request or response | `413 request_too_large` or `413 response_too_large` |
 | Session id bound to another caller | `403 access_denied`; the audit record names the mismatch |
 | Credential Secret unreadable | `503 tool_unavailable`, retryable |
