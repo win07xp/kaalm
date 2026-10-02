@@ -338,9 +338,9 @@ func TestAllowTool_FewerCallsThanReplicas(t *testing.T) {
 	}
 	now = now.Add(60 * time.Second)
 	// About 0.67 of a call has refilled, so a third of a call (30s) is
-	// missing. Float rounding can push the ceiling to 31.
-	if ok, wait := rl.AllowTool(tp, "team-a"); ok || wait < 30 || wait > 31 {
-		t.Errorf("after 60s = (%v, %d), want (false, 30 or 31)", ok, wait)
+	// missing. The exact 30s wait is not rounded up to 31 (#361).
+	if ok, wait := rl.AllowTool(tp, "team-a"); ok || wait != 30 {
+		t.Errorf("after 60s = (%v, %d), want (false, 30)", ok, wait)
 	}
 	now = now.Add(30 * time.Second)
 	if ok, wait := rl.AllowTool(tp, "team-a"); !ok || wait != 0 {
@@ -380,7 +380,9 @@ func TestAllowHeartbeat_BurstAndRefill(t *testing.T) {
 // TestRateLimiter_FewerRequestsThanReplicas: when requestsPerMinute is below
 // the replica count, each replica's share is below one request, yet the
 // request bucket still holds one whole request, so the key is admitted once
-// per refill instead of refused forever (#202).
+// per refill instead of refused forever (#202). Sixty seconds after the
+// drain, a third of a request (30s) is missing, and the refusal reports
+// exactly 30 (#361).
 func TestRateLimiter_FewerRequestsThanReplicas(t *testing.T) {
 	rl := NewRateLimiter(func() int { return 3 })
 	now := time.Now()
@@ -394,9 +396,41 @@ func TestRateLimiter_FewerRequestsThanReplicas(t *testing.T) {
 	if ok || retry != 90 { // 1 request at 2/3 per minute is 90s
 		t.Errorf("drained bucket: ok=%v retry=%d, want refused with 90", ok, retry)
 	}
-	now = now.Add(90 * time.Second)
+	now = now.Add(60 * time.Second)
+	if ok, retry := rl.Allow(p, "team-a", "m1"); ok || retry != 30 {
+		t.Errorf("after 60s: ok=%v retry=%d, want refused with 30", ok, retry)
+	}
+	now = now.Add(30 * time.Second)
 	if !allowLLM(rl, p, "team-a", "m1") {
 		t.Error("a bucket refilled to one request must admit")
+	}
+}
+
+// TestRetryAfterSeconds: the Retry-After is the ceiling of the exact wait,
+// so float error in a whole-second wait does not add a second (#361), a
+// real fraction still rounds up, and the result is at least 1.
+func TestRetryAfterSeconds(t *testing.T) {
+	// Built from runtime values, as production does: a constant expression
+	// such as 1 - 2.0/3 is folded exactly and would hide the float error.
+	share := perReplica(2, 3)
+	refilled := 1.0 * share // one minute of refill
+	cases := []struct {
+		name               string
+		deficit, perMinute float64
+		want               int
+	}{
+		{"third of a call at 2/3 per minute", 1 - refilled, share, 30},
+		{"half a call at 1 per minute", 0.5, 1, 30},
+		{"token debt of half a minute", 500, 1000, 30},
+		{"one call at 2/3 per minute", 1, share, 90},
+		{"real fraction rounds up", 0.5000001, 1, 31},
+		{"zero deficit floors at 1", 0, 2, 1},
+		{"sub-second wait floors at 1", 1e-6, 60, 1},
+	}
+	for _, tc := range cases {
+		if got := retryAfterSeconds(tc.deficit, tc.perMinute); got != tc.want {
+			t.Errorf("%s: retryAfterSeconds(%v, %v) = %d, want %d", tc.name, tc.deficit, tc.perMinute, got, tc.want)
+		}
 	}
 }
 
