@@ -37,6 +37,9 @@ type AgentSpec struct {
 	// +optional
 	Args []string `json:"args,omitempty"`
 	// Env are extra environment variables merged with the injected KAALM_* set.
+	// Each valueFrom.secretKeyRef must name a Secret in the Agent's namespace
+	// labeled kaalm.io/workload-secret: "true" (rule 48); until it does, the
+	// Agent is Ready=False with reason SecretNotOptedIn and no new Pod is made.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 	// Handler references a developer-owned ConfigMap holding handler source

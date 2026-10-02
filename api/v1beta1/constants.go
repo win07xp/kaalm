@@ -123,7 +123,7 @@ const (
 	ReasonCallbackAuthMissing        = "CallbackAuthMissing"
 	ReasonCallbackAuthInvalid        = "CallbackAuthInvalid"
 	ReasonCallbackHostUnresolved     = "CallbackHostUnresolved"
-	ReasonSecretNotOptedIn           = "SecretNotOptedIn"        // rules 45 and 49
+	ReasonSecretNotOptedIn           = "SecretNotOptedIn"        // rules 45, 48, and 49
 	ReasonCallbackHostNotApproved    = "CallbackHostNotApproved" // rule 46
 	ReasonEndpointHostNotApproved    = "EndpointHostNotApproved" // rule 50
 	ReasonAgentReachable             = "AgentReachable"
@@ -237,6 +237,10 @@ const (
 	// value is AnnotationTrue (rule 45). An AgentChannel may reference only
 	// Secrets that carry it; the reconciler and the gateway both check it.
 	LabelChannelCredential = "kaalm.io/channel-credential"
+	// LabelWorkloadSecret opts a Secret in to use by an Agent's or
+	// AgentTask's env when its value is AnnotationTrue (rule 48). Every Secret
+	// a workload's spec.env names through valueFrom.secretKeyRef must carry it.
+	LabelWorkloadSecret = "kaalm.io/workload-secret"
 	// AnnotationCallbackHosts lists, comma-separated, the hostnames a Secret's
 	// credential manager approves as callbackUrl hosts when the Secret is a
 	// bearer callbackAuth token (rule 46).
