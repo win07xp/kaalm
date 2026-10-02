@@ -2,7 +2,7 @@
 
 Kaalm (Kubernetes AI/Agent Loop Manager) is a Kubernetes-native operator that makes AI agents a first-class workload type. You declare agents, their policies, their model access, and their inbound channels as custom resources. The operator turns those declarations into running Pods, TLS identities, network policies, budgets, and lifecycle automation.
 
-This book is the complete design and the shipped operator implements it: it was written to be implemented from, and it doubles as onboarding material for anyone joining the project. Every number, field name, and rule in it is deliberate. Where the implementation stands against the design, release by release, is recorded in the [Roadmap](ROADMAP.md).
+This book is the complete design, and the shipped operator implements it. It also serves as onboarding material for anyone joining the project. The [Roadmap](ROADMAP.md) records where the implementation stands against the design, release by release.
 
 ## How this book is organized
 
@@ -15,9 +15,9 @@ The parts build on each other. Reading front to back never requires a concept th
 5. **The Controller** documents the operator: its reconcilers, the Agent and AgentTask state machines, hibernation and wake, change propagation, and finalizers.
 6. **The Console** documents the optional operator console: its scope, the read API, authentication, and test-chat.
 7. **Security** covers the trust model, RBAC, credential handling, TLS and certificates, and the threat model.
-8. **Operations** covers deployment with Helm, API versioning and the deprecation policy, and observability.
+8. **Operations** covers deployment with Helm, API versioning and the deprecation policy, observability, and load and scale.
 9. The appendix holds the twenty-four acceptance scenarios that double as v1 acceptance criteria.
 
 ## Where to start
 
-If you are new to the project, read part 1 in order. If you are implementing a component, read parts 1 and 2 first, then the part for your component. If you are evaluating Kaalm as an operator or security reviewer, parts 1, 6, and 7 are written for you.
+If you are new to the project, read part 1 in order. If you are implementing a component, read parts 1 and 2 first, then the part for your component. If you are evaluating Kaalm as an operator or security reviewer, parts 1, 7, and 8 are written for you.
