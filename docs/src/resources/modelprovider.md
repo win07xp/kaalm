@@ -22,12 +22,11 @@ spec:
   type: anthropic
 
   # Required. The schema pattern ^https:// rejects any other scheme: the
-  # gateway forwards the credential to this URL. Its hostname must be listed
-  # in the credential Secret's kaalm.io/provider-hosts annotation (rule 50).
+  # gateway forwards the credential to this URL. Its hostname must be
+  # approved by the credential Secret (rule 50).
   endpoint: "https://api.anthropic.com"
 
-  # Required. A Secret key in the operator namespace, read by the gateway
-  # there; credentials never reach agent containers. For google-vertex the
+  # Required. A Secret key in the operator namespace. For google-vertex the
   # value is a GCP service-account JSON key, not a static API key (see The
   # google-vertex probe on Reconcilers). The Secret must carry the label
   # kaalm.io/provider-credential: "true" (rule 49) and list the endpoint host
@@ -85,13 +84,10 @@ spec:
         action: block
 
   rateLimits:
-    # Cluster-wide ceiling per (namespace, model); each replica enforces its
-    # share.
+    # Cluster-wide ceiling per (namespace, model); see Rate limit scope.
     requestsPerMinute: 300
     # Cluster-wide ceiling on input plus output tokens per minute, per
-    # (namespace, model). A request is admitted while the token bucket is
-    # above 0, and the call's tokens are debited when it ends. Unset or 0
-    # means no token limit.
+    # (namespace, model). Unset or 0 means no token limit.
     tokensPerMinute: 500000
 
   # Providers tried when this one fails, each with its own fallback list,
@@ -150,31 +146,31 @@ status:
 |---|---|
 | `Ready` | The spec is valid and the credential resolves. `True` with `reason: CredentialsValid`. `False` with one of `CredentialsMissing` (the Secret or key is absent or empty), `SecretNotOptedIn` (the Secret lacks the label `kaalm.io/provider-credential: "true"`, rule 49), `EndpointHostNotApproved` (the Secret's `kaalm.io/provider-hosts` annotation omits the `spec.endpoint` host, rule 50), `CredentialsInvalid` (the probe was refused with a 401 or 403), `FallbackIneligible` (rules 11 and 12), `InvalidDegradeTarget` (rule 18), `InvalidModelMap` (rule 41), `HardBudgetUnpriced` (rule 33), or `DeletionBlocked` while a delete waits on a referrer ([Cluster-scoped resources](../controller/finalizers.md#cluster-scoped-resources)). Each reason sends a `Warning` event with the same reason when it first appears on `Ready` ([Event emission](../controller/operations.md#event-emission)). |
 | `Healthy` | The periodic upstream probe, run against every provider type including `google-vertex`. `True` with `UpstreamReachable`; `False` with `ProviderUnhealthy` and a `Warning` event on every failing pass, or with `CredentialsInvalid` when the probe itself is refused. |
-| `GatewayReachable` | `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. Set on every pass and refreshed at once on a gateway Pod readiness change ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)). The same value is mirrored onto every ModelProvider. |
+| `GatewayReachable` | `True` with `GatewayReady` when at least one gateway Pod is Ready, else `False` with `GatewayUnavailable`. Set on each pass that gets past the credential and configuration checks, and refreshed at once when a gateway Pod's readiness changes ([ModelProviderReconciler](../controller/reconcilers.md#modelproviderreconciler)). Every ModelProvider that passes those checks shows the same value. |
 | `FallbackIneligible` | Advisory; never affects `Ready`. `True` with `reason: FallbackIneligible` when the reconcile-time scan finds a fallback candidate that a caller's namespace or model can never reach; `False` with `AllCandidatesEligible` once the findings clear. A `Warning` event with the same reason names each finding when it is added. A provider with no findings carries no such condition ([Reconcile-time fallback eligibility scan](../controller/reconcilers.md#reconcile-time-fallback-eligibility-scan)). |
 | `DegradeTargetNotCheapest` | Advisory; never affects `Ready`. `True` with `CheaperModelAvailable` when a degrade policy's `degradeTo` costs more than another priced model in the catalog, `False` with `DegradeTargetCheapest` once none does. The message lists every such target. One `Warning` event fires on the transition to `True` ([`degradeTo` validation](#degradeto-validation)). |
 | `MaxOutputTokensUnset` | Advisory; never affects `Ready`. `True` with `MaxOutputTokensUnset` when a fallback edge from an `openai` or `openai-compatible` provider into an `anthropic` provider reaches models that declare no `maxOutputTokens`. The message lists each `provider/model` in sorted order. `False` with `MaxOutputTokensDeclared` once none remain. A provider with no findings carries no such condition. The `Warning` event fires on the transition to `True` ([What does not translate](../gateways/llm/fallback.md#what-does-not)). |
 | `BoundaryMarginRaised` | Hard enforcement only. `True` when a gateway replica observed traffic that needed a wider boundary margin than `hard.boundaryMarginPercent` configures ([Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). |
 
-`healthCheck.enabled: false` disables the probe (for example for an offline test fixture); `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each request. A failing probe requeues on a backoff instead of the plain interval ([Probe backoff](../controller/reconcilers.md#probe-backoff)). `budgetUsage` is per-namespace spend for the current period, and `clusterSpentUSD` is the sum across namespaces.
+`healthCheck.enabled: false` disables the probe; `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each request. A failing probe requeues on a backoff instead of the plain interval ([Probe backoff](../controller/reconcilers.md#probe-backoff)). `budgetUsage` is per-namespace spend for the current period, and `clusterSpentUSD` is the sum across namespaces.
 
 Each `budgetUsage` entry's `state` is a per-namespace state machine over the current period:
 
 ![Per-namespace budget state for one ModelProvider and one period. The period opening enters Normal. Normal moves to Throttled when spend reaches a degrade policy's atPercent. Normal or Throttled move to Blocked when spend reaches a block policy's atPercent. A period rollover, or a spec edit that raises the ceiling or changes the policies, moves Throttled or Blocked back to Normal.](../diagrams/budget-namespace-states.svg)
 
-The state is derived from `percentUsed` and the highest policy threshold at or below it. `percentUsed` is the worse of two ratios: the namespace's spend against `perNamespaceUSD`, and the provider's cluster-wide spend against `clusterUSD`. An unset ceiling adds no ratio. This is the same rule the gateway's admission decision applies, so a namespace under its own ceiling that the cluster ceiling blocks reports `state: Blocked`. The state is `Throttled` for a degrade policy, `Blocked` for a block policy, `Normal` when no threshold is crossed or no policies exist. Warn policies record a metric and a log line and change no state. Spend is monotonic within a period, so only the rollover or a spec edit moves a namespace back; the reconciler recomputes the state from the current spec on every pass. The field is display truth: enforcement reads each gateway replica's live counter plus its peers' partials ([Budget state management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management)). Hard enforcement changes nothing in this state machine: the boundary region is a transient gateway admission mode, not a namespace state.
+The state is derived from `percentUsed` and the highest policy threshold at or below it. `percentUsed` is the worse of two ratios: the namespace's spend against `perNamespaceUSD`, and the provider's cluster-wide spend against `clusterUSD`. An unset ceiling adds no ratio. This is the same rule the gateway's admission decision applies, so a namespace under its own ceiling that the cluster ceiling blocks reports `state: Blocked`. The state is `Throttled` for a degrade policy, `Blocked` for a block policy, `Normal` when no threshold is crossed or no policies exist. Warn policies record a metric and change no state. Spend is monotonic within a period, so only the rollover or a spec edit moves a namespace back. Hard enforcement changes nothing in this state machine: the boundary region is a transient gateway admission mode, not a namespace state.
 
 ## Design notes
 
 ### Credential scoping
 
-Credentials are referenced from the operator's namespace and read directly by the gateway there. They never leave that namespace or reach agent containers: an agent that wants to call an LLM goes through the gateway, which attaches the credential server-side ([Credential handling](../security/credentials.md)). Only a Secret that carries the label `kaalm.io/provider-credential: "true"` and lists the endpoint host in its `kaalm.io/provider-hosts` annotation may serve as a credential, so a provider cannot name an arbitrary Secret in `kaalm-system` or send a credential to a host that the credential manager did not approve ([Provider credentials](validation-and-defaulting.md#provider-credentials)).
+Credentials are referenced from the operator's namespace and read directly by the gateway there. They never leave that namespace or reach agent containers: an agent that wants to call an LLM goes through the gateway, which attaches the credential server-side ([Credential handling](../security/credentials.md)). Only a Secret that opted in with the label and listed the endpoint host (rules 49 and 50) may serve as a credential, so a provider cannot name an arbitrary Secret in `kaalm-system` or send a credential to a host that the credential manager did not approve ([Provider credentials](validation-and-defaulting.md#provider-credentials)).
 
 ### Budget accounting
 
-Budget state in status is the source of truth for display; each gateway replica holds an authoritative live counter that is folded into status periodically, because status updates are rate-limited and lossy ([Budget state management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management)).
+Budget state in status is the source of truth for display only. Enforcement reads each gateway replica's live counter plus its peers' published partials; status is folded from them periodically, because status updates are rate-limited and lossy ([Budget state management](../gateways/llm/budgets-and-rate-limits.md#budget-state-management)).
 
-Periods reset at midnight UTC: `monthly` on the first day of the calendar month, `weekly` on Monday, `daily` every day. The `Retry-After` on `429 budget_exhausted` is the seconds to the next reset. Setting `clusterUSD` without `perNamespaceUSD`, or the reverse, is supported: the unset ceiling is not enforced. When a block fires, `error.message` names which ceiling won ([LLM Gateway error responses](../gateways/api/errors.md#llm-gateway-error-responses)).
+Periods reset at midnight UTC: `monthly` on the first day of the calendar month, `weekly` on Monday, `daily` every day. The `Retry-After` on `429 budget_exhausted` is the seconds to the next reset. When a block fires, `error.message` names which ceiling won ([LLM Gateway error responses](../gateways/api/errors.md#llm-gateway-error-responses)).
 
 There is no pre-request cost estimation: a request's cost is knowable only after the response, so soft mode counts after the fact within its stated bound, and hard mode bounds the crossing with serialized admission rather than estimates.
 
@@ -182,11 +178,11 @@ There is no pre-request cost estimation: a request's cost is knowable only after
 
 Both `rateLimits` fields are cluster-wide ceilings per (namespace, model), so N namespaces, or N models in one namespace, each get the full ceiling. `tokensPerMinute` therefore does not keep a shared provider key under the provider's own tokens-per-minute limit. The token limit is enforced after the call, so a large call blocks the next request, not itself ([Rate limiting](../gateways/llm/budgets-and-rate-limits.md#rate-limiting)).
 
-The gateway divides each ceiling across its replicas, so the split is approximate. When `requestsPerMinute` is lower than the replica count, each replica still admits one request for each (namespace, model), then refuses until its bucket refills, and a cluster-wide burst can admit up to one request per replica while the long-run rate stays at the limit ([Request limits below the replica count](../gateways/llm/budgets-and-rate-limits.md#request-limits-below-the-replica-count)).
+Each gateway replica enforces its share of a ceiling, so the split is approximate. When `requestsPerMinute` is lower than the replica count, a burst can admit up to one request per replica while the long-run rate stays at the limit ([Request limits below the replica count](../gateways/llm/budgets-and-rate-limits.md#request-limits-below-the-replica-count)).
 
 ### Glob semantics in `allowedNamespaces`
 
-Patterns use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules: `*` matches any run of non-`/` characters. Namespace names contain no `/`, so `sandbox-*` matches `sandbox-foo` and `sandbox-foo-bar` alike. Prefer exact names where possible.
+Patterns use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules: `*` matches any run of non-`/` characters. Namespace names contain no `/`, so `sandbox-*` matches `sandbox-foo` and `sandbox-foo-bar` alike.
 
 ### Fallback trees
 
@@ -196,17 +192,17 @@ Each provider's `spec.fallback` list may name providers with lists of their own,
 
 Follow the visit numbers, not the levels: `anthropic-overflow` is a direct child of the primary and is still cut, because the walk reaches it fifth and the three slots are gone. How a budget-blocked primary, a budget-blocked fallback, and an ineligible candidate each affect the walk, and how exhaustion maps to error codes, are on [Fallback logic](../gateways/llm/fallback.md).
 
-Each `spec.fallback[]` entry is a name and an optional `modelMap` (rule 41). Rule 12 governs which types may reference which: `anthropic` and `openai` or `openai-compatible` may cross in either direction, with the gateway translating at the crossing; `google-vertex` chains stay same-type. The map lives on the edge rather than on the provider because the same fallback can serve different primaries under different names, and because the primary is the resource the platform team edits when they add a backup ([Crossing formats](../gateways/llm/fallback.md#crossing-formats)).
+Each `spec.fallback[]` entry is a name and an optional `modelMap` (rule 41). Rule 12 governs which provider types may reference which ([Crossing formats](../gateways/llm/fallback.md#crossing-formats)). The map lives on the edge rather than on the provider because the same fallback can serve different primaries under different names, and because the primary is the resource the platform team edits when they add a backup.
 
 Rule 11 rejects a circular tree: a provider that appears among its own ancestors. A backup that two branches share is not circular. The gateway attempts it once per request, at its first position in the walk.
 
 ### Cost fields are strings
 
-Cost fields are decimal strings, not floats, to avoid precision loss. The gateway parses them as decimals.
+Cost fields are decimal strings, not floats, to avoid precision loss.
 
 ### `degradeTo` validation
 
-Every `degradeTo` must name a model in the same provider's catalog (rule 18, `Ready=False, reason=InvalidDegradeTarget`). On every pass that gets past the credentials check, including a pass that fails a `Ready` check ([step 2 of the reconciler](../controller/reconcilers.md#modelproviderreconciler)), the reconciler also runs a cost check: it averages each model's input and output prices and, when a degrade target costs more than another priced model, sets the `DegradeTargetNotCheapest` condition and emits one `Warning` event with `reason=DegradeTargetNotCheapest`. The condition message and the event message list every `degradeTo` target that costs more than another priced model, each with the cheapest priced model. A target tied for the lowest average, or without both prices, is not listed. The event fires once, when the condition turns `True`, not on every pass and not when the list changes. The check is advisory and does not affect `Ready`, since a platform team may prefer a target for latency or capability; it catches the misconfiguration where a policy labeled "degrade" raises cost at the threshold ([Cost sanity on degradeTo](../controller/reconcilers.md#cost-sanity-on-degradeto)).
+Every `degradeTo` must name a model in the same provider's catalog (rule 18, `Ready=False, reason=InvalidDegradeTarget`). On every pass that gets past the credentials check, including a pass that fails a `Ready` check ([step 2 of the reconciler](../controller/reconcilers.md#modelproviderreconciler)), the reconciler also runs a cost check: it averages each model's input and output prices and, when a degrade target costs more than another priced model, sets the `DegradeTargetNotCheapest` condition and emits one `Warning` event with `reason=DegradeTargetNotCheapest` when the condition turns `True`. Both name every such `degradeTo` target with the cheapest priced model. A target tied for the lowest average, or without both prices, is not listed. The check is advisory and does not affect `Ready`, since a platform team may prefer a target for latency or capability; it catches the misconfiguration where a policy labeled "degrade" raises cost at the threshold ([Cost sanity on degradeTo](../controller/reconcilers.md#cost-sanity-on-degradeto)).
 
 ### Deletion
 
