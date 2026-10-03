@@ -29,7 +29,7 @@ import (
 
 // ProviderProbeResult classifies a provider liveness probe. Exactly one of
 // Healthy, AuthFailed, or Err(!=nil) is the meaningful outcome. See the
-// result handling in docs/src/controller/reconcilers.md (ModelProviderReconciler).
+// result handling in docs/src/controller/reconcilers/modelprovider.md.
 type ProviderProbeResult struct {
 	// Healthy is true on a 2xx from the provider.
 	Healthy bool

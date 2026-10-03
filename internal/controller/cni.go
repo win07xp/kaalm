@@ -37,8 +37,8 @@ const ciliumPolicyResource = "ciliumnetworkpolicies"
 // ProbeFQDNPolicySupport reports whether the cluster's CNI can enforce FQDN
 // egress policies: the cluster serves the ciliumnetworkpolicies resource in
 // cilium.io/v2. It is a one-time discovery check; FQDNProbe caches the result
-// for the process lifetime (docs/src/controller/reconcilers.md,
-// AgentClassReconciler).
+// for the process lifetime (docs/src/controller/reconcilers/agentclass.md,
+// CNI FQDN-policy probe).
 func ProbeFQDNPolicySupport(dc discovery.DiscoveryInterface) (bool, error) {
 	list, err := dc.ServerResourcesForGroupVersion(ciliumPolicyGVK.GroupVersion().String())
 	if err != nil {

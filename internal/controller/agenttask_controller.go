@@ -52,8 +52,8 @@ var provisioningDeadline = 5 * time.Minute
 // AgentTaskReconciler drives the run-to-completion state machine: Pending ->
 // Provisioning -> Running -> Completing -> Succeeded/Failed/TimedOut, with
 // backoffLimit retries bracketed by the currentPodUID identity gate and the
-// completion mailbox. See docs/src/controller/reconcilers.md
-// (AgentTaskReconciler) and task-lifecycle.md.
+// completion mailbox. See docs/src/controller/reconcilers/agenttask.md
+// and task-lifecycle.md.
 type AgentTaskReconciler struct {
 	client.Client
 	Recorder          record.EventRecorder

@@ -40,7 +40,7 @@ import (
 // for liveness over MCP, and holds it in Terminating while referenced by an
 // Agent, AgentTask, or AgentClass. The grant checks of rules 35 to 38 run on
 // the workload reconcilers (toolGrantViolations). See
-// docs/src/controller/reconcilers.md (ToolProviderReconciler).
+// docs/src/controller/reconcilers/toolprovider.md.
 type ToolProviderReconciler struct {
 	client.Client
 	Recorder record.EventRecorder
