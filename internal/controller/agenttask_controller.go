@@ -296,6 +296,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			task.Status.CurrentPodUID = string(pod.UID)
 		}
 		task.Status.PodName = pod.Name
+		task.Status.PodCreateRejectedTime = nil
 		if err := r.Status().Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -361,7 +362,6 @@ func (r *AgentTaskReconciler) podCreateRejected(
 	}
 	task.Status.PodName = ""
 	if now.Sub(task.Status.PodCreateRejectedTime.Time) > provisioningDeadline {
-		task.Status.PodCreateRejectedTime = nil
 		// A task that settles without ever having a Pod has no class bounds
 		// yet; record them so the class default TTL still reaches it.
 		if task.Status.Retries >= task.Spec.Completion.BackoffLimit && task.Status.ClassBounds == nil {
@@ -510,6 +510,7 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 	task.Status.ArtifactValues = nil
 	task.Status.AgentReportedStatus = ""
 	task.Status.AgentReportedMessage = ""
+	task.Status.PodCreateRejectedTime = nil
 	r.setTaskPhase(task, kaalmv1beta1.TaskFailed)
 	r.setTaskReady(task, false, reason, msg)
 	if err := r.Status().Update(ctx, task); err != nil {
@@ -564,6 +565,7 @@ func (r *AgentTaskReconciler) settle(
 	r.setTaskPhase(task, phase)
 	now := metav1.Now()
 	task.Status.CompletionTime = &now
+	task.Status.PodCreateRejectedTime = nil
 	completed := metav1.ConditionFalse
 	if phase == kaalmv1beta1.TaskSucceeded {
 		completed = metav1.ConditionTrue

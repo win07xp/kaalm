@@ -217,3 +217,134 @@ func TestTask_PodCreateRejectedDeadlineFromStatus(t *testing.T) {
 		return nil
 	})
 }
+
+// setTaskRejectedTime writes status.podCreateRejectedTime the way an earlier
+// pass would have left it, optionally with podName cleared.
+func setTaskRejectedTime(t *testing.T, name string, at time.Time, clearPodName bool) {
+	t.Helper()
+	eventually(t, func() error {
+		task := getTask(t, name)
+		stamp := metav1.NewTime(at)
+		task.Status.PodCreateRejectedTime = &stamp
+		if clearPodName {
+			task.Status.PodName = ""
+		}
+		return testClient.Status().Update(ctxT(), task)
+	})
+}
+
+// An attempt that ends clears the rejection time: a stale time left by an
+// earlier attempt must not fail the next attempt's first rejection at once.
+// The next rejection starts its own provisioning deadline.
+func TestTask_PodCreateRejectedTimeClearedOnRetry(t *testing.T) {
+	missing := "absent-sandbox-retry"
+	mkWorkloadClass(t, "wc-reject-retry", nil)
+	mkTask(t, "reject-retry", "wc-reject-retry", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.BackoffLimit = 1
+	})
+	eventually(t, func() error { return markCertReadyErr("reject-retry") })
+	eventually(t, func() error {
+		if taskPod(t, "reject-retry") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	setTaskRejectedTime(t, "reject-retry", time.Now().Add(-10*time.Minute), false)
+
+	// The next attempt's Pod create is rejected: the class now names a
+	// RuntimeClass the cluster lacks.
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-reject-retry"}, &ac); err != nil {
+			return err
+		}
+		ac.Spec.Runtime.RuntimeClassName = &missing
+		return testClient.Update(ctxT(), &ac)
+	})
+	pod := taskPod(t, "reject-retry")
+	pod.Status.Phase = corev1.PodFailed
+	if err := testClient.Status().Update(ctxT(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+
+	eventually(t, func() error {
+		task := getTask(t, "reject-retry")
+		if task.Status.Retries != 1 {
+			return fmt.Errorf("retries = %d, want 1", task.Status.Retries)
+		}
+		return expectReadyRejected(task.Status.Conditions, "RuntimeClass")
+	})
+	consistently(t, time.Second, func() error {
+		task := getTask(t, "reject-retry")
+		if task.Status.Phase != kaalmv1beta1.TaskProvisioning {
+			return fmt.Errorf("phase = %s, want Provisioning", task.Status.Phase)
+		}
+		rejected := task.Status.PodCreateRejectedTime
+		if rejected == nil || time.Since(rejected.Time) > time.Minute {
+			return fmt.Errorf("podCreateRejectedTime = %v, want this attempt's first rejection", rejected)
+		}
+		return nil
+	})
+}
+
+// A rejected task that settles Failed on a class violation keeps no
+// rejection time.
+func TestTask_PodCreateRejectedTimeClearedOnSettle(t *testing.T) {
+	missing := "absent-sandbox-settle"
+	mkWorkloadClass(t, "wc-reject-settle", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Runtime.RuntimeClassName = &missing
+	})
+	mkTask(t, "reject-settle", "wc-reject-settle", nil)
+	eventually(t, func() error { return markCertReadyErr("reject-settle") })
+	eventually(t, func() error {
+		if getTask(t, "reject-settle").Status.PodCreateRejectedTime == nil {
+			return errString("podCreateRejectedTime unset")
+		}
+		return nil
+	})
+
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-reject-settle"}, &ac); err != nil {
+			return err
+		}
+		ac.Spec.AllowedNamespaces = []string{"team-*"}
+		return testClient.Update(ctxT(), &ac)
+	})
+	expectTaskPhase(t, "reject-settle", kaalmv1beta1.TaskFailed)
+	task := getTask(t, "reject-settle")
+	if c := condition(task.Status.Conditions, kaalmv1beta1.ConditionCompleted); c == nil ||
+		c.Reason != kaalmv1beta1.ReasonNamespaceNotAllowed {
+		t.Fatalf("Completed = %+v, want NamespaceNotAllowed", c)
+	}
+	if task.Status.PodCreateRejectedTime != nil {
+		t.Errorf("podCreateRejectedTime = %v, want cleared", task.Status.PodCreateRejectedTime)
+	}
+}
+
+// A Pod whose creation's status write was lost is recorded by the repair
+// pass, which also clears the rejection time the lost write would have
+// cleared.
+func TestTask_PodCreateRejectedTimeClearedOnLostWriteRepair(t *testing.T) {
+	mkWorkloadClass(t, "wc-reject-repair", nil)
+	mkTask(t, "reject-repair", "wc-reject-repair", nil)
+	eventually(t, func() error { return markCertReadyErr("reject-repair") })
+	eventually(t, func() error {
+		if taskPod(t, "reject-repair") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	setTaskRejectedTime(t, "reject-repair", time.Now(), true)
+
+	eventually(t, func() error {
+		task := getTask(t, "reject-repair")
+		if task.Status.PodName == "" {
+			return errString("podName not repaired yet")
+		}
+		if task.Status.PodCreateRejectedTime != nil {
+			return fmt.Errorf("podCreateRejectedTime = %v, want cleared", task.Status.PodCreateRejectedTime)
+		}
+		return nil
+	})
+}
