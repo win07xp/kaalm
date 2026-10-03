@@ -147,7 +147,11 @@ MCP revision **2026-07-28** makes the protocol stateless. Kaalm is dual-era for 
 
 ### Limits and SSRF protection
 
-Request and response bodies are capped by `gateway.mcpMaxBodyBytes` (default 4 MiB), and each call carries an upstream timeout, `gateway.mcpUpstreamTimeout` (default 120s). Both are separate from the LLM proxy's body and first-byte settings. Over the body cap: `413 request_too_large` for the request, `413 response_too_large` for a buffered response. An SSE stream that passes the cap is cut off, because its status line has already been sent. The timeout is one deadline for each call, response included: exceeding it gives `504 tool_timeout`, retryable.
+Request and response bodies are capped by `gateway.mcpMaxBodyBytes` (default 4 MiB), and each call carries an upstream timeout, `gateway.mcpUpstreamTimeout` (default 120s). Both are separate from the LLM proxy's body and first-byte settings. Over the body cap: `413 request_too_large` for the request, `413 response_too_large` for a buffered response. The cap also covers `tools/list` in both encodings, so an oversized list is a `413`, not a `503`: raise `gateway.mcpMaxBodyBytes` or trim the server's catalog.
+
+A stream is relayed up to the cap, and the line that passes it is not forwarded. The stream then ends with one JSON-RPC error event for the request's id, code `-32603`, `data.type` `response_too_large`. The status line is already sent, so a `413` is impossible. A JSON-RPC error is what the caller's MCP SDK raises as a failed call, the same reasoning as the `-32020` answer above. The event's exact fields are in the [error reference](api/errors.md#tool-broker-stream-cap).
+
+The timeout is one deadline for each call, response included: exceeding it gives `504 tool_timeout`, retryable.
 
 ToolProvider endpoints are operator-declared configuration, like ModelProvider endpoints, so they get the trust provider endpoints get rather than the full callback policy ([rule 22](../resources/validation/channels.md)) that user-supplied callback URLs receive. The schema requires `https://`, and the broker never follows redirects, which closes the confused-deputy path a compromised tool server could otherwise open.
 
@@ -168,6 +172,8 @@ Every brokered call emits one `info`-level structured log line. Bodies are never
 | `kaalm_tool_calls_total` | `provider`, `namespace`, `tool`, `status` | `status` is `ok` for a relayed 2xx, the wire error type for every failure the broker produces (`access_denied`, `tool_denied`, `rate_limited`, `header_mismatch`, and the rest of the [error vocabulary](api/errors.md)), and `upstream_error` for a relayed non-2xx |
 | `kaalm_tool_call_duration_seconds` | `provider`, `tool` | forwarded calls only, so local denials, which complete in microseconds, do not pull the percentiles toward zero |
 
+A stream ended by the cap counts as `response_too_large` on `kaalm_tool_calls_total` and in the audit `error_type`, while the audit `status` is the HTTP status the broker already sent, which is the upstream's status: usually `200`, but a relayed 4xx event stream keeps its 4xx.
+
 The `tool` label is bounded by the **declared** catalog. On a provider with `spec.tools`, cataloged ids appear verbatim and anything else collapses to `uncataloged`. On a provider without one, every tool collapses, because wire-supplied names are unbounded and a compromised server could inflate the label set at will. The audit record always carries the real name. Declare catalogs for this reason, per the [cardinality rules](../operations/observability.md#cardinality).
 
 Metering is **rate limits and audit, not budgets**. Tool calls carry no token-price dimension, and rule 33's argument against capping unpriced calls applies here as it does to [provider-side tools](#provider-side-tools). `ToolProvider.spec.rateLimits.requestsPerMinute` is a cluster-wide ceiling per (namespace, ToolProvider) pair that each replica divides by the live replica count, on the same token buckets the LLM plane uses. As on the LLM plane, the bucket always has room for one call, so when `requestsPerMinute` is below the replica count, each replica admits one call and then refuses until its bucket refills at `requestsPerMinute / number_of_replicas` calls per minute. For example, `2` on 3 replicas admits one call per replica every 90 seconds. A cluster-wide burst can admit up to `number_of_replicas` calls at once, and the long-run rate stays at `requestsPerMinute` ([Request limits below the replica count](llm/budgets-and-rate-limits.md#request-limits-below-the-replica-count)). There is no USD budget for tools; the per-call cost a budget would need is a [roadmap](../ROADMAP.md#beyond) item.
@@ -184,12 +190,13 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Batch array, or not a JSON-RPC message | `400 invalid_request` |
 | Modern header missing or mismatched | `400` with JSON-RPC error `-32020` |
 | Rate limit exceeded | `429 rate_limited`, computed [`Retry-After`](llm/budgets-and-rate-limits.md#retry-after) |
-| Oversized request or response | `413 request_too_large` or `413 response_too_large` |
+| Oversized request, buffered response, or `tools/list` response | `413 request_too_large` or `413 response_too_large` |
+| Response stream passes the cap after it started | JSON-RPC error event, code `-32603`, `data.type` `response_too_large`; the stream ends |
 | Session id bound to another caller | `403 access_denied` |
 | Credential Secret unreadable, unlabeled, or not approving the endpoint host | `503 tool_unavailable`, retryable |
 | Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, retryable, `Retry-After: 1` |
 | Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable, with a `Warning` event, `reason=CredentialsInvalid`, recorded on the ToolProvider for the rejected call. The health probe separately sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid` ([ToolProviderReconciler](../controller/reconcilers/toolprovider.md)) |
-| `tools/list` response the broker cannot parse | `503 tool_unavailable`, not retryable |
+| `tools/list` response within the cap that the broker cannot parse | `503 tool_unavailable`, not retryable |
 | Tool call exceeds the upstream timeout | `504 tool_timeout`, retryable |
 | Other protocol-level 4xx from the server | relayed verbatim (an expired session's 404, for example), so MCP session semantics survive the broker |
 
