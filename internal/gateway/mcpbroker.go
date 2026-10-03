@@ -131,20 +131,26 @@ func decodeMCPHeaderValue(v string) string {
 func writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
+	_, _ = w.Write(append(jsonrpcError(id, code, message, nil), '\n'))
+}
+
+// jsonrpcError renders a JSON-RPC error response for the request id (null
+// when the request had none). data is omitted when nil.
+func jsonrpcError(id json.RawMessage, code int, message string, data any) []byte {
 	if len(id) == 0 {
 		id = json.RawMessage("null")
 	}
-	_ = json.NewEncoder(w).Encode(struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Error   struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}{JSONRPC: "2.0", ID: id, Error: struct {
+	type rpcError struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
-	}{Code: code, Message: message}})
+		Data    any    `json:"data,omitempty"`
+	}
+	out, _ := json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   rpcError        `json:"error"`
+	}{JSONRPC: "2.0", ID: id, Error: rpcError{Code: code, Message: message, Data: data}})
+	return out
 }
 
 // toolFilter is a caller's effective tool set: grant narrowing intersected
@@ -532,7 +538,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	case msg.Method == "tools/list" && resp.StatusCode < 300:
 		respBytes, relayStatus, relayErrType = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
 	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
-		respBytes = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes())
+		respBytes, relayErrType = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID)
 		relayStatus = resp.StatusCode
 	default:
 		respBytes, relayStatus, relayErrType = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes())
@@ -548,8 +554,16 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 func (s *Server) relayFilteredToolsList(
 	w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter, providerName string,
 ) (respBytes int64, status int, errType string) {
-	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"),
-		io.LimitReader(resp.Body, s.mcpMaxBodyBytes()), msg.ID)
+	// Reading one byte past the cap tells a list that passes it apart from
+	// one that ends exactly at it.
+	maxBytes := s.mcpMaxBodyBytes()
+	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
+	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), lr, msg.ID)
+	if err != nil && lr.N <= 0 {
+		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
+			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes), Provider: providerName}, 0)
+		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
+	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
 			Message: "tool provider returned an unparseable tools/list response", Provider: providerName}, 0)
@@ -616,34 +630,67 @@ func relayMCPBuffered(w http.ResponseWriter, resp *http.Response, maxBytes int64
 }
 
 // relayMCPStream forwards SSE events as they arrive, flushing per line,
-// bounded by the response cap and the caller's disconnect. It returns the
-// bytes relayed downstream.
-func relayMCPStream(w http.ResponseWriter, r *http.Request, resp *http.Response, maxBytes int64) int64 {
+// bounded by the response cap and the caller's disconnect. The line that
+// passes the cap is not forwarded: the stream ends with a JSON-RPC error
+// event for the request id instead, since the status line is already sent.
+// It returns the upstream bytes relayed downstream and the error type
+// (response_too_large when the cap ended the stream).
+func relayMCPStream(
+	w http.ResponseWriter, r *http.Request, resp *http.Response, maxBytes int64, id json.RawMessage,
+) (respBytes int64, errType string) {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
+	flush := func() {
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 
-	var written int64
-	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxBytes))
-	scanner.Buffer(make([]byte, 0, 64*1024), int(maxBytes))
+	var written, consumed int64
+	overCap := false
+	// Reading one byte past the cap tells a stream that passes it apart
+	// from one that ends exactly at it; the split counts raw bytes,
+	// line terminators included.
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxBytes+1))
+	scanner.Buffer(make([]byte, 0, 64*1024), int(maxBytes)+1)
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		advance, token, err := bufio.ScanLines(data, atEOF)
+		consumed += int64(advance)
+		return advance, token, err
+	})
 	for scanner.Scan() {
 		select {
 		case <-r.Context().Done():
-			return written
+			return written, ""
 		default:
+		}
+		if consumed > maxBytes {
+			overCap = true
+			break
 		}
 		line := scanner.Bytes()
 		bodyLog("mcp stream", line)
 		n, err := w.Write(append(line, '\n'))
 		written += int64(n)
 		if err != nil {
-			return written
+			return written, ""
 		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		flush()
 	}
-	return written
+	if !overCap && !errors.Is(scanner.Err(), bufio.ErrTooLong) {
+		return written, ""
+	}
+	// The leading blank line closes any event the cut left open, so the
+	// error parses as its own event.
+	event := jsonrpcError(id, mcp.CodeInternalError,
+		fmt.Sprintf("tool provider response exceeds %d bytes; the stream is truncated", maxBytes),
+		struct {
+			Type string `json:"type"`
+		}{errResponseTooLarge})
+	_, _ = fmt.Fprintf(w, "\ndata: %s\n\n", event)
+	flush()
+	return written, errResponseTooLarge
 }
 
 // copyMCPHeaders applies the forwarded-header contract: hop-by-hop and

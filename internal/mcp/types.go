@@ -36,6 +36,9 @@ const protocolVersion = "2025-03-26"
 // jsonrpcVersion is the fixed JSON-RPC 2.0 version marker.
 const jsonrpcVersion = "2.0"
 
+// CodeInternalError is JSON-RPC 2.0's predefined internal-error code.
+const CodeInternalError = -32603
+
 // request is a JSON-RPC 2.0 request. A nil ID marks a notification.
 type request struct {
 	JSONRPC string `json:"jsonrpc"`
