@@ -78,15 +78,14 @@ kubectl get agentclasses
 ```
 
 Applying over the chart's class prints one warning about a missing
-`last-applied-configuration` annotation, because Helm created the object;
-`kubectl` patches the annotation in and the apply succeeds. Fields the sample
-does not set (the chart's resource defaults and lifecycle ceilings) stay as
-they were.
+`last-applied-configuration` annotation, because Helm created the object. The
+apply still succeeds, and fields the sample does not set (the chart's resource
+defaults and lifecycle ceilings) keep their values.
 
-The `AGENTS` and `TASKS` columns count the live users of each class. The Ready
-condition (`kubectl describe agentclass standard`) goes True when the spec is
-coherent (for example, every `allowedProviders` entry names a ModelProvider
-that exists).
+The `AGENTS` and `TASKS` columns count the live users of each class. The
+`Ready` condition (`kubectl describe agentclass standard`) goes True when the
+spec is valid and every `allowedProviders` entry names an existing
+ModelProvider.
 
 ## A starter class for handler mounts
 
@@ -126,8 +125,10 @@ spec:
 Pinning `allowedImages` to exactly the published base images keeps the grant
 narrow: mounted code runs only inside the runtime you chose, never inside an
 image that a broader `allowedImages` list admits. Setting
-`allowHandlerMounts` back to `false` later degrades existing Agents that mount handlers, with the same recoverable
-handling as the other class gates.
+`allowHandlerMounts` back to `false` later degrades existing Agents that mount
+handlers, with reason `HandlerMountNotAllowed`. As with the other class gates in
+[Changing a class later](#changing-a-class-later), the Pod keeps running and
+the Agent recovers when the class or the Agent changes back.
 
 ## A sandboxed class for code-executing agents
 
@@ -159,11 +160,9 @@ a starting point. It names the class `sandboxed` and runs its Pods under the
 - The restricted security baseline, written out.
 - A default and a maximum task timeout.
 
-The sample file holds the exact values. Replace the image repository with
-yours before you apply it.
-
-Before you apply the sample, confirm that the cluster has the `gvisor`
-RuntimeClass with `kubectl get runtimeclass gvisor`. The file is not in
+Replace the image repository with yours before you apply the sample. Confirm
+that the cluster has the `gvisor` RuntimeClass with
+`kubectl get runtimeclass gvisor`. The file is not in
 `config/samples/kustomization.yaml`, so apply it on its own:
 
 ```bash
@@ -173,10 +172,10 @@ kubectl apply -f config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml
 ## Pod security defaults
 
 Every Pod Kaalm creates meets the `restricted` Pod Security Standard by
-default: it runs as non-root with the runtime default seccomp profile, cannot
-escalate privileges, drops every capability, and has a read-only root with an
-`emptyDir` at `/tmp`. The class's `security` block is merged over that
-baseline field by field for every Pod created under it from then on; see
+default: non-root, the runtime default seccomp profile, no privilege
+escalation, every capability dropped, and a read-only root with an `emptyDir`
+at `/tmp`. The class's `security` block is merged over that baseline field by
+field for every Pod created under it from then on; see
 [Changing a class later](#changing-a-class-later) for existing Pods. Declare
 only what you change. The chart's `standard` class writes the baseline out,
 and a class that also pins the UID looks like this:
@@ -225,17 +224,16 @@ spec:
 ```
 
 Kaalm's own labels (`kaalm.io/agent` or `kaalm.io/task`, and
-`kaalm.io/workload`) are added after yours and cannot be overridden. A
-`podMetadata` change replaces every running agent Pod of the class.
+`kaalm.io/workload`) are added after yours and cannot be overridden.
 
 ## Changing a class later
 
 Which class fields reach a running agent depends on the field:
 
-- `network.egress.allowedCIDRs` and `network.allowSameNamespaceIngress` are
-  applied to the existing NetworkPolicy on the next reconcile.
-- `network.egress.allowedHosts` is applied to the agent's CiliumNetworkPolicy
-  on the next reconcile, on Cilium only.
+- `network.egress.allowedCIDRs` and `network.allowSameNamespaceIngress` reach
+  the existing NetworkPolicy without a restart.
+- `network.egress.allowedHosts` reaches the agent's CiliumNetworkPolicy without
+  a restart, on Cilium only.
 - `lifecycle` defaults and ceilings apply on the next activity evaluation.
   The task timeout and TTL bounds are different: a task records them when
   its Pod is created, so an edit reaches only tasks whose Pod, including a

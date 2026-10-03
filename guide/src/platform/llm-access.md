@@ -2,8 +2,7 @@
 
 A ModelProvider gives teams LLM access without ever handing them the API key.
 The credential lives in a Secret in `kaalm-system`; the gateway reads it
-there and injects it server-side on every proxied call. Teams see model names
-and budgets, never keys.
+there and injects it server-side on every proxied call.
 
 ## 1. Create the credential Secret
 
@@ -92,17 +91,18 @@ kubectl get modelproviders
 ```
 
 The two columns to read: `Ready` means the spec is valid and the credential
-resolves, including the label and the host annotation from step 1; `Healthy` reports the periodic upstream probe. A provider can be
-Ready but Unhealthy (endpoint down); it recovers on its own when the probe
-succeeds again. A key the provider rejects is different: the probe reports
-it as `Ready=False` with reason `CredentialsInvalid` and a `Warning` event, and the provider stays
-that way until the Secret holds a key the provider accepts.
+resolves, including the label and the host annotation from step 1; `Healthy`
+reports the periodic upstream probe. A provider can be Ready but Unhealthy
+(endpoint down); it recovers on its own when the probe succeeds again. A key
+the provider rejects is different: the probe reports it as `Ready=False` with
+reason `CredentialsInvalid` and a `Warning` event, and the provider stays that
+way until the Secret holds a key the provider accepts.
 
 The probe is configurable through `spec.healthCheck` (`enabled`, default
-true; `intervalSeconds`, default 60; `timeoutSeconds`, default 10). Disabling
-it is useful for offline fixtures. A provider whose probe keeps failing is
-checked less often over time, back to the plain interval as soon as it
-recovers.
+true; `intervalSeconds`, default 60; `timeoutSeconds`, default 10). A probe
+that keeps failing runs less often, up to every 10 minutes at the default
+interval, until it succeeds. A change to the Secret or the spec re-probes at
+once.
 
 ## 4. Trust a private CA
 
@@ -117,17 +117,17 @@ trusts what the gateway's forwarding path trusts:
 | The Kaalm cluster CA (`kaalm-ca-issuer`) | `gateway.trustClusterCAForUpstream=true` |
 | Any other CA | `gateway.upstreamCA.configMap=CONFIGMAP_NAME` |
 
-For the second row, create a ConfigMap named `CONFIGMAP_NAME` in `kaalm-system` whose `ca.crt` key
-holds the PEM bundle (the key name is `gateway.upstreamCA.key`, default
-`ca.crt`). Both components re-read the bundle when it rotates, with no
-restart. The two rows compose: enabling both merges the cluster CA and your
-bundle into one trust pool.
+For the second row, create a ConfigMap named `CONFIGMAP_NAME` in
+`kaalm-system` whose `ca.crt` key holds the PEM bundle (the key name is
+`gateway.upstreamCA.key`, default `ca.crt`). Both components re-read the
+bundle when it rotates, with no restart. The two rows compose: enabling both
+merges the cluster CA and your bundle into one trust pool.
 
 The older `controller.trustClusterCAForProbes` and `controller.probeCA` values
 are deprecated but still honored. They add CAs to the controller's probe pool
 only, so a CA set there makes a provider `Healthy` without making forwarding
-trust it. The chart's install notes print a warning when either is set, so
-move to the gateway values above.
+trust it. Move to the gateway values above; the chart's install notes warn
+while either is set.
 
 The same choice exists for async webhook callbacks to receivers under a
 private CA: `gateway.trustClusterCAForCallbacks=true` for the cluster CA.
