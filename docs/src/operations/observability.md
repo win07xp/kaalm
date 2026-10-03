@@ -34,16 +34,16 @@ This page carries the full metric table, the log conventions and the PII rule, t
 
 | Component | Port | Path | Auth | Notes |
 |---|---|---|---|---|
-| Controller | `:8080` | `/metrics` | None | controller-runtime's metrics port; the chart passes `--metrics-secure=false`. Every replica serves it, and the phase gauges are computed from each replica's cache |
+| Controller | `:8080` | `/metrics` | None | Plain HTTP, controller-runtime's metrics port. Every replica serves it |
 | Gateway | `:9090` | `/metrics` | None | Plain HTTP, shared by the LLM and User Gateway paths |
 
-Both endpoints are unauthenticated and plain HTTP, the usual Prometheus scrape arrangement, and they are ClusterIP only. The chart ships no `ServiceMonitor` or `PodMonitor`; its NetworkPolicy admits the two ports only from the `networkPolicy.metricsFrom` peers, so point that value at your Prometheus ([The operator's own NetworkPolicy](deployment.md#the-operators-own-networkpolicy), [Recommendations for deployment](../security/model.md#recommendations-for-deployment)). The console serves no metrics.
+Both endpoints are ClusterIP only. The chart ships no `ServiceMonitor` or `PodMonitor`; its NetworkPolicy admits the two ports only from the `networkPolicy.metricsFrom` peers, so point that value at your Prometheus ([The operator's own NetworkPolicy](deployment.md#the-operators-own-networkpolicy), [Recommendations for deployment](../security/model.md#recommendations-for-deployment)). The console serves no metrics.
 
 ### Aggregated catalog
 
 Standard controller-runtime reconcile metrics (counts, duration, queue depth, work-queue saturation) are emitted automatically by the controller. See [Observability](../controller/operations.md#observability) for the per-component canonical list.
 
-The Kaalm-specific metrics across all three components. The dashboard test under `test/dashboards` reads this table and requires every row on a panel. One Kaalm metric is outside it on purpose: `kaalm_storage_migrated_objects_total{kind}`, a counter the storage-version migrator increments once per upgrade ([Storage-version migration](api-versioning.md#storage-version-migration)).
+The Kaalm-specific metrics across all three components. The dashboard test under `test/dashboards` reads this table, so a new row needs a panel ([Dashboards](#dashboards)). One Kaalm metric is outside it on purpose: `kaalm_storage_migrated_objects_total{kind}`, a counter the storage-version migrator increments once per upgrade ([Storage-version migration](api-versioning.md#storage-version-migration)).
 
 | Source | Metric | Type | Labels |
 |---|---|---|---|
@@ -75,8 +75,6 @@ The Kaalm-specific metrics across all three components. The dashboard test under
 | User Gateway | `kaalm_channel_response_too_large_total` | counter | `namespace`, `mode` |
 | User Gateway | `kaalm_channel_async_patch_failed_total` | counter | `namespace` |
 
-The table holds names, types, and label names only. When each metric increments and what each label value means are stated on the component pages linked in the introduction.
-
 ### Cardinality
 
 The `namespace` label appears on most metrics and dominates cardinality in clusters with many active tenants. The `model` and `provider` labels are bounded by `ModelProvider.spec.models` and the count of declared providers. The `tool` label is bounded by declared catalogs: on the broker metrics it carries only ids from `ToolProvider.spec.tools` (everything else collapses to `uncataloged`; see [Audit and metering](../gateways/tool-plane.md#audit-and-metering)), and on `kaalm_llm_server_tool_use_total` it carries the provider-side tool vocabulary, a handful of values per provider type. Enum labels (`status`, `result`, `mode`, `phase`, `trigger`, `action`, `direction`, `ready`, `platform_connected`) carry a handful of values each.
@@ -85,7 +83,7 @@ The `namespace` label appears on most metrics and dominates cardinality in clust
 
 ## Logs
 
-The gateway and the console write structured JSON to stdout at `info` through `log/slog`. The controller writes structured JSON to stderr at `info` through controller-runtime's zap logger. `controller.logLevel`, `gateway.logLevel`, and `console.logLevel` set each component's level ([Configuration reference](deployment.md#configuration-reference)); the controller accepts `debug`, `info`, or `error`, and the gateway and console accept `debug`, `info`, `warn`, or `error`. The chart configures no log shipping; ship the streams with a cluster log pipeline such as Fluent Bit, Vector, or Loki.
+The gateway and the console write structured JSON to stdout at `info`. The controller writes structured JSON to stderr at `info`. `controller.logLevel`, `gateway.logLevel`, and `console.logLevel` set each component's level ([Configuration reference](deployment.md#configuration-reference)); the controller accepts `debug`, `info`, or `error`, and the gateway and console accept `debug`, `info`, `warn`, or `error`. The chart configures no log shipping; ship the streams with your cluster log pipeline.
 
 Per-line fields are per call site, not a fixed schema. The controller's lines carry controller-runtime's `controller`, `namespace`, `name`, and `reconcileID` fields. The gateway's lines carry the identifiers each path has: `requestId`, `messageId`, and `namespace` on the User Gateway, `namespace` and `provider` on the budget and fallback paths, and the audit fields on the tool broker. No line carries a `component` field; the stream tells the components apart.
 
@@ -102,12 +100,10 @@ This is a hard rule because logs are typically shipped to lower-trust aggregatio
 
 ### Debug build for body logging
 
-A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies on the LLM proxy paths, and tool-call request and response bodies on the MCP broker routes, for testing an image against the contract and for integration debugging. Body logging exists only in that build:
+A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies on the LLM proxy paths, and tool-call request and response bodies on the MCP broker routes, for testing an image against the [runtime contract](../runtime/contract.md) and for integration debugging. Body logging exists only in that build:
 
 - The published images are default builds. A debug build emits a startup banner, so an operator who runs one notices.
 - There is **no runtime Helm value, environment variable, feature flag, or administration endpoint** that flips body logging on in a default build. The gate is build-time only.
-
-In the default build the body logger compiles to a no-op, so no configuration can turn body logging on; developers use the debug build for local work against the [runtime contract](../runtime/contract.md).
 
 ## Kubernetes Events
 
@@ -128,7 +124,7 @@ Events persist per the cluster's standard Event retention. For long-term audit, 
 
 ## Recommended alerts
 
-These alerts cover the failure modes this book names. The page states no PromQL or thresholds.
+These alerts cover the failure modes this book names.
 
 | Alert | Severity | Architectural hook |
 |---|---|---|
@@ -161,7 +157,7 @@ Conventions the panels follow:
 - The per-namespace rate-limit panel is the `rate_limited` outcome of `kaalm_llm_requests_total`; there is no separate utilization gauge for the per-(namespace, model) ceiling.
 - The cluster dashboard's `job` variable matches scrape jobs whose name contains `kaalm`; a ServiceMonitor on the chart's Services resolves to such names. Every other panel is independent of how the scrape is configured.
 
-`make dashboards-verify` proves the files against a live cluster: it installs a throwaway Prometheus and Grafana, provisions the three files unchanged, and checks that Grafana serves each dashboard, that Grafana can query the data source, that every panel query is valid PromQL against the scraped series, and that the metric families the e2e suite exercises are present.
+`make dashboards-verify` proves the files against a live cluster: it installs a throwaway Prometheus and Grafana, provisions the three files unchanged into Grafana, and checks that every panel query is valid PromQL against the scraped series and that the metric families the e2e suite exercises are present.
 
 ## Tracing
 
@@ -173,7 +169,7 @@ OpenTelemetry tracing is off by default. When it is on, it connects one user mes
 
 | Span | Kind | Where | Notes |
 |---|---|---|---|
-| `channel.receive` | server | User Gateway | Webhook and test-chat receipt; root unless the caller sent trace context. Covers handling through the sync reply, or through the `202` in async mode; the background delivery stays connected through the span identity without inheriting the caller's cancellation |
+| `channel.receive` | server | User Gateway | Webhook and test-chat receipt; root unless the caller sent trace context. Covers handling through the sync reply, or through the `202` in async mode; the background delivery stays in the same trace |
 | `agent.deliver` | client | User Gateway | The delivery to the agent, retries included; its context travels to the agent on the delivery request |
 | `llm.request` | server | LLM proxy | Parented by whatever context the agent propagated. A denial past route authorization (budget, rate limit) closes it with an error status, so a blocked request is visible in its trace |
 | `llm.forward` | client | LLM proxy | One per provider attempt, fallback candidates included; the candidate is the `kaalm.provider` attribute |
@@ -186,11 +182,11 @@ The agent's own processing appears as the gap between `agent.deliver` and its ch
 
 **Exporter.** OTLP over HTTP, configured by two Helm values ([Deployment](deployment.md)): `gateway.tracing.otlpEndpoint` (default `""`) and `gateway.tracing.sampleRatio` (default `1.0`, parent-based head sampling for traces the gateway starts). With no endpoint, no tracer is installed: no spans, no propagation, and request handling carries no tracing overhead, which is the default install. An `https` endpoint is verified against the gateway's upstream trust pool when one is configured, else the system roots; an `http` endpoint sends in the clear.
 
-The controller and the console emit no spans: the traced path is the message path, and reconcile visibility remains metrics, logs, and Events. Scenario [S20](../appendix/scenarios.md#s20-follow-one-message-across-the-hops) proves the connected trace live: one webhook message, one trace, its spans read back out of a Jaeger beside the e2e cluster.
+The controller and the console emit no spans: the traced path is the message path, and reconcile visibility remains metrics, logs, and Events. Scenario [S20](../appendix/scenarios.md#s20-follow-one-message-across-the-hops) proves the connected trace live.
 
 ## Profiling
 
-Both components can serve Go's `net/http/pprof` profiles, off by default. Setting `controller.pprofPort` or `gateway.pprofPort` to a port number adds the flag (`--pprof-bind-address` on the controller, `--pprof-addr` on the gateway) and a named `pprof` container port; the listener then serves CPU, heap, goroutine, mutex, and block profiles under `/debug/pprof/`. Turning it on also enables mutex and block sampling, which are off by default because each costs a little on every contended lock and blocking call.
+Both components can serve Go's `net/http/pprof` profiles, off by default. Setting `controller.pprofPort` or `gateway.pprofPort` to a port number starts the listener and adds a named `pprof` container port; it serves CPU, heap, goroutine, mutex, and block profiles under `/debug/pprof/`. Turning it on also enables mutex and block sampling, which cost a little on every contended lock and blocking call.
 
 The listener is a debugging aid, not an operations surface. It is unauthenticated, and the chart never puts it behind a Service, so the way to reach it is a port-forward for the length of a profiling session:
 

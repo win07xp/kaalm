@@ -1,6 +1,6 @@
 # Acceptance scenarios
 
-These scenarios are concrete enough to double as acceptance criteria: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. Priya, the platform engineer who provisions the capability, is the actor in S1 through S5, S17, S19 through S21, and S24. Dev, the application developer who deploys agents, is the actor in S6 through S11. S12 through S15, S22, and S23 cover channel integration, where external systems talk to agents through the User Gateway. S16, the zero-build on-ramp, and S18, the governed tool, involve both. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused; [Provenance](#provenance) records the release that added each one. Because this appendix is read after the rest of the book, each scenario links freely into the chapters that specify the behavior it exercises.
+These scenarios are concrete enough to double as acceptance criteria: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. Priya, the platform engineer who provisions the capability, is the actor in S1 through S5, S17, S19 through S21, and S24. Dev, the application developer who deploys agents, is the actor in S6 through S11. S12 through S15, S22, and S23 cover channel integration, where external systems talk to agents through the User Gateway. S16, the zero-build on-ramp, and S18, the governed tool, involve both. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused; [Provenance](#provenance) records the release that added each one.
 
 ## S1: Install Kaalm and offer a standard agent class
 
@@ -22,7 +22,7 @@ An edge may also cross formats, with a model map on the edge; that is [S24](#s24
 
 ## S5: Revoke access for a team
 
-A team is decommissioned. Priya removes their namespace from the `allowedNamespaces` list on the relevant ModelProviders. Two things happen: the gateway denies the namespace's next LLM call, and the controller, re-queued by its ModelProvider watch, transitions the affected Agents to `phase=Degraded, reason=ClassConstraintViolation` so the revocation is visible in `kubectl get agents` (see [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling)). The Pods keep running, but LLM access is gone. Priya then deletes the namespace.
+A team is decommissioned. Priya removes their namespace from the `allowedNamespaces` list on the relevant ModelProviders. Two things happen: the gateway denies the namespace's next LLM call, and the controller transitions the affected Agents to `phase=Degraded, reason=ClassConstraintViolation` so the revocation is visible in `kubectl get agents` (see [AgentClass change handling](../controller/change-propagation.md#agentclass-change-handling)). The Pods keep running, but LLM access is gone. Priya then deletes the namespace.
 
 ## S6: Deploy a persistent customer support agent
 
@@ -146,11 +146,11 @@ The scenarios that define the resource model, S1 to S18, drive these requirement
 - **S9** is not an acceptance criterion but informs the resource model: task and persistent agents are built from shared primitives. Kaalm ships the enabling mount primitive, [`Agent.spec.persistence.existingClaim`](../resources/agent.md) (validation rule 27); snapshotting itself is standard Kubernetes `VolumeSnapshot`, not a Kaalm mechanism.
 - **S10** requires the controller to surface a provider's blocked budget as an Agent status condition.
 - **S11** requires finalizers and the `AgentClass.spec.persistence.pvcRetention` field (`Delete` or `Retain`).
-- **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener; **S22, S23** require the Discord and WhatsApp adapters on the same listener and, in e2e, a mock of each platform's API. For S12 specifically, the recommended path is a [reference base image](../runtime/base-images.md) with a mounted handler (S16); the [starter templates](../runtime/starter-templates.md) remain the path for agents that outgrow it. Either way the runtime contract (HTTPS serving, client-cert mTLS, cert-file reload, `messageId` dedup) comes implemented.
+- **S12, S13** require AgentChannel with the webhook adapter and the User Gateway listener; **S22, S23** require the Discord and WhatsApp adapters on the same listener. For S12 specifically, the recommended path is a [reference base image](../runtime/base-images.md) with a mounted handler (S16); the [starter templates](../runtime/starter-templates.md) remain the path for agents that outgrow it. Either way the [runtime contract](../runtime/contract.md) comes implemented.
 - **S14** requires the controller's authenticated activator endpoint, called from the User Gateway path, for wake-on-demand of hibernated agents.
 - **S15** requires the User Gateway to support async webhook response mode with callback delivery and a polling fallback endpoint.
-- **S16** requires the published reference base images, the `Agent.spec.handler` ConfigMap reference with its `$KAALM_HANDLER_PATH` injection, and the `AgentClass.spec.image.allowHandlerMounts` gate (validation rules 30 and 31). See [Reference base images](../runtime/base-images.md).
-- **S17** requires the opt-in hard budget mode: `budget.enforcement` with the boundary-region admission logic, validation rules 32 to 34, and the `_retired` durability key in the budget exchange. See [Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement).
+- **S16** requires the published reference base images, the `Agent.spec.handler` ConfigMap reference, and the `AgentClass.spec.image.allowHandlerMounts` gate (validation rules 30 and 31). See [Reference base images](../runtime/base-images.md).
+- **S17** requires the opt-in hard budget mode: `budget.enforcement` and validation rules 32 to 34. See [Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement).
 - **S18** requires the tool plane: the `ToolProvider` CRD, the class and workload grant chain (validation rules 35 to 38), and the gateway's `/v1/mcp/*` broker with credential injection and session ownership binding. Specified in [The tool plane](../gateways/tool-plane.md).
 
 ## Provenance
