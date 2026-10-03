@@ -280,7 +280,8 @@ func pickSeconds(v, def, max *int32) *int32 {
 // block, else the class defaults (a block with neither requests nor limits
 // counts as unset), clamped to the class maxLimits. Claims are always
 // dropped: a container claim must name an entry in pod.spec.resourceClaims,
-// which the controller never sets, so the API server would reject the Pod.
+// which the controller never sets. With Dynamic Resource Allocation enabled
+// the API server rejects such a Pod; with it disabled it strips the claims.
 //
 // legacyClaims holds the claims a release with hash formula 1 passed to the
 // container and hashed, which it did only when the class set no maxLimits.
