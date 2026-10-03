@@ -1,6 +1,6 @@
 # Gateway overview
 
-The gateway is a single replicated Deployment in `kaalm-system`. It hosts two logical gateways, the [LLM Gateway](llm/request-handling.md#request-flow) for outbound agent-to-provider traffic and the [User Gateway](user/overview.md#request-flow) for inbound channel traffic, plus the [tool plane](tool-plane.md)'s broker. Its two TLS listeners split by exposure, not by subsystem. The **cluster listener** (`:8443`) serves every in-cluster caller: the LLM proxy, the tool broker, and the internal endpoints that agents, the controller, and the console call. The **user listener** (`:8080`) serves the Ingress-fronted surface: inbound channel webhooks and the async polling endpoint. A separate health port serves kubelet probes, and a metrics port serves Prometheus.
+The gateway is a single replicated Deployment in `kaalm-system`. It hosts two logical gateways, the [LLM Gateway](llm/request-handling.md#request-flow) for outbound agent-to-provider traffic and the [User Gateway](user/overview.md#request-flow) for inbound channel traffic, plus the [tool plane](tool-plane.md)'s broker. Its two TLS listeners split by exposure, not by subsystem. The **cluster listener** (`:8443`) serves every in-cluster caller: the LLM proxy, the tool broker, and the internal endpoints that agents, the controller, and the console call. The **user listener** (`:8080`) serves the Ingress-fronted surface: inbound channel webhooks and the async polling endpoint.
 
 ![The single gateway Deployment in kaalm-system and its four ports, with a trust boundary. Outside it, external webhook callers reach an Ingress, which routes to the :8080 user listener and has no route to :8443. Inside the cluster, Agent and AgentTask Pods reach the :8443 cluster listener with mTLS or a bearer token, the controller and the console reach it with their own mTLS certificates, the kubelet probes :8081, and Prometheus scrapes :9090.](../diagrams/gateway-listener-ports.svg)
 
@@ -19,22 +19,22 @@ A fifth port, off by default, serves Go profiles when `gateway.pprofPort` is set
 
 The split is a security boundary. `:8080` hosts no mTLS-authenticated path, so an Ingress fronting it cannot reach an endpoint whose authorization assumes a controller or console certificate; those endpoints exist on `:8443` alone, which no Ingress routes to ([Controller-only paths on the same socket](listener-tls.md#controller-only-paths-on-the-same-socket)).
 
-Probes get their own port for the same reason. The controller's `:9443` lets cert-less kubelet probes share the socket with mTLS paths, because that port is reachable only inside the cluster ([Control plane](../concepts/system-architecture.md#control-plane)). Both gateway listeners are reachable beyond that boundary: `:8080` sits behind a user-provisioned Ingress, and `:8443` is reachable by every mTLS-authenticated agent. A cert-less probe path on either would be a cert-less path an outsider could reach, so probes terminate on `:8081`, outside both listener auth profiles.
+Probes get their own port for the same reason. `:8080` sits behind a user-provisioned Ingress, and `:8443` is reachable by every mTLS-authenticated agent, so a cert-less probe path on either would be a cert-less path an outsider could reach. Probes terminate on `:8081`, outside both listener auth profiles.
 
 ## The call surfaces
 
-The Deployment serves four kinds of request. Agents send two of them, LLM calls and tool calls, which the gateway forwards to a provider or an MCP server. Channel platforms send the third, a message for an agent, which the gateway delivers and answers. The fourth is the internal API: agents report to it, and the controller and the console read from and act through it.
+The Deployment serves four kinds of request. Agents send LLM calls and tool calls, which the gateway forwards to a provider or an MCP server. Channel platforms send messages for an agent, which the gateway delivers and answers. The internal API is for Kaalm's own components: agents report to it, and the controller and the console read from and act through it.
 
 ![The gateway in the middle, with three colored flows. Brown, the User Gateway: a channel platform sends a message to :8080, the gateway delivers it to the agent Pod over mTLS, and the reply goes back to the platform. Purple, the LLM proxy and tool broker: Agent and AgentTask Pods call :8443, and the gateway forwards to LLM providers and MCP servers with the credential injected. Blue, the internal API: Pods report heartbeats and task completion to :8443, the controller reads activity and channel health from it, and the console sends test chats and reads spend through it.](../diagrams/gateway-call-surfaces.svg)
 
 | Surface | Listener | Direction | What the gateway does | Specified on |
 |---|---|---|---|---|
-| LLM proxy | `:8443` | Agent to provider | Identifies the caller ([Workload identity](llm/workload-identity.md)), resolves the provider and model, applies the three tenancy gates, budgets, and rate limits, forwards with the credential injected, walks the fallback chain on failure, and meters usage and spend | [LLM Gateway](llm/overview.md), [Request handling](llm/request-handling.md#request-flow) |
+| LLM proxy | `:8443` | Agent to provider | Identifies the caller ([Workload identity](llm/workload-identity.md)), resolves the provider and model, applies the tenancy gates, budgets, and rate limits, forwards with the credential injected, falls back on failure, and meters usage and spend | [LLM Gateway](llm/overview.md), [Request handling](llm/request-handling.md#request-flow) |
 | Tool broker | `:8443` | Agent to MCP server | The same caller identity, then the tool grant chain, credential injection, per-call audit, and rate limits | [The tool plane](tool-plane.md) |
-| User Gateway | `:8080` | Platform to agent, and the reply back | Authenticates per AgentChannel, normalizes the message, wakes a hibernated Agent through the controller, delivers over mTLS, and returns the reply synchronously, by callback, by polling, or through the platform's API | [User Gateway](user/overview.md#request-flow), [Platform adapters and channel health](user/platform-adapters.md), [Async webhook responses](api/async-responses.md) |
+| User Gateway | `:8080` | Platform to agent, and the reply back | Authenticates per AgentChannel, wakes a hibernated Agent through the controller, delivers over mTLS, and returns the reply synchronously, by callback, by polling, or through the platform's API | [User Gateway](user/overview.md#request-flow), [Platform adapters and channel health](user/platform-adapters.md), [Async webhook responses](api/async-responses.md) |
 | Internal API | `:8443` | Agent to gateway, controller and console to gateway | Task completion and heartbeats in; activity, channel health, and spend out; test chats delivered on the console's behalf | [Internal endpoints](#internal-endpoints) |
 
-The LLM proxy and the tool broker share one caller-identity step (an mTLS SAN for Kaalm-managed Pods, a `TokenReview`-validated bearer token for the gateway-only tier) and differ only in what they authorize afterwards. The User Gateway depends on the controller for wake-on-demand: while the activator endpoint is unreachable, a hibernated Agent cannot receive a message and the caller gets `controller_unavailable` ([The activator](user/activation-and-activity.md#the-activator)).
+The User Gateway depends on the controller for wake-on-demand: while the activator endpoint is unreachable, a hibernated Agent cannot receive a message and the caller gets `controller_unavailable` ([The activator](user/activation-and-activity.md#the-activator)).
 
 ## The :8443 listener profile
 
@@ -49,9 +49,7 @@ All paths on `:8443` share one TLS socket. The handshake accepts a client certif
 
 Every regime answers `401 unauthorized` when the required credential is absent or fails, `403 invalid_cert` when a certificate is presented whose SAN is not a recognized identity, and `403 access_denied` when the identity is recognized but not the one the path accepts. The branch-by-branch mechanics and the figures are on [Per-path client auth enforcement](listener-tls.md#per-path-client-auth-enforcement); the SAN shapes, the `TokenReview` flow, and the cross-check are on [Workload identity](llm/workload-identity.md).
 
-The dual-mode rows share one profile on purpose: establishing who is calling is plane-independent, so the middleware carries no plane-specific logic, and what differs per plane is authorization, the provider chain versus the [tool grant chain](tool-plane.md#grants), enforced by each handler. `/v1/task/complete` adds handler checks of its own, on the task's completion mode, its phase, and the calling Pod's identity ([Task completion](api/task-complete.md)).
-
-A routing bug in the path-to-regime mapping would let agent-certificate holders reach controller-only paths, so that mapping is the detail the gateway's authorization depends on most.
+The dual-mode rows share one profile on purpose: establishing who is calling (an mTLS SAN for Kaalm-managed Pods, a `TokenReview`-validated bearer token for the gateway-only tier) is plane-independent, so the middleware carries no plane-specific logic. What differs per plane is authorization, the provider chain versus the [tool grant chain](tool-plane.md#grants), enforced by each handler. `/v1/task/complete` adds handler checks of its own, on the task's completion mode, its phase, and the calling Pod's identity ([Task completion](api/task-complete.md)).
 
 ## The :8080 listener profile
 
@@ -66,7 +64,7 @@ No mTLS-authenticated path lives on `:8080`, and the listener requests no client
 
 ## Internal endpoints
 
-Six endpoints on `:8443` are for Kaalm's own components. They share the cluster listener so that mTLS-authenticated callers reach them without a third listener, and they live under the reserved `/v1/` prefix ([Reserved gateway paths](api/overview.md#reserved-gateway-paths)).
+Six endpoints on `:8443` are for Kaalm's own components. They share the cluster listener, so mTLS-authenticated callers reach them without a third listener, and live under the reserved `/v1/` prefix ([Reserved gateway paths](api/overview.md#reserved-gateway-paths)).
 
 | Endpoint | Direction | Purpose |
 |---|---|---|
@@ -79,16 +77,7 @@ Six endpoints on `:8443` are for Kaalm's own components. They share the cluster 
 
 ## Credentials and RBAC
 
-LLM and tool credentials are Secrets in `kaalm-system`, read by the gateway and never leaving the namespace ([Credential handling](../security/credentials.md)). The gateway ServiceAccount holds four kinds of grant ([Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions)):
-
-| Grant | Scope | Used for |
-|---|---|---|
-| `create` on `tokenreviews` | Cluster | Bearer-token callers in the gateway-only tier |
-| `get, list, watch` on the Kaalm CRDs and Pods; `patch` on AgentChannels; `get` on Services; `create, patch` on Events | Cluster | Provider and channel routing, the source-IP cross-check, delivery endpoints, the channel delete handshake, and channel events |
-| `get, watch` on Secrets; `get, list, watch, create, patch` on ConfigMaps | `kaalm-system` only | Credentials, the budget exchange, async response records |
-| Per-channel and per-task Roles | One user namespace each, `resourceNames`-scoped | `get, watch` on a channel's credential Secrets that carry the [rule 45](../resources/validation/channels.md) label; `update, patch` on one task's completion ConfigMap, never `create` |
-
-The per-namespace Roles are created by the reconcilers and carry an ownerRef to the AgentChannel or AgentTask, so they are collected with it.
+LLM and tool credentials are Secrets in `kaalm-system`, read by the gateway and never leaving the namespace ([Credential handling](../security/credentials.md)). The gateway ServiceAccount reads the Kaalm CRDs and Pods cluster-wide (routing and the source-IP cross-check), creates `tokenreviews` for bearer-token callers, reads Secrets and writes ConfigMaps in `kaalm-system` only, and holds per-channel and per-task Roles scoped by `resourceNames`. [Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions) lists every verb and why. The reconcilers create the per-channel and per-task Roles with an ownerRef to the AgentChannel or AgentTask, so they are collected with it.
 
 ## Multi-replica state
 
