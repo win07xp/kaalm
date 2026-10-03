@@ -31,6 +31,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -1071,6 +1072,58 @@ func TestAgent_V1HashMatchRewritesInPlace(t *testing.T) {
 		return nil
 	})
 	expectAgentPhase(t, "rehash-agent", kaalmv1beta1.AgentRunning)
+}
+
+func TestAgent_V1HashWithClaimsRewritesInPlace(t *testing.T) {
+	// A release that kept container claims hashed them when the class set no
+	// maxLimits. The API server (DRA gate off) stripped them from the Pod, so
+	// it ran; the upgrade must rewrite its hash, not replace it.
+	mkWorkloadClass(t, "wc-rehash-claims", nil)
+	claims := []corev1.ResourceClaim{{Name: "gpu"}}
+	mkWorkloadAgent(t, "rehash-claims-agent", "wc-rehash-claims", func(ag *kaalmv1beta1.Agent) {
+		ag.Spec.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+			Claims:   claims,
+		}
+	})
+	markCertReady(t, "rehash-claims-agent")
+	eventually(t, func() error {
+		if agentPod(t, "rehash-claims-agent") == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	markPodReady(t, agentPod(t, "rehash-claims-agent"))
+	expectAgentPhase(t, "rehash-claims-agent", kaalmv1beta1.AgentRunning)
+	pod := agentPod(t, "rehash-claims-agent")
+
+	eff := effectiveSpecFor(t, "rehash-claims-agent", "wc-rehash-claims")
+	v100 := eff
+	v100.Resources.Claims = claims
+	v100.LegacyClaims = nil
+	writeAsV1(t, pod, podSpecHashV1(v100))
+
+	eventually(t, func() error {
+		var got corev1.Pod
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		if apierrors.IsNotFound(err) || err == nil && !got.DeletionTimestamp.IsZero() {
+			t.Fatal("a v1 Pod whose hash covered claims was deleted")
+		}
+		if err != nil {
+			return err
+		}
+		if got.UID != pod.UID {
+			return errString("pod UID changed")
+		}
+		if got.Annotations[annotationPodSpecHashVersion] != podSpecHashVersion {
+			return errString("hash version not rewritten yet")
+		}
+		if got.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
+			return errString("hash not rewritten yet")
+		}
+		return nil
+	})
+	expectAgentPhase(t, "rehash-claims-agent", kaalmv1beta1.AgentRunning)
 }
 
 func TestAgent_V1HashMismatchReplacesPod(t *testing.T) {

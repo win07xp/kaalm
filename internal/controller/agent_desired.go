@@ -174,6 +174,11 @@ type effectiveAgentSpec struct {
 	WakeTimeout        time.Duration
 	HibernationEnabled bool
 	ActivitySource     string
+
+	// LegacyClaims is used only by podSpecHashV1, to reproduce the hash of
+	// Pods created by a release that kept container claims. It never reaches
+	// the Pod or podSpecHash. Remove it together with podSpecHashV1.
+	LegacyClaims []corev1.ResourceClaim
 }
 
 // deriveEffectiveSpec merges class defaults into the Agent's spec and clamps
@@ -184,7 +189,6 @@ func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentCla
 		Command:          agent.Spec.Command,
 		Args:             agent.Spec.Args,
 		Env:              agent.Spec.Env,
-		Resources:        agent.Spec.Resources,
 		HealthPort:       defaultHealthPort,
 		ServiceEnabled:   true,
 		PersistenceOn:    agent.Spec.Persistence.Enabled,
@@ -206,10 +210,7 @@ func deriveEffectiveSpec(agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentCla
 	if eff.Image == "" {
 		eff.Image = class.Spec.Image.DefaultImage
 	}
-	if len(eff.Resources.Requests) == 0 && len(eff.Resources.Limits) == 0 {
-		eff.Resources = class.Spec.Resources.Defaults
-	}
-	eff.Resources = clampResources(eff.Resources, class.Spec.Resources.MaxLimits)
+	eff.Resources, eff.LegacyClaims = effectiveResources(agent.Spec.Resources, class.Spec.Resources)
 	if eff.ServicePort == 0 {
 		eff.ServicePort = defaultHealthPort
 	}
@@ -273,6 +274,29 @@ func pickSeconds(v, def, max *int32) *int32 {
 		out = *max
 	}
 	return &out
+}
+
+// effectiveResources resolves a workload's container resources: its own
+// block, else the class defaults (a block with neither requests nor limits
+// counts as unset), clamped to the class maxLimits. Claims are always
+// dropped: a container claim must name an entry in pod.spec.resourceClaims,
+// which the controller never sets, so the API server would reject the Pod.
+//
+// legacyClaims holds the claims a release with hash formula 1 passed to the
+// container and hashed, which it did only when the class set no maxLimits.
+// res is a copy, so clearing its claims never mutates the workload or class.
+func effectiveResources(own corev1.ResourceRequirements, class kaalmv1beta1.AgentClassResources) (
+	res corev1.ResourceRequirements, legacyClaims []corev1.ResourceClaim) {
+	res = own
+	if len(res.Requests) == 0 && len(res.Limits) == 0 {
+		res = class.Defaults
+	}
+	if len(class.MaxLimits) == 0 {
+		legacyClaims = res.Claims
+	}
+	res = clampResources(res, class.MaxLimits)
+	res.Claims = nil
+	return res, legacyClaims
 }
 
 // clampResources caps limits (and any requests above the cap) at maxLimits.
@@ -394,7 +418,9 @@ func podSpecHash(eff effectiveAgentSpec) string {
 // wrote on every agent Pod. They exist only to rewrite the hash of Pods created before
 // the formula changed, so an upgrade does not replace them. Remove them once
 // no supported upgrade path starts from a release that wrote v1 hashes.
-// Do not edit: the output must stay byte-for-byte what v1.0.0 produced.
+// Do not edit: for a spec as v1.0.0 derived it, the output must stay
+// byte-for-byte what v1.0.0 produced. LegacyClaims restores the container
+// claims v1.0.0 kept (and hashed) when the class set no maxLimits.
 type hashableSpecV1 struct {
 	Image     string                      `json:"image"`
 	Command   []string                    `json:"command,omitempty"`
@@ -408,12 +434,16 @@ type hashableSpecV1 struct {
 func podSpecHashV1(eff effectiveAgentSpec) string {
 	providers := append([]string(nil), eff.Providers...)
 	sort.Strings(providers)
+	res := eff.Resources
+	if len(eff.LegacyClaims) > 0 {
+		res.Claims = eff.LegacyClaims
+	}
 	h := hashableSpecV1{
 		Image:     eff.Image,
 		Command:   eff.Command,
 		Args:      eff.Args,
 		Env:       eff.Env,
-		Resources: eff.Resources,
+		Resources: res,
 		Providers: providers,
 		Handler:   eff.HandlerConfigMap,
 	}

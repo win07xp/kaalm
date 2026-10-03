@@ -48,6 +48,7 @@ type AgentTaskSpec struct {
 	// +optional
 	Tools []AgentToolGrant `json:"tools,omitempty"`
 	// Resources requested by the task container, clamped to the class maximum.
+	// The controller ignores claims.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 	// Persistence requests a PVC for the duration of the task.

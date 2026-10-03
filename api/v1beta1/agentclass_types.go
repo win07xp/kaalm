@@ -109,6 +109,7 @@ type AgentClassImage struct {
 // AgentClassResources sets default and ceiling compute.
 type AgentClassResources struct {
 	// Defaults are applied at reconcile time when a workload omits resources.
+	// The controller ignores claims.
 	// +optional
 	Defaults corev1.ResourceRequirements `json:"defaults,omitempty"`
 	// MaxLimits caps a workload's resource limits. Requests above the cap are

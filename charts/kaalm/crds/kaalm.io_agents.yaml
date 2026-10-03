@@ -819,8 +819,9 @@ spec:
                   type: object
                 type: array
               resources:
-                description: Resources requested by the agent container, clamped to
-                  the class maximum.
+                description: |-
+                  Resources requested by the agent container, clamped to the class maximum.
+                  The controller ignores claims.
                 properties:
                   claims:
                     description: |-
