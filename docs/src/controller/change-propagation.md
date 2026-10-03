@@ -38,6 +38,8 @@ Each Pod carries a second annotation, `kaalm.io/pod-spec-hash-version`, which re
 - If the hashes match, the Pod is current under the rules it was created with. The reconciler patches both annotations in place with the current formula's hash and version, and the Pod keeps running.
 - If the hashes differ, the Pod has drifted, and the reconciler replaces it as usual.
 
+The version 1 hash is recomputed from the spec as the earlier release derived it, including container `claims` that release passed through when the class set no `maxLimits`. A running Pod whose Agent sets `claims` therefore keeps running through the upgrade.
+
 As a result, an AgentClass edit made before the upgrade to a field that version 1 does not hash (`security`, `runtime.runtimeClassName`, the pull settings, the termination grace period, or `podMetadata`) does not reach a running Pod at upgrade time. The edit takes effect when the Pod is next replaced. An edit made after the upgrade replaces the Pod, as [Bucket 1](#bucket-1-recreate-and-clamp-default) describes.
 
 ## AgentClass change handling

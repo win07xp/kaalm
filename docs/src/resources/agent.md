@@ -47,7 +47,8 @@ spec:
       tools: ["web_search"]   # optional narrowing; omitted means every tool
 
   # Clamped to the class maxLimits (rule 6). Defaults from the class when
-  # neither requests nor limits is set.
+  # neither requests nor limits is set. `claims` is ignored; see
+  # "Defaults and maxLimits" on the AgentClass page.
   resources:
     requests: { cpu: "500m", memory: "1Gi" }
     limits:   { cpu: "1",    memory: "2Gi" }

@@ -40,7 +40,8 @@ spec:
     - providerRef: { name: search-tools }
       tools: ["web_search"]
 
-  # Clamped to the class maxLimits (rule 6).
+  # Clamped to the class maxLimits (rule 6). `claims` is ignored; see
+  # "Defaults and maxLimits" on the AgentClass page.
   resources:
     requests: { cpu: "1", memory: "2Gi" }
     limits:   { cpu: "2", memory: "4Gi" }
