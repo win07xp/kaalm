@@ -114,7 +114,7 @@ status:
 | `Completed` | Set when the task settles: `True` for `Succeeded`, `False` for any other terminal phase. The reason names why it settled: `TaskSucceeded` and `TaskFailed` in the common cases, otherwise `TimeoutSucceeded`, `TimeoutExceeded`, `PodDisrupted`, `PodStartFailed`, `ProvisioningDeadlineExceeded`, a container's waiting reason such as `InvalidImageName` or `ErrImageNeverPull` once `backoffLimit` is spent, or a class-violation reason. The message explains why it settled, for example the agent's reported message, the container's exit summary, or the validation failure. |
 | `startTime` | Set when the task moves to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
 | `completionTime` | Set when the task settles. |
-| `podName` | The current Pod. Empty while the task has no Pod, including while its Pod create is rejected. |
+| `podName` | The current Pod. Empty while the Pod create is rejected. |
 | `podCreateRejectedTime` | When the API server first rejected the current attempt's Pod create. The five-minute provisioning deadline counts from it while no Pod exists ([The clock starts at Ready](../controller/task-lifecycle.md#the-clock-starts-at-ready)). Cleared when a Pod is created or the attempt fails. |
 | `currentPodUID` | For an `agentReported` task, the UID of the Pod allowed to report completion, set on every Pod creation and cleared during a retry reset. Never set for an `exitCode` task. |
 | `retries` | Incremented at the start of each `backoffLimit` retry cycle and compared with the limit to decide whether `Failed` is terminal ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). |
