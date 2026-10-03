@@ -7,7 +7,7 @@ hibernation; only a Pod with an identity and gateway access.
 ## Declaring a task
 
 A task you can run under the sample class with no code of your own, on the
-published Go base image:
+published Go base image (adapted from `test/e2e/testdata/agenttask.yaml`):
 
 ```yaml
 apiVersion: kaalm.io/v1beta1
@@ -29,12 +29,10 @@ spec:
 ```
 
 `KAALM_TASK_AUTOCOMPLETE` is a test hook in both base images and in the
-starter templates. In a task, any non-empty value is sent as the completion
-status shortly after the container starts, and the gateway accepts only
-`success` or `failure`. The hook
-reports alongside whatever else the task does and does not replace it. Your
-task image reports completion itself, from its own code. The e2e suite's
-fixture, `test/e2e/testdata/agenttask.yaml`, has the same fields. The
+starter templates. In a task, it reports its value as the completion status
+shortly after the container starts, beside whatever else the task does. The
+gateway accepts only `success` or `failure`. Your task image reports
+completion itself, from its own code. The
 [Reference base images](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-kaalm_task_autocomplete-hook)
 page has the hook's retry rules.
 
@@ -42,8 +40,8 @@ page has the hook's retry rules.
 
 A Python task is an image built `FROM` the Python base image, with a
 `handler.py` that defines `run_task`. Set `KAALM_HANDLER_PATH` in the
-Dockerfile, because the controller sets it only for Agents with
-`spec.handler`, and `spec.handler` stays Agent-only:
+Dockerfile: `spec.handler` is Agent-only, so the controller never sets it for
+a task:
 
 ```dockerfile
 FROM ghcr.io/win07xp/kaalm-agent-python:1.0.0
@@ -68,39 +66,34 @@ async def run_task():
         pass  # something else already settled the task
 ```
 
-The runtime starts `run_task` once, after its HTTPS server is listening, and
-only when the container runs as an AgentTask. `handle_message` is still
-required.
+The runtime runs `run_task` once, and only when the container runs as an
+AgentTask. `handle_message` is still required.
 
 - `kaalm.complete_task(status, message="", artifacts=None)` reports the
   result. `status` is `"success"` or `"failure"`, and `artifacts` is a dict
   of strings. It retries transport errors and the `409 stale_pod` answer for
-  you, within four attempts. Any other refusal raises `RuntimeError`.
+  you. Any other refusal raises `RuntimeError`.
 - If `run_task` returns without reporting, the runtime reports `success`
   with an empty message and no artifacts. A task that declares
   `spec.artifacts` must call `kaalm.complete_task` itself with them;
   otherwise the gateway rejects the automatic `success` with `400`, and the
-  runtime logs that once and does not retry.
+  runtime does not retry it.
 - If `run_task` raises, the runtime reports `failure` with the exception
-  text, or the exception type name when the text is empty, cut to 4 KiB.
-  That includes an exception from `kaalm.complete_task` inside `run_task`.
-- Once the gateway accepts a report, no other report is sent.
-  `kaalm.complete_task` then raises `kaalm.TaskAlreadyCompleted` without
+  text. That includes an exception from `kaalm.complete_task` inside
+  `run_task`.
+- Once the gateway accepts a report, no other report is sent: a later
+  `kaalm.complete_task` call raises `kaalm.TaskAlreadyCompleted` without
   sending, and so does a call after the gateway answers that the task is
-  already finished. Do not retry; let the error end the run or catch it
-  and return.
-- In an `exitCode` task, the container's exit is the verdict, and the
-  gateway refuses every report with `403 TaskNotAgentReported`. The runtime
-  then exits for you: 0 when `run_task` returned, 1 when it raised. Do not
-  call `kaalm.complete_task` there. The refusal raises `RuntimeError`
-  (`task completion failed: 403 ...TaskNotAgentReported...`), not
-  `kaalm.TaskAlreadyCompleted`, so the `except` clause in the example above
-  does not catch it. If the error escapes `run_task`, it counts as a raise:
-  no report is sent and the container exits 1, even when the work
-  succeeded. Return from `run_task` to succeed and raise to fail. The
-  example above fits `agentReported` tasks.
+  already finished. Do not retry; catch the error and return.
+- In an `exitCode` task, the container's exit is the verdict. The gateway
+  refuses every report with `403 TaskNotAgentReported`, and the runtime exits
+  for you: 0 when `run_task` returned, 1 when it raised. Return to succeed,
+  raise to fail, and do not call `kaalm.complete_task`. Its refusal raises
+  `RuntimeError`, not `kaalm.TaskAlreadyCompleted`, so the `except` clause in
+  the example does not catch it, and an error that escapes `run_task` exits 1
+  even when the work succeeded. The example is for `agentReported` tasks.
 - A `run_task` that is not `async def`, or that takes required arguments,
-  stops the container at startup with an error in its log.
+  stops the container at startup, and the Pod log names the error.
 
 The [Reference base images](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/base-images.md#the-python-run_task-entry-point)
 page has the full reporting and retry rules. In Go, your code provides `main()`
@@ -142,9 +135,7 @@ nightly-report   Succeeded   standard   10s
 ```
 
 For an `agentReported` task, the result lands in a per-task ConfigMap
-mailbox in your namespace, named `TASK_NAME-completion`. The gateway writes
-it through a per-task Role, and an identity check on the reporting call
-accepts the report only from the task's current Pod.
+mailbox in your namespace, named `TASK_NAME-completion`.
 
 ![AgentTask state machine, one trigger per edge. Pending to Provisioning on Certificate created, Provisioning to Running on Pod Ready, Running to Completing on completion, exit, or timeout, and Completing to Succeeded on success, to Failed on failure, or to TimedOut on a timeout with onTimeout Fail. Pending to Failed when the spec is irreconcilable, Provisioning to Failed when the Pod fails to start or the spec is irreconcilable, Running to Failed when the Pod is lost with an empty mailbox, and Failed back to Provisioning while retries are left. Any phase moves to Terminating when deleted or when the TTL expires.](../diagrams/task-lifecycle.svg)
 
@@ -162,7 +153,7 @@ omits one is rejected with `400 invalid_request` naming the missing artifact,
 and the task stays `Running` until it reports again or times out. A `failure`
 report may carry any subset. The first completion call a Pod makes can also be
 refused with `409 Conflict` and `error.type: stale_pod`
-while the gateway's Pod index catches up; `CompleteTask` in Go and
+before the gateway has seen the new Pod; `CompleteTask` in Go and
 `kaalm.complete_task` in Python retry that on their own, and a task image of
 your own must too (runtime contract item 6).
 
@@ -170,10 +161,10 @@ your own must too (runtime contract item 6).
 
 - `ttlSecondsAfterFinished` deletes the AgentTask itself once the TTL has
   passed since completion, and with it the Pod, the mailbox, and the task's
-  PVC, the same way a Job's TTL works. Read the result before then. If you
-  leave the field unset, the class's default TTL applies, and the class can
-  cap the value you set. The `standard` class sets neither, so a task with no
-  TTL keeps its record. To keep a finished task longer, raise its TTL; the
+  PVC. Read the result before then. If you leave the field unset, the
+  class's default TTL applies, and the class can cap the value you set. The
+  `standard` class sets no default TTL and no cap, so a task with no TTL
+  keeps its record. To keep a finished task longer, raise its TTL; the
   change applies at once, up to the class cap in force when the task's Pod
   was created. The Pod is not stopped at completion: a container that keeps
   running after it reports stays up until the TTL.

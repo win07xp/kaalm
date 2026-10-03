@@ -43,10 +43,11 @@ kubectl label secret support-whatsapp-creds \
 ```
 
 Replace `VERIFY_TOKEN` with a string you choose, and `APP_SECRET` and
-`ACCESS_TOKEN` with the values from the app. All three keys are required; a channel whose Secret is missing one reports
-`Ready=False` with reason `CredentialsMissing`. The label opts the Secret in
-to channel use, and a channel whose Secret lacks it reports `Ready=False`
-with reason `SecretNotOptedIn`; see
+`ACCESS_TOKEN` with the values from the app. All three keys are required; a
+channel whose Secret is missing one reports `Ready=False` with reason
+`CredentialsMissing`. The label opts the Secret in to channel use, and a
+channel whose Secret lacks it reports `Ready=False` with reason
+`SecretNotOptedIn`; see
 [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 
 ## Create the channel
@@ -72,9 +73,8 @@ spec:
 
 `phoneNumberId` is the business number this channel answers as; events for
 other numbers under the same app are acknowledged and dropped. The `path`
-follows the same rules as a webhook channel: it starts with
-`/channels/{namespace}/` and never with `/v1/`. Apply the manifest and wait
-for the `Phase` column to read `Active`:
+follows the [webhook path rules](connecting-a-channel.md#a-synchronous-channel).
+Apply the manifest and wait for the `Phase` column to read `Active`:
 
 ```bash
 kubectl get agentchannel support-whatsapp -n team-support
@@ -90,11 +90,11 @@ In the app dashboard, under WhatsApp, Configuration, set the webhook
 https://bots.example.com/channels/team-support/support-whatsapp
 ```
 
-When you click **Verify and save**, Meta sends a `GET` with your verify
-token and a challenge; the gateway echoes the challenge and Meta accepts
-the URL. Then subscribe the webhook to the **messages** field. Do this only
-after the channel is `Active`: an unregistered path answers `401` and the
-verification fails.
+When you click **Verify and save**, Meta sends your verify token to the URL.
+The gateway checks it against the Secret and answers Meta's challenge, and
+Meta accepts the URL. Then subscribe the webhook to the **messages**
+field. Do this only after the channel is `Active`: an unregistered path
+answers `401` and the verification fails.
 
 ## Try it
 
@@ -105,9 +105,9 @@ from the same phone number carries the same session ID, so the agent can
 keep a conversation going.
 
 The agent receives a message envelope with `channelType: whatsapp`, the
-customer's WhatsApp ID as `userId`, and the message text as `content`; the
-design book's WhatsApp channel page lists every envelope field and how each
-message type maps.
+customer's WhatsApp ID as `userId`, and the message text as `content`;
+[WhatsApp channel](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/api/channel-whatsapp.md)
+lists every envelope field and how each message type maps.
 
 ## The 24-hour window
 
@@ -126,16 +126,15 @@ should say so within the window.
 - `WebhookAuthFailed`: Meta's signatures do not verify, or the verify token
   did not match. The `appSecret` or `verifyToken` in the Secret does not
   match the app.
-- `CallbackRejected`: Meta refused the reply. The message names the HTTP
-  status and Meta's error code: `131047` is the 24-hour window, a `401` is
-  a bad or expired `accessToken`.
+- `CallbackRejected`: Meta refused the reply. The condition message names the
+  HTTP status and Meta's error code: `131047` is the 24-hour window, a `401`
+  is a bad or expired `accessToken`.
 - `DispatchFailed` or `AgentNotReady`: the agent did not answer. The
-  customer sees the error as the reply, for example `delivery_failed: ...`,
-  rather than silence.
+  customer sees the error as the reply rather than silence. The reply starts
+  with the error type, such as `delivery_failed` or `wake_timeout`.
 
 Delivery receipts for the agent's replies arrive at the same URL as
-`statuses` events; the gateway acknowledges and drops them, so they never
-reach the agent.
+`statuses` events; the gateway drops them, so they never reach the agent.
 
 ---
 

@@ -31,16 +31,15 @@ spec:
         key: token
 ```
 
-Three rules about `path`:
+Two rules about `path`:
 
 - It must start with `/channels/{namespace}/`, your own namespace; the rest
   is yours to choose, and no two channels in the namespace may share a path.
 - The `/v1/` prefix is reserved for the gateway's API and rejected.
-- The bearer Secret (`e2e-hook`) lives in your namespace, next to the
-  channel; the reconciler grants the gateway a scoped read.
 
-The Secret must carry the label `kaalm.io/channel-credential: "true"`, which
-opts it in to channel use. The e2e suite's `test/e2e/testdata/secrets.yaml`
+The bearer Secret (`e2e-hook`) lives in your namespace, next to the channel.
+It must carry the label `kaalm.io/channel-credential: "true"`, which opts it
+in to channel use. The e2e suite's `test/e2e/testdata/secrets.yaml`
 creates `e2e-hook` with it. Your team's credential manager creates and labels
 the Secret; if the platform team set `rbac.personas.developerSecrets`, you do
 it yourself:
@@ -64,9 +63,9 @@ kubectl get agentchannels -n e2e
 
 The webhook listens on the user gateway, port 8080 (TLS), Service
 `kaalm-gateway` in `kaalm-system`. The listener's certificate comes from the
-Kaalm CA, which trust-manager projects into every namespace as the `kaalm-ca`
-ConfigMap; from inside the cluster, read `ca.crt` from that ConfigMap. From
-in-cluster or through your ingress:
+Kaalm CA. To verify it, read `ca.crt` from the `kaalm-ca` ConfigMap that
+trust-manager projects into every namespace. From in-cluster or through your
+ingress:
 
 ```bash
 curl -sS --cacert ca.crt \
@@ -79,11 +78,11 @@ curl -sS --cacert ca.crt \
 Replace `GATEWAY_HOST` with `kaalm-gateway.kaalm-system.svc` from inside the
 cluster, or your ingress hostname from outside.
 
-In `sync` mode the agent's reply is the HTTP response body. The caller
-identity can be threaded through per request (the sample channel in
-`config/samples/kaalm_v1beta1_agentchannel.yaml` maps it from an
-`X-User-Id` header), which is what gives each user a stable conversation
-session with the agent.
+In `sync` mode the agent's reply is the HTTP response body. To give each
+caller a stable conversation session with the agent, set `spec.session.enabled:
+true` and map the caller identity with `userId` (the sample channel in
+`config/samples/kaalm_v1beta1_agentchannel.yaml` maps it from an `X-User-Id`
+header).
 
 ## Asynchronous channels
 
@@ -93,13 +92,13 @@ reply pushed, add a `callbackUrl` and, with it, `callbackAuth` (the sample
 channel shows an HMAC-signed callback); without one, poll
 `GET /v1/channels/responses/{requestId}?channelPath={channelPath}` with the
 `channelPath` value from the `202` body. Responses are held for a bounded
-time; the design book's Async webhook responses page states the TTL and the
-retry schedule.
+time; the TTL and the retry schedule are on
+[Async webhook responses](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/api/async-responses.md).
 
 Every Secret a channel names needs the label, including the `callbackAuth`
 Secret; the sample's `webhook-secret` and `callback-secret` both do. A
 `callbackAuth` of type `bearer` also needs the host of the `callbackUrl` in the
-Secret's `kaalm.io/callback-hosts` annotation, a comma-separated list of
+Secret's `kaalm.io/callback-hosts` annotation, a comma-separated list of bare
 hostnames, or the channel reports `CallbackHostNotApproved`. An HMAC callback
 needs no annotation.
 
