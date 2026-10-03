@@ -881,6 +881,23 @@ func TestGetErrorBranches(t *testing.T) {
 	if err := r.reconcileBudget(ctx, budgeted, map[string]bool{}); err == nil {
 		t.Error("reconcileBudget must surface a ConfigMap Get error")
 	}
+
+	// The AgentClass provider checks return a non-NotFound Get error instead
+	// of reporting the reference as checked.
+	acr := &AgentClassReconciler{Client: c}
+	ac := &kaalmv1beta1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "c"},
+		Spec: kaalmv1beta1.AgentClassSpec{
+			AllowedProviders:     []kaalmv1beta1.LocalObjectReference{{Name: "p"}},
+			AllowedToolProviders: []kaalmv1beta1.LocalObjectReference{{Name: "t"}},
+		},
+	}
+	if missing, err := acr.missingProviders(ctx, ac); err == nil || missing != nil {
+		t.Errorf("missingProviders Get error: missing=%q err=%v", missing, err)
+	}
+	if missing, err := acr.missingToolProviders(ctx, ac); err == nil || missing != nil {
+		t.Errorf("missingToolProviders Get error: missing=%q err=%v", missing, err)
+	}
 }
 
 func TestMapFuncs_ListErrorReturnsNil(t *testing.T) {

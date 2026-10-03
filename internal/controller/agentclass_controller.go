@@ -86,8 +86,18 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Validate.
 	var problems []string
-	problems = append(problems, r.missingProviders(ctx, &ac)...)
-	problems = append(problems, r.missingToolProviders(ctx, &ac)...)
+	// The provider reads come first: a failed read fails the pass before
+	// anything writes status or queues an event.
+	missing, err := r.missingProviders(ctx, &ac)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	problems = append(problems, missing...)
+	missing, err = r.missingToolProviders(ctx, &ac)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	problems = append(problems, missing...)
 	badCIDRs := invalidCIDRs(&ac)
 	problems = append(problems, badCIDRs...)
 	problems = append(problems, invalidHosts(&ac)...)
@@ -250,7 +260,10 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 	return ctrl.Result{}, r.Update(ctx, ac)
 }
 
-func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) []string {
+// missingProviders lists the allowedProviders entries with no ModelProvider.
+// Any other read error is returned, so the pass fails and retries with
+// backoff instead of reporting the reference as checked.
+func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) ([]string, error) {
 	var missing []string
 	for _, ref := range ac.Spec.AllowedProviders {
 		var mp kaalmv1beta1.ModelProvider
@@ -259,14 +272,16 @@ func (r *AgentClassReconciler) missingProviders(ctx context.Context, ac *kaalmv1
 				missing = append(missing, fmt.Sprintf("allowedProvider %q does not exist", ref.Name))
 				continue
 			}
-			// A transient get error is surfaced by returning it up the stack; here
-			// we conservatively skip so a flake does not mark the class invalid.
+			return nil, fmt.Errorf("get ModelProvider %q: %w", ref.Name, err)
 		}
 	}
-	return missing
+	return missing, nil
 }
 
-func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) []string {
+// missingToolProviders lists the allowedToolProviders entries with no
+// ToolProvider. Any other read error is returned, so the pass fails and
+// retries with backoff instead of reporting the reference as checked.
+func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaalmv1beta1.AgentClass) ([]string, error) {
 	var missing []string
 	for _, ref := range ac.Spec.AllowedToolProviders {
 		var tp kaalmv1beta1.ToolProvider
@@ -275,11 +290,10 @@ func (r *AgentClassReconciler) missingToolProviders(ctx context.Context, ac *kaa
 				missing = append(missing, fmt.Sprintf("allowedToolProvider %q does not exist", ref.Name))
 				continue
 			}
-			// Transient get errors are skipped conservatively, matching
-			// missingProviders.
+			return nil, fmt.Errorf("get ToolProvider %q: %w", ref.Name, err)
 		}
 	}
-	return missing
+	return missing, nil
 }
 
 // deprecatedFields is the one list of deprecated AgentClass fields. It
