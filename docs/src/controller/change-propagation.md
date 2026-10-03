@@ -31,6 +31,8 @@ The cap applies to every drift replacement alike: an edit to an Agent's own spec
 
 A Pod that never becomes Ready after a grant, because it crash-loops or cannot pull its image, sets the Agent `Failed` but keeps its slot, so a bad rollout halts at the cap instead of failing the whole class. A further spec change replaces that Agent's Pod at once, on the slot it already holds, and the rollout resumes from there.
 
+A replacement Pod create that the API server rejects, such as a class edit that names a missing `RuntimeClass` or a Pod create over a ResourceQuota, halts the rollout at the cap in the same way. The Agent keeps its slot and shows `Provisioning` with `Ready=False, reason=PodCreateRejected`, not `Failed`, so a bad `runtimeClassName` stops at `maxUnavailableOnDrift` Agents. Fixing the cause creates the Pod within 30 seconds ([Timing](reconcilers/agent.md#timing)), and a further spec change retries the create at once on the held slot.
+
 ### An upgrade that changes the hash formula replaces no Pod
 
 Each Pod carries a second annotation, `kaalm.io/pod-spec-hash-version`, which records the version of the formula that produced its hash. A Pod without this annotation has a version 1 hash. When the reconciler finds such a Pod, it recomputes the hash with the version 1 formula and compares:

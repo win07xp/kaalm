@@ -17,7 +17,7 @@ The other lifecycles in the system are indexed on [Lifecycles at a glance](../ap
 | `Pending` | `Provisioning` | The pre-Pod checks pass and the Certificate exists; the task holds in `Provisioning` until the Certificate is Ready. A task whose env Secret is missing or lacks the workload label stays in its phase with `Ready=False, reason=SecretNotOptedIn` (rule 48). |
 | `Pending`, `Provisioning` | `Failed` (terminal) | A class-versus-spec violation under rules 2 to 5, 24, 35 to 38, or 47: `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, or `NamespaceNotAllowed` (the class does not admit the task's namespace; this check runs first, so it is the reported reason when several fail). Checked whenever no Pod exists, so a retry is validated against the class as it now stands. Not retried. |
 | `Provisioning` | `Running` | The Pod reports Ready. The same status write sets `status.startTime`, and the timeout clock starts. |
-| `Provisioning` | `Failed` | The container image name is invalid or can never be pulled (`InvalidImageName`, `ErrImageNeverPull`); the Pod reaches a terminal phase before Ready (`PodStartFailed`); or the Pod is not Ready five minutes after creation, whatever the cause (`ProvisioningDeadlineExceeded`). Retryable. An `exitCode` task whose Pod exits 0 before Ready goes to `Completing` instead. |
+| `Provisioning` | `Failed` | The container image name is invalid or can never be pulled (`InvalidImageName`, `ErrImageNeverPull`); the Pod reaches a terminal phase before Ready (`PodStartFailed`); or the attempt has no Ready Pod five minutes after the Pod was created, or after the API server first rejected the Pod create, whatever the cause (`ProvisioningDeadlineExceeded`). While a Pod create is rejected, the task waits in `Provisioning` with `Ready=False, reason=PodCreateRejected` ([Error handling](operations.md#error-handling) says which errors count). Retryable. An `exitCode` task whose Pod exits 0 before Ready goes to `Completing` instead. |
 | `Running` | `Completing` | The completion mailbox holds a payload (`agentReported`), the container exits (`exitCode`), or the timeout elapses. |
 | `Running` | `Failed` | The Pod is lost mid-run and the mailbox is empty (`PodDisrupted`). Retryable. See [Completion beats disruption](#completion-beats-disruption). |
 | `Completing` | `Succeeded` | The payload reports success and its artifact names pass the re-check, or the container exited 0. |
@@ -30,7 +30,7 @@ A terminal `Failed` carries `completionTime`; a transient `Failed` written mid-r
 
 ### The clock starts at Ready
 
-The task's effective timeout comes from its own `completion.timeout` and its class bounds ([The class bounds timeout and retention](../resources/agenttask.md#the-class-bounds-timeout-and-retention)). It measures from `status.startTime`, which the reconciler sets when the Pod reports Ready, so scheduling and image-pull time never count against the task's budget. A retry clears `startTime`, so each attempt gets the full timeout. A task stuck before Ready is bounded by the fixed five-minute provisioning deadline instead.
+The task's effective timeout comes from its own `completion.timeout` and its class bounds ([The class bounds timeout and retention](../resources/agenttask.md#the-class-bounds-timeout-and-retention)). It measures from `status.startTime`, which the reconciler sets when the Pod reports Ready, so scheduling and image-pull time never count against the task's budget. A retry clears `startTime`, so each attempt gets the full timeout. A task stuck before Ready, including one whose Pod create the API server rejects, is bounded by the fixed five-minute provisioning deadline instead.
 
 ### Completion beats disruption
 
@@ -82,6 +82,7 @@ A retry also re-runs the env Secret gate ([rule 48](../resources/validation/refe
 | `PodStartFailed`, `ProvisioningDeadlineExceeded`, `InvalidImageName`, `ErrImageNeverPull` | Warning | a provisioning failure settles or retries |
 | `PodDisrupted` | Warning | the Pod was lost mid-run or before completion settled |
 | `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, `NamespaceNotAllowed` | Warning | the pre-Pod class check settles the task `Failed` |
+| `PodCreateRejected` | Warning | the API server rejects the Pod create and `Ready` first takes this reason, not on each re-check and not when only the message changes |
 | `ChildConflict` | Warning | a child object that the task would own already exists and is not owned by it, when the reason or its message first appears on `Ready` |
 | `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn` | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason, when the reason first appears on `Ready`, not on each pass that finds the problem again |
 

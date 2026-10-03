@@ -18,22 +18,27 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   cert-manager logs.
 - **PVC unbound** (`Provisioning`): `kubectl get pvc -n NAMESPACE`; usually a
   StorageClass problem.
-- **RuntimeClass missing**: the Agent's class names a `RuntimeClass` the
-  cluster lacks, so the apiserver rejects every Pod create of the class with
-  `pod rejected: RuntimeClass "NAME" not found`. The Agent has no Pod, and no
-  condition names the cause, even after its certificate is issued. The error
-  appears only in the controller log. To check, read the name from the class,
-  then look for it on the cluster:
+- **RuntimeClass missing**: reason `PodCreateRejected`. The Agent's class
+  names a `RuntimeClass` the cluster lacks, so the apiserver rejects every Pod
+  create of the class. The message includes `RuntimeClass "NAME" not found`,
+  and the Agent has no Pod. To check, read the name from the class, then look
+  for it on the cluster:
 
   ```bash
   kubectl get agentclass CLASS_NAME -o jsonpath='{.spec.runtime.runtimeClassName}'
   kubectl get runtimeclass RUNTIMECLASS_NAME
   ```
 
-  To fix it, create the `RuntimeClass` or change the class. Then edit the
-  Agent (for example, add an annotation) to retry at once, because creating
-  the `RuntimeClass` does not trigger a retry. For the full behavior, see
+  To fix it, create the `RuntimeClass` or change the class. The Agent retries
+  on its own and gets its Pod within 30 seconds, so you don't need to edit it.
+  For the full behavior, see
   [Security model and isolation](https://github.com/win07xp/kaalm/blob/main/docs/src/security/model.md#runtimeclass).
+- **Another rejected Pod create**: reason `PodCreateRejected`, and the message
+  names the cause. If it says `exceeded quota`, the namespace is out of
+  quota; run `kubectl describe resourcequota -n NAMESPACE` to see which
+  resource. If an admission webhook or a Pod Security policy denied the Pod,
+  the message names the webhook or policy. Fix the cause, and the Pod follows
+  within 30 seconds.
 
 An image or namespace the class does not allow is not a `Provisioning`
 symptom: the Agent goes `Degraded` instead.
@@ -240,6 +245,20 @@ Read the error type; the three cases behave differently:
 - **`budget_exhausted`**: the namespace or cluster budget is spent;
   `Retry-After` is the seconds until the period resets. Retrying sooner is
   pointless; ask your platform team or wait.
+
+## Task stuck in `Provisioning`
+
+```bash
+kubectl describe agenttask TASK_NAME     # conditions carry the reason
+```
+
+A task with `Ready=False` and reason `PodCreateRejected` has no Pod because the
+apiserver refused it. The causes and checks are the same as for an Agent (see
+[Agent stuck in `Pending` or `Provisioning`](#agent-stuck-in-pending-or-provisioning)).
+The task waits in `Provisioning` and checks again every 30 seconds. If the
+cause is still there after five minutes, the attempt fails with reason
+`ProvisioningDeadlineExceeded`, and the task retries while `backoffLimit`
+allows.
 
 ## Task never completes
 

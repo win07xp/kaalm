@@ -52,6 +52,8 @@ An Agent in `Running` or `Idle` returns to `Provisioning` when its Pod goes away
 
 Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the reconciler is the self-healing loop. The PVC, Service, and Certificate are preserved, as in the spec-drift replacement.
 
+If the API server rejects the replacement Pod, the Agent stays `Provisioning` with `Ready=False, reason=PodCreateRejected` ([AgentReconciler](reconcilers/agent.md#what-it-reports)).
+
 ### Degraded
 
 `Degraded` is the phase for a mismatch between the Agent and the AgentClass and providers that admit it. The developer, not the controller, can fix it. The reconciler evaluates every mismatch together at the top of each pass, before the hibernation branch, the Ready gates, and the Pod, so a Degraded Agent's Pod is neither created nor deleted while it is Degraded: a Running Agent keeps running, and a Hibernated one stays asleep.

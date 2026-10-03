@@ -25,6 +25,9 @@ partition "gate, or fail" {
   if (a dependency missing:\nimage, Secret, PVC,\nConfigMap, Certificate?) then (yes)
     :Ready=False,\nrequeue 30s or 5s,\nnone for image;
     kill
+  elseif (the API server\nrejects the Pod create?) then (yes)
+    :Ready=False\nPodCreateRejected,\nrequeue 30s;
+    kill
   elseif (the Pod cannot run:\ncrash loop, image pull?) then (yes)
     :phase=Failed, until\nthe Pod recovers;
     kill
