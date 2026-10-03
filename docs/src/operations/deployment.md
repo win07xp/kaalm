@@ -288,7 +288,7 @@ No Pod restarts are needed at any step, in either tier.
 
 ### Breaking spec changes
 
-A breaking spec change ships as a new API version with conversion, so an upgrade never replaces existing objects ([Deprecation policy](api-versioning.md#deprecation-policy)). The replace-not-migrate procedure (let in-flight AgentTasks run to completion or delete them, hibernate or delete Agents, apply the new CRDs, then re-apply updated manifests) is the path for a fresh install or a rollback across the graduation.
+A breaking spec change ships as a new API version with conversion, so an upgrade never replaces existing objects ([Deprecation policy](api-versioning.md#deprecation-policy)). The replace-not-migrate procedure (let in-flight AgentTasks run to completion or delete them, hibernate or delete Agents, apply the new CRDs, then re-apply updated manifests) is the path for a fresh install or a rollback across the `v1alpha1` to `v1beta1` storage-version change ([Upgrading in place](api-versioning.md#upgrading-in-place)).
 
 Agent state survives a replace through the PVC path: `pvcRetention: Retain` on delete, or snapshot and remount through [`persistence.existingClaim`](../resources/agent.md).
 

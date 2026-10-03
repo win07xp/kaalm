@@ -99,7 +99,7 @@ Two things to watch after enabling it:
 - A `BoundaryMarginRaised` condition on the provider means observed traffic
   needed a wider margin than your `boundaryMarginPercent`. The gateway
   widened it automatically and the guarantee held, but size the value
-  from [the overspend bound](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/budgets-and-rate-limits.md#the-overspend-bound).
+  from [the boundary region](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/budgets-and-rate-limits.md#the-boundary-region).
 - A namespace that lives near its ceiling (month-end, typically) lives with
   serialized admission until the period resets. If a team needs throughput
   at high utilization, widen their budget rather than their margin.

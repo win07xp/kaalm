@@ -57,23 +57,27 @@ of its keep policy):
 
 ```bash
 kubectl get agentclasses
-kubectl describe agentclass standard   # conditions show Ready=True
 ```
-
-The same conditions include `CertificateCleanup`, which reports whether
-cert-manager runs with `--enable-certificate-owner-ref=true`. `True` means
-deleting an Agent or AgentTask deletes its TLS Secret; `False` means the
-Secret is left behind and cert-manager needs the flag set.
 
 ```text
 NAME       AGENTS   TASKS   REPLACING   AGE
 standard                                28s
 ```
 
+The empty `AGENTS` and `TASKS` columns fill in as workloads use the class;
+`REPLACING` counts Agents whose Pod is being replaced after a spec change.
+
+```bash
+kubectl describe agentclass standard   # conditions show Ready=True
+```
+
 A Ready condition on the class means the controller has reconciled it. The
-empty `AGENTS` and `TASKS` columns fill in as workloads use the class;
-`REPLACING` counts Agents whose Pod is being replaced after a spec change. The
-class allows any image, storage, and hibernation, but it lists no
+conditions also include `CertificateCleanup`, which reports whether
+cert-manager runs with `--enable-certificate-owner-ref=true`. `True` means
+deleting an Agent or AgentTask deletes its TLS Secret; `False` means the
+Secret is left behind and cert-manager needs the flag set.
+
+The class allows any image, storage, and hibernation, but it lists no
 ModelProvider and no ToolProvider, so an Agent that names a provider under it
 goes `Degraded` until the platform team names one
 ([Offering agent classes](../platform/agent-classes.md)). From here:

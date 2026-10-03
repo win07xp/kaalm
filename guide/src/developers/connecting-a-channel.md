@@ -42,20 +42,25 @@ It must carry the label `kaalm.io/channel-credential: "true"`, which opts it
 in to channel use. The e2e suite's `test/e2e/testdata/secrets.yaml`
 creates `e2e-hook` with it. Your team's credential manager creates and labels
 the Secret; if the platform team set `rbac.personas.developerSecrets`, you do
-it yourself:
+it yourself. If you create it yourself, the channel above reads the `token`
+key, so create it with that key and label it:
 
 ```bash
+kubectl create secret generic SECRET_NAME -n NAMESPACE --from-literal=token=BEARER_TOKEN
 kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/channel-credential=true
 ```
 
-Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with your
-namespace. A channel whose Secret has no label reports `Ready=False` with
-reason `SecretNotOptedIn`; see
+Replace `SECRET_NAME` with the Secret's name (`e2e-hook` here), `NAMESPACE`
+with your namespace (`e2e` here), and `BEARER_TOKEN` with the token callers
+present. A channel whose Secret has no label reports `Ready=False` with reason
+`SecretNotOptedIn`; see
 [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 
-Apply it and check the channel reaches `Active`:
+Save the channel as `channel.yaml`, apply it, and check that it reaches
+`Active`:
 
 ```bash
+kubectl apply -f channel.yaml
 kubectl get agentchannels -n e2e
 ```
 
@@ -64,8 +69,15 @@ kubectl get agentchannels -n e2e
 The webhook listens on the user gateway, port 8080 (TLS), Service
 `kaalm-gateway` in `kaalm-system`. The listener's certificate comes from the
 Kaalm CA. To verify it, read `ca.crt` from the `kaalm-ca` ConfigMap that
-trust-manager projects into every namespace. From in-cluster or through your
-ingress:
+trust-manager projects into every namespace. Fetch the certificate and read the
+bearer token from the `token` key of the `e2e-hook` Secret:
+
+```bash
+kubectl get configmap kaalm-ca -n e2e -o jsonpath='{.data.ca\.crt}' > ca.crt
+TOKEN=$(kubectl get secret e2e-hook -n e2e -o jsonpath='{.data.token}' | base64 -d)
+```
+
+Then call the channel from in-cluster or through your ingress:
 
 ```bash
 curl -sS --cacert ca.crt \

@@ -86,7 +86,7 @@ Trust runs one way. The apiserver verifies the controller against the `caBundle`
 
 ## Upgrading in place
 
-The upgrade procedure is the [Rolling upgrade order](deployment.md#rolling-upgrade-order) on the Deployment page, and the graduation is why it is documented that way. From a release before v0.6.0:
+The upgrade procedure is the [Rolling upgrade order](deployment.md#rolling-upgrade-order) on the Deployment page. The steps below are that procedure for the release that made `v1beta1` the storage version. From a release before v0.6.0:
 
 1. **Apply the CRDs from the new chart.** `kubectl apply --server-side --force-conflicts -f crds/` adds `v1beta1` to each CRD, makes it the storage version, marks `v1alpha1` deprecated, and adds the conversion stanza. `--force-conflicts` is a required part of the command, not a workaround: Helm is the field manager for every CRD field from the install, and the first server-side apply must take that management over. cainjector fills the `caBundle` immediately, because the `kaalm-controller-tls` Certificate already exists.
 2. **Upgrade the release.** `helm upgrade` rolls the controller (which now serves the conversion listener and opens the Service port) and the gateway; with `--wait` the command returns when both rollouts are complete.
@@ -107,9 +107,9 @@ kubectl get agents.v1alpha1.kaalm.io -A
 # (every agent, converted on the way out)
 ```
 
-**Downgrade across the graduation is not supported.** After objects are stored at `v1beta1`, a chart whose CRDs do not know that version cannot serve them, so rolling the images back is not enough. The manifests are declarative; keep them (and any PVC you care about, under `pvcRetention: Retain`) and re-apply on a fresh install if a rollback is ever needed.
+**Downgrade across the storage-version change is not supported.** After objects are stored at `v1beta1`, a chart whose CRDs do not know that version cannot serve them, so rolling the images back is not enough. The manifests are declarative; keep them (and any PVC you care about, under `pvcRetention: Retain`) and re-apply on a fresh install if a rollback is ever needed.
 
-The upgrade e2e that proves [S21](../appendix/scenarios.md#s21-upgrade-in-place-and-keep-every-agent) runs the two steps against the release the `PREV_CHART_VERSION` make variable names and asserts the behavior appropriate to that release. Its CI workflow runs it twice: from the latest release, which is after the graduation, so that run asserts that no window exists and nothing migrates; and from v0.5.0, the last release before v0.6.0, so that run exercises the window and a real storage migration.
+The upgrade e2e that proves [S21](../appendix/scenarios.md#s21-upgrade-in-place-and-keep-every-agent) runs the two steps against the release the `PREV_CHART_VERSION` make variable names and asserts the behavior appropriate to that release. Its CI workflow runs it twice: from the latest release, which is after the storage-version change, so that run asserts that no window exists and nothing migrates; and from v0.5.0, the last release before v0.6.0, so that run exercises the window and a real storage migration.
 
 ## Storage-version migration
 
@@ -137,7 +137,7 @@ This is the policy a `v1alpha1` user can plan against, and the rule set every la
 
 **What a `v1alpha1` user does.** Nothing is required at upgrade time: manifests, GitOps repositories, and scripts that say `v1alpha1` keep working, with the warning. Moving to `v1beta1` is a find-and-replace of the `apiVersion` line, because the schema is identical, and the natural moment is the next edit of each manifest.
 
-**What this policy does not cover.** The gateway's HTTP wire contract is versioned by its `/v1` path prefix and evolves additively on its own terms ([HTTP API](../gateways/api/overview.md)); the runtime contract and the base-image ABIs carry their own append-only rules ([The runtime contract](../runtime/contract.md), [Reference base images](../runtime/base-images.md)); Helm values follow the chart upgrade notes on [Deployment](deployment.md#helm-chart-upgrades); and the controller-to-gateway internal contracts are covered by the one-version skew rule there. This page is about the custom resources only.
+**What this policy does not cover.** The gateway's HTTP wire contract is versioned by its `/v1` path prefix and evolves additively on its own terms ([HTTP API](../gateways/api/overview.md)); the runtime contract and the base-image ABIs carry their own append-only rules ([The runtime contract](../runtime/contract.md), [Reference base images](../runtime/base-images.md)); Helm values follow the chart upgrade notes on [Deployment](deployment.md#helm-chart-upgrades); and the controller-to-gateway internal contracts are covered by the one-version skew rule under [Rolling upgrade order](deployment.md#rolling-upgrade-order). This page is about the custom resources only.
 
 ## Scenario
 

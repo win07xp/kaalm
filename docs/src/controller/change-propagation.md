@@ -61,7 +61,7 @@ Class fields outside the hash reach a running Agent by other routes or not at al
 | `network.egress.allowedCIDRs`, `allowSameNamespaceIngress` | the NetworkPolicy is updated in place; no restart |
 | `image.allowedImages` narrowed but still admitting the image | none |
 | `lifecycle` defaults and caps | applied on the next activity evaluation; no restart |
-| `lifecycle.maxUnavailableOnDrift` | paces how many Pods the changes above replace at once; see [Drift replacements are capped per class](#drift-replacements-are-capped-per-class) |
+| `lifecycle.maxUnavailableOnDrift` | paces how many Pods the hash changes listed before this table replace at once; see [Drift replacements are capped per class](#drift-replacements-are-capped-per-class) |
 
 ### Bucket 2: degrade-when-irreconcilable
 

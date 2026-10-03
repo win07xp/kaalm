@@ -68,7 +68,7 @@ Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the recon
 | `HibernationRequiresPersistence` | 29 | `spec.lifecycle.hibernationEnabled: true` while the Agent's own `spec.persistence.enabled` is `false` |
 | `HandlerMountNotAllowed` | 30 | `spec.handler` set while the class has `image.allowHandlerMounts: false` |
 
-The rules are specified under [Cross-resource validation](../resources/validation-and-defaulting.md#cross-resource-validation). A mismatch may be present at first provisioning or introduced later by class, ModelProvider, or ToolProvider drift on a provisioned Agent; both are the same transition, and [AgentClass change handling](change-propagation.md#agentclass-change-handling) covers which class edits cause it. Rule 29 is spec-internal, so no class edit can introduce it.
+The rules are indexed under [Cross-resource validation](../resources/validation-and-defaulting.md#cross-resource-validation). A mismatch may be present at first provisioning or introduced later by class, ModelProvider, or ToolProvider drift on a provisioned Agent; both are the same transition, and [AgentClass change handling](change-propagation.md#agentclass-change-handling) covers which class edits cause it. Rule 29 is spec-internal, so no class edit can introduce it.
 
 **Entering.** On the first transition into `Degraded` the controller records the current phase in `status.preDegradedPhase`, emits a `Warning` event with the first outstanding reason, and sets `Ready=False` with that reason and message. If a further mismatch arises while the Agent is already `Degraded`, only `reason` and `message` are updated; `preDegradedPhase` is preserved, so the Agent still remembers where it came from.
 

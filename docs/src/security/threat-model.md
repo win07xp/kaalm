@@ -53,7 +53,7 @@ Granting the gate makes ConfigMap write access in a namespace equivalent to code
 
 ## Component compromise
 
-These rows ask what an attacker gains by taking over a Kaalm component. For Secrets the answer is everything the component can read: `kaalm-system` plus the labeled channel Secrets each AgentChannel names for the gateway, and the whole cluster for the operator.
+These rows ask what an attacker gains by taking over a Kaalm component. For Secrets the answer is everything the component can read. For the gateway, that is `kaalm-system` plus the labeled channel Secrets each AgentChannel names. For the operator, it is `kaalm-system` plus the Secrets its minted Roles name in user namespaces, and any Secret through its `escalate` and `bind` verbs ([Compromised operator reads credential Secrets](#compromised-operator-reads-credential-secrets)).
 
 | Threat | Mitigation | Decision |
 |---|---|---|
@@ -61,7 +61,7 @@ These rows ask what an attacker gains by taking over a Kaalm component. For Secr
 | A compromised gateway reads credential Secrets | The standing read is `kaalm-system`; in user namespaces it reads only the labeled Secrets each AgentChannel names ([Summary of the gateway's reach](rbac.md#summary-of-the-gateways-reach)). Sign and verify the gateway image and restrict who can update its Deployment. | Accepted |
 | A compromised gateway writes ConfigMaps into user namespaces | No `create` on user-namespace ConfigMaps; `update, patch` only on each task's pre-created completion ConfigMap ([Dynamic per-namespace grants: task completion ConfigMaps](rbac.md#dynamic-per-namespace-grants-task-completion-configmaps)). | Mitigated |
 | A hostile or oversized body reaches the gateway's parsers | Every listener bounds its reads before parsing and fails closed on a body it cannot decode. See [Hostile bodies and the parsers](#hostile-bodies-and-the-parsers). | Mitigated |
-| A compromised console reads credentials or cluster state | The console ServiceAccount reads every Kaalm resource and the Namespace list cluster-wide, creates `TokenReview` and `SubjectAccessReview`, and holds no Secret access. See [What a compromised console gains](#what-a-compromised-console-gains). | Accepted |
+| A compromised console reads credentials or cluster state | The console ServiceAccount reads Agents, AgentTasks, AgentChannels, ModelProviders, and the Namespace list cluster-wide, creates `TokenReview` and `SubjectAccessReview`, and holds no Secret access. See [What a compromised console gains](#what-a-compromised-console-gains). | Accepted |
 
 #### Compromised operator reads credential Secrets
 
@@ -73,7 +73,7 @@ Every listener bounds its reads before parsing: the LLM proxy answers `413` abov
 
 #### What a compromised console gains
 
-The gateway authorizes the console SAN on `POST /v1/test-chat` and `GET /v1/spend`, so a compromised console can wake agents, deliver messages to them and spend their namespaces' budgets, and read spend figures. Test-chat deliveries carry a `/console/{namespace}/{agentName}` channel origin, so they are distinguishable in the gateway's delivery log. Through its own ServiceAccount the console reads the spec and status of every Kaalm resource in every namespace. The component is stateless, and the mitigation matches the other `kaalm-system` components: restrict and audit the namespace, and leave the console disabled where it is not used.
+The gateway authorizes the console SAN on `POST /v1/test-chat` and `GET /v1/spend`, so a compromised console can wake agents, deliver messages to them and spend their namespaces' budgets, and read spend figures. Test-chat deliveries carry a `/console/{namespace}/{agentName}` channel origin, so they are distinguishable in the gateway's delivery log. Through its own ServiceAccount the console reads the spec and status of every Agent, AgentTask, AgentChannel, and ModelProvider in every namespace. The component is stateless, and the mitigation matches the other `kaalm-system` components: restrict and audit the namespace, and leave the console disabled where it is not used.
 
 ## Tenant isolation and budgets
 

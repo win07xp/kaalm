@@ -4,7 +4,7 @@ A persistent Agent that nobody is talking to still costs a Pod. Hibernation recl
 
 Three things have to work for this to be safe. The controller must know when an Agent was last active, it must tear the Pod down without losing state, and something must be able to wake the Agent when its Service has no endpoints to route to. This page covers all three.
 
-Four Agent phases participate: `Running` -> `Idle` -> `Hibernating` -> `Hibernated` -> `Resuming` -> `Running`. The transition triggers themselves are tabulated in the [Agent state machine](agent-lifecycle.md).
+Five Agent phases participate: `Running` -> `Idle` -> `Hibernating` -> `Hibernated` -> `Resuming` -> `Running`. The transition triggers themselves are tabulated in the [Agent state machine](agent-lifecycle.md).
 
 ## Timing knobs
 
@@ -77,7 +77,7 @@ Hibernation presupposes the PVC: `spec.lifecycle.hibernationEnabled: true` with 
 
 ## Wake trigger
 
-When an Agent is `Hibernated`, its ClusterIP Service has no endpoints, so traffic is not routed to it. Nothing in the data path can wake the Agent. The gateway therefore serves as the activator: on a channel message for a `Hibernated` or `Hibernating` Agent it calls `POST /v1/activate/{namespace}/{agentName}` on the controller over mTLS, waits up to `wakeTimeout` for the Agent's Service to become reachable, then delivers the message. The activator client, its TLS, and the failure table are under [The activator](../gateways/user/activation-and-activity.md#the-activator). The full sequence, including the two orderings that surprise readers (the `202` precedes the wake, and the replica that receives the call is not necessarily the one that performs the reconcile), is drawn in [The wake sequence](../gateways/user/activation-and-activity.md#the-wake-sequence).
+When an Agent is `Hibernated`, its ClusterIP Service has no endpoints, so traffic is not routed to it. Nothing in the data path can wake the Agent. The gateway therefore calls the controller's activator: on a channel message for a `Hibernated` or `Hibernating` Agent it calls `POST /v1/activate/{namespace}/{agentName}` on the controller over mTLS, waits up to `wakeTimeout` for the Agent's Service to become reachable, then delivers the message. The activator client, its TLS, and the failure table are under [The activator](../gateways/user/activation-and-activity.md#the-activator). The full sequence, including the two orderings that surprise readers (the `202` precedes the wake, and the replica that receives the call is not necessarily the one that performs the reconcile), is drawn in [The wake sequence](../gateways/user/activation-and-activity.md#the-wake-sequence).
 
 While waiting, the gateway holds the message. Sync callers block, and async callers already hold their `202`. The Discord bot shows as thinking until the reply lands; the WhatsApp adapter has no progress signal.
 

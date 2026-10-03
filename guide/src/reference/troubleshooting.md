@@ -283,8 +283,8 @@ the probe. A ModelProvider reports all of these reasons:
   provider rejected the key on the probe.
 - `SecretNotOptedIn`: a provider may use only a Secret with the label
   `kaalm.io/provider-credential: "true"`. Only the exact value `true` counts.
-  The channel label `kaalm.io/channel-credential` and the workload label
-  `kaalm.io/workload-secret` do not count either.
+  Other labels, such as the channel label `kaalm.io/channel-credential` and the
+  workload label `kaalm.io/workload-secret`, do not count.
 
   ```bash
   kubectl label secret SECRET_NAME -n kaalm-system kaalm.io/provider-credential=true

@@ -4,7 +4,7 @@ This page lists the field-level schema checks and the defaults applied to each k
 
 ## Schema validation
 
-Field-level checks the apiserver enforces from the CRD schema, without a rule number. Each rejects the write at apply time.
+This table lists the field-level checks the apiserver enforces from the CRD schema. They have no rule number, and each rejects the write at apply time.
 
 | Kind | Field | Check |
 |---|---|---|

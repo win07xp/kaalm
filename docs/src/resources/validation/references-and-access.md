@@ -31,7 +31,7 @@ While the check fails, either kind re-checks every 30 seconds, because Secrets a
 
 ## Access gates on providers and tools
 
-These rules and rules 3 and 35 are the gate chain drawn on [Core concepts](../../concepts/core-concepts.md#the-custom-resources): the class allows the provider, the workload asks for it, and the provider admits the namespace. All of them run at reconcile time, because each compares two resources, and all of them share one outcome: `phase=Degraded, reason=ClassConstraintViolation` on an Agent, `phase=Failed` on an AgentTask.
+Rules 4, 5, 36, and 37, with rules 3 and 35, are the gate chain drawn on [Core concepts](../../concepts/core-concepts.md#the-custom-resources): the class allows the provider, the workload asks for it, and the provider admits the namespace. All of them run at reconcile time, because each compares two resources, and all of them share one outcome: `phase=Degraded, reason=ClassConstraintViolation` on an Agent, `phase=Failed` on an AgentTask.
 
 **Rule 4: A provider must admit the workload's namespace.** Every referenced ModelProvider must list the workload's namespace in `allowedNamespaces`.
 

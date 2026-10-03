@@ -31,7 +31,6 @@ What ships is observation. The provider adapters extract server-tool-use counts 
 | Format | Source | `tool` label |
 |---|---|---|
 | Anthropic | `usage.server_tool_use`, cumulative on streamed `message_delta` events | the counter name, for example `web_search_requests` |
-| Vertex | `groundingMetadata.webSearchQueries`, one per executed query | `google_search` |
 | OpenAI chat completions | no usage-level server-tool counts on the paths the gateway proxies | none emitted |
 
 Pricing and enforcement do not ship. Provider-side tool charges are money the budget ledger cannot see, the same gap as usage-less responses under [Hard enforcement](llm/budgets-and-rate-limits.md#hard-enforcement): rule 33 refuses to cap what the ledger prices at zero, and that applies to server tools too. A `serverTools[].costPerCallUSD` facet on the ModelProvider, and stripping or rejecting an undeclared server tool in the request body, are [roadmap](../ROADMAP.md#beyond) items. Provider-side tools have no grant surface of their own: a workload's access is the provider grant chain it already has (`spec.providers`, class `allowedProviders`, provider `allowedNamespaces`).
@@ -150,7 +149,7 @@ MCP revision **2026-07-28** makes the protocol stateless. Kaalm is dual-era for 
 
 Request and response bodies are capped by `gateway.mcpMaxBodyBytes` (default 4 MiB), and each call carries an upstream timeout, `gateway.mcpUpstreamTimeout` (default 120s). Both are separate from the LLM proxy's body and first-byte settings. Over the body cap: `413 request_too_large` for the request, `413 response_too_large` for a buffered response. An SSE stream that passes the cap is cut off, because its status line has already been sent. The timeout is one deadline for each call, response included: exceeding it gives `504 tool_timeout`, retryable.
 
-ToolProvider endpoints are operator-declared configuration, like ModelProvider endpoints, so they get the trust provider endpoints get rather than the full [callback policy](../resources/validation-and-defaulting.md) that user-supplied callback URLs receive. The schema requires `https://`, and the broker never follows redirects, which closes the confused-deputy path a compromised tool server could otherwise open.
+ToolProvider endpoints are operator-declared configuration, like ModelProvider endpoints, so they get the trust provider endpoints get rather than the full callback policy ([rule 22](../resources/validation/channels.md)) that user-supplied callback URLs receive. The schema requires `https://`, and the broker never follows redirects, which closes the confused-deputy path a compromised tool server could otherwise open.
 
 ## Audit and metering
 

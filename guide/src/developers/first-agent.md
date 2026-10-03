@@ -89,17 +89,17 @@ bundle on their own. An image you build yourself reads them as
 [The runtime contract](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/contract.md)
 describes.
 
-## 4. Prove it can reach an LLM
+## 4. How the agent calls a model
 
-The agent calls models through the gateway using a qualified name, for
-example `anthropic-shared/claude-opus-4-6` in the standard `model` field of an
-Anthropic or OpenAI-format request. The gateway holds the API key, so the
-agent never sees it ([Request handling](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/request-handling.md)
-covers the checks). If the agent answers a message, the delivery path works,
-and the base images' `kaalm.gateway` client is already pointed at the LLM
-path.
+The built-in echo handler makes no model call, so an echo reply proves the
+delivery path, not the LLM path. A handler you add calls models through the
+gateway using a qualified name, for example `anthropic-shared/claude-opus-4-6`
+in the standard `model` field of an Anthropic or OpenAI-format request. The
+gateway holds the API key, so the agent never sees it ([Request handling](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/request-handling.md)
+covers the checks). The base images' `kaalm.gateway` client is already pointed
+at the LLM path.
 
-To send it that message from outside the cluster, continue to
+To send the agent a message from outside the cluster, continue to
 [Connecting a channel](connecting-a-channel.md).
 
 ## If it never reaches Running

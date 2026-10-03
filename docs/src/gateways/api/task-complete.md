@@ -1,6 +1,6 @@
 # Task completion
 
-`POST /v1/task/complete` is the internal endpoint an AgentTask's agent container calls to report that its work is finished. It applies only to tasks with `completion.condition: agentReported`; tasks in `exitCode` mode signal completion through container exit and are rejected here with `403 TaskNotAgentReported`. Like the other agent-report endpoints it is mTLS-only: there is no ServiceAccount-bearer alternative, and gateway-only-tier workloads cannot reach it (see [Workload identity](../llm/workload-identity.md) and [Agent to gateway authentication](../../security/rbac.md#agent-to-gateway-authentication)).
+`POST /v1/task/complete` is the internal endpoint an AgentTask's agent container calls to report that its work is finished. It applies only to tasks with `completion.condition: agentReported`; tasks in `exitCode` mode signal completion through container exit and are rejected here with `403 TaskNotAgentReported`. Like the heartbeat endpoint it is mTLS-only: there is no ServiceAccount-bearer alternative, and gateway-only-tier workloads cannot reach it (see [Workload identity](../llm/workload-identity.md) and [Agent to gateway authentication](../../security/rbac.md#agent-to-gateway-authentication)).
 
 **Caller.** The task's agent container, presenting the per-task client certificate whose SAN carries the AgentTask kind, name, and namespace.
 
