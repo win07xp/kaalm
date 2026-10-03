@@ -16,7 +16,7 @@ cert-manager must run with `--enable-certificate-owner-ref=true` (Helm: `extraAr
 4. The chart installs the gateway serving certificate `kaalm-gateway-tls`, issued from `kaalm-ca-issuer`. It serves both gateway listeners; [Where the listener's TLS material comes from](../gateways/listener-tls.md#where-the-listeners-tls-material-comes-from) lists its SANs and the `gateway.externalHostnames` value that extends them.
 5. The chart installs the controller certificate `kaalm-controller-tls`. The controller's `:9443` listener serves it for the activator, and the conversion webhook listener on `:9444` serves the same certificate to the API server. cert-manager's cainjector copies the CA from this Secret's `ca.crt` into each Kaalm CRD's `spec.conversion.webhook.clientConfig.caBundle` and keeps it current ([API versioning and deprecation](../operations/api-versioning.md#where-the-conversion-webhook-runs)).
 6. When the [console](../console/overview.md) is enabled, the chart installs `kaalm-console-tls` from the same issuer. A default install never creates it, so the gateway's console-only routes have no authorized caller.
-7. The [AgentReconciler](../controller/reconcilers/agent.md#agent-certificate) and [AgentTaskReconciler](../controller/reconcilers/agenttask.md#agenttask-certificate) create a `Certificate` per workload and hold the Pod until it is Ready; see [Lifecycle of an Agent TLS serving certificate](#lifecycle-of-an-agent-tls-serving-certificate).
+7. The [AgentReconciler](../controller/reconcilers/agent.md#what-it-checks) and [AgentTaskReconciler](../controller/reconcilers/agenttask.md#agenttask-certificate) create a `Certificate` per workload and hold the Pod until it is Ready; see [Lifecycle of an Agent TLS serving certificate](#lifecycle-of-an-agent-tls-serving-certificate).
 
 The gateway, controller, and console certificates carry `usages: [server auth, client auth]`, because each also presents its certificate as a client on another component's authenticated endpoint ([Internal endpoint authentication](rbac.md#internal-endpoint-authentication)). Neither the gateway nor the controller reads the CA Secret. Their trust material arrives as the projected `kaalm-ca-system` ConfigMap ([Trust bundle projection](#trust-bundle-projection)), so no Kaalm component needs RBAC outside `kaalm-system` for trust distribution.
 
@@ -97,7 +97,7 @@ Both controllers are cluster-critical dependencies. Monitor them as such.
 
 ## Lifecycle of an Agent TLS serving certificate
 
-1. **Created** by the AgentReconciler before the Pod ([AgentReconciler](../controller/reconcilers/agent.md), step 7): a `Certificate` named `{agentName}-tls` in the Agent's namespace with an ownerRef to the Agent, `issuerRef` `kaalm-ca-issuer` (`ClusterIssuer`), SANs `{name}.{namespace}.svc.cluster.local`, `{name}.{namespace}.svc`, and `{name}.{namespace}`, and usages `server auth` and `client auth`.
+1. **Created** by the AgentReconciler before the Pod ([Agent certificate](../controller/reconcilers/agent.md#agent-certificate)): a `Certificate` named `{agentName}-tls` in the Agent's namespace with an ownerRef to the Agent, `issuerRef` `kaalm-ca-issuer` (`ClusterIssuer`), SANs `{name}.{namespace}.svc.cluster.local`, `{name}.{namespace}.svc`, and `{name}.{namespace}`, and usages `server auth` and `client auth`.
 2. **Stored.** cert-manager writes the output Secret, named by `spec.secretName`, `{agentName}-tls-{uid}`, in the Agent's namespace. `{uid}` is the first eight characters of the Agent's `metadata.uid`. The reconciler holds the Pod with `Ready=False, reason=CertificateNotReady`, requeued every five seconds, until the `Certificate` is Ready.
 3. **Mounted** into the Pod at `/var/run/kaalm/tls.crt` and `/var/run/kaalm/tls.key`. The agent serves HTTPS with it and presents it as a client certificate on every call to the gateway.
 4. **Verified** by the gateway against `kaalm-ca` on every inbound call, and on `POST /v1/message` delivery the gateway verifies the agent's serving certificate the same way.
@@ -106,7 +106,7 @@ Both controllers are cluster-critical dependencies. Monitor them as such.
 
 ## Lifecycle of an AgentTask TLS client certificate
 
-1. **Created** by the AgentTaskReconciler ([AgentTaskReconciler](../controller/reconcilers/agenttask.md), step 4): a `Certificate` named `{taskName}-tls` in the task's namespace with an ownerRef to the AgentTask, the same `issuerRef`, one SAN `{taskName}.{namespace}.task.kaalm.io`, and usage `client auth` only. A task has no Service and is never a delivery target, so the certificate never serves TLS.
+1. **Created** by the AgentTaskReconciler ([AgentTask certificate](../controller/reconcilers/agenttask.md#agenttask-certificate)): a `Certificate` named `{taskName}-tls` in the task's namespace with an ownerRef to the AgentTask, the same `issuerRef`, one SAN `{taskName}.{namespace}.task.kaalm.io`, and usage `client auth` only. A task has no Service and is never a delivery target, so the certificate never serves TLS.
 2. **Stored** as `{taskName}-tls-{uid}` in the task's namespace, named by the same rule and held by the same Ready gate as an Agent's.
 3. **Mounted** at the same paths. The task presents the certificate on LLM requests and task completion.
 4. **Verified** by the gateway against `kaalm-ca` on every call, reading the namespace from the SAN.

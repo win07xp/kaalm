@@ -1,18 +1,46 @@
 # AgentClassReconciler
 
-This page specifies the AgentClassReconciler: what one pass does, and the CNI probe behind the `FQDNPolicySupported` condition. What it watches is in [Reconcilers](../reconcilers.md#what-each-reconciler-watches).
+## What it's for
 
-AgentClass has no owned child resources, so a pass validates the class, counts its users, checks certificate cleanup, and writes status.
+The AgentClassReconciler decides whether an [AgentClass](../../resources/agentclass.md) is valid, reports four advisory conditions (FQDN egress support, security baseline, deprecated fields, certificate cleanup), and counts the Agents and AgentTasks that use it. On delete it holds the class while any of them references it, then releases the finalizer ([Cluster-scoped resources](../finalizers.md#cluster-scoped-resources)).
 
-1. Validate references and network fields, collecting every problem: a listed `allowedProviders` or `allowedToolProviders` entry that does not exist, an `allowedCIDRs` entry that does not parse ([rule 19](../../resources/validation/class-policy.md)), and an `allowedHosts` entry that is not a valid DNS name (rule 20). Any problem sets `Ready=False` with a message listing them all, sorted. The reason is `InvalidCIDR` when an `allowedCIDRs` entry is malformed, since that problem sorts first, and `InvalidReference` otherwise.
-2. Write the `FQDNPolicySupported` condition on every pass. With `allowedHosts` empty it is `True, reason=NoHostsRequested`. With hosts listed, the cached result of the CNI probe decides: `True`, or `False, reason=FQDNPolicyUnsupported`, with a `Warning` event of the same reason when the condition first turns `False`. Either way the class still becomes `Ready=True`. The AgentReconciler and AgentTaskReconciler turn the hosts into each workload's CiliumNetworkPolicy when the probe answers `True`, and ignore them otherwise ([FQDN egress policy](../../runtime/child-resources.md#fqdn-egress-policy)). Write the `SecurityBaseline` condition too: `True, reason=RestrictedBaseline`, or `False, reason=BelowRestrictedBaseline` naming each declared `security` field below the restricted Pod Security Standard, with a `Warning` event of the same reason when it first turns `False` ([Pod Security Standards](../../security/model.md#pod-security-standards)). Write the `DeprecatedFields` condition when the class sets a deprecated field (today only `network.allowHostNetwork: true`): `True, reason=DeprecatedFieldSet`, with a `Warning` event of the same reason when it first turns `True`, sent after the status write. Once the field is removed, an existing condition becomes `False, reason=NoDeprecatedFields` and sends no event; a class that never set one gets no condition. It never affects `Ready` ([AgentClass status](../../resources/agentclass.md#status)).
-3. Write the `CertificateCleanup` condition: read the controller's own `kaalm-controller-tls` Secret from the manager cache and report whether it carries an ownerReference to a cert-manager `Certificate`, which tells whether cert-manager runs with `--enable-certificate-owner-ref=true` ([In-cluster TLS](../../security/tls.md#in-cluster-tls)). Informational, like `FQDNPolicySupported`: it never affects `Ready` and emits no Event. See [AgentClass status](../../resources/agentclass.md#status) for the condition's values.
-4. Count the Agents and AgentTasks referencing the class into `status.agentsInUse` and `status.tasksInUse`, and write status.
+## What it owns and watches
 
-On delete, the class is held while either count is above zero; see [Cluster-scoped resources](../finalizers.md#cluster-scoped-resources).
+The reconciler creates no child objects. It reads the providers the class lists, the Agents and AgentTasks that reference it, the controller's own `kaalm-controller-tls` Secret, and the discovery API for the [CNI probe](#cni-fqdn-policy-probe). [What each reconciler watches](../reconcilers.md#what-each-reconciler-watches) lists what re-runs a class, and [AgentClass change handling](../change-propagation.md#agentclass-change-handling) how an edit reaches its workloads.
 
-## CNI FQDN-policy probe
+### CNI FQDN-policy probe
 
-The probe runs the first time a reconciler needs its answer, and its result is cached for the process lifetime. The AgentClass, Agent, and AgentTask reconcilers share one cached probe, so the condition and the policies always agree. The probe asks the apiserver's discovery API for the `cilium.io/v2` group version and reports support only when it serves the `ciliumnetworkpolicies` resource, the type the controller writes with `toFQDNs`. The `cilium.io` group alone is not enough: Tetragon installs CRDs in `cilium.io` (`TracingPolicy`, in `cilium.io/v1alpha1`) on any CNI. A `NotFound` answer for `cilium.io/v2` means unsupported, and that answer is cached. Any other discovery error is not cached; the pass fails and retries.
+The AgentClass, Agent, and AgentTask reconcilers share one probe, so the condition and the policies always agree. It asks the apiserver's discovery API for the `cilium.io/v2` group version and reports support only when it serves `ciliumnetworkpolicies`, the type the controller writes with `toFQDNs`. The `cilium.io` group alone is not enough: Tetragon installs CRDs in `cilium.io` (`TracingPolicy`) on any CNI.
 
-Hostname egress is supported on Cilium only. Every other CNI, Calico Enterprise included, reports unsupported. The probe does not look for Calico: open-source Calico serves the same `crd.projectcalico.org` group but has no domain-based egress, and the controller writes no Calico policy. When the cluster does not serve `ciliumnetworkpolicies` in `cilium.io/v2`, including a Calico or flannel cluster with Tetragon installed, `allowedHosts` has no effect, and a class that sets `allowedHosts` reports `False, reason=FQDNPolicyUnsupported`. Because the probe runs once per process, a CNI change is not picked up until the controller restarts; operators who change their CNI roll the controller Deployment afterwards.
+The controller caches the answer. A `NotFound` answer for `cilium.io/v2` means unsupported. Any other discovery error fails the pass, which retries.
+
+Hostname egress is supported on Cilium only. Every other CNI, Calico Enterprise included, reports unsupported: open-source Calico serves the same `crd.projectcalico.org` group but has no domain-based egress, and the controller writes no Calico policy. There, `allowedHosts` has no effect and a class that sets it reports `False, FQDNPolicyUnsupported`.
+
+## What it checks
+
+The checks don't stop at the first failure, and the `Ready` message lists every problem. The reason is `InvalidCIDR` when any `allowedCIDRs` entry is malformed, and `InvalidReference` otherwise.
+
+| Check | Reason when it fails | Rule |
+|---|---|---|
+| Each `allowedProviders` and `allowedToolProviders` entry names an existing provider; health is not checked | `InvalidReference` | none; see [AgentClass status](../../resources/agentclass.md#status) |
+| Each `allowedCIDRs` entry parses as a CIDR | `InvalidCIDR` | [19](../../resources/validation/class-policy.md) |
+| Each `allowedHosts` entry is a valid DNS name | `InvalidReference` | [20](../../resources/validation/class-policy.md) |
+
+## What it reports
+
+A class has no phase. [AgentClass status](../../resources/agentclass.md#status) lists every condition value.
+
+- **`Ready`** is `True` with `AllReferencesResolved` when every check passes, otherwise `False` with the reason from [What it checks](#what-it-checks), or `DeletionBlocked` while a delete is held.
+- **`FQDNPolicySupported`** is `True, NoHostsRequested` when `allowedHosts` is empty. Otherwise it is the [CNI probe](#cni-fqdn-policy-probe) answer, `True` or `False, FQDNPolicyUnsupported`. The Agent and AgentTask reconcilers write the hosts into a CiliumNetworkPolicy only on `True` ([FQDN egress policy](../../runtime/child-resources.md#fqdn-egress-policy)).
+- **Advisory conditions and counts.** `SecurityBaseline` and `DeprecatedFields` report the class's own spec. `CertificateCleanup` reports, from the controller's `kaalm-controller-tls` Secret, whether cert-manager cleans up workload TLS Secrets. `agentsInUse`, `tasksInUse`, `agentsReplacing`, and `agentsPendingReplacement` count the Agents and AgentTasks that use the class. [AgentClass status](../../resources/agentclass.md#status) gives their values.
+- **Events.** Every `Ready=False` reason raises a Warning event with the same reason, once when it first appears. So do `FQDNPolicySupported` and `SecurityBaseline` when they first turn `False`, and `DeprecatedFields` when it first turns `True`. `CertificateCleanup` raises none.
+
+## Timing
+
+- **A watch event starts every pass,** and no pass schedules a timed re-check. A class turns `Ready` when a missing provider is created, as soon as the controller's cache sees it, and a held delete releases the same way after the last referrer goes.
+- **A failed pass** retries with backoff and writes no status.
+- **A CNI change** shows after a controller restart ([CNI FQDN-policy probe](#cni-fqdn-policy-probe)).
+
+## Design choices
+
+- **The four conditions other than `Ready` are advisory.** A class that relaxes `security` or lists hosts the CNI can't enforce still serves its workloads, and the condition and Warning event make the gap visible.

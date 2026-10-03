@@ -2,7 +2,7 @@
 
 An [AgentTask](../resources/agenttask.md) is a run-to-completion workload: the operator provisions a Pod, the Pod does its work, and the operator records the result; the Pod is removed with the task when its TTL expires. Unlike an Agent, which is long-lived and hibernates between requests, an AgentTask always settles in a terminal phase.
 
-This page covers the AgentTask state machine, how the operator decides a task is done, how artifacts get from the container into `status`, and what happens on a retry. The order in which one reconcile pass runs these steps is under [AgentTaskReconciler](reconcilers/agenttask.md); the wire contract of the completion call is [POST /v1/task/complete](../gateways/api/task-complete.md).
+This page covers the AgentTask state machine, how the operator decides a task is done, how artifacts get from the container into `status`, and what happens on a retry. The checks the reconciler runs before it creates a Pod, and their order, are on the [AgentTaskReconciler](reconcilers/agenttask.md#what-it-checks) page; the wire contract of the completion call is [POST /v1/task/complete](../gateways/api/task-complete.md).
 
 ## State machine
 
@@ -15,7 +15,7 @@ The other lifecycles in the system are indexed on [Lifecycles at a glance](../ap
 | From | To | Trigger |
 |---|---|---|
 | `Pending` | `Provisioning` | The pre-Pod checks pass and the Certificate exists; the task holds in `Provisioning` until the Certificate is Ready. A task whose env Secret is missing or lacks the workload label stays in its phase with `Ready=False, reason=SecretNotOptedIn` (rule 48). |
-| `Pending`, `Provisioning` | `Failed` (terminal) | A class-versus-spec violation under rules 2, 4, 5, 24, 35 to 38, or 47: `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, or `NamespaceNotAllowed` (the class does not admit the task's namespace, and the first check run). Checked whenever no Pod exists, so a retry is validated against the class as it now stands. Not retried. |
+| `Pending`, `Provisioning` | `Failed` (terminal) | A class-versus-spec violation under rules 2 to 5, 24, 35 to 38, or 47: `ClassConstraintViolation`, `PersistenceNotAllowed`, `ToolNotInCatalog`, or `NamespaceNotAllowed` (the class does not admit the task's namespace, and the first check run). Checked whenever no Pod exists, so a retry is validated against the class as it now stands. Not retried. |
 | `Provisioning` | `Running` | The Pod reports Ready. The same status write sets `status.startTime`, and the timeout clock starts. |
 | `Provisioning` | `Failed` | The container image name is invalid or can never be pulled (`InvalidImageName`, `ErrImageNeverPull`); the Pod reaches a terminal phase before Ready (`PodStartFailed`); or the Pod is not Ready five minutes after creation, whatever the cause (`ProvisioningDeadlineExceeded`). Retryable. An `exitCode` task whose Pod exits 0 before Ready goes to `Completing` instead. |
 | `Running` | `Completing` | The completion mailbox holds a payload (`agentReported`), the container exits (`exitCode`), or the timeout elapses. |

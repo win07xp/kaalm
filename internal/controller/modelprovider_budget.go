@@ -60,7 +60,8 @@ func (r *ModelProviderReconciler) gatewayPods(ctx context.Context) (names map[st
 }
 
 // setGatewayReachable mirrors the cluster-wide gateway readiness onto this
-// provider's status for kubectl-describe visibility (reconciler step 3).
+// provider's status for kubectl-describe visibility (GatewayReachable under
+// What it reports in docs/src/controller/reconcilers/modelprovider.md).
 func (r *ModelProviderReconciler) setGatewayReachable(mp *kaalmv1beta1.ModelProvider, ready int) {
 	cond := metav1.Condition{Type: kaalmv1beta1.ConditionGatewayReachable}
 	if ready >= 1 {

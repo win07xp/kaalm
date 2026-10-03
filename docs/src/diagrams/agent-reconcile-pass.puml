@@ -42,7 +42,7 @@ partition "5 to 7: hibernation, gates, Certificate" {
     :Ready=False; requeue 30s\nfor an unwatched object;
     kill
   elseif (Certificate Ready?) then (no)
-    :Provisioning\nrequeue 5s;
+    :Pending to Provisioning\nrequeue 5s;
     kill
   else (yes)
   endif

@@ -110,5 +110,3 @@ Operational uses include pre-warming an agent before expected traffic or forcing
 The wake sets `status.lastActivityTime` because the message that woke the agent is activity, but the gateway records it only once delivery succeeds, after the Pod is Ready, and the controller's activity read is cached per namespace. Without the write, an agent that slept longer than `idleTimeout + hibernationDelay` would go straight back through `Idle` to `Hibernating` after answering one message.
 
 A `kaalm.io/wake-trigger` annotation left on an Agent with no `kaalm.io/wake=true` request is stale: the reconciler removes it on its next pass, before it can label a later manual wake as a channel wake.
-
-See [AgentReconciler](reconcilers/agent.md) step 1 for the implementation detail.

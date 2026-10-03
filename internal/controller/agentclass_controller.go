@@ -44,7 +44,7 @@ import (
 
 // AgentClassReconciler validates an AgentClass, counts its users, and holds it in
 // Terminating while any workload still references it. See
-// docs/src/controller/reconcilers.md (AgentClassReconciler).
+// docs/src/controller/reconcilers/agentclass.md.
 type AgentClassReconciler struct {
 	client.Client
 	Recorder record.EventRecorder

@@ -50,8 +50,8 @@ const defaultHealthInterval = 60 * time.Second
 // ModelProviderReconciler validates a ModelProvider's credentials, fallback tree,
 // and degrade targets, reduces its budget partials, mirrors GatewayReachable
 // from gateway Pod readiness, probes it for liveness, and holds it in
-// Terminating while referenced. See docs/src/controller/reconcilers.md
-// (ModelProviderReconciler).
+// Terminating while referenced. See
+// docs/src/controller/reconcilers/modelprovider.md.
 type ModelProviderReconciler struct {
 	client.Client
 	Recorder record.EventRecorder

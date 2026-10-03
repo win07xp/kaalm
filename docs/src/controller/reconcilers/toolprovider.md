@@ -1,11 +1,39 @@
 # ToolProviderReconciler
 
-This page specifies the ToolProviderReconciler: what one pass does. What it watches is in [Reconcilers](../reconcilers.md#what-each-reconciler-watches).
+## What it's for
 
-Reconciliation is the [ModelProviderReconciler](modelprovider.md)'s pass without budgets, fallback, and the gateway mirror:
+The ToolProviderReconciler decides whether a [ToolProvider](../../resources/toolprovider.md) is `Ready`: its optional credential must pass rules 49 and 50, and the server must not reject it. It probes the server over MCP, reports the server's liveness on `Healthy`, and records the MCP revision it speaks in `status.mcpRevision`. On delete it [holds](../finalizers.md#cluster-scoped-resources) the ToolProvider while any Agent, AgentTask, or AgentClass references it.
 
-1. **Credentials.** Resolve `spec.credentialsRef` only when set, and only from the operator namespace: a same-named Secret in a tenant namespace never satisfies the ref. The Secret passes the same credential checks as on ModelProvider (rules 49 and 50, [Provider credentials](../../resources/validation/providers.md#provider-credentials)), and a failure ends the pass before the probe. A nil ref is valid, since unauthenticated servers exist; the probe then carries no credential, and the Ready message says so.
-2. **Liveness probe**, when `healthCheck.enabled` (a nil block defaults to enabled, as on ModelProvider), bounded by `healthCheck.timeoutSeconds` (default 10s). The probe connects to `spec.endpoint` with the tool credential as `Authorization: Bearer <credential>`, and never follows a redirect. It speaks MCP in whichever revision the server does ([Protocol revisions](../../gateways/tool-plane.md#protocol-revisions)). Success sets `Healthy=True, reason=UpstreamReachable` and records the negotiated revision in `status.mcpRevision`; a failed probe keeps the last recorded revision. Failures, events, and requeue follow the [ModelProvider probe table](modelprovider.md#liveness-probe): a `401` or `403` anywhere in the sequence sets `CredentialsInvalid` and ends the pass, and any other failure sets `ProviderUnhealthy`. The probe backs off while it fails ([Probe backoff](modelprovider.md#probe-backoff)) and uses the ModelProvider's trust pool ([Probe TLS trust](modelprovider.md#probe-tls-trust)).
-3. **Ready.** Set `Ready=True, reason=CredentialsValid`.
+## What it owns and watches
 
-On delete, the reconciler holds the ToolProvider while any Agent, AgentTask, or AgentClass references it ([Cluster-scoped resources](../finalizers.md#cluster-scoped-resources)). The grant checks of rules 35 to 38 run on the workload reconcilers, not here, exactly as the provider checks of rules 3 to 5 do. The broker on the gateway enforces the grants at call time; see [The broker](../../gateways/tool-plane.md#the-broker).
+It owns nothing. It reads the credential Secret from `kaalm-system` only, so a same-named tenant Secret never satisfies the ref. [What each reconciler watches](../reconcilers.md#what-each-reconciler-watches) lists what re-runs it.
+
+## What it checks
+
+The first failing check sets `Ready=False` with its reason code and ends the pass, so the probe never sends a credential the Secret has not approved. No `credentialsRef` is valid: the Secret checks are skipped and the probe sends no credential.
+
+| Check | Reason when it fails | Rule |
+|---|---|---|
+| The Secret exists | `CredentialsMissing` | |
+| It carries the label `kaalm.io/provider-credential: "true"` | `SecretNotOptedIn` | [49](../../resources/validation/providers.md#provider-credentials) |
+| Its `kaalm.io/provider-hosts` annotation lists the `spec.endpoint` host | `EndpointHostNotApproved` | [50](../../resources/validation/providers.md#provider-credentials) |
+| It holds the key, non-empty | `CredentialsMissing` | |
+| The probe gets no `401` or `403` | `CredentialsInvalid` | |
+
+The probe runs unless `healthCheck.enabled` is `false`. It sends `Authorization: Bearer <credential>` to `spec.endpoint`, never follows a redirect, and speaks MCP in whichever revision the server does ([Protocol revisions](../../gateways/tool-plane.md#protocol-revisions)). Its outcomes and timeout are the [ModelProvider probe](modelprovider.md#liveness-probe)'s, and it uses the same [trust pool](modelprovider.md#probe-tls-trust).
+
+Rules 35 to 38, the tool grants, are checked on the [Agent](agent.md) and [AgentTask](agenttask.md) reconcilers, not here, and the gateway's [broker](../../gateways/tool-plane.md#the-broker) enforces them at call time.
+
+## What it reports
+
+`Ready` is `True` with `CredentialsValid` when no check fails, also while `Healthy` is `False` for `ProviderUnhealthy`. Otherwise it carries the table's reason, or `DeletionBlocked` during a delete hold. A `Warning` event with the reason fires when a `Ready=False` reason first appears, and `ProviderUnhealthy` fires on every failing probe pass. [Status](../../resources/toolprovider.md#status) lists the rest.
+
+## Timing
+
+- **A spec, Secret, or referrer change** re-runs the pass at once, without waiting out a probe backoff. A failed Secret check has no timed re-check.
+- **A probed server**, including one that answers `CredentialsInvalid`, is re-probed every `healthCheck.intervalSeconds` (default 60), and a failing probe [backs off](modelprovider.md#probe-backoff), so a recovered server can take up to the backoff cap (10 minutes at the default interval) to show `Healthy`. With the probe disabled, nothing re-probes.
+
+## Design choices
+
+- **`credentialsRef` is optional**, because unauthenticated servers exist ([Credential scoping](../../resources/toolprovider.md#credential-scoping-and-why-the-ref-is-optional)).
+- **The probe speaks MCP**, because an HTTP 200 proves nothing about a tool server ([The probe speaks MCP](../../resources/toolprovider.md#the-probe-speaks-mcp)).

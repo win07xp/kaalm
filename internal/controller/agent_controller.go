@@ -69,7 +69,7 @@ var gateRequeue = 30 * time.Second
 // Provisioning -> Running path of the Agent state machine plus Degraded,
 // Failed, and Terminating. The Idle/Hibernation cycle, activity fan-out, and
 // wake handling are gateway-coupled and land in a later phase. See
-// docs/src/controller/reconcilers.md (AgentReconciler).
+// docs/src/controller/reconcilers/agent.md.
 type AgentReconciler struct {
 	client.Client
 	Recorder record.EventRecorder
