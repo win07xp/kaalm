@@ -30,7 +30,7 @@ import (
 // controller's client cert, SAN verification pinned to the Service DNS) at
 // GET /v1/channels/health, with the same 15-second per-namespace cache. See
 // docs/src/gateways/user/platform-adapters.md (Channel Health Tracking) and
-// docs/src/controller/reconcilers.md (Channel health poll).
+// docs/src/controller/reconcilers/agentchannel.md (Channel health poll).
 type GatewayChannelHealthClient struct {
 	Reader            client.Reader
 	OperatorNamespace string
