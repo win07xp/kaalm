@@ -75,7 +75,7 @@ Some changes exclude the Agent rather than constrain its derived Pod spec. The r
 6. `spec.handler` set while the class has `image.allowHandlerMounts: false` (rule 30).
 7. The class sets `allowedNamespaces` and none of its patterns matches the Agent's namespace (rule 47). The Pod keeps running, but the gateway refuses the Agent's LLM and tool calls, as it does when a provider drops the namespace. Adding the namespace back, or removing the field, restores the prior phase. Rule 47 is the first check, so it is the reported reason when several mismatches exist.
 
-The reasons, the `preDegradedPhase` bookkeeping, per-mismatch recovery, and what happens to the Pod meanwhile are specified under [Degraded](agent-lifecycle.md#degraded). The controller restores the prior phase on the next pass after every mismatch has cleared, whichever side is aligned. Recoverable runtime issues (a transient provider outage, budget exhaustion) are a different bucket: they set a `Degraded` condition without changing the phase, see [Error handling](operations.md#error-handling).
+The reasons, the `preDegradedPhase` bookkeeping, per-mismatch recovery, and what happens to the Pod meanwhile are specified under [Degraded](agent-lifecycle.md#degraded). The controller restores the prior phase on the next pass after every mismatch has cleared, whichever side is aligned. A provider budget that blocks the namespace is a different bucket: it sets the `Degraded` condition with `reason=BudgetExhausted` and leaves the phase alone. An unhealthy provider shows on the `ProvidersReady` condition instead, see [Error handling](operations.md#error-handling).
 
 ### Bucket 3: routing-concern changes
 
