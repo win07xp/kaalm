@@ -84,7 +84,7 @@ type ChannelHealthClient interface {
 
 // AgentChannelReconciler validates channels, scopes credential access, reports
 // status, and coordinates the delete handshake. It owns no Pods. See
-// docs/src/controller/reconcilers.md (AgentChannelReconciler).
+// docs/src/controller/reconcilers/agentchannel.md.
 type AgentChannelReconciler struct {
 	client.Client
 	Recorder          record.EventRecorder
