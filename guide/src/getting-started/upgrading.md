@@ -14,8 +14,9 @@ helm pull oci://ghcr.io/win07xp/charts/kaalm --version VERSION --untar
 kubectl apply --server-side --force-conflicts -f kaalm/crds/
 ```
 
-`--force-conflicts` is part of the command: Helm is the field manager for every CRD field from
-the install, and the first server-side apply takes that management over.
+`--force-conflicts` is part of the command: Helm is the field manager for every
+CRD field from the install, and the first server-side apply takes that
+management over.
 
 Replace `VERSION` with the release you are upgrading to, listed on the
 [Releases page](https://github.com/win07xp/kaalm/releases). If you work from
@@ -33,9 +34,9 @@ helm upgrade kaalm oci://ghcr.io/win07xp/charts/kaalm \
 
 Pass the same `--set` values as your install; `helm upgrade` resets anything
 you leave out to the chart's defaults. With `--wait`, the command returns when
-the controller and gateway rollouts are complete. Values whose change has
-workload-visible effects are listed under Helm chart upgrades on the design
-book's Deployment page.
+the controller and gateway rollouts are complete. The design book's
+[Deployment](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#helm-chart-upgrades)
+page lists the values whose change has workload-visible effects.
 
 Running agents are not restarted by either step. The controller replaces an
 agent Pod only when the Pod's own spec changes, and a Kaalm upgrade does not
@@ -70,23 +71,22 @@ one window to know about.
 **Between step 1 and step 2**, reads at `v1alpha1` keep working, but a write
 at `v1alpha1`, including `kubectl apply` of an existing manifest, and a read
 at `v1beta1` of an object still stored at `v1alpha1` fail with a conversion
-error: the new CRDs already store at `v1beta1`, and no replica of the old
-controller serves the conversion webhook. The old controller's own status
-writes hit the same error, so expect reconcile errors in its log and
-`Warning` events on workloads for the length of the rollout, typically under
-a minute. Everything recovers on its own the moment the first new replica is
-Ready; nothing needs to be reapplied. The gateway does not write these
-objects, so message delivery and LLM traffic continue throughout.
+error, because no replica of the old controller serves the conversion webhook.
+The old controller's own status writes fail the same way, so expect reconcile
+errors in its log and `Warning` events on workloads for the length of the
+rollout, typically under a minute. Everything recovers on its own the moment
+the first new replica is Ready; nothing needs to be reapplied. Message
+delivery and LLM traffic continue throughout. The design book explains the
+window on
+[API versioning and deprecation](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/api-versioning.md#upgrading-in-place).
 
 During the upgrade, Helm reports that it skipped deleting the `standard`
 AgentClass. That is expected: the chart leaves its sample class alone for
-this one upgrade (nothing can read or write it until the new controller is
-up) and adopts it again on your next `helm upgrade`. The class stays in
-place throughout.
+this one upgrade and adopts it again on your next `helm upgrade`. The class
+stays in place throughout.
 
 **After step 2**, verify the storage migration finished. The controller
-replica that wins leader election rewrites every stored object at `v1beta1`
-and then trims each CRD's status, retrying with backoff if a pass fails:
+migrates the stored objects to `v1beta1` on its own:
 
 ```bash
 kubectl get crd agents.kaalm.io -o jsonpath='{.status.storedVersions}'
@@ -170,24 +170,20 @@ stops routing to it until you label the Secret.
    more than one host, separate the names with commas. HMAC callbacks need no
    annotation.
 
-On its first pass after the upgrade, the controller shrinks each channel's
-`-creds` Role to the labeled Secrets and creates a controller-only `-check`
-Role and RoleBinding beside it. No `roleRef` changes. A channel that fails a
-check is re-checked every minute, so a Secret you label after the upgrade
-brings its channel back to `Ready=True` within a minute, or at once when you
-edit the channel.
+A channel that fails a check is re-checked every minute, so a Secret you label
+after the upgrade brings its channel back to `Ready=True` within a minute, or
+at once when you edit the channel. The controller also narrows the channel's
+credential Role to the labeled Secrets; the design book lists the Roles on
+[RBAC and authentication](https://github.com/win07xp/kaalm/blob/main/docs/src/security/rbac.md#operator-serviceaccount).
 
 ### Label workload Secrets
 
 After the upgrade, an Agent whose `spec.env` names a Secret without the
 workload label shows `Ready=False` with the reason `SecretNotOptedIn` and a
-`Warning` event. The Agent keeps its phase and its running Pod, and the
-controller makes no replacement Pod until you label the Secret. While the
-label is missing, the controller also makes no idle or hibernation transition
-for the Agent and does not update its phase from the Pod, so the Pod keeps
-running. A finished
-AgentTask needs nothing. A pending or retrying AgentTask waits without
-failing.
+`Warning` event. The Agent keeps its phase and its running Pod. Until you
+label the Secret, the controller makes no replacement Pod, no idle or
+hibernation transition, and no phase update from the Pod. A finished AgentTask
+needs nothing. A pending or retrying AgentTask waits without failing.
 
 1. List the Secrets that Agents and AgentTasks read in `spec.env`. Each row
    shows the namespace, the workload, and the Secret names:
@@ -216,11 +212,10 @@ workload's Pod already holds its value in the environment:
    Pod, delete the task.
 2. Rotate the Secret.
 
-On its first pass after the upgrade, the controller creates a controller-only
-Role and RoleBinding pair for each workload that reads a Secret, named
-`kaalm-agent-NAME-envsecrets` or `kaalm-task-NAME-envsecrets`. No existing
-object changes. A workload that fails the check is re-checked every 30 seconds,
-so a Secret you label after the upgrade clears the workload on the next pass.
+A workload that fails the check is re-checked every 30 seconds, so a Secret you
+label after the upgrade clears the workload on the next pass. The controller
+also creates a Role and RoleBinding for each workload that reads a Secret
+(see [RBAC and authentication](https://github.com/win07xp/kaalm/blob/main/docs/src/security/rbac.md#operator-serviceaccount)).
 
 ### Label provider and tool Secrets
 
@@ -292,11 +287,9 @@ its certificate to a Secret named `{name}-tls-` plus the first eight characters
 of the workload's UID, such as `support-assistant-tls-3f9c2a1e`. The
 Certificate is still named `{name}-tls`. A workload whose Certificate existed
 before the upgrade keeps its `{name}-tls` Secret, and the upgrade doesn't
-replace its Pods. A workload that had no Certificate yet, such as an Agent that
-has been `Degraded` since it was created or an AgentTask still `Pending`, gets
-the UID-suffixed name when the controller creates its Certificate. An Agent that
-became `Degraded` later, for example from `Running`, already has its
-Certificate and keeps `{name}-tls`.
+replace its Pods. A workload that had no Certificate yet, such as an AgentTask
+still `Pending`, gets the UID-suffixed name when the controller creates its
+Certificate.
 
 A script or Pod that reads a workload's TLS Secret by name should read
 `spec.secretName` from the workload's Certificate instead:

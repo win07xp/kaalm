@@ -34,9 +34,8 @@ The gateway also exposes a Service:
 kubectl get svc -n kaalm-system kaalm-gateway
 ```
 
-with three ports: `8080` (the User listener, inbound webhooks), `8443` (the
-cluster listener: LLM calls, task completion, the tool plane, and the internal
-endpoints), and `9090` (metrics):
+with three ports: `8080` (the User listener, for inbound webhooks), `8443` (the
+cluster listener, for traffic inside the cluster), and `9090` (metrics):
 
 ```text
 NAME            TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)                      AGE
@@ -67,12 +66,13 @@ deleting an Agent or AgentTask deletes its TLS Secret; `False` means the
 Secret is left behind and cert-manager needs the flag set.
 
 ```text
-NAME       AGENTS   TASKS   AGE
-standard                    28s
+NAME       AGENTS   TASKS   REPLACING   AGE
+standard                                28s
 ```
 
-A Ready condition on the class means the controller has reconciled it; the
-empty `AGENTS` and `TASKS` columns fill in as workloads use the class. The
+A Ready condition on the class means the controller has reconciled it. The
+empty `AGENTS` and `TASKS` columns fill in as workloads use the class;
+`REPLACING` counts Agents whose Pod is being replaced after a spec change. The
 class allows any image, storage, and hibernation, but it lists no
 ModelProvider and no ToolProvider, so an Agent that names a provider under it
 goes `Degraded` until the platform team names one
