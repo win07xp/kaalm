@@ -177,6 +177,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 
 | Condition | Caller sees |
 |---|---|
+| Method other than `POST` | `405 invalid_request` |
 | Unknown ToolProvider name in the path | `400 invalid_request` |
 | Namespace, grant, or class gate fails | `403 access_denied`, the type the LLM tenancy chain uses |
 | Tool outside the grant or catalog | `403 tool_denied` |
