@@ -2,15 +2,23 @@
 
 The LLM Gateway is the shared cluster-level component responsible for mediating LLM traffic between agent containers and upstream providers. It is where spend tracking, budget guardrails (soft by default, hard by opt-in), rate limiting, fallback, and credential isolation live.
 
-The pages in this chapter follow a single request through the gateway. [Request handling](request-handling.md#request-flow) walks the end-to-end request flow, streaming, and model identification; [Workload identity](workload-identity.md) covers how the gateway establishes which namespace a caller belongs to; and [TLS on the cluster listener](../listener-tls.md) covers the certificates and per-path client-auth rules on the listener itself. [Provider routing and adapters](provider-routing.md) covers picking a ModelProvider and speaking its wire format, [Budgets and rate limits](budgets-and-rate-limits.md#budget-state-management) covers spend accounting and throttling, and [Fallback logic](fallback.md) covers what happens when the chosen provider fails. [LLM Gateway operations](operations.md#gateway-readiness) collects readiness, observability, and failure modes.
+The pages in this chapter follow one request through the gateway:
+
+- [Request handling](request-handling.md#request-flow): the end-to-end flow, streaming, and model identification.
+- [Workload identity](workload-identity.md): how the gateway establishes which namespace a caller belongs to.
+- [TLS on the cluster listener](../listener-tls.md): the certificates and per-path client-auth rules on the listener itself.
+- [Provider routing and adapters](provider-routing.md): picking a ModelProvider and speaking its wire format.
+- [Budgets and rate limits](budgets-and-rate-limits.md#budget-state-management): spend accounting and throttling.
+- [Fallback logic](fallback.md): what happens when the chosen provider fails.
+- [LLM Gateway operations](operations.md#gateway-readiness): readiness, observability, and failure modes.
 
 For the User Gateway (channel message delivery, activator, activity tracking), see [User Gateway](../user/overview.md). For the HTTP endpoint contracts agents use, see [HTTP API](../api/overview.md).
 
 ## Why a shared gateway
 
-Agent containers need to call LLM providers. Doing this naively (agents holding API keys and calling providers directly) gives up all centralized control: no spend visibility, no fallback, no per-namespace accounting, and every agent image must embed credentials. Kaalm interposes on LLM traffic to deliver ModelProvider guarantees.
+If agents held API keys and called providers directly, there would be no spend visibility, no fallback, no per-namespace accounting, and every agent image would embed credentials. Kaalm interposes on LLM traffic to deliver ModelProvider guarantees.
 
-Similarly, agents need to be reachable from user-facing platforms (Discord, WhatsApp, webhooks). Rather than requiring each developer to build their own webhook receiver and protocol adapter, Kaalm provides a shared channel ingress point.
+Agents also need to be reachable from user-facing platforms (Discord, WhatsApp, webhooks). Rather than having each developer build a webhook receiver and protocol adapter, Kaalm provides a shared channel ingress point.
 
 ### Architecture option analysis
 
@@ -36,7 +44,7 @@ One replicated proxy Deployment in `kaalm-system`.
 
 Pros: Credentials never leave `kaalm-system`. NetworkPolicy cleanly isolates agent Pods (deny all egress to LLM provider IPs; allow egress to the gateway Service, which is cross-Pod and fully enforceable). Budget state is centralized in one component: cross-replica reconciliation reduces to a single per-provider ConfigMap exchange with a bounded staleness window (see [Budget state management](budgets-and-rate-limits.md#budget-state-management)), rather than the per-sidecar eventual-consistency mesh Option A would require. The gateway also serves as the activator for hibernated agents. SPOF concern is addressed with 2-3 replicas, a PodDisruptionBudget (`minAvailable: 1`), and `maxUnavailable: 1` rolling updates.
 
-**Kaalm ships Option C.** The per-Pod sidecar pattern was rejected because the same-Pod network namespace sharing undermines the credential isolation guarantee on standard Kubernetes clusters without a service mesh.
+**Kaalm ships Option C.** Option A shares a network namespace between the proxy and the agent, which undermines credential isolation on standard Kubernetes clusters without a service mesh.
 
 ## Gateway architecture
 
@@ -44,4 +52,4 @@ The gateway process hosts both listeners and the activator. The cluster listener
 
 ![The Kaalm Gateway process in kaalm-system, containing three subsystems. The Cluster Listener runs a request pipeline that descends from request validator to model allow-list check, namespace access check, budget check and policy enforcement, rate limiter, upstream router with fallback, and provider adapter, which egresses to the LLM Provider APIs. The provider response returns into a second column: response relay, then token counter (post-call), then spend state update. The User Gateway Listener and the Activator / Activity Store share the same process and are covered in the User Gateway chapter.](../../diagrams/llm-gateway-pipeline.svg)
 
-Reading the diagram: the left column is the outbound request path and the right column is the return path. The provider adapter is the egress point, and everything after the response relay is post-call accounting, which is why token counting and the spend update sit outside the request's own latency path.
+In the diagram, the left column is the outbound request path and the right column is the return path. The provider adapter is the egress point, and everything after the response relay is post-call accounting, so token counting and the spend update sit outside the request's own latency path.
