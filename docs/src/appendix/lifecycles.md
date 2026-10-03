@@ -1,6 +1,6 @@
 # Lifecycles at a glance
 
-Every state machine in Kaalm is drawn once, on the page that specifies it. This page indexes them so you can find the states a thing can be in without knowing the book's layout.
+Every state machine in Kaalm is drawn once, on the page that specifies it. This page indexes them.
 
 ## Workload phase machines
 
@@ -14,7 +14,7 @@ The CRD schema does not constrain `status.phase`: the field is a plain string wi
 
 ## Platform resources without a phase
 
-`AgentClass`, `ModelProvider`, and `ToolProvider` have no `status.phase`: they are configuration, not workloads, so nothing about them starts, idles, or terminates. Their observed state is carried by conditions: `Ready` on all three; `FQDNPolicySupported` on AgentClass ([AgentClassReconciler](../controller/reconcilers/agentclass.md)); `Healthy` on both providers; `GatewayReachable` and `BoundaryMarginRaised` on ModelProvider ([ModelProviderReconciler](../controller/reconcilers/modelprovider.md), [ModelProvider status](../resources/modelprovider.md#status)).
+`AgentClass`, `ModelProvider`, and `ToolProvider` have no `status.phase`: they are configuration, not workloads. Their observed state is carried by conditions: `Ready` on all three; `FQDNPolicySupported` on AgentClass ([AgentClassReconciler](../controller/reconcilers/agentclass.md)); `Healthy` on both providers; `GatewayReachable` and `BoundaryMarginRaised` on ModelProvider ([ModelProviderReconciler](../controller/reconcilers/modelprovider.md), [ModelProvider status](../resources/modelprovider.md#status)).
 
 ModelProvider carries one state machine, per namespace and period: the budget state `Normal`, `Throttled`, `Blocked`, monotonic within a period and reset only by the rollover, drawn under [ModelProvider status](../resources/modelprovider.md#status).
 

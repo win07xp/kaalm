@@ -1,6 +1,6 @@
 # Finalizers
 
-A finalizer is a marker on a resource that blocks the apiserver from deleting it. When you delete a resource that carries one, the apiserver sets a deletion timestamp and stops there. The object stays visible and readable until the controller responsible for it does its cleanup work and removes its finalizer entry. Only then does the object disappear.
+A finalizer is a marker on a resource that blocks the apiserver from deleting it. The apiserver sets a deletion timestamp, and the object stays readable until its controller finishes cleanup and removes the finalizer entry.
 
 Kaalm uses finalizers for two jobs: to run teardown that the garbage collector cannot express (terminating a Pod, changing what cascade GC does, sweeping resources in another namespace), and to hold a resource while something still depends on it.
 
@@ -26,17 +26,17 @@ The finalizer runs in this order, each step on its own pass:
 
 ![Flowchart of Agent deletion under the finalizer. The deletion timestamp is set and the finalizer holds the Agent; the phase becomes Terminating with preDegradedPhase cleared. Pod row: if a Pod exists it is deleted and the pass waits for the watch. PVC row: a PVC that Kaalm did not provision is left alone; a Kaalm-provisioned PVC under pvcRetention Retain has the Agent's ownerRef removed; under Delete it is left as is. Then the finalizer is removed and the apiserver deletes the Agent.](../diagrams/agent-finalizer-pvc.svg)
 
-Retention is not a flag the garbage collector reads. It is implemented by rewriting the ownership graph while the finalizer still holds the Agent, so that cascade GC reaches a different conclusion on its own. The order of the two writes is the point: once the finalizer entry is gone the object can vanish at any moment, so the ownerRef edit lands first.
+Retention is not a flag the garbage collector reads. The finalizer rewrites the ownership graph while it still holds the Agent, so cascade GC reaches a different conclusion on its own. The ownerRef edit lands before the finalizer is removed, because once the entry is gone the Agent can vanish at any moment.
 
 `pvcRetention` governs the per-Agent PVC only. A PVC named by [`spec.persistence.existingClaim`](../resources/agent.md) never received an ownerRef and is untouched under either setting, and `PersistentVolume.persistentVolumeReclaimPolicy`, which governs the PV when a PVC is deleted, is independent of it.
 
 ## AgentTask
 
-The finalizer deletes the Pod if one exists, waits for it to go, and releases. Nothing else is swept: every other child (the Certificate, ServiceAccount, and NetworkPolicy always, the PVC when persistence is enabled, and the completion ConfigMap with its Role and RoleBinding for `agentReported` tasks) is owner-referenced to the AgentTask and removed by cascade GC; see [Child resources](../runtime/child-resources.md).
+The finalizer deletes the Pod if one exists, waits for it to go, and releases. Every other child is owner-referenced to the AgentTask and removed by cascade GC; see [Child resources](../runtime/child-resources.md).
 
 ## Cluster-scoped resources
 
-ModelProvider, ToolProvider, and AgentClass are cluster-scoped and carry no phase. On delete, the reconciler keeps the finalizer while a referrer exists, so the object keeps its deletion timestamp and stays readable, and releases it on the pass after the last reference clears (the referrers' watches re-enqueue the resource).
+ModelProvider, ToolProvider, and AgentClass are cluster-scoped and carry no phase. On delete, the reconciler keeps the finalizer while a referrer exists, so the object stays readable, and releases it on the pass after the last reference clears.
 
 | Resource | Pinned by | Fields checked |
 |---|---|---|
@@ -44,7 +44,7 @@ ModelProvider, ToolProvider, and AgentClass are cluster-scoped and carry no phas
 | ToolProvider | any Agent or AgentTask, or any AgentClass | `spec.tools[].providerRef`, `spec.allowedToolProviders` |
 | AgentClass | any Agent or AgentTask | `spec.agentClassRef` |
 
-The hold is by reference, not by validity: a workload whose reference violates a validation rule still pins its provider or class. While the hold lasts, the reconciler sets `Ready=False, reason=DeletionBlocked`, with a message naming one referrer (or, with more than one, the total count and the first) so `kubectl describe` and a hung `kubectl delete` both point somewhere useful. The named referrer is the first in the order Agents, then AgentTasks, then AgentClasses, each sorted by name. A `Warning` event with the same reason and message fires when the hold first appears; the condition is rewritten only when the message changes, such as when the count drops.
+The hold is by reference, not by validity: a workload whose reference violates a validation rule still pins its provider or class. While the hold lasts, the reconciler sets `Ready=False, reason=DeletionBlocked`. The condition message names a referrer, and the total count when more than one object holds the delete, so `kubectl describe` and a hung `kubectl delete` both point somewhere useful. A `Warning` event with the same reason fires when the hold first appears.
 
 No gateway-side teardown is needed for a provider. The gateway's own watch drops it from its routing table, and its credential Secret is an independent resource the platform team deletes separately. Gateway-only-tier callers hold no Agent or AgentTask reference and never block a delete; their next request to a deleted provider fails with `400 invalid_request`.
 
@@ -55,21 +55,21 @@ Deleting a channel is a handshake with the gateway, because the channel's async 
 ![Sequence diagram of AgentChannel deletion with two gateway replicas. The reconciler sets status.phase to Terminating; both replicas see it in their watch and answer 401 on the channel's path; the first replica to see it writes the channel-disconnected annotation. The reconciler proceeds when it sees the annotation, or 30 seconds after the deletion timestamp without it, then deletes the kaalm-async-* ConfigMaps by the channel's labels and removes the finalizer.](../diagrams/channel-delete-handshake.svg)
 
 1. The reconciler sets `status.phase: Terminating`.
-2. Every gateway replica sees the phase in its watch and rejects further inbound requests on the channel's path with `401`, so it creates no new `kaalm-async-*` record. The gate is the intake handler's, so it costs nothing extra.
-3. The first replica to see the phase, whether through an Add or an Update event, writes the `kaalm.io/channel-disconnected: "true"` annotation on the channel. Handling Add as well as Update means a replica that starts or re-lists after the phase already flipped to `Terminating` still writes the annotation.
-4. The reconciler proceeds when it sees the annotation, checking every two seconds, or 30 seconds after the deletion timestamp without it, so a dead gateway cannot wedge the delete.
+2. Every gateway replica sees the phase in its watch and rejects further inbound requests on the channel's path with `401`, so it creates no new `kaalm-async-*` record.
+3. The first replica to see the phase writes the `kaalm.io/channel-disconnected: "true"` annotation on the channel, including a replica that starts after the phase flipped to `Terminating`.
+4. The reconciler proceeds when it sees the annotation, or 30 seconds after the deletion timestamp without it, so a dead gateway cannot wedge the delete.
 5. It deletes every `kaalm-async-*` ConfigMap in `kaalm-system` carrying the channel's `kaalm.io/channel-namespace` and `kaalm.io/channel-name` labels, expired or not.
 6. It removes the finalizer and the apiserver deletes the channel.
 
-The confirmation is one annotation written by whichever replica saw the phase first, not one per replica, so a replica that has not seen `Terminating` can still create a `kaalm-async-*` record after the sweep; the same holds on the timeout branch. Records are created only at intake, behind the write gate described under [Response persistence](../gateways/api/async-responses.md#response-persistence), and after that are only patched: a `Patch` on a deleted record fails and does not recreate it. Every record expires 1 hour after creation. The [async orphan pruner](#async-orphan-pruning) reaps such a record once it expires.
+The confirmation is one annotation written by whichever replica saw the phase first, not one per replica, so a replica that has not seen `Terminating` can still create a `kaalm-async-*` record after the sweep; the same holds on the timeout branch. Records are created only at intake, behind the write gate described under [Response persistence](../gateways/api/async-responses.md#response-persistence), and after that are only patched: a `Patch` on a deleted record fails and does not recreate it. The [async orphan pruner](#async-orphan-pruning) reaps such a record once it expires.
+
+The Roles and RoleBindings the reconciler created for the channel are owner-referenced and cascade-delete with it; see [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount) (Per-channel Roles).
 
 ### Async orphan pruning
 
-A leader-only runnable, separate from the reconcilers, runs one pass when its replica becomes leader and then every 10 minutes. Each pass lists the ConfigMaps in `kaalm-system`, considers only names starting with `kaalm-async-`, and deletes a record when both of the following are true:
+A leader-only runnable runs one pass when its replica becomes leader and then every 10 minutes. Each pass checks the `kaalm-async-*` ConfigMaps in `kaalm-system` and deletes a record when both of the following are true:
 
-- It's expired: `kaalm.io/expires-at` is at or before now, or, when that annotation is missing or not a parseable RFC 3339 timestamp, `creationTimestamp` is more than 2 hours old (twice the fixed 1-hour TTL).
+- It's expired: its `kaalm.io/expires-at` time has passed.
 - Its channel no longer exists, read from the `kaalm.io/channel-namespace` and `kaalm.io/channel-name` labels. A record with no channel labels has no channel to look up and counts as orphaned once expired.
 
-A record whose channel exists is left to that channel's own expiry prune and finalizer sweep, even while the channel is being deleted. A failed pass is logged and retried on the next tick; it never stops the manager. So a stray record left behind by the race above lingers at most about 10 minutes past its expiry.
-
-The Roles and RoleBindings the reconciler created for the channel are owner-referenced and cascade-delete with it; see [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount) (Per-channel Roles).
+A record whose channel exists is left to that channel's own expiry prune and finalizer sweep, even while the channel is being deleted. A failed pass is retried on the next tick. So a stray record left behind by the race above lingers at most about 10 minutes past its expiry.
