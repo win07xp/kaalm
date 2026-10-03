@@ -33,7 +33,7 @@ What each child is for:
 - **The Pod** runs the agent container under the [RuntimeClass](../security/model.md#runtimeclass) its AgentClass names, or the cluster's default runtime when the class names none.
 - **The Service** exposes the agent's HTTPS endpoint inside the cluster. The gateway delivers channel messages through it with [`POST /v1/message`](../gateways/api/agent-endpoints.md#post-v1message); exposing it outside the cluster is the developer's responsibility. An Agent with the Service disabled is outbound-only and cannot be referenced by an AgentChannel (`Ready=False, reason=AgentServiceDisabled` on the channel).
 - **The ServiceAccount** carries no RoleBindings, and the Pod does not mount its token unless the class sets `security.automountServiceAccountToken`, so by default the agent has no Kubernetes API access ([Agent Pod ServiceAccount](../security/rbac.md#agent-pod-serviceaccount)).
-- **The NetworkPolicy** is synthesized from the AgentClass network policy plus the gateway's egress and ingress rules ([AgentReconciler](../controller/reconcilers/agent.md), step 8).
+- **The NetworkPolicy** is synthesized from the AgentClass network policy plus the gateway's egress and ingress rules ([What the synthesized NetworkPolicy protects](#what-the-synthesized-networkpolicy-protects)).
 - **The CiliumNetworkPolicy** carries the class's `allowedHosts`, which standard NetworkPolicy cannot express ([FQDN egress policy](#fqdn-egress-policy)).
 - **The PVC** is mounted into the agent container at `spec.persistence.mountPath`, default `/var/agent/memory` ([Agent spec](../resources/agent.md#spec)), and the controller injects `$KAALM_MEMORY_DIR` with that path ([Memory and dedup persistence](base-images.md#memory-and-dedup-persistence)).
 - **The Certificate** is a per-agent TLS certificate with `server auth` and `client auth` usages, signed by the Kaalm CA `ClusterIssuer` and rotated by cert-manager ([Lifecycle of an Agent TLS serving certificate](../security/tls.md#lifecycle-of-an-agent-tls-serving-certificate)). The same certificate serves the agent's HTTPS listener and is presented on every call to the gateway.
@@ -90,7 +90,7 @@ Which children are re-derived and which are preserved when an AgentClass changes
 
 ## AgentTask child resources
 
-An AgentTask gets a similar set, adjusted for a short-lived workload that takes no inbound traffic: no Service, a client-auth-only certificate, and, in `agentReported` mode, a completion mailbox. [AgentTaskReconciler](../controller/reconcilers/agenttask.md) is the authoritative step list.
+An AgentTask gets a similar set, adjusted for a short-lived workload that takes no inbound traffic: no Service, a client-auth-only certificate, and, in `agentReported` mode, a completion mailbox. [AgentTaskReconciler](../controller/reconcilers/agenttask.md#what-it-checks) gives what blocks the Pod and the order the checks run in.
 
 ![An AgentTask with ownerRef edges to a Pod, PVC, ServiceAccount, NetworkPolicy, and a client-auth-only Certificate, plus a completion ConfigMap and a per-task Role and RoleBinding inside a dashed band that exists only in agentReported mode. As with an Agent, the Certificate's output Secret carries an ownerRef to the Certificate instead.](../diagrams/child-resource-ownership-task.svg)
 

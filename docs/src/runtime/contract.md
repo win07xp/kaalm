@@ -13,7 +13,7 @@ The container serves two health endpoints on `$KAALM_HEALTH_PORT` (default 8080)
 | `GET /readyz` | Readiness | `200` when the container can accept a message, `503` otherwise |
 | `GET /livez` | Liveness | `200` when the process is healthy |
 
-The controller injects probes for both paths on an Agent Pod ([AgentReconciler step 9](../controller/reconcilers/agent.md)); an AgentTask Pod gets no probes. The container serves TLS on this port with the per-workload certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, so the injected probes use `httpGet.scheme: HTTPS`. Kubernetes does not verify certificates on `httpGet` probes, so the probe needs no CA configuration.
+The controller injects probes for both paths on an Agent Pod ([Injected environment and probes](../controller/reconcilers/agent.md#injected-environment-and-probes)); an AgentTask Pod gets no probes. The container serves TLS on this port with the per-workload certificate at `$KAALM_TLS_CERT` and `$KAALM_TLS_KEY`, so the injected probes use `httpGet.scheme: HTTPS`. Kubernetes does not verify certificates on `httpGet` probes, so the probe needs no CA configuration.
 
 In both reference runtimes, the container can accept a message when two things hold: the handler is loaded, and the certificate reloader holds a certificate that is not past its expiry. An expired certificate fails every gateway handshake, so until a rotation replaces it, `/readyz` answers `503` and the Pod leaves the Service endpoints. `/livez` does not depend on readiness, so an expired certificate makes the Pod unready but does not restart it.
 

@@ -111,7 +111,7 @@ status:
 |---|---|
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
 | `Ready` | `False` with the reason of a gate that holds the task without failing it: `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `SystemNamespaceForbidden`, `ChildConflict`, or `CertificateNotReady`. For `SecretNotOptedIn`, see [Env Secrets must opt in](#env-secrets-must-opt-in). |
-| `Completed` | `True` with `reason: TaskSucceeded` or `TaskFailed` once the task settles; the message is the agent's reported message, the container's exit summary, or the validation failure. |
+| `Completed` | Set when the task settles: `True` for `Succeeded`, `False` for any other terminal phase. The reason names why it settled: `TaskSucceeded` and `TaskFailed` in the common cases, otherwise `TimeoutSucceeded`, `TimeoutExceeded`, `PodDisrupted`, `ProvisioningDeadlineExceeded`, or a class-violation reason. The message is the agent's reported message, the container's exit summary, or the validation failure. |
 | `startTime` | Set when the task moves to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
 | `completionTime` | Set when the task settles. |
 | `podName` | The current Pod. |
