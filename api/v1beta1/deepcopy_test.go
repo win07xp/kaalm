@@ -442,17 +442,18 @@ func newFullAgentTask() *AgentTask {
 			},
 		},
 		Status: AgentTaskStatus{
-			ObservedGeneration:   4,
-			Phase:                TaskRunning,
-			Conditions:           fullConditions(),
-			StartTime:            ptr(metav1.NewTime(time.Unix(500, 0))),
-			CompletionTime:       ptr(metav1.NewTime(time.Unix(600, 0))),
-			PodName:              "task-1-pod",
-			CurrentPodUID:        "uid-1",
-			Retries:              1,
-			ArtifactValues:       map[string]string{"output-1": "value-1"},
-			AgentReportedStatus:  "success",
-			AgentReportedMessage: "done",
+			ObservedGeneration:    4,
+			Phase:                 TaskRunning,
+			Conditions:            fullConditions(),
+			StartTime:             ptr(metav1.NewTime(time.Unix(500, 0))),
+			CompletionTime:        ptr(metav1.NewTime(time.Unix(600, 0))),
+			PodCreateRejectedTime: ptr(metav1.NewTime(time.Unix(450, 0))),
+			PodName:               "task-1-pod",
+			CurrentPodUID:         "uid-1",
+			Retries:               1,
+			ArtifactValues:        map[string]string{"output-1": "value-1"},
+			AgentReportedStatus:   "success",
+			AgentReportedMessage:  "done",
 			ClassBounds: &AgentTaskClassBounds{
 				DefaultTaskTimeout:             metav1.Duration{Duration: 5 * time.Minute},
 				MaxTaskTimeout:                 metav1.Duration{Duration: 50 * time.Minute},
@@ -473,6 +474,7 @@ func mutateAgentTask(a *AgentTask) {
 	a.Spec.Tools[0].Tools[0] = mutatedStr
 	a.Status.Conditions[0].Message = mutatedStr
 	*a.Status.StartTime = metav1.NewTime(time.Unix(999, 0))
+	*a.Status.PodCreateRejectedTime = metav1.NewTime(time.Unix(999, 0))
 	a.Status.ArtifactValues["output-1"] = mutatedStr
 }
 

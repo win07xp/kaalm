@@ -161,6 +161,9 @@ const (
 	ReasonSpecDriftPending           = "SpecDriftPending"
 	ReasonDeletionBlocked            = "DeletionBlocked"
 	ReasonNamespaceNotAllowed        = "NamespaceNotAllowed" // rule 47: AgentClass allowedNamespaces
+	// ReasonPodCreateRejected: the API server refused the workload's Pod
+	// create (Ready=False on Agent and AgentTask).
+	ReasonPodCreateRejected = "PodCreateRejected"
 )
 
 // ConditionBoundaryMarginRaised reports that a hard-enforcement gateway
