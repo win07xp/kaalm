@@ -1,31 +1,64 @@
 # AgentTaskReconciler
 
-This page specifies the AgentTaskReconciler: what one pass does, and its Certificate, completion mailbox, and child resources. What it watches is in [Reconcilers](../reconcilers.md#what-each-reconciler-watches).
+## What it's for
 
-The reconciler implements the [AgentTask lifecycle](../task-lifecycle.md). One pass:
+The AgentTaskReconciler runs one [AgentTask](../../resources/agenttask.md) to completion. It validates the task against its class, creates the Certificate, children, and Pod, drives the task through the [AgentTask lifecycle](../task-lifecycle.md) to a terminal phase, and deletes the settled task when its TTL expires. On delete, the [finalizer](../finalizers.md#agenttask) deletes the Pod, waits for it to go, and releases; cascade garbage collection removes the other children.
 
-1. **Phase bookkeeping.** A task with no phase becomes `Pending`. A `Failed` task with no `completionTime` is a retry interrupted mid-flight and resumes at `Provisioning`. A terminal task (`Succeeded`, `Failed` with `completionTime`, `TimedOut`) goes to the TTL path: past its effective TTL (rule 43), it is set `Terminating` and deleted, otherwise the pass requeues for the remaining time.
-2. **Guards.** The operator namespace sets `Ready=False, reason=SystemNamespaceForbidden`; a missing AgentClass sets `Ready=False, reason=InvalidReference`. Neither is terminal.
-3. **Pre-Pod checks**, run only while no Pod exists and the phase is `Pending` or `Provisioning`, so a retry is validated against the class as it now stands. A class-versus-spec violation under rules 47, 2, 4, 5, 24, and 35 to 38 settles the task as terminal `Failed` with the violation's reason (`NamespaceNotAllowed`, `ClassConstraintViolation`, `PersistenceNotAllowed`, or `ToolNotInCatalog`), rule 47 being the first check, since AgentTask has no `Degraded` phase. A missing `imagePullSecrets` entry, read under the task's pull-Secret Role as for an Agent ([Ready gates](agent.md#ready-gates)), sets `Ready=False, reason=ImagePullSecretMissing` and requeues in 30 seconds. Next, the env Secret gate (rule 48), read under the task's env-Secret Role, sets `Ready=False, reason=SecretNotOptedIn` (or `InvalidReference` for a `secretKeyRef` with no name) and requeues in 30 seconds. The env Secret gate covers the first attempt and every `backoffLimit` retry. A task that has a Pod or has finished is not checked, so a finished task needs no label. An empty image or a malformed class `allowedCIDRs` entry (rule 19) sets `Ready=False, reason=InvalidReference`. None of these gates is terminal.
-4. **Certificate.** Ensure the per-task Certificate and hold in `Provisioning` with `Ready=False, reason=CertificateNotReady`, requeued every five seconds, until it is Ready. See [AgentTask certificate](#agenttask-certificate).
-5. **Children.** Converge the ServiceAccount, NetworkPolicy, the CiliumNetworkPolicy when the class lists `allowedHosts` and the CNI probe answers `True`, the PVC when persistence is enabled, and, for `agentReported` tasks only, the completion mailbox with its Role and RoleBinding. As for an Agent, a child name taken by an object the task does not control sets `Ready=False, reason=ChildConflict`, keeps the phase, and creates no Pod; see [Child ownership](agent.md#child-ownership). See [Completion mailbox and per-task Role](#completion-mailbox-and-per-task-role).
-6. **Pod.** Create the Pod with `restartPolicy: Never`, the same injected environment as an Agent and no probes, and set `status.currentPodUID` from the Create response in the same status write for `agentReported` tasks. See [Task child-resource convergence](#task-child-resource-convergence).
-7. **Drive the lifecycle.** Readiness, the provisioning deadline, the completion mailbox, Pod loss, timeouts, retries, and settlement are specified on [AgentTask lifecycle](../task-lifecycle.md).
+## What it owns and watches
 
-On an AgentClass change the reconciler does not disturb a task that has a Pod; the new invariants apply at the next Pod creation, which is a retry or a new task. See [AgentTask handling](../change-propagation.md#agenttask-handling-no-degraded-phase).
+Every object the reconciler creates carries a controller ownerRef to the AgentTask: the Certificate, ServiceAccount, NetworkPolicy, Pod, a PVC when persistence is enabled, a CiliumNetworkPolicy when the class lists `allowedHosts` and the CNI supports FQDN policies, and, for `agentReported` tasks, the completion ConfigMap with its Role and RoleBinding. Two more Roles let the controller read the pull Secrets and env Secrets ([Operator ServiceAccount](../../security/rbac.md#operator-serviceaccount)). [AgentTask child resources](../../runtime/child-resources.md#agenttask-child-resources) lists each name and when it exists.
 
-## AgentTask certificate
+It reads the task's AgentClass, ModelProviders, and ToolProviders, and watches its children and the AgentClass spec; see [What each reconciler watches](../reconcilers.md#what-each-reconciler-watches).
 
-Named `{taskName}-tls` in the task's namespace, owner-referenced to the AgentTask. It differs from the [Agent certificate](agent.md#agent-certificate) in two fields: `spec.dnsNames` is the single SAN `{taskName}.{namespace}.task.kaalm.io`, a non-Service pattern the gateway's SAN parser recognizes as an AgentTask identity ([Workload identity](../../gateways/llm/workload-identity.md)), and `spec.usages` is `client auth` only, since tasks have no inbound TLS listener. Issuer, secret name pattern, duration, and renewal match the Agent's. Pod creation waits on the Certificate for the same reason as for Agents, and for a task the wait also keeps a slow issuance from counting against `backoffLimit`.
+### AgentTask certificate
 
-## Completion mailbox and per-task Role
+The Certificate `{taskName}-tls` differs from the [Agent certificate](agent.md#agent-certificate) in two fields: `spec.dnsNames` is the single task SAN ([Workload identity](../../gateways/llm/workload-identity.md)), and `spec.usages` is `client auth` only, since a task has no TLS listener. Until the Certificate is Ready, the task holds in `Provisioning` with `Ready=False, reason=CertificateNotReady` and has no Pod. The provisioning deadline starts at Pod creation, so a slow issuance never counts against `backoffLimit`.
 
-For `agentReported` tasks the reconciler pre-creates the empty `{taskName}-completion` ConfigMap in the task's namespace with `data: {}`, owned by the AgentTask, then ensures a per-task `Role` and `RoleBinding` granting the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) `update, patch` on that one name (`resourceNames: ["{taskName}-completion"]`). The Role and RoleBinding are owned by the AgentTask too.
+### Completion mailbox and per-task Role
 
-The verb set is `update, patch` and not `create` because RBAC `resourceNames` does not constrain `create`: granting it would widen the gateway's access to every ConfigMap in the namespace. Pre-creating the resource here and granting only name-scoped mutate verbs makes the scoping enforceable, the same pattern as the [per-channel Role](agentchannel.md#per-channel-credential-roles); see [Gateway ServiceAccount](../../security/rbac.md#gateway-serviceaccount-permissions). `exitCode` tasks have no completion endpoint and skip the mailbox, the Role, and the UID write.
+For `agentReported` tasks the reconciler pre-creates the empty `{taskName}-completion` ConfigMap, then a Role and RoleBinding that grant the gateway ServiceAccount (`kaalm-system/kaalm-gateway`) `update, patch` on that one name. The Role has no `create`, which `resourceNames` cannot scope, so pre-creating the ConfigMap is what makes the scoping enforceable ([Gateway ServiceAccount](../../security/rbac.md#gateway-serviceaccount-permissions)). `exitCode` tasks skip the mailbox and the Role and have no `status.currentPodUID`.
 
-## Task child-resource convergence
+### Task child-resource convergence
 
-Task Pods are created with `restartPolicy: Never`: the reconciler performs retries through `backoffLimit`, so a kubelet in-place restart would bypass `status.retries` and blur the one-run-per-`currentPodUID` gate, and `exitCode` completion depends on the Pod phase reaching `Succeeded` or `Failed`, which it never does under `Always` or `OnFailure`. No liveness or readiness probe is injected: tasks have no Service, and liveness is governed by the effective completion timeout (rule 42) and the provisioning deadline.
+After the Certificate is Ready, the reconciler converges the children, then creates the Pod with the Agent's injected environment ([Injected environment and probes](agent.md#injected-environment-and-probes)). The task's NetworkPolicy has the Agent's egress rules and no ingress allow rule ([AgentTask child resources](../../runtime/child-resources.md#agenttask-child-resources)).
 
-The injected environment is the Agent's set ([Injected environment and probes](agent.md#injected-environment-and-probes)); `KAALM_GATEWAY_ENDPOINT` is always present so a task can call [POST /v1/task/complete](../../gateways/api/task-complete.md) even when it makes no LLM calls, while heartbeats are Agent-only ([The runtime contract](../../runtime/contract.md) item 5). The ServiceAccount is `task-{taskName}` with no bindings. The NetworkPolicy is the Agent's ([Child-resource convergence](agent.md#child-resource-convergence)) without the gateway ingress rule, since a task is not a delivery target: `policyTypes: [Ingress, Egress]` with an explicit `ingress: []`, and the same egress rules (gateway on 8443, DNS, `allowedCIDRs`).
+## What it checks
+
+The first failing check sets `Ready=False` with its reason code, and the later checks do not run.
+
+| Check | Reason when it fails | Rule |
+|---|---|---|
+| The task is not in the operator namespace | `SystemNamespaceForbidden` | [28](../../resources/validation/names-and-tasks.md) |
+| `agentClassRef` names an AgentClass | `InvalidReference` | [1](../../resources/validation/references-and-access.md) |
+| The class admits the task's namespace | `NamespaceNotAllowed` | [47](../../resources/validation/class-policy.md) |
+| The class allows the image, and each model provider exists, is allowed, and admits the namespace | `ClassConstraintViolation` | [2](../../resources/validation/class-policy.md), [3 to 5](../../resources/validation/references-and-access.md) |
+| Each tool grant resolves, is allowed, and names cataloged tools | `ClassConstraintViolation`, `ToolNotInCatalog` | [35 to 38](../../resources/validation/references-and-access.md) |
+| The class allows the task's persistence | `PersistenceNotAllowed` | [24](../../resources/validation/class-policy.md) |
+| The pull-Secret Role can be written, and each Secret exists | `ChildConflict`, `ImagePullSecretMissing` | [23](../../resources/validation/references-and-access.md) |
+| The env-Secret Role can be written, and each Secret exists with the workload label | `ChildConflict`, `SecretNotOptedIn`, or `InvalidReference` for a `secretKeyRef` with no name | [48](../../resources/validation/references-and-access.md) |
+| The task or the class sets an image | `InvalidReference` | |
+| The class `allowedCIDRs` entries are well-formed | `InvalidReference` | [19](../../resources/validation/class-policy.md) |
+| The Certificate and child names are free or controlled by the task | `ChildConflict` | [Child ownership](agent.md#child-ownership) |
+
+The first two checks run until the task settles. The others, except `ChildConflict`, run only while the task has no Pod and is `Pending` or `Provisioning`, so a retry is validated against the class as it now stands, a task with a Pod finishes under the class it started with ([AgentTask handling](../change-propagation.md#agenttask-handling-no-degraded-phase)), and a finished task needs no label. A failure of rules 47, 2 to 5, 35 to 38, or 24 (`NamespaceNotAllowed`, `ClassConstraintViolation`, `ToolNotInCatalog`, `PersistenceNotAllowed`) settles the task `Failed`, because an AgentTask has no `Degraded` phase to recover from. Any other failed check keeps the phase and is not terminal.
+
+## What it reports
+
+- **`status.phase`** follows the [state machine](../task-lifecycle.md#state-machine).
+- **`Ready`** is `True` with `PodRunning` once the Pod is Ready. Otherwise it is `False` with a reason from [What it checks](#what-it-checks), `CertificateNotReady`, `PodProvisioning`, `PodTerminating` while a retry waits for the old Pod to go, or the failure or settling reason.
+- **`Completed`** is set on settling: `True` for `Succeeded`, `False` otherwise ([Status](../../resources/agenttask.md#status)).
+- **Events** are listed under [Event reasons](../task-lifecycle.md#event-reasons).
+
+## Timing
+
+- **A completion, an `exitCode` Pod exit, a failed `agentReported` Pod, or Pod loss.** Each shows at once, because the reconciler watches the completion ConfigMap and the Pod. An `agentReported` Pod that exits 0 without reporting leaves the task `Running` until its timeout, or indefinitely when it has none ([The class bounds timeout and retention](../../resources/agenttask.md#the-class-bounds-timeout-and-retention)).
+- **A running task.** The pass is requeued for the timeout deadline, measured from `status.startTime`.
+- **Waiting on the Certificate, a terminating Pod, or a Pod that is not Ready.** The task re-checks every 5 seconds, and at once when the Certificate or the Pod changes. A Pod not Ready five minutes after creation fails the attempt with `ProvisioningDeadlineExceeded` at the next re-check, and the task retries while `backoffLimit` allows.
+- **Waiting on a Secret or a conflicting object.** The task re-checks every 30 seconds, because neither raises an event.
+- **A missing class, an empty image, or a malformed class CIDR.** No timed re-check: these clear when the task or the class changes. `SystemNamespaceForbidden` has no timed re-check and does not clear; create the task in another namespace.
+- **A settled task.** The pass is requeued for the remaining TTL ([rule 43](../../resources/validation/class-policy.md)), then the task goes `Terminating` and is deleted. With no TTL, the task stays.
+
+## Design choices
+
+- **`restartPolicy: Never`**, so a crash is a counted retry, not a kubelet restart ([exitCode](../task-lifecycle.md#exitcode)).
+- **No probes**, because a task has no Service; the completion timeout ([rule 42](../../resources/validation/class-policy.md)) and the provisioning deadline bound liveness.
