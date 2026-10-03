@@ -97,7 +97,7 @@ kubectl get agentchannel support-discord -n team-support
 A channel whose Secret lacks the label reports `Ready=False` with reason
 `SecretNotOptedIn`. One whose Secret is missing the key, or whose key is not a
 valid Ed25519 public key, reports `CredentialsMissing` or `CredentialsInvalid`.
-Fix the Secret; the reconciler re-checks within a minute. See
+Fix the Secret and the channel re-checks at once. See
 [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 
 ## Point Discord at the channel
