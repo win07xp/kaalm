@@ -22,11 +22,11 @@ Notes on individual rows:
 
 - **Timeout before any response bytes.** The per-attempt bound is `gateway.providerFirstByteTimeout` (default `120s`; see [Deployment](../../operations/deployment.md#helm-chart-contents)). It bounds the wait for the first response byte; after that, the same value bounds each gap between response bytes. A timeout after the first byte of a stream is a mid-stream failure: it ends the stream with an error event and does not fall back. A non-streaming response that stalls after its headers is still a timeout before any bytes reach the caller, so it falls back.
 - **Upstream `429`.** This is distinct from the gateway's own `429 rate_limited`, which is returned to the caller without fallback.
-- **Upstream `401` or `403`.** If a later health probe still sees 401 or 403, the reconciler sets `Ready=False, reason=CredentialsInvalid` on that provider. The event tells the platform team that rotation or re-issuance is needed while the fallback keeps traffic serving.
+- **Upstream `401` or `403`.** If a later health probe still sees 401 or 403, the reconciler sets `Ready=False, reason=CredentialsInvalid` on that provider.
 
 ## Per-candidate checks
 
-Every candidate, the primary included, passes these checks before the gateway forwards to it. The first five are static: derived from configuration or from the request body, and free, because failing one consumes no attempt slot. The last two are the attempt itself.
+Every candidate, the primary included, passes these checks before the gateway forwards to it. The first five are static, derived from configuration or the request body, and failing one consumes no attempt slot. The last two are the attempt itself.
 
 | Check | Derived from | Slot consumed on failure | Children walked | Signal |
 |---|---|---|---|---|
@@ -38,9 +38,11 @@ Every candidate, the primary included, passes these checks before the gateway fo
 | Budget admission for the agent's namespace: not blocked, throttled, or failed closed | request-time state | yes | yes | The outcome's class feeds the exhaustion mapping under [Depth cap semantics](#depth-cap-semantics) |
 | Forward with the candidate's credentials | upstream | yes | yes, when the response is fallbackable | `CredentialsInvalid` on the candidate for `401` or `403` |
 
-A static failure is a misconfiguration, and all but the translatability check are discoverable at reconcile time. The gateway skips the candidate, does not walk its children (validation guarantees compatible chains, so children stay reachable through an eligible ancestor), and emits the event on the primary ModelProvider, the resource the platform team manages and watches, naming the offender and the failure: for example `fallback 'openai-backup' skipped: namespace 'team-ml' not in allowedNamespaces`. Spending attempt slots on misconfigured fallbacks would hide the problem and make it indistinguishable from upstream outages in metrics. The event is not returned to the caller, whose request continues down the tree. The namespace and model checks also run at reconcile time, before any request arrives, and raise the same `FallbackIneligible` event on the primary when they find a candidate a caller can never reach; see [Reconcile-time fallback eligibility scan](../../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan). The other static checks here (a missing provider, an incompatible format, a bad `modelMap`) are validated at reconcile time too, but as the structural `Ready=False, reason=FallbackIneligible` failure ([Fallback chain validation](../../controller/reconcilers/modelprovider.md#fallback-chain-validation)), with no event.
+A static failure is a misconfiguration, and all but the translatability check are discoverable at reconcile time. The gateway skips the candidate and does not walk its children, which a request can reach only through that candidate. It emits the event on the primary ModelProvider, the resource the platform team manages and watches, naming the offender and the failure. The caller never sees the event, and its request continues down the tree. Spending attempt slots on misconfigured fallbacks would hide the problem and make it indistinguishable from upstream outages in metrics.
 
-A budget outcome costs a slot because budget state is runtime state, and slot-bounded latency still matters. This applies only while walking the chain after a non-budget primary failure; a budget-blocked primary never reaches the walk. Under [hard enforcement](budgets-and-rate-limits.md#interaction-with-fallback) a candidate is admitted under the same rules as a primary, and after a fallbackable failure its boundary slot is freed at zero cost before the walk descends, so no slot is ever held across another provider's upstream call. The primary itself is admitted before the walk starts and is never re-admitted.
+The namespace and model checks also run at reconcile time and raise the same `FallbackIneligible` event on the primary when they find a candidate a caller can never reach; see [Reconcile-time fallback eligibility scan](../../controller/reconcilers/modelprovider.md#reconcile-time-fallback-eligibility-scan). The other static checks (a missing provider, an incompatible format, a bad `modelMap`) are validated at reconcile time as the structural `Ready=False, reason=FallbackIneligible` failure, with no event ([Fallback chain validation](../../controller/reconcilers/modelprovider.md#fallback-chain-validation)).
+
+A budget outcome costs an attempt slot because budget state is runtime state, and slot-bounded latency still matters. A budget-blocked primary never reaches the walk. Under [hard enforcement](budgets-and-rate-limits.md#interaction-with-fallback) a candidate is admitted under the same rules as a primary. After a fallbackable failure its boundary slot is freed at zero cost before the walk descends, so no slot is held across another provider's upstream call.
 
 ## Traversal algorithm
 
@@ -57,13 +59,13 @@ A budget outcome costs a slot because budget state is runtime state, and slot-bo
 | Fallbackable failure | yes | yes | Nothing from this candidate; its class is recorded. |
 | Children exhausted | none | none | Nothing; the parent continues with the next sibling, or the root returns the exhaustion error. |
 
-`attemptCount` is returned from every recursive call, so increments inside one subtree are visible to the next sibling. The cap therefore bounds the total providers attempted across the whole tree, not one root-to-leaf path. Without the thread-back, each sibling would restart from the caller's local count and the cap could be exceeded along the breadth of the tree.
+The attempt count carries from one subtree to the next sibling, so the cap bounds the total providers attempted across the whole tree, not one root-to-leaf path.
 
 ## Depth cap semantics
 
-`maxFallbackDepth` (default `3`, the Helm value `gateway.maxFallbackDepth`, passed to the gateway as `--max-fallback-depth`) bounds the **total number of providers attempted per request, including the primary**, not the nesting depth of the tree. With the default, the gateway tries at most the primary plus two others before giving up, however the tree is nested. The [ModelProvider](../../resources/modelprovider.md#fallback-trees) page draws a tree with the cut.
+`maxFallbackDepth` (default `3`, the Helm value `gateway.maxFallbackDepth`) bounds the **total number of providers attempted per request, including the primary**, not the nesting depth of the tree. With the default, the gateway tries at most the primary plus two others before giving up, however the tree is nested. The [ModelProvider](../../resources/modelprovider.md#fallback-trees) page draws a tree with the cut.
 
-This is the latency guarantee: each attempt is bounded by `gateway.providerFirstByteTimeout` (default `120s`), so no request waits more than `maxFallbackDepth × providerFirstByteTimeout` for its first response byte before a terminal error. Once a stream starts, the same value bounds each gap between chunks rather than the stream's length: a stream that keeps sending runs to completion, and a stalled stream ends with an error event; see [Streaming responses](request-handling.md#streaming-responses).
+This is the latency guarantee: each attempt is bounded by `gateway.providerFirstByteTimeout` (default `120s`), so no request waits more than `maxFallbackDepth × providerFirstByteTimeout` for its first response byte before a terminal error. Once a stream starts, the same value bounds each gap between chunks, not the stream's length; see [Streaming responses](request-handling.md#streaming-responses).
 
 When the chain is exhausted or the cap is reached without a successful response, the gateway returns an error whose type reflects the failure classes recorded across the walk:
 
@@ -75,17 +77,19 @@ When the chain is exhausted or the cap is reached without a successful response,
 | Every attempt timed out before its response reached the caller | `504 provider_timeout` | `false` |
 | Any other mix, including any upstream error response (`5xx`, upstream `429`, `401`, `403`) | `502 provider_error` | `false` |
 
-The three `provider_*` errors are not retryable because the gateway has already retried through the whole chain, and they carry the originally requested provider in `error.provider`; see [LLM Gateway error responses](../api/errors.md#llm-gateway-error-responses). A walk exhausted by budget outcomes is a budget error and never a `502`, because the caller needs the retry time and the operator's provider-error alerts should not fire for a policy outcome; see [Interaction with fallback](budgets-and-rate-limits.md#interaction-with-fallback).
+The three `provider_*` errors are not retryable because the gateway has already retried through the whole chain, and they carry the originally requested provider in `error.provider`; see [LLM Gateway error responses](../api/errors.md#llm-gateway-error-responses). A walk exhausted by budget outcomes is a budget error and never a `502`, because the caller needs the retry time and the operator's provider-error alerts should not fire for a policy outcome.
 
 ## Crossing formats
 
-A fallback edge may cross API formats: an `anthropic` provider may name an `openai` or `openai-compatible` fallback and the reverse. `google-vertex` stays same-type in both directions, because its model is part of the URL and its wire format is a third format, and an inbound `/v1/completions` request, the legacy completions format, is never translated into another format. Rule 12 states this ([Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation)).
+A fallback edge may cross API formats: an `anthropic` provider may name an `openai` or `openai-compatible` fallback and the reverse. `google-vertex` stays same-type in both directions, because its model is part of the URL and its wire format is a third format. Rule 12 states which type pairs are allowed ([Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation)).
 
-The primary is always spoken to in the caller's format, so nothing changes until the walk reaches a candidate of the other format. There, and only there, the gateway rewrites the request into the candidate's format before forwarding and rewrites the response back, streaming or not, so the caller never sees a format it did not ask for. Translation adds no round trip and happens before the first byte, which keeps the [point of no return](request-handling.md#streaming-responses) where it is: a stream that has started does not fall back, translated or not.
+An inbound `/v1/completions` request, the legacy completions format, is never translated into another format. Any candidate of another format is ineligible for that request, like a request the other format cannot express ([What does not](#what-does-not)).
+
+The primary is always spoken to in the caller's format, so nothing changes until the walk reaches a candidate of the other format. There, and only there, the gateway rewrites the request into the candidate's format before forwarding and rewrites the response back, streaming or not, so the caller never sees a format it did not ask for. Translation happens before the first byte, so a stream that has started does not fall back, translated or not ([point of no return](request-handling.md#streaming-responses)).
 
 ### The model on the other side
 
-A caller asks for `anthropic-shared/claude-sonnet-4-6`, and an `openai` fallback has no such model, so the mapped-model check would skip every cross-format candidate. The edge carries the mapping: each `spec.fallback[]` entry is a `FallbackReference` with a `name` and an optional `modelMap` from this provider's model ids to the fallback's ([ModelProvider](../../resources/modelprovider.md#fallback-trees)). The check tests the mapped model, or the requested model itself when the map has no entry (the same-type case, or a compatible provider that offers the same id). Rule 41 validates the map at reconcile time: every key is one of this provider's models and every value one of the fallback's. The mapped model is what the walk carries into the candidate: the budget gate, the request body, and spend accounting all see it.
+A caller asks for `anthropic-shared/claude-sonnet-4-6`, and an `openai` fallback has no such model, so the mapped-model check would skip every cross-format candidate. The edge carries the mapping: each `spec.fallback[]` entry is a `FallbackReference` with a `name` and an optional `modelMap` from this provider's model ids to the fallback's ([ModelProvider](../../resources/modelprovider.md#fallback-trees)). The check tests the mapped model, or the requested model itself when the map has no entry (the same-type case, or a compatible provider that offers the same id). Rule 41 validates the map at reconcile time: every key is one of this provider's models and every value one of the fallback's. The budget gate, the request body, and spend accounting all use the mapped model.
 
 ### What translates
 
@@ -107,14 +111,14 @@ Two fields are dropped without penalty: Anthropic `cache_control` markers (an op
 
 ### What does not
 
-A request that carries a feature the other format cannot express is not forwarded lossily. The candidate is ineligible **for this request**: no attempt slot is consumed, a `FallbackIneligible` event on the primary names the feature (`fallback 'openai-backup' skipped: request uses extended thinking, which openai cannot express`), and the walk continues with the next sibling. The features:
+A request that carries a feature the other format cannot express is not forwarded lossily. The candidate is ineligible **for this request**: no attempt slot is consumed, a `FallbackIneligible` event on the primary names the feature, and the walk continues with the next sibling. The features:
 
 - Anthropic to OpenAI: extended `thinking`, server tools (`web_search` and the other server-side tools), `mcp_servers`, `document` and audio content blocks, `output_format` structured outputs.
 - OpenAI to Anthropic: `n` greater than 1, `logprobs`, `response_format`, the legacy `functions` and `function_call` fields, audio content parts, and a request without `max_tokens` when the mapped model declares no `maxOutputTokens`.
 
 The reconciler flags the last one ahead of traffic: a crossing edge into an `anthropic` provider whose mapped models declare no `maxOutputTokens` sets the advisory `MaxOutputTokensUnset` condition on the primary at reconcile time, listing the affected `provider/model` pairs ([ModelProvider status](../../resources/modelprovider.md#status)). A `Warning` event with the same reason fires once, when the condition turns `True`. The edge stays valid, because same-format traffic and requests that carry their own `max_tokens` cross it.
 
-This is the only eligibility check the reconciler cannot run ahead of time, because it depends on the request body. The condition is the operator's signal that a chain was configured to cross and the traffic cannot.
+The condition is the operator's signal that a chain was configured to cross and the traffic cannot.
 
 ### Streaming across the crossing
 
@@ -136,8 +140,8 @@ When the candidate answers with SSE, the relay translates event by event, still 
 
 ### Usage, spend, and errors
 
-Usage is read with the **serving candidate's** adapter from the untranslated upstream response, never from the translated one, and spend lands on the provider that served, at that provider's prices for the mapped model. Reading usage with the caller's adapter is correct only while formats match; crossing is what makes the distinction matter.
+Usage is read with the **serving candidate's** adapter from the untranslated upstream response, never from the translated one, and spend lands on the provider that served, at that provider's prices for the mapped model.
 
 A non-fallbackable `4xx` from a cross-format candidate (`400`, `422`, other `4xx`) is relayed in the **caller's** error envelope, because the caller cannot parse the other format's; the status and message carry over. Fallbackable failures are classified exactly as before.
 
-The response's `model` field is the raw id of the model that served, as it is for a same-type fallback: the caller learns which provider answered only from the model id, and crossing does not change that.
+The response's `model` field is the raw id of the model that served, as for a same-type fallback.
