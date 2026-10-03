@@ -28,7 +28,7 @@ The gateway serves two TLS listeners. Which listener a path lives on decides who
 | `:8080` | `/channels/{namespace}/{channel-path}` | External callers through the Ingress | Per AgentChannel |
 | `:8080` | `/v1/channels/responses/{requestId}` | The webhook caller polling for a late reply | The originating AgentChannel's auth |
 
-Any other path on `:8443` answers `400 invalid_request` with the constant message `unrecognized path`; the paths on that listener are this fixed API, so the answer reveals nothing about a tenant. Any other path on `:8080` answers the same `401 unauthorized` as a failed credential, because channel paths on that listener belong to tenants ([User Gateway error responses](errors.md#user-gateway-error-responses)).
+Any other path on `:8443` answers `400 invalid_request`; the paths on that listener are this fixed API, so the answer reveals nothing about a tenant. Any other path on `:8080` answers the same `401 unauthorized` as a failed credential, because channel paths on that listener belong to tenants ([User Gateway error responses](errors.md#user-gateway-error-responses)).
 
 The kubelet probe endpoints, `/healthz` and `/readyz`, are on the separate health port, not on either listener ([Ports](../overview.md#ports)).
 
@@ -41,7 +41,7 @@ Two rules enforce this, at different times:
 - **Rule 16, at apply time.** The CRD's CEL validation rejects a path that begins with `/v1/` before the object is stored. The reconciler never sees it and sets no status.
 - **Rule 15, at reconcile time.** The path must begin with `/channels/{namespace}/`, where `{namespace}` is the AgentChannel's own namespace, and no other AgentChannel may register the same path. A violation is `Ready=False` with `reason: InvalidPath` or `reason: PathConflict`, and the gateway never routes the path. CEL cannot read `metadata.namespace`, so this rule cannot run at apply time.
 
-Rule 15 already excludes `/v1/`, so rule 16 adds only the earlier failure. Both rules are in [Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation).
+Both rules are in [Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation).
 
 The controller's activator, `POST /v1/activate/{namespace}/{agentName}`, is served on the controller Service, port 9443, not on the gateway ([The activator](../user/activation-and-activity.md#the-activator)).
 
@@ -55,10 +55,10 @@ The proxy accepts requests on three paths and forwards each to the resolved Mode
 | `/v1/chat/completions` | OpenAI chat completions, also served by vLLM, Ollama, and LiteLLM |
 | `/v1/completions` | OpenAI completions |
 
-The path names the inbound format; the provider's type names the outbound one. When the two differ, the gateway translates ([Request format detection](../llm/request-handling.md#request-format-detection)). Bodies pass through otherwise unchanged: the gateway adds no envelope of its own. It strips the caller's auth headers, hop-by-hop headers, and `Accept-Encoding`, injects the provider credential, strips the `{providerRef}/` prefix from the model name, and relays the response, including SSE streams ([Request flow](../llm/request-handling.md#request-flow), step 7).
+The path names the inbound format; the provider's type names the outbound one. When the two differ, the gateway translates ([Request format detection](../llm/request-handling.md#request-format-detection)). Bodies pass through otherwise unchanged: the gateway adds no envelope of its own. It replaces the caller's credentials with the provider credential, strips the `{providerRef}/` prefix from the model name, and relays the response, including SSE streams ([Request flow](../llm/request-handling.md#request-flow), step 7).
 
 Errors the gateway raises itself use the envelope in [LLM Gateway error responses](errors.md#llm-gateway-error-responses).
 
-**Request body size.** Each of the three paths reads at most `gateway.maxLLMRequestBodyBytes` (default 4 MiB) and answers `413 request_too_large` above that. The body is buffered before forwarding, for credential injection and token-usage extraction, so the cap bounds per-request gateway memory. The tool broker reads its body under a separate cap ([The tool plane](../tool-plane.md)).
+**Request body size.** Each of the three paths reads at most `gateway.maxLLMRequestBodyBytes` (default 4 MiB) and answers `413 request_too_large` above that. The gateway buffers the body before forwarding, so the cap bounds per-request gateway memory. The tool broker reads its body under a separate cap ([The tool plane](../tool-plane.md)).
 
 Auth, provider routing, budgets, fallback, and streaming are specified in [LLM Gateway](../llm/overview.md).

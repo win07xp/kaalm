@@ -22,7 +22,7 @@ Every request carries:
 
 **Verification.** The gateway loads the channel's `publicKey`, checks `Ed25519.Verify(publicKey, timestamp || body, signature)` over the raw body bytes, and rejects a timestamp more than 300s from its own clock. A failed check, or a `publicKey` that is missing or not a 32-byte hex string, answers `401` with the [User Gateway error envelope](errors.md#user-gateway-error-responses) and records a `WebhookAuthFailed` health observation, except for the save-time probe that the next paragraph describes.
 
-Discord's save-time check sends one valid `PING` and one `PING` with an invalid signature and requires the `401` on the second, so the rejection is part of the contract. A `PING` that fails the check is that probe: it gets the same `401`, but it is not a health observation, so saving the URL leaves `PlatformConnected` unchanged. A wrong `publicKey` also fails the valid `PING`, so Discord refuses to save the URL and the probe never hides a misconfigured channel. Any other interaction that fails the check, and a body that is not JSON, records `WebhookAuthFailed`.
+Discord's save-time check sends one valid `PING` and one `PING` with an invalid signature and requires the `401` on the second, so the rejection is part of the contract. A `PING` that fails the check is that probe: it gets the same `401`, but it is not a health observation, so saving the URL leaves `PlatformConnected` unchanged. A wrong `publicKey` also fails the valid `PING`, so Discord refuses to save the URL and the probe never hides a misconfigured channel. Any other request that fails the check, including one whose body is not JSON, records `WebhookAuthFailed`.
 
 **Body.** The interaction object. The fields the adapter reads:
 
@@ -52,7 +52,7 @@ In a DM the sender is `user` rather than `member.user`.
 | `POST` body over `gateway.maxMessageBodyBytes` | `413 request_too_large`, before the path is resolved |
 | Path not routed, or method not `POST` | `401 unauthorized` |
 | Signature, timestamp, or `publicKey` rejected | `401 unauthorized` |
-| Body is not JSON | `400 invalid_request` |
+| Signature valid, body is not JSON | `400 invalid_request` |
 | `type` 1, PING | `200` `{"type": 1}`. No envelope, no health observation. |
 | `type` 2, command in scope | `200` `{"type": 5}`, a deferred message: the person sees the bot thinking. One envelope is dispatched. |
 | `type` 2, command out of scope | `200` `{"type": 4, "data": {"content": "This bot is not available here.", "flags": 64}}`, an ephemeral refusal for an interaction outside `guildId` or `allowedChannelIds`. No envelope. |
@@ -61,7 +61,7 @@ In a DM the sender is `user` rather than `member.user`.
 | `type` 5, modal submit | `200` `{"type": 4, "data": {"content": "Modals are not supported.", "flags": 64}}`. No envelope. |
 | Any other `type` | `400 invalid_request` |
 
-Every `200` is returned inside Discord's 3-second window, before the agent is involved. Refused and unknown interactions count on `kaalm_channel_messages_total` with `status="rejected"`.
+An out-of-scope command counts on `kaalm_channel_messages_total` with `status="rejected"`; no other row does.
 
 ## Normalization
 

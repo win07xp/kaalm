@@ -8,9 +8,9 @@ The gateway serves Prometheus metrics on `:9090/metrics` ([Endpoints](../../oper
 
 | Metric | Type | Labels | Increments when |
 |---|---|---|---|
-| `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` | a message finishes the delivery pipeline (step 8 of the request flow), or a platform event is rejected before it |
+| `kaalm_channel_messages_total` | counter | `channel_type`, `namespace`, `status` | a message finishes the wake and delivery pipeline (steps 7 and 8 of the request flow), or a platform event is rejected before it |
 | `kaalm_channel_message_duration_seconds` | histogram | `channel_type` | the same, with the whole pipeline's duration, wake included |
-| `kaalm_channel_wake_total` | counter | `namespace` | the activator is called for a `Hibernated` Agent |
+| `kaalm_channel_wake_total` | counter | `namespace` | the activator is called for a `Hibernated` or `Hibernating` Agent |
 | `kaalm_channel_wake_duration_seconds` | histogram | `namespace`, `result` | a wake ends, measured from the activator call: `result` is `ready`, `controller_unavailable`, or `wake_timeout` |
 | `kaalm_channel_delivery_attempts_total` | counter | `namespace`, `outcome` | every `POST /v1/message` attempt, retries included |
 | `kaalm_channel_callback_total` | counter | `namespace`, `status` | an outbound reply ends: an async webhook callback, or a Discord or WhatsApp reply |
@@ -22,10 +22,10 @@ Label vocabularies:
 
 - **`channel_type`** is `webhook`, `discord`, or `whatsapp`, and `console` for [test-chat](../api/internal-endpoints.md#post-v1test-chat) deliveries.
 - **`status` on messages** is `delivered` or the failing error type: `delivery_failed`, `wake_timeout`, `controller_unavailable`, or `response_too_large`. For a platform channel it is also `rejected`, an inbound event that produced no envelope (a Discord interaction out of scope, a WhatsApp event for another number, a status callback, or an unparseable message), which is counted here and never becomes a health observation. A sync request cut off by `gateway.syncDeliveryDeadline` is counted under the failure that was in progress, or not at all when the deadline fell inside a backoff, so `sync_deadline_exceeded` never appears here.
-- **`outcome` on delivery attempts** is `ok` or the layer that failed: `dns`, `connect` (refused, reset, unreachable, or every connect within the attempt hit its bound), `tls`, `timeout` (the per-attempt read deadline), `status` (the agent answered outside 2xx), `malformed` (2xx with an unusable envelope), `too_large` (not retried), `canceled` (the delivery's own context ended), or `other`. Each failed attempt is also logged at warning level with the namespace, agent, message id, attempt number, outcome, and error.
+- **`outcome` on delivery attempts** is `ok` or the layer that failed: `dns`, `connect` (refused, reset, unreachable, or every connect within the attempt hit its bound), `tls`, `timeout` (the per-attempt read deadline), `status` (the agent answered outside 2xx), `malformed` (2xx with an unusable envelope), `too_large` (not retried), `canceled` (the delivery's own context ended), or `other`. Each failed attempt is also logged at warning level.
 - **`status` on callbacks** is `delivered`, `rejected`, `exhausted`, or `invalid`, specified with their triggers under [Callback failure buckets](../api/async-responses.md#callback-failure-buckets) and, for platform replies, [Reply delivery](platform-adapters.md#reply-delivery). `exhausted` on a webhook callback means the payload is still retrievable by polling; on a platform reply it means the payload is dropped.
 
-The wake counter and histogram read together: how often the activator fired, how long each wake took, and how it ended, which is what an SLO on the wake-on-demand dependency needs. `kaalm_channel_async_patch_failed_total` is the operator-side signal that the [replica-local drop](../api/async-responses.md#response-patch-failure) fired; any sustained nonzero rate warrants an alert ([Recommended alerts](../../operations/observability.md#recommended-alerts)).
+`kaalm_channel_async_patch_failed_total` is the operator-side signal that the [replica-local drop](../api/async-responses.md#response-patch-failure) fired; any sustained nonzero rate warrants an alert ([Recommended alerts](../../operations/observability.md#recommended-alerts)).
 
 For LLM Gateway metrics, see [LLM Gateway operations](../llm/operations.md#observability).
 

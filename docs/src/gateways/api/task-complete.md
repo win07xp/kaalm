@@ -10,15 +10,14 @@
 
 The gateway writes the pre-existing `{taskName}-completion` ConfigMap in the task's namespace, which acts as a mailbox. The ConfigMap is the data channel; admission to write it is a separate check, described under [The identity gate](#the-identity-gate).
 
-- The AgentTaskReconciler creates the ConfigMap at task provisioning with `data: {}` and an ownerRef to the AgentTask, so it is deleted with the task, together with a per-task Role and RoleBinding that grant the gateway `update` and `patch` on that one ConfigMap name. The names, and why the Role carries no `create` verb, are under [The completion mailbox](../../runtime/child-resources.md#the-completion-mailbox).
-- The gateway patches the ConfigMap through that Role; see [Gateway ServiceAccount permissions](../../security/rbac.md#gateway-serviceaccount-permissions).
-- The reconciler watches the ConfigMap, re-validates the artifact names, and transitions the task to `Completing` on the first observed payload. It remains the final authority on AgentTask state; see [AgentTask lifecycle](../../controller/task-lifecycle.md).
+- The AgentTaskReconciler creates the ConfigMap at task provisioning with `data: {}` and an ownerRef to the AgentTask, so it is deleted with the task. A per-task Role and RoleBinding let the gateway `update` and `patch` that one ConfigMap and nothing else. The names, and why the Role carries no `create` verb, are under [The completion mailbox](../../runtime/child-resources.md#the-completion-mailbox); see also [Gateway ServiceAccount permissions](../../security/rbac.md#gateway-serviceaccount-permissions).
+- The reconciler watches the ConfigMap and remains the final authority on AgentTask state; see [AgentTask lifecycle](../../controller/task-lifecycle.md).
 
 ![Sequence diagram of the record path: the Task Pod POSTs to the gateway over mTLS, the gateway runs its gates and validation, patches the completion ConfigMap through the scoped Role, and returns 200; the reconciler's ConfigMap watch fires, it re-checks the artifacts, and it sets status.phase to Completing.](../../diagrams/task-completion-record.svg)
 
 ## The identity gate
 
-Every call passes the gates below in order, and every rejection fires before the ConfigMap `Patch` is attempted, so only a `503` means the write itself failed. Gates 1 to 3 are the mTLS profile shared by the agent-report paths, specified under [Per-path client auth enforcement](../listener-tls.md#per-path-client-auth-enforcement) and [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes). Gates 4 to 7 read `spec.completion`, `status.phase`, and `status.currentPodUID` from the gateway's cluster-wide AgentTask watch, so they run synchronously with no apiserver round trip.
+Every call passes the gates below in order, and every rejection fires before the ConfigMap `Patch` is attempted, so only a `503` means the write itself failed. Gates 1 to 3 are the mTLS profile shared by the agent-report paths, specified under [Per-path client auth enforcement](../listener-tls.md#per-path-client-auth-enforcement) and [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes). Gates 4 to 7 read `spec.completion`, `status.phase`, and `status.currentPodUID` from the gateway's cluster-wide AgentTask watch, so a status change reaches them after an informer lag (see [Race windows](#race-windows)).
 
 ![Flowchart of the gates on POST /v1/task/complete in order: client certificate, SAN kind, source IP resolves to a Pod, an AgentTask backs the caller, the condition is agentReported, the phase is not terminal, the Pod UID matches status.currentPodUID, the body and artifact names are valid, the size caps hold, and the Patch succeeds. Each failed check ends in its status code and reason; the Pod UID and Patch checks are marked retryable.](../../diagrams/task-completion-gates.svg)
 
@@ -35,7 +34,7 @@ Every call passes the gates below in order, and every rejection fires before the
 | 9 | Every artifact value is within 4 KiB and the combined payload within 32 KiB | `413 request_too_large` | `false` |
 | 10 | The ConfigMap `Patch` succeeds | `503 internal_unavailable`, `Retry-After: 1` | `true` |
 
-The live `List Pods` in gate 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches gate 7 and at worst receives the retryable `409 stale_pod`. The fallback is scoped to this path alone: heartbeats are periodic and recover on the next tick, and a fleet-wide fallback would turn an informer resync into a burst of live `List` calls against the apiserver.
+The live `List Pods` in gate 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches gate 7 and at worst receives the retryable `409 stale_pod`. The fallback applies to this path alone: other paths recover without it (see [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes)), and a fallback on every path would turn an informer resync into a burst of live `List` calls against the apiserver.
 
 Gate 7 is the identity gate proper. It closes the stale-write race after a `backoffLimit` retry, where an old Pod's delayed completion would otherwise overwrite the new Pod's data, and it is the same rejection a new Pod can receive before the gateway sees its UID, as described under [Race windows](#race-windows), which is why it is retryable. Gate 6 exists because the reconciler does not re-process the mailbox once the phase is terminal; without the gate the agent's write would be silently dropped.
 
@@ -65,9 +64,9 @@ The gateway validates artifact names against the task's `spec.artifacts` and ret
 - **`status: "success"`**: every declared name must be present, and no undeclared names may appear.
 - **`status: "failure"`**: only the no-undeclared-names rule is enforced. A failing task may report a subset of declared artifacts, or none, and still have its failure recorded, so an agent that crashes before producing its full deliverable set can still report failure.
 
-`error.message` names the offending key in either branch: `missing declared artifact: pr-url` (success only) or `undeclared artifact in payload: extra-key` (both branches).
+`error.message` names the offending key in either branch.
 
-The gateway reads `spec.artifacts` from its AgentTask watch, so the check runs synchronously and the agent learns of a mismatch before exiting rather than later in `AgentTask.status`. The AgentTaskReconciler re-validates the names with the same per-status rule when it reads the ConfigMap, as a second check against RBAC drift on the per-task Role. Under normal operation the gateway-side check makes the reconciler's re-check a no-op.
+The gateway reads `spec.artifacts` from its AgentTask watch, so the check runs synchronously and the agent learns of a mismatch before exiting rather than later in `AgentTask.status`. The AgentTaskReconciler re-validates the names with the same per-status rule when it reads the ConfigMap, as a second check against RBAC drift on the per-task Role.
 
 ## Response codes
 
@@ -90,35 +89,35 @@ Returned when the request body is not valid JSON, when `status` is missing or is
 
 ### 401 Unauthorized
 
-Returned when no client certificate is presented, or when the source IP resolves to no Pod in the SAN namespace in the informer cache or in the live `List Pods` fallback. Typical causes of the second case are off-cluster spoofing, or a Pod terminated and removed by kubelet between dial and handle. The envelope is the [LLM Gateway 401 row](errors.md#llm-gateway-error-responses), `error.type: unauthorized`, `retryable: false`: both lookups have been exhausted, so a fresh attempt hits the same condition. Agents under normal operation do not observe this code.
+Returned when no client certificate is presented, or when the source IP resolves to no Pod in the SAN namespace in the informer cache or in the live `List Pods` fallback. The envelope is the [LLM Gateway 401 row](errors.md#llm-gateway-error-responses), `error.type: unauthorized`, `retryable: false`: both lookups have been exhausted, so a fresh attempt hits the same condition. Agents under normal operation do not observe this code.
 
 ### 403 Forbidden
 
-| Reason | Condition | `error.message` |
-|---|---|---|
-| `NotAgentTaskPod` | The SAN kind is not AgentTask, or no AgentTask with the SAN name exists in the namespace | `NotAgentTaskPod: Agent callers are not accepted on this path`, or `NotAgentTaskPod: no AgentTask backs this caller` |
-| `TaskNotAgentReported` | The task has `completion.condition: exitCode` | `TaskNotAgentReported: this task completes via container exit` |
-| `TaskAlreadyCompleted` | `status.phase` is terminal (`Succeeded`, `Failed`, `TimedOut`) | `TaskAlreadyCompleted: the task has reached a terminal phase` |
+| Reason | Condition |
+|---|---|
+| `NotAgentTaskPod` | The SAN kind is not AgentTask, or no AgentTask with the SAN name exists in the namespace |
+| `TaskNotAgentReported` | The task has `completion.condition: exitCode` |
+| `TaskAlreadyCompleted` | `status.phase` is terminal (`Succeeded`, `Failed`, `TimedOut`) |
 
-Every message starts with its reason code followed by `: `, so a caller can tell the three reasons apart by the prefix of `error.message`.
+Every `error.message` starts with its reason code followed by `: `, so a caller can tell the three reasons apart by that prefix.
 
-`exitCode` tasks have no completion mailbox: the ConfigMap and the per-task Role are provisioned in `agentReported` mode only (see [Child resources](../../runtime/child-resources.md)). `TaskAlreadyCompleted` is gate 6 under [The identity gate](#the-identity-gate).
+`exitCode` tasks have no completion mailbox: the ConfigMap and the per-task Role are provisioned in `agentReported` mode only (see [Child resources](../../runtime/child-resources.md)).
 
 ### 409 Conflict
 
-Returned when the calling Pod's UID does not match `status.currentPodUID`, or the field is empty: gate 7 under [The identity gate](#the-identity-gate). `error.type` is `stale_pod`, `retryable` is `true`, and `error.message` is `StalePodCompletion: the calling Pod is not the task's current Pod`. The call conflicts with the task's current state rather than being refused for good: once the gateway sees the new UID, the same Pod's retry can succeed, which is why the code is `409` and not `403`. See [Race windows](#race-windows).
+Returned when the calling Pod's UID does not match `status.currentPodUID`, or the field is empty: gate 7 under [The identity gate](#the-identity-gate). `error.type` is `stale_pod`, `retryable` is `true`, and `error.message` starts with `StalePodCompletion: `. The call conflicts with the task's current state rather than being refused for good: once the gateway sees the new UID, the same Pod's retry can succeed, which is why the code is `409` and not `403`. See [Race windows](#race-windows).
 
 ### 413 Payload Too Large
 
-Returned when any single artifact value exceeds 4 KiB (`error.message` names the artifact key) or when the sum of `message` plus all artifact values exceeds 32 KiB. Sizes are measured in UTF-8 bytes of the value strings only; keys are bounded by ConfigMap key naming rules and are not counted. The combined cap exists because the body is buffered in gateway memory and then patched into the per-task ConfigMap, which has the Kubernetes object limit of about 1 MiB. Large artifacts should be stored externally and referenced by URL in the value.
+Returned when any single artifact value exceeds 4 KiB or when the sum of `message` plus all artifact values exceeds 32 KiB. Sizes are measured in UTF-8 bytes of the value strings only; keys are bounded by ConfigMap key naming rules and are not counted. The combined cap exists because the body is buffered in gateway memory and then patched into the per-task ConfigMap, which has the Kubernetes object limit of about 1 MiB. Large artifacts should be stored externally and referenced by URL in the value.
 
 ### 503 Service Unavailable
 
-Returned when the `Patch` against the completion ConfigMap fails after every gate has passed: apiserver transiently unavailable, etcd unreachable, a `Patch` conflict, or RBAC drift on the per-task Role. `error.type: internal_unavailable`, `retryable: true`, with `Retry-After: 1` (integer delta-seconds, RFC 7231 § 7.1.3) as a cadence floor, mirroring the `504 controller_unavailable` pattern on the User Gateway. Agents must wait at least 1 second before retrying and may apply their own bounded backoff that waits longer, per [The runtime contract](../../runtime/contract.md), item 6.
+Returned when the `Patch` against the completion ConfigMap fails after every gate has passed: apiserver transiently unavailable, etcd unreachable, a `Patch` conflict, or RBAC drift on the per-task Role. `error.type: internal_unavailable`, `retryable: true`, with `Retry-After: 1` (integer delta-seconds, RFC 7231 § 7.1.3) as a cadence floor. Agents must wait at least 1 second before retrying; see [Retry guidance](#retry-guidance).
 
 ## Race windows
 
-Re-completion across a `backoffLimit` retry is the supported multi-call path. The reconciler clears `status.currentPodUID`, resets the mailbox to `data: {}`, creates the replacement Pod, and sets `status.currentPodUID` to the new Pod's UID from the Create response; the order and the figure are under [Retry mechanics](../../controller/task-lifecycle.md#retry-mechanics). Any in-flight call from the old Pod fails gate 7, and the new Pod's call lands on a fresh mailbox under the new UID.
+Re-completion across a `backoffLimit` retry is the supported multi-call path. The reconciler clears `status.currentPodUID`, resets the mailbox to `data: {}`, and sets `status.currentPodUID` to the replacement Pod's UID once that Pod exists; the order and the figure are under [Retry mechanics](../../controller/task-lifecycle.md#retry-mechanics). Any in-flight call from the old Pod fails gate 7, and the new Pod's call lands on a fresh mailbox under the new UID.
 
 The gateway sees the new UID after an informer lag, typically under 100ms, while agent startup takes seconds. A first call from the new Pod inside that lag receives `409 stale_pod`. This is the transient, retryable form of that code.
 
@@ -127,8 +126,8 @@ The gateway sees the new UID after an informer lag, typically under 100ms, while
 - **`retryable: false`** on `400`, `413`, and the `NotAgentTaskPod`, `TaskNotAgentReported`, and `TaskAlreadyCompleted` reasons: a duplicate call from the same Pod hits the same outcome. On `TaskAlreadyCompleted` the task is terminal and further writes are rejected by design; the agent should log and exit.
 - **`retryable: true`** on `409 stale_pod` and `503 internal_unavailable`: the lag before the gateway sees the new UID is transient, and so are the conditions behind a `503` (an apiserver flap, a leader election, brief etcd unavailability).
 
-Agents should retry both retryable cases with bounded backoff per [The runtime contract](../../runtime/contract.md), item 6: 100ms, 500ms, 2s, 3 attempts at most. For `503`, the `Retry-After: 1` floor also applies.
+For `409 stale_pod`, retry with bounded backoff as in [The runtime contract](../../runtime/contract.md), item 6: four attempts, immediately and then after 100ms, 500ms, and 2s. For `503`, this page recommends the same backoff with every wait raised to at least the 1-second `Retry-After` floor.
 
 ## Error envelope
 
-Error responses carry the structured `{ "error": { "type", "message", "retryable" } }` envelope, the same envelope as [User Gateway error responses](errors.md#user-gateway-error-responses). `error.type` is `invalid_request` for 400, `unauthorized` for 401, `access_denied` for 403, `stale_pod` for 409, `request_too_large` for 413, and `internal_unavailable` for 503. `error.message` carries the diagnostic: the offending artifact name or key for 400 and 413, the reason string for 403 and 409, and `patching the completion ConfigMap failed` for 503.
+Error responses carry the structured `{ "error": { "type", "message", "retryable" } }` envelope, the same envelope as [User Gateway error responses](errors.md#user-gateway-error-responses), with the `error.type` for each code listed under [Response codes](#response-codes). `error.message` names the offending artifact key when an artifact breaks the name rule or the 4 KiB cap, and starts with the reason code for 403 and 409.
