@@ -1,10 +1,10 @@
 # Running framework agents
 
-Kaalm never dictates what code produces a reply. The runtime contract
+Kaalm does not dictate what code produces a reply. The runtime contract
 governs how a container behaves; a framework agent (LangGraph, LangChain,
-or anything else) is the code between envelope in and reply out. If you
-already have one, you can keep it. There are two
-integration levels, and the first needs no conversion at all.
+or anything else) is the code between envelope in and reply out, so you can
+keep one you already have. There are two integration levels, and the first
+needs no conversion at all.
 
 ## Level 1: gateway only, zero conversion
 
@@ -37,9 +37,9 @@ all configuration:
    the gateway never reads, so use its `auth_token` parameter instead,
    which also lands in `Authorization`.
 3. **Qualify the model name.** `openai-shared/gpt-5.2` instead of
-   `gpt-5.2`: the gateway splits the prefix, checks the gates, injects the
-   real credential, and forwards. Whatever key your client was configured
-   with is stripped before forwarding, so a placeholder is safe.
+   `gpt-5.2`: the gateway reads the provider from the prefix and injects the
+   real credential. Whatever key your client was configured with is
+   stripped before forwarding, so a placeholder is safe.
 
 One wire fact to respect: the primary provider must speak your client's
 format. An OpenAI-format client targets a provider of `spec.type` `openai`
@@ -51,8 +51,7 @@ What you get: the API key leaves your pods, and the namespace's budgets,
 rate limits, and fallback apply to every call. What it does not: no Agent
 resource means no lifecycle, no hibernation, no channels, and no per-agent
 identity; your namespace is the tenancy unit. That trade is the design
-book's tiered on-ramp (Operations, Deployment), and moving up a tier is
-the rest of this page.
+book's tiered on-ramp (Operations, Deployment). Level 2 moves up a tier.
 
 ## Level 2: full lifecycle, the framework inside the handler
 
@@ -73,10 +72,8 @@ model = ChatOpenAI(
 
 `kaalm.http_client()` and `kaalm.http_async_client()` mint standard httpx
 clients that carry the pod's mTLS identity and keep it current across
-certificate rotation. Their names mirror the keyword arguments the
-framework SDKs take; pass both, because a framework that touches the async
-path with only a sync client supplied would silently run without your
-identity. Write the handler as `async def` and use the framework's async
+certificate rotation. Pass both: a framework that touches the async path with
+only a sync client supplied would silently run without your identity. Write the handler as `async def` and use the framework's async
 invocation: the runtime executes sync handlers on a thread without an
 event loop.
 
@@ -86,13 +83,10 @@ different combination:
 - **`examples/langgraph-chat/`**: a conversational graph with a SQLite
   checkpointer on the agent's PVC, keyed by the envelope's `sessionId`.
   Graph state survives hibernation, which the framework alone cannot
-  offer. Needs `spec.persistence.enabled: true`; the volume is mounted at
-  `/var/agent/memory` by default, and the controller injects
-  `$KAALM_MEMORY_DIR` with that path, so a custom `mountPath` works too.
+  offer. Needs `spec.persistence.enabled: true`; the example reads the
+  volume path from `$KAALM_MEMORY_DIR`, so a custom `mountPath` works too.
 - **`examples/langgraph-tools/`**: a tool-calling agent whose MCP tools
-  arrive through the gateway's broker at `/v1/mcp/{toolProvider}`, so the
-  tool credential never exists in the pod and the tool list is already
-  filtered to the grant. The MCP connection reuses
+  arrive through the gateway's broker, and whose MCP connection reuses
   `kaalm.http_async_client` through the adapter's client factory. The
   calling side is
   [Calling tools through the gateway](calling-tools.md).
@@ -111,9 +105,9 @@ The `langgraph-task` example is the custom-image alternative. It implements
 the slice of the contract a task needs: it reads its goal from its own
 `spec.env` (Kaalm injects no goal variables), runs the graph, and reports
 through `POST /v1/task/complete` with `status: "success"` and the artifacts
-declared in `spec.artifacts`, retrying only the retryable rejection
-(`409 stale_pod`, on 100ms, 500ms, 2s) and treating `TaskAlreadyCompleted`
-as done.
+declared in `spec.artifacts`, retrying only `409 stale_pod` and treating
+`TaskAlreadyCompleted` as done. That is item 6 of the checklist in
+[Building your own agent image](building-your-own-image.md).
 
 ## Errors your graph will see
 
@@ -140,14 +134,12 @@ pause.
 
 ## The rotation footnote
 
-Kaalm rotates workload certificates on disk mid-pod-lifetime. The `kaalm`
-client factories exist so this never becomes your problem; a client built
-by hand from `$KAALM_TLS_CERT` files snapshots its SSL context and an
-agent that neither hibernates nor restarts for most of the certificate's
-lifetime (90 days by default) would still present the old certificate
-after rotation. If you must build your own client (as the task example does), that is fine precisely
-when the pod is short-lived; long-lived hand-built clients should be
-rebuilt when TLS errors appear.
+Kaalm rotates workload certificates on disk while the pod runs. The `kaalm`
+client factories handle this. A client you build by hand from the
+`$KAALM_TLS_CERT` files snapshots its SSL context, so a long-lived agent keeps
+presenting the old certificate after rotation (certificates last 90 days by
+default). A hand-built client is fine in a short-lived pod, as in the task
+example; in a long-lived one, rebuild the client when TLS errors appear.
 
 ---
 

@@ -75,12 +75,11 @@ Three wire facts:
   `400 invalid_request`.
 
 On the 2026-07-28 revision, which a client selects with its
-`MCP-Protocol-Version` header, there is no session: the first call is
-`server/discover`, every POST carries an `Mcp-Method` header naming its
-method, `tools/call` also carries `Mcp-Name`, and a missing or mismatched
-header is answered `400` with JSON-RPC error `-32020` in the body rather than
-the gateway envelope. The design book's tool plane page states both
-revisions.
+`MCP-Protocol-Version` header, there is no session and the first call is
+`server/discover`. Every POST carries an `Mcp-Method` header naming its method, and
+`tools/call` also carries `Mcp-Name` naming the tool. A missing or mismatched header is answered `400`
+with JSON-RPC error `-32020` in the body, not the gateway envelope. The design
+book's tool plane page states both revisions.
 
 ![Sequence diagram of one brokered tool call. The agent container POSTs to /v1/mcp/{toolProvider} on the gateway broker at :8443 with a JSON-RPC body. The broker establishes the caller identity, runs the checks in order, reads the credential from a Secret in kaalm-system, strips inbound auth and injects the credential, and forwards to the tool server with no redirects and an upstream timeout. Three outcomes: unreachable, redirect, 401, 403, or 5xx is 503 tool_unavailable; a timeout is 504 tool_timeout; a response, JSON or an SSE stream, has tools/list filtered with cacheScope set to private and a legacy Mcp-Session-Id wrapped, then is relayed. The call ends with one audit line and the metrics.](../diagrams/tool-broker-flow.svg)
 
@@ -94,8 +93,8 @@ never on the message:
 | 403 | `access_denied` | no | A tenancy gate: namespace, class, or session ownership. The fix is in the specs, not your code |
 | 403 | `tool_denied` | no | The named tool is outside your grant, or the method is off the broker's allowlist |
 | 413 | `request_too_large`, `response_too_large` | no | The request or the server's response exceeded the broker's body cap |
-| 429 | `rate_limited` | after `Retry-After` | Your namespace hit the provider's `requestsPerMinute` ceiling. `Retry-After` is the seconds until your namespace's bucket admits a call again, at least 1. It can be minutes when the provider's `requestsPerMinute` is below the gateway replica count |
-| 503 | `tool_unavailable` | per `error.retryable` | The tool server is unreachable, refusing, rejected the injected credential, or sent a `tools/list` answer the broker cannot parse; a platform problem, not yours. The first two are retryable; the last two are not |
+| 429 | `rate_limited` | after `Retry-After` | Your namespace hit the provider's `requestsPerMinute` ceiling. `Retry-After` is the seconds until your namespace's bucket admits a call again. It can be minutes when the provider's `requestsPerMinute` is below the gateway replica count |
+| 503 | `tool_unavailable` | per `error.retryable` | The tool server is unreachable, answered with a 5xx, rejected the injected credential, or sent a `tools/list` answer the broker cannot parse; a platform problem, not yours. The first two are retryable; the last two are not |
 | 504 | `tool_timeout` | yes | The call exceeded the broker's upstream timeout |
 
 A protocol-level 4xx from the tool server itself relays verbatim (an
@@ -106,9 +105,8 @@ recovery, re-initialize and retry, works unchanged through the broker.
 
 The tool credential. It is not mounted in your pod, it is not in your spec,
 and it never exists in your namespace. If the server starts rejecting it,
-you see `tool_unavailable` and your platform team sees the provider's
-`Healthy` condition drop on its next probe; there is nothing to rotate or fix
-on your side.
+you see `tool_unavailable`; there is nothing to rotate or fix on your
+side.
 
 ---
 

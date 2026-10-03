@@ -18,7 +18,7 @@ Environment:
 |---|---|
 | `KAALM_HEALTH_PORT` | The port to serve on (default 8080) |
 | `KAALM_GATEWAY_ENDPOINT` | Base HTTPS URL of the gateway's cluster listener; all outbound calls go here |
-| `KAALM_OPERATOR_NAMESPACE` | The namespace the gateway runs in. Build the gateway Service DNS from it to check who is delivering to you: `kaalm-gateway.{namespace}.svc.cluster.local` and `kaalm-gateway.{namespace}.svc` |
+| `KAALM_OPERATOR_NAMESPACE` | The namespace the gateway runs in. Build the gateway Service DNS names from it, `kaalm-gateway.{namespace}.svc.cluster.local` and `kaalm-gateway.{namespace}.svc`, to check who is delivering to you |
 | `KAALM_TLS_CERT` / `KAALM_TLS_KEY` | Your per-agent certificate and key, mounted at `/var/run/kaalm/` |
 | `KAALM_CA_CERT` | The cluster CA bundle, same mount |
 | `KAALM_HANDLER_PATH` | Only when `Agent.spec.handler` is set: the directory the handler ConfigMap is mounted at (`/opt/kaalm/handler`). Its absence is how a base image knows to serve its built-in default; a `FROM` build that bakes a handler sets it itself |
@@ -42,8 +42,7 @@ Numbered as in the design book (runtime contract items 1 to 8):
 1. **Health endpoints (required).** Serve `GET /readyz` and `GET /livez`
    over TLS on `$KAALM_HEALTH_PORT`. `/readyz` returns 200 when the
    container can accept a message and 503 otherwise; `/livez` returns 200
-   when the process is healthy. The controller's injected probes target
-   exactly these paths.
+   when the process is healthy.
 2. **Graceful SIGTERM (required).** Finish in-flight work and exit within
    the grace period.
 3. **Gateway communication (required in practice).** Talk to
@@ -51,19 +50,20 @@ Numbered as in the design book (runtime contract items 1 to 8):
    certificate and verifying the gateway against `$KAALM_CA_CERT`.
 4. **Message endpoint (channel-backed Agents only).** Serve
    `POST /v1/message` on the health port: message envelope in, response
-   envelope out. Verify the caller's client certificate; only the gateway
-   should be able to deliver. Reload both your serving certificate and the
-   CA bundle from disk when they rotate.
+   envelope out. Verify the caller's client certificate on this path only,
+   because the kubelet's probes of `/readyz` and `/livez` present none: answer
+   `401` with no certificate and `403` when its SAN is not a gateway Service
+   DNS name. Reload both your serving certificate and the CA bundle from disk
+   when they rotate.
 5. **Heartbeats (persistent Agents only, optional).**
    `POST /v1/agent/heartbeat` to the gateway signals activity for idle
    detection; alternatively let the gateway infer activity from your
    traffic. Task images must NOT heartbeat; the gateway rejects it.
 6. **Completion (AgentTasks only).** Report the verdict with
    `POST /v1/task/complete`, including any declared artifacts. Retry a
-   `409` with `error.type: stale_pod` a few times with backoff (the
-   controller writes the new Pod's UID to the task's status after it
-   creates the Pod, and a call that arrives before that write gets the
-   `409`); treat
+   `409` with `error.type: stale_pod` with backoff, because a report can
+   arrive before the controller records the new Pod (the reference runtimes
+   try four times: at once, then after 100ms, 500ms, and 2s). Treat
    `reason=TaskAlreadyCompleted` as final and exit.
 7. **Message deduplication (required if you implement /v1/message).**
    Deliveries carry a gateway-generated `messageId`; process each id once.
@@ -77,27 +77,24 @@ Numbered as in the design book (runtime contract items 1 to 8):
 
 The same image can serve as a persistent Agent and as an AgentTask. The
 starter templates detect task mode from their own certificate's SAN and
-switch behavior: no heartbeat loop, report completion instead. The
-`KAALM_TEMPLATE_HEARTBEAT` variable (`auto`, the default, or `off`) exists
-only as an override for the heartbeat loop; there is no force-on.
+switch behavior: no heartbeat loop, report completion instead. Set
+`KAALM_TEMPLATE_HEARTBEAT=off` to stop the heartbeat in both modes; the
+[Starter templates](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/starter-templates.md#the-heartbeat-toggle-and-hibernation)
+says when you need that.
 
 ## Growing out of a template versus starting clean
 
-Before either: if a base image plus a mounted or `FROM`-baked handler covers
-your case, stay there and skip this whole page. The templates carry no
-contract code of their own. `examples/starter-python` is a `FROM` build on
+The templates carry no contract code of their own. `examples/starter-python` is a `FROM` build on
 the Python base image plus a `handler.py`, and `examples/starter-go` is a
 `main.go` and `handler.go` that import the `agentruntime` module, which
-implements mTLS serving, certificate rotation reload, envelope parsing, dedup,
-heartbeat, and completion retry. Start from the Go template if Go is your
+implements the whole checklist. Start from the Go template if Go is your
 language and you need the whole program. Start clean only when you need
-another runtime, and implement the checklist in order: serve, verify, reload,
-dedup, propagate.
+another runtime, and implement the checklist above.
 
 ## Testing an image before pointing an Agent at it
 
-The fastest full-fidelity loop is the e2e cluster, because the contract is mostly about TLS identity, and that needs
-the real certificate issuance:
+The fastest full-fidelity loop is the e2e cluster, because the contract is
+mostly about TLS identity and that needs real certificate issuance:
 
 ```bash
 make k3d-up e2e-images e2e-deploy
