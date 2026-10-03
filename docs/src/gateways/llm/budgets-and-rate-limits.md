@@ -133,7 +133,7 @@ For a hard-mode provider, spend within a period never exceeds a `block` ceiling 
 Three limits are part of the guarantee:
 
 - The gateway can only cap what providers report. A response with no usage metadata settles at zero cost ([Streaming responses](request-handling.md#streaming-responses)); a provider that omits usage evades any gateway-side cap. Rule 33 keeps unpriced *models* out of hard mode, but usage-less *responses* are a provider behavior no proxy can price.
-- The margin bounds when serialization engages, not what one admitted request may cost. A single request larger than the remaining headroom is admitted, and its overshoot is the first bullet's bound.
+- The margin bounds when serialization engages, not what one admitted request may cost. A single request larger than the remaining headroom is admitted, and its overshoot is the one-in-flight-request bound of the guarantee above.
 - A simultaneous crash of all replicas loses at most the in-flight requests' costs inside the boundary region (settles publish immediately there), rather than soft mode's 10 seconds of spend.
 
 ### Behavior under failure

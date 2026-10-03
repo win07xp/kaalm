@@ -128,9 +128,9 @@ rateLimits:
   requestsPerMinute: 300
 ```
 
-The ceiling is per namespace and cluster-wide, as for ModelProvider rate
-limits. A namespace over its ceiling gets `429 rate_limited` with a `Retry-After`
-header. Zero or omitted means no limit.
+The ceiling is per namespace and ToolProvider. As with ModelProvider limits,
+each gateway replica enforces its share. A namespace over its ceiling gets
+`429 rate_limited` with a `Retry-After` header. Zero or omitted means no limit.
 
 ## 5. Read the audit trail and metrics
 

@@ -143,7 +143,8 @@ reply renders. Three consequences follow:
 Repeated chats from the same person to the same agent share one session, so
 agents with session memory behave normally. Messages are plain text, and a
 reply is subject to the same deadline and size limits as a sync webhook
-reply. A cold wake can exceed the 30-second sync deadline on the first try;
+reply. A message over `gateway.maxMessageBodyBytes` (1 MiB by default) gets
+`413`. A cold wake can exceed the 30-second sync deadline on the first try;
 send the message again.
 
 ## 6. The JSON API

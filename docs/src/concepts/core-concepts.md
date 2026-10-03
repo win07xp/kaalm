@@ -30,9 +30,9 @@ The resources form one reference graph, split along the scope boundary in the ta
 
 **What a workload is.** Every Agent and AgentTask names exactly one AgentClass, and the class is what the platform team's policy attaches to. An AgentChannel names one Agent by name in its own namespace; a task has no channel, because it is not a resident to talk to.
 
-![The model-provider gates. AgentClass names ModelProviders through spec.allowedProviders, and Agent and AgentTask each name a ModelProvider through spec.providers[].providerRef, so two separate edges converge on ModelProvider.](../diagrams/crd-references-model-gates.svg)
+![The model-provider gates. AgentClass names ModelProviders through spec.allowedProviders, and Agent and AgentTask each name a ModelProvider through spec.providers[].providerRef, so three edges converge on ModelProvider.](../diagrams/crd-references-model-gates.svg)
 
-**Who may call a model.** The two red edges into ModelProvider are separate gates, not one list. An Agent may call a provider only when its AgentClass lists the provider in `allowedProviders` (the platform team's decision), the Agent names it in `providers[].providerRef` (the developer's decision), and the ModelProvider admits the Agent's namespace in `allowedNamespaces`. The third gate is not a reference, so no figure draws it; it is [rule 4](../resources/validation/references-and-access.md), beside rules 3 and 5 for the two edges shown.
+**Who may call a model.** The red edges into ModelProvider are two separate gates, the class's and the workload's, not one list. An Agent may call a provider only when its AgentClass lists the provider in `allowedProviders` (the platform team's decision), the Agent names it in `providers[].providerRef` (the developer's decision), and the ModelProvider admits the Agent's namespace in `allowedNamespaces`. The third gate is not a reference, so no figure draws it; it is [rule 4](../resources/validation/references-and-access.md), beside rules 3 and 5 for the two gates shown.
 
 ![The tool-provider gates, drawn the same way: AgentClass names ToolProviders through spec.allowedToolProviders, and Agent and AgentTask each name a ToolProvider through spec.tools[].providerRef.](../diagrams/crd-references-tool-gates.svg)
 

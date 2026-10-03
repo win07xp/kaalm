@@ -43,7 +43,7 @@ Both endpoints are ClusterIP only. The chart ships no `ServiceMonitor` or `PodMo
 
 Standard controller-runtime reconcile metrics (counts, duration, queue depth, work-queue saturation) are emitted automatically by the controller. See [Observability](../controller/operations.md#observability) for the per-component canonical list.
 
-The Kaalm-specific metrics across all three components. The dashboard test under `test/dashboards` reads this table, so a new row needs a panel ([Dashboards](#dashboards)). One Kaalm metric is outside it on purpose: `kaalm_storage_migrated_objects_total{kind}`, a counter the storage-version migrator increments once per upgrade ([Storage-version migration](api-versioning.md#storage-version-migration)).
+The table lists the Kaalm-specific metrics of the controller and the gateway; the gateway rows are split into LLM Gateway, User Gateway, and Tool broker. The dashboard test under `test/dashboards` reads this table, so a new row needs a panel ([Dashboards](#dashboards)). One Kaalm metric is outside it on purpose: `kaalm_storage_migrated_objects_total{kind}`, a counter the storage-version migrator increments once per upgrade ([Storage-version migration](api-versioning.md#storage-version-migration)).
 
 | Source | Metric | Type | Labels |
 |---|---|---|---|

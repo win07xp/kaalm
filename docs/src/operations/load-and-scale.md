@@ -202,4 +202,4 @@ The baseline is one developer machine. The numbers that transfer are the per-uni
 
 - [Observability](observability.md) for the metric catalog the harness reads.
 - [Controller operations](../controller/operations.md#observability) and [LLM gateway operations](../gateways/llm/operations.md#observability) for what each metric means.
-- [Vision and scope](../concepts/vision-and-scope.md) for the fleet size the design targets.
+- [Reconcile interval and performance](../controller/overview.md#reconcile-interval-and-performance) for the fleet size the design targets.

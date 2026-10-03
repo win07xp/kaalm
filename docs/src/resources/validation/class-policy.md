@@ -20,7 +20,7 @@ Each of these compares a workload against its AgentClass, so none of the workloa
 
 ## Class caps
 
-Resource limits, volume size, the Agent lifecycle timeouts, and the task timeout and retention are bounded by the class, and a workload that asks for more is not rejected: the effective value is clamped to the cap at reconcile time (the `resources.limits` clamp is drawn in [Change propagation](../../controller/change-propagation.md#agentclass-change-handling)).
+Resource limits, volume size, the Agent lifecycle timeouts, and the task timeout and retention are bounded by the class, and a workload that asks for more is not rejected: the effective value is clamped to the cap at reconcile time (the `resources.limits` clamp is described in [Change propagation](../../controller/change-propagation.md#bucket-1-recreate-and-clamp-default)).
 
 **Rule 6: Resource limits are capped by the class.** A limit above `AgentClass.spec.resources.maxLimits` is lowered to the cap, a request above it likewise, and a resource named in `maxLimits` with no limit of its own is given the cap.
 

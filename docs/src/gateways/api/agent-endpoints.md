@@ -51,7 +51,7 @@ The agent is the server, so the [runtime contract](../../runtime/contract.md) pu
 | Client certificate | `kaalm-gateway-tls` |
 | Headers | `Content-Type: application/json`; `traceparent` and `tracestate` when tracing is enabled ([item 8](../../runtime/contract.md#8-trace-context-propagation)). No `Authorization` header. |
 | Attempts | Four: immediately, then after 1s, 5s, and 25s |
-| Per-attempt bound | `gateway.agentReadTimeout` (default 10s). The whole delivery is also bounded: by the sync deadline in sync mode, by the async pipeline bound in async mode. |
+| Per-attempt bound | `gateway.agentReadTimeout` (default 10s). The whole delivery is also bounded: by the sync deadline in sync mode, by the [async pipeline bound](async-responses.md#async-pipeline-bound) in async mode. |
 | Response cap | `gateway.maxResponseBodyBytes` (default 900 KiB). A reply over the cap is `response_too_large` and is not retried. |
 
 ### Request body (sent by the gateway)

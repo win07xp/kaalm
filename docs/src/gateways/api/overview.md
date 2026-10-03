@@ -55,7 +55,7 @@ The proxy accepts requests on three paths and forwards each to the resolved Mode
 | `/v1/chat/completions` | OpenAI chat completions, also served by vLLM, Ollama, and LiteLLM |
 | `/v1/completions` | OpenAI completions |
 
-The path names the inbound format; the provider's type names the outbound one. When the two differ, the gateway translates ([Request format detection](../llm/request-handling.md#request-format-detection)). Bodies pass through otherwise unchanged: the gateway adds no envelope of its own. It replaces the caller's credentials with the provider credential, strips the `{providerRef}/` prefix from the model name, and relays the response, including SSE streams ([Request flow](../llm/request-handling.md#request-flow), step 7).
+The path names the inbound format; the provider's type names the outbound one. When the two differ, the gateway translates ([Request format detection](../llm/request-handling.md#request-format-detection)). Bodies pass through otherwise unchanged: the gateway adds no envelope of its own. It replaces the caller's credentials with the provider credential, strips the `{providerRef}/` prefix from the model name, and relays the response, including SSE streams ([Request flow](../llm/request-handling.md#request-flow), steps 7 to 9).
 
 Errors the gateway raises itself use the envelope in [LLM Gateway error responses](errors.md#llm-gateway-error-responses).
 

@@ -87,7 +87,8 @@ The field behaves differently from the provider allowlists:
 
 ## Revoking a team
 
-Remove the namespace from `allowedNamespaces`. Two things happen, in order:
+Remove the namespace from the ModelProvider's `allowedNamespaces`. Two things
+happen, in order:
 
 - **Immediately**: the gateway denies the namespace's next LLM call with
   `403 access_denied`.
