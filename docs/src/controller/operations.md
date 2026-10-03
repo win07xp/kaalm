@@ -64,7 +64,7 @@ The chart serves the controller's Prometheus metrics on `:8080/metrics` over pla
 | `kaalm_agents` | gauge | `phase`, `namespace` | Agent count by phase |
 | `kaalm_tasks` | gauge | `phase`, `namespace` | AgentTask count by phase |
 | `kaalm_channels` | gauge | `namespace`, `phase`, `ready`, `platform_connected` | AgentChannel count by `status.phase`, the `Ready` condition, and the tri-state `PlatformConnected` condition, the last two as `true`, `false`, or `unknown` |
-| `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` | the canonical spend total the ModelProvider fold writes ([step 4](reconcilers/modelprovider.md)), distinct from the gateway's per-replica `kaalm_llm_spend_usd_total` partials |
+| `kaalm_provider_budget_canonical_usd` | gauge | `provider`, `namespace`, `period` | the canonical spend total the ModelProvider fold writes ([Budget reconciliation](reconcilers/modelprovider.md#budget-reconciliation)), distinct from the gateway's per-replica `kaalm_llm_spend_usd_total` partials |
 | `kaalm_hibernations_total` | counter | `namespace` | hibernations completed, counted after the `Hibernated` status write succeeds |
 | `kaalm_wakes_total` | counter | `namespace`, `trigger` | wakes honored. `trigger` is `channel` for a wake the activator requested on a channel message, `annotation` for a manual wake ([Manual wake](hibernation-and-wake.md#manual-wake)) |
 | `kaalm_storage_migrated_objects_total` | counter | `kind` | custom resources the storage-version migrator rewrote at `v1beta1`: zero on a fresh install, the pre-upgrade object count on the first leader start after an upgrade, zero after that ([Storage version migration](../operations/api-versioning.md#storage-version-migration)) |
