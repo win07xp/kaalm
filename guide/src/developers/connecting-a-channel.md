@@ -78,6 +78,11 @@ curl -sS --cacert ca.crt \
 Replace `GATEWAY_HOST` with `kaalm-gateway.kaalm-system.svc` from inside the
 cluster, or your ingress hostname from outside.
 
+This channel sets no `spec.webhook.content` extractor, so the agent receives
+the whole request body as text: `{"content": "hello"}`, not `hello`. To pass
+only the field, set `spec.webhook.content.fromBody: content`; see
+[AgentChannel](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/agentchannel.md#extracting-userid-and-content).
+
 In `sync` mode the agent's reply is the HTTP response body. To give each
 caller a stable conversation session with the agent, set `spec.session.enabled:
 true` and map the caller identity with `userId` (the sample channel in
