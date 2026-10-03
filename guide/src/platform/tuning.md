@@ -3,19 +3,18 @@
 The chart's defaults suit most clusters. The values on this page change how
 the two components behave under load, during debugging, when they issue
 workload certificates, or on a cluster whose DNS is not where the default
-expects; everything else is covered on the page that needs it. Set them on `helm install` or
-`helm upgrade`, and pass the same values on every upgrade, because
+expects; everything else is covered on the page that needs it. Set them on
+`helm install` or `helm upgrade`, and pass the same values on every upgrade, because
 `helm upgrade` resets anything you leave out.
 
 ## Reconcile parallelism
 
 `controller.maxConcurrentReconciles` (default `4`) is how many objects each
 of the Agent, AgentChannel, and AgentTask controllers reconciles at once, so
-the default is up to twelve in flight across the three. The controller never
-reconciles one object from two workers, so the value only lets different
-objects proceed in parallel. Raise it on a cluster that
-creates hundreds of agents in bursts and watches the reconcile queue depth
-climb ([Installing the Grafana dashboards](../observing/dashboards.md) has
+the default is up to twelve in flight across the three. One object is never
+reconciled by two workers, so the value only lets different objects proceed in
+parallel. Raise it on a cluster that creates hundreds of agents in bursts and
+watches the reconcile queue depth climb ([Installing the Grafana dashboards](../observing/dashboards.md) has
 the panel); set it to `1` to serialize everything while chasing a bug.
 
 ```bash
@@ -42,8 +41,7 @@ more requests; the extra workers only queue behind the limiter otherwise.
 
 Both Deployments request `100m` CPU and `128Mi` memory and set a `512Mi`
 memory limit, with no CPU limit so a burst of work is never throttled.
-`controller.resources` and `gateway.resources` hold those defaults, and the
-chart renders them into the container unchanged. Helm merges a `--set` of one
+`controller.resources` and `gateway.resources` hold those defaults. Helm merges a `--set` of one
 field into the defaults, so the other fields keep their values. The
 controller's memory grows with the number of objects its cache holds; raise
 its limit on large fleets.
@@ -56,12 +54,13 @@ its limit on large fleets.
 
 All three components write JSON logs at `info`. Set a level per component
 with `controller.logLevel` (`debug`, `info`, or `error`), `gateway.logLevel`,
-or `console.logLevel` (`debug`, `info`, `warn`, or `error`). Prompt and
-response bodies are never logged at any level.
+or `console.logLevel` (`debug`, `info`, `warn`, or `error` for both). Prompt
+and response bodies are never logged at any level.
 
 ```bash
 --set controller.logLevel=debug
 ```
+
 ## Where agents find DNS
 
 Every agent and task Pod gets a NetworkPolicy that allows DNS on port 53
@@ -109,9 +108,6 @@ kubectl -n kaalm-system port-forward deploy/kaalm-gateway 6060:6060
 go tool pprof -http=:8000 http://127.0.0.1:6060/debug/pprof/profile?seconds=30
 ```
 
-Heap, goroutine, mutex, and block profiles are under the same
-`/debug/pprof/` prefix. Leave both values at `0` in production.
-
 ## Workload certificate lifetime
 
 Every Agent and AgentTask gets its own client certificate, which it presents
@@ -129,8 +125,8 @@ until it expires, so shorten both on a cluster where that window matters:
 Use Go duration syntax (`h`, `m`, `s`; there is no `d` unit). `duration`
 must be at least `1h` and `renewBefore` at least `5m`, the minimums
 cert-manager accepts, and `renewBefore` must be shorter than `duration`.
-Otherwise the controller exits at startup with an error naming the value. The new lifetime applies to certificates created
-after the change; an existing workload keeps its certificate's lifetime until
+Otherwise the controller exits at startup with an error naming the value. The
+new lifetime applies to certificates created after the change; an existing workload keeps its certificate's lifetime until
 the workload is re-created.
 
 ## Replicas and rollouts
@@ -139,13 +135,13 @@ the workload is re-created.
 refuses to render below two: the second controller replica serves the
 wake-on-demand endpoint during a rolling update, and the second gateway
 replica keeps LLM and webhook traffic flowing through one. Raise the gateway
-count for throughput; rate-limit buckets re-divide across replicas on the
-next refill. Raising the controller count adds standby capacity only, since
+count for throughput. Raising the controller count adds standby capacity only, since
 one replica leads at a time.
 
-A gateway rollout resets its in-memory activity state, so idle and
-hibernation transitions defer for one `idleTimeout` afterwards. Schedule
-chart upgrades with that in mind on clusters with multi-hour idle timeouts.
+A gateway rollout defers idle and hibernation transitions for one
+`idleTimeout`, so schedule chart upgrades accordingly on clusters with
+multi-hour idle timeouts. See
+[Deployment](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#helm-chart-upgrades).
 
 ---
 

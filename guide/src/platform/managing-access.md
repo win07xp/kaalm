@@ -17,8 +17,7 @@ with its client certificate), every LLM request passes:
 3. **The provider's namespace allowlist**: the calling namespace must match
    `allowedNamespaces` (globs supported).
 
-Every failure returns `403` with error type `access_denied` and a message
-naming the failed gate. The provider's namespace gate is checked before model
+Every failure returns `403` with error type `access_denied`. The provider's namespace gate is checked before model
 existence, so a namespace without access never learns which models a provider
 hosts.
 
@@ -54,11 +53,10 @@ Prefer exact namespace names in `allowedNamespaces`; use globs like
 
 ## Keep a class to some teams
 
-RBAC cannot limit which AgentClass a developer names in `agentClassRef`,
-because it authorizes creating an Agent or AgentTask, not the names its spec
-references. Removing a
-developer's read access to a class does not stop them naming it either. To keep
-a class to chosen teams, list their namespaces in the class's
+RBAC cannot limit which AgentClass a developer names in `agentClassRef`, and
+removing their read access to a class does not stop it
+([RBAC and authentication](https://github.com/win07xp/kaalm/blob/main/docs/src/security/rbac.md#persona-roles)
+says why). To keep a class to chosen teams, list their namespaces in the class's
 `allowedNamespaces`. Each entry is a `path.Match` glob, such as `team-*`:
 
 ```bash
@@ -73,8 +71,8 @@ its LLM and tool calls. A malformed pattern, such as `[`, matches nothing.
 
 The field behaves differently from the provider allowlists:
 
-- **Unset admits every namespace.** Existing classes, and the chart's
-  `standard` class, behave as before. To admit every namespace explicitly,
+- **Unset admits every namespace.** The chart's `standard` class
+  leaves it unset. To admit every namespace explicitly,
   list `"*"`.
 - **An empty list is rejected.** The API server refuses `[]` and tells you to
   omit the field to admit every namespace. On a provider, an empty list admits
@@ -109,10 +107,11 @@ not open.
 Removing a team's namespace from a class's `allowedNamespaces` has the same
 effect, with reason `NamespaceNotAllowed`: the gateway denies the next LLM and
 tool call, the controller degrades the namespace's Agents, and their Pods keep
-running. A new AgentTask of that class fails terminally with the same reason.
-A task that already has a Pod keeps running, but the gateway refuses its calls.
-To restore access, add the namespace back or remove the field, and the Agents
-return to their earlier phase.
+running. A new AgentTask of that class fails terminally with reason
+`NamespaceNotAllowed`. A task that already
+has a Pod keeps running, but the gateway refuses its calls. To restore access,
+add the namespace back or remove the field, and the Agents return to their
+earlier phase.
 
 ## Kubernetes roles for a team
 
@@ -120,8 +119,8 @@ The chart can install the Kubernetes roles a development team needs and bind
 them from your values. They are off by default. Four roles exist: platform
 administrators manage the catalog, catalog readers read it, developers run
 agents in their own namespace, and secrets administrators manage credential
-Secrets. [Roles for
-people](https://github.com/win07xp/kaalm/blob/main/docs/src/security/rbac.md#roles-for-people)
+Secrets. [RBAC and
+authentication](https://github.com/win07xp/kaalm/blob/main/docs/src/security/rbac.md#roles-for-people)
 in the design book lists what each role grants.
 
 To give a team its roles:
@@ -175,8 +174,7 @@ Each list does one job:
 
 - `catalogReaders` binds the catalog read role cluster-wide. Add every
   developer group to it, so developers can look up the cluster-scoped
-  AgentClasses and ModelProviders they name in a manifest; a namespace binding
-  cannot grant cluster-scoped kinds.
+  AgentClasses and ModelProviders they name in a manifest.
 - `developers` maps a namespace to the subjects who work in it. Each namespace
   must already exist, or the upgrade fails with `namespace not found`. Create a
   team's namespace first, and add its entry when you onboard the team. For a
@@ -184,28 +182,22 @@ Each list does one job:
   with a RoleBinding in that namespace yourself.
 - `secretsAdmins` binds the Secret role in `kaalm-system` only, for the LLM
   and tool credentials. These people also label each provider Secret and list
-  its endpoint hosts. See
-  [Label provider Secrets](#label-provider-secrets).
+  its endpoint hosts ([Label provider Secrets](#label-provider-secrets)).
 - `namespaceSecretsAdmins` maps a team namespace to that team's credential
   managers, who own its channel credentials. See
   [Keep channel credentials in team namespaces](#keep-channel-credentials-in-team-namespaces).
 
 If `developers` or `namespaceSecretsAdmins` is not a map (for example, a
-list), the upgrade fails with `kaalm: rbac.personas.developers must be a map
-of namespace to a list of subjects`, or the same message for
-`namespaceSecretsAdmins`.
+list), the upgrade fails and the error names the value.
 
 ### Keep channel credentials in team namespaces
 
 Each team owns its channel credentials. Name a credential manager for the
 team's namespace in `namespaceSecretsAdmins`, as in the example above. The
-chart then binds the Secret role there with a RoleBinding named
-`kaalm-secrets-admin`, and the platform team holds no Secret rights in team
-namespaces. The namespace must already exist, and an empty list renders
-nothing. Do not list the release namespace: the upgrade fails with
-`kaalm: rbac.personas.namespaceSecretsAdmins must not list the release
-namespace; use rbac.personas.secretsAdmins`. `secretsAdmins` is the list for
-the release namespace, which holds the provider and tool credentials.
+chart then binds the Secret role there, and the platform team holds no Secret
+rights in team namespaces. The namespace must already exist. Do not list the
+release namespace: the upgrade fails. `secretsAdmins` is the list for the
+release namespace, which holds the provider and tool credentials.
 
 The credential manager creates each channel Secret and labels it, because a
 channel may use only Secrets that carry the label:
@@ -216,9 +208,9 @@ kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/channel-credential=true
 
 Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with the team's
 namespace. A Secret used as a bearer `callbackAuth` token also needs its
-approved hosts in the `kaalm.io/callback-hosts` annotation. The label applies
-in every namespace, whoever creates the Secret. Developers need no Secret
-access to use the channel. [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved)
+approved hosts in the `kaalm.io/callback-hosts` annotation. The label is
+required in every namespace, whoever creates the Secret. Developers need no
+Secret access to use the channel. [Troubleshooting](../reference/troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved)
 shows what a channel reports when a Secret lacks the label.
 
 ### Label the Secrets a workload reads
@@ -236,8 +228,8 @@ Replace `SECRET_NAME` with the Secret's name and `NAMESPACE` with the
 workload's namespace. The label is separate from
 `kaalm.io/channel-credential` and `kaalm.io/provider-credential`: each label
 covers one use, so a Secret used two ways needs both labels. There is no
-switch to turn the check off, and it applies in every namespace. Developers
-need no Secret access to use a labeled Secret.
+switch to turn the check off. Developers need no Secret access to use a
+labeled Secret.
 [Troubleshooting](../reference/troubleshooting.md#workload-is-readyfalse-with-secretnotoptedin)
 shows what a workload reports when a Secret lacks the label. For the rule, see
 [Validation and defaulting](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/validation-and-defaulting.md).
@@ -257,9 +249,8 @@ kubectl annotate secret SECRET_NAME -n kaalm-system kaalm.io/provider-hosts=HOST
 Replace `SECRET_NAME` with the Secret's name and `HOSTS` with the bare
 hostnames of the endpoints that use it, separated by commas. The platform
 team that writes providers holds no Secret rights, so it cannot point a
-provider at another Secret in `kaalm-system`, such as the gateway's session
-key, or send a credential to a host the credential manager did not approve.
-[Providing LLM access](llm-access.md#1-create-the-credential-secret) and
+provider at another Secret in `kaalm-system` or send a credential to a host
+the credential manager did not approve. [Providing LLM access](llm-access.md#1-create-the-credential-secret) and
 [Providing tool access](tool-access.md#1-create-the-credential-secret) show the
 Secrets, and
 [Troubleshooting](../reference/troubleshooting.md#modelprovider-readyfalse)
@@ -269,25 +260,27 @@ shows what a provider reports when a Secret lacks either.
 
 When a team's developers manage Secrets themselves, for example in a dev
 loop, set `rbac.personas.developerSecrets: true`. The developer role then
-grants `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
-Secrets in every namespace where `kaalm-developer` is bound. The other roles
-do not change. The setting has no effect while `enabled` is `false`.
-Developers still label the Secrets they create, because the channel rule and
-the workload rule have no exception.
+grants read and write access to Secrets in every namespace where
+`kaalm-developer` is bound; the exact verbs are in
+[RBAC and authentication](https://github.com/win07xp/kaalm/blob/main/docs/src/security/rbac.md#persona-roles).
+The setting has no effect while `enabled` is `false`. Developers still label
+the Secrets they create, because the channel rule and the workload rule have no
+exception.
 
 ### Let developers exec into agents
 
 Set `rbac.personas.developerExec: true` to add `pods/exec` to the developer
 role, for debugging inside agent containers. Enable it only if your policy
-allows developers into agent containers. It applies in every namespace where `kaalm-developer` is bound.
+allows developers into agent containers. It applies in every namespace where
+`kaalm-developer` is bound.
 
 ### Revoke access
 
 Removing a namespace from `developers` or `namespaceSecretsAdmins` and
 upgrading deletes that namespace's RoleBinding, which revokes the team's
-access. Setting `enabled` to `false`
-deletes all four ClusterRoles, so any binding you wrote by hand that
-references them stays in place but grants nothing.
+access. Setting `enabled` to `false` deletes all four ClusterRoles, so any
+binding you wrote by hand that references them stays in place but grants
+nothing.
 
 ### Adopt roles you created by hand
 
@@ -303,17 +296,10 @@ kind, name, and namespace. The chart can render these objects:
   `namespaceSecretsAdmins`.
 - RoleBinding `kaalm-developer` in each namespace listed in `developers`.
 
-The common cases are a hand-written ClusterRole `kaalm-catalog-reader`, its
-ClusterRoleBinding if you also named it `kaalm-catalog-reader`, a RoleBinding
-`kaalm-developer`, and a RoleBinding `kaalm-secrets-admin` that you bound by
-hand in a team namespace that you list in `namespaceSecretsAdmins`.
-
 A binding's `roleRef` cannot change after you create the binding, and the API
-server rejects any update to it. The chart renders every binding with
-`roleRef` kind `ClusterRole`: each RoleBinding `kaalm-developer` points at
-ClusterRole `kaalm-developer`, RoleBinding `kaalm-secrets-admin` points at
-ClusterRole `kaalm-secrets-admin`, and each ClusterRoleBinding points at the
-ClusterRole of the same name. Choose by what the existing object references:
+server rejects any update to it. Every binding the chart renders has
+`roleRef` kind `ClusterRole` and points at the ClusterRole of the same name.
+Choose by what the existing object references:
 
 - **A ClusterRole, or a binding whose `roleRef` already matches the chart's:**
   delete the object, or adopt it into the release.
@@ -347,9 +333,6 @@ delete it too:
 ```bash
 kubectl delete role kaalm-developer -n NAMESPACE
 ```
-
-A namespaced Role named `kaalm-developer` does not collide with the
-ClusterRole.
 
 ## Auditing with kubectl alone
 
