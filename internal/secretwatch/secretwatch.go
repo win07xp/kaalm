@@ -15,8 +15,9 @@ limitations under the License.
 */
 
 // Package secretwatch serves Secret reads from one GET-backed, name-filtered
-// watch per referenced Secret. The gateway and the controller share it: both
-// hold get and watch on individual Secrets but never list.
+// watch per referenced Secret, and tells subscribers when a watched Secret
+// changes. The gateway and the controller share it: both hold get and watch
+// on individual Secrets but never list.
 package secretwatch
 
 import (
@@ -26,6 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +48,10 @@ import (
 // every read is a live GET through the client's rate limiter, which is what
 // capped every gateway replica at 20 requests per second (#170) and
 // throttled the controller's per-minute channel validation.
+//
+// Subscribers learn when a watched Secret changes, so a caller can act on a
+// change instead of waiting for its next read. A watcher with no subscriber
+// (the gateway's) attaches no handler to its informers.
 type Watcher struct {
 	client kubernetes.Interface
 	ctx    context.Context
@@ -61,12 +67,21 @@ type Watcher struct {
 
 	mu        sync.Mutex
 	informers map[types.NamespacedName]*secretInformer
+
+	// subMu guards subscribers and is never held while taking mu, so a
+	// notification never waits on entryFor or the janitor. The only nesting
+	// is mu then subMu.
+	subMu       sync.RWMutex
+	subscribers []func(types.NamespacedName)
 }
 
 type secretInformer struct {
 	informer cache.SharedInformer
 	stop     chan struct{}
 	lastUsed time.Time
+	// changes is the subscribers' change handler on informer; nil while the
+	// watcher has no subscriber.
+	changes cache.ResourceEventHandlerRegistration
 }
 
 // New builds a watcher whose informers stop when ctx ends.
@@ -139,9 +154,98 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 		stop:     make(chan struct{}),
 		lastUsed: time.Now(),
 	}
+	if w.hasSubscribers() {
+		// Subscribers live on the watcher, so an informer the janitor
+		// stopped and a later read restarted gets the handler again. A
+		// handler added before Run cannot fail.
+		entry.changes, _ = entry.informer.AddEventHandler(w.changeHandler(key))
+	}
 	go entry.informer.Run(entry.stop)
 	w.informers[key] = entry
 	return entry
+}
+
+// Subscribe registers fn to learn when a watched Secret changes: it is
+// created, updated to a new resourceVersion, or deleted after its watch's
+// first sync. The informer's initial read is never reported, nor is the
+// replay a running informer gives a newly added handler. fn runs on the
+// informer's handler goroutine and must not block for long.
+func (w *Watcher) Subscribe(fn func(types.NamespacedName)) {
+	w.subMu.Lock()
+	w.subscribers = append(w.subscribers, fn)
+	w.subMu.Unlock()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for key, entry := range w.informers {
+		if entry.changes != nil {
+			continue
+		}
+		// An error means the informer is stopping; the janitor is about
+		// to drop it.
+		if reg, err := entry.informer.AddEventHandler(w.changeHandler(key)); err == nil {
+			entry.changes = reg
+		}
+	}
+}
+
+func (w *Watcher) hasSubscribers() bool {
+	w.subMu.RLock()
+	defer w.subMu.RUnlock()
+	return len(w.subscribers) > 0
+}
+
+// notify calls every subscriber with key, outside subMu.
+func (w *Watcher) notify(key types.NamespacedName) {
+	w.subMu.RLock()
+	subs := append([]func(types.NamespacedName){}, w.subscribers...)
+	w.subMu.RUnlock()
+	for _, fn := range subs {
+		fn(key)
+	}
+}
+
+// changeHandler reports changes to the Secret at key. It skips the initial
+// list (and a late handler's replay), relists that bring back an unchanged
+// object, and any other object: the API server filters the watch by name,
+// but a fake clientset does not.
+func (w *Watcher) changeHandler(key types.NamespacedName) cache.ResourceEventHandlerDetailedFuncs {
+	matches := func(obj interface{}) bool {
+		m, err := apimeta.Accessor(obj)
+		return err == nil && m.GetNamespace() == key.Namespace && m.GetName() == key.Name
+	}
+	return cache.ResourceEventHandlerDetailedFuncs{
+		AddFunc: func(obj interface{}, isInInitialList bool) {
+			if isInInitialList || !matches(obj) {
+				return
+			}
+			w.notify(key)
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if !matches(newObj) {
+				return
+			}
+			oldSec, okOld := oldObj.(*corev1.Secret)
+			newSec, okNew := newObj.(*corev1.Secret)
+			if okOld && okNew && newSec.ResourceVersion != "" &&
+				oldSec.ResourceVersion == newSec.ResourceVersion {
+				return
+			}
+			w.notify(key)
+		},
+		DeleteFunc: func(obj interface{}) {
+			if tomb, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				if tomb.Key == key.String() {
+					w.notify(key)
+				}
+				return
+			}
+			if !matches(obj) {
+				return
+			}
+			w.notify(key)
+		},
+	}
 }
 
 // waitSynced polls HasSynced closely (the standard helper polls at 100 ms,

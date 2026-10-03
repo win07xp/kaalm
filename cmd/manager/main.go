@@ -305,13 +305,15 @@ func main() {
 	// out of reach; a live read per validation pass throttled the client at
 	// a few hundred channels. The clientset uses the manager's rest config,
 	// so --client-qps and --client-burst apply to it, in a token bucket of
-	// its own.
+	// its own. The watcher also tells the channel reconciler when a Secret a
+	// channel references changes, so the channel re-runs at once.
 	clientset, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to build the Secret watcher's clientset")
 		os.Exit(1)
 	}
-	secretSource := secretwatch.NewReader(secretwatch.New(ctx, clientset))
+	secretWatcher := secretwatch.New(ctx, clientset)
+	secretSource := secretwatch.NewReader(secretWatcher)
 
 	if err := controller.SetupIndexers(context.Background(), mgr); err != nil {
 		setupLog.Error(err, "unable to set up field indexers")
@@ -461,6 +463,7 @@ func main() {
 		Recorder:                mgr.GetEventRecorderFor("agentchannel-controller"),
 		OperatorNamespace:       operatorNamespace,
 		SecretReader:            secretSource,
+		SecretChanges:           secretWatcher,
 		Health:                  channelHealthClient,
 		CallbackPolicy:          managerCallbackPolicy,
 	}).SetupWithManager(mgr); err != nil {

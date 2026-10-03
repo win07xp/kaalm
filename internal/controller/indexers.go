@@ -51,6 +51,10 @@ const (
 	// IndexChannelAgentRef indexes AgentChannels by spec.agentRef.name, the
 	// Agent they bind in their own namespace.
 	IndexChannelAgentRef = "spec.agentRef.name"
+	// IndexChannelSecretRef indexes AgentChannels by each Secret name their
+	// credentials reference, the names authSecretNames returns (a
+	// multi-value index).
+	IndexChannelSecretRef = "spec.secretRef.name"
 )
 
 // SetupIndexers registers the field indexers the reconcilers depend on. It must
@@ -114,6 +118,9 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentChannel{}, IndexChannelAgentRef, channelAgentRefIndex); err != nil {
 		return err
 	}
+	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentChannel{}, IndexChannelSecretRef, channelSecretRefIndex); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -128,6 +135,11 @@ func channelPathIndex(o client.Object) []string {
 // channelAgentRefIndex is the IndexChannelAgentRef extractor.
 func channelAgentRefIndex(o client.Object) []string {
 	return []string{o.(*kaalmv1beta1.AgentChannel).Spec.AgentRef.Name}
+}
+
+// channelSecretRefIndex is the IndexChannelSecretRef extractor.
+func channelSecretRefIndex(o client.Object) []string {
+	return authSecretNames(o.(*kaalmv1beta1.AgentChannel))
 }
 
 func providerRefNames(refs []kaalmv1beta1.AgentProviderReference) []string {

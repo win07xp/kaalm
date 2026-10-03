@@ -304,7 +304,8 @@ func runSuite(m *testing.M) int {
 	if err != nil {
 		return setupFailed("clientset", err)
 	}
-	secretSource := secretwatch.NewReader(secretwatch.New(ctx, clientset))
+	secretWatcher := secretwatch.New(ctx, clientset)
+	secretSource := secretwatch.NewReader(secretWatcher)
 	fakeHealth = newFakeHealth()
 	if err := (&AgentClassReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
@@ -357,6 +358,7 @@ func runSuite(m *testing.M) int {
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorderFor("test"),
 		OperatorNamespace: testSystemNamespace,
 		SecretReader:      secretSource,
+		SecretChanges:     secretWatcher,
 	}).SetupWithManager(mgr); err != nil {
 		return setupFailed("AgentChannelReconciler", err)
 	}

@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
@@ -82,6 +83,12 @@ type ChannelHealthClient interface {
 	NamespaceChannelHealth(ctx context.Context, namespace string) (reachable []ReplicaChannelHealth, total int, err error)
 }
 
+// SecretChangeSource reports changes to the Secrets it watches. A
+// secretwatch.Watcher satisfies it.
+type SecretChangeSource interface {
+	Subscribe(fn func(types.NamespacedName))
+}
+
 // AgentChannelReconciler validates channels, scopes credential access, reports
 // status, and coordinates the delete handshake. It owns no Pods. See
 // docs/src/controller/reconcilers/agentchannel.md.
@@ -92,8 +99,13 @@ type AgentChannelReconciler struct {
 	// SecretReader reads Secrets in user namespaces, which the manager's
 	// cache does not hold. In production it is a secretwatch.Reader: one
 	// name-filtered watch per referenced Secret, so repeated reads are cache
-	// hits. nil falls back to the embedded client.
+	// hits. nil falls back to the embedded client. SecretChanges reports
+	// changes to the Secrets read through it.
 	SecretReader client.Reader
+	// SecretChanges is the watcher behind SecretReader. When set, a change
+	// to a Secret a channel references re-enqueues the channel at once; nil
+	// leaves only the periodic pass.
+	SecretChanges SecretChangeSource
 	// MaxConcurrentReconciles is the number of reconciles that may run at
 	// once; controller-runtime still serializes per object. 0 means one.
 	MaxConcurrentReconciles int
@@ -167,12 +179,15 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// nothing to add; clear it so it fires afresh once the channel passes.
 		r.forgetCallbackResolution(&channel)
 		r.reducePhase(&channel, &agent)
-		// Re-check on the same cadence as a healthy channel: the reconciler
-		// watches no Secrets (its Secret access is scoped per channel), so a
-		// credential fixed in place is only ever noticed by a later pass. A
-		// child conflict re-checks sooner, on the workloads' cadence: the
-		// conflicting object carries no owner reference, so its removal
-		// raises no watch event.
+		// Re-check on the same cadence as a healthy channel. A change to a
+		// referenced Secret re-enqueues the channel at once through
+		// SecretChanges; this requeue is the fallback for a change no watch
+		// reported (a Secret whose watch has not started or synced yet) and
+		// for checks no watch covers, and it keeps the channel's Secret
+		// watches in use so the watcher's idle janitor (one hour) never
+		// stops them. A child conflict re-checks sooner, on the workloads'
+		// cadence: the conflicting object carries no owner reference, so its
+		// removal raises no watch event.
 		requeue := time.Minute
 		if reason == kaalmv1beta1.ReasonChildConflict {
 			requeue = gateRequeue
@@ -904,18 +919,37 @@ func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1beta1.AgentChan
 }
 
 // SetupWithManager wires the reconciler, its owned RBAC pair, the Agent
-// watch (phase reduction must track Agent phase changes), and the path
-// sibling watch (a rule 15 conflict's outcome depends on every channel on
-// the path).
+// watch (phase reduction must track Agent phase changes), the path sibling
+// watch (a rule 15 conflict's outcome depends on every channel on the
+// path), and, when SecretChanges is set, the referenced-Secret watch (the
+// rule 25, 40, 45, and 46 checks read each Secret's label, annotation, and
+// keys).
 func (r *AgentChannelReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.MaxConcurrentReconciles}).
 		For(&kaalmv1beta1.AgentChannel{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(r.channelsForAgent)).
-		Watches(&kaalmv1beta1.AgentChannel{}, r.pathSiblingHandler()).
-		Complete(r)
+		Watches(&kaalmv1beta1.AgentChannel{}, r.pathSiblingHandler())
+	if r.SecretChanges != nil {
+		// The controller cannot list user-namespace Secrets, so the watch
+		// rides on the per-Secret informers the reads already started.
+		b = b.WatchesRawSource(source.Func(func(
+			ctx context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request],
+		) error {
+			r.SecretChanges.Subscribe(func(key types.NamespacedName) {
+				if ctx.Err() != nil {
+					return
+				}
+				for _, req := range r.channelsForSecret(ctx, key) {
+					q.Add(req)
+				}
+			})
+			return nil
+		}))
+	}
+	return b.Complete(r)
 }
 
 // channelsOnPath lists the channels in namespace registered at path, through
@@ -994,6 +1028,24 @@ func (r *AgentChannelReconciler) channelsForAgent(ctx context.Context, obj clien
 	var channels kaalmv1beta1.AgentChannelList
 	if err := r.List(ctx, &channels, client.InNamespace(obj.GetNamespace()),
 		client.MatchingFields{IndexChannelAgentRef: obj.GetName()}); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(channels.Items))
+	for _, ch := range channels.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: ch.Namespace, Name: ch.Name}})
+	}
+	return reqs
+}
+
+// channelsForSecret re-enqueues every channel whose credentials reference
+// the changed Secret, through the IndexChannelSecretRef field index.
+func (r *AgentChannelReconciler) channelsForSecret(ctx context.Context, key types.NamespacedName) []reconcile.Request {
+	var channels kaalmv1beta1.AgentChannelList
+	if err := r.List(ctx, &channels, client.InNamespace(key.Namespace),
+		client.MatchingFields{IndexChannelSecretRef: key.Name}); err != nil {
+		// The periodic pass still re-checks the channels.
+		log.FromContext(ctx).Error(err, "listing channels referencing a Secret", "secret", key)
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(channels.Items))
