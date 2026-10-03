@@ -8,7 +8,7 @@ The happy path is a straight line: an Agent is admitted (`Pending`), its child r
 - **Re-provisioning.** Spec drift or an involuntary Pod disruption sends a live Agent back through `Provisioning` for a Pod replacement.
 - **Trouble.** `Degraded` for a mismatch the developer can fix, `Failed` for a Pod that cannot run, `Terminating` for deletion.
 
-This page is the state machine itself: the figure, the table of every transition and its trigger, and the mechanics of the Degraded and Failed phases. The mechanics behind the other transitions live on their own pages: [Activity detection](hibernation-and-wake.md#activity-detection) (how the controller knows an Agent is idle), [Hibernation mechanics](hibernation-and-wake.md#hibernation-mechanics), [Wake trigger](hibernation-and-wake.md#wake-trigger), and [AgentClass change handling](change-propagation.md#agentclass-change-handling) (how a class edit propagates to provisioned Agents). For what the reconciler does on each pass, see [AgentReconciler](reconcilers/agent.md).
+This page is the state machine itself: the figure, the table of every transition and its trigger, and the mechanics of the Degraded and Failed phases. The other transitions are explained on their own pages: [Activity detection](hibernation-and-wake.md#activity-detection), [Hibernation mechanics](hibernation-and-wake.md#hibernation-mechanics), [Wake trigger](hibernation-and-wake.md#wake-trigger), and [AgentClass change handling](change-propagation.md#agentclass-change-handling). For what the reconciler does on each pass, see [AgentReconciler](reconcilers/agent.md).
 
 ## State diagram
 
@@ -18,7 +18,7 @@ The other lifecycles in the system are indexed on [Lifecycles at a glance](../ap
 
 ## Transition triggers
 
-The table lists every transition in the order the reconciler evaluates them. Rows whose behavior needs more than a sentence are expanded in the sections below it.
+The table lists every transition in the order the reconciler evaluates them. Rows that need more than a sentence are expanded below it.
 
 | From | To | Trigger |
 |---|---|---|
@@ -31,7 +31,7 @@ The table lists every transition in the order the reconciler evaluates them. Row
 | `Hibernating` | `Hibernated` | The Pod is deleted and gone. The PVC, Service, Certificate, ServiceAccount, and NetworkPolicy remain; `status.podName` is cleared and `status.hibernatedAt` set. |
 | `Hibernated` | `Resuming` | The `kaalm.io/wake=true` annotation, set by the gateway [activator](../gateways/user/activation-and-activity.md#the-activator) on a channel message (with `kaalm.io/wake-trigger=channel`), or by hand. The annotation set while `Hibernating` is kept and honored once the Agent is `Hibernated`. In any other phase it is removed with a `WakeIgnored` warning, silently in `Resuming`. |
 | `Resuming` | `Running` | The recreated Pod reports Ready. The Agent stays `Resuming` while the Pod is created, replaced, or not Ready, so a woken Agent never shows `Provisioning`. See [Wake-failure state machine](hibernation-and-wake.md#wake-failure-state-machine). |
-| `Running`, `Idle` | `Provisioning` | Spec drift: the hash in the Pod's `kaalm.io/pod-spec-hash` annotation differs from the hash re-derived from the current spec. The Agent moves to `Provisioning` after it holds a `maxUnavailableOnDrift` slot; until then it stays in phase with `PodUpToDate=False, reason=ReplacementPending` and its current Pod keeps running. Drift is detected in both phases, since an idle Agent still has a Pod. See [Drift replacements are capped per class](change-propagation.md#drift-replacements-are-capped-per-class). |
+| `Running`, `Idle` | `Provisioning` | Spec drift: the Pod's `kaalm.io/pod-spec-hash` annotation differs from the hash of the current spec. The Agent moves to `Provisioning` after it holds a `maxUnavailableOnDrift` slot; until then it stays in phase with `PodUpToDate=False, reason=ReplacementPending` and its current Pod keeps running. See [Drift replacements are capped per class](change-propagation.md#drift-replacements-are-capped-per-class). |
 | `Running`, `Idle` | `Provisioning` | Involuntary Pod disruption: the Pod was deleted out of band, or is present but terminal. See [Involuntary Pod disruption](#involuntary-pod-disruption). |
 | any | `Degraded` | A class-versus-spec mismatch, present at first provisioning or introduced by class, ModelProvider, or ToolProvider drift. The check runs before every other step, so `Hibernated` and `Pending` Agents degrade too. See [Degraded](#degraded). |
 | `Degraded` | the phase recorded in `status.preDegradedPhase` | Every outstanding mismatch has cleared. |
@@ -47,10 +47,10 @@ Provisioning waits on the per-Agent `Certificate` before creating the Pod, so th
 
 An Agent in `Running` or `Idle` returns to `Provisioning` when its Pod goes away or dies without the kubelet bringing it back. Two cases:
 
-- **Deleted out of band**: node drain or the eviction API, a manual `kubectl delete`, or node loss followed by Pod garbage collection. The owned-Pod watch fires and the reconciler creates a replacement.
-- **Present but terminal**: node-pressure eviction leaves the Pod object at `status.phase: Failed`, `reason: Evicted`. `restartPolicy: Always` does not resurrect it, because the kubelet restarts containers inside a live Pod, never a dead Pod, and the eviction increments no `restartCount`, so crash-loop detection never sees it. The reconciler emits a `PodDisrupted` warning, deletes the dead Pod, and re-enters `Provisioning`.
+- **Deleted out of band**: node drain or the eviction API, a manual `kubectl delete`, or node loss followed by Pod garbage collection. The owned-Pod watch fires, so the reconciler creates a replacement at once.
+- **Present but terminal**: node-pressure eviction leaves the Pod object at `status.phase: Failed`, `reason: Evicted`. `restartPolicy: Always` does not resurrect it, because the kubelet restarts containers inside a live Pod, never a dead one, and crash-loop detection never sees it (the eviction increments no `restartCount`). The reconciler emits a `PodDisrupted` warning, deletes the dead Pod, and re-enters `Provisioning`.
 
-Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the reconciler is the self-healing loop. The PVC, Service, and Certificate are preserved exactly as in the spec-drift replacement. `Hibernated` needs no handling here because no Pod exists.
+Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the reconciler is the self-healing loop. The PVC, Service, and Certificate are preserved, as in the spec-drift replacement.
 
 ### Degraded
 
@@ -68,7 +68,7 @@ Agent Pods are bare Pods with no Deployment or ReplicaSet behind them: the recon
 | `HibernationRequiresPersistence` | 29 | `spec.lifecycle.hibernationEnabled: true` while the Agent's own `spec.persistence.enabled` is `false` |
 | `HandlerMountNotAllowed` | 30 | `spec.handler` set while the class has `image.allowHandlerMounts: false` |
 
-The rules are specified under [Cross-resource validation](../resources/validation-and-defaulting.md#cross-resource-validation). A mismatch may be present at first provisioning (a developer applies an Agent that already violates its class) or introduced later by class, ModelProvider, or ToolProvider drift on a provisioned Agent; both are the same transition, and [AgentClass change handling](change-propagation.md#agentclass-change-handling) covers which class edits cause it. Rule 29 is spec-internal, so no class edit can introduce it.
+The rules are specified under [Cross-resource validation](../resources/validation-and-defaulting.md#cross-resource-validation). A mismatch may be present at first provisioning or introduced later by class, ModelProvider, or ToolProvider drift on a provisioned Agent; both are the same transition, and [AgentClass change handling](change-propagation.md#agentclass-change-handling) covers which class edits cause it. Rule 29 is spec-internal, so no class edit can introduce it.
 
 **Entering.** On the first transition into `Degraded` the controller records the current phase in `status.preDegradedPhase`, emits a `Warning` event with the first outstanding reason, and sets `Ready=False` with that reason and message. If a further mismatch arises while the Agent is already `Degraded`, only `reason` and `message` are updated; `preDegradedPhase` is preserved, so the Agent still remembers where it came from.
 
@@ -76,7 +76,7 @@ The rules are specified under [Cross-resource validation](../resources/validatio
 
 The idle clock is not reset. Idleness is evaluated against the gateway's activity record, which runs through the Degraded period, so an Agent restored to `Idle` whose `hibernationDelay` has elapsed moves to `Hibernating` on the next pass.
 
-**Not everything bad is a phase change.** Recoverable runtime issues (a transient provider outage, budget exhaustion) set a `Degraded` condition on the Agent without touching `status.phase`. See [Error handling](operations.md#error-handling).
+**Not everything bad is a phase change.** A provider budget that blocks the Agent's namespace sets the `Degraded` condition with `reason=BudgetExhausted` and leaves `status.phase` alone, so the Agent keeps running and the condition clears when the provider unblocks the namespace. Only a class or provider mismatch the developer can fix sets `phase=Degraded`. See [Error handling](operations.md#error-handling).
 
 ### Failed
 

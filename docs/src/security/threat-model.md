@@ -1,6 +1,6 @@
 # Threat model
 
-This page lists the threats Kaalm defends against, the threats it accepts, and the threats it leaves to the platform team. Each threat is one table row with the mitigation and a decision: **mitigated**, **accepted** (a bound Kaalm chooses to live with), **out of scope** (outside the trust boundary), or **as shipped** (the design says one thing and the code does another; an issue tracks it). A row whose argument needs more than a sentence links to a note after its table.
+This page lists the threats Kaalm defends against, the threats it accepts, and the threats it leaves to the platform team. Each threat is one table row with the mitigation and a decision: **mitigated**, **accepted** (a bound Kaalm chooses to live with), or **out of scope** (outside the trust boundary). A row whose argument needs more than a sentence links to a note after its table.
 
 Read [Trust model](model.md#trust-model) first: several rows are out of scope only because of where the trust boundary sits.
 
@@ -48,7 +48,7 @@ Granting the gate makes ConfigMap write access in a namespace equivalent to code
 |---|---|---|
 | Platform credentials leak through an etcd backup | Encrypt etcd at rest, outside Kaalm. | Out of scope |
 | Stale credentials after rotation fail silently | The gateway follows every Secret it uses through a watch; the ModelProviderReconciler re-reads the key and probes the provider on every pass ([Lifecycle of an LLM API key](credentials.md#lifecycle-of-an-llm-api-key)). | Mitigated |
-| A workload references a Secret that was never meant for it | A workload's `spec.env` may read only a Secret labeled `kaalm.io/workload-secret: "true"` ([rule 48](../resources/validation/references-and-access.md)). Otherwise the workload reports `Ready=False, reason=SecretNotOptedIn`, no new Pod is made, and the status names no key and does not say whether the Secret exists. A Pod that already runs stays in place. The operator reads the Secrets that workload env names, labeled or not, under per-workload Roles ([Operator ServiceAccount](rbac.md#operator-serviceaccount)). | Mitigated |
+| A workload references a Secret that was never meant for it | A workload's `spec.env` may read only a Secret labeled `kaalm.io/workload-secret: "true"` ([rule 48](../resources/validation/references-and-access.md)). Otherwise the workload reports `Ready=False, reason=SecretNotOptedIn`, no new Pod is made, and the status names no key and does not say whether the Secret exists. A Pod that already runs stays in place. | Mitigated |
 | A channel credential leaks from an agent namespace | The Secret lives in that namespace, so the exposure is that namespace's channels. The team's credential manager rotates it ([Roles for people](rbac.md#roles-for-people)). | Accepted |
 
 ## Component compromise
@@ -65,7 +65,7 @@ These rows ask what an attacker gains by taking over a Kaalm component. For Secr
 
 #### Compromised operator reads credential Secrets
 
-The operator's standing Secret read is `kaalm-system` ([Operator ServiceAccount](rbac.md#operator-serviceaccount)), so a compromised operator reads every provider key and tool credential there, and its process holds them in the manager's Secret informer. In user namespaces it holds no standing read: it reads the Secrets a channel references, labeled or not, a class's pull Secrets, and the Secrets a workload's `spec.env` names, labeled or not, all by name under Roles scoped to those names, and follows each through a single-object watch. Its process holds those referenced Secrets in memory and no others, so a compromise also yields the credentials of every channel, every workload pull Secret, and every workload env Secret that it tracks. The residual is the `escalate` and `bind` verbs those Roles require. A compromised operator can mint itself a Role over any Secret, which it could also reach by creating a Pod that mounts the Secret, since it creates Pods in every namespace. Either route is an API write that the audit log records, not a silent read. The operator never writes or copies a Secret. Mitigate as for the gateway: image signing, restricted Deployment update rights, and audit logging on Secret access and on Role creation by the operator's ServiceAccount.
+The operator's standing Secret read is `kaalm-system` ([Operator ServiceAccount](rbac.md#operator-serviceaccount)), so a compromised operator reads every provider key and tool credential there. In user namespaces it holds no standing read: it reads the Secrets a channel references, labeled or not, a class's pull Secrets, and the Secrets a workload's `spec.env` names, labeled or not, all by name under Roles scoped to those names. It holds only those Secrets in memory, so a compromise also yields every channel, workload pull, and workload env Secret it tracks. The residual is the `escalate` and `bind` verbs those Roles require. A compromised operator can mint itself a Role over any Secret, which it could also reach by creating a Pod that mounts the Secret, since it creates Pods in every namespace. Either route is an API write that the audit log records, not a silent read. The operator never writes or copies a Secret. Mitigate as for the gateway: image signing, restricted Deployment update rights, and audit logging on Secret access and on Role creation by the operator's ServiceAccount.
 
 #### Hostile bodies and the parsers
 
@@ -141,7 +141,7 @@ Inbound HMAC is body-only with no timestamp, the cost of accepting third-party s
 
 #### Why the platform reply path has no deny ranges
 
-The SSRF defenses on `callbackUrl` exist because the URL is developer-supplied. A platform base URL (`gateway.platforms.<type>.apiBaseUrl`) is operator-supplied at install time, in the same trust tier as a ModelProvider endpoint, and defending the gateway against its own operator is out of scope. The value accepts `http://` for the same reason: the e2e mock platforms stand in at install time.
+The SSRF defenses on `callbackUrl` exist because the URL is developer-supplied. A platform base URL (`gateway.platforms.<type>.apiBaseUrl`) is operator-supplied at install time, in the same trust tier as a ModelProvider endpoint, and defending the gateway against its own operator is out of scope. The value accepts `http://` for the same reason.
 
 #### Cross-channel async response fetch
 
@@ -149,7 +149,7 @@ The poll endpoint authenticates the caller against the AgentChannel named by `ch
 
 #### SSRF through callbackUrl
 
-The gateway has wider egress than any user namespace, so an unrestricted `callbackUrl` would make it a confused deputy. Rule 22 rejects a URL at admission unless it is `https://` and its host resolves outside the deny ranges. On every delivery the gateway re-resolves the host, re-applies the check, and dials the exact IP that passed while preserving the Host header and SNI ([`callbackUrl` re-validation on delivery](../gateways/user/overview.md#callbackurl-re-validation-on-delivery)); handing the hostname back to the transport would reopen the DNS-rebinding window. A pooled connection is reused only after the check passes again for that attempt. The Helm value `gateway.callbackUrl.allowlist` replaces the deny-internal default with an explicit allowlist, and loopback, link-local, and unspecified addresses stay denied under any allowlist.
+The gateway has wider egress than any user namespace, so an unrestricted `callbackUrl` would make it a confused deputy. Rule 22 rejects a URL at admission unless it is `https://` and its host resolves outside the deny ranges. On every delivery the gateway re-resolves the host, re-applies the check, and dials the exact IP that passed ([`callbackUrl` re-validation on delivery](../gateways/user/overview.md#callbackurl-re-validation-on-delivery)); handing the hostname back to the transport would reopen the DNS-rebinding window. The Helm value `gateway.callbackUrl.allowlist` replaces the deny-internal default with an explicit allowlist, and loopback, link-local, and unspecified addresses stay denied under any allowlist.
 
 ## Identity and namespace spoofing
 
@@ -170,7 +170,7 @@ The namespace is read from the SAN, whose forms and label counts [Mode 1](../gat
 
 #### Auth downgrade to ServiceAccount token
 
-Before any `TokenReview`, the gateway resolves the request's source IP to a Pod and answers `401` if that Pod has an ownerRef to an Agent or AgentTask or carries the Kaalm-managed label. The check is not cached and runs before the token cache, so it is unaffected by cache hits or API server latency. When both a client certificate and a bearer header are present, the certificate wins and the header is ignored. By default the Pod also sets `automountServiceAccountToken: false`, so it holds no token to present; a class that opts in to API access mounts one, and the precheck still rejects it here ([Agent Pod ServiceAccount](rbac.md#agent-pod-serviceaccount)). Keeping the tier's credential surface to one artifact matters because leaf rotation contains a leak but does not revoke it ([Containment, not revocation](tls.md#containment-not-revocation)).
+Before any `TokenReview`, the gateway resolves the request's source IP to a Pod and answers `401` if that Pod has an ownerRef to an Agent or AgentTask or carries the Kaalm-managed label. The check is not cached and runs before the token cache, so a token-cache hit cannot skip it. When both a client certificate and a bearer header are present, the certificate wins and the header is ignored. By default the Pod also sets `automountServiceAccountToken: false`, so it holds no token to present; a class that opts in to API access mounts one, and the precheck still rejects it here ([Agent Pod ServiceAccount](rbac.md#agent-pod-serviceaccount)). Keeping the tier's credential surface to one artifact matters because leaf rotation contains a leak but does not revoke it ([Containment, not revocation](tls.md#containment-not-revocation)).
 
 #### SAN collision in kaalm-system
 
@@ -194,7 +194,7 @@ The agent's `POST /v1/message` handler requires a client certificate whose SAN i
 
 #### The conversion listener's exposure
 
-The conversion listener on `:9444` requires no client authentication because its caller, the API server, presents no certificate. An unauthorized caller gains nothing: the handler decodes a `ConversionReview`, converts between `kaalm.io` versions, and echoes the result, reading no cluster state and holding no credentials. The remaining lever is resource exhaustion, and bodies are capped far above any real review. The chart's NetworkPolicy for the operator's own Pods leaves `:9444` open to any source, because the API server is not a Pod a policy can select, and admits the two metrics ports only from `networkPolicy.metricsFrom` ([The operator's own NetworkPolicy](../operations/deployment.md#the-operators-own-networkpolicy)).
+The conversion listener on `:9444` requires no client authentication because its caller, the API server, presents no certificate. An unauthorized caller gains nothing: the handler decodes a `ConversionReview`, converts between `kaalm.io` versions, and echoes the result, reading no cluster state and holding no credentials. The remaining lever is resource exhaustion, and bodies are capped far above any real review. The chart's NetworkPolicy for the operator's own Pods leaves `:9444` open to any source, because the API server is not a Pod a policy can select ([The operator's own NetworkPolicy](../operations/deployment.md#the-operators-own-networkpolicy)).
 
 ## The console
 

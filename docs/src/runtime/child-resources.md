@@ -57,7 +57,7 @@ The two directions carry different weight:
 - **The ingress rule is layered.** It is combined with the [agent-side mTLS check on `POST /v1/message`](contract.md#client-certificate-verification-on-v1message), so a misconfigured per-Agent NetworkPolicy does not open delivery to arbitrary in-cluster callers.
 - **The egress rule is not layered.** It is the only Kaalm-managed control that stops an agent from calling provider IPs directly.
 
-Three caveats bound the guarantee. The synthesis applies only to Kaalm-managed Pods; the gateway-only tier's egress responsibility is stated under [Adoption tiers](../concepts/tenancy-and-tiers.md#adoption-tiers). Because NetworkPolicy is additive, the guarantee assumes the developer trust tier defined in [Trust model](../security/model.md#trust-model). And CNI enforcement is a hard prerequisite: clusters on default kindnet or default flannel do not enforce NetworkPolicy and are not supported targets ([Recommendation 4](../security/model.md#recommendations-for-deployment)).
+Three caveats bound the guarantee. The synthesis applies only to Kaalm-managed Pods; the gateway-only tier's egress responsibility is stated under [Adoption tiers](../concepts/tenancy-and-tiers.md#adoption-tiers). Because NetworkPolicy is additive, the guarantee assumes the developer trust tier defined in [Trust model](../security/model.md#trust-model). And CNI enforcement is a hard prerequisite: clusters on default kindnet or default flannel do not enforce NetworkPolicy and are not supported targets ([Recommendation 5](../security/model.md#recommendations-for-deployment)).
 
 ### FQDN egress policy
 
