@@ -72,25 +72,21 @@ spec:
 What each block does:
 
 - **`endpoint`** must be `https://`; the schema rejects anything else because
-  the gateway forwards the credential to this URL. In-cluster and external
-  endpoints are equally valid, and the broker never follows redirects.
+  the gateway forwards the credential to this URL. The broker never follows
+  redirects, so give the final URL.
 - **`allowedNamespaces`** is the tenancy gate, read exactly as
   ModelProvider's: globs are supported, and an empty list means no namespace
   may use the provider.
 - **`tools`** is the optional declared catalog, and it is a ceiling: grants
   are validated against it and the broker rejects calls to anything outside
-  it. It also keeps the metrics readable, because tool names outside a
-  declared catalog collapse to one `uncataloged` label value. Declare it
-  whenever you know the server's tool set.
+  it. Declare it whenever you know the server's tool set: without it, every
+  tool shows as `uncataloged` in the metrics.
 - **`healthCheck`** drives the `Healthy` column with a probe that speaks
-  MCP itself: `server/discover` and a `tools/list` for a server on the
-  2026-07-28 revision, or `initialize` then `tools/list` for an older one.
-  The revision it negotiated lands in `status.mcpRevision`. The probe trusts
-  system CA roots plus the gateway's upstream trust. For a server with a
-  private CA (a cluster-internal certificate, for example), set
-  `gateway.trustClusterCAForUpstream=true` for the cluster CA, or
-  `gateway.upstreamCA.configMap` for any other bundle. One value covers both
-  the broker and the probe ([Trust a private CA](llm-access.md#4-trust-a-private-ca)).
+  MCP. The revision it negotiated lands in `status.mcpRevision`. For a
+  server with a private CA, set `gateway.trustClusterCAForUpstream=true`
+  for the cluster CA, or `gateway.upstreamCA.configMap` for any other
+  bundle. One value covers both the broker and the probe
+  ([Trust a private CA](llm-access.md#4-trust-a-private-ca)).
 
 ![Flowchart of every check on POST /v1/mcp/{toolProvider} in the order the broker runs them, as four rows. Route and namespace: ToolProvider exists, else 400 invalid_request; caller namespace in allowedNamespaces, else 403 access_denied. Workload grant, for mTLS callers only: ToolProvider in the workload's spec.tools providerRef, the AgentClass allowedNamespaces admits the caller's namespace, and ToolProvider in the AgentClass allowedToolProviders, else 403 access_denied. Request: token bucket per namespace and ToolProvider, else 429 rate_limited; body within the cap, else 413 request_too_large; one JSON-RPC message, else 400 invalid_request; method on the allowlist, else 403 tool_denied. Tool and session: modern headers match the body, else 400 with JSON-RPC error -32020; tools/call names a tool in the grant and catalog, else 403 tool_denied; a legacy session id is owned by this caller, else 403 access_denied; then inject the credential and forward.](../diagrams/tool-grant-chain.svg)
 
@@ -116,8 +112,7 @@ narrowed to named tools; that side is covered in
 A grant that fails any gate is visible in status, not silently ignored: an
 Agent goes `Degraded` with reason `ClassConstraintViolation` (provider not
 in the class allowlist, missing, or namespace not admitted) or
-`ToolNotInCatalog` (a granted tool is outside the declared catalog), with
-the message naming the failed gate. An AgentTask denied at provisioning
+`ToolNotInCatalog` (a granted tool is outside the declared catalog). An AgentTask denied at provisioning
 fails terminally. Revocation behaves exactly as it does for models: the
 broker denies the namespace's next call immediately with
 `403 access_denied`, and the controller degrades the affected Agents within
@@ -133,9 +128,8 @@ rateLimits:
   requestsPerMinute: 300
 ```
 
-The ceiling is per namespace and cluster-wide; each gateway replica divides
-it by the live replica count, exactly as ModelProvider rate limits work. A
-namespace over its ceiling gets `429 rate_limited` with a `Retry-After`
+The ceiling is per namespace and cluster-wide, as for ModelProvider rate
+limits. A namespace over its ceiling gets `429 rate_limited` with a `Retry-After`
 header. Zero or omitted means no limit.
 
 ## 5. Read the audit trail and metrics
@@ -149,16 +143,15 @@ kubectl logs -n kaalm-system -l app.kubernetes.io/component=gateway --tail=-1 \
 ```
 
 Each record names the calling workload, the provider, the tool, the outcome,
-and the duration; the design book's tool plane page lists every field. A
-denied call is in the log but never reached the tool server, and the e2e
-suite proves it by counting requests on a mock server.
+and the duration; [The tool plane](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/tool-plane.md#audit-and-metering)
+in the design book lists every field. A denied call is in the log but never
+reached the tool server.
 
 On the metrics side:
 
 - `kaalm_tool_calls_total{provider, namespace, tool, status}` counts every
   brokered call. `status` is `ok`, an error type such as `tool_denied`, or
-  `upstream_error` for a server-side failure the broker relayed. Tool names
-  outside the declared catalog collapse to `uncataloged`.
+  `upstream_error` for a server-side failure the broker relayed.
 - `kaalm_tool_call_duration_seconds{provider, tool}` observes forwarded
   calls only, so local denials cannot drag the percentiles down.
 

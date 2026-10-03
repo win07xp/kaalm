@@ -53,7 +53,7 @@ the agent's volume when persistence is enabled), `kaalm.http_client()` and
 framework SDKs), `kaalm.trace_context()` (the current message's trace
 headers), `kaalm.complete_task` (reports an AgentTask's result), and
 `kaalm.TaskAlreadyCompleted` (the exception `complete_task` raises when the
-task is already finished or has already reported). The last two matter only for tasks; see
+task has already reported or finished). The last two matter only for tasks; see
 [Running tasks](running-tasks.md).
 
 ```python
@@ -84,13 +84,13 @@ injects `KAALM_HANDLER_PATH`. Every key in the ConfigMap becomes a file, and
 sibling keys are importable as modules, so a handler can span a few files.
 A handler that is configured but fails to load crashes the container rather
 than silently serving the default; `kubectl logs` on the agent pod names the
-exact failure.
+failure.
 
 ## 3. Roll a change, roll it back
 
-Edits to a mounted ConfigMap do not restart the agent, and content is not
-tracked, but the edited content is what the next Pod loads, a wake from
-hibernation included. Version the name instead:
+Editing a mounted ConfigMap does not restart the agent, but the edited content
+is what the next Pod loads, a wake from hibernation included. Version the
+name instead:
 
 ```bash
 kubectl create configmap greeter-handler-v2 --from-file=handler.py
@@ -109,10 +109,11 @@ rollbacks trustworthy.
 
 The moment your handler needs a dependency the base image does not bundle,
 move to the `FROM` pattern: same base image, same handler file, plus a
-one-line `pip install`. The class gate does not apply (a `FROM` build
-passes ordinary image review through `allowedImages`), and the trade-offs are on
-[Building your own agent image](building-your-own-image.md). If the
-dependency you need is an agent framework, that is its own page:
+one-line `pip install`. The `allowHandlerMounts` gate does not apply: a `FROM`
+build passes ordinary image review through `allowedImages`.
+[Building your own agent image](building-your-own-image.md) points to the
+worked example, `examples/starter-python`. If the dependency
+you need is an agent framework, see
 [Running framework agents](framework-agents.md).
 
 ## If the handler never runs

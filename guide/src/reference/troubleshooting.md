@@ -46,9 +46,8 @@ symptom: the Agent goes `Degraded` instead.
   agent's *phase* goes to `Degraded`, reason `ClassConstraintViolation` (see
   S5 in the scenarios); the Pod keeps running and LLM calls return `403`
   until the class or the Agent changes back.
-- **Namespace not admitted by the class**: reason `NamespaceNotAllowed`, with
-  the message `namespace "NAMESPACE" is not in AgentClass "CLASS"
-  allowedNamespaces`. A new Agent gets no Pod. A running Agent keeps its Pod,
+- **Namespace not admitted by the class**: reason `NamespaceNotAllowed`. A
+  new Agent gets no Pod. A running Agent keeps its Pod,
   and its LLM and tool calls return `403`. This reason shows first when
   several gates fail. Ask your platform team to add the namespace to the
   class ([Keep a class to some
@@ -94,11 +93,9 @@ kubectl get agent AGENT_NAME -n NAMESPACE \
   -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
 ```
 
-For an AgentTask, use `kubectl get agenttask TASK_NAME`. The message reads
-`env "ENV_NAME": Secret "SECRET" is not usable: a workload may use only a
-Secret in its namespace that carries the label kaalm.io/workload-secret:
-"true"`. A missing Secret and an unlabeled one give the same message, and it
-never names a key or a value. Check which case you have, then fix it:
+For an AgentTask, use `kubectl get agenttask TASK_NAME`. A missing Secret and
+an unlabeled one give the same reason and message, and the message never names
+a key or a value. Check which case you have, then fix it:
 
 ```bash
 kubectl get secret SECRET_NAME -n NAMESPACE --show-labels
@@ -106,7 +103,7 @@ kubectl get secret SECRET_NAME -n NAMESPACE --show-labels
 
 - If the Secret is missing, create it in the workload's namespace.
 - If the Secret exists and was created for workloads, label it. Only the exact
-  value `true` counts; `True`, `yes`, and an empty value do not.
+  value `true` counts.
 
   ```bash
   kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/workload-secret=true
@@ -120,18 +117,17 @@ kubectl get secret SECRET_NAME -n NAMESPACE --show-labels
 
 An optional reference (`optional: true`) is checked too, so a missing optional
 Secret also blocks the workload. A `secretKeyRef` with no name gives reason
-`InvalidReference` and the message `env "ENV_NAME": secretKeyRef names no
-Secret`. When several entries fail, the message reports the first one in spec
-order. A labeled Secret that lacks the referenced key passes this check, and
-the Pod shows `CreateContainerConfigError`.
+`InvalidReference`. When several entries fail, status reports the first in spec
+order, so fixing one can show the next. A labeled Secret that lacks the
+referenced key passes this check, and the Pod shows `CreateContainerConfigError`.
 
 The workload re-checks every 30 seconds, so it recovers on the next pass after
 you label the Secret. An Agent that already has a running Pod keeps the Pod and
 its phase while `Ready` is `False`, and the controller makes no replacement Pod
 (for a spec change, a lost Pod, or a wake) until you label the Secret or remove
-the reference. It also makes no idle or hibernation transition and does not
-update the phase from the Pod, so the Pod keeps running. A `Pending` or retrying AgentTask waits without failing, and a
-finished AgentTask needs no label. Who may label a Secret depends on your
+the reference. It also makes no idle or hibernation transition. A `Pending` or
+retrying AgentTask waits without failing, and a finished AgentTask needs no
+label. Who may label a Secret depends on your
 platform team: see [Managing team access](../platform/managing-access.md#label-the-secrets-a-workload-reads).
 
 ## Channel is `Ready=False` with `SecretNotOptedIn` or `CallbackHostNotApproved`
@@ -147,23 +143,22 @@ A channel is not `Ready` until each Secret it references passes these checks.
 The gateway routes only `Ready=True` channels, so an unlabeled Secret stops
 traffic to the channel:
 
-- **`SecretNotOptedIn`**: the message says `Secret "NAME" does not carry the
-  label kaalm.io/channel-credential: "true"`. Confirm that the Secret was
+- **`SecretNotOptedIn`**: the Secret lacks the label
+  `kaalm.io/channel-credential: "true"`. Confirm that the Secret was
   created for the channel, then label it. Only the exact value `true`
-  counts; `True`, `yes`, and an empty value do not.
+  counts.
 
   ```bash
   kubectl label secret SECRET_NAME -n NAMESPACE kaalm.io/channel-credential=true
   ```
 
-  A message that starts `callbackAuth:` names the callback Secret. The
-  message never lists the Secret's keys.
+  The callback Secret needs the label too, and the message never lists a
+  Secret's keys.
 - **`CallbackHostNotApproved`**: a Secret that holds a `bearer` callback token
   must list the host of the channel's `callbackUrl` in its
   `kaalm.io/callback-hosts` annotation. The annotation is a comma-separated
-  list of bare hostnames. An entry must equal the hostname, ignoring case and
-  surrounding spaces, with no wildcards and no suffixes, and the port in
-  `callbackUrl` plays no part. A channel with an `hmac` callback needs no
+  list of bare hostnames. An entry must equal the hostname, with no wildcards
+  and no suffixes, and the port in `callbackUrl` plays no part. A channel with an `hmac` callback needs no
   annotation.
 
   ```bash
@@ -178,8 +173,7 @@ after you fix the Secret, or at once when you edit the channel. The gateway
 does not wait for that pass: it refuses an unlabeled Secret on every read,
 and before every callback attempt it checks the label and the host again.
 When it refuses a callback, nothing is delivered, the response is still
-available by polling, and the gateway records `CallbackInvalid` channel health
-with a message that starts `callbackAuth secret unavailable:`. The channel's
+available by polling, and the gateway records `CallbackInvalid` channel health. The channel's
 `PlatformConnected` condition shows `CallbackInvalid` only when no delivery
 succeeded within the health window. If one did, `PlatformConnected` stays
 `True`, and the next pass reports `SecretNotOptedIn` or
@@ -279,20 +273,16 @@ the last reference clears.
 
 `kubectl describe modelprovider PROVIDER_NAME`, or `kubectl describe
 toolprovider PROVIDER_NAME` for a ToolProvider. A ToolProvider reports only
-the credential reasons: `CredentialsMissing`, `CredentialsInvalid`,
-`SecretNotOptedIn`, and `EndpointHostNotApproved`. It reports
-`CredentialsMissing`, `SecretNotOptedIn`, and `EndpointHostNotApproved` only
-when `credentialsRef` is set. It reports `CredentialsInvalid` with or without
-`credentialsRef` when the server rejects the probe. A ModelProvider reports
-all of these reasons:
+the credential reasons: `CredentialsMissing`, `SecretNotOptedIn`, and
+`EndpointHostNotApproved` when `credentialsRef` is set, and
+`CredentialsInvalid` with or without `credentialsRef` when the server rejects
+the probe. A ModelProvider reports all of these reasons:
 
 - `CredentialsMissing` or `CredentialsInvalid`: the Secret named by
   `credentialsRef` is absent in `kaalm-system` or lacks the key, or the
   provider rejected the key on the probe.
-- `SecretNotOptedIn`: the message says `Secret "NAME" does not carry the
-  label kaalm.io/provider-credential: "true"`. A provider may use only a
-  Secret with that label. Only the exact value `true` counts; `True`, `yes`,
-  an empty value, and the misspelled `kaalm.io/provider-credentials` do not.
+- `SecretNotOptedIn`: a provider may use only a Secret with the label
+  `kaalm.io/provider-credential: "true"`. Only the exact value `true` counts.
   The channel label `kaalm.io/channel-credential` and the workload label
   `kaalm.io/workload-secret` do not count either.
 
@@ -303,9 +293,8 @@ all of these reasons:
 - `EndpointHostNotApproved`: the Secret carries the label but its
   `kaalm.io/provider-hosts` annotation does not list the host of the
   provider's `spec.endpoint`. The annotation is a comma-separated list of
-  bare hostnames. An entry must equal the hostname, ignoring case and
-  surrounding spaces, with no wildcards and no suffixes, and the port and
-  path of the endpoint play no part. List an IP address bare. The
+  bare hostnames. An entry must equal the hostname, with no wildcards and no
+  suffixes, and the port and path of the endpoint play no part. List an IP address bare. The
   `kaalm.io/callback-hosts` annotation of channels does not count.
 
   ```bash
@@ -314,10 +303,9 @@ all of these reasons:
 
   Replace `HOSTS` with the hostname, or with a comma-separated list that
   keeps the hosts the Secret already lists. A Secret shared by several
-  providers lists every one of their hosts.
-  The message `spec.endpoint "ENDPOINT" has no hostname that Secret "NAME"
-  could approve` means the endpoint holds no hostname, as in `https://` or
-  `https://:8443`; fix `spec.endpoint`.
+  providers lists every one of their hosts. The same reason also shows when
+  `spec.endpoint` holds no hostname, as in `https://` or `https://:8443`; fix
+  `spec.endpoint`.
 
 - `InvalidDegradeTarget`: a budget policy's `degradeTo` is not in
   `spec.models`.

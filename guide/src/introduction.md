@@ -19,10 +19,9 @@ Three are cluster-scoped and managed by the platform team:
 - **ModelProvider** is a managed LLM provider: the credential (kept out of team
   namespaces), the model catalog with prices, which namespaces may use it, and
   the budget attached to that use.
-- **ToolProvider** is a managed reference to an external MCP tool server,
-  the same idea applied to tools: the credential stays out of team
-  namespaces, an optional declared catalog bounds what can be called, and an
-  allowlist decides which namespaces may use it.
+- **ToolProvider** is a managed reference to an external MCP tool server: the
+  credential stays out of team namespaces, an optional declared catalog bounds
+  what can be called, and an allowlist decides which namespaces may use it.
 
 Three are namespaced and managed by application teams:
 
@@ -41,9 +40,8 @@ egress for the traffic that does not go through the gateway.
 ## Which chapters are for you
 
 - **Platform engineer** (you install Kaalm and offer classes and providers to
-  teams): read Getting started, then For platform teams. Observing the
-  platform comes next, when you want the fleet on a
-  screen, dashboards, and traces.
+  teams): read Getting started, then For platform teams. Then read Observing the
+  platform for the console, dashboards, and traces.
 - **Agent developer** (someone already runs Kaalm for you; you deploy agents):
   skim the mental model in the preceding section, then start at [Your first agent](developers/first-agent.md).
 

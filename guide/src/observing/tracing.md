@@ -14,9 +14,6 @@ upgrade command:
 --set gateway.tracing.otlpEndpoint=http://jaeger.tracing-e2e.svc:4318
 ```
 
-The e2e suite's install, the Makefile's `e2e-deploy` target, sets it to its
-own Jaeger.
-
 `gateway.tracing.sampleRatio` (default `1.0`) is parent-based head sampling
 for the traces the gateway starts; a sampling decision that arrives with a
 caller's trace context is honored either way. An `https` endpoint is
@@ -24,8 +21,8 @@ verified against the system roots, plus whatever
 `gateway.trustClusterCAForUpstream` and `gateway.upstreamCA` add; an `http`
 endpoint sends in the clear.
 
-On a running install, `helm upgrade` with the new value rolls the gateway:
-the endpoint is a container argument, read at startup.
+On a running install, `helm upgrade` with the new value restarts the
+gateway, which reads the endpoint at startup.
 
 ## 2. Run a throwaway Jaeger
 
@@ -46,7 +43,7 @@ kubectl port-forward -n tracing-e2e svc/jaeger 16686:16686
 ```
 
 The UI is then at `http://localhost:16686`. It keeps nothing across a
-restart; it is not a production collector.
+restart, so it is not a production collector.
 
 ## 3. Send a message and find its trace
 
@@ -106,8 +103,7 @@ requirement.
 ## 6. Turn it off
 
 Set `gateway.tracing.otlpEndpoint` back to the empty string and upgrade.
-No tracer is installed, no context is created or forwarded, and request
-handling carries no tracing overhead.
+Tracing is then off, as in a fresh install.
 
 ---
 

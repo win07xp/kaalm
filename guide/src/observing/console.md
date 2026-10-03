@@ -15,8 +15,6 @@ Add one value to your install or upgrade command:
 --set console.enabled=true
 ```
 
-The e2e suite's own install, the Makefile's `e2e-deploy` target, sets it.
-
 Then wait for the rollout:
 
 ```bash
@@ -25,9 +23,8 @@ kubectl rollout status deployment/kaalm-console -n kaalm-system
 
 The flag renders a ServiceAccount, a read-only ClusterRole and its binding,
 a certificate, a one-replica Deployment, and a ClusterIP Service named
-`kaalm-console` on port 8443. Without the flag, `helm template` renders none
-of them. The chart ships one replica with no `console.replicas` value, and
-no Ingress and no LoadBalancer; how the console is exposed is your decision.
+`kaalm-console` on port 8443. The chart has no `console.replicas` value, no
+Ingress, and no LoadBalancer; how the console is exposed is your decision.
 
 ## 2. Give someone access
 
@@ -119,7 +116,7 @@ parameter to the page URL, such as `?limit=500`, to see more, up to 1000.
   ceiling, plus a per-workload breakdown (`agent/AGENT_NAME`,
   `task/TASK_NAME`, and an unattributed bucket for gateway-only callers). The
   breakdown is the current period, read live from the gateway, and can run
-  ahead of the namespace figure, which the controller folds once per pass.
+  ahead of the namespace figure, which updates once per controller pass.
 - **Tasks**: phase, start and completion times, retries, and artifact names.
   Artifact values never appear; task history is about lifecycle, not
   content.
@@ -127,8 +124,7 @@ parameter to the page URL, such as `?limit=500`, to see more, up to 1000.
   `PlatformConnected` conditions.
 
 An agent's own page adds its conditions, class, providers, tools, endpoint,
-Pod and PVC names, and its own current-period spend. Every number is a status field
-`kubectl get` would also show; the console puts them on one screen.
+Pod and PVC names, and its own current-period spend.
 
 ## 5. Test-chat
 

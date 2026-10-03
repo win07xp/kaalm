@@ -86,9 +86,9 @@ spec:
 ```
 
 `guildId` is optional: with it set, commands from any other server get a
-short refusal and never reach the agent. The `path` follows the same rules
-as a webhook channel: it starts with `/channels/{namespace}/` and never with
-`/v1/`. Apply the manifest and wait for the `Phase` column to read `Active`:
+short refusal and never reach the agent. The `path` follows the
+[webhook path rules](connecting-a-channel.md#a-synchronous-channel). Apply the
+manifest and wait for the `Phase` column to read `Active`:
 
 ```bash
 kubectl get agentchannel support-discord -n team-support
@@ -110,10 +110,10 @@ https://bots.example.com/channels/team-support/support-discord
 ```
 
 When you save, Discord sends a verification `PING` and a deliberately
-badly signed one; the gateway answers the first with `PONG` and the second
-with `401`, and Discord accepts the URL. The badly signed `PING` does not
-count against the channel's health. Save only after the channel is
-`Active`: an unregistered path answers `401` to everything and the save fails.
+badly signed one. The gateway answers `PONG` and `401`, which Discord expects,
+and the badly signed `PING` does not count against the channel's health. Save
+only after the channel is `Active`: an unregistered path answers `401` to
+everything and the save fails.
 
 ## Try it
 
@@ -123,8 +123,9 @@ With `session.enabled: true`, every command from the same person carries the
 same session ID, so the agent can keep a conversation going.
 
 The agent receives a message envelope with `channelType: discord`, the
-person's Discord user ID as `userId`, and the option's text as `content`; the
-design book's Discord channel page lists every envelope field.
+person's Discord user ID as `userId`, and the option's text as `content`;
+[Discord channel](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/api/channel-discord.md)
+lists every envelope field.
 
 ![Sequence diagram of a platform channel message after intake. A person sends a slash command or a message; the platform sends a signed POST to /channels/{namespace}/{path} on the User Gateway, which runs the intake checks and acknowledges. The gateway wakes the Agent if needed and POSTs /v1/message to the Agent Service with up to four attempts, receiving a reply envelope or an error. The gateway then calls SendReply against the platform API with up to four attempts per chunk. On 2xx the reply appears in the chat; on a terminal status, or when the retries are exhausted, the gateway records CallbackRejected and drops the payload.](../diagrams/platform-channel-flow.svg)
 
@@ -142,11 +143,9 @@ kubectl patch secret support-discord-creds \
 ```
 
 The merge patch keeps `publicKey` and the `kaalm.io/channel-credential` label.
-Don't re-create the Secret. `kubectl create` fails with `AlreadyExists` while
-the Secret exists. If you delete it first, the new Secret has no label, and the
+Don't delete and re-create the Secret: the new Secret has no label, and the
 channel reports `Ready=False` with reason `SecretNotOptedIn` until you label it
-again. The gateway reads `botToken` from the same Secret and checks the label
-on every read.
+again.
 
 When the token has expired, the gateway posts the reply as a normal message
 in the channel, mentioning the person who asked. Without `botToken`, a late
@@ -161,12 +160,12 @@ reply is dropped and the channel's `PlatformConnected` condition reports
 - `WebhookAuthFailed`: Discord's signatures do not verify. The `publicKey` in
   the Secret does not match the application, or the interactions URL points
   at a different channel.
-- `CallbackRejected`: Discord refused the reply. The message names the HTTP
-  status; a `404` means the reply token had expired (see
+- `CallbackRejected`: Discord refused the reply. The condition message names
+  the HTTP status; a `404` means the reply token had expired (see
   [Slow agents](#slow-agents)).
 - `DispatchFailed` or `AgentNotReady`: the agent did not answer. The person
-  sees the error as the bot's reply, for example
-  `delivery_failed: ...`, rather than silence.
+  sees the error as the bot's reply rather than silence. The reply starts with
+  the error type, such as `delivery_failed` or `wake_timeout`.
 
 A command Discord shows as "The application did not respond" never reached
 the gateway, or reached it after Discord's 3-second window. Check the

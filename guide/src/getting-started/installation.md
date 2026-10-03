@@ -37,8 +37,7 @@ Replace `VERSION` with the release you are installing, for example `1.0.0`.
 
 Releases are listed on the
 [Releases page](https://github.com/win07xp/kaalm/releases). The chart and the
-controller and gateway images it pulls all share that version, so the install
-is fully pinned.
+controller and gateway images it pulls all share that version.
 
 ![What the Helm chart installs, by where each object lands: the three prerequisites it does not install; the six CRDs, two ClusterIssuers, two ClusterRoles with bindings, and the standard AgentClass at cluster scope; the two Deployments with PodDisruptionBudgets, two Services, ServiceAccounts, Roles, leaf Certificates, and the session-key Secret in kaalm-system; the console objects when enabled; the four persona ClusterRoles and the bindings from values when rbac.personas.enabled is set; and the CA Certificate and Bundle in the cluster resource namespace.](../diagrams/helm-install-inventory.svg)
 
@@ -69,8 +68,7 @@ CNI=cilium make k3d-up   # the same with Cilium, for allowedHosts
 The cluster is named `kaalm-dev`; set `CLUSTER=CLUSTER_NAME` to pick
 another. The
 script switches your kubectl context to it. Then run the same `helm install`
-as in [Install](#install) against it. This gives you a full
-local install from the published artifacts without building anything.
+as in [Install](#install) against it.
 
 ## From source
 
@@ -95,14 +93,13 @@ helm upgrade --install kaalm charts/kaalm \
 
 Replace `REGISTRY` with a registry your cluster can pull from. The
 checkout's chart reports the placeholder version `0.2.0` in `helm list`
-and its notes; at tag time, the release workflow packages the chart with the
-release version.
+and its notes.
 
-On k3d you can skip the registry and `k3d image import` the two images
-instead. `make upgrade-images` builds and imports exactly those two;
-`make e2e-images` builds the full e2e set, and `make e2e-deploy` installs
-the local chart with the e2e suite's own values, console and tracing
-included.
+On k3d you can skip the registry. `make upgrade-images` builds the two images
+under the chart's default names and imports them into the cluster, so run the
+`helm upgrade --install` above without the four `image` flags.
+`make e2e-images` builds the full e2e image set, and `make e2e-deploy` installs
+the local chart with the e2e suite's own values.
 
 ---
 

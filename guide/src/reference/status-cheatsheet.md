@@ -155,8 +155,8 @@ names the host, so `kubectl describe agentchannel` shows the typo.
   failing is checked less often over time. Ready without Healthy means valid
   config, unreachable provider.
 - `GatewayReachable`: mirrored onto every provider from the controller's
-  view of the gateway Pods, refreshed on every reconcile pass and at once on
-  a gateway Pod readiness change.
+  view of the gateway Pods, and updated at once when a gateway Pod's readiness
+  changes.
 - `FallbackIneligible` (advisory, never affects `Ready`): the reconcile-time
   scan found a fallback candidate that a caller's namespace or model can
   never reach. Clears on its own once the configuration is fixed.
@@ -202,9 +202,8 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
   when not. As with ModelProvider, Ready without Healthy means valid config,
-  unreachable server. The probe trusts the system CA roots plus the gateway's
-  upstream trust (`gateway.trustClusterCAForUpstream` and
-  `gateway.upstreamCA.configMap`; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca)).
+  unreachable server. The probe trusts the same CAs as the gateway's upstream
+  path; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca).
 
 ## AgentClass
 

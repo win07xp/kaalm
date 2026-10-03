@@ -9,7 +9,8 @@ removes.
 A healthy persistent agent moves through `Pending`, `Provisioning`, and
 `Running`. It goes `Idle` after `idleTimeout` with no activity, then through
 `Hibernating` to `Hibernated` after `hibernationDelay` elapses. It comes back
-through `Resuming` to `Running` when a message arrives or you wake it. The full status vocabulary is on the
+through `Resuming` to `Running` when a message arrives or you wake it. The full
+status vocabulary is on the
 [Status cheatsheet](../reference/status-cheatsheet.md).
 
 An agent with no idle timeout never goes `Idle`. If neither the Agent's
@@ -39,8 +40,8 @@ Hibernation and wake page states both timers and their class ceilings.
 ## Waking
 
 Any message through the agent's channel wakes it: the gateway holds the
-message, triggers the wake, polls the agent's Service until it accepts a
-connection (`Resuming`, then `Running`), then delivers. Conversation memory is intact because it lives on the PVC.
+message, wakes the agent (`Resuming`, then `Running`), then delivers. Conversation
+memory is intact because it lives on the PVC.
 
 The timing caveat that matters: under default settings, a sync-mode channel
 times out (`504 sync_deadline_exceeded` at 30 seconds) before a cold wake
@@ -77,14 +78,13 @@ deletion under either `pvcRetention` setting.
 
 ## Deletion
 
-On `kubectl delete agent`, the finalizer marks the Agent `Terminating`,
-deletes the Pod, and waits for it to go; the kubelet sends SIGTERM and the
-class's grace period applies, and finishing in-flight work in that window is
-the image's job. Only then is the resource released. The PVC's fate is the
+On `kubectl delete agent`, the Agent goes `Terminating` and its Pod is
+deleted. The kubelet sends SIGTERM and the class's grace period applies;
+finishing in-flight work in that window is the image's job. The Agent is
+released once the Pod is gone. The PVC's fate is the
 class's `pvcRetention` policy: `Delete`, the default, removes it with the
-agent; `Retain` (the sample class's choice) keeps it for a successor agent or
-post-mortem. The chart's `standard` class ships the `Delete` default. This
-policy is Kaalm's own and is independent of the PV reclaim policy underneath.
+agent; `Retain` keeps it for a successor agent or post-mortem. This policy is
+Kaalm's own and is independent of the PV reclaim policy underneath.
 
 ---
 
