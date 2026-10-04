@@ -226,7 +226,7 @@ func (r *RateLimiter) refilled(key string, perMinute, burst float64) *tokenBucke
 		r.buckets[key] = b
 	}
 	// Clamp before the refill, so the debt counts as if it had been clamped
-	// at the current share when it was taken.
+	// at the current share at the last refill.
 	if b.tokens < -burst {
 		b.tokens = -burst
 	}

@@ -134,8 +134,9 @@ func TestRateLimiter_TokenDebtReclampedWhenReplicasGrow(t *testing.T) {
 }
 
 // TestRateLimiter_TokenDebtReclampedBeforeRefill: the re-clamp runs before
-// the elapsed refill is credited, so the key admits again one minute after
-// the debit even when the replica count grows partway through (#377).
+// the elapsed refill is credited, so when no call reaches the key before the
+// replica count grows partway through, the key admits again one minute after
+// the debit (#377).
 func TestRateLimiter_TokenDebtReclampedBeforeRefill(t *testing.T) {
 	replicas := 1
 	rl := NewRateLimiter(func() int { return replicas })
