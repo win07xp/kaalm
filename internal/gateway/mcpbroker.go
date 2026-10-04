@@ -538,7 +538,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	var relayDetail string
 	switch {
 	case msg.Method == "tools/list" && resp.StatusCode < 300:
-		respBytes, relayStatus, relayErrType = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
+		respBytes, relayStatus, relayErrType, relayDetail = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
 	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
 		respBytes, relayErrType = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID)
 		relayStatus = resp.StatusCode
@@ -563,32 +563,37 @@ func (s *Server) logToolCredentialRefusal(ctx context.Context, provider string, 
 
 // relayFilteredToolsList buffers a tools/list response (either encoding),
 // filters the tool set to the caller's grant, and replies as plain JSON: the
-// model never sees a tool it cannot call. It returns the outcome triple the
-// caller funnels into mcpResult.
+// model never sees a tool it cannot call. It returns the outcome the caller
+// funnels into mcpResult, the audit detail included.
 func (s *Server) relayFilteredToolsList(
 	w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter, providerName string,
-) (respBytes int64, status int, errType string) {
+) (respBytes int64, status int, errType, detail string) {
 	// Reading one byte past the cap tells a list that passes it apart from
 	// one that ends exactly at it.
 	maxBytes := s.mcpMaxBodyBytes()
 	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
 	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), lr, msg.ID)
 	if err != nil && lr.N <= 0 {
+		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
-			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes), Provider: providerName}, 0)
-		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
+			Message: msg, Provider: providerName}, 0)
+		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// The upstream timeout covers the response, not only its headers.
+		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
 		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
-			Message:  fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName),
-			Provider: providerName, Retryable: true}, 0)
-		return 0, http.StatusGatewayTimeout, errToolTimeout
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusGatewayTimeout, errToolTimeout, msg
 	}
 	if err != nil {
+		// A read error names the tool server's address, which is platform
+		// tier: the cause goes to the audit detail, the caller gets a fixed
+		// message.
+		msg := "tool provider returned an unparseable tools/list response"
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
-			Message: "tool provider returned an unparseable tools/list response", Provider: providerName}, 0)
-		return 0, http.StatusServiceUnavailable, errToolUnavailable
+			Message: msg, Provider: providerName}, 0)
+		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
 	if parsed.Error == nil && parsed.Result != nil {
 		var result map[string]json.RawMessage
@@ -617,14 +622,15 @@ func (s *Server) relayFilteredToolsList(
 	}
 	encoded, err := json.Marshal(parsed)
 	if err != nil {
+		msg := "re-encoding tools/list response"
 		writeError(w, http.StatusInternalServerError, errorBody{Type: errInternalUnavailable,
-			Message: "re-encoding tools/list response", Provider: providerName, Retryable: true}, 0)
-		return 0, http.StatusInternalServerError, errInternalUnavailable
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusInternalServerError, errInternalUnavailable, msg + ": " + err.Error()
 	}
 	bodyLog("mcp response", encoded)
 	w.Header().Set("Content-Type", "application/json")
 	n, _ := w.Write(encoded)
-	return int64(n), http.StatusOK, ""
+	return int64(n), http.StatusOK, "", ""
 }
 
 // relayMCPBuffered copies a JSON response through, capped. It returns the

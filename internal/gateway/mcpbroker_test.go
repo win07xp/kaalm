@@ -1410,3 +1410,47 @@ func TestMCPBroker_ModernToolsListRewritesCacheScope(t *testing.T) {
 		t.Fatalf("ttlMs = %d, want the upstream hint preserved", parsed.Result.TTLMs)
 	}
 }
+
+// TestRelayFilteredToolsList_FailureDetail pins the audit detail on the
+// tools/list relay's failures: the caller message stays fixed, and the
+// cause goes to the audit record, as on the buffered relay.
+func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
+	h.server.Config.MCPMaxBodyBytes = 1024
+	msg := mcpRequest{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "tools/list"}
+
+	t.Run("read failure", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
+				Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET})),
+		}
+		_, status, errType, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
+			t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
+		}
+		body := expectMCPErrorBody(t, rec.Result(), http.StatusServiceUnavailable, errToolUnavailable)
+		if strings.Contains(body.Message, "10.43.7.9") {
+			t.Errorf("caller message leaks the tool server address: %q", body.Message)
+		}
+		if !strings.HasPrefix(detail, body.Message+": ") || !strings.Contains(detail, "10.43.7.9") {
+			t.Errorf("audit detail = %q, want the caller message and the transport error", detail)
+		}
+	})
+
+	t.Run("response too large", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", 4096))),
+		}
+		_, status, _, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		body := expectMCPErrorBody(t, rec.Result(), http.StatusRequestEntityTooLarge, errResponseTooLarge)
+		if status != http.StatusRequestEntityTooLarge || detail != body.Message {
+			t.Errorf("outcome = (%d, detail %q), want (413, the caller message %q)", status, detail, body.Message)
+		}
+	})
+}
