@@ -101,9 +101,11 @@ func (r *RateLimiter) Allow(provider *kaalmv1beta1.ModelProvider, namespace, mod
 
 // DebitTokens subtracts a finished call's settled tokens from the
 // (namespace, model) token bucket that admitted it. The bucket may go
-// negative, down to minus one burst, so one huge call blocks the key for at
-// most about one refill window. A provider with no tokensPerMinute limit
-// debits nothing.
+// negative, down to minus one burst at the current share, so one huge call
+// blocks the key for at most about one refill window. When the share later
+// shrinks (more replicas or a lower ceiling), refilled re-clamps the older
+// debt, so the bound holds across those changes. A provider with no
+// tokensPerMinute limit debits nothing.
 func (r *RateLimiter) DebitTokens(provider *kaalmv1beta1.ModelProvider, namespace, model string, tokens int64) {
 	limit := provider.Spec.RateLimits.TokensPerMinute
 	if limit <= 0 || tokens <= 0 {
@@ -210,15 +212,23 @@ func (r *RateLimiter) take(key string, perMinute, burst float64) (bool, int) {
 	return false, retryAfterSeconds(1-b.tokens, perMinute)
 }
 
-// refilled returns key's bucket, created full when missing, after adding
-// the tokens earned since its last refill (capped at the burst). The caller
-// holds r.mu.
+// refilled returns key's bucket, created full when missing. It first raises
+// a debt deeper than one burst to minus one burst, so a debt taken at a
+// larger share (before the replica count grew or the ceiling dropped) blocks
+// for at most one refill window at the current share. Then it adds the
+// tokens earned since the last refill, capped at the burst. The caller holds
+// r.mu.
 func (r *RateLimiter) refilled(key string, perMinute, burst float64) *tokenBucket {
 	now := r.now()
 	b := r.buckets[key]
 	if b == nil {
 		b = &tokenBucket{tokens: burst, lastRefill: now, perMinute: perMinute}
 		r.buckets[key] = b
+	}
+	// Clamp before the refill, so the debt counts as if it had been clamped
+	// at the current share at the last refill.
+	if b.tokens < -burst {
+		b.tokens = -burst
 	}
 	elapsed := now.Sub(b.lastRefill).Minutes()
 	if elapsed > 0 {
