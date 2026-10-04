@@ -1089,9 +1089,10 @@ func (r *AgentReconciler) convergePod(
 	// Pod; that is how a rollout halted by a failed replacement recovers.
 	waiting := false
 	cause := ""
+	mounted := tlsSecretOf(pod)
 	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
 		cause = "derived Pod spec changed"
-	} else if mounted := tlsSecretOf(pod); mounted != "" && tlsSecret != "" && mounted != tlsSecret {
+	} else if mounted != "" && tlsSecret != "" && mounted != tlsSecret {
 		cause = fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s", tlsSecret, mounted)
 	}
 	if cause != "" {
@@ -1128,9 +1129,14 @@ func (r *AgentReconciler) convergePod(
 		}
 		r.setReady(agent, true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")
 		if !waiting {
-			// A Ready Pod on the current spec frees the drift slot.
-			r.setPodUpToDate(agent, metav1.ConditionTrue, kaalmv1beta1.ReasonPodCurrent,
-				"agent Pod matches the derived spec")
+			// A Ready Pod on the current spec that mounts the Certificate's
+			// Secret frees the drift slot. The message names the Secret only
+			// when the TLS check compared one.
+			msg := "agent Pod matches the derived spec"
+			if mounted != "" && mounted == tlsSecret {
+				msg += " and mounts the Certificate's TLS Secret " + tlsSecret
+			}
+			r.setPodUpToDate(agent, metav1.ConditionTrue, kaalmv1beta1.ReasonPodCurrent, msg)
 		}
 	} else {
 		r.setPhase(agent, podPendingPhase(agent), "Pod is not Ready")
