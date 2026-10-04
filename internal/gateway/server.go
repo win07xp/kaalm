@@ -169,6 +169,9 @@ type Server struct {
 	callbackClientOnce sync.Once
 	callbackClient     *http.Client
 
+	// credentialLog paces the LLM proxy's credential-refusal warning.
+	credentialLog logThrottle
+
 	// AgentResolver resolves agent Service names for delivery dials; nil
 	// means net.DefaultResolver. Tests inject a counting fake.
 	AgentResolver ipResolver

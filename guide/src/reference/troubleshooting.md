@@ -357,7 +357,9 @@ time. The provider recovers on its own as soon as you set the label or the
 annotation, with no edit to the provider. The gateway applies the same checks
 on every call, so until the Secret passes, an LLM call falls back to the next
 provider or returns `503 provider_unavailable`, and a tool call returns
-`503 tool_unavailable`.
+`503 tool_unavailable`. To confirm from the gateway side, search the gateway logs for
+`llm credential unavailable`; the line names the provider and the reason. See
+[Provider routing and adapters](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/llm/provider-routing.md#credential-handling).
 
 A `FallbackIneligible` `Warning` event with `Ready` still `True` is
 different: the reconciler's eligibility scan found a fallback candidate that

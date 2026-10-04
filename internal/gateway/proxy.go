@@ -395,18 +395,28 @@ func (s *Server) candidateRequest(
 	return outBody, inboundPath, adapter, candAdapter, model
 }
 
+// credentialLogInterval paces the credential-refusal warning: one line per
+// provider per minute per replica. The refusal repeats on every request until
+// the Secret is fixed, and the ModelProvider status already carries the cause.
+const credentialLogInterval = time.Minute
+
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
 // The attempt runs under an attemptWatchdog: UpstreamTimeout bounds the wait
 // for response headers, then each gap between body reads. A buffered body
 // releases the watchdog once read; a streaming 2xx hands it to the relay
-// through the wrapped body, whose Close releases it.
+// through the wrapped body, whose Close releases it. A credential the store
+// refuses is a connect-class failure, logged at most once a minute per provider.
 func (s *Server) forwardOnce(
 	ctx context.Context, r *http.Request, provider *kaalmv1beta1.ModelProvider,
 	outBody []byte, inboundPath string, adapter, typeAdapter providerAdapter, modelID string,
 ) forwardResult {
 	credential, err := s.Store.Credential(ctx, provider)
 	if err != nil {
+		// A done context means the caller left; the error is not a credential problem.
+		if ctx.Err() == nil && s.credentialLog.allow(provider.Name, credentialLogInterval) {
+			slog.Warn("llm credential unavailable", "provider", provider.Name, "error", err)
+		}
 		return forwardResult{fallilable: true, class: classConnect, err: err}
 	}
 	upstreamURL := strings.TrimSuffix(provider.Spec.Endpoint, "/") + adapter.upstreamPath(inboundPath, modelID)
