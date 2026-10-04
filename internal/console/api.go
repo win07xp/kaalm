@@ -192,6 +192,8 @@ func (s *Server) apiAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
+		// invalid_request is the type the gateway uses for its own 404s, including a
+		// missing agent on test-chat, which the chat route relays: one type on both routes.
 		writeAPIError(w, http.StatusNotFound, "invalid_request", "agent not found")
 		return
 	}
