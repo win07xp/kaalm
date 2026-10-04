@@ -70,7 +70,7 @@ Every span is created by the gateway. One message yields:
 | `agent.deliver` | User Gateway | The delivery to the agent, retries included |
 | `llm.request` | LLM proxy | One LLM request from the agent; a budget or rate-limit denial closes it with an error status, so a blocked request is visible |
 | `llm.forward` | LLM proxy | One provider attempt; the candidate is the `kaalm.provider` attribute, and a fallback walk shows one per candidate |
-| `tool.call` | Tool broker | One governed MCP call; broker denials and failed relays (a response over the size cap, or one the broker could not read) carry an error status |
+| `tool.call` | Tool broker | One governed MCP call; broker denials and failed relays (a response over the size cap, streamed or not, or a response the broker could not read before relaying it) carry an error status |
 | `tool.forward` | Tool broker | The upstream half of a forwarded call |
 
 ![The span tree for one message: channel.receive parents agent.deliver; the agent's own work has no span but propagates the context; llm.request parents llm.forward, and tool.call parents tool.forward.](../diagrams/span-tree.svg)
