@@ -57,9 +57,12 @@ type Response struct {
 }
 
 // RPCError is a JSON-RPC 2.0 error object, surfaced verbatim to callers.
+// Data is kept raw, so a relay that re-encodes the error passes it on
+// unchanged.
 type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 func (e *RPCError) Error() string {

@@ -334,6 +334,66 @@ func TestMCPBroker_ToolsListFullForBearerTier(t *testing.T) {
 	}
 }
 
+// toolsListUpstreamError is an upstream tools/list answer carrying a
+// JSON-RPC error with data.
+const toolsListUpstreamError = `{"jsonrpc":"2.0","id":3,"error":{"code":-32022,` +
+	`"message":"unsupported protocol version","data":{"supported":["2025-06-18"]}}}`
+
+// relayToolsList serves upstream as the tools/list answer, in JSON or as one
+// SSE event, and returns the broker's reply body after checking it is a 200
+// normalized to JSON.
+func relayToolsList(t *testing.T, mode, upstream string) []byte {
+	t.Helper()
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		if mode == "sse" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", upstream)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, upstream)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+		map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	return raw
+}
+
+// An upstream JSON-RPC error on tools/list reaches the caller whole, its
+// data included (#414).
+func TestMCPBroker_ToolsListRelaysUpstreamError(t *testing.T) {
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := relayToolsList(t, mode, toolsListUpstreamError)
+			var got struct {
+				Error struct {
+					Code    int             `json:"code"`
+					Message string          `json:"message"`
+					Data    json.RawMessage `json:"data"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("decode %s: %v", raw, err)
+			}
+			if got.Error.Code != -32022 || got.Error.Message != "unsupported protocol version" {
+				t.Errorf("error = %+v, want code -32022 and the upstream message", got.Error)
+			}
+			if string(got.Error.Data) != `{"supported":["2025-06-18"]}` {
+				t.Errorf("error.data = %s, want the upstream data unchanged (body: %s)", got.Error.Data, raw)
+			}
+		})
+	}
+}
+
 func TestMCPBroker_SessionOwnership(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
