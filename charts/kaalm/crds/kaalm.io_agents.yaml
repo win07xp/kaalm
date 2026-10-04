@@ -432,8 +432,11 @@ spec:
             description: AgentStatus is the observed state of an Agent.
             properties:
               conditions:
-                description: Conditions report Ready, ProvidersReady, and the recoverable
-                  Degraded state.
+                description: |-
+                  Conditions report whether the Agent's Pod is ready to serve (Ready),
+                  plus conditions that leave the phase unchanged, such as provider health
+                  and drift replacement progress. See docs/src/resources/agent.md#status
+                  for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -942,8 +945,11 @@ spec:
             description: AgentStatus is the observed state of an Agent.
             properties:
               conditions:
-                description: Conditions report Ready, ProvidersReady, and the recoverable
-                  Degraded state.
+                description: |-
+                  Conditions report whether the Agent's Pod is ready to serve (Ready),
+                  plus conditions that leave the phase unchanged, such as provider health
+                  and drift replacement progress. See docs/src/resources/agent.md#status
+                  for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

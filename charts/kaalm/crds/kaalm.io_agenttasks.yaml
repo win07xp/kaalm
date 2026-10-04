@@ -422,7 +422,10 @@ spec:
                 format: date-time
                 type: string
               conditions:
-                description: Conditions report Completed.
+                description: |-
+                  Conditions report whether the task has settled and how (Completed), and
+                  the state of the current attempt (Ready). See
+                  docs/src/resources/agenttask.md#status for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -915,7 +918,10 @@ spec:
                 format: date-time
                 type: string
               conditions:
-                description: Conditions report Completed.
+                description: |-
+                  Conditions report whether the task has settled and how (Completed), and
+                  the state of the current attempt (Ready). See
+                  docs/src/resources/agenttask.md#status for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

@@ -240,7 +240,9 @@ type AgentChannelStatus struct {
 	// Phase is the current lifecycle phase. Unset until first reconcile.
 	// +optional
 	Phase AgentChannelPhase `json:"phase,omitempty"`
-	// Conditions report Ready and the tri-state PlatformConnected.
+	// Conditions report whether the channel is valid so the gateway routes it
+	// (Ready), and the health of recent inbound delivery (PlatformConnected).
+	// See docs/src/resources/agentchannel.md#status for each condition.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
