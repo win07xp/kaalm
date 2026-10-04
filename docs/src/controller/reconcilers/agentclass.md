@@ -18,13 +18,14 @@ Hostname egress is supported on Cilium only. Every other CNI, Calico Enterprise 
 
 ## What it checks
 
-The checks don't stop at the first failure, and the `Ready` message lists every problem. The reason is `InvalidCIDR` when any `allowedCIDRs` entry is malformed, and `InvalidReference` otherwise.
+The checks don't stop at the first failure, and the `Ready` message lists every problem. The reason is `InvalidCIDR` when any `allowedCIDRs` entry is malformed, else `InvalidNamespacePattern` when any `allowedNamespaces` entry is malformed, and `InvalidReference` otherwise.
 
 | Check | Reason when it fails | Rule |
 |---|---|---|
 | Each `allowedProviders` and `allowedToolProviders` entry names an existing provider; health is not checked | `InvalidReference` | none; see [AgentClass status](../../resources/agentclass.md#status) |
 | Each `allowedCIDRs` entry parses as a CIDR | `InvalidCIDR` | [19](../../resources/validation/class-policy.md) |
 | Each `allowedHosts` entry is a valid DNS name | `InvalidReference` | [20](../../resources/validation/class-policy.md) |
+| Each `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-gates-on-providers-and-tools) |
 
 ## What it reports
 

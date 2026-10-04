@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,9 +37,9 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// ToolProviderReconciler validates a ToolProvider's credentials, probes it
-// for liveness over MCP, and holds it in Terminating while referenced by an
-// Agent, AgentTask, or AgentClass. The grant checks of rules 35 to 38 run on
+// ToolProviderReconciler validates a ToolProvider's credentials and
+// allowedNamespaces patterns, probes it for liveness over MCP, and holds it
+// in Terminating while referenced by an Agent, AgentTask, or AgentClass. The grant checks of rules 35 to 38 run on
 // the workload reconcilers (toolGrantViolations). See
 // docs/src/controller/reconcilers/toolprovider.md.
 type ToolProviderReconciler struct {
@@ -98,6 +99,15 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return r.finish(ctx, &tp, ctrl.Result{})
 		}
 		readyMsg = "provider is valid"
+	}
+
+	// Rule 51: a malformed allowedNamespaces entry matches nothing. Report
+	// it on Ready and skip the probe, as the credential checks do.
+	if bad := invalidNamespacePatterns(tp.Spec.AllowedNamespaces); len(bad) > 0 {
+		msg := strings.Join(bad, "; ")
+		r.setReadyFalse(&tp, kaalmv1beta1.ReasonInvalidNamespacePattern, msg, msg)
+		setHealthyNotProbed(&tp.Status.Conditions, "Ready is False with reason "+kaalmv1beta1.ReasonInvalidNamespacePattern)
+		return r.finish(ctx, &tp, ctrl.Result{})
 	}
 
 	// Liveness probe.

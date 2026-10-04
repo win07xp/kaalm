@@ -33,6 +33,7 @@ func TestAgentClass_AdmitsNamespace(t *testing.T) {
 		{"star admits all", []string{"*"}, "prod", true},
 		{"second pattern admits", []string{"team-*", "default"}, "default", true},
 		{"malformed pattern admits nothing", []string{"["}, "team-a", false},
+		{"a valid entry still admits beside a malformed one", []string{"[", "team-a"}, "team-a", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

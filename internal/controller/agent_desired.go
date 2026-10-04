@@ -339,7 +339,9 @@ func imageAllowed(image string, allowed []string) bool {
 
 // namespaceAllowed reports whether ns matches at least one glob in allowed. An
 // empty list allows none, as the provider docs have always stated: "*" is the
-// explicit opt-in to every namespace (behavior aligned in v0.4.0).
+// explicit opt-in to every namespace (behavior aligned in v0.4.0). A
+// malformed pattern matches nothing; the provider reconcilers report it on
+// Ready (rule 51).
 func namespaceAllowed(ns string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return false

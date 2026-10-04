@@ -21,7 +21,8 @@ import "path"
 // AdmitsNamespace reports whether the class admits Agents and AgentTasks in
 // namespace ns (rule 47). An unset allowedNamespaces admits every namespace.
 // Otherwise ns must match one of the path.Match glob patterns; a malformed
-// pattern matches nothing. This is the opposite of the ModelProvider and
+// pattern matches nothing, and the AgentClassReconciler reports it on Ready
+// (rule 51). This is the opposite of the ModelProvider and
 // ToolProvider allowedNamespaces checks (namespaceAllowed in the controller,
 // namespaceGlobAllowed in the gateway), where an empty list admits none. The
 // API server rejects an explicit empty list on the class, so here an empty

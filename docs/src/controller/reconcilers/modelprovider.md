@@ -29,9 +29,10 @@ The checks run in the order of the following table. A failing credential or conf
 | Every `modelMap` key names one of the provider's own models and every value one of the fallback's | `InvalidModelMap` | [41](../../resources/validation/providers.md#providers-fallback-and-budgets) |
 | Every `budget.policies[].degradeTo` names a model in `spec.models` | `InvalidDegradeTarget` | [18](../../resources/validation/providers.md#providers-fallback-and-budgets) |
 | Under hard enforcement, every model is priced | `HardBudgetUnpriced` | [33](../../resources/validation/providers.md#providers-fallback-and-budgets) |
+| Every `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-gates-on-providers-and-tools) |
 | The upstream accepts the credential (skipped when `healthCheck.enabled` is `false`) | `CredentialsInvalid` | |
 
-The four configuration rows run together, and the `Ready` message lists every problem found. When more than one fails, the reason is `InvalidDegradeTarget` if any degrade target is bad, else `HardBudgetUnpriced`, else `InvalidModelMap`, else `FallbackIneligible`. [Provider credentials](../../resources/validation/providers.md#provider-credentials) states what the early end on a credential failure protects.
+The five configuration rows run together, and the `Ready` message lists every problem found. When more than one fails, the reason is `InvalidDegradeTarget` if any degrade target is bad, else `HardBudgetUnpriced`, else `InvalidModelMap`, else `FallbackIneligible`, else `InvalidNamespacePattern`. [Provider credentials](../../resources/validation/providers.md#provider-credentials) states what the early end on a credential failure protects.
 
 Three advisory checks never touch `Ready`: the [cost check](#cost-sanity-on-degradeto), the `MaxOutputTokensUnset` check in [Fallback chain validation](#fallback-chain-validation), and the [eligibility scan](#reconcile-time-fallback-eligibility-scan). The cost check and the `MaxOutputTokensUnset` check run on every pass that passes the credential check, including a pass that fails a configuration check. The eligibility scan runs only on a pass that passes the credential and configuration checks, so a failing pass leaves its `FallbackIneligible` condition as it was.
 

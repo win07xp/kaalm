@@ -150,6 +150,13 @@ func TestModelProvider_ReadyFalseWarningsFollowTheStatusWrite(t *testing.T) {
 		reason:    kaalmv1beta1.ReasonHardBudgetUnpriced,
 		substring: `model "free-model" is unpriced`,
 	}, {
+		name: "rule 51: a malformed allowedNamespaces pattern",
+		mp: eventsProvider("ev-mp-nspattern", func(mp *kaalmv1beta1.ModelProvider) {
+			mp.Spec.AllowedNamespaces = []string{"*", "["}
+		}),
+		reason:    kaalmv1beta1.ReasonInvalidNamespacePattern,
+		substring: `"["`,
+	}, {
 		name: "the probe's rejected credential",
 		mp: eventsProvider("ev-mp-rejected", func(mp *kaalmv1beta1.ModelProvider) {
 			mp.Spec.HealthCheck = &kaalmv1beta1.ModelProviderHealthCheck{Enabled: true}
