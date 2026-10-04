@@ -532,7 +532,7 @@ func TestRelayMCPBuffered_ReadFailure(t *testing.T) {
 		Body: io.NopCloser(iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
 			Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET})),
 	}
-	_, status, errType := relayMCPBuffered(rec, resp, 1024, "search")
+	_, status, errType, detail := relayMCPBuffered(rec, resp, 1024, "search")
 	if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
 		t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
 	}
@@ -542,6 +542,14 @@ func TestRelayMCPBuffered_ReadFailure(t *testing.T) {
 	}
 	if !body.Retryable {
 		t.Error("a read failure must be retryable")
+	}
+	// The transport error names the tool server's address, which is
+	// platform tier: it goes to the audit detail, not to the caller.
+	if strings.Contains(body.Message, "10.43.7.9") {
+		t.Errorf("caller message leaks the tool server address: %q", body.Message)
+	}
+	if !strings.Contains(detail, "10.43.7.9") {
+		t.Errorf("audit detail = %q, want the transport error", detail)
 	}
 }
 

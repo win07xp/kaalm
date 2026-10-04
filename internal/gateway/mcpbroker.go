@@ -534,6 +534,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	var respBytes int64
 	var relayStatus int
 	var relayErrType string
+	var relayDetail string
 	switch {
 	case msg.Method == "tools/list" && resp.StatusCode < 300:
 		respBytes, relayStatus, relayErrType = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
@@ -541,9 +542,9 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		respBytes, relayErrType = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID)
 		relayStatus = resp.StatusCode
 	default:
-		respBytes, relayStatus, relayErrType = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes(), providerName)
+		respBytes, relayStatus, relayErrType, relayDetail = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes(), providerName)
 	}
-	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, "",
+	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, relayDetail,
 		start, reqBytes, respBytes, forwarded)
 }
 
@@ -607,20 +608,25 @@ func (s *Server) relayFilteredToolsList(
 }
 
 // relayMCPBuffered copies a JSON response through, capped. It returns the
-// outcome triple the caller funnels into mcpResult.
+// outcome the caller funnels into mcpResult, the audit detail included.
 func relayMCPBuffered(
 	w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
-) (respBytes int64, status int, errType string) {
+) (respBytes int64, status int, errType, detail string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
+		// The transport error names the tool server's address, which is
+		// platform tier: it goes to the audit detail, and the caller gets a
+		// fixed message, as on the unreachable path.
+		msg := fmt.Sprintf("reading the response from tool provider %q failed", providerName)
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
-			Message: "reading tool provider response: " + err.Error(), Provider: providerName, Retryable: true}, 0)
-		return 0, http.StatusServiceUnavailable, errToolUnavailable
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
 	if int64(len(body)) > maxBytes {
+		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
-			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes), Provider: providerName}, 0)
-		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
+			Message: msg, Provider: providerName}, 0)
+		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
 	}
 	bodyLog("mcp response", body)
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -628,7 +634,7 @@ func relayMCPBuffered(
 	}
 	w.WriteHeader(resp.StatusCode)
 	n, _ := w.Write(body)
-	return int64(n), resp.StatusCode, ""
+	return int64(n), resp.StatusCode, "", ""
 }
 
 // relayMCPStream forwards SSE events as they arrive, flushing per line,
