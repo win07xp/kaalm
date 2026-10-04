@@ -17,7 +17,8 @@ limitations under the License.
 // Package cel exercises the CRD schema validation (CEL and structural) against a
 // real apiserver via envtest. Every fixture under test/fixtures/valid and every
 // manifest under config/samples must apply with strict field validation; every
-// fixture under test/fixtures/invalid must be rejected. This is the apply-time
+// fixture under test/fixtures/invalid must be rejected by the one rule its
+// `# expect:` line names. This is the apply-time
 // half of docs/src/resources/validation-and-defaulting.md.
 package cel
 
@@ -32,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -223,16 +225,49 @@ func TestSamplesApply(t *testing.T) {
 	}
 }
 
-// TestInvalidFixturesRejected asserts every invalid fixture is rejected. Each
-// fixture is crafted to trip exactly one apply-time rule (see its header comment).
+// expectedRejection returns the fragment of the rejection message an invalid
+// fixture declares on its one `# expect:` line.
+func expectedRejection(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "# expect:"); ok {
+			found = append(found, strings.TrimSpace(rest))
+		}
+	}
+	if len(found) != 1 || found[0] == "" {
+		t.Fatalf("%s: every invalid fixture needs exactly one non-empty `# expect:` line "+
+			"with part of the rejection message, found %q", path, found)
+	}
+	return found[0]
+}
+
+// TestInvalidFixturesRejected asserts every invalid fixture is rejected for the
+// reason it was written for. Each fixture is crafted to trip exactly one
+// apply-time rule, named in its header comment, and its `# expect:` line holds
+// part of that rule's message. The test fails when the fixture is rejected for
+// another reason, or by more than one rule.
 func TestInvalidFixturesRejected(t *testing.T) {
 	c := newClient(t)
 	for _, f := range fixtures(t, "invalid") {
 		t.Run(filepath.Base(f), func(t *testing.T) {
+			want := expectedRejection(t, f)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := c.Create(ctx, decode(t, f), client.DryRunAll); err == nil {
+			err := dryRunCreate(ctx, c, decode(t, f))
+			if err == nil {
 				t.Fatalf("expected rejection, but the apiserver accepted it")
+			}
+			var status *apierrors.StatusError
+			if !errors.As(err, &status) || status.ErrStatus.Details == nil || len(status.ErrStatus.Details.Causes) != 1 {
+				t.Fatalf("expected exactly one rule violation, got: %v", err)
+			}
+			if !strings.Contains(status.ErrStatus.Details.Causes[0].Message, want) {
+				t.Fatalf("rejected for the wrong reason: want a message containing %q, got: %v", want, err)
 			}
 		})
 	}

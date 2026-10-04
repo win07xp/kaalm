@@ -1,4 +1,5 @@
 # rule 39: exactly one block; here whatsapp is the type but discord is set too
+# expect: exactly the block matching spec.type must be set
 apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata: {name: two-blocks, namespace: default}
