@@ -47,12 +47,13 @@ type RateLimiter struct {
 	buckets map[string]*tokenBucket // key: namespace/model, or a prefixed key
 }
 
+// tokenBucket is one bucket's level and the time it was last refilled. It
+// stores no rate or burst: each refilled call passes the current
+// per-replica share, so a change in the ceiling or the replica count takes
+// effect on the bucket's next refill.
 type tokenBucket struct {
 	tokens     float64
 	lastRefill time.Time
-	// perMinute is the per-replica ceiling this bucket was last sized for; a
-	// change in the ceiling or replica count re-sizes on the next refill.
-	perMinute float64
 }
 
 // NewRateLimiter builds a limiter. replicas defaults to 1 when nil.
@@ -222,7 +223,7 @@ func (r *RateLimiter) refilled(key string, perMinute, burst float64) *tokenBucke
 	now := r.now()
 	b := r.buckets[key]
 	if b == nil {
-		b = &tokenBucket{tokens: burst, lastRefill: now, perMinute: perMinute}
+		b = &tokenBucket{tokens: burst, lastRefill: now}
 		r.buckets[key] = b
 	}
 	// Clamp before the refill, so the debt counts as if it had been clamped
@@ -235,7 +236,6 @@ func (r *RateLimiter) refilled(key string, perMinute, burst float64) *tokenBucke
 		b.tokens += elapsed * perMinute
 		b.lastRefill = now
 	}
-	b.perMinute = perMinute
 	if b.tokens > burst {
 		b.tokens = burst
 	}
