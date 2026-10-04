@@ -22,6 +22,7 @@ package chart
 import (
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -93,6 +94,28 @@ func TestStandardAgentClass_AllowedProvidersComeFromValues(t *testing.T) {
 		if ac.Spec.AllowedProviders[i].Name != name {
 			t.Errorf("allowedProviders[%d] is %q, want %q", i, ac.Spec.AllowedProviders[i].Name, name)
 		}
+	}
+}
+
+// standardAgentClass.allowedNamespaces renders into spec.allowedNamespaces
+// only when it lists something: unset admits every namespace, and the CRD
+// rejects an empty list (rule 47), so an empty value must omit the field. The
+// entries are quoted, so a bare "*" is not read as a YAML alias (#371).
+func TestStandardAgentClass_AllowedNamespacesComeFromValues(t *testing.T) {
+	if got := renderStandardClass(t).Spec.AllowedNamespaces; got != nil {
+		t.Errorf("default render lists allowedNamespaces %q, want the field unset", got)
+	}
+
+	ac := renderStandardClass(t,
+		"--set-json", `standardAgentClass.allowedNamespaces=["team-a","team-data-*","*"]`)
+	want := []string{"team-a", "team-data-*", "*"}
+	if !slices.Equal(ac.Spec.AllowedNamespaces, want) {
+		t.Errorf("allowedNamespaces %q, want %q", ac.Spec.AllowedNamespaces, want)
+	}
+
+	empty := renderStandardClass(t, "--set-json", "standardAgentClass.allowedNamespaces=[]")
+	if got := empty.Spec.AllowedNamespaces; got != nil {
+		t.Errorf("an empty value renders allowedNamespaces %q, want the field unset", got)
 	}
 }
 
