@@ -1,6 +1,6 @@
 # Reference and access rules
 
-This page states the rules that make a reference resolve (rules 1, 3, 13, 23, 27, 31, 35, and 48) and the access gates on providers and tools (rules 4, 5, 36, 37, and 38). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
+This page states the rules that make a reference resolve (rules 1, 3, 13, 23, 27, 31, 35, and 48) and the access gates on providers and tools (rules 4, 5, 36, 37, 38, and 51). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
 
 ## Referenced objects must exist
 
@@ -42,3 +42,7 @@ Rules 4, 5, 36, and 37, with rules 3 and 35, are the gate chain drawn on [Core c
 **Rule 37: A ToolProvider must be on the class allowlist.** Every referenced ToolProvider must appear in the AgentClass's `allowedToolProviders`, the rule 5 analog.
 
 **Rule 38: Granted tools must exist in a declared catalog.** When a ToolProvider declares a `tools` catalog, every tool name in a workload's grant must appear in it. *Reconcile time; the class-mismatch handling with its own `reason=ToolNotInCatalog`, naming the missing tools.* When no catalog is declared, the server's own `tools/list` governs and this rule does not apply.
+
+**Rule 51: Every `allowedNamespaces` entry must be a valid pattern.** Each `allowedNamespaces` entry on an AgentClass, ModelProvider, or ToolProvider must be a valid `path.Match` pattern. `[` is not. *Reconcile time; `Ready=False, reason=InvalidNamespacePattern` on that resource, with a message naming each malformed entry, and a `Warning` event when the reason first appears.* CEL cannot run `path.Match`, and the `v1beta1` policy forbids tightening apply-time validation that a stored object could already violate, so the rule reports status and does not reject the write.
+
+The rule changes no access outcome. A malformed entry still matches no namespace, and the other entries still admit theirs, in the controller and in the gateway. Workloads that use the resource keep the outcomes of rules 4, 36, and 47. On a ModelProvider, the check is one of the configuration checks: a failing pass ends before the probe and the budget reduction, as it does for rules 11 and 18 ([ModelProviderReconciler](../../controller/reconcilers/modelprovider.md#what-it-checks)).

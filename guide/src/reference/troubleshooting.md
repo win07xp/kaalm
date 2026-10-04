@@ -225,6 +225,13 @@ One of the gates denied; the error message names which:
 - not in the AgentClass `allowedProviders`,
 - namespace not in the provider's `allowedNamespaces`.
 
+A malformed `allowedNamespaces` entry on the provider or the class also gets
+this `403`. The message names the allowlist that denied, not the malformed
+entry. To find the entry, check the provider and the class for `Ready=False`
+with reason `InvalidNamespacePattern`; that message names it. For a provider,
+see [ModelProvider `Ready=False`](#modelprovider-readyfalse). For a class, see
+[Keep a class to some teams](../platform/managing-access.md#keep-a-class-to-some-teams).
+
 ## LLM call returns `400`
 
 - Model not qualified: the model field must be
@@ -292,8 +299,9 @@ the last reference clears.
 
 `kubectl describe modelprovider PROVIDER_NAME`, or `kubectl describe
 toolprovider PROVIDER_NAME` for a ToolProvider. A ToolProvider reports only
-the credential reasons: `CredentialsMissing`, `SecretNotOptedIn`, and
-`EndpointHostNotApproved` when `credentialsRef` is set, and
+the credential reasons and `InvalidNamespacePattern`: `CredentialsMissing`,
+`SecretNotOptedIn`, and `EndpointHostNotApproved` when `credentialsRef` is set,
+`InvalidNamespacePattern` with or without `credentialsRef`, and
 `CredentialsInvalid` with or without `credentialsRef` when the server rejects
 the probe. A ModelProvider reports all of these reasons:
 
@@ -334,6 +342,10 @@ the probe. A ModelProvider reports all of these reasons:
   end's catalog does not have.
 - `HardBudgetUnpriced`: hard enforcement is on and a model in the catalog
   has no prices.
+- `InvalidNamespacePattern`: an `allowedNamespaces` entry is not a valid
+  glob, such as `[`. The message names each such entry. Correct or remove it.
+  Until you do, that entry admits no namespace, and the other entries still
+  work. The reason shows once the Secret checks pass.
 
 Each of these reasons also fires a `Warning` event with the same reason the
 first time `Ready` turns `False` with it.

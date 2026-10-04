@@ -147,7 +147,9 @@ names the host, so `kubectl describe agentchannel` shows the typo.
   (the Secret's `kaalm.io/provider-hosts` annotation does not list the
   `spec.endpoint` host), `CredentialsInvalid`, `InvalidDegradeTarget`,
   `FallbackIneligible`, `InvalidModelMap`, `HardBudgetUnpriced` (hard
-  enforcement requires a fully priced model catalog), `DeletionBlocked`
+  enforcement requires a fully priced model catalog),
+  `InvalidNamespacePattern` (an `allowedNamespaces` entry is not a valid
+  glob), `DeletionBlocked`
   (a delete is held by a referrer; see [Deleting a provider, tool
   provider, or class never finishes](troubleshooting.md#deleting-a-provider-tool-provider-or-class-never-finishes)).
   Each of these reasons fires a `Warning` event the first time `Ready` turns
@@ -193,13 +195,15 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 `kubectl get toolproviders` columns: `Type`, `Ready`, `Healthy`, `Age`.
 
 - `Ready`: the spec is valid and, when `credentialsRef` is set, the Secret
-  resolves in `kaalm-system`; a provider with no credential is Ready. False
-  reasons: `CredentialsMissing`, `SecretNotOptedIn` and
+  resolves in `kaalm-system`; a provider with no credential and valid
+  `allowedNamespaces` entries is Ready. False reasons: `CredentialsMissing`, `SecretNotOptedIn` and
   `EndpointHostNotApproved` (the Secret lacks the label
   `kaalm.io/provider-credential: "true"` or does not list the endpoint host
   in `kaalm.io/provider-hosts`; both apply only when `credentialsRef` is
   set, and the fixes are in
   [Troubleshooting](troubleshooting.md#modelprovider-readyfalse)),
+  `InvalidNamespacePattern` (an `allowedNamespaces` entry is not a valid
+  glob; it applies with or without `credentialsRef`),
   `CredentialsInvalid` (the server rejected
   the injected credential), `DeletionBlocked` (a delete is held by a
   referrer; see [Deleting a provider, tool provider, or class never
@@ -223,7 +227,9 @@ holding a `maxUnavailableOnDrift` slot; `status.agentsPendingReplacement`
 counts the rest waiting for one, but has no column of its own.
 
 Conditions: `Ready` (`AllReferencesResolved`; `InvalidCIDR` when an
-`allowedCIDRs` entry does not parse; `InvalidReference` when a
+`allowedCIDRs` entry does not parse; `InvalidNamespacePattern` when an
+`allowedNamespaces` entry is not a valid glob (it ranks after `InvalidCIDR`
+and before `InvalidReference`); `InvalidReference` when a
 listed provider or tool provider does not exist or an `allowedHosts` entry is
 not a DNS name; `DeletionBlocked` while a delete is held by a referrer, see
 [Deleting a provider, tool provider, or class never

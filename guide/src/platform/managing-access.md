@@ -49,7 +49,9 @@ third.
 3. The team lists the provider in their Agent's `spec.providers`.
 
 Prefer exact namespace names in `allowedNamespaces`; use globs like
-`team-*` only when your namespace naming convention makes them safe.
+`team-*` only when your namespace naming convention makes them safe. A
+malformed provider entry, such as `[`, admits no namespace, and the provider
+shows `Ready=False` with reason `InvalidNamespacePattern`.
 
 ## Keep a class to some teams
 
@@ -67,7 +69,10 @@ kubectl patch agentclass restricted --type=merge \
 The controller and the gateway both check the list. An Agent whose namespace
 the class does not admit goes `Degraded` with reason `NamespaceNotAllowed`, no
 Pod is created for a new Agent, and the gateway answers `403 access_denied` to
-its LLM and tool calls. A malformed pattern, such as `[`, matches nothing.
+its LLM and tool calls. A malformed pattern, such as `[`, matches nothing, and
+the class shows `Ready=False` with reason `InvalidNamespacePattern` and a
+message that names the entry. Run `kubectl describe agentclass restricted` to
+see it, then fix or remove the entry. The class's other entries keep working.
 
 The field behaves differently from the provider allowlists:
 
