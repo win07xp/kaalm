@@ -157,8 +157,11 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// The system-namespace guard runs first, as on the workload reconcilers.
 	if channel.Namespace == r.OperatorNamespace {
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
-		return ctrl.Result{}, r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonSystemNamespaceForbidden,
-			fmt.Sprintf("AgentChannels may not live in the operator namespace %q", r.OperatorNamespace))
+		if err := r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonSystemNamespaceForbidden,
+			fmt.Sprintf("AgentChannels may not live in the operator namespace %q", r.OperatorNamespace)); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Step 1: resolve agentRef (an Agent, never an AgentTask).
@@ -169,8 +172,15 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, agentErr
 		}
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
-		return ctrl.Result{}, r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonAgentNotFound,
-			fmt.Sprintf("Agent %q not found in namespace %q", channel.Spec.AgentRef.Name, channel.Namespace))
+		if err := r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonAgentNotFound,
+			fmt.Sprintf("Agent %q not found in namespace %q", channel.Spec.AgentRef.Name, channel.Namespace)); err != nil {
+			return ctrl.Result{}, err
+		}
+		// The Agent watch fires once when the Agent is deleted and never
+		// again, so this re-check is what prunes records that expire later.
+		// Creating the Agent still re-runs the channel at once through
+		// channelsForAgent.
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
 	// Steps 2 and 3 validation chain; the first failure reports and stops.
@@ -187,12 +197,17 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// watches in use so the watcher's idle janitor (one hour) never
 		// stops them. A child conflict re-checks sooner, on the workloads'
 		// cadence: the conflicting object carries no owner reference, so its
-		// removal raises no watch event.
+		// removal raises no watch event. This re-check also runs the expiry
+		// prune, so an expired record of a failing channel goes within one
+		// interval.
 		requeue := time.Minute
 		if reason == kaalmv1beta1.ReasonChildConflict {
 			requeue = gateRequeue
 		}
-		return ctrl.Result{RequeueAfter: requeue}, r.gateChannel(ctx, &channel, statusBefore, reason, msg)
+		if err := r.gateChannel(ctx, &channel, statusBefore, reason, msg); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: requeue}, nil
 	}
 	r.setChannelReady(&channel, true, kaalmv1beta1.ReasonAgentReachable, "channel is valid")
 
@@ -915,10 +930,14 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 }
 
 // gateChannel sets Ready=False for a validation failure, writes the status if
-// the pass changed it, and emits a Warning event with the same reason when
-// the reason first appears, not on each pass that finds the problem again.
-// The event follows a successful write, so a pass that lost its write to a
-// conflict does not report the reason twice.
+// the pass changed it, emits a Warning event with the same reason when the
+// reason first appears (not on each pass that finds the problem again), then
+// prunes the channel's expired async records. The event follows a successful
+// write, so a pass that lost its write to a conflict does not report the
+// reason twice. A channel that went invalid can still hold records it wrote
+// while Ready, and the gateway writes none while it is not Ready, so this
+// prune is what removes them. The status is written before the prune, so a
+// prune error never hides the gate's status.
 func (r *AgentChannelReconciler) gateChannel(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, before *kaalmv1beta1.AgentChannelStatus,
 	reason, msg string,
@@ -931,7 +950,7 @@ func (r *AgentChannelReconciler) gateChannel(
 	if first && r.Recorder != nil {
 		r.Recorder.Event(channel, corev1.EventTypeWarning, reason, msg)
 	}
-	return nil
+	return r.pruneAsyncConfigMaps(ctx, channel, false)
 }
 
 func (r *AgentChannelReconciler) setChannelReady(channel *kaalmv1beta1.AgentChannel, ok bool, reason, msg string) {
