@@ -830,22 +830,6 @@ func expectTLSProjection(t *testing.T, pod *corev1.Pod, secret string) {
 	t.Error("TLS volume has no Secret source")
 }
 
-// tlsSecretOf returns the Secret the Pod's kaalm-tls projected volume names,
-// or "" when the volume or its Secret source is missing.
-func tlsSecretOf(pod *corev1.Pod) string {
-	for _, v := range pod.Spec.Volumes {
-		if v.Name != tlsVolumeName || v.Projected == nil {
-			continue
-		}
-		for _, src := range v.Projected.Sources {
-			if src.Secret != nil {
-				return src.Secret.Name
-			}
-		}
-	}
-	return ""
-}
-
 // The claims tests share a request, a limit cap, and a claim that no
 // Pod-level resourceClaims entry names.
 var (
