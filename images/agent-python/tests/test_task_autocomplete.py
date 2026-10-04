@@ -28,6 +28,8 @@ NOT_AGENT_REPORTED = GatewayReply(403, {"error": {
 # gateway's identity check answers 409 stale_pod, which complete_task retries.
 NON_RETRYABLE = GatewayReply(403, {"error": {"type": "access_denied", "message": "denied"}})
 UNAVAILABLE = GatewayReply(503, {"error": {"type": "internal_unavailable", "retryable": True}})
+# A 5xx that complete_task does not retry itself, so only the hook retries it.
+SERVER_ERROR = GatewayReply(500, {"error": {"type": "internal_error"}})
 
 
 class RecordingGateway:
@@ -85,15 +87,25 @@ async def test_unset_or_empty_does_nothing(monkeypatch, sleeps):
 
 
 async def test_retries_six_times_five_seconds_apart(sleeps):
-    gw = RecordingGateway(*([UNAVAILABLE] * 10))
+    gw = RecordingGateway(*([SERVER_ERROR] * 10))
     await mk_agent(gw).autocomplete("success")
     assert len(gw.bodies) == 6
     assert sleeps == [runtime.AUTOCOMPLETE_RETRY_DELAY] * 5
     assert runtime.AUTOCOMPLETE_RETRY_DELAY == 5.0
 
 
+async def test_unavailable_runs_complete_task_schedule_each_attempt(sleeps):
+    """A 503 internal_unavailable that never clears: each of the 6 attempts
+    runs complete_task's own 4 attempts, with each wait after a 503 raised to
+    the 1-second minimum."""
+    gw = RecordingGateway(*([UNAVAILABLE] * 24))
+    await mk_agent(gw).autocomplete("success")
+    assert len(gw.bodies) == 24
+    assert sleeps == [1.0, 1.0, 2.0, runtime.AUTOCOMPLETE_RETRY_DELAY] * 5 + [1.0, 1.0, 2.0]
+
+
 async def test_succeeds_on_a_later_attempt(sleeps):
-    gw = RecordingGateway(UNAVAILABLE, UNAVAILABLE)
+    gw = RecordingGateway(SERVER_ERROR, SERVER_ERROR)
     await mk_agent(gw).autocomplete("success")
     assert len(gw.bodies) == 3
 

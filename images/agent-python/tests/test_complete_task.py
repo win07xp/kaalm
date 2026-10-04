@@ -1,6 +1,7 @@
 # Copyright 2026 The Kaalm Authors. Licensed under the Apache License, Version 2.0.
-"""complete_task against a scripted gateway: the 409 stale_pod rejection and
-transport errors are retried on the bounded schedule, TaskAlreadyCompleted
+"""complete_task against a scripted gateway: the 409 stale_pod rejection, the
+503 internal_unavailable answer (each wait after it raised to at least
+Retry-After), and transport errors are retried on the bounded schedule, TaskAlreadyCompleted
 raises kaalm.TaskAlreadyCompleted at once, and any other non-200 (a 403
 included) fails at once (contract item 6). Once a report is accepted, a
 later call raises kaalm.TaskAlreadyCompleted without sending."""
@@ -24,6 +25,8 @@ DONE = GatewayReply(403, {"error": {
     "type": "access_denied", "retryable": False,
     "message": "TaskAlreadyCompleted: the task has reached a terminal phase"}})
 OK = GatewayReply(200, "")
+UNAVAILABLE_BODY = {"error": {"type": "internal_unavailable", "retryable": True}}
+UNAVAILABLE = GatewayReply(503, UNAVAILABLE_BODY)
 
 
 class ScriptedGateway:
@@ -46,11 +49,15 @@ class ScriptedGateway:
 
 
 @pytest.fixture(autouse=True)
-def no_backoff(monkeypatch):
-    async def instant(_):
-        return None
+def sleeps(monkeypatch):
+    """Skips every backoff and records each requested delay."""
+    recorded: list[float] = []
+
+    async def instant(delay):
+        recorded.append(delay)
 
     monkeypatch.setattr(asyncio, "sleep", instant)
+    return recorded
 
 
 def mk_agent(gateway: ScriptedGateway) -> Agent:
@@ -131,4 +138,49 @@ async def test_no_report_is_sent_after_an_accepted_one():
     await agent.complete_task("success")
     with pytest.raises(kaalm.TaskAlreadyCompleted):
         await agent.complete_task("failure", "second thoughts")
+    assert gw.calls == 1
+
+
+async def test_unavailable_is_retried_then_succeeds(sleeps):
+    gw = ScriptedGateway(UNAVAILABLE, UNAVAILABLE, OK)
+    await mk_agent(gw).complete_task("success", "done")
+    assert gw.calls == 3
+    # No Retry-After: each wait after a 503 is raised to the 1-second minimum.
+    assert sleeps == [1.0, 1.0]
+
+
+async def test_unavailable_waits_at_least_retry_after(sleeps):
+    slow = GatewayReply(503, UNAVAILABLE_BODY, retry_after=3.0)
+    gw = ScriptedGateway(slow, slow, slow, OK)
+    await mk_agent(gw).complete_task("success", "done")
+    assert sleeps == [3.0, 3.0, 3.0]
+
+
+async def test_retry_after_is_capped(sleeps):
+    huge = GatewayReply(503, UNAVAILABLE_BODY, retry_after=600.0)
+    gw = ScriptedGateway(huge, huge, huge, huge)
+    with pytest.raises(RuntimeError, match="exhausted"):
+        await mk_agent(gw).complete_task("success", "done")
+    assert sleeps == [30.0, 30.0, 30.0]
+    assert gw.calls == 4
+
+
+async def test_unavailable_exhausts_the_schedule(sleeps):
+    gw = ScriptedGateway(UNAVAILABLE, UNAVAILABLE, UNAVAILABLE, UNAVAILABLE)
+    with pytest.raises(RuntimeError, match="exhausted.*503"):
+        await mk_agent(gw).complete_task("success", "done")
+    assert gw.calls == 4
+    assert sleeps == [1.0, 1.0, 2.0]
+
+
+async def test_floor_applies_only_after_a_503(sleeps):
+    gw = ScriptedGateway(UNAVAILABLE, STALE, OK)
+    await mk_agent(gw).complete_task("success", "done")
+    assert sleeps == [1.0, 0.5]
+
+
+async def test_a_bare_503_is_not_retried():
+    gw = ScriptedGateway(GatewayReply(503, "upstream sad"))
+    with pytest.raises(RuntimeError, match="503"):
+        await mk_agent(gw).complete_task("success", "done")
     assert gw.calls == 1

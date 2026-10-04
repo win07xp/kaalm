@@ -42,9 +42,17 @@ log = logging.getLogger("agent")
 
 HEARTBEAT_PERIOD = 30  # seconds
 
-# complete_task's bounded backoff for the 409 stale_pod rejection and for
-# transport errors (contract item 6), as in agentruntime/complete.go.
+# complete_task's bounded backoff for the 409 stale_pod rejection, the 503
+# internal_unavailable answer, and transport errors (contract item 6), as in
+# agentruntime/complete.go. The wait after a 503 is raised to at least its
+# Retry-After.
 COMPLETE_RETRY_SCHEDULE = (0.0, 0.1, 0.5, 2.0)  # seconds; the first is no wait
+# The floor after a 503 internal_unavailable without a usable Retry-After:
+# the 1-second minimum the gateway's 503 asks for.
+COMPLETE_UNAVAILABLE_MIN_WAIT = 1.0  # seconds
+# The most a Retry-After may raise one wait, so a wrong value cannot stall
+# the report.
+COMPLETE_RETRY_AFTER_CAP = 30.0  # seconds
 
 # Errors raised before the gateway answers at all: complete_task retries
 # these within its schedule, like agentruntime's CompleteTask.
@@ -55,7 +63,8 @@ TRANSPORT_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, OSError)
 # report made as the Pod starts can race the gateway's source-IP check, which
 # answers 401 until the kubelet posts this Pod's IP. Only answers that a later
 # attempt may change are retried: transport errors, a 5xx, that 401, and a
-# 409 stale_pod that outlasts complete_task's own schedule.
+# 409 stale_pod or 503 internal_unavailable that outlasts complete_task's own
+# schedule. Each attempt runs that whole schedule.
 AUTOCOMPLETE_ATTEMPTS = 6
 AUTOCOMPLETE_RETRY_DELAY = 5.0  # seconds
 
@@ -172,11 +181,12 @@ class Agent:
         return not self.is_task
 
     async def complete_task(self, status: str, message: str = "", artifacts: dict[str, str] | None = None) -> None:
-        """Report AgentTask completion, retrying the 409 stale_pod rejection
-        and transport errors.
+        """Report AgentTask completion, retrying the 409 stale_pod rejection,
+        the 503 internal_unavailable answer, and transport errors.
 
         Four attempts: immediately, then after 100ms, 500ms, 2s (contract
-        item 6). A TaskAlreadyCompleted 403 is terminal and raises
+        item 6). The wait after a 503 is at least its Retry-After (1s when
+        absent, at most 30s). A TaskAlreadyCompleted 403 is terminal and raises
         kaalm.TaskAlreadyCompleted, as does any call after a report was
         accepted (without sending). Any other answer raises
         CompletionRejected. Bound as kaalm.complete_task.
@@ -190,7 +200,10 @@ class Agent:
                 raise CompletionRejected(403, "TaskNotAgentReported: this task completes via container exit")
             body = {"status": status, "message": message, "artifacts": artifacts or {}}
             last: Exception | None = None
+            floor = 0.0  # the Retry-After floor from a 503 on the previous attempt
             for delay in COMPLETE_RETRY_SCHEDULE:
+                delay = max(delay, floor)
+                floor = 0.0
                 if delay:
                     await asyncio.sleep(delay)
                 try:
@@ -204,6 +217,13 @@ class Agent:
                     return
                 if reply.status == 409 and '"stale_pod"' in text:
                     last = CompletionRejected(reply.status, text)
+                    continue
+                if reply.status == 503 and '"internal_unavailable"' in text:
+                    last = CompletionRejected(reply.status, text)
+                    retry_after = reply.retry_after
+                    if retry_after is None:
+                        retry_after = COMPLETE_UNAVAILABLE_MIN_WAIT
+                    floor = min(retry_after, COMPLETE_RETRY_AFTER_CAP)
                     continue
                 if reply.status == 403 and "TaskAlreadyCompleted" in text:
                     self.task_reported = True
@@ -222,7 +242,9 @@ class Agent:
         be exitCode. An already-terminal task, an exitCode task, and any
         other 4xx (a 409 stale_pod aside, which complete_task retries, and a
         401 from the source-IP check at Pod start) end the attempts at once,
-        since a retry gets the same answer."""
+        since a retry gets the same answer. A 503 internal_unavailable is
+        retried inside each attempt by complete_task and again here, so one
+        that never clears is sent up to 24 times."""
         if self.task_reported or self.not_agent_reported:
             log.info("task completion %r not sent: the task already has its outcome", status)
             return
