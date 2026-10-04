@@ -91,7 +91,7 @@ Per-line fields are per call site, not a fixed schema. The controller's lines ca
 
 **Hard rule: in the default build, prompt and response bodies are never logged at any level.** This holds at `info`, at `debug`, and on every code path. Specifically:
 
-- The **LLM proxy** writes no per-request line. Its only log lines are a budget threshold crossing and a streaming relay error, both with names and counts. Request accounting is metrics ([Aggregated catalog](#aggregated-catalog)).
+- The **LLM proxy** writes no per-request line. Its only log lines are a budget threshold crossing, a streaming relay error, a response that carried no usage ([Streaming responses](../gateways/llm/request-handling.md#streaming-responses)), and a refused provider credential ([Credential handling](../gateways/llm/provider-routing.md#credential-handling)). Each carries names, counts, or a reason, never a body or a key value. Request accounting is metrics ([Aggregated catalog](#aggregated-catalog)).
 - The **tool broker** logs one audit record per call: caller identity, ToolProvider, tool, method, outcome, duration, and sizes ([Audit and metering](../gateways/tool-plane.md#audit-and-metering)). Arguments and results are never logged.
 - The **User Gateway** logs a failed delivery attempt and each test-chat delivery, with channel, request id, status, and latency. Webhook payloads and agent replies are never logged.
 - **Reconciler logs** cite resource names and condition reasons, never Secret content, channel auth tokens, or provider API keys.
