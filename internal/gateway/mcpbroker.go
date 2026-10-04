@@ -338,8 +338,9 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	forwarded := false
 
 	// tctx becomes the tool.call span context once the route is authorized;
-	// the deny closure captures the variable, so late denials carry the
-	// error status onto the span (early ones hit the noop span, harmlessly).
+	// the deny closure captures the variable, so late denials and relay
+	// failures carry the error status onto the span (early denials hit the
+	// noop span, harmlessly).
 	tctx := r.Context()
 
 	// retryable is set per cause, as the LLM proxy does, never derived from
@@ -543,6 +544,9 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		relayStatus = resp.StatusCode
 	default:
 		respBytes, relayStatus, relayErrType, relayDetail = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes(), providerName)
+	}
+	if relayErrType != "" {
+		spanError(tctx, relayErrType)
 	}
 	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, relayDetail,
 		start, reqBytes, respBytes, forwarded)

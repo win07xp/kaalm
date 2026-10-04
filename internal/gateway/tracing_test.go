@@ -17,10 +17,13 @@ limitations under the License.
 package gateway
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -137,6 +140,78 @@ func TestTracing_ToolCallSpansParentOntoCallerContext(t *testing.T) {
 		t.Errorf("tool.call parent = %s, want the caller's span", got)
 	}
 	assertChild(t, byName, "tool.forward", "tool.call")
+}
+
+// A relay failure marks the tool.call span with its error type, as a
+// denial does (#415); a stream cut at the cap is otherwise a 200.
+func TestTracing_ToolCallRelayFailureMarksSpan(t *testing.T) {
+	toolsList := map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
+	cases := []struct {
+		name     string
+		upstream http.HandlerFunc
+		body     map[string]any
+		code     codes.Code
+		desc     string
+	}{
+		{"buffered response too large", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":7,"result":{"blob":%q}}`, strings.Repeat("y", 4096))
+		}, mcpCall("web_search"), codes.Error, errResponseTooLarge},
+		{"buffered response unreadable", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "100")
+			_, _ = fmt.Fprint(w, `{"jsonrpc"`)
+		}, mcpCall("web_search"), codes.Error, errToolUnavailable},
+		{"tools/list too large", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search","description":%q}]}}`,
+				strings.Repeat("d", 4096))
+		}, toolsList, codes.Error, errResponseTooLarge},
+		{"tools/list unparseable", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, "not json")
+		}, toolsList, codes.Error, errToolUnavailable},
+		{"stream passes the cap", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"+
+				"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"blob\":\""+
+				strings.Repeat("z", 4096)+"\"}}\n\n")
+		}, mcpCall("web_search"), codes.Error, errResponseTooLarge},
+		{"upstream 5xx denied", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+		}, mcpCall("web_search"), codes.Error, errToolUnavailable},
+		{"success", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"content":[]}}`)
+		}, mcpCall("web_search"), codes.Unset, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			exp := tracetest.NewInMemoryExporter()
+			h := newHarness(t, c.upstream)
+			h.seedToolRoute()
+			h.server.Tracing = newTestTracing(exp)
+			h.server.Config.MCPMaxBodyBytes = 1024
+			cert := agentCert(t, h.ca)
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), c.body, nil)
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+
+			var call *tracetest.SpanStub
+			for _, s := range exp.GetSpans() {
+				if s.Name == "tool.call" {
+					call = &s
+				}
+			}
+			if call == nil {
+				t.Fatalf("tool.call span missing; got %v", spanNames(exp))
+			}
+			if call.Status.Code != c.code || call.Status.Description != c.desc {
+				t.Errorf("tool.call status = (%v, %q), want (%v, %q)",
+					call.Status.Code, call.Status.Description, c.code, c.desc)
+			}
+		})
+	}
 }
 
 func assertChild(t *testing.T, byName map[string]tracetest.SpanStub, child, parent string) {
