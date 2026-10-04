@@ -209,7 +209,7 @@ Anyone who can create an Agent can already run arbitrary code: any image matchin
 
 ### `maxUnavailableOnDrift` paces spec-drift replacements
 
-The field bounds how many of the class's Agents may have their Pod replaced for spec drift at once, whether the drift comes from an edit to the Agent's own spec or from a class or provider change. The mechanics, including how a slot is granted and freed and what happens when a replacement fails, are under [Drift replacements are capped per class](../controller/change-propagation.md#drift-replacements-are-capped-per-class).
+The field bounds how many of the class's Agents may have their Pod replaced for spec drift at once, whether the drift comes from an edit to the Agent's own spec, from a class or provider change, or from a Certificate that names a [different TLS Secret than the Pod mounts](../controller/change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced). The mechanics, including how a slot is granted and freed and what happens when a replacement fails, are under [Drift replacements are capped per class](../controller/change-propagation.md#drift-replacements-are-capped-per-class).
 
 ### `automountServiceAccountToken` is the opt-in for API access
 
