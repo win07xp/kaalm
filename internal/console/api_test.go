@@ -111,20 +111,21 @@ func decode[T any](t *testing.T, resp *http.Response) T {
 func TestAPI_AuthMatrix(t *testing.T) {
 	h := newAPIHarness(t)
 	cases := []struct {
-		name  string
-		path  string
-		token string
-		want  int
+		name     string
+		path     string
+		token    string
+		want     int
+		wantType string // the error envelope's type; empty for a success
 	}{
-		{"no auth", "/api/v1/namespaces", "", 401},
-		{"bad token", "/api/v1/namespaces/team-a/agents", "nope", 401},
-		{"allowed fleet", "/api/v1/namespaces/team-a/agents", "priya-token", 200},
-		{"denied namespace", "/api/v1/namespaces/team-b/agents", "dev-token", 403},
-		{"allowed tasks", "/api/v1/namespaces/team-a/tasks", "priya-token", 200},
-		{"allowed channels", "/api/v1/namespaces/team-a/channels", "priya-token", 200},
-		{"allowed spend", "/api/v1/namespaces/team-a/spend", "priya-token", 200},
-		{"agent detail", "/api/v1/namespaces/team-a/agents/coder", "priya-token", 200},
-		{"agent missing", "/api/v1/namespaces/team-a/agents/nope", "priya-token", 404},
+		{"no auth", "/api/v1/namespaces", "", 401, "unauthorized"},
+		{"bad token", "/api/v1/namespaces/team-a/agents", "nope", 401, "unauthorized"},
+		{"allowed fleet", "/api/v1/namespaces/team-a/agents", "priya-token", 200, ""},
+		{"denied namespace", "/api/v1/namespaces/team-b/agents", "dev-token", 403, "access_denied"},
+		{"allowed tasks", "/api/v1/namespaces/team-a/tasks", "priya-token", 200, ""},
+		{"allowed channels", "/api/v1/namespaces/team-a/channels", "priya-token", 200, ""},
+		{"allowed spend", "/api/v1/namespaces/team-a/spend", "priya-token", 200, ""},
+		{"agent detail", "/api/v1/namespaces/team-a/agents/coder", "priya-token", 200, ""},
+		{"agent missing", "/api/v1/namespaces/team-a/agents/nope", "priya-token", 404, "invalid_request"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -133,6 +134,12 @@ func TestAPI_AuthMatrix(t *testing.T) {
 			_ = resp.Body.Close()
 			if resp.StatusCode != c.want {
 				t.Errorf("status = %d, want %d (%s)", resp.StatusCode, c.want, body)
+			}
+			if c.wantType != "" {
+				var e apiError
+				if err := json.Unmarshal(body, &e); err != nil || e.Error.Type != c.wantType {
+					t.Errorf("error type = %q, want %q (%s)", e.Error.Type, c.wantType, body)
+				}
 			}
 		})
 	}
