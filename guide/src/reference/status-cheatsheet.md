@@ -156,8 +156,12 @@ names the host, so `kubectl describe agentchannel` shows the typo.
 - `Healthy`: the periodic upstream probe, run against every provider type
   (`UpstreamReachable` when good, `ProviderUnhealthy` when not, or
   `CredentialsInvalid` when the probe itself is refused). A probe that keeps
-  failing is checked less often over time. Ready without Healthy means valid
-  config, unreachable provider.
+  failing is checked less often over time. Ready with Healthy `False`
+  (`ProviderUnhealthy`) means valid config, unreachable provider. `Unknown`
+  with `NotProbed` means the probe did not run: `Ready` is `False` for a
+  Secret or configuration reason, `healthCheck.enabled` is `false`, or a
+  delete is held. The message names which. When `Ready` is `False`, fix that first; `Healthy` updates when the
+  probe next runs.
 - `GatewayReachable`: mirrored onto every provider from the controller's
   view of the gateway Pods, and updated at once when a gateway Pod's readiness
   changes.
@@ -205,9 +209,10 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 - `Healthy`: the periodic probe, which speaks MCP (`server/discover` or
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
-  when not. As with ModelProvider, Ready without Healthy means valid config,
-  unreachable server. The probe trusts the same CAs as the gateway's upstream
-  path; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca).
+  when not. As with ModelProvider, Ready with Healthy `False`
+  (`ProviderUnhealthy`) means valid config, unreachable server. `Unknown` with
+  `NotProbed`, as for ModelProvider. The probe trusts the same CAs as the
+  gateway's upstream path; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca).
 
 ## AgentClass
 

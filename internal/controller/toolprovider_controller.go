@@ -94,6 +94,7 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		credential, reason, msg = r.credential(ctx, &tp)
 		if reason != kaalmv1beta1.ReasonCredentialsValid {
 			r.setReadyFalse(&tp, reason, msg, msg)
+			setHealthyNotProbed(&tp.Status.Conditions, "Ready is False with reason "+reason)
 			return r.finish(ctx, &tp, ctrl.Result{})
 		}
 		readyMsg = "provider is valid"
@@ -128,6 +129,8 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			tp.Status.MCPRevision = res.MCPRevision
 			requeue = ctrl.Result{RequeueAfter: r.interval(&tp)}
 		}
+	} else {
+		setHealthyNotProbed(&tp.Status.Conditions, "healthCheck.enabled is false")
 	}
 
 	r.setCondition(&tp, kaalmv1beta1.ConditionReady, true, kaalmv1beta1.ReasonCredentialsValid, readyMsg)
@@ -148,7 +151,8 @@ func (r *ToolProviderReconciler) reconcileDelete(
 	if len(refs) > 0 {
 		// Hold while any Agent, AgentTask, or AgentClass references it, and
 		// say so on Ready. Their watches re-enqueue us when a referrer goes
-		// away.
+		// away. Healthy rides along on the first DeletionBlocked write.
+		setHealthyNotProbed(&tp.Status.Conditions, "deletion is held")
 		return holdDeletion(ctx, r.Client, r.Recorder, tp, &tp.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer)

@@ -20,7 +20,7 @@ On period rollover, the previous period's totals are archived to status in the f
 
 ## What it checks
 
-The checks run in the order of the following table. A failing credential or configuration check ends the pass before the gateway mirror, the budget reduction, and the probe, so `GatewayReachable`, `budgetUsage`, and `Healthy` keep their last values.
+The checks run in the order of the following table. A failing credential or configuration check ends the pass before the gateway mirror, the budget reduction, and the probe, so `GatewayReachable` and `budgetUsage` keep their last values and `Healthy` goes `Unknown` with `NotProbed`. A stale `Healthy=True` beside `Ready=False` would read as a working provider.
 
 | Check | Reason when it fails | Rule |
 |---|---|---|
@@ -103,7 +103,7 @@ The check is advisory and never sets `Ready=False`; the reason is under [`degrad
 A ModelProvider is cluster-scoped and has no phase. [ModelProvider status](../../resources/modelprovider.md#status) lists every condition.
 
 - **`Ready`** is `True` with `reason: CredentialsValid` when every check passes, and `False` with the reason from [What it checks](#what-it-checks) otherwise. A provider whose probe fails with `ProviderUnhealthy` stays `Ready=True`.
-- **`Healthy`** is set by the probe only ([Liveness probe](#liveness-probe)).
+- **`Healthy`** is `True` or `False` only from a probe in the same pass ([Liveness probe](#liveness-probe)). A pass that ends without one sets `Unknown` with `NotProbed`: a failing credential or configuration check, a disabled probe, or a held delete. [ModelProvider status](../../resources/modelprovider.md#status) gives the meaning.
 - **`GatewayReachable`** is `True` with `GatewayReady` when at least one gateway Pod in `kaalm-system` is Ready, else `False` with `GatewayUnavailable`. The value is cluster-wide, the same on every provider that passes the credential and configuration checks.
 - **`BoundaryMarginRaised`** and `status.budgetUsage` come from [Budget reconciliation](#budget-reconciliation). The advisory conditions `MaxOutputTokensUnset`, `FallbackIneligible`, and `DegradeTargetNotCheapest` come from the checks above.
 - **Events.** Every `Ready=False` reason raises a `Warning` event with the same reason, once, when it first appears on `Ready`. [Event emission](../operations.md#event-emission) lists the rest.
@@ -118,7 +118,7 @@ A ModelProvider is cluster-scoped and has no phase. [ModelProvider status](../..
 
 ### Probe backoff
 
-A probe whose `Healthy` condition is not `False` requeues at `healthCheck.intervalSeconds` (default 60). A failing probe (`Healthy=False`, reason `ProviderUnhealthy` or `CredentialsInvalid`) backs off: each periodic failure doubles the wait (interval, 2x, 4x, 8x, and so on), capped at ten intervals or ten minutes, whichever is smaller, and never below the interval. A controller restart keeps the backoff, because it is read from the `Healthy` condition's `lastTransitionTime`. One successful probe returns the provider to the plain interval.
+A probe whose `Healthy` condition is not `False` requeues at `healthCheck.intervalSeconds` (default 60). A failing probe (`Healthy=False`, reason `ProviderUnhealthy` or `CredentialsInvalid`) backs off: each periodic failure doubles the wait (interval, 2x, 4x, 8x, and so on), capped at ten intervals or ten minutes, whichever is smaller, and never below the interval. A controller restart keeps the backoff, because it is read from the `Healthy` condition's `lastTransitionTime`. One successful probe returns the provider to the plain interval. A pass that runs no probe sets `Healthy` to `Unknown`, not `False`, so the first failure after it starts the backoff at the interval: time spent not probing says nothing about how long the upstream has been failing, and an operator who fixes a Secret sees a prompt re-probe.
 
 The backoff delays only the periodic requeue. The event-driven re-runs above are not delayed, so a fixed credential or endpoint takes effect at once. The same backoff governs the ToolProvider probe ([ToolProviderReconciler](toolprovider.md)).
 

@@ -168,8 +168,8 @@ kubectl get toolproviders
 The columns read as ModelProvider's do: `Ready` means the spec is valid and
 the credential Secret, when one is named, resolves and carries the label and
 host annotation from step 1; `Healthy` reports the periodic probe. Ready
-without Healthy means valid config, unreachable server, and it recovers on
-its own when the probe succeeds again.
+with Healthy `False` (`ProviderUnhealthy`) means valid config, unreachable
+server, and it recovers on its own when the probe succeeds again.
 
 ---
 

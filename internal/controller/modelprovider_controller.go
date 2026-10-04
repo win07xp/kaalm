@@ -102,6 +102,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	credential, credReason, credMsg := r.credential(ctx, &mp)
 	if credReason != kaalmv1beta1.ReasonCredentialsValid {
 		r.setReadyFalse(&mp, credReason, credMsg)
+		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+credReason)
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 
@@ -114,6 +115,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if len(problems) > 0 {
 		reason, msg := readyFalseFromProblems(problems)
 		r.setReadyFalse(&mp, reason, msg)
+		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+reason)
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
@@ -159,6 +161,8 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			r.setHealthy(&mp, true, kaalmv1beta1.ReasonUpstreamReachable, "provider is reachable")
 			requeue = ctrl.Result{RequeueAfter: r.interval(&mp)}
 		}
+	} else {
+		setHealthyNotProbed(&mp.Status.Conditions, "healthCheck.enabled is false")
 	}
 
 	r.setReady(&mp, true, kaalmv1beta1.ReasonCredentialsValid, "provider is valid")
@@ -184,7 +188,8 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	if len(refs) > 0 {
 		// Hold while any Agent, AgentTask, or AgentClass references it, and
 		// say so on Ready. Their watches re-enqueue us when a referrer goes
-		// away.
+		// away. Healthy rides along on the first DeletionBlocked write.
+		setHealthyNotProbed(&mp.Status.Conditions, "deletion is held")
 		return holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, refs)
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
