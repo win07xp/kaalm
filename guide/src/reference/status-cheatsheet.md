@@ -37,7 +37,8 @@ allowed, exists, and is `Ready`; `ClassConstraintViolation` when one is not
 allowed or does not exist; `ProviderUnhealthy` when one is not `Ready`),
 `Degraded`, which carries one reason, `BudgetExhausted`, present only while a
 referenced provider reports the namespace budget-blocked, and `PodUpToDate`
-(`True` with `Current` when the Pod matches the derived spec; `False` with
+(`True` with `Current` when the Pod matches the derived spec and mounts the
+Certificate's TLS Secret ([Change propagation](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced)); `False` with
 `Replacing` while the Agent holds one of the class's `maxUnavailableOnDrift`
 slots, or `ReplacementPending` while it waits for one and its current Pod
 keeps running). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
