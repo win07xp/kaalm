@@ -311,6 +311,15 @@ The v1.0.0 controller then re-creates the Certificate with the old Secret name.
 The design book states the naming rule on
 [Agent certificate](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agent.md#agent-certificate).
 
+If you delete an Agent's Certificate that kept its `{name}-tls` Secret, or any
+Certificate that names a Secret its Agent's Pod doesn't mount, the controller
+replaces the Agent's Pod once the new certificate is issued. The Pod mounts the
+new Secret, because a Pod on the old one stops receiving renewals. The replacement
+follows the class's `maxUnavailableOnDrift`, so a class with many Agents
+restarts them a few at a time. A running AgentTask Pod isn't replaced. The
+design book explains the rule on
+[Change propagation](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced).
+
 ---
 
 *How this works: design book pages Operations, API versioning and deprecation

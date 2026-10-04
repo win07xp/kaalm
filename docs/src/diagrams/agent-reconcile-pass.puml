@@ -56,9 +56,9 @@ partition "8 to 11: children, Pod, activity, status" {
       :Ready=False\nPodCreateRejected\nrequeue 30s;
     endif
     :Provisioning\n(Resuming if woken);
-  elseif (terminal, or spec drift\nwith a free slot?) then (yes)
+  elseif (terminal, spec drift, or\nTLS Secret mismatch,\nwith a free slot?) then (yes)
     :delete, Provisioning\n(Resuming if woken);
-  elseif (spec drift,\nno free slot?) then (yes)
+  elseif (spec drift or TLS\nSecret mismatch,\nno free slot?) then (yes)
     :ReplacementPending,\nold Pod keeps running;
   elseif (crash loop or\nImagePullBackOff?) then (yes)
     :phase=Failed;
