@@ -20,7 +20,7 @@ gateway calls, per-path client-cert verification on `POST /v1/message`
 certificate reload when the kubelet swaps the `..data` symlink, `messageId`
 deduplication persisted across hibernation, the Agent-mode heartbeat loop
 with task-mode detection from the cert SAN, and the `CompleteTask` helper
-with the bounded `409 stale_pod` retry.
+retrying `409 stale_pod` and `503 internal_unavailable` on a bounded schedule.
 
 ## What you change
 

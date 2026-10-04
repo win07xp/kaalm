@@ -126,7 +126,7 @@ The gateway sees the new UID after an informer lag, typically under 100ms, while
 - **`retryable: false`** on `400`, `413`, and the `NotAgentTaskPod`, `TaskNotAgentReported`, and `TaskAlreadyCompleted` reasons: a duplicate call from the same Pod hits the same outcome. On `TaskAlreadyCompleted` the task is terminal and further writes are rejected by design; the agent should log and exit.
 - **`retryable: true`** on `409 stale_pod` and `503 internal_unavailable`: the lag before the gateway sees the new UID is transient, and so are the conditions behind a `503` (an apiserver flap, a leader election, brief etcd unavailability).
 
-For `409 stale_pod`, retry with bounded backoff as in [The runtime contract](../../runtime/contract.md), item 6: four attempts, immediately and then after 100ms, 500ms, and 2s. For `503`, this page recommends the same backoff with every wait raised to at least the 1-second `Retry-After` floor.
+Retry both `409 stale_pod` and `503 internal_unavailable` as [The runtime contract](../../runtime/contract.md), item 6, describes.
 
 ## Error envelope
 

@@ -11,8 +11,8 @@ What it proves:
 - **A framework inside task mode.** The graph runs to completion, every
   model call brokered by the gateway with the pod's mTLS identity, and the
   program reports the result through `POST /v1/task/complete` with the
-  contract's bounded retry (`409 stale_pod` retried on 100ms / 500ms / 2s,
-  `TaskAlreadyCompleted` terminal).
+  contract's bounded retry (`409 stale_pod` and `503 internal_unavailable`,
+  the latter waiting at least `Retry-After`; `TaskAlreadyCompleted` terminal).
 - **Goal in, artifact out.** The input arrives through the task's own
   `spec.env` (Kaalm injects no goal variables), and the declared `summary`
   artifact is reported on success, which the gateway validates against

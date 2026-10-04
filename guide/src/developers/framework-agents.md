@@ -105,8 +105,8 @@ The `langgraph-task` example is the custom-image alternative. It implements
 the slice of the contract a task needs: it reads its goal from its own
 `spec.env` (Kaalm injects no goal variables), runs the graph, and reports
 through `POST /v1/task/complete` with `status: "success"` and the artifacts
-declared in `spec.artifacts`, retrying only `409 stale_pod` and treating
-`TaskAlreadyCompleted` as done. That is item 6 of the checklist in
+declared in `spec.artifacts`, retrying `409 stale_pod` and
+`503 internal_unavailable` and treating `TaskAlreadyCompleted` as done. That is item 6 of the checklist in
 [Building your own agent image](building-your-own-image.md).
 
 ## Errors your graph will see
