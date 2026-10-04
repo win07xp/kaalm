@@ -18,11 +18,38 @@ import aiohttp
 from . import tracecontext
 
 
-class GatewayReply(NamedTuple):
-    """status plus the parsed JSON body (or raw text when not JSON)."""
-
+class _ReplyFields(NamedTuple):
     status: int
     data: Any
+
+
+class GatewayReply(_ReplyFields):
+    """status plus the parsed JSON body (or raw text when not JSON).
+
+    Unpacks as (status, data). retry_after is the reply's Retry-After header
+    in seconds, or None when it is absent or not integer delta-seconds; it is
+    an attribute, not a tuple field, so two-name unpacking keeps working.
+    """
+
+    # The class default covers instances built by _make or _replace, which
+    # skip __new__.
+    retry_after: float | None = None
+
+    def __new__(cls, status: int, data: Any, retry_after: float | None = None) -> GatewayReply:
+        self = super().__new__(cls, status, data)
+        self.retry_after = retry_after
+        return self
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    """A Retry-After value as seconds when it is integer delta-seconds; None
+    for a missing value, an HTTP-date, a sign, or anything else."""
+    if value is None:
+        return None
+    v = value.strip()
+    if v.isascii() and v.isdigit():
+        return float(int(v))
+    return None
 
 
 class GatewayClient:
@@ -55,7 +82,7 @@ class GatewayClient:
                 data: Any = await resp.json()
             else:
                 data = await resp.text()
-            return GatewayReply(resp.status, data)
+            return GatewayReply(resp.status, data, _retry_after_seconds(resp.headers.get("Retry-After")))
 
     async def post(self, path: str, json: Any = None, **kwargs: Any) -> GatewayReply:
         return await self.request("POST", path, json=json, **kwargs)

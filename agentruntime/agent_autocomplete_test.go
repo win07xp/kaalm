@@ -54,11 +54,21 @@ func TestAutocomplete_StopsForAnExitCodeTask(t *testing.T) {
 	}
 }
 
-// A retryable failure keeps the hook going for its 6 attempts.
+// A failure CompleteTask does not retry itself keeps the hook going for its
+// 6 attempts.
 func TestAutocomplete_RetriesARetryableFailure(t *testing.T) {
-	got := autocompleteAttempts(t, http.StatusServiceUnavailable,
-		`{"error":{"type":"internal_unavailable","retryable":true}}`)
+	got := autocompleteAttempts(t, http.StatusInternalServerError, "boom")
 	if got != 6 {
 		t.Errorf("attempts = %d, want 6", got)
+	}
+}
+
+// A 503 internal_unavailable that never clears runs CompleteTask's own four
+// attempts inside each of the hook's 6 attempts.
+func TestAutocomplete_UnavailableRunsTheInnerScheduleEachAttempt(t *testing.T) {
+	got := autocompleteAttempts(t, http.StatusServiceUnavailable,
+		`{"error":{"type":"internal_unavailable","retryable":true}}`)
+	if got != 24 {
+		t.Errorf("attempts = %d, want 24 (6 hook attempts x 4 CompleteTask attempts)", got)
 	}
 }

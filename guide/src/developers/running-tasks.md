@@ -71,8 +71,9 @@ AgentTask. `handle_message` is still required.
 
 - `kaalm.complete_task(status, message="", artifacts=None)` reports the
   result. `status` is `"success"` or `"failure"`, and `artifacts` is a dict
-  of strings. It retries transport errors and the `409 stale_pod` answer for
-  you. Any other refusal raises `RuntimeError`.
+  of strings. It retries transport errors, the `409 stale_pod` answer, and the
+  `503 internal_unavailable` answer for you. Any other refusal raises
+  `RuntimeError`.
 - If `run_task` returns without reporting, the runtime reports `success`
   with an empty message and no artifacts. A task that declares
   `spec.artifacts` must call `kaalm.complete_task` itself with them;

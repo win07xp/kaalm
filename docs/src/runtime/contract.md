@@ -105,6 +105,8 @@ This item is optional. An AgentTask in `completion.condition: agentReported` mod
 
 The report can race the status update in which the reconciler writes the new Pod's UID to `AgentTask.status.currentPodUID`, and a retry re-opens the same window ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). The gateway answers the race with `409 Conflict`, `error.type: stale_pod`, and `retryable: true`. The container retries on that answer with bounded backoff: the reference runtimes make four attempts, immediately and then after 100ms, 500ms, and 2s, and give up after the fourth.
 
+The gateway answers a report it could not record, because its write of the completion failed, with `503 Service Unavailable`, `error.type: internal_unavailable`, `retryable: true`, and `Retry-After` ([503 Service Unavailable](../gateways/api/task-complete.md#503-service-unavailable)). The answer is transient, not a refusal. The container retries it within the same four attempts, and the wait before the next attempt is at least the `Retry-After` value. The reference runtimes wait 1 second when `Retry-After` is missing or not an integer number of seconds, and never wait more than 30 seconds for it, so a wrong value cannot stall the report.
+
 `403 access_denied` with a message beginning `TaskAlreadyCompleted:` is final. The task has reached `Succeeded`, `Failed`, or `TimedOut`, and further reports are rejected; the container logs and exits.
 
 ## 7. Message deduplication

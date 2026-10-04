@@ -28,6 +28,17 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
 COMPLETE_RETRY_DELAYS = (0.0, 0.1, 0.5, 2.0)
+# After a 503 internal_unavailable, the next wait is at least Retry-After:
+# 1 second when it is missing or not integer seconds, never more than 30.
+UNAVAILABLE_MIN_WAIT = 1.0
+RETRY_AFTER_CAP = 30.0
+
+
+def unavailable_wait(retry_after: str | None) -> float:
+    """The minimum wait after a 503 internal_unavailable."""
+    v = (retry_after or "").strip()
+    wait = float(int(v)) if v.isascii() and v.isdigit() else UNAVAILABLE_MIN_WAIT
+    return min(wait, RETRY_AFTER_CAP)
 
 
 class State(TypedDict, total=False):
@@ -51,16 +62,23 @@ async def complete_task(
     client: httpx.AsyncClient, gateway: str, status: str, message: str, artifacts: dict[str, str]
 ) -> None:
     """POST /v1/task/complete per the runtime contract: retry only the
-    retryable rejection (409 stale_pod) on a bounded schedule;
+    retryable rejections (409 stale_pod, 503 internal_unavailable) on a
+    bounded schedule, waiting at least Retry-After after a 503;
     403 TaskAlreadyCompleted is terminal; anything else non-200 is an error."""
     body = {"status": status, "message": message, "artifacts": artifacts}
+    floor = 0.0
     for delay in COMPLETE_RETRY_DELAYS:
+        delay = max(delay, floor)
+        floor = 0.0
         if delay:
             await asyncio.sleep(delay)
         resp = await client.post(gateway + "/v1/task/complete", json=body)
         if resp.status_code == 200:
             return
         if resp.status_code == 409 and '"stale_pod"' in resp.text:
+            continue
+        if resp.status_code == 503 and '"internal_unavailable"' in resp.text:
+            floor = unavailable_wait(resp.headers.get("Retry-After"))
             continue
         if resp.status_code == 403 and "TaskAlreadyCompleted" in resp.text:
             return

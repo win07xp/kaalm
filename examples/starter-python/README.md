@@ -81,8 +81,8 @@ if `handler.py` defines it. When `run_task` returns, the runtime reports
 reports `failure` with the exception text. A task that declares
 `spec.artifacts` must call `kaalm.complete_task` from `run_task` with them,
 because the gateway rejects an automatic `success` that omits one;
-`kaalm.complete_task` also reports a message. It retries transport errors and
-`409 stale_pod` for you. See [Task mode](../../docs/src/runtime/base-images.md#task-mode) for
+`kaalm.complete_task` also reports a message. It retries transport errors,
+`409 stale_pod`, and `503 internal_unavailable` for you. See [Task mode](../../docs/src/runtime/base-images.md#task-mode) for
 the full rules.
 
 For smoke and e2e runs, set `KAALM_TASK_AUTOCOMPLETE=success` (in the

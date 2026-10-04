@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from kaalm_agent.gateway import GatewayClient
+from kaalm_agent.gateway import GatewayClient, GatewayReply
 
 
 class FakeReloader:
@@ -25,9 +25,21 @@ async def make_server(aiohttp_server):
     async def plain_text(_: web.Request) -> web.Response:
         return web.Response(status=503, text="upstream sad")
 
+    async def unavailable(_: web.Request) -> web.Response:
+        return web.json_response(
+            {"error": {"type": "internal_unavailable", "retryable": True}},
+            status=503, headers={"Retry-After": "1"})
+
+    async def unavailable_dated(_: web.Request) -> web.Response:
+        return web.json_response(
+            {"error": {"type": "internal_unavailable", "retryable": True}},
+            status=503, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})
+
     app = web.Application()
     app.router.add_post("/v1/chat", echo_json)
     app.router.add_get("/text", plain_text)
+    app.router.add_post("/v1/task/complete", unavailable)
+    app.router.add_post("/dated", unavailable_dated)
     return await aiohttp_server(app)
 
 
@@ -81,3 +93,25 @@ async def test_close_is_idempotent(aiohttp_server):
     await client.post("/v1/chat", json={})
     await client.close()
     await client.close()
+
+
+async def test_reply_carries_retry_after_seconds(aiohttp_server):
+    server = await make_server(aiohttp_server)
+    client = GatewayClient(str(server.make_url("")), FakeReloader())
+    reply = await client.post("/v1/task/complete", json={"status": "success"})
+    assert reply.status == 503
+    assert reply.retry_after == 1.0
+    assert (await client.get("/text")).retry_after is None
+    assert (await client.post("/v1/chat", json={})).retry_after is None
+    # Only integer delta-seconds is read; an HTTP-date counts as absent.
+    assert (await client.post("/dated")).retry_after is None
+    await client.close()
+
+
+def test_reply_still_unpacks_as_status_and_data():
+    reply = GatewayReply(200, "", retry_after=2.0)
+    status, data = reply
+    assert (status, data) == (200, "")
+    assert GatewayReply(200, "") == (200, "")
+    assert GatewayReply(200, "").retry_after is None
+    assert reply._replace(status=503).retry_after is None

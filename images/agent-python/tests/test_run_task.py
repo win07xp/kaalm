@@ -31,7 +31,9 @@ DONE = GatewayReply(403, {"error": {
 NOT_AGENT_REPORTED = GatewayReply(403, {"error": {
     "type": "access_denied", "retryable": False,
     "message": "TaskNotAgentReported: this task completes via container exit"}})
-UNAVAILABLE = GatewayReply(503, {"error": {"type": "internal_unavailable", "retryable": True}})
+# A 5xx that complete_task does not retry itself, so only the runtime's own
+# report retries it.
+SERVER_ERROR = GatewayReply(500, {"error": {"type": "internal_error"}})
 UNKNOWN_SOURCE = GatewayReply(401, {"error": {
     "type": "unauthenticated", "message": "source address is not a known Pod"}})
 BAD_REQUEST = GatewayReply(400, {"error": {
@@ -149,7 +151,7 @@ async def test_runtime_completion_retries_a_retryable_answer():
     async def run_task():
         return None
 
-    gw = RecordingGateway(UNAVAILABLE, UNAVAILABLE)
+    gw = RecordingGateway(SERVER_ERROR, SERVER_ERROR)
     await mk_task_agent(gw, run_task).run_task_and_complete()
     assert [b["status"] for b in gw.bodies] == ["success"] * 3
 

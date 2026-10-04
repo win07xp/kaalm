@@ -63,8 +63,11 @@ Numbered as in the design book (runtime contract items 1 to 8):
    `POST /v1/task/complete`, including any declared artifacts. Retry a
    `409` with `error.type: stale_pod` with backoff, because a report can
    arrive before the controller records the new Pod (the reference runtimes
-   try four times: at once, then after 100ms, 500ms, and 2s). Treat
-   `reason=TaskAlreadyCompleted` as final and exit.
+   try four times: at once, then after 100ms, 500ms, and 2s). Retry a `503`
+   with `error.type: internal_unavailable` too, waiting at least its
+   `Retry-After` before the next attempt (the
+   [runtime contract](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/contract.md#6-completion-signal-agenttask-only)
+   has the schedule). Treat `reason=TaskAlreadyCompleted` as final and exit.
 7. **Message deduplication (required if you implement /v1/message).**
    Deliveries carry a gateway-generated `messageId`; process each id once.
    With `hibernationEnabled: true` the buffer of seen ids must survive Pod
