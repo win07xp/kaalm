@@ -28,12 +28,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -712,53 +714,163 @@ func TestChannel_DegradedWhenAgentDegraded(t *testing.T) {
 	})
 }
 
-func TestChannel_PruneExpiredAsyncConfigMaps(t *testing.T) {
-	mkWorkloadClass(t, "chc-prune", nil)
-	mkWorkloadAgent(t, "ch-agent-prune", "chc-prune", nil)
-	mkChannelSecret(t, "ch-prune-secret")
-
-	mkAsyncCM := func(name string, expired bool) {
-		expiry := time.Now().Add(time.Hour)
-		if expired {
-			expiry = time.Now().Add(-time.Hour)
-		}
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: name, Namespace: testSystemNamespace,
-				Labels: map[string]string{
-					kaalmv1beta1.LabelChannelNamespace: "default",
-					kaalmv1beta1.LabelChannelName:      "ch-prune",
-				},
-				Annotations: map[string]string{
-					kaalmv1beta1.AnnotationExpiresAt: expiry.UTC().Format(time.RFC3339),
-				},
-			},
-			Data: map[string]string{},
-		}
-		if err := testClient.Create(ctxT(), cm); err != nil {
-			t.Fatalf("create async cm: %v", err)
-		}
+// mkAsyncRecord creates an async response record for the default-namespace
+// channel, expired an hour ago or expiring in an hour.
+func mkAsyncRecord(t *testing.T, channel, name string, expired bool) {
+	t.Helper()
+	expiry := time.Now().Add(time.Hour)
+	if expired {
+		expiry = time.Now().Add(-time.Hour)
 	}
-	mkAsyncCM("kaalm-async-expired-1", true)
-	mkAsyncCM("kaalm-async-live-1", false)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: testSystemNamespace,
+			Labels: map[string]string{
+				kaalmv1beta1.LabelChannelNamespace: "default",
+				kaalmv1beta1.LabelChannelName:      channel,
+			},
+			Annotations: map[string]string{
+				kaalmv1beta1.AnnotationExpiresAt: expiry.UTC().Format(time.RFC3339),
+			},
+		},
+		Data: map[string]string{},
+	}
+	if err := testClient.Create(ctxT(), cm); err != nil {
+		t.Fatalf("create async cm: %v", err)
+	}
+}
 
-	mkChannel(t, "ch-prune", "ch-agent-prune", "/channels/default/ch-prune", nil)
-	expectChannelReady(t, "ch-prune", metav1.ConditionTrue, "")
-
+// expectAsyncPruned waits for the expired record to go and checks the live
+// one stays.
+func expectAsyncPruned(t *testing.T, expired, live string) {
+	t.Helper()
 	eventually(t, func() error {
 		var cm corev1.ConfigMap
 		err := testClient.Get(ctxT(),
-			types.NamespacedName{Namespace: testSystemNamespace, Name: "kaalm-async-expired-1"}, &cm)
+			types.NamespacedName{Namespace: testSystemNamespace, Name: expired}, &cm)
 		if !apierrors.IsNotFound(err) {
 			return errString("expired record not pruned")
 		}
 		return nil
 	})
-	var live corev1.ConfigMap
+	var cm corev1.ConfigMap
 	if err := testClient.Get(ctxT(),
-		types.NamespacedName{Namespace: testSystemNamespace, Name: "kaalm-async-live-1"}, &live); err != nil {
+		types.NamespacedName{Namespace: testSystemNamespace, Name: live}, &cm); err != nil {
 		t.Errorf("live record must survive the prune: %v", err)
 	}
+}
+
+// A channel that fails validation still prunes its expired records: it can
+// hold records written while it was Ready.
+func TestChannel_PruneExpiredAsyncConfigMapsWhileInvalid(t *testing.T) {
+	mkWorkloadClass(t, "chc-prune-inv", nil)
+	mkWorkloadAgent(t, "ch-agent-prune-inv", "chc-prune-inv", nil)
+	// No channel Secret, so validation fails with CredentialsMissing.
+	mkAsyncRecord(t, "ch-prune-inv", "kaalm-async-inv-expired", true)
+	mkAsyncRecord(t, "ch-prune-inv", "kaalm-async-inv-live", false)
+
+	mkChannel(t, "ch-prune-inv", "ch-agent-prune-inv", "/channels/default/ch-prune-inv", nil)
+	expectChannelReady(t, "ch-prune-inv", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
+	expectAsyncPruned(t, "kaalm-async-inv-expired", "kaalm-async-inv-live")
+}
+
+// A channel whose Agent is gone still prunes its expired records.
+func TestChannel_PruneExpiredAsyncConfigMapsAgentNotFound(t *testing.T) {
+	mkChannelSecret(t, "ch-prune-noagent-secret")
+	mkAsyncRecord(t, "ch-prune-noagent", "kaalm-async-noagent-expired", true)
+	mkAsyncRecord(t, "ch-prune-noagent", "kaalm-async-noagent-live", false)
+
+	mkChannel(t, "ch-prune-noagent", "no-such-agent", "/channels/default/ch-prune-noagent", nil)
+	expectChannelReady(t, "ch-prune-noagent", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
+	expectAsyncPruned(t, "kaalm-async-noagent-expired", "kaalm-async-noagent-live")
+}
+
+// gateFakeChannel is a channel with its finalizer set whose Agent does not
+// exist, for driving the AgentNotFound exit on a fake client.
+func gateFakeChannel() *kaalmv1beta1.AgentChannel {
+	return &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ch-gate", Namespace: "default",
+			Finalizers: []string{kaalmv1beta1.ChannelFinalizer},
+		},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "missing"},
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
+				Path: "/channels/default/ch-gate",
+				Auth: kaalmv1beta1.ChannelAuth{
+					Type:      "bearer",
+					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "ch-gate-secret", Key: "token"},
+				},
+			},
+		},
+	}
+}
+
+// No watch event re-runs a channel after its Agent is deleted, so the
+// AgentNotFound exit re-checks every minute to prune records that expire
+// later.
+func TestChannel_AgentNotFoundRequeuesEveryMinute(t *testing.T) {
+	ch := gateFakeChannel()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(ch).WithStatusSubresource(ch).Build()
+	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
+	res, err := r.Reconcile(context.Background(),
+		reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "ch-gate"}})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter != time.Minute {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, time.Minute)
+	}
+}
+
+// A prune error on a failing pass is returned, but the gate's status write
+// has already happened.
+func TestChannel_GatePruneErrorKeepsStatus(t *testing.T) {
+	ch := gateFakeChannel()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(ch).WithStatusSubresource(ch).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.ConfigMapList); ok {
+					return errString("list failed")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
+	key := types.NamespacedName{Namespace: "default", Name: "ch-gate"}
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err == nil {
+		t.Fatal("want the prune error, got nil")
+	}
+	if res != (reconcile.Result{}) {
+		t.Errorf("result = %+v, want zero alongside an error", res)
+	}
+	var got kaalmv1beta1.AgentChannel
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != kaalmv1beta1.ChannelFailed {
+		t.Errorf("phase = %q, want Failed", got.Status.Phase)
+	}
+	cond := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != kaalmv1beta1.ReasonAgentNotFound {
+		t.Errorf("Ready = %+v, want False/AgentNotFound", cond)
+	}
+}
+
+func TestChannel_PruneExpiredAsyncConfigMaps(t *testing.T) {
+	mkWorkloadClass(t, "chc-prune", nil)
+	mkWorkloadAgent(t, "ch-agent-prune", "chc-prune", nil)
+	mkChannelSecret(t, "ch-prune-secret")
+
+	mkAsyncRecord(t, "ch-prune", "kaalm-async-expired-1", true)
+	mkAsyncRecord(t, "ch-prune", "kaalm-async-live-1", false)
+
+	mkChannel(t, "ch-prune", "ch-agent-prune", "/channels/default/ch-prune", nil)
+	expectChannelReady(t, "ch-prune", metav1.ConditionTrue, "")
+	expectAsyncPruned(t, "kaalm-async-expired-1", "kaalm-async-live-1")
 }
 
 func TestChannel_DeleteHandshake(t *testing.T) {

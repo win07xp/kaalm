@@ -28,7 +28,7 @@ The reconciler fans `GET /v1/channels/health?namespace={ns}` out to every gatewa
 
 ### Async ConfigMap pruning
 
-The reconciler deletes the `kaalm-async-*` ConfigMaps in `kaalm-system` that carry this channel's labels (`kaalm.io/channel-namespace`, `kaalm.io/channel-name`) and whose `kaalm.io/expires-at` annotation is in the past. The 1-hour TTL is enforced here because a cross-namespace ownerRef cannot express the linkage; see [Response persistence](../../gateways/api/async-responses.md#response-persistence).
+The reconciler deletes the `kaalm-async-*` ConfigMaps in `kaalm-system` that carry this channel's labels (`kaalm.io/channel-namespace`, `kaalm.io/channel-name`) and whose `kaalm.io/expires-at` annotation is in the past. The prune runs on every pass, including a pass where a check fails. A channel that goes invalid can still hold records it wrote while `Ready`, and the gateway writes none while the channel is not `Ready`, so this prune is the only thing that removes the expired ones. The 1-hour TTL is enforced here because a cross-namespace ownerRef cannot express the linkage; see [Response persistence](../../gateways/api/async-responses.md#response-persistence).
 
 ## What it checks
 
@@ -71,10 +71,10 @@ The phase is a memoryless reduction of the bound Agent's phase, recomputed on ev
 ## Timing
 
 - **A change to a Secret the channel references.** Creating or deleting the Secret, adding or removing the `kaalm.io/channel-credential` label, editing the `kaalm.io/callback-hosts` annotation, or changing a key re-runs the channel at once, so a fix needs no channel edit and no wait. The operator already watches each Secret it has read for the channel. A channel that fails an earlier check (Agent, service, path, or Role write) has read no Secret yet, so it picks up Secret changes on the pass after that check passes.
-- **A failing channel.** One that fails a check after its Agent is found re-checks every minute. This is the fallback for a Secret change the watch has not reported, such as one made while the Secret's watch is still starting. A `ChildConflict` channel re-checks every 30 seconds, because removing the conflicting object raises no event. `AgentNotFound` runs again when the Agent is created, and `SystemNamespaceForbidden` has no timed re-check.
+- **A failing channel.** A failing channel re-checks every minute, `AgentNotFound` included, with two exceptions below. For a channel that fails a check after its Agent is found, this is the fallback for a Secret change the watch has not reported, such as one made while the Secret's watch is still starting. For `AgentNotFound`, it is what prunes records that expire later, because once the Agent is deleted no watch event re-runs the channel. A `ChildConflict` channel re-checks every 30 seconds, because removing the conflicting object raises no event. `SystemNamespaceForbidden` has no timed re-check. Creating the Agent still re-runs an `AgentNotFound` channel at once.
 - **A change to the bound Agent.** It shows at once.
 - **A path conflict.** It resolves as soon as a competing channel is created, deleted, or moves to another path. A `Ready=True` channel turns `PathConflict` at once when a new or moved channel wins the path (it wins a `creationTimestamp` tie by name under [rule 15](../../resources/validation/channels.md), or the clock went back), and the next turns `Ready` when the winner leaves. A deleted channel holds its path until the object leaves the API server.
-- **Health and pruning.** Both run only on a valid pass, so `PlatformConnected` is re-evaluated at least once a minute on a valid channel, from gateway data up to 15 seconds old. On a valid channel an expired async record lingers at most one minute; a channel that stays invalid keeps its expired records until it is valid again or deleted.
+- **Health and pruning.** Health runs only on a valid pass, so `PlatformConnected` is re-evaluated at least once a minute on a valid channel, from gateway data up to 15 seconds old. Pruning runs on every pass, so the re-check cadence bounds how long an expired record lingers, valid or not; see Cleanup under [Response persistence](../../gateways/api/async-responses.md#response-persistence) for the bound.
 
 ## Design choices
 
