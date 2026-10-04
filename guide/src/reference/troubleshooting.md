@@ -225,8 +225,8 @@ One of the gates denied; the error message names which:
 - not in the AgentClass `allowedProviders`,
 - namespace not in the provider's `allowedNamespaces`.
 
-A malformed `allowedNamespaces` entry on the provider or the class also gets
-this `403`. The message names the allowlist that denied, not the malformed
+A call from a namespace that only a malformed `allowedNamespaces` entry was
+meant to admit gets this `403` too. The message names the allowlist that denied, not the malformed
 entry. To find the entry, check the provider and the class for `Ready=False`
 with reason `InvalidNamespacePattern`; that message names it. For a provider,
 see [ModelProvider `Ready=False`](#modelprovider-readyfalse). For a class, see
