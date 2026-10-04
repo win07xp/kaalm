@@ -92,10 +92,14 @@ kubectl get modelproviders
 
 The two columns to read: `Ready` means the spec is valid and the credential
 resolves, including the label and the host annotation from step 1; `Healthy`
-reports the periodic upstream probe. A provider can be Ready but Unhealthy
-(endpoint down); it recovers on its own when the probe succeeds again. A key
-the provider rejects is different: the probe reports it as `Ready=False` with
-reason `CredentialsInvalid` and a `Warning` event, and the provider stays that
+reports the periodic upstream probe. `Healthy` shows `Unknown` while a Secret
+or spec problem keeps `Ready` `False`, and with the probe disabled, because the
+probe did not run
+([Status cheatsheet](../reference/status-cheatsheet.md#modelprovider)). A
+provider can be Ready but Unhealthy (endpoint down); it recovers on its own
+when the probe succeeds again. A key the provider rejects is different: the
+probe reports it as `Ready=False` with reason `CredentialsInvalid` and a
+`Warning` event, and the provider stays that
 way until the Secret holds a key the provider accepts.
 
 The probe is configurable through `spec.healthCheck` (`enabled`, default

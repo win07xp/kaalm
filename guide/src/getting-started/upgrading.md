@@ -221,9 +221,10 @@ also creates a Role and RoleBinding for each workload that reads a Secret
 After the upgrade, a provider whose Secret has no label shows `Ready=False`
 with the reason `SecretNotOptedIn`. A provider whose Secret has the label but
 does not list the endpoint host shows `Ready=False` with the reason
-`EndpointHostNotApproved`. Each reason comes with a `Warning` event. The
-gateway applies the same checks on every call, so an LLM call falls back to
-the next provider or returns `503 provider_unavailable`, and a tool call
+`EndpointHostNotApproved`. Each reason comes with a `Warning` event, and
+`Healthy` shows `Unknown` until the Secret passes, because the probe does not
+run. The gateway applies the same checks on every call, so an LLM call falls
+back to the next provider or returns `503 provider_unavailable`, and a tool call
 returns `503 tool_unavailable`, until you fix the Secret.
 
 1. List each ModelProvider with its endpoint and its Secret, then each

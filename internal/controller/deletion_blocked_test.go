@@ -63,6 +63,22 @@ func expectDeletionBlocked(t *testing.T, kind, name string, conds func() []metav
 	}
 }
 
+// expectHealthyNotProbed waits for Healthy=Unknown NotProbed whose message
+// contains why.
+func expectHealthyNotProbed(t *testing.T, conds func() []metav1.Condition, why string) {
+	t.Helper()
+	eventually(t, func() error {
+		c := condition(conds(), kaalmv1beta1.ConditionHealthy)
+		if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != kaalmv1beta1.ReasonNotProbed {
+			return errString("Healthy is not Unknown/NotProbed yet")
+		}
+		if !strings.Contains(c.Message, why) {
+			return errString("Healthy message does not contain " + why + ": " + c.Message)
+		}
+		return nil
+	})
+}
+
 func deleteObject(t *testing.T, obj client.Object) {
 	t.Helper()
 	if err := testClient.Delete(ctxT(), obj); err != nil && !apierrors.IsNotFound(err) {
@@ -103,6 +119,11 @@ func TestModelProvider_DeleteBlockedIsVisible(t *testing.T) {
 		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp)
 		return mp.Status.Conditions
 	}, "AgentClass db-mp-class")
+	expectHealthyNotProbed(t, func() []metav1.Condition {
+		var mp kaalmv1beta1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp)
+		return mp.Status.Conditions
+	}, "deletion is held")
 
 	deleteObject(t, &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "db-mp-class"}})
 	expectGone(t, types.NamespacedName{Name: "db-mp"}, &kaalmv1beta1.ModelProvider{})
@@ -126,6 +147,7 @@ func TestToolProvider_DeleteBlockedIsVisible(t *testing.T) {
 
 	deleteObject(t, &kaalmv1beta1.ToolProvider{ObjectMeta: metav1.ObjectMeta{Name: "db-tp"}})
 	expectDeletionBlocked(t, "ToolProvider", "db-tp", toolProviderConditions("db-tp"), "AgentClass db-tp-class")
+	expectHealthyNotProbed(t, toolProviderConditions("db-tp"), "deletion is held")
 
 	deleteObject(t, &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "db-tp-class"}})
 	expectGone(t, types.NamespacedName{Name: "db-tp"}, &kaalmv1beta1.ToolProvider{})

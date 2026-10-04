@@ -202,3 +202,47 @@ func TestToolProvider_FailedProbeBacksOff(t *testing.T) {
 		t.Errorf("after a success: RequeueAfter = %v, want the 30s interval", res.RequeueAfter)
 	}
 }
+
+// A pass that does not probe sets Healthy=Unknown, so the first probe failure
+// after the cause is fixed starts the backoff at the interval instead of
+// counting the time nothing was probed.
+func TestModelProvider_ProbeAfterNotProbedStartsFreshBackoff(t *testing.T) {
+	ctx := context.Background()
+	mp := probedProvider("mp-fresh", metav1.ConditionFalse, time.Now().Add(-3*time.Minute))
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(mp).WithStatusSubresource(mp).Build()
+	health := newFakeHealth()
+	r := &ModelProviderReconciler{
+		Client: c, Recorder: record.NewFakeRecorder(10),
+		OperatorNamespace: testOperatorNamespace, Health: health,
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "mp-fresh"}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	var got kaalmv1beta1.ModelProvider
+	if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	expectNotProbed(t, got.Status.Conditions, kaalmv1beta1.ReasonCredentialsMissing)
+
+	if err := c.Create(ctx, providerKey("mp-fresh")); err != nil {
+		t.Fatal(err)
+	}
+	health.set("mp-fresh", ProviderProbeResult{Err: errString("upstream 503")})
+	res, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !near(res.RequeueAfter, time.Minute) {
+		t.Errorf("first failure after a NotProbed pass: RequeueAfter = %v, want the 1m interval", res.RequeueAfter)
+	}
+	if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	h := condition(got.Status.Conditions, kaalmv1beta1.ConditionHealthy)
+	if h == nil || h.Status != metav1.ConditionFalse || h.Reason != kaalmv1beta1.ReasonProviderUnhealthy {
+		t.Errorf("Healthy = %+v, want False/ProviderUnhealthy", h)
+	}
+}
