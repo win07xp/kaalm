@@ -92,7 +92,7 @@ Per-line fields are per call site, not a fixed schema. The controller's lines ca
 **Hard rule: in the default build, prompt and response bodies are never logged at any level.** This holds at `info`, at `debug`, and on every code path. Specifically:
 
 - The **LLM proxy** writes no per-request line. Its only log lines are a budget threshold crossing, a streaming relay error, a response that carried no usage ([Streaming responses](../gateways/llm/request-handling.md#streaming-responses)), and a refused provider credential ([Credential handling](../gateways/llm/provider-routing.md#credential-handling)). Each carries names, counts, or a reason, never a body or a key value. Request accounting is metrics ([Aggregated catalog](#aggregated-catalog)).
-- The **tool broker** logs one audit record per call: caller identity, ToolProvider, tool, method, outcome, duration, and sizes ([Audit and metering](../gateways/tool-plane.md#audit-and-metering)). Arguments and results are never logged.
+- The **tool broker** logs one audit record per call: caller identity, ToolProvider, tool, method, outcome, duration, and sizes ([Audit and metering](../gateways/tool-plane.md#audit-and-metering)). It also writes two warnings: a refused or unreadable credential, paced ([Credential injection](../gateways/tool-plane.md#credential-injection)), and a tool server that rejected the gateway credential. Each carries the ToolProvider name and a reason or status, never a body or a credential value. Arguments and results are never logged.
 - The **User Gateway** logs a failed delivery attempt and each test-chat delivery, with channel, request id, status, and latency. Webhook payloads and agent replies are never logged.
 - **Reconciler logs** cite resource names and condition reasons, never Secret content, channel auth tokens, or provider API keys.
 
@@ -174,8 +174,10 @@ OpenTelemetry tracing is off by default. When it is on, it connects one user mes
 | `agent.deliver` | client | User Gateway | The delivery to the agent, retries included; its context travels to the agent on the delivery request |
 | `llm.request` | server | LLM proxy | Parented by whatever context the agent propagated. A denial past route authorization (budget, rate limit) closes it with an error status, so a blocked request is visible in its trace |
 | `llm.forward` | client | LLM proxy | One per provider attempt, fallback candidates included; the candidate is the `kaalm.provider` attribute |
-| `tool.call` | server | Tool broker | The governed MCP call; broker denials carry an error status |
+| `tool.call` | server | Tool broker | The governed MCP call; broker denials and failed relays carry an error status, as the note after the table explains |
 | `tool.forward` | client | Tool broker | The upstream half of a forwarded call |
+
+**Tool call status.** The `tool.call` span carries an error status for broker denials and for a failed relay: a response over the size cap, or one the broker could not read. The status description is the error type, such as `response_too_large`, the same type the caller and the `status` label of `kaalm_tool_calls_total` see. A stream cut at the cap has already sent its status line, usually `200`, so the span status is the trace's only sign of the truncation. A tool server's own 4xx answer, relayed unchanged, leaves the status unset, and the metric labels it `upstream_error`.
 
 ![The span tree for one message: channel.receive parents agent.deliver; the agent's own work has no span but propagates the context; llm.request parents llm.forward, and tool.call parents tool.forward.](../diagrams/span-tree.svg)
 

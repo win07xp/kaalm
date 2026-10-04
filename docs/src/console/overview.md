@@ -119,21 +119,27 @@ namespace holds of that kind) and `truncated` (`true` when `total` is
 greater than the number of rows returned). Spend and the single-agent route
 take no `limit`.
 
-Errors use the gateway's envelope, `{"error": {"type", "message"}}`, with
+Every error the API returns uses the gateway's envelope,
+`{"error": {"type", "message"}}`, with
 `401 unauthorized`, `403 access_denied`, `400 invalid_request`,
-`404 invalid_request`,
+`404 invalid_request`, `405 invalid_request`,
 `413 request_too_large` on the chat route when the request body exceeds the
 console's own body cap ([Test-chat](#test-chat)), and `502` or `503
 internal_unavailable`; the chat route otherwise relays the gateway's own
-status. The page routes are not part of the API.
+status. The page routes are not part of the API: they still answer
+plain-text errors.
 
-The `404` answers a named agent that does not exist, on both agent routes. The
+One `404` answers a named agent that does not exist, on both agent routes. The
 single-agent read returns it directly. The chat route relays the gateway's own
 `404` for a missing agent ([POST
 /v1/test-chat](../gateways/api/internal-endpoints.md#post-v1test-chat)). The
 type is `invalid_request`, which the gateway uses for its own `404`s, so a
-client that handles the shared envelope sees one set of types. A path that
-matches no route gets a plain-text `404`, not the envelope.
+client that handles the shared envelope sees one set of types.
+
+A route called with a method it doesn't serve answers `405`, and the `Allow`
+header names the methods it does serve. A path under `/api/` that no route
+matches answers `404 invalid_request` too, so a client tells it apart from the
+missing-agent `404` by the message, not the type.
 
 Responses are console-owned summaries, not raw CRD objects. A fleet row looks
 like:

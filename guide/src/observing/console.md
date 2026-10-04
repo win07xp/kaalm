@@ -179,7 +179,12 @@ full contract.
 
 An invalid token gets `401` and a namespace the token may not read gets
 `403`, both as `{"error": {"type": "...", "message": "..."}}`. A test-chat
-body over the size cap gets `413`, as in [Test-chat](#5-test-chat). Fields
+body over the size cap gets `413`, as in [Test-chat](#5-test-chat). Every
+other error from `/api/v1`, including a mistyped path or the wrong method,
+comes back in the same envelope, so a script parses errors one way. The
+design book's
+[Console overview](https://github.com/win07xp/kaalm/blob/main/docs/src/console/overview.md#the-read-api)
+lists the error types. Fields
 and endpoints are added to `/api/v1`, never renamed or removed, so a script
 written against it keeps working.
 

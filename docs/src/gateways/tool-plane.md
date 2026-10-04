@@ -121,6 +121,8 @@ The same as the LLM path: inbound auth material is stripped, and the ToolProvide
 
 The broker reads a credential only from a Secret that passes [rules 49 and 50](../resources/validation/providers.md#provider-credentials), the provider-credential label and the endpoint host annotation. The check runs on every brokered call and follows the same terms as the LLM path ([Credential handling](llm/provider-routing.md#credential-handling)). A refusal, or an unreadable Secret, returns `503 tool_unavailable`, retryable. The reason goes to the gateway log, never to the caller, and an error never carries a credential value.
 
+The gateway logs the reason as the warning `mcp credential unavailable`, with the ToolProvider name and the reason. Each gateway replica logs it at most once a minute per ToolProvider, so expect one line per replica, not one per refused call. Every refused call still has its audit record (`mcp call`, `error_type` `tool_unavailable`, and a `detail` saying the credential is unavailable), so per-call counts come from [Audit and metering](#audit-and-metering).
+
 ### Session ownership (legacy revisions)
 
 Through the 2025 revisions, MCP sessions travel in an `Mcp-Session-Id` header, and a broker that passed them through verbatim would let one workload resume another's session. The broker never relays the upstream id unbound. It returns a wrapped id that binds the upstream id to the caller identity (`namespace/Kind/name` for a workload, `ns/namespace` for the bearer tier) with an HMAC-SHA256 tag keyed by the gateway-shared `KAALM_MCP_SESSION_KEY`, a chart-managed Secret. The binding is stateless, because an in-memory table would break on cross-replica routing: on every later request any replica recomputes the tag from the presented id and the authenticated identity, and a mismatch is `403 access_denied` before anything is forwarded. The wrap applies to every relayed response that carries the header, including a relayed 4xx, so only the owner can resume a session.
@@ -164,7 +166,7 @@ Every brokered call emits one `info`-level structured log line. Bodies are never
 | `namespace`, `workload`, `workload_kind` | the caller; the workload fields appear for mTLS callers only |
 | `provider`, `method`, `tool` | the ToolProvider, the JSON-RPC method, and the real tool name |
 | `status`, `error_type` | the HTTP status and the wire error type, when the broker produced the error |
-| `detail` | the denial reason, for example which gate refused or that a session id belongs to another caller |
+| `detail` | the denial reason, for example which gate refused or that a session id belongs to another caller. For a `503 tool_unavailable` when the tool server is unreachable or its response could not be read, it also carries the transport error, which the caller's message leaves out because it names the tool server's address |
 | `duration_seconds`, `request_bytes`, `response_bytes` | timing and sizes |
 
 | Metric | Labels | Notes |
