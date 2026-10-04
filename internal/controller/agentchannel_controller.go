@@ -219,12 +219,13 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Step 5: phase reduction from the Agent's phase.
 	r.reducePhase(&channel, &agent)
 
-	// Step 6: prune expired async response ConfigMaps for this channel.
-	if err := r.pruneAsyncConfigMaps(ctx, &channel, false); err != nil {
+	// Step 6: write the status, then prune expired async response
+	// ConfigMaps for this channel. The status goes first, as in gateChannel,
+	// so a prune error never hides this pass's status.
+	if err := r.updateStatusIfChanged(ctx, &channel, statusBefore); err != nil {
 		return ctrl.Result{}, err
 	}
-
-	if err := r.updateStatusIfChanged(ctx, &channel, statusBefore); err != nil {
+	if err := r.pruneAsyncConfigMaps(ctx, &channel, false); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("reconciled AgentChannel", "phase", channel.Status.Phase)
@@ -862,8 +863,10 @@ func (r *AgentChannelReconciler) reducePhase(channel *kaalmv1beta1.AgentChannel,
 	}
 }
 
-// pruneAsyncConfigMaps deletes this channel's async response records: only
-// expired ones on normal passes, all of them on the finalizer sweep.
+// pruneAsyncConfigMaps deletes this channel's async response records. A
+// normal pass deletes the ones asyncRecordExpired reports, which includes the
+// creationTimestamp fallback for a record with no parseable expiry; the
+// finalizer sweep deletes them all.
 func (r *AgentChannelReconciler) pruneAsyncConfigMaps(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, sweepAll bool,
 ) error {
@@ -880,11 +883,8 @@ func (r *AgentChannelReconciler) pruneAsyncConfigMaps(
 		if !strings.HasPrefix(cm.Name, "kaalm-async-") {
 			continue
 		}
-		if !sweepAll {
-			expiresAt, err := time.Parse(time.RFC3339, cm.Annotations[kaalmv1beta1.AnnotationExpiresAt])
-			if err != nil || expiresAt.After(now) {
-				continue
-			}
+		if !sweepAll && !asyncRecordExpired(cm, now) {
+			continue
 		}
 		if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
 			return err

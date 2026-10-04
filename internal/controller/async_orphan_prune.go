@@ -116,7 +116,8 @@ func (p *AsyncOrphanPruner) pruneOnce(ctx context.Context) error {
 
 // asyncRecordExpired reads the expiry annotation; without a parseable one it
 // falls back to creationTimestamp plus twice the TTL, so a malformed record is
-// reaped only when it is clearly past any lifetime the gateway gives.
+// reaped only when it is clearly past any lifetime the gateway gives. Both the
+// per-channel prune (pruneAsyncConfigMaps) and the orphan pruner use it.
 func asyncRecordExpired(cm *corev1.ConfigMap, now time.Time) bool {
 	if expiresAt, err := time.Parse(time.RFC3339, cm.Annotations[kaalmv1beta1.AnnotationExpiresAt]); err == nil {
 		return !expiresAt.After(now)
