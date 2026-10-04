@@ -439,7 +439,10 @@ spec:
             description: AgentChannelStatus is the observed state of an AgentChannel.
             properties:
               conditions:
-                description: Conditions report Ready and the tri-state PlatformConnected.
+                description: |-
+                  Conditions report whether the channel is valid so the gateway routes it
+                  (Ready), and the health of recent inbound delivery (PlatformConnected).
+                  See docs/src/resources/agentchannel.md#status for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -930,7 +933,10 @@ spec:
             description: AgentChannelStatus is the observed state of an AgentChannel.
             properties:
               conditions:
-                description: Conditions report Ready and the tri-state PlatformConnected.
+                description: |-
+                  Conditions report whether the channel is valid so the gateway routes it
+                  (Ready), and the health of recent inbound delivery (PlatformConnected).
+                  See docs/src/resources/agentchannel.md#status for each condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

@@ -172,7 +172,10 @@ type AgentStatus struct {
 	// Phase is the current lifecycle phase.
 	// +optional
 	Phase AgentPhase `json:"phase,omitempty"`
-	// Conditions report Ready, ProvidersReady, and the recoverable Degraded state.
+	// Conditions report whether the Agent's Pod is ready to serve (Ready),
+	// plus conditions that leave the phase unchanged, such as provider health
+	// and drift replacement progress. See docs/src/resources/agent.md#status
+	// for each condition.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

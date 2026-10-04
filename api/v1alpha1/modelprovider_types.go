@@ -194,7 +194,10 @@ type ModelProviderHealthCheck struct {
 type ModelProviderStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// Conditions report Ready and Healthy.
+	// Conditions report whether the spec is valid and the credential resolves
+	// (Ready), the upstream health probe (Healthy), and checks that never
+	// affect Ready. See docs/src/resources/modelprovider.md#status for each
+	// condition.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

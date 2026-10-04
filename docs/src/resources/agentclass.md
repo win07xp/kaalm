@@ -137,7 +137,7 @@ spec:
     defaultTTLSecondsAfterFinished: 86400
     maxTTLSecondsAfterFinished: 604800
     terminationGracePeriodSeconds: 60
-    # Caps concurrent Pod replacements for spec drift: an integer of at
+    # Caps concurrent Pod replacements for drift: an integer of at
     # least 1, or a percentage of the class's Agents from 1% to 100%,
     # rounded up. Schema default 25%; rule 44.
     maxUnavailableOnDrift: "25%"
@@ -183,7 +183,7 @@ status:
 | `DeprecatedFields` | Advisory, and present only once the class sets a deprecated field. `True, reason: DeprecatedFieldSet` while it does, with a message naming each such field. The only deprecated field is `network.allowHostNetwork` (see [Deprecation policy](../operations/api-versioning.md#deprecation-policy)). A `Warning` event of reason `DeprecatedFieldSet` follows each time the condition turns `True`. When the class stops setting the field, the condition becomes `False, reason: NoDeprecatedFields`, and no event is sent. A class that never set a deprecated field has no such condition. It never affects `Ready` or any workload. |
 | `CertificateCleanup` | A cluster capability, present on every class like `FQDNPolicySupported`: whether cert-manager runs with `--enable-certificate-owner-ref=true` ([In-cluster TLS](../security/tls.md#in-cluster-tls)). `True, reason: OwnerRefEnabled` when the flag is set, so deleting an Agent or AgentTask deletes its TLS Secret. `False, reason: OwnerRefDisabled` when it is not, so a deleted workload's TLS Secret is orphaned; setting the flag later flips this to `True` without recreating workloads. `Unknown, reason: ControllerSecretNotFound` when the controller's own `kaalm-controller-tls` Secret is missing. It never affects `Ready` and emits no Event. |
 
-`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. They still count a workload whose namespace the class does not admit, because it still references the class. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid spec-drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` as the `Agents`, `Tasks`, and `Replacing` columns.
+`agentsInUse` and `tasksInUse` count the Agents and AgentTasks referencing the class, so the platform team can see what a change affects. They still count a workload whose namespace the class does not admit, because it still references the class. `agentsReplacing` and `agentsPendingReplacement` break down the Agents already counted in `agentsInUse` that are mid drift replacement: holding a `maxUnavailableOnDrift` slot, or waiting for one. `kubectl get ac` prints `agentsInUse`, `tasksInUse`, and `agentsReplacing` as the `Agents`, `Tasks`, and `Replacing` columns.
 
 ## Design notes
 

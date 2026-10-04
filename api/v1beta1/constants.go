@@ -69,13 +69,13 @@ const (
 	ConditionFQDNPolicySupported = "FQDNPolicySupported" // AgentClass
 	ConditionSecurityBaseline    = "SecurityBaseline"    // AgentClass
 	ConditionCertificateCleanup  = "CertificateCleanup"  // AgentClass: cert-manager owner-ref cleanup of workload TLS Secrets
-	ConditionHealthy             = "Healthy"             // ModelProvider
+	ConditionHealthy             = "Healthy"             // ModelProvider, ToolProvider
 	ConditionGatewayReachable    = "GatewayReachable"    // ModelProvider, Agent
 	ConditionProvidersReady      = "ProvidersReady"      // Agent
 	ConditionDegraded            = "Degraded"            // Agent: recoverable condition, distinct from the Degraded phase
 	ConditionCompleted           = "Completed"           // AgentTask
 	ConditionPlatformConnected   = "PlatformConnected"   // AgentChannel, tri-state
-	ConditionPodUpToDate         = "PodUpToDate"         // Agent: spec-drift replacement progress
+	ConditionPodUpToDate         = "PodUpToDate"         // Agent: drift replacement progress (Pod spec change or TLS Secret mismatch)
 	ConditionIdleDetection       = "IdleDetection"       // Agent: False (Disabled) when no idle timeout applies; absent otherwise
 	ConditionDeprecatedFields    = "DeprecatedFields"    // AgentClass: advisory, True while the class sets a deprecated field
 )

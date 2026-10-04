@@ -123,7 +123,9 @@ type AgentTaskStatus struct {
 	// Phase is the current lifecycle phase.
 	// +optional
 	Phase AgentTaskPhase `json:"phase,omitempty"`
-	// Conditions report Completed.
+	// Conditions report whether the task has settled and how (Completed), and
+	// the state of the current attempt (Ready). See
+	// docs/src/resources/agenttask.md#status for each condition.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

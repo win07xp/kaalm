@@ -108,7 +108,9 @@ type ToolProviderStatus struct {
 	// health checks are disabled.
 	// +optional
 	MCPRevision string `json:"mcpRevision,omitempty"`
-	// Conditions report Ready and Healthy.
+	// Conditions report whether the credential resolves (Ready) and the result
+	// of the periodic MCP probe (Healthy). See
+	// docs/src/resources/toolprovider.md#status for each condition.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

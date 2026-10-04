@@ -223,8 +223,10 @@ type AgentClassLifecycle struct {
 	// +optional
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
 	// MaxUnavailableOnDrift caps how many of the class's Agents may have
-	// their Pod replaced for spec drift at the same time: a count of at least
+	// their Pod replaced for drift at the same time: a count of at least
 	// 1, or a percentage of the class's Agents from 1% to 100%, rounded up.
+	// Drift is a change to the Agent's derived Pod spec, or a Pod that mounts
+	// a different TLS Secret than the Agent's Certificate names.
 	// Unset means 25%.
 	// +kubebuilder:validation:XIntOrString
 	// +kubebuilder:validation:XValidation:rule="type(self) == int ? self >= 1 : self.matches('^([1-9][0-9]?|100)%$')",message="maxUnavailableOnDrift must be an integer of at least 1 or a percentage from 1% to 100% (rule 44)"
@@ -259,7 +261,8 @@ type AgentClassStatus struct {
 	// +optional
 	TasksInUse int32 `json:"tasksInUse,omitempty"`
 	// AgentsReplacing counts the class's Agents whose Pod is being replaced
-	// for spec drift: each holds one of the maxUnavailableOnDrift slots.
+	// for drift (a derived Pod spec change or a TLS Secret mismatch): each
+	// holds one of the maxUnavailableOnDrift slots.
 	// +optional
 	AgentsReplacing int32 `json:"agentsReplacing,omitempty"`
 	// AgentsPendingReplacement counts the class's drifted Agents that are
