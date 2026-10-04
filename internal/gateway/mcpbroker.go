@@ -578,6 +578,13 @@ func (s *Server) relayFilteredToolsList(
 			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes), Provider: providerName}, 0)
 		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		// The upstream timeout covers the response, not only its headers.
+		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
+			Message:  fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName),
+			Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusGatewayTimeout, errToolTimeout
+	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
 			Message: "tool provider returned an unparseable tools/list response", Provider: providerName}, 0)
