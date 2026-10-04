@@ -112,6 +112,86 @@ func TestRateLimiter_TokenDebtClampedAtOneBurst(t *testing.T) {
 	}
 }
 
+// TestRateLimiter_TokenDebtReclampedWhenReplicasGrow: a debt taken at a
+// larger share is re-clamped to minus one burst at the current share once
+// the replica count grows, so it still blocks for at most a minute (#377).
+func TestRateLimiter_TokenDebtReclampedWhenReplicasGrow(t *testing.T) {
+	replicas := 1
+	rl := NewRateLimiter(func() int { return replicas })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 1000)
+
+	rl.DebitTokens(p, "team-a", "m1", 1_000_000) // clamps at -1000
+	replicas = 2                                 // share 500
+	ok, retry := rl.Allow(p, "team-a", "m1")
+	if ok || retry > 60 {
+		t.Errorf("after the replica count grew: ok=%v retry=%d, want refused within a minute", ok, retry)
+	}
+	if retry != 60 {
+		t.Errorf("after the replica count grew: retry=%d, want 60 (one burst at the new share)", retry)
+	}
+}
+
+// TestRateLimiter_TokenDebtReclampedBeforeRefill: the re-clamp runs before
+// the elapsed refill is credited, so the key admits again one minute after
+// the debit even when the replica count grows partway through (#377).
+func TestRateLimiter_TokenDebtReclampedBeforeRefill(t *testing.T) {
+	replicas := 1
+	rl := NewRateLimiter(func() int { return replicas })
+	t0 := time.Now()
+	now := t0
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 1000)
+
+	rl.DebitTokens(p, "team-a", "m1", 1_000_000) // -1000 at t0
+	now = t0.Add(30 * time.Second)
+	replicas = 2 // share 500: -500 + 250 = -250
+	if ok, retry := rl.Allow(p, "team-a", "m1"); ok || retry != 30 {
+		t.Errorf("at t0+30s: ok=%v retry=%d, want refused with 30", ok, retry)
+	}
+	now = t0.Add(60 * time.Second)
+	if ok, retry := rl.Allow(p, "team-a", "m1"); ok || retry != 1 {
+		t.Errorf("at t0+60s: ok=%v retry=%d, want refused with 1", ok, retry)
+	}
+	now = t0.Add(61 * time.Second)
+	if ok, retry := rl.Allow(p, "team-a", "m1"); !ok {
+		t.Errorf("at t0+61s: ok=%v retry=%d, want admitted", ok, retry)
+	}
+}
+
+// TestRateLimiter_TokenDebtReclampedWhenCeilingDrops: lowering
+// tokensPerMinute shrinks the share like a replica-count increase, and the
+// debt is re-clamped the same way (#377).
+func TestRateLimiter_TokenDebtReclampedWhenCeilingDrops(t *testing.T) {
+	rl := NewRateLimiter(func() int { return 1 })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+
+	rl.DebitTokens(rlTokenProvider(0, 1000), "team-a", "m1", 1_000_000) // -1000
+	ok, retry := rl.Allow(rlTokenProvider(0, 250), "team-a", "m1")
+	if ok || retry != 60 {
+		t.Errorf("after the ceiling dropped: ok=%v retry=%d, want refused with 60", ok, retry)
+	}
+}
+
+// TestRateLimiter_TokenDebtNotDeepenedWhenReplicasShrink: a larger share
+// leaves the debt as it is; it only refills faster.
+func TestRateLimiter_TokenDebtNotDeepenedWhenReplicasShrink(t *testing.T) {
+	replicas := 2
+	rl := NewRateLimiter(func() int { return replicas })
+	now := time.Now()
+	rl.now = func() time.Time { return now }
+	p := rlTokenProvider(0, 1000)
+
+	rl.DebitTokens(p, "team-a", "m1", 1_000_000) // clamps at -500
+	replicas = 1                                 // share 1000
+	ok, retry := rl.Allow(p, "team-a", "m1")
+	if ok || retry != 30 {
+		t.Errorf("after the replica count shrank: ok=%v retry=%d, want refused with 30", ok, retry)
+	}
+}
+
 // TestRateLimiter_TokensDivideByReplicas: the token ceiling splits across
 // live replicas like the request ceiling.
 func TestRateLimiter_TokensDivideByReplicas(t *testing.T) {
