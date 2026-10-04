@@ -368,6 +368,11 @@ func TestModelProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
 	if n := fakeHealth.count("mp-nohc"); n != 0 {
 		t.Fatalf("healthCheck.enabled=false: expected probe to be skipped, called %d times", n)
 	}
+	expectHealthyNotProbed(t, func() []metav1.Condition {
+		var mp kaalmv1beta1.ModelProvider
+		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nohc"}, &mp)
+		return mp.Status.Conditions
+	}, "healthCheck.enabled is false")
 }
 
 func TestModelProvider_NilHealthCheckRunsProbe(t *testing.T) {

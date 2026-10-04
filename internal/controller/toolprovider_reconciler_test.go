@@ -20,6 +20,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -202,9 +203,7 @@ func TestToolProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
 	if n := fakeToolHealth.count("tp-nohc"); n != 0 {
 		t.Fatalf("healthCheck.enabled=false: expected probe to be skipped, called %d times", n)
 	}
-	if c := condition(get(), kaalmv1beta1.ConditionHealthy); c != nil {
-		t.Fatalf("Healthy condition present without a probe: %+v", c)
-	}
+	expectHealthyNotProbed(t, get, "healthCheck.enabled is false")
 }
 
 func TestToolProvider_NilHealthCheckRunsProbe(t *testing.T) {
@@ -613,4 +612,109 @@ func TestToolProvider_EndpointHostMustBeApproved(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// A ToolProvider pass that ends without probing must not keep a Healthy
+// value from an earlier probe: it sets Healthy=Unknown with NotProbed.
+func TestToolProvider_HealthyNotProbedWhenPassEndsEarly(t *testing.T) {
+	secret := func(name string, labels, annotations map[string]string) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name + "-key", Namespace: testOperatorNamespace,
+				Labels: labels, Annotations: annotations,
+			},
+			Data: map[string][]byte{"token": []byte("sk-test")},
+		}
+	}
+	optIn := map[string]string{kaalmv1beta1.LabelProviderCredential: kaalmv1beta1.AnnotationTrue}
+	cases := []struct {
+		name    string
+		objects func(name string) []client.Object
+		mutate  func(tp *kaalmv1beta1.ToolProvider)
+		ready   metav1.ConditionStatus
+		reason  string
+		why     string
+	}{
+		{
+			name:    "credentials missing",
+			objects: func(string) []client.Object { return nil },
+			ready:   metav1.ConditionFalse, reason: kaalmv1beta1.ReasonCredentialsMissing,
+		},
+		{
+			name: "secret not opted in",
+			objects: func(name string) []client.Object {
+				return []client.Object{secret(name, nil,
+					map[string]string{kaalmv1beta1.AnnotationProviderHosts: testProviderHosts})}
+			},
+			ready: metav1.ConditionFalse, reason: kaalmv1beta1.ReasonSecretNotOptedIn,
+		},
+		{
+			name: "endpoint host not approved",
+			objects: func(name string) []client.Object {
+				return []client.Object{secret(name, optIn,
+					map[string]string{kaalmv1beta1.AnnotationProviderHosts: "other.example.com"})}
+			},
+			ready: metav1.ConditionFalse, reason: kaalmv1beta1.ReasonEndpointHostNotApproved,
+		},
+		{
+			name:    "probe disabled",
+			objects: func(string) []client.Object { return nil },
+			mutate: func(tp *kaalmv1beta1.ToolProvider) {
+				tp.Spec.CredentialsRef = nil
+				tp.Spec.HealthCheck = &kaalmv1beta1.ToolProviderHealthCheck{Enabled: false}
+			},
+			ready: metav1.ConditionTrue, reason: kaalmv1beta1.ReasonCredentialsValid,
+			why: "healthCheck.enabled is false",
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			name := "tp-np-" + string(rune('a'+i))
+			tp := &kaalmv1beta1.ToolProvider{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: name, Generation: 1,
+					Finalizers: []string{kaalmv1beta1.ToolProviderFinalizer},
+				},
+				Spec: kaalmv1beta1.ToolProviderSpec{
+					Type: "mcp", Endpoint: "https://mcp.example.com",
+					CredentialsRef: &kaalmv1beta1.SecretKeyReference{Name: name + "-key", Key: "token"},
+				},
+				Status: kaalmv1beta1.ToolProviderStatus{
+					Conditions: healthyCond(metav1.ConditionTrue, time.Now().Add(-time.Hour)),
+				},
+			}
+			if tc.mutate != nil {
+				tc.mutate(tp)
+			}
+			objs := append([]client.Object{tp}, tc.objects(name)...)
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+				WithObjects(objs...).WithStatusSubresource(tp).Build()
+			health := newFakeToolHealth()
+			r := &ToolProviderReconciler{
+				Client: c, Recorder: record.NewFakeRecorder(10),
+				OperatorNamespace: testOperatorNamespace, Health: health,
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+			if _, err := r.Reconcile(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			var got kaalmv1beta1.ToolProvider
+			if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+				t.Fatal(err)
+			}
+			ready := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+			if ready == nil || ready.Status != tc.ready || ready.Reason != tc.reason {
+				t.Fatalf("Ready = %+v, want %s/%s", ready, tc.ready, tc.reason)
+			}
+			why := tc.why
+			if why == "" {
+				why = tc.reason
+			}
+			expectNotProbed(t, got.Status.Conditions, why)
+			if n := health.count(name); n != 0 {
+				t.Fatalf("probe ran %d times on a pass that should not probe", n)
+			}
+		})
+	}
 }

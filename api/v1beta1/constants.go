@@ -164,6 +164,10 @@ const (
 	// ReasonPodCreateRejected: the API server refused the workload's Pod
 	// create (Ready=False on Agent and AgentTask).
 	ReasonPodCreateRejected = "PodCreateRejected"
+	// ReasonNotProbed: Healthy=Unknown on a ModelProvider or ToolProvider
+	// pass that ran no probe (a failing credential or configuration check,
+	// healthCheck.enabled false, or a held delete).
+	ReasonNotProbed = "NotProbed"
 )
 
 // ConditionBoundaryMarginRaised reports that a hard-enforcement gateway

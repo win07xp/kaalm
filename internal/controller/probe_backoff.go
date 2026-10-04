@@ -53,3 +53,19 @@ func probeRequeue(conds []metav1.Condition, interval time.Duration, now time.Tim
 	ceiling = max(ceiling, interval)
 	return min(interval+failing, ceiling)
 }
+
+// setHealthyNotProbed sets Healthy=Unknown with reason NotProbed on a
+// ModelProvider or ToolProvider pass that ends without probing: a failing
+// credential or configuration check, a disabled probe, or a held delete. True
+// and False come only from a probe in the same pass. Unknown, not False, is
+// what lets probeRequeue start a fresh backoff at the next probe failure:
+// time spent not probing says nothing about how long the upstream has been
+// failing.
+func setHealthyNotProbed(conds *[]metav1.Condition, why string) {
+	apimeta.SetStatusCondition(conds, metav1.Condition{
+		Type:    kaalmv1beta1.ConditionHealthy,
+		Status:  metav1.ConditionUnknown,
+		Reason:  kaalmv1beta1.ReasonNotProbed,
+		Message: "the probe did not run: " + why,
+	})
+}
