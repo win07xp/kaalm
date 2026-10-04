@@ -613,6 +613,13 @@ func relayMCPBuffered(
 	w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
 ) (respBytes int64, status int, errType, detail string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if errors.Is(err, context.DeadlineExceeded) {
+		// The upstream timeout covers the response, not only its headers.
+		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
+		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusGatewayTimeout, errToolTimeout, msg
+	}
 	if err != nil {
 		// The transport error names the tool server's address, which is
 		// platform tier: it goes to the audit detail, and the caller gets a

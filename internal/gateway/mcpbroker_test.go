@@ -520,6 +520,38 @@ func TestMCPBroker_BufferedRelayErrors(t *testing.T) {
 			t.Error("response_too_large must not be retryable")
 		}
 	})
+
+	// The upstream timeout covers the response body too: a tool server
+	// that sends headers and then stalls is a timeout, not unavailable.
+	t.Run("response read times out", func(t *testing.T) {
+		blocked := make(chan struct{})
+		h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"jsonrpc":`)
+			w.(http.Flusher).Flush()
+			select {
+			case <-blocked:
+			case <-r.Context().Done():
+			}
+		})
+		// LIFO: blocked must close before the harness cleanup waits on the
+		// parked handler.
+		t.Cleanup(func() { close(blocked) })
+		h.server.Config.MCPUpstreamTimeout = 200 * time.Millisecond
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		retryAfter := resp.Header.Get("Retry-After")
+		body := expectMCPErrorBody(t, resp, http.StatusGatewayTimeout, errToolTimeout)
+		if body.Provider != "search" || !body.Retryable || retryAfter != "" {
+			t.Errorf("envelope = %+v, Retry-After %q; want provider search, retryable, no Retry-After", body, retryAfter)
+		}
+		if got := mcpCalls(h, "web_search", errToolTimeout); got != 1 {
+			t.Errorf("tool_timeout calls = %v, want 1", got)
+		}
+	})
 }
 
 // TestRelayMCPBuffered_ReadFailure drives the read-error branch directly: a
