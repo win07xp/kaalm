@@ -466,7 +466,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Retryable: the proxy treats a credential read failure as a
 		// connect-class failure, and the Secret read can be transient.
-		slog.Warn("mcp credential unavailable", "provider", tp.Name, "error", err)
+		s.logToolCredentialRefusal(r.Context(), tp.Name, err)
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
 			"tool provider credential is unavailable", true, 0, msg.Method, toolName)
 		return
@@ -550,6 +550,15 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, relayDetail,
 		start, reqBytes, respBytes, forwarded)
+}
+
+// logToolCredentialRefusal writes the credential-refusal warning, paced per
+// ToolProvider. A done context means the caller left, which is not a
+// credential problem, so it neither logs nor spends the provider's slot.
+func (s *Server) logToolCredentialRefusal(ctx context.Context, provider string, err error) {
+	if ctx.Err() == nil && s.toolCredentialLog.allow(provider, credentialLogInterval) {
+		slog.Warn("mcp credential unavailable", "provider", provider, "error", err)
+	}
 }
 
 // relayFilteredToolsList buffers a tools/list response (either encoding),
