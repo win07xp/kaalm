@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -187,6 +188,13 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 	if err := testClient.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-ok-creds-gateway"}, &rb); err != nil {
 		t.Errorf("gateway RoleBinding missing: %v", err)
+	}
+	// The controller is not bound to the credential Role: the check Role
+	// already grants it every name the credential Role lists.
+	if err := testClient.Get(ctxT(), types.NamespacedName{
+		Namespace: "default", Name: channelControllerCredsBindingName("ch-ok"),
+	}, &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Errorf("controller RoleBinding to the credential Role: got err=%v, want NotFound", err)
 	}
 	// The controller-only check Role lists the Secret too (rule 45 reads its
 	// label), bound to the controller alone.
@@ -1591,6 +1599,82 @@ func TestChannel_UnownedCredentialRoleIsChildConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectChannelReady(t, "ch-own-role", metav1.ConditionTrue, "")
+}
+
+// A controller binding to the credential Role that the channel controls,
+// as an older release created it, is deleted; the gateway binding stays.
+func TestChannel_ControllerCredsBindingRemoved(t *testing.T) {
+	mkWorkloadClass(t, "chc-ccb-legacy", nil)
+	mkWorkloadAgent(t, "ch-agent-ccb-legacy", "chc-ccb-legacy", nil)
+	mkChannelSecret(t, "ch-ccb-legacy-secret")
+	mkChannel(t, "ch-ccb-legacy", "ch-agent-ccb-legacy", "/channels/default/ch-ccb-legacy", nil)
+	expectChannelReady(t, "ch-ccb-legacy", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	var ch kaalmv1beta1.AgentChannel
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-ccb-legacy"}, &ch); err != nil {
+		t.Fatal(err)
+	}
+	name := channelControllerCredsBindingName("ch-ccb-legacy")
+	legacy := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: kindRole, Name: "kaalm-channel-ch-ccb-legacy-creds"},
+		Subjects: []rbacv1.Subject{{
+			Kind: rbacv1.ServiceAccountKind, Name: controllerServiceAccount, Namespace: testSystemNamespace,
+		}},
+	}
+	if err := controllerutil.SetControllerReference(&ch, legacy, testClient.Scheme()); err != nil {
+		t.Fatal(err)
+	}
+	if err := testClient.Create(ctxT(), legacy); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatal(err)
+	}
+
+	eventually(t, func() error {
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rbacv1.RoleBinding{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return errString("the controller RoleBinding to the credential Role still exists")
+	})
+	if err := testClient.Get(ctxT(), types.NamespacedName{
+		Namespace: "default", Name: "kaalm-channel-ch-ccb-legacy-creds-gateway",
+	}, &rbacv1.RoleBinding{}); err != nil {
+		t.Errorf("gateway RoleBinding missing: %v", err)
+	}
+}
+
+// A RoleBinding with the old controller binding's name that the channel does
+// not control is not the channel's child: it is left alone and does not
+// block the channel.
+func TestChannel_UnownedCredsControllerBindingLeftAlone(t *testing.T) {
+	name := channelControllerCredsBindingName("ch-ccb-foreign")
+	foreign := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: kindRole, Name: "someone-elses-role"},
+		Subjects: []rbacv1.Subject{{
+			Kind: rbacv1.ServiceAccountKind, Name: "someone", Namespace: "default",
+		}},
+	}
+	if err := testClient.Create(ctxT(), foreign); err != nil {
+		t.Fatal(err)
+	}
+	mkWorkloadClass(t, "chc-ccb-foreign", nil)
+	mkWorkloadAgent(t, "ch-agent-ccb-foreign", "chc-ccb-foreign", nil)
+	mkChannelSecret(t, "ch-ccb-foreign-secret")
+	mkChannel(t, "ch-ccb-foreign", "ch-agent-ccb-foreign", "/channels/default/ch-ccb-foreign", nil)
+	expectChannelReady(t, "ch-ccb-foreign", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	var rb rbacv1.RoleBinding
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rb); err != nil {
+		t.Fatalf("the foreign RoleBinding was removed: %v", err)
+	}
+	if rb.RoleRef != foreign.RoleRef || len(rb.Subjects) != 1 || rb.Subjects[0] != foreign.Subjects[0] ||
+		metav1.GetControllerOf(&rb) != nil {
+		t.Fatalf("the foreign RoleBinding was rewritten or adopted: %+v", rb)
+	}
 }
 
 // ---- Rules 45 and 46: channel Secrets opt in, bearer callbacks bind hosts ----

@@ -132,6 +132,12 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		By("the sleeper hibernates")
 		Eventually(func() string { return phase("agent", "up-sleeper") }, "180s", "5s").Should(Equal("Hibernated"))
 
+		By("the previous release binds the controller to the channel's credential Role")
+		Eventually(func() error {
+			_, err := utils.Kubectl("get", "rolebinding", "kaalm-channel-up-channel-creds-controller", "-n", ns)
+			return err
+		}, "120s", "5s").Should(Succeed())
+
 		By("a marker is written to the keeper's memory volume")
 		keeperPodName = keeperPod()
 		Expect(keeperPodName).NotTo(BeEmpty())
@@ -207,6 +213,17 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 				"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
 			return lastLine(out)
 		}, "120s", "5s").Should(Equal("True"))
+
+		By("the controller's binding to the credential Role is removed; the gateway's stays")
+		Eventually(func() string {
+			out, err := utils.Kubectl("get", "rolebinding", "kaalm-channel-up-channel-creds-controller", "-n", ns)
+			if err == nil {
+				return "still exists"
+			}
+			return out
+		}, "120s", "5s").Should(ContainSubstring("NotFound"))
+		_, err = utils.Kubectl("get", "rolebinding", "kaalm-channel-up-channel-creds-gateway", "-n", ns)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("holds providers until their credential Secret is labeled and approves the endpoint host", func() {
