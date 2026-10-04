@@ -48,12 +48,14 @@ type request struct {
 }
 
 // Response is a decoded JSON-RPC 2.0 response. ID is kept raw because
-// callers relayed by the broker may use string or numeric ids.
+// callers relayed by the broker may use string or numeric ids. An absent
+// result or error stays absent on re-encode: JSON-RPC 2.0 allows only one
+// of the two, and strict MCP clients reject a response carrying both.
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
-	Result  json.RawMessage `json:"result"`
-	Error   *RPCError       `json:"error"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *RPCError       `json:"error,omitempty"`
 }
 
 // RPCError is a JSON-RPC 2.0 error object, surfaced verbatim to callers.

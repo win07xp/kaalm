@@ -394,6 +394,34 @@ func TestMCPBroker_ToolsListRelaysUpstreamError(t *testing.T) {
 	}
 }
 
+// A re-encoded tools/list answer carries result or error, never both:
+// JSON-RPC 2.0 allows one, and strict MCP clients reject the pair.
+func TestMCPBroker_ToolsListAnswerCarriesOneMember(t *testing.T) {
+	list := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search"},{"name":"fetch_page"}]}}`
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, c := range []struct {
+				name, upstream, want, absent string
+			}{
+				{"success", list, "result", "error"},
+				{"error", toolsListUpstreamError, "error", "result"},
+			} {
+				var members map[string]json.RawMessage
+				raw := relayToolsList(t, mode, c.upstream)
+				if err := json.Unmarshal(raw, &members); err != nil {
+					t.Fatalf("%s: decode %s: %v", c.name, raw, err)
+				}
+				if _, ok := members[c.want]; !ok {
+					t.Errorf("%s: reply has no %q member: %s", c.name, c.want, raw)
+				}
+				if _, ok := members[c.absent]; ok {
+					t.Errorf("%s: reply carries %q too: %s", c.name, c.absent, raw)
+				}
+			}
+		})
+	}
+}
+
 func TestMCPBroker_SessionOwnership(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
