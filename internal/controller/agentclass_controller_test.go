@@ -107,3 +107,115 @@ func TestAgentClass_ProviderReadErrorFailsThePass(t *testing.T) {
 		})
 	}
 }
+
+// reconcileClass runs one AgentClassReconciler pass over the named class and
+// returns the stored class.
+func reconcileClass(t *testing.T, c client.Client, rec *record.FakeRecorder, name string) *kaalmv1beta1.AgentClass {
+	t.Helper()
+	r := &AgentClassReconciler{Client: c, Recorder: rec}
+	if _, err := r.Reconcile(ctxT(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+		t.Fatal(err)
+	}
+	var got kaalmv1beta1.AgentClass
+	if err := c.Get(ctxT(), types.NamespacedName{Name: name}, &got); err != nil {
+		t.Fatal(err)
+	}
+	return &got
+}
+
+// Rule 51: a malformed allowedNamespaces entry makes the class Ready=False
+// with InvalidNamespacePattern, names only that entry, and sends one Warning
+// when the reason first appears. Fixing the entry makes the class Ready.
+func TestAgentClass_MalformedNamespacePatternIsNotReady(t *testing.T) {
+	const name = "ac-bad-pattern"
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Generation: 1, Finalizers: []string{kaalmv1beta1.ClassFinalizer},
+	}}
+	ac.Spec.AllowedNamespaces = []string{"team-a", "team-["}
+	c := classClientBuilder(t, ac).Build()
+	rec := record.NewFakeRecorder(16)
+
+	var events []string
+	for range 2 {
+		got := reconcileClass(t, c, rec, name)
+		ready := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if ready == nil || ready.Status != metav1.ConditionFalse ||
+			ready.Reason != kaalmv1beta1.ReasonInvalidNamespacePattern {
+			t.Fatalf("Ready = %+v, want False/%s", ready, kaalmv1beta1.ReasonInvalidNamespacePattern)
+		}
+		if !strings.Contains(ready.Message, `"team-["`) || strings.Contains(ready.Message, `"team-a"`) {
+			t.Errorf("Ready message %q must name the malformed entry and only it", ready.Message)
+		}
+		events = append(events, drainEvents(rec)...)
+	}
+	if got := withPrefix(events, "Warning "+kaalmv1beta1.ReasonInvalidNamespacePattern); len(got) != 1 {
+		t.Fatalf("two failing passes emitted %d InvalidNamespacePattern events, want 1: %q", len(got), events)
+	}
+
+	var stored kaalmv1beta1.AgentClass
+	if err := c.Get(ctxT(), types.NamespacedName{Name: name}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	stored.Spec.AllowedNamespaces = []string{"team-a", "team-b"}
+	if err := c.Update(ctxT(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	got := reconcileClass(t, c, rec, name)
+	ready := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != kaalmv1beta1.ReasonAllReferencesResolved {
+		t.Fatalf("after the fix, Ready = %+v, want True/%s", ready, kaalmv1beta1.ReasonAllReferencesResolved)
+	}
+}
+
+// With several kinds of problem on one class, the reason follows a fixed
+// precedence: InvalidCIDR, then InvalidNamespacePattern, then
+// InvalidReference. The message lists every problem.
+func TestAgentClass_NamespacePatternReasonPrecedence(t *testing.T) {
+	cases := []struct {
+		name       string
+		set        func(*kaalmv1beta1.AgentClassSpec)
+		reason     string
+		substrings []string
+	}{{
+		name: "a bad CIDR beats a bad pattern",
+		set: func(s *kaalmv1beta1.AgentClassSpec) {
+			s.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/33"}
+		},
+		reason:     kaalmv1beta1.ReasonInvalidCIDR,
+		substrings: []string{"10.0.0.0/33", `allowedNamespaces entry "["`},
+	}, {
+		name: "a bad pattern beats a missing provider",
+		set: func(s *kaalmv1beta1.AgentClassSpec) {
+			s.AllowedProviders = []kaalmv1beta1.LocalObjectReference{{Name: "prec-ghost"}}
+		},
+		reason:     kaalmv1beta1.ReasonInvalidNamespacePattern,
+		substrings: []string{"prec-ghost", `allowedNamespaces entry "["`},
+	}, {
+		name: "a bad pattern beats a malformed host",
+		set: func(s *kaalmv1beta1.AgentClassSpec) {
+			s.Network.Egress.AllowedHosts = []string{"Not_A_Host"}
+		},
+		reason:     kaalmv1beta1.ReasonInvalidNamespacePattern,
+		substrings: []string{"Not_A_Host", `allowedNamespaces entry "["`},
+	}}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "ac-pattern-prec-" + string(rune('a'+i))
+			ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{
+				Name: name, Generation: 1, Finalizers: []string{kaalmv1beta1.ClassFinalizer},
+			}}
+			ac.Spec.AllowedNamespaces = []string{"["}
+			tc.set(&ac.Spec)
+			got := reconcileClass(t, classClientBuilder(t, ac).Build(), record.NewFakeRecorder(16), name)
+			ready := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != tc.reason {
+				t.Fatalf("Ready = %+v, want False/%s", ready, tc.reason)
+			}
+			for _, s := range tc.substrings {
+				if !strings.Contains(ready.Message, s) {
+					t.Errorf("Ready message %q does not list %q", ready.Message, s)
+				}
+			}
+		})
+	}
+}

@@ -161,6 +161,10 @@ const (
 	ReasonSpecDriftPending           = "SpecDriftPending"
 	ReasonDeletionBlocked            = "DeletionBlocked"
 	ReasonNamespaceNotAllowed        = "NamespaceNotAllowed" // rule 47: AgentClass allowedNamespaces
+	// ReasonInvalidNamespacePattern: rule 51, Ready=False on an AgentClass,
+	// ModelProvider, or ToolProvider whose allowedNamespaces holds a
+	// malformed glob pattern.
+	ReasonInvalidNamespacePattern = "InvalidNamespacePattern"
 	// ReasonPodCreateRejected: the API server refused the workload's Pod
 	// create (Ready=False on Agent and AgentTask).
 	ReasonPodCreateRejected = "PodCreateRejected"

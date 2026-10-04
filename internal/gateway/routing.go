@@ -136,7 +136,9 @@ func containsProviderRef(refs []kaalmv1beta1.AgentProviderReference, name string
 
 // namespaceGlobAllowed matches ns against exact names or path.Match globs. An
 // empty list allows none, as the provider docs have always stated: "*" is the
-// explicit opt-in to every namespace (behavior aligned in v0.4.0).
+// explicit opt-in to every namespace (behavior aligned in v0.4.0). A
+// malformed pattern matches nothing; the provider reconcilers report it on
+// Ready (rule 51).
 func namespaceGlobAllowed(ns string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return false

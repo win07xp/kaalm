@@ -30,7 +30,7 @@ import (
 
 // When several config checks fail, Ready=False takes its reason from a fixed
 // precedence (InvalidDegradeTarget, HardBudgetUnpriced, InvalidModelMap,
-// FallbackIneligible), and the message lists every problem. The reason comes
+// FallbackIneligible, InvalidNamespacePattern), and the message lists every problem. The reason comes
 // from which check failed, never from the message text, so a model, key, or
 // provider name that contains "degradeTo", "unpriced", or "modelMap" does not
 // change it (#334).
@@ -103,6 +103,24 @@ func TestModelProvider_ReadyFalseReasonPrecedence(t *testing.T) {
 		},
 		reason:     kaalmv1beta1.ReasonFallbackIneligible,
 		substrings: []string{`fallback provider "prec-unpriced" does not exist`},
+	}, {
+		name: "a bad model map beats a malformed namespace pattern",
+		mutate: func(mp *kaalmv1beta1.ModelProvider) {
+			mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{
+				{Name: "prec-backup", ModelMap: map[string]string{"not-a-model": "m1"}},
+			}
+			mp.Spec.AllowedNamespaces = []string{"["}
+		},
+		reason:     kaalmv1beta1.ReasonInvalidModelMap,
+		substrings: []string{`key "not-a-model"`, `allowedNamespaces entry "["`},
+	}, {
+		name: "a missing fallback beats a malformed namespace pattern",
+		mutate: func(mp *kaalmv1beta1.ModelProvider) {
+			mp.Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "prec-gone"}}
+			mp.Spec.AllowedNamespaces = []string{"["}
+		},
+		reason:     kaalmv1beta1.ReasonFallbackIneligible,
+		substrings: []string{`fallback provider "prec-gone" does not exist`, `allowedNamespaces entry "["`},
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

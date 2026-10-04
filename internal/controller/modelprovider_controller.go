@@ -48,7 +48,7 @@ import (
 const defaultHealthInterval = 60 * time.Second
 
 // ModelProviderReconciler validates a ModelProvider's credentials, fallback tree,
-// and degrade targets, reduces its budget partials, mirrors GatewayReachable
+// degrade targets, and allowedNamespaces patterns, reduces its budget partials, mirrors GatewayReachable
 // from gateway Pod readiness, probes it for liveness, and holds it in
 // Terminating while referenced. See
 // docs/src/controller/reconcilers/modelprovider.md.
@@ -106,11 +106,13 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.finish(ctx, &mp, ctrl.Result{})
 	}
 
-	// Config validation: fallback tree, degrade targets, and hard pricing.
+	// Config validation: fallback tree, degrade targets, hard pricing, and
+	// allowedNamespaces patterns.
 	var problems []validationProblem
 	problems = append(problems, r.validateFallback(ctx, &mp)...)
 	problems = append(problems, validateDegradeTargets(&mp)...)
 	problems = append(problems, validateHardPricing(&mp)...)
+	problems = append(problems, validateNamespacePatterns(&mp)...)
 	r.costSanity(&mp)
 	if len(problems) > 0 {
 		reason, msg := readyFalseFromProblems(problems)
@@ -220,6 +222,18 @@ var validationReasonPrecedence = []string{
 	kaalmv1beta1.ReasonHardBudgetUnpriced,
 	kaalmv1beta1.ReasonInvalidModelMap,
 	kaalmv1beta1.ReasonFallbackIneligible,
+	kaalmv1beta1.ReasonInvalidNamespacePattern,
+}
+
+// validateNamespacePatterns reports each malformed allowedNamespaces entry
+// (rule 51). The gateway still routes the valid entries; the malformed one
+// matches nothing.
+func validateNamespacePatterns(mp *kaalmv1beta1.ModelProvider) []validationProblem {
+	var problems []validationProblem
+	for _, msg := range invalidNamespacePatterns(mp.Spec.AllowedNamespaces) {
+		problems = append(problems, validationProblem{reason: kaalmv1beta1.ReasonInvalidNamespacePattern, message: msg})
+	}
+	return problems
 }
 
 // readyFalseFromProblems picks the Ready=False reason for a non-empty set of

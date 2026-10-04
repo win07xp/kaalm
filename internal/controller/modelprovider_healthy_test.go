@@ -106,6 +106,15 @@ func TestModelProvider_HealthyNotProbedWhenPassEndsEarly(t *testing.T) {
 			readyWhy: kaalmv1beta1.ReasonFallbackIneligible,
 		},
 		{
+			name:    "malformed allowedNamespaces pattern",
+			objects: func(name string) []client.Object { return []client.Object{providerKey(name)} },
+			mutate: func(mp *kaalmv1beta1.ModelProvider) {
+				mp.Spec.AllowedNamespaces = []string{"*", "["}
+			},
+			ready:    metav1.ConditionFalse,
+			readyWhy: kaalmv1beta1.ReasonInvalidNamespacePattern,
+		},
+		{
 			name:    "probe disabled",
 			objects: func(name string) []client.Object { return []client.Object{providerKey(name)} },
 			mutate: func(mp *kaalmv1beta1.ModelProvider) {

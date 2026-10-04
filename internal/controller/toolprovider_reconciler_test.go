@@ -499,16 +499,24 @@ func TestToolProvider_ReadyFalseWarningsFollowTheStatusWrite(t *testing.T) {
 		key    bool
 		probe  ToolProbeResult
 		reason string
+		mutate func(*kaalmv1beta1.ToolProvider)
 	}{
-		{"credentials missing", false, ToolProbeResult{}, kaalmv1beta1.ReasonCredentialsMissing},
+		{"credentials missing", false, ToolProbeResult{}, kaalmv1beta1.ReasonCredentialsMissing, nil},
 		{"the probe's rejected credential", true,
 			ToolProbeResult{ProviderProbeResult: ProviderProbeResult{AuthFailed: true}},
-			kaalmv1beta1.ReasonCredentialsInvalid},
+			kaalmv1beta1.ReasonCredentialsInvalid, nil},
+		{"rule 51: a malformed allowedNamespaces pattern", true,
+			ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true}},
+			kaalmv1beta1.ReasonInvalidNamespacePattern,
+			func(tp *kaalmv1beta1.ToolProvider) { tp.Spec.AllowedNamespaces = []string{"["} }},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			name := "ev-tp-" + string(rune('a'+i))
 			tp := eventsToolProvider(name)
+			if tc.mutate != nil {
+				tc.mutate(tp)
+			}
 			objs := []client.Object{tp}
 			if tc.key {
 				objs = append(objs, providerKey(name))
@@ -657,6 +665,15 @@ func TestToolProvider_HealthyNotProbedWhenPassEndsEarly(t *testing.T) {
 			ready: metav1.ConditionFalse, reason: kaalmv1beta1.ReasonEndpointHostNotApproved,
 		},
 		{
+			name:    "malformed allowedNamespaces pattern",
+			objects: func(string) []client.Object { return nil },
+			mutate: func(tp *kaalmv1beta1.ToolProvider) {
+				tp.Spec.CredentialsRef = nil
+				tp.Spec.AllowedNamespaces = []string{"e2e", "["}
+			},
+			ready: metav1.ConditionFalse, reason: kaalmv1beta1.ReasonInvalidNamespacePattern,
+		},
+		{
 			name:    "probe disabled",
 			objects: func(string) []client.Object { return nil },
 			mutate: func(tp *kaalmv1beta1.ToolProvider) {
@@ -716,5 +733,56 @@ func TestToolProvider_HealthyNotProbedWhenPassEndsEarly(t *testing.T) {
 				t.Fatalf("probe ran %d times on a pass that should not probe", n)
 			}
 		})
+	}
+}
+
+// The credential checks run before the rule 51 pattern check and end the
+// pass, so a missing Secret wins over a malformed allowedNamespaces entry.
+// Once the Secret exists, the pattern is reported, with its own Warning.
+func TestToolProvider_CredentialFailureWinsOverNamespacePattern(t *testing.T) {
+	const name = "tp-cred-vs-pattern"
+	tp := eventsToolProvider(name)
+	tp.Spec.AllowedNamespaces = []string{"["}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(tp).WithStatusSubresource(tp).Build()
+	health := newFakeToolHealth()
+	rec := record.NewFakeRecorder(16)
+	r := &ToolProviderReconciler{Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	ready := func() *metav1.Condition {
+		t.Helper()
+		if _, err := r.Reconcile(ctxT(), req); err != nil {
+			t.Fatal(err)
+		}
+		var got kaalmv1beta1.ToolProvider
+		if err := c.Get(ctxT(), req.NamespacedName, &got); err != nil {
+			t.Fatal(err)
+		}
+		return condition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	}
+
+	if got := ready(); got == nil || got.Status != metav1.ConditionFalse ||
+		got.Reason != kaalmv1beta1.ReasonCredentialsMissing {
+		t.Fatalf("Ready = %+v, want False/%s", got, kaalmv1beta1.ReasonCredentialsMissing)
+	}
+	if ev := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonInvalidNamespacePattern); len(ev) != 0 {
+		t.Fatalf("a pass that ended at the credential check emitted %q", ev)
+	}
+
+	if err := c.Create(ctxT(), providerKey(name)); err != nil {
+		t.Fatal(err)
+	}
+	got := ready()
+	if got == nil || got.Status != metav1.ConditionFalse || got.Reason != kaalmv1beta1.ReasonInvalidNamespacePattern {
+		t.Fatalf("Ready = %+v, want False/%s", got, kaalmv1beta1.ReasonInvalidNamespacePattern)
+	}
+	if !strings.Contains(got.Message, `allowedNamespaces entry "["`) {
+		t.Errorf("Ready message %q does not name the malformed entry", got.Message)
+	}
+	if ev := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonInvalidNamespacePattern); len(ev) != 1 {
+		t.Fatalf("the pattern pass emitted %d InvalidNamespacePattern events, want 1", len(ev))
+	}
+	if n := health.count(name); n != 0 {
+		t.Fatalf("probe ran %d times on a pass that should not probe", n)
 	}
 }
