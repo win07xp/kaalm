@@ -20,6 +20,8 @@ The check Role lets the reconciler read the label on every Secret the channel na
 
 A Role or RoleBinding of one of these names that the channel does not control is never written; see [Child ownership](agent.md#child-ownership).
 
+The operator needs no binding to the credential Role, because the check Role already covers every Secret name the credential Role lists. The reconciler deletes a RoleBinding named `kaalm-channel-{name}-creds-controller` when the channel controls it, so an existing binding is removed on the next pass. A binding of that name that the channel does not control is left alone and does not set `ChildConflict`.
+
 ### Channel health poll
 
 The reconciler fans `GET /v1/channels/health?namespace={ns}` out to every gateway Pod because each replica reports only the deliveries it handled, and skips unreachable replicas. The endpoint is specified under [GET /v1/channels/health](../../gateways/api/internal-endpoints.md#get-v1channelshealth), and the four-rule reduction into `PlatformConnected` under [How the controller reduces it](../../gateways/user/platform-adapters.md#how-the-controller-reduces-it).
