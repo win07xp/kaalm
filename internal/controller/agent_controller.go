@@ -73,7 +73,9 @@ var gateRequeue = 30 * time.Second
 // docs/src/controller/reconcilers/agent.md.
 type AgentReconciler struct {
 	client.Client
-	Recorder record.EventRecorder
+	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
+	claimsWarned claimsWarnings
+	Recorder     record.EventRecorder
 	// OperatorNamespace hosts the gateway and controller (kaalm-system).
 	// Agents in this namespace are rejected to protect SAN integrity.
 	OperatorNamespace string
@@ -141,6 +143,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	defer r.events.take(&agent)
 
 	if !agent.DeletionTimestamp.IsZero() {
+		r.claimsWarned.forget(agent.UID)
 		return ctrl.Result{}, r.reconcileDelete(ctx, &agent)
 	}
 
@@ -152,6 +155,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	agent.Status.ObservedGeneration = agent.Generation
+	// Rule 53: advisory, with no condition. The Agent warns about its own
+	// claims only; claims inherited from class defaults warn on the class.
+	r.claimsWarned.note(r.Recorder, &agent, "spec.resources", agent.Spec.Resources.Claims)
 	if agent.Status.Phase == "" {
 		r.setPhase(&agent, kaalmv1beta1.AgentPending, "")
 	}

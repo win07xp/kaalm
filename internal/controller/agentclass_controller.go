@@ -47,7 +47,9 @@ import (
 // docs/src/controller/reconcilers/agentclass.md.
 type AgentClassReconciler struct {
 	client.Client
-	Recorder record.EventRecorder
+	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
+	claimsWarned claimsWarnings
+	Recorder     record.EventRecorder
 	// FQDNSupport reports whether the CNI can enforce FQDN egress policies;
 	// production passes a shared FQDNProbe. nil means unsupported.
 	FQDNSupport func() (bool, error)
@@ -74,6 +76,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if !ac.DeletionTimestamp.IsZero() {
+		r.claimsWarned.forget(ac.UID)
 		return r.reconcileDelete(ctx, &ac)
 	}
 
@@ -250,6 +253,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if invalid != nil {
 		r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
 	}
+	// Rule 53 is advisory with no condition, so its rising edge is held in
+	// memory; noting it after the status write keeps a failed write silent.
+	r.claimsWarned.note(r.Recorder, &ac, "spec.resources.defaults", ac.Spec.Resources.Defaults.Claims)
 	logger.V(1).Info("reconciled AgentClass", "ready", len(problems) == 0, "agents", usage.agents, "tasks", usage.tasks)
 	return ctrl.Result{}, nil
 }

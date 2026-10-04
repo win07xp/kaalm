@@ -171,6 +171,10 @@ const (
 	// ReasonPodCreateRejected: the API server refused the workload's Pod
 	// create (Ready=False on Agent and AgentTask).
 	ReasonPodCreateRejected = "PodCreateRejected"
+	// ReasonResourceClaimsIgnored: rule 53, an advisory Warning event on an
+	// Agent, AgentTask, or AgentClass whose resources block sets container
+	// claims, which the controller drops; Ready is unaffected.
+	ReasonResourceClaimsIgnored = "ResourceClaimsIgnored"
 	// ReasonNotProbed: Healthy=Unknown on a ModelProvider or ToolProvider
 	// pass that ran no probe (a failing credential or configuration check,
 	// healthCheck.enabled false, or a held delete).
