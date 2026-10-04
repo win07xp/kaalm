@@ -26,7 +26,7 @@ Every gateway error is a JSON object with a single top-level `error`:
 
 `Retry-After`, when present, is integer seconds, never an HTTP date.
 
-Two responses on the `:8443` listener are not in this envelope. A JSON-RPC header mismatch on the tool broker is a JSON-RPC error object with code `-32020` and HTTP status `400` ([The tool plane](../tool-plane.md)). Upstream provider errors relayed through the LLM proxy are the provider's own body. A stream that fails after it starts ends with an [error event](#mid-stream-error-event) instead of an error response.
+Three responses on the `:8443` listener are not in this envelope. A JSON-RPC header mismatch on the tool broker is a JSON-RPC error object with code `-32020` and HTTP status `400` ([The tool plane](../tool-plane.md)). The broker's stream cap is a JSON-RPC error event ([Tool broker stream cap](#tool-broker-stream-cap)). Upstream provider errors relayed through the LLM proxy are the provider's own body. A stream that fails after it starts ends with an [error event](#mid-stream-error-event) instead of an error response.
 
 ## LLM Gateway error responses
 
@@ -42,7 +42,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 405 | `invalid_request` | no | | A method other than `POST` on `/v1/mcp/{toolProvider}`, or the wrong method on an internal mTLS path ([Listener TLS](../listener-tls.md)); the response carries `Allow` |
 | 409 | `stale_pod` | yes | | `POST /v1/task/complete`: the calling Pod is not the task's current Pod ([409 Conflict](task-complete.md#409-conflict)) |
 | 413 | `request_too_large` | no | | The body exceeds `gateway.maxLLMRequestBodyBytes` (default 4 MiB) on a proxy path, or `gateway.mcpMaxBodyBytes` (default 4 MiB) on the broker |
-| 413 | `response_too_large` | no | | The tool provider's response exceeds `gateway.mcpMaxBodyBytes` (default 4 MiB) |
+| 413 | `response_too_large` | no | | A buffered or `tools/list` response from the tool provider exceeds `gateway.mcpMaxBodyBytes` (default 4 MiB). A stream already under way reports it as a [JSON-RPC error event](#tool-broker-stream-cap) instead |
 | 429 | `rate_limited` | yes | Seconds until the bucket admits again, at least 1 ([Retry-After](../llm/budgets-and-rate-limits.md#retry-after)) | The per-namespace request bucket for the model or tool provider is empty, or the model's token bucket is at or below zero |
 | 429 | `budget_exhausted` | no after a block; yes after throttles only | seconds to the next period, or the throttle's `1` | The provider, or the provider and every fallback, is budget-blocked or throttled |
 | 429 | `budget_throttled` | yes | `1` | Hard enforcement: the boundary admission slot is held by another request |
@@ -90,6 +90,23 @@ data: {"error":{"type":"provider_error","message":"the provider stream failed be
 | `provider_error` | Reading the provider's stream failed for any other reason, such as a dropped connection |
 
 The event carries no `retryable` field. The agent has partial output, so whether to retry the whole request is its own decision. Usage that arrived before the failure is settled as spend.
+
+### Tool broker stream cap
+
+A tool server's SSE response that passes `gateway.mcpMaxBodyBytes` has already sent its status line, so the broker cannot answer `413`. It relays the stream up to the cap, does not forward the line that passes it, and ends the stream with one JSON-RPC error event:
+
+```text
+data: {"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"tool provider response exceeds 4194304 bytes; the stream is truncated","data":{"type":"response_too_large"}}}
+```
+
+This is a JSON-RPC message, not the gateway envelope, so the caller's MCP client reads it and raises a failed call.
+
+| Field | Value |
+|---|---|
+| `id` | The `id` of the request that opened the stream |
+| `error.code` | `-32603` |
+| `error.data.type` | `response_too_large` |
+| `error.message` | Free text. Branch on `error.data.type`, not the message. |
 
 ## User Gateway error responses
 

@@ -32,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
+	"github.com/win07xp/kaalm/internal/mcp"
 )
 
 // seedToolRoute installs an agent in team-a granting ToolProvider "search"
@@ -605,6 +606,177 @@ func TestMCPBroker_SizeCaps(t *testing.T) {
 		// A small request under the cap; the response is what exceeds it.
 		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
 		expectMCPError(t, resp, http.StatusRequestEntityTooLarge, errResponseTooLarge)
+	})
+
+	// An oversized tools/list, in either encoding, is the cap and not a
+	// parse failure: 413, not 503 (#395).
+	for _, mode := range []string{"json", "sse"} {
+		t.Run("tools/list response too large/"+mode, func(t *testing.T) {
+			list := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search","description":%q}]}}`,
+				strings.Repeat("d", 4096))
+			h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				if mode == "sse" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprintf(w, "data: %s\n\n", list)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, list)
+			})
+			h.server.Config.MCPMaxBodyBytes = 1024
+			h.seedToolRoute()
+			cert := agentCert(t, h.ca)
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+				map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusRequestEntityTooLarge {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %d, want 413: %s", resp.StatusCode, body)
+			}
+			var envelope struct {
+				Error errorBody `json:"error"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&envelope)
+			if envelope.Error.Type != errResponseTooLarge || envelope.Error.Provider != "search" {
+				t.Fatalf("error = %+v, want type %q with provider search", envelope.Error, errResponseTooLarge)
+			}
+			if got := mcpCalls(h, "", errResponseTooLarge); got != 1 {
+				t.Errorf("response_too_large counter = %v, want 1", got)
+			}
+		})
+	}
+
+	t.Run("tools/list at the cap is served", func(t *testing.T) {
+		list := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search"},{"name":"fetch_page"}]}}`
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, list)
+		})
+		h.server.Config.MCPMaxBodyBytes = int64(len(list))
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+			map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), "web_search") || strings.Contains(string(body), "fetch_page") {
+			t.Fatalf("want the filtered list, got %s", body)
+		}
+	})
+}
+
+// lastSSEData returns the data of the stream's last event.
+func lastSSEData(t *testing.T, stream string) string {
+	t.Helper()
+	events := strings.Split(strings.TrimRight(stream, "\n"), "\n\n")
+	for _, line := range strings.Split(events[len(events)-1], "\n") {
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			return data
+		}
+	}
+	t.Fatalf("last event has no data line: %q", stream)
+	return ""
+}
+
+// expectStreamCapEvent asserts the stream ends with the broker's cap event:
+// a JSON-RPC error for request id 7 carrying data.type response_too_large.
+func expectStreamCapEvent(t *testing.T, stream string) {
+	t.Helper()
+	var msg struct {
+		ID    json.RawMessage `json:"id"`
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Data    struct {
+				Type string `json:"type"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	data := lastSSEData(t, stream)
+	if err := json.Unmarshal([]byte(data), &msg); err != nil {
+		t.Fatalf("last event is not JSON: %v: %q", err, data)
+	}
+	if string(msg.ID) != "7" || msg.Error.Code != mcp.CodeInternalError || msg.Error.Data.Type != errResponseTooLarge {
+		t.Fatalf("last event = %s, want id 7, code %d, data.type %q", data, mcp.CodeInternalError, errResponseTooLarge)
+	}
+}
+
+// A stream that passes the cap after its status line is sent ends with a
+// JSON-RPC error event the caller's SDK raises, and the metric records
+// response_too_large (#395).
+func TestMCPBroker_StreamSizeCap(t *testing.T) {
+	streamHarness := func(t *testing.T, stream string, maxBytes int64) *harness {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, stream)
+		})
+		h.server.Config.MCPMaxBodyBytes = maxBytes
+		h.seedToolRoute()
+		return h
+	}
+	call := func(t *testing.T, h *harness) (*http.Response, string) {
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp, string(raw)
+	}
+
+	t.Run("event passes the cap", func(t *testing.T) {
+		stream := "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n" +
+			"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"blob\":\"" +
+			strings.Repeat("z", 4096) + "\"}}\n\n"
+		h := streamHarness(t, stream, 1024)
+		resp, body := call(t, h)
+		if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+			t.Fatalf("got %d %q, want 200 text/event-stream", resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+		if !strings.Contains(body, "notifications/progress") {
+			t.Fatalf("events under the cap must be relayed: %q", body)
+		}
+		if strings.Contains(body, "zzzz") {
+			t.Fatalf("the line that passes the cap must not be forwarded: %q", body)
+		}
+		expectStreamCapEvent(t, body)
+		if got := mcpCalls(h, "web_search", errResponseTooLarge); got != 1 {
+			t.Errorf("response_too_large counter = %v, want 1", got)
+		}
+		if got := mcpCalls(h, "web_search", "ok"); got != 0 {
+			t.Errorf("ok counter = %v, want 0", got)
+		}
+	})
+
+	t.Run("line longer than the scanner buffer", func(t *testing.T) {
+		stream := "data: " + strings.Repeat("z", 200000) + "\n\n"
+		h := streamHarness(t, stream, 100000)
+		_, body := call(t, h)
+		if strings.Contains(body, "zzzz") {
+			t.Fatalf("the oversized line must not be forwarded: %.200q", body)
+		}
+		expectStreamCapEvent(t, body)
+		if got := mcpCalls(h, "web_search", errResponseTooLarge); got != 1 {
+			t.Errorf("response_too_large counter = %v, want 1", got)
+		}
+	})
+
+	t.Run("stream at the cap is relayed whole", func(t *testing.T) {
+		stream := "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n" +
+			"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"pad\":\"" + strings.Repeat("p", 512) + "\"}}\n\n"
+		h := streamHarness(t, stream, int64(len(stream)))
+		_, body := call(t, h)
+		if body != stream {
+			t.Fatalf("stream at the cap must be relayed byte for byte:\n got %q\nwant %q", body, stream)
+		}
+		if got := mcpCalls(h, "web_search", "ok"); got != 1 {
+			t.Errorf("ok counter = %v, want 1", got)
+		}
+
+		h = streamHarness(t, stream, int64(len(stream))-1)
+		_, body = call(t, h)
+		expectStreamCapEvent(t, body)
 	})
 }
 
