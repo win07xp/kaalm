@@ -382,3 +382,63 @@ func TestListLimit(t *testing.T) {
 		t.Errorf("limits = %d/%d, the book states 100/1000", defaultListLimit, maxListLimit)
 	}
 }
+
+// Every answer under /api/ is the JSON envelope, an unknown path and a
+// wrong method included; the page routes keep the mux's plain text (#427).
+func TestAPI_UnmatchedRoutesAnswerTheEnvelope(t *testing.T) {
+	h := newAPIHarness(t)
+	cases := []struct {
+		method, path, token string
+		status              int
+		allow               string
+	}{
+		{http.MethodGet, "/api/v1/nope", "", http.StatusNotFound, ""},
+		{http.MethodGet, "/api/v1/namespaces/", "", http.StatusNotFound, ""},
+		{http.MethodGet, "/api/v1/namespaces/team-a", "", http.StatusNotFound, ""},
+		{http.MethodGet, "/api/v2/namespaces", "", http.StatusNotFound, ""},
+		{http.MethodGet, "/api", "", http.StatusNotFound, ""},
+		{http.MethodPost, "/api/v1/namespaces", "", http.StatusMethodNotAllowed, "GET, HEAD"},
+		{http.MethodDelete, "/api/v1/namespaces/team-a/agents/coder", "", http.StatusMethodNotAllowed, "GET, HEAD"},
+		{http.MethodPut, "/api/v1/namespaces/team-a/spend", "", http.StatusMethodNotAllowed, "GET, HEAD"},
+		{http.MethodGet, "/api/v1/namespaces/team-a/agents/coder/chat", "", http.StatusMethodNotAllowed, "POST"},
+		// Authentication does not change the answer.
+		{http.MethodPost, "/api/v1/namespaces", "priya-token", http.StatusMethodNotAllowed, "GET, HEAD"},
+	}
+	for _, c := range cases {
+		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			req := httptest.NewRequest(c.method, c.path, nil)
+			if c.token != "" {
+				req.Header.Set("Authorization", "Bearer "+c.token)
+			}
+			rec := httptest.NewRecorder()
+			h.server.Handler().ServeHTTP(rec, req)
+			if rec.Code != c.status {
+				t.Fatalf("status = %d, want %d (%s)", rec.Code, c.status, rec.Body)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			var got apiError
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body is not the envelope: %v (%s)", err, rec.Body)
+			}
+			if got.Error.Type != "invalid_request" || got.Error.Message == "" {
+				t.Errorf("error = %+v, want invalid_request with a message", got.Error)
+			}
+			if allow := rec.Header().Get("Allow"); allow != c.allow {
+				t.Errorf("Allow = %q, want %q", allow, c.allow)
+			}
+		})
+	}
+
+	t.Run("page routes are outside the API", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		h.server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); strings.HasPrefix(ct, "application/json") {
+			t.Errorf("page 404 Content-Type = %q, want the mux's plain text", ct)
+		}
+	})
+}

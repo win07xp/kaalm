@@ -79,6 +79,32 @@ func writeAPIError(w http.ResponseWriter, status int, errType, message string) {
 	_ = json.NewEncoder(w).Encode(apiError{Error: apiErrorBody{Type: errType, Message: message}})
 }
 
+// apiNotFound answers a path under /api/ that no route matches. Every
+// response under /api/ is the envelope, so a client parses errors one way;
+// the type mirrors the gateway's own 404s.
+func apiNotFound(w http.ResponseWriter, _ *http.Request) {
+	writeAPIError(w, http.StatusNotFound, "invalid_request", "no API route matches this path")
+}
+
+// apiMethodNotAllowed answers an API route called with a method it does not
+// serve, in the envelope and with Allow, mirroring the gateway's 405. A GET
+// route also serves HEAD, so Allow names both.
+func apiMethodNotAllowed(methods []string) http.HandlerFunc {
+	allow := make([]string, 0, len(methods)+1)
+	for _, m := range methods {
+		allow = append(allow, m)
+		if m == http.MethodGet {
+			allow = append(allow, http.MethodHead)
+		}
+	}
+	allowHeader := strings.Join(allow, ", ")
+	message := strings.Join(methods, " or ") + " required"
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", allowHeader)
+		writeAPIError(w, http.StatusMethodNotAllowed, "invalid_request", message)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
