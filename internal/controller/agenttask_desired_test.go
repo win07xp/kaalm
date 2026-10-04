@@ -356,3 +356,49 @@ func TestDesiredTaskPVC(t *testing.T) {
 		t.Errorf("size not honored: %s", q.String())
 	}
 }
+
+func TestDeriveEffectiveTaskSpec_DropsClaims(t *testing.T) {
+	cases := []struct {
+		name     string
+		own      corev1.ResourceRequirements
+		defaults corev1.ResourceRequirements
+		wantCPU  bool
+	}{
+		{
+			name:    "own claims",
+			own:     corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+			wantCPU: true,
+		},
+		{
+			name:     "default claims",
+			defaults: corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+			wantCPU:  true,
+		},
+		{
+			name:     "claims-only defaults",
+			defaults: corev1.ResourceRequirements{Claims: claimsTestGPU},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			class := claimsTestClass(*tc.defaults.DeepCopy(), nil)
+			task := &kaalmv1beta1.AgentTask{
+				ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"},
+				Spec:       kaalmv1beta1.AgentTaskSpec{Resources: *tc.own.DeepCopy()},
+			}
+			eff := deriveEffectiveTaskSpec(task, class)
+			if len(eff.Resources.Claims) != 0 {
+				t.Errorf("claims kept: %v", eff.Resources.Claims)
+			}
+			if _, ok := eff.Resources.Requests[corev1.ResourceCPU]; ok != tc.wantCPU {
+				t.Errorf("cpu request set = %v, want %v", ok, tc.wantCPU)
+			}
+			pod := desiredTaskPod(task, eff, "kaalm-system", "x-tls")
+			for _, c := range pod.Spec.Containers {
+				if len(c.Resources.Claims) != 0 {
+					t.Errorf("container %s has claims %v", c.Name, c.Resources.Claims)
+				}
+			}
+		})
+	}
+}

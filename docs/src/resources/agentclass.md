@@ -149,8 +149,6 @@ spec:
     annotations: {}
 ```
 
-`resources.defaults` is a full `ResourceRequirements` block, so the schema also accepts `claims`; the controller does not read it.
-
 ## Status
 
 ```yaml
@@ -196,6 +194,8 @@ An empty `allowedImages` admits any image with no warning, so leave it empty onl
 ### Defaults and maxLimits
 
 `resources.defaults` applies whole, and only when the workload sets neither `requests` nor `limits`. A workload that sets either one gets no class defaults for the other.
+
+The schema accepts `claims` in `resources.defaults` and in an Agent's or AgentTask's `spec.resources`, because each is a full `ResourceRequirements` block. The controller removes `claims` from every workload container, whether or not the class sets `maxLimits`. A container claim must name an entry in the Pod's `spec.resourceClaims`, which Kaalm never sets, so a Kaalm workload cannot use Dynamic Resource Allocation claims. Setting `claims` has no effect, and a block with only `claims` counts as unset, so the class defaults still apply.
 
 `maxLimits` clamps and never rejects, at reconcile time (rule 6): a limit above the cap is lowered to it, a request above the cap is lowered to it, and a resource named in `maxLimits` that the workload leaves without a limit is given the cap as its limit. The same holds for `maxSizeGi`, `maxIdleTimeout`, `maxHibernationDelay`, `maxWakeTimeout`, `maxTaskTimeout`, and `maxTTLSecondsAfterFinished` (rules 7 to 10, 42, and 43). A lifecycle max bounds a value and never supplies one, so a class that bounds every task sets the default as well ([AgentTask](agenttask.md#the-class-bounds-timeout-and-retention)). The full default-versus-cap table is on [Defaulting](validation/schema-and-defaulting.md#defaulting).
 

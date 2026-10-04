@@ -1223,8 +1223,9 @@ spec:
                   of this class.
                 properties:
                   defaults:
-                    description: Defaults are applied at reconcile time when a workload
-                      omits resources.
+                    description: |-
+                      Defaults are applied at reconcile time when a workload omits resources.
+                      The controller ignores claims.
                     properties:
                       claims:
                         description: |-

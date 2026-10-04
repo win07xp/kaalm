@@ -84,7 +84,6 @@ func deriveEffectiveTaskSpec(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.A
 	eff := effectiveTaskSpec{
 		Image:            task.Spec.Image,
 		Env:              task.Spec.Env,
-		Resources:        task.Spec.Resources,
 		HealthPort:       defaultHealthPort,
 		PersistenceOn:    task.Spec.Persistence.Enabled,
 		MountPath:        task.Spec.Persistence.MountPath,
@@ -101,10 +100,7 @@ func deriveEffectiveTaskSpec(task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.A
 	if eff.Image == "" {
 		eff.Image = class.Spec.Image.DefaultImage
 	}
-	if len(eff.Resources.Requests) == 0 && len(eff.Resources.Limits) == 0 {
-		eff.Resources = class.Spec.Resources.Defaults
-	}
-	eff.Resources = clampResources(eff.Resources, class.Spec.Resources.MaxLimits)
+	eff.Resources, _ = effectiveResources(task.Spec.Resources, class.Spec.Resources)
 	if task.Spec.Persistence.SizeGi != nil {
 		eff.PVCSizeGi = *task.Spec.Persistence.SizeGi
 	} else {

@@ -40,6 +40,8 @@ Each Pod carries a second annotation, `kaalm.io/pod-spec-hash-version`, which re
 
 As a result, an AgentClass edit made before the upgrade to a field that version 1 does not hash (`security`, `runtime.runtimeClassName`, the pull settings, the termination grace period, or `podMetadata`) does not reach a running Pod at upgrade time. The edit takes effect when the Pod is next replaced. An edit made after the upgrade replaces the Pod, as [Bucket 1](#bucket-1-recreate-and-clamp-default) describes.
 
+The version 1 hash is recomputed from the spec as the earlier release derived it, including container `claims` that release passed through when the class set no `maxLimits`. A running Pod whose Agent sets `claims` therefore keeps running through the upgrade.
+
 ## AgentClass change handling
 
 When an AgentClass, ModelProvider, or ToolProvider spec changes, the [AgentReconciler](reconcilers/agent.md) re-enqueues every Agent referencing it so propagation is event-driven rather than waiting for a periodic requeue. The [AgentTaskReconciler](reconcilers/agenttask.md) watches AgentClass only. Each watch fires only on a change that can affect an Agent, so most status writes never fan out: a class or tool provider triggers on a spec generation change, and a model provider on a spec change, a change to its `Ready` status or reason, or a change to the set of namespaces its budget blocks.

@@ -845,3 +845,130 @@ func tlsSecretOf(pod *corev1.Pod) string {
 	}
 	return ""
 }
+
+// The claims tests share a request, a limit cap, and a claim that no
+// Pod-level resourceClaims entry names.
+var (
+	claimsTestGPU    = []corev1.ResourceClaim{{Name: "gpu"}}
+	claimsTestCPU    = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m")}
+	claimsTestMaxCPU = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")}
+)
+
+func claimsTestClass(defaults corev1.ResourceRequirements, maxLimits corev1.ResourceList) *kaalmv1beta1.AgentClass {
+	return &kaalmv1beta1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "std"},
+		Spec: kaalmv1beta1.AgentClassSpec{
+			Image:     kaalmv1beta1.AgentClassImage{DefaultImage: "registry/default:v1"},
+			Resources: kaalmv1beta1.AgentClassResources{Defaults: defaults, MaxLimits: maxLimits},
+		},
+	}
+}
+
+func TestDeriveEffectiveSpec_DropsClaims(t *testing.T) {
+	cases := []struct {
+		name       string
+		own        corev1.ResourceRequirements
+		defaults   corev1.ResourceRequirements
+		maxLimits  corev1.ResourceList
+		wantCPU    bool
+		wantLegacy []corev1.ResourceClaim
+	}{
+		{
+			name:       "own claims, no maxLimits",
+			own:        corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+			wantCPU:    true,
+			wantLegacy: claimsTestGPU,
+		},
+		{
+			name:      "own claims, maxLimits",
+			own:       corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+			maxLimits: claimsTestMaxCPU,
+			wantCPU:   true,
+		},
+		{
+			name:       "default claims, no maxLimits",
+			defaults:   corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+			wantCPU:    true,
+			wantLegacy: claimsTestGPU,
+		},
+		{
+			name:       "claims-only defaults",
+			defaults:   corev1.ResourceRequirements{Claims: claimsTestGPU},
+			wantLegacy: claimsTestGPU,
+		},
+		{
+			name:     "claims-only own counts as unset",
+			own:      corev1.ResourceRequirements{Claims: []corev1.ResourceClaim{{Name: "own"}}},
+			defaults: corev1.ResourceRequirements{Requests: claimsTestCPU},
+			wantCPU:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			class := claimsTestClass(*tc.defaults.DeepCopy(), tc.maxLimits)
+			agent := &kaalmv1beta1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
+				Spec:       kaalmv1beta1.AgentSpec{Resources: *tc.own.DeepCopy()},
+			}
+			eff := deriveEffectiveSpec(agent, class)
+			if len(eff.Resources.Claims) != 0 {
+				t.Errorf("claims kept: %v", eff.Resources.Claims)
+			}
+			if cpu, ok := eff.Resources.Requests[corev1.ResourceCPU]; ok != tc.wantCPU ||
+				ok && cpu.Cmp(claimsTestCPU[corev1.ResourceCPU]) != 0 {
+				t.Errorf("cpu request = %v (set %v), want set %v", cpu, ok, tc.wantCPU)
+			}
+			if len(tc.wantLegacy) == 0 && len(eff.LegacyClaims) != 0 ||
+				len(tc.wantLegacy) > 0 && (len(eff.LegacyClaims) != 1 || eff.LegacyClaims[0] != tc.wantLegacy[0]) {
+				t.Errorf("LegacyClaims = %v, want %v", eff.LegacyClaims, tc.wantLegacy)
+			}
+			pod := desiredPod(agent, eff, "kaalm-system", "x-tls")
+			for _, c := range pod.Spec.Containers {
+				if len(c.Resources.Claims) != 0 {
+					t.Errorf("container %s has claims %v", c.Name, c.Resources.Claims)
+				}
+			}
+			// The derivation never mutates the stored objects.
+			if len(agent.Spec.Resources.Claims) != len(tc.own.Claims) {
+				t.Error("agent spec claims mutated")
+			}
+			if len(class.Spec.Resources.Defaults.Claims) != len(tc.defaults.Claims) {
+				t.Error("class default claims mutated")
+			}
+		})
+	}
+}
+
+func TestPodSpecHash_IgnoresClaims(t *testing.T) {
+	class := claimsTestClass(corev1.ResourceRequirements{}, nil)
+	plain := &kaalmv1beta1.Agent{Spec: kaalmv1beta1.AgentSpec{
+		Resources: corev1.ResourceRequirements{Requests: claimsTestCPU},
+	}}
+	withClaims := plain.DeepCopy()
+	withClaims.Spec.Resources.Claims = claimsTestGPU
+	if a, b := podSpecHash(deriveEffectiveSpec(plain, class)), podSpecHash(deriveEffectiveSpec(withClaims, class)); a != b {
+		t.Errorf("claims changed the hash: %s vs %s", a, b)
+	}
+}
+
+func TestPodSpecHashV1_RestoresLegacyClaims(t *testing.T) {
+	// A release that kept claims hashed them when the class set no
+	// maxLimits. podSpecHashV1 must reproduce that hash from the new
+	// derivation, or those Pods would look drifted and be replaced.
+	class := claimsTestClass(corev1.ResourceRequirements{}, nil)
+	agent := &kaalmv1beta1.Agent{Spec: kaalmv1beta1.AgentSpec{
+		Resources: corev1.ResourceRequirements{Requests: claimsTestCPU, Claims: claimsTestGPU},
+	}}
+	derived := deriveEffectiveSpec(agent, class)
+	handBuilt := derived
+	handBuilt.Resources.Claims = claimsTestGPU
+	handBuilt.LegacyClaims = nil
+	if a, b := podSpecHashV1(derived), podSpecHashV1(handBuilt); a != b {
+		t.Errorf("podSpecHashV1 = %s, want the v1.0.0-style hash %s", a, b)
+	}
+	cleared := derived
+	cleared.LegacyClaims = nil
+	if podSpecHashV1(cleared) == podSpecHashV1(derived) {
+		t.Error("LegacyClaims had no effect on the v1 hash")
+	}
+}
