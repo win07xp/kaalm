@@ -572,7 +572,8 @@ func (s *Server) relayFilteredToolsList(
 	// one that ends exactly at it.
 	maxBytes := s.mcpMaxBodyBytes()
 	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
-	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), lr, msg.ID)
+	rr := &readErrRecorder{r: lr}
+	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), rr, msg.ID)
 	if err != nil && lr.N <= 0 {
 		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
@@ -586,10 +587,19 @@ func (s *Server) relayFilteredToolsList(
 			Message: msg, Provider: providerName, Retryable: true}, 0)
 		return 0, http.StatusGatewayTimeout, errToolTimeout, msg
 	}
+	if err != nil && rr.err != nil {
+		// A failed read is a transport fault, retryable as on the buffered
+		// relay. Its error names the tool server's address, which is
+		// platform tier: the cause goes to the audit detail, and the caller
+		// gets a fixed message.
+		msg := fmt.Sprintf("reading the response from tool provider %q failed", providerName)
+		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + rr.err.Error()
+	}
 	if err != nil {
-		// A read error names the tool server's address, which is platform
-		// tier: the cause goes to the audit detail, the caller gets a fixed
-		// message.
+		// The list arrived whole and does not parse: a retry gets the same
+		// answer.
 		msg := "tool provider returned an unparseable tools/list response"
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
 			Message: msg, Provider: providerName}, 0)
@@ -631,6 +641,22 @@ func (s *Server) relayFilteredToolsList(
 	w.Header().Set("Content-Type", "application/json")
 	n, _ := w.Write(encoded)
 	return int64(n), http.StatusOK, "", ""
+}
+
+// readErrRecorder passes reads through and keeps the first error other than
+// io.EOF, so a caller can tell a failed read apart from a body that arrived
+// whole and does not parse.
+type readErrRecorder struct {
+	r   io.Reader
+	err error
+}
+
+func (rr *readErrRecorder) Read(p []byte) (int, error) {
+	n, err := rr.r.Read(p)
+	if err != nil && err != io.EOF && rr.err == nil {
+		rr.err = err
+	}
+	return n, err
 }
 
 // relayMCPBuffered copies a JSON response through, capped. It returns the

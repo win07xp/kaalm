@@ -1438,6 +1438,37 @@ func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
 		if !strings.HasPrefix(detail, body.Message+": ") || !strings.Contains(detail, "10.43.7.9") {
 			t.Errorf("audit detail = %q, want the caller message and the transport error", detail)
 		}
+		// A failed read is a transport fault, retryable as on the buffered
+		// relay; only a list that arrived whole and will not parse is not.
+		if !body.Retryable {
+			t.Error("read failure retryable = false, want true")
+		}
+		if want := `reading the response from tool provider "search" failed`; body.Message != want {
+			t.Errorf("message = %q, want %q", body.Message, want)
+		}
+	})
+
+	t.Run("unparseable list", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader("not json")),
+		}
+		_, status, errType, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
+			t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
+		}
+		body := expectMCPErrorBody(t, rec.Result(), http.StatusServiceUnavailable, errToolUnavailable)
+		if body.Retryable {
+			t.Error("unparseable list retryable = true, want false")
+		}
+		if want := "tool provider returned an unparseable tools/list response"; body.Message != want {
+			t.Errorf("message = %q, want %q", body.Message, want)
+		}
+		if !strings.HasPrefix(detail, body.Message+": ") {
+			t.Errorf("audit detail = %q, want the caller message and the parse error", detail)
+		}
 	})
 
 	t.Run("response too large", func(t *testing.T) {
