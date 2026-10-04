@@ -26,7 +26,7 @@ Rules 35 to 38, the tool grants, are checked on the [Agent](agent.md) and [Agent
 
 ## What it reports
 
-`Ready` is `True` with `CredentialsValid` when no check fails, also while `Healthy` is `False` for `ProviderUnhealthy`. Otherwise it carries the table's reason, or `DeletionBlocked` during a delete hold. A `Warning` event with the reason fires when a `Ready=False` reason first appears, and `ProviderUnhealthy` fires on every failing probe pass. [Status](../../resources/toolprovider.md#status) lists the rest.
+`Ready` is `True` with `CredentialsValid` when no check fails, also while `Healthy` is `False` for `ProviderUnhealthy`. Otherwise it carries the table's reason, or `DeletionBlocked` during a delete hold. A `Warning` event with the reason fires when a `Ready=False` reason first appears, and `ProviderUnhealthy` fires on every failing probe pass. A pass that ends at a Secret check, with the probe disabled, or in a delete hold sets `Healthy=Unknown` with `NotProbed`, for the [reason a ModelProvider does](modelprovider.md#what-it-reports). [Status](../../resources/toolprovider.md#status) lists the rest.
 
 ## Timing
 
