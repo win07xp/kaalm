@@ -28,6 +28,10 @@ spec:
   ttlSecondsAfterFinished: 300
 ```
 
+Give the task a name that no Agent in the namespace uses, because an Agent and
+an AgentTask of the same name block each other; see
+[Child resources](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/child-resources.md#an-agent-and-an-agenttask-cannot-share-a-name).
+
 `KAALM_TASK_AUTOCOMPLETE` is a test hook in both base images and in the
 starter templates. In a task, it reports its value as the completion status
 shortly after the container starts, beside whatever else the task does. The
@@ -63,7 +67,7 @@ async def run_task():
     try:
         await kaalm.complete_task("success", "done", {"report-url": report_url})
     except kaalm.TaskAlreadyCompleted:
-        pass  # something else already settled the task
+        pass  # the task is already settled
 ```
 
 The runtime runs `run_task` once, and only when the container runs as an
@@ -85,7 +89,10 @@ AgentTask. `handle_message` is still required.
 - Once the gateway accepts a report, no other report is sent: a later
   `kaalm.complete_task` call raises `kaalm.TaskAlreadyCompleted` without
   sending, and so does a call after the gateway answers that the task is
-  already finished. Do not retry; catch the error and return.
+  already finished. Do not retry; catch the error and return. After
+  `kaalm.complete_task` retried a `503 internal_unavailable`, the error can
+  mean that your own report was recorded, and the task's outcome is correct
+  either way, so the catch-and-return needs no re-run or error path.
 - In an `exitCode` task, the container's exit is the verdict. The gateway
   refuses every report with `403 TaskNotAgentReported`, and the runtime exits
   for you: 0 when `run_task` returned, 1 when it raised. Return to succeed,

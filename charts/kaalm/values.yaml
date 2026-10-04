@@ -242,6 +242,14 @@ standardAgentClass:
   # Ready=False with InvalidReference. Set it to the names you create:
   # --set standardAgentClass.allowedProviders={anthropic-shared}
   allowedProviders: []
+  # Namespace patterns (path.Match globs, such as team-*) whose Agents and
+  # AgentTasks may use this class, rendered into spec.allowedNamespaces. Empty
+  # leaves the field unset, so the class admits every namespace. This differs
+  # from a ModelProvider, where an empty list admits none: the CRD rejects an
+  # empty list on a class. Quote the list so the shell does not split it or
+  # expand the *:
+  # --set 'standardAgentClass.allowedNamespaces={team-a,team-data-*}'
+  allowedNamespaces: []
 
 # The optional operator console (docs/src/console/overview.md): read-only
 # fleet visibility plus one governed test-chat action. Off by default; a

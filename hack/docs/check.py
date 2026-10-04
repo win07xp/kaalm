@@ -37,6 +37,17 @@ Checks, per book:
   listed figure is a byte-exact copy of its design-book source, and nothing
   else sits in guide/src/diagrams.
 
+Across the repository, outside the books:
+
+- every book page that a Go file under api/, cmd/, internal/, or test/ cites by
+  path (`docs/src/...md`, also `guide/src` and `learn/src`) exists, and its
+  `#anchor` names a heading on that page, under the same slug rules as
+  in-book links. API type comments are the CRD field descriptions that
+  `kubectl explain` shows, so a comment is held to the book's link rules. Only
+  the path and the `#anchor` are checked: a section named in prose after the
+  path, such as `tool-plane.md (The Broker)`, is not. Renaming a heading means
+  updating these comments as well as the in-book links.
+
 Also runs diagram_check.py over docs/src/diagrams.
 
 Usage: check.py [--time-report] [--ratchet-report]

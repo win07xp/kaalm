@@ -76,9 +76,22 @@ see it, then fix or remove the entry. The class's other entries keep working.
 
 The field behaves differently from the provider allowlists:
 
-- **Unset admits every namespace.** The chart's `standard` class
-  leaves it unset. To admit every namespace explicitly,
-  list `"*"`.
+- **Unset admits every namespace.** The chart's `standard` class admits
+  every namespace until you set the chart value, so set it in your install
+  values instead of patching the chart-managed class. Quote the list so the
+  shell does not split it or expand the `*`:
+
+  ```bash
+  helm upgrade kaalm oci://ghcr.io/win07xp/charts/kaalm \
+    --version VERSION \
+    --namespace kaalm-system \
+    --set 'standardAgentClass.allowedNamespaces={team-a,team-data-*}'
+  ```
+
+  Pass your other install values too, because `helm upgrade` resets anything
+  you leave out. The
+  [Deployment](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#configuration-reference)
+  page lists the value. To admit every namespace explicitly, list `"*"`.
 - **An empty list is rejected.** The API server refuses `[]` and tells you to
   omit the field to admit every namespace. On a provider, an empty list admits
   no namespace.

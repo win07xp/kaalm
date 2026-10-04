@@ -50,7 +50,10 @@ symptom: the Agent goes `Degraded` instead.
 - **Image not allowed, provider or tool grant revoked, provider deleted**: the
   agent's *phase* goes to `Degraded`, reason `ClassConstraintViolation` (see
   S5 in the scenarios); the Pod keeps running and LLM calls return `403`
-  until the class or the Agent changes back.
+  until the class or the Agent changes back. If the image should match the
+  allowlist, check the AgentClass for `Ready=False` with reason
+  `InvalidImagePattern`: its message names the broken entry, and the Agent's
+  message names only the allowlist.
 - **Namespace not admitted by the class**: reason `NamespaceNotAllowed`. A
   new Agent gets no Pod. A running Agent keeps its Pod,
   and its LLM and tool calls return `403`. This reason shows first when

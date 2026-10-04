@@ -51,7 +51,10 @@ The decisions that matter:
 
 - **`image.allowedImages`** is a glob allowlist. An Agent or AgentTask whose
   image does not match is rejected at reconcile time, so this is your control
-  over what code runs as an agent. An empty list allows every image.
+  over what code runs as an agent. An empty list allows every image. A
+  malformed glob such as `[` matches no image, and the class then shows
+  `Ready=False` with reason `InvalidImagePattern` naming the entry. Check the
+  class's `Ready` after you edit the list.
 - **`allowedProviders`** narrows which ModelProviders workloads of this class
   may use. This gate stacks with the provider's own namespace allowlist: a
   request must pass both.

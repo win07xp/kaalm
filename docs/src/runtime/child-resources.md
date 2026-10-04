@@ -57,7 +57,7 @@ The two directions carry different weight:
 - **The ingress rule is layered.** It is combined with the [agent-side mTLS check on `POST /v1/message`](contract.md#client-certificate-verification-on-v1message), so a misconfigured per-Agent NetworkPolicy does not open delivery to arbitrary in-cluster callers.
 - **The egress rule is not layered.** It is the only Kaalm-managed control that stops an agent from calling provider IPs directly.
 
-Three caveats bound the guarantee. The synthesis applies only to Kaalm-managed Pods; the gateway-only tier's egress responsibility is stated under [Adoption tiers](../concepts/tenancy-and-tiers.md#adoption-tiers). Because NetworkPolicy is additive, the guarantee assumes the developer trust tier defined in [Trust model](../security/model.md#trust-model). And CNI enforcement is a hard prerequisite: clusters on default kindnet or default flannel do not enforce NetworkPolicy and are not supported targets ([Recommendation 5](../security/model.md#recommendations-for-deployment)).
+Three caveats bound the guarantee. The synthesis applies only to Kaalm-managed Pods; the gateway-only tier's egress responsibility is stated under [Adoption tiers](../concepts/tenancy-and-tiers.md#adoption-tiers). Because NetworkPolicy is additive, the guarantee assumes the developer trust tier defined in [Trust model](../security/model.md#trust-model). And the guarantee holds only on a cluster whose CNI enforces NetworkPolicy; the policies have no effect without one ([Network policy prerequisite](../operations/deployment.md#network-policy-prerequisite), [Recommendation 5](../security/model.md#recommendations-for-deployment)).
 
 ### FQDN egress policy
 
@@ -122,6 +122,18 @@ What differs from an Agent:
 When [`completion.condition: agentReported`](../controller/task-lifecycle.md), the controller also provisions a per-task ConfigMap, pre-created with `data: {}`, where the gateway writes the completion payload, and a per-task Role and RoleBinding that grant the gateway ServiceAccount name-scoped `update` and `patch` on that one ConfigMap. The ConfigMap is a completion channel, not configuration delivery. The controller pre-creates it because RBAC cannot scope `create` to one name, so the Role carries no `create` verb ([Gateway ServiceAccount permissions](../security/rbac.md#gateway-serviceaccount-permissions)).
 
 For an `agentReported` task, the reconciler writes the Pod's UID to `status.currentPodUID` on every Pod creation, initial and retry; a task in `exitCode` mode never has the field set. The gateway rejects a completion from any other Pod at `/v1/task/complete` with `409 stale_pod`. The order in which a retry clears and rewrites the field is in [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
+
+## An Agent and an AgentTask cannot share a name
+
+An Agent and an AgentTask in the same namespace cannot share a name, because three of their children get the same name: the Certificate `{name}-tls`, the NetworkPolicy `{name}`, and, when the class sets `network.egress.allowedHosts` on a cluster with FQDN support, the CiliumNetworkPolicy `{name}-fqdn`.
+
+Whichever of the two provisions first keeps the names. The other reports `Ready=False, reason=ChildConflict` naming one of these children, creates no Pod, and keeps its phase; an AgentTask is not failed. [Child ownership](../controller/reconcilers/agent.md#child-ownership) gives the requeue and event behavior.
+
+The names stay taken until the other workload is deleted, not only until it stops running. A settled AgentTask keeps them until its `ttlSecondsAfterFinished` deletes it ([The class bounds timeout and retention](../resources/agenttask.md#the-class-bounds-timeout-and-retention)) or you delete it, and a hibernated Agent keeps them.
+
+To clear the clash, delete one of the two workloads, and recreate it under another name if you still need it. Deleting the child does not help: it belongs to the other workload, which depends on it and recreates it.
+
+No apply-time check catches the clash, because Kaalm runs no admission webhook and a schema rule cannot see other objects ([No admission webhooks](../controller/overview.md#no-admission-webhooks)).
 
 ## Async response ConfigMaps are swept by label, not owned
 

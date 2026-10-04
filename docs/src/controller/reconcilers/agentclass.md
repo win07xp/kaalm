@@ -18,7 +18,7 @@ Hostname egress is supported on Cilium only. Every other CNI, Calico Enterprise 
 
 ## What it checks
 
-The checks don't stop at the first failure, and the `Ready` message lists every problem. The reason is `InvalidCIDR` when any `allowedCIDRs` entry is malformed, else `InvalidNamespacePattern` when any `allowedNamespaces` entry is malformed, and `InvalidReference` otherwise.
+The checks don't stop at the first failure, and the `Ready` message lists every problem. The reason is the first that applies: `InvalidCIDR` when any `allowedCIDRs` entry is malformed, then `InvalidNamespacePattern` when any `allowedNamespaces` entry is malformed, then `InvalidImagePattern` when any `image.allowedImages` entry is malformed, and `InvalidReference` otherwise.
 
 | Check | Reason when it fails | Rule |
 |---|---|---|
@@ -26,6 +26,7 @@ The checks don't stop at the first failure, and the `Ready` message lists every 
 | Each `allowedCIDRs` entry parses as a CIDR | `InvalidCIDR` | [19](../../resources/validation/class-policy.md) |
 | Each `allowedHosts` entry is a valid DNS name | `InvalidReference` | [20](../../resources/validation/class-policy.md) |
 | Each `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-gates-on-providers-and-tools) |
+| Each `image.allowedImages` entry is a valid glob pattern | `InvalidImagePattern` | [52](../../resources/validation/class-policy.md) |
 
 ## What it reports
 
@@ -34,7 +35,7 @@ A class has no phase. [AgentClass status](../../resources/agentclass.md#status) 
 - **`Ready`** is `True` with `AllReferencesResolved` when every check passes, otherwise `False` with the reason from [What it checks](#what-it-checks), or `DeletionBlocked` while a delete is held.
 - **`FQDNPolicySupported`** is `True, NoHostsRequested` when `allowedHosts` is empty. Otherwise it is the [CNI probe](#cni-fqdn-policy-probe) answer, `True` or `False, FQDNPolicyUnsupported`. The Agent and AgentTask reconcilers write the hosts into a CiliumNetworkPolicy only on `True` ([FQDN egress policy](../../runtime/child-resources.md#fqdn-egress-policy)).
 - **Advisory conditions and counts.** `SecurityBaseline` and `DeprecatedFields` report the class's own spec. `CertificateCleanup` reports, from the controller's `kaalm-controller-tls` Secret, whether cert-manager cleans up workload TLS Secrets. `agentsInUse`, `tasksInUse`, `agentsReplacing`, and `agentsPendingReplacement` count the Agents and AgentTasks that use the class. [AgentClass status](../../resources/agentclass.md#status) gives their values.
-- **Events.** Every `Ready=False` reason raises a Warning event with the same reason, once when it first appears. So do `FQDNPolicySupported` and `SecurityBaseline` when they first turn `False`, and `DeprecatedFields` when it first turns `True`. `CertificateCleanup` raises none.
+- **Events.** Every `Ready=False` reason raises a Warning event with the same reason, once when it first appears. So do `FQDNPolicySupported` and `SecurityBaseline` when they first turn `False`, and `DeprecatedFields` when it first turns `True`. `CertificateCleanup` raises none. A class whose `resources.defaults` sets `claims` raises `ResourceClaimsIgnored`, which has no condition ([Event emission](../operations.md#event-emission)).
 
 ## Timing
 

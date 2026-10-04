@@ -65,7 +65,10 @@ missing), `HandlerConfigMapNotFound`, `CertificateNotReady`,
 why),
 `ChildConflict` (an object the Agent does not own already has the name of
 one of its children, such as its NetworkPolicy; the message names it, and
-deleting it lets the Agent continue), and
+deleting it lets the Agent continue, unless an AgentTask of the same name owns
+it: then delete one of the two workloads, and recreate it under another name
+if you still need it, as
+[Child resources](https://github.com/win07xp/kaalm/blob/main/docs/src/runtime/child-resources.md#an-agent-and-an-agenttask-cannot-share-a-name) explains), and
 `SystemNamespaceForbidden` (an Agent in `kaalm-system` is never
 provisioned). Reasons on `Ready` that report progress: `PodProvisioning`,
 `PodRunning`, `PodDisrupted`, `SpecDrift`, `Hibernated`, and `Woken`; an
@@ -85,7 +88,8 @@ class does not admit, at provisioning (same reasons as the Agent's Degraded,
 but terminal here).
 
 Conditions: `Ready` (provisioning gate; `ChildConflict` holds a task
-without a Pod, as it holds an Agent, and `PodCreateRejected` holds a task
+without a Pod, as it holds an Agent (an Agent of the same name can own the
+conflicting object, with the same fix as above), and `PodCreateRejected` holds a task
 whose Pod create the apiserver refused until the five-minute provisioning
 deadline fails the attempt) and `Completed` (terminal verdict,
 reason `TaskSucceeded`, `TaskFailed`, `TimeoutExceeded`, or
@@ -214,7 +218,9 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
 - `Healthy`: the periodic probe, which speaks MCP (`server/discover` or
   `initialize`, then `tools/list`; the negotiated revision lands in
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
-  when not. As with ModelProvider, Ready with Healthy `False`
+  when not, or `CredentialsInvalid` when the tool server rejects the probe's
+  credential (`Ready` turns `False` with it, and the fix is the credential
+  Secret, not the server). As with ModelProvider, Ready with Healthy `False`
   (`ProviderUnhealthy`) means valid config, unreachable server. `Unknown` with
   `NotProbed`, as for ModelProvider. The probe trusts the same CAs as the
   gateway's upstream path; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca).
@@ -230,7 +236,9 @@ counts the rest waiting for one, but has no column of its own.
 Conditions: `Ready` (`AllReferencesResolved`; `InvalidCIDR` when an
 `allowedCIDRs` entry does not parse; `InvalidNamespacePattern` when an
 `allowedNamespaces` entry is not a valid glob (it ranks after `InvalidCIDR`
-and before `InvalidReference`); `InvalidReference` when a
+and before `InvalidReference`); `InvalidImagePattern` when an `allowedImages`
+entry is not a valid glob (it ranks after `InvalidNamespacePattern` and before
+`InvalidReference`); `InvalidReference` when a
 listed provider or tool provider does not exist or an `allowedHosts` entry is
 not a DNS name; `DeletionBlocked` while a delete is held by a referrer, see
 [Deleting a provider, tool provider, or class never
