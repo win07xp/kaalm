@@ -49,3 +49,30 @@ func TestInvalidNamespacePatterns(t *testing.T) {
 		})
 	}
 }
+
+// Rule 52: invalidImagePatterns names each malformed allowedImages entry
+// once, and never a valid one.
+func TestInvalidImagePatterns(t *testing.T) {
+	msg := func(p string) string { return `allowedImages entry "` + p + `" is not a valid glob pattern` }
+	cases := []struct {
+		name     string
+		patterns []string
+		want     []string
+	}{
+		{"nil", nil, nil},
+		{"empty", []string{}, nil},
+		{"valid entries", []string{"registry.test/agents/*", "ghcr.io/win07xp/*:v*", "docker.io/library/nginx", "[!a]*"}, nil},
+		{"unclosed class", []string{"["}, []string{msg("[")}},
+		{"unclosed class after a prefix", []string{"registry.test/["}, []string{msg("registry.test/[")}},
+		{"trailing escape", []string{`a\`}, []string{`allowedImages entry "a\\" is not a valid glob pattern`}},
+		{"repeat reported once, valid entry skipped", []string{"ok/*", "[", "["}, []string{msg("[")}},
+		{"spec order kept", []string{"registry.test/[", "ok", "["}, []string{msg("registry.test/["), msg("[")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := invalidImagePatterns(tc.patterns); !slices.Equal(got, tc.want) {
+				t.Errorf("invalidImagePatterns(%q) = %q, want %q", tc.patterns, got, tc.want)
+			}
+		})
+	}
+}

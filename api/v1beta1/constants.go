@@ -165,6 +165,9 @@ const (
 	// ModelProvider, or ToolProvider whose allowedNamespaces holds a
 	// malformed glob pattern.
 	ReasonInvalidNamespacePattern = "InvalidNamespacePattern"
+	// ReasonInvalidImagePattern: rule 52, Ready=False on an AgentClass whose
+	// image.allowedImages holds a malformed glob pattern.
+	ReasonInvalidImagePattern = "InvalidImagePattern"
 	// ReasonPodCreateRejected: the API server refused the workload's Pod
 	// create (Ready=False on Agent and AgentTask).
 	ReasonPodCreateRejected = "PodCreateRejected"

@@ -101,8 +101,10 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	badCIDRs := invalidCIDRs(&ac)
 	problems = append(problems, badCIDRs...)
 	problems = append(problems, invalidHosts(&ac)...)
-	badPatterns := invalidNamespacePatterns(ac.Spec.AllowedNamespaces)
-	problems = append(problems, badPatterns...)
+	badNamespacePatterns := invalidNamespacePatterns(ac.Spec.AllowedNamespaces)
+	problems = append(problems, badNamespacePatterns...)
+	badImagePatterns := invalidImagePatterns(ac.Spec.Image.AllowedImages)
+	problems = append(problems, badImagePatterns...)
 
 	// warnings are the advisory findings that first appear on this pass,
 	// emitted after the status write below records them.
@@ -214,9 +216,13 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		sort.Strings(problems)
 		// The message lists every problem; the reason follows a fixed
 		// precedence: a malformed CIDR (rule 19), then a malformed
-		// allowedNamespaces pattern (rule 51), then InvalidReference.
+		// allowedNamespaces pattern (rule 51), then a malformed allowedImages
+		// pattern (rule 52), then InvalidReference.
 		reason := kaalmv1beta1.ReasonInvalidReference
-		if len(badPatterns) > 0 {
+		if len(badImagePatterns) > 0 {
+			reason = kaalmv1beta1.ReasonInvalidImagePattern
+		}
+		if len(badNamespacePatterns) > 0 {
 			reason = kaalmv1beta1.ReasonInvalidNamespacePattern
 		}
 		if len(badCIDRs) > 0 {
