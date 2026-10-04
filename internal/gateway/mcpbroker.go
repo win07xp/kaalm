@@ -541,7 +541,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		respBytes, relayErrType = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID)
 		relayStatus = resp.StatusCode
 	default:
-		respBytes, relayStatus, relayErrType = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes())
+		respBytes, relayStatus, relayErrType = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes(), providerName)
 	}
 	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, "",
 		start, reqBytes, respBytes, forwarded)
@@ -608,16 +608,18 @@ func (s *Server) relayFilteredToolsList(
 
 // relayMCPBuffered copies a JSON response through, capped. It returns the
 // outcome triple the caller funnels into mcpResult.
-func relayMCPBuffered(w http.ResponseWriter, resp *http.Response, maxBytes int64) (respBytes int64, status int, errType string) {
+func relayMCPBuffered(
+	w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
+) (respBytes int64, status int, errType string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
-			Message: "reading tool provider response: " + err.Error(), Retryable: true}, 0)
+			Message: "reading tool provider response: " + err.Error(), Provider: providerName, Retryable: true}, 0)
 		return 0, http.StatusServiceUnavailable, errToolUnavailable
 	}
 	if int64(len(body)) > maxBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
-			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)}, 0)
+			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes), Provider: providerName}, 0)
 		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
 	}
 	bodyLog("mcp response", body)

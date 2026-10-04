@@ -22,9 +22,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -83,6 +87,12 @@ func mcpCall(tool string) map[string]any {
 // error.type, returning the decoded body message.
 func expectMCPError(t *testing.T, resp *http.Response, status int, errType string) string {
 	t.Helper()
+	return expectMCPErrorBody(t, resp, status, errType).Message
+}
+
+// expectMCPErrorBody is expectMCPError returning the whole decoded error.
+func expectMCPErrorBody(t *testing.T, resp *http.Response, status int, errType string) errorBody {
+	t.Helper()
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != status {
 		body, _ := io.ReadAll(resp.Body)
@@ -96,7 +106,7 @@ func expectMCPError(t *testing.T, resp *http.Response, status int, errType strin
 	if envelope.Error.Type != errType {
 		t.Fatalf("error.type = %q, want %q (raw body: %s)", envelope.Error.Type, errType, raw)
 	}
-	return envelope.Error.Message
+	return envelope.Error
 }
 
 func TestMCPBroker_MTLSHappyPath(t *testing.T) {
@@ -488,6 +498,51 @@ func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
 		expectMCPError(t, resp, http.StatusGatewayTimeout, errToolTimeout)
 	})
+}
+
+// Errors the buffered relay raises name the provider, as every broker error
+// does (#412).
+func TestMCPBroker_BufferedRelayErrors(t *testing.T) {
+	t.Run("response too large names the provider", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":7,"result":{"blob":%q}}`, strings.Repeat("y", 4096))
+		})
+		h.server.Config.MCPMaxBodyBytes = 1024
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		body := expectMCPErrorBody(t, resp, http.StatusRequestEntityTooLarge, errResponseTooLarge)
+		if body.Provider != "search" {
+			t.Errorf("provider = %q, want search", body.Provider)
+		}
+		if body.Retryable {
+			t.Error("response_too_large must not be retryable")
+		}
+	})
+}
+
+// TestRelayMCPBuffered_ReadFailure drives the read-error branch directly: a
+// connection reset mid-body is timing-dependent over a real socket.
+func TestRelayMCPBuffered_ReadFailure(t *testing.T) {
+	rec := httptest.NewRecorder()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
+			Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET})),
+	}
+	_, status, errType := relayMCPBuffered(rec, resp, 1024, "search")
+	if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
+		t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
+	}
+	body := expectMCPErrorBody(t, rec.Result(), http.StatusServiceUnavailable, errToolUnavailable)
+	if body.Provider != "search" {
+		t.Errorf("provider = %q, want search", body.Provider)
+	}
+	if !body.Retryable {
+		t.Error("a read failure must be retryable")
+	}
 }
 
 // retryable is set per cause, not by status: two 503s can disagree, and a
