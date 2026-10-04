@@ -479,8 +479,9 @@ func TestAgent_WakeHoldsResumingUntilReady(t *testing.T) {
 }
 
 // TestAgent_WakePodCreateErrorKeepsResuming pins the wake-failure behavior: a
-// Pod-creation error during a wake returns the error for a requeue and leaves
-// the Agent in Resuming. It never sets Failed or Provisioning (#206).
+// transient Pod-creation error during a wake returns the error for a requeue
+// and leaves the Agent in Resuming. It never sets Failed or Provisioning
+// (#206). A rejected create is covered in agent_pod_create_rejected_test.go.
 func TestAgent_WakePodCreateErrorKeepsResuming(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "woken", Namespace: "default"},
@@ -488,7 +489,7 @@ func TestAgent_WakePodCreateErrorKeepsResuming(t *testing.T) {
 	}
 	r := &AgentReconciler{Client: newErrCreateClient(t), OperatorNamespace: "kaalm-system"}
 	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080}
-	if _, err := r.convergePod(context.Background(), agent, &kaalmv1beta1.AgentClass{}, eff, "woken-tls"); err == nil {
+	if _, _, err := r.convergePod(context.Background(), agent, &kaalmv1beta1.AgentClass{}, eff, "woken-tls"); err == nil {
 		t.Fatal("convergePod must surface the Pod-creation error so the pass requeues")
 	}
 	if agent.Status.Phase != kaalmv1beta1.AgentResuming {

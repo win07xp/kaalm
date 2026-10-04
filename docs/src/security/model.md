@@ -30,10 +30,10 @@ An AgentClass may set `spec.runtime.runtimeClassName`, naming a Kubernetes `Runt
 
 A class that names a missing `RuntimeClass` has these effects:
 
-- An Agent of the class gets no Pod and does not go `Degraded`. The controller retries the Pod create with backoff ([Error handling](../controller/operations.md#error-handling)). No condition or event names the `RuntimeClass`; the rejection shows only in the controller log.
-- An AgentTask likewise gets no Pod and stays `Provisioning`. The rejection spends no `backoffLimit` retry, and the completion timeout does not start, because it counts from `startTime`, which is set only at `Running`.
-- If a class in use is edited to name a missing `RuntimeClass`, each Agent that gets a drift slot deletes its Pod and cannot create the replacement. At most `maxUnavailableOnDrift` of the class's Agents lose their Pod; the rest keep their old Pods ([Drift replacements are capped per class](../controller/change-propagation.md#drift-replacements-are-capped-per-class)).
-- Once the `RuntimeClass` exists or the class is changed, the next retry creates the Pod. Kaalm does not watch `RuntimeClass` objects, so creating one does not trigger a retry; an edit to the Agent or AgentTask retries at once.
+- An Agent of the class gets no Pod and does not go `Degraded`. It shows `Ready=False` with `reason=PodCreateRejected`, whose message carries the API server's `RuntimeClass "NAME" not found`, and raises one `Warning` event ([Error handling](../controller/operations.md#error-handling)).
+- An AgentTask likewise gets no Pod and stays `Provisioning` with the same reason. After five minutes the attempt fails with `ProvisioningDeadlineExceeded` and retries while `backoffLimit` allows ([The clock starts at Ready](../controller/task-lifecycle.md#the-clock-starts-at-ready)). The completion timeout does not start, because it counts from `startTime`, which is set only at `Running`.
+- If a class in use is edited to name a missing `RuntimeClass`, each Agent that gets a drift slot deletes its Pod and cannot create the replacement, and shows `Provisioning` with `PodCreateRejected`. At most `maxUnavailableOnDrift` of the class's Agents lose their Pod; the rest keep their old Pods ([Drift replacements are capped per class](../controller/change-propagation.md#drift-replacements-are-capped-per-class)).
+- Once the `RuntimeClass` exists or the class is changed, the Pod follows. Kaalm does not watch `RuntimeClass` objects, so creating one triggers no retry by itself; the workload re-checks every 30 seconds, so the Pod follows within 30 seconds. An edit to the Agent, the AgentTask, or the class retries at once.
 
 Platform teams create one AgentClass per isolation tier (`standard` with the field unset, `sandboxed` requiring gVisor, and so on), and developers pick a class.
 

@@ -479,6 +479,14 @@ spec:
               phase:
                 description: Phase is the current lifecycle phase.
                 type: string
+              podCreateRejectedTime:
+                description: |-
+                  PodCreateRejectedTime is when the API server first rejected the
+                  current attempt's Pod create. It is cleared when a Pod is created or
+                  the attempt fails. The provisioning deadline counts from it while no
+                  Pod exists.
+                format: date-time
+                type: string
               podName:
                 type: string
               retries:
@@ -963,6 +971,14 @@ spec:
                 type: integer
               phase:
                 description: Phase is the current lifecycle phase.
+                type: string
+              podCreateRejectedTime:
+                description: |-
+                  PodCreateRejectedTime is when the API server first rejected the
+                  current attempt's Pod create. It is cleared when a Pod is created or
+                  the attempt fails. The provisioning deadline counts from it while no
+                  Pod exists.
+                format: date-time
                 type: string
               podName:
                 type: string

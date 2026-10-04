@@ -57,9 +57,10 @@ const (
 )
 
 // gateRequeue is the retry interval for Ready=False gates that depend on
-// unwatched resources (imagePullSecrets, existingClaim PVCs, and a child name
-// taken by an object the workload does not own): without it a Secret created
-// after the gate fired would never be observed. A variable so tests can
+// unwatched resources (imagePullSecrets, existingClaim PVCs, a child name
+// taken by an object the workload does not own, and a Pod create the API
+// server rejected): without it a Secret created after the gate fired would
+// never be observed. A variable so tests can
 // shorten it.
 var gateRequeue = 30 * time.Second
 
@@ -260,7 +261,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Step 9: converge the Pod and derive the phase from it.
-	driftWaiting, err := r.convergePod(ctx, &agent, &class, eff, tlsSecret)
+	driftWaiting, createRejected, err := r.convergePod(ctx, &agent, &class, eff, tlsSecret)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -277,6 +278,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	if driftWaiting {
 		res = withDriftRetry(res)
+	}
+	// A rejected Pod create depends on objects the controller does not
+	// watch (RuntimeClasses, quotas, webhooks): re-check on gateRequeue.
+	if createRejected && !res.Requeue && (res.RequeueAfter == 0 || res.RequeueAfter > gateRequeue) {
+		res.RequeueAfter = gateRequeue
 	}
 
 	// Step 11: write status only when the pass changed it.
@@ -1007,32 +1013,43 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // class has a drift slot free, mark the Agent Failed on a persistent crash
 // loop, and derive Running from readiness. Until the Pod is Ready, a woken
 // Agent stays Resuming and any other Agent is Provisioning (podPendingPhase).
-// A Pod-creation error returns without a phase change, so the pass requeues
-// with Ready=False. It reports whether the Agent has drifted and waits for a
-// slot, so the caller can schedule a retry. A Pod it creates mounts tlsSecret,
+// A Pod create the API server rejects (isPodCreateRejection) sets that phase
+// with Ready=False PodCreateRejected and clears podName; any other creation
+// error returns without a phase change, so the pass retries with backoff. It
+// reports whether the Agent has drifted and waits for a slot, and whether the
+// create was rejected, so the caller can schedule a retry. A Pod it creates mounts tlsSecret,
 // the Secret the Agent's Certificate names; drift compares only the spec hash,
 // which excludes that name.
 func (r *AgentReconciler) convergePod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 	tlsSecret string,
-) (bool, error) {
+) (driftWaiting, createRejected bool, err error) {
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	if pod == nil {
 		desired := desiredPod(agent, eff, r.OperatorNamespace, tlsSecret)
 		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
-			return false, err
+			return false, false, err
 		}
 		if err := r.Create(ctx, desired); err != nil {
-			return false, err
+			if !isPodCreateRejection(err) {
+				return false, false, err
+			}
+			// A rejection holds like a gate: the cause is fixed outside the
+			// Agent, and the caller's timed requeue notices the fix. The
+			// drift slot (PodUpToDate=Replacing) is kept.
+			r.setPhase(agent, podPendingPhase(agent), "Pod create rejected")
+			r.setReadyGate(agent, kaalmv1beta1.ReasonPodCreateRejected, err.Error())
+			agent.Status.PodName = ""
+			return false, true, nil
 		}
 		r.setPhase(agent, podPendingPhase(agent), "Pod created")
 		r.setReady(agent, false, "PodProvisioning", "agent Pod created, waiting for readiness")
 		agent.Status.PodName = desired.Name
-		return false, nil
+		return false, false, nil
 	}
 
 	// A Pod already being deleted is a replacement in progress: wait for the
@@ -1040,7 +1057,7 @@ func (r *AgentReconciler) convergePod(
 	if !pod.DeletionTimestamp.IsZero() {
 		r.setPhase(agent, podPendingPhase(agent), "previous Pod terminating")
 		r.setReady(agent, false, "PodProvisioning", "previous Pod terminating")
-		return false, nil
+		return false, false, nil
 	}
 
 	// Involuntary disruption: a terminal Pod is never resurrected by the
@@ -1050,14 +1067,14 @@ func (r *AgentReconciler) convergePod(
 			fmt.Sprintf("Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase))
 		r.setPhase(agent, podPendingPhase(agent), "replacing a terminal Pod")
 		r.setReady(agent, false, "PodDisrupted", "replacing a terminal Pod")
-		return false, r.Delete(ctx, pod)
+		return false, false, r.Delete(ctx, pod)
 	}
 
 	// A Pod hashed by an older formula that is current under that formula
 	// is not drift: rewrite its hash annotations in place so an upgrade that changes
 	// the formula replaces no Pod.
 	if err := r.rewriteLegacyHash(ctx, pod, eff); err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	// Spec drift: compare the hash in the Pod's annotation against the
@@ -1068,12 +1085,12 @@ func (r *AgentReconciler) convergePod(
 	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
 		replace, err := r.admitDriftReplacement(ctx, agent, class)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if replace {
 			r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift",
 				"derived Pod spec changed; replacing the Pod")
-			return false, r.Delete(ctx, pod)
+			return false, false, r.Delete(ctx, pod)
 		}
 		waiting = true
 	}
@@ -1087,7 +1104,7 @@ func (r *AgentReconciler) convergePod(
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Reason))
 			r.setReady(agent, false, cs.State.Waiting.Reason,
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Message))
-			return waiting, nil
+			return waiting, false, nil
 		}
 	}
 
@@ -1108,7 +1125,7 @@ func (r *AgentReconciler) convergePod(
 		r.setPhase(agent, podPendingPhase(agent), "Pod is not Ready")
 		r.setReady(agent, false, "PodNotReady", "agent Pod is not ready")
 	}
-	return waiting, nil
+	return waiting, false, nil
 }
 
 // withDriftRetry makes sure an Agent waiting for a drift slot is retried

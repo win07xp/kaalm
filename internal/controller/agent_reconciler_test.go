@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -96,8 +95,13 @@ func markCertReady(t *testing.T, agentName string) {
 
 // markCertReadyErr is the error-returning core, shared with the task suite.
 func markCertReadyErr(workloadName string) error {
+	return markCertReadyIn("default", workloadName)
+}
+
+// markCertReadyIn is markCertReadyErr for a workload in namespace ns.
+func markCertReadyIn(ns, workloadName string) error {
 	var cert cmapi.Certificate
-	key := types.NamespacedName{Namespace: "default", Name: workloadName + "-tls"}
+	key := types.NamespacedName{Namespace: ns, Name: workloadName + "-tls"}
 	if err := testClient.Get(ctxT(), key, &cert); err != nil {
 		return err
 	}
@@ -954,75 +958,6 @@ func TestAgent_ClassSecurityAndRuntimeChangeReplacesPod(t *testing.T) {
 	}
 }
 
-// A class naming a RuntimeClass the cluster lacks: the apiserver rejects the
-// Pod create, the Agent gets no Pod, and it does not go Degraded. The test
-// pins only that: the phase and Ready reason left behind are not intended
-// behavior (#369). An edit to the Agent after the RuntimeClass exists
-// creates the Pod.
-func TestAgent_MissingRuntimeClassLeavesNoPod(t *testing.T) {
-	const rcName = "absent-sandbox"
-	rcRef := rcName
-	mkWorkloadClass(t, "wc-missing-rc", func(ac *kaalmv1beta1.AgentClass) {
-		ac.Spec.Runtime.RuntimeClassName = &rcRef
-	})
-	mkWorkloadAgent(t, "missing-rc-agent", "wc-missing-rc", nil)
-	markCertReady(t, "missing-rc-agent")
-
-	// The apiserver's RuntimeClass admission is what rejects the Pod.
-	probe := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "missing-rc-probe", Namespace: "default"},
-		Spec: corev1.PodSpec{
-			RuntimeClassName: &rcRef,
-			Containers:       []corev1.Container{{Name: "c", Image: "registry.test/agents/demo:v1"}},
-		},
-	}
-	err := testClient.Create(ctxT(), probe)
-	if !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), `RuntimeClass "`+rcName+`" not found`) {
-		t.Fatalf("pod create with missing RuntimeClass: err = %v, want Forbidden RuntimeClass not found", err)
-	}
-
-	// The NetworkPolicy comes from step 8, after the certificate gate. It
-	// shows a pass reached the step just before the Pod create, not that the
-	// create ran, so the state is held across several backoff retries below.
-	eventually(t, func() error {
-		var np networkingv1.NetworkPolicy
-		return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-agent"}, &np)
-	})
-	consistently(t, time.Second, func() error {
-		var ag kaalmv1beta1.Agent
-		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "missing-rc-agent"}, &ag); err != nil {
-			return err
-		}
-		if ag.Status.Phase == kaalmv1beta1.AgentDegraded {
-			return fmt.Errorf("phase = %s, want not Degraded", ag.Status.Phase)
-		}
-		if c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionDegraded); c != nil {
-			return fmt.Errorf("degraded condition = %+v, want none", c)
-		}
-		if p := agentPod(t, "missing-rc-agent"); p != nil {
-			return fmt.Errorf("pod %s exists, want none", p.Name)
-		}
-		return nil
-	})
-
-	// Recovery: once the RuntimeClass exists, an edit to the Agent retries.
-	rc := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: rcName}, Handler: "runsc"}
-	if err := testClient.Create(ctxT(), rc); err != nil {
-		t.Fatalf("create runtimeclass: %v", err)
-	}
-	touchAgent(t, "missing-rc-agent")
-	eventually(t, func() error {
-		p := agentPod(t, "missing-rc-agent")
-		if p == nil {
-			return errString("no pod yet")
-		}
-		if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != rcName {
-			t.Fatalf("pod runtimeClassName = %v, want %s", p.Spec.RuntimeClassName, rcName)
-		}
-		return nil
-	})
-}
-
 // writeAsV1 rewrites a live Pod's annotations the way a v1.0.0 controller
 // wrote them: the given hash and no hash-version annotation.
 func writeAsV1(t *testing.T, pod *corev1.Pod, hash string) {
@@ -1558,7 +1493,7 @@ func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 		t.Error("ensureCertificate must surface a create error")
 	}
 	// convergePod finds no Pod and fails to create one.
-	if _, err := ar.convergePod(ctx, agent, class, eff, "a-tls"); err == nil {
+	if _, _, err := ar.convergePod(ctx, agent, class, eff, "a-tls"); err == nil {
 		t.Error("convergePod must surface a create error")
 	}
 
@@ -1610,7 +1545,7 @@ func TestEnsureCertificate_KeepsExistingSecretName(t *testing.T) {
 	}
 
 	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, ServicePort: 8080}
-	if _, err := r.convergePod(ctx, agent, &kaalmv1beta1.AgentClass{}, eff, name); err != nil {
+	if _, _, err := r.convergePod(ctx, agent, &kaalmv1beta1.AgentClass{}, eff, name); err != nil {
 		t.Fatalf("convergePod: %v", err)
 	}
 	var pods corev1.PodList

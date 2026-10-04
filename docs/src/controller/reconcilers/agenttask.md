@@ -12,7 +12,7 @@ It reads the task's AgentClass, ModelProviders, and ToolProviders, and watches i
 
 ### AgentTask certificate
 
-The Certificate `{taskName}-tls` differs from the [Agent certificate](agent.md#agent-certificate) in two fields: `spec.dnsNames` is the single task SAN ([Workload identity](../../gateways/llm/workload-identity.md)), and `spec.usages` is `client auth` only, since a task has no TLS listener. Until the Certificate is Ready, the task holds in `Provisioning` with `Ready=False, reason=CertificateNotReady` and has no Pod. The provisioning deadline starts at Pod creation, so a slow issuance never counts against `backoffLimit`.
+The Certificate `{taskName}-tls` differs from the [Agent certificate](agent.md#agent-certificate) in two fields: `spec.dnsNames` is the single task SAN ([Workload identity](../../gateways/llm/workload-identity.md)), and `spec.usages` is `client auth` only, since a task has no TLS listener. Until the Certificate is Ready, the task holds in `Provisioning` with `Ready=False, reason=CertificateNotReady` and has no Pod. The provisioning deadline starts at Pod creation, or at the first rejected Pod create ([The clock starts at Ready](../task-lifecycle.md#the-clock-starts-at-ready)), so a slow issuance never counts against `backoffLimit`.
 
 ### Completion mailbox and per-task Role
 
@@ -45,7 +45,7 @@ The first two checks run until the task settles. The others, except `ChildConfli
 ## What it reports
 
 - **`status.phase`** follows the [state machine](../task-lifecycle.md#state-machine).
-- **`Ready`** is `True` with `PodRunning` once the Pod is Ready. Otherwise it is `False` with a reason from [What it checks](#what-it-checks), `CertificateNotReady`, `PodProvisioning`, `PodTerminating` while a retry waits for the old Pod to go, or the failure or settling reason.
+- **`Ready`** is `True` with `PodRunning` once the Pod is Ready. Otherwise it is `False` with a reason from [What it checks](#what-it-checks), `CertificateNotReady`, `PodProvisioning`, `PodCreateRejected` while the API server refuses the Pod create ([Error handling](../operations.md#error-handling) says which errors count), `PodTerminating` while a retry waits for the old Pod to go, or the failure or settling reason.
 - **`Completed`** is set on settling: `True` for `Succeeded`, `False` otherwise ([Status](../../resources/agenttask.md#status)).
 - **Events** are listed under [Event reasons](../task-lifecycle.md#event-reasons).
 
@@ -55,6 +55,7 @@ The first two checks run until the task settles. The others, except `ChildConfli
 - **A running task.** The pass is requeued for the timeout deadline, measured from `status.startTime`.
 - **Waiting on the Certificate, a terminating Pod, or a Pod that is not Ready.** The task re-checks every 5 seconds, and at once when the Certificate or the Pod changes. A Pod not Ready five minutes after creation fails the attempt with `ProvisioningDeadlineExceeded` at the next re-check, and the task retries while `backoffLimit` allows.
 - **Waiting on a Secret or a conflicting object.** The task re-checks every 30 seconds, because neither raises an event.
+- **A rejected Pod create.** The task re-checks every 30 seconds, because a RuntimeClass, quota, or webhook raises no event, so a fixed cause shows within 30 seconds. The attempt fails with `ProvisioningDeadlineExceeded` at the first re-check after five minutes, and the task retries while `backoffLimit` allows ([The clock starts at Ready](../task-lifecycle.md#the-clock-starts-at-ready)).
 - **A missing class, an empty image, or a malformed class CIDR.** No timed re-check: these clear when the task or the class changes. `SystemNamespaceForbidden` has no timed re-check and does not clear; create the task in another namespace.
 - **A settled task.** The pass is requeued for the remaining TTL ([rule 43](../../resources/validation/class-policy.md)), then the task goes `Terminating` and is deleted. With no TTL, the task stays.
 

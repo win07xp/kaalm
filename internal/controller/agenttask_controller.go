@@ -44,9 +44,12 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// provisioningDeadline bounds how long an image-pull or scheduling failure may
-// persist before the task fails. A documented constant, not a spec field
-// (docs/src/controller/task-lifecycle.md). A variable so tests can shorten it.
+// provisioningDeadline bounds how long an attempt may go without a Ready Pod
+// before it fails: an image-pull or scheduling failure, counted from Pod
+// creation, and a rejected Pod create, counted from the attempt's first
+// rejection (status.podCreateRejectedTime). A documented constant, not a
+// spec field (docs/src/controller/task-lifecycle.md). A variable so tests
+// can shorten it.
 var provisioningDeadline = 5 * time.Minute
 
 // AgentTaskReconciler drives the run-to-completion state machine: Pending ->
@@ -250,11 +253,15 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			return ctrl.Result{}, err
 		}
 		if err := r.Create(ctx, desired); err != nil {
-			return ctrl.Result{}, err
+			if !isPodCreateRejection(err) {
+				return ctrl.Result{}, err
+			}
+			return r.podCreateRejected(ctx, task, class, err)
 		}
 		r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 		r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
 		task.Status.PodName = desired.Name
+		task.Status.PodCreateRejectedTime = nil
 		// The class snapshot for this attempt: a retry's new Pod copies the
 		// bounds again from the class as it then stands.
 		task.Status.ClassBounds = classTaskBounds(class)
@@ -289,6 +296,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			task.Status.CurrentPodUID = string(pod.UID)
 		}
 		task.Status.PodName = pod.Name
+		task.Status.PodCreateRejectedTime = nil
 		if err := r.Status().Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -337,6 +345,36 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			fmt.Sprintf("Pod %s not Ready within %s", pod.Name, provisioningDeadline))
 	}
 	return ctrl.Result{RequeueAfter: certWaitRequeue}, r.Status().Update(ctx, task)
+}
+
+// podCreateRejected holds a task whose Pod create the API server rejected:
+// Provisioning with Ready=False PodCreateRejected, re-checked on gateRequeue
+// because the cause (a RuntimeClass, a quota, a webhook) is not watched. The
+// provisioning deadline counts from the attempt's first rejection, recorded
+// in status so a controller restart keeps it; past the deadline the attempt
+// fails or retries like a Pod that never became Ready.
+func (r *AgentTaskReconciler) podCreateRejected(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, err error,
+) (ctrl.Result, error) {
+	now := metav1.Now()
+	if task.Status.PodCreateRejectedTime == nil {
+		task.Status.PodCreateRejectedTime = &now
+	}
+	task.Status.PodName = ""
+	if now.Sub(task.Status.PodCreateRejectedTime.Time) > provisioningDeadline {
+		// A task that settles without ever having a Pod has no class bounds
+		// yet; record them so the class default TTL still reaches it.
+		if task.Status.Retries >= task.Spec.Completion.BackoffLimit && task.Status.ClassBounds == nil {
+			task.Status.ClassBounds = classTaskBounds(class)
+		}
+		return ctrl.Result{}, r.failOrRetry(ctx, task, "ProvisioningDeadlineExceeded",
+			fmt.Sprintf("Pod create rejected for longer than %s: %s", provisioningDeadline, err.Error()))
+	}
+	r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
+	if err := r.gateTask(ctx, task, kaalmv1beta1.ReasonPodCreateRejected, err.Error()); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
 // driveRunning watches for completion, timeout, and mid-run Pod loss, in that
@@ -472,6 +510,7 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 	task.Status.ArtifactValues = nil
 	task.Status.AgentReportedStatus = ""
 	task.Status.AgentReportedMessage = ""
+	task.Status.PodCreateRejectedTime = nil
 	r.setTaskPhase(task, kaalmv1beta1.TaskFailed)
 	r.setTaskReady(task, false, reason, msg)
 	if err := r.Status().Update(ctx, task); err != nil {
@@ -526,6 +565,7 @@ func (r *AgentTaskReconciler) settle(
 	r.setTaskPhase(task, phase)
 	now := metav1.Now()
 	task.Status.CompletionTime = &now
+	task.Status.PodCreateRejectedTime = nil
 	completed := metav1.ConditionFalse
 	if phase == kaalmv1beta1.TaskSucceeded {
 		completed = metav1.ConditionTrue

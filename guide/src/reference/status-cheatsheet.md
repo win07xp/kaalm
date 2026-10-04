@@ -60,6 +60,8 @@ malformed `allowedCIDRs` entry),
 lacks the label `kaalm.io/workload-secret: "true"`; a running Pod stays in
 place and the phase is kept), `ExistingClaimNotFound` (the adopted PVC is
 missing), `HandlerConfigMapNotFound`, `CertificateNotReady`,
+`PodCreateRejected` (the apiserver refused the Pod create; the message says
+why),
 `ChildConflict` (an object the Agent does not own already has the name of
 one of its children, such as its NetworkPolicy; the message names it, and
 deleting it lets the Agent continue), and
@@ -82,7 +84,9 @@ class does not admit, at provisioning (same reasons as the Agent's Degraded,
 but terminal here).
 
 Conditions: `Ready` (provisioning gate; `ChildConflict` holds a task
-without a Pod, as it holds an Agent) and `Completed` (terminal verdict,
+without a Pod, as it holds an Agent, and `PodCreateRejected` holds a task
+whose Pod create the apiserver refused until the five-minute provisioning
+deadline fails the attempt) and `Completed` (terminal verdict,
 reason `TaskSucceeded`, `TaskFailed`, `TimeoutExceeded`, or
 `TimeoutSucceeded`). A completion call from the wrong Pod is refused with
 `409 stale_pod` (retryable by the task), and one against a finished task
