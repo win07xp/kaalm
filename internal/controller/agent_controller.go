@@ -1017,9 +1017,12 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // with Ready=False PodCreateRejected and clears podName; any other creation
 // error returns without a phase change, so the pass retries with backoff. It
 // reports whether the Agent has drifted and waits for a slot, and whether the
-// create was rejected, so the caller can schedule a retry. A Pod it creates mounts tlsSecret,
-// the Secret the Agent's Certificate names; drift compares only the spec hash,
-// which excludes that name.
+// create was rejected, so the caller can schedule a retry. A Pod it creates
+// mounts tlsSecret, the Secret the Agent's Certificate names. Drift is a spec
+// hash mismatch or a TLS volume that names a Secret other than tlsSecret; both
+// kinds share the maxUnavailableOnDrift slots. The Secret name stays out of
+// the hash, so a Certificate that kept its pre-v1.1.0 name replaces no Pod on
+// upgrade.
 func (r *AgentReconciler) convergePod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 	tlsSecret string,
@@ -1077,19 +1080,27 @@ func (r *AgentReconciler) convergePod(
 		return false, false, err
 	}
 
-	// Spec drift: compare the hash in the Pod's annotation against the
-	// re-derived one, never the live Pod object. It runs before the crash-loop
-	// check, so a spec change replaces a crash-looping Pod; that is how a
-	// rollout halted by a failed replacement recovers.
+	// Drift: compare the hash in the Pod's annotation against the re-derived
+	// one, never the live Pod object, then the Secret the Pod's TLS volume
+	// names against the one the Certificate names. Both read the Pod already
+	// listed, so neither costs an API call. A Pod mounting another Secret
+	// stops receiving renewals, so it is replaced like spec drift. The check
+	// runs before the crash-loop check, so a change replaces a crash-looping
+	// Pod; that is how a rollout halted by a failed replacement recovers.
 	waiting := false
+	cause := ""
 	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
-		replace, err := r.admitDriftReplacement(ctx, agent, class)
+		cause = "derived Pod spec changed"
+	} else if mounted := tlsSecretOf(pod); mounted != "" && tlsSecret != "" && mounted != tlsSecret {
+		cause = fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s", tlsSecret, mounted)
+	}
+	if cause != "" {
+		replace, err := r.admitDriftReplacement(ctx, agent, class, cause)
 		if err != nil {
 			return false, false, err
 		}
 		if replace {
-			r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift",
-				"derived Pod spec changed; replacing the Pod")
+			r.Recorder.Event(agent, corev1.EventTypeNormal, "SpecDrift", cause+"; replacing the Pod")
 			return false, false, r.Delete(ctx, pod)
 		}
 		waiting = true
@@ -1144,9 +1155,10 @@ func withDriftRetry(res ctrl.Result) ctrl.Result {
 // for a slot (maxUnavailableOnDrift). On a grant it sets Replacing and
 // persists the status before the caller deletes the Pod, so the slot counts
 // even if the controller stops right after the delete. On a refusal it sets
-// ReplacementPending and leaves the Pod running.
+// ReplacementPending and leaves the Pod running. The caller passes the drift
+// cause, which names what changed in every event and condition message.
 func (r *AgentReconciler) admitDriftReplacement(
-	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass,
+	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, cause string,
 ) (bool, error) {
 	if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacing {
 		granted, err := r.driftSlots.acquire(ctx, r.Client, agent, class, r.now())
@@ -1156,17 +1168,17 @@ func (r *AgentReconciler) admitDriftReplacement(
 		if !granted {
 			if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacementPending {
 				r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonSpecDriftPending,
-					"derived Pod spec changed; waiting for a free maxUnavailableOnDrift slot")
+					cause+"; waiting for a free maxUnavailableOnDrift slot")
 			}
 			r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacementPending,
-				"derived Pod spec changed; waiting for a free maxUnavailableOnDrift slot, the current Pod keeps running")
+				cause+"; waiting for a free maxUnavailableOnDrift slot, the current Pod keeps running")
 			return false, nil
 		}
 	}
-	r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacing,
-		"replacing the Pod for the updated spec")
-	r.setPhase(agent, podPendingPhase(agent), "replacing the Pod for the updated spec")
-	r.setReady(agent, false, "SpecDrift", "replacing Pod for updated spec")
+	msg := cause + "; replacing the Pod"
+	r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonReplacing, msg)
+	r.setPhase(agent, podPendingPhase(agent), msg)
+	r.setReady(agent, false, "SpecDrift", msg)
 	if err := r.writeStatus(ctx, agent); err != nil {
 		return false, err
 	}

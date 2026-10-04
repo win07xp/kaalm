@@ -55,17 +55,19 @@ partition "8 to 11: children, Pod, activity, status" {
     if (the API server\nrejects it?) then (yes)
       :Ready=False\nPodCreateRejected\nrequeue 30s;
     endif
-    :Provisioning\n(Resuming if woken);
-  elseif (terminal, or spec drift\nwith a free slot?) then (yes)
-    :delete, Provisioning\n(Resuming if woken);
-  elseif (spec drift,\nno free slot?) then (yes)
+    :Provisioning\n(Resuming\nif woken);
+  elseif (terminal?) then (yes)
+    :delete,\nProvisioning\n(Resuming\nif woken);
+  elseif (spec drift or\nTLS mismatch,\nfree slot?) then (yes)
+    :delete,\nProvisioning\n(Resuming\nif woken);
+  elseif (spec drift or\nTLS mismatch,\nno free slot?) then (yes)
     :ReplacementPending,\nold Pod keeps running;
   elseif (crash loop or\nImagePullBackOff?) then (yes)
     :phase=Failed;
   elseif (Ready?) then (yes)
     :Running, or\nIdle stays;
   else (no)
-    :Provisioning\n(Resuming if woken);
+    :Provisioning\n(Resuming\nif woken);
   endif
   :Running or Idle:\nevaluate activity;
   :write status if changed;

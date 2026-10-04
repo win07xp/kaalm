@@ -585,6 +585,22 @@ func agentPodLabels(agent *kaalmv1beta1.Agent) map[string]string {
 	}
 }
 
+// tlsSecretOf returns the Secret the Pod's kaalm-tls projected volume names,
+// or "" when the Pod has no such volume or the volume has no Secret source.
+func tlsSecretOf(pod *corev1.Pod) string {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name != tlsVolumeName || v.Projected == nil {
+			continue
+		}
+		for _, src := range v.Projected.Sources {
+			if src.Secret != nil {
+				return src.Secret.Name
+			}
+		}
+	}
+	return ""
+}
+
 // desiredPod derives the agent Pod: injected env and probes per the runtime
 // contract, the single projected TLS volume at /var/run/kaalm, and the
 // drift-detection hash annotation. The TLS volume projects tlsSecret, the
