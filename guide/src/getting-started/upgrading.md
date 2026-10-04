@@ -170,9 +170,8 @@ stops routing to it until you label the Secret.
    more than one host, separate the names with commas. HMAC callbacks need no
    annotation.
 
-A channel that fails a check is re-checked every minute, so a Secret you label
-after the upgrade brings its channel back to `Ready=True` within a minute, or
-at once when you edit the channel. The controller also narrows the channel's
+A Secret you label after the upgrade brings its channel back to `Ready=True`
+as soon as you label it. The controller also narrows the channel's
 credential Role to the labeled Secrets; the design book lists the Roles on
 [RBAC and authentication](https://github.com/win07xp/kaalm/blob/main/docs/src/security/rbac.md#operator-serviceaccount).
 

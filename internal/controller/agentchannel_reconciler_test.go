@@ -114,24 +114,6 @@ func editSecret(t *testing.T, name string, mutate func(*corev1.Secret)) {
 	})
 }
 
-// touchChannel annotates a channel so it reconciles now: the reconciler
-// watches no Secrets, so a Secret change shows on its own only at the next
-// one-minute pass.
-func touchChannel(t *testing.T, name, value string) {
-	t.Helper()
-	eventually(t, func() error {
-		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
-			return err
-		}
-		if ch.Annotations == nil {
-			ch.Annotations = map[string]string{}
-		}
-		ch.Annotations["test/touch"] = value
-		return testClient.Update(ctxT(), &ch)
-	})
-}
-
 // getRole reads a Role in default.
 func getRole(name string) (*rbacv1.Role, error) {
 	var role rbacv1.Role
@@ -502,6 +484,78 @@ func TestChannelsForAgent(t *testing.T) {
 	unindexed := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
 	if reqs := (&AgentChannelReconciler{Client: unindexed}).channelsForAgent(ctx, agent); reqs != nil {
 		t.Errorf("channelsForAgent without the %s index answered %v; want the indexed lookup", IndexChannelAgentRef, reqs)
+	}
+}
+
+// TestChannelsForSecret: a Secret change enqueues the channels in its
+// namespace whose credentials reference it, through the referenced-Secret
+// index (#357).
+func TestChannelsForSecret(t *testing.T) {
+	const ref = "shared"
+	cbURL := "https://example.com/hook"
+	webhook := func(ns, name string, auth kaalmv1beta1.ChannelAuth, mutate func(*kaalmv1beta1.AgentChannelWebhook)) *kaalmv1beta1.AgentChannel {
+		ch := &kaalmv1beta1.AgentChannel{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec: kaalmv1beta1.AgentChannelSpec{
+				Webhook: &kaalmv1beta1.AgentChannelWebhook{Path: "/channels/" + ns + "/" + name, Auth: auth},
+			},
+		}
+		if mutate != nil {
+			mutate(ch.Spec.Webhook)
+		}
+		return ch
+	}
+	bearer := func(name string) kaalmv1beta1.ChannelAuth {
+		return kaalmv1beta1.ChannelAuth{Type: "bearer", SecretRef: &kaalmv1beta1.SecretKeyReference{Name: name, Key: "token"}}
+	}
+	callback := func(withURL bool) func(*kaalmv1beta1.AgentChannelWebhook) {
+		return func(w *kaalmv1beta1.AgentChannelWebhook) {
+			if withURL {
+				w.CallbackURL = &cbURL
+			}
+			auth := bearer(ref)
+			w.CallbackAuth = &auth
+		}
+	}
+	objs := []client.Object{
+		webhook("team-a", "bearer", bearer(ref), nil),
+		webhook("team-a", "hmac", kaalmv1beta1.ChannelAuth{Type: "hmac", HMAC: &kaalmv1beta1.ChannelHMAC{
+			Header: "X-Sig", SecretRef: kaalmv1beta1.SecretKeyReference{Name: ref, Key: "key"}}}, nil),
+		webhook("team-a", "callback", bearer("inbound"), callback(true)),
+		&kaalmv1beta1.AgentChannel{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "discord"},
+			Spec: kaalmv1beta1.AgentChannelSpec{
+				Type: kaalmv1beta1.ChannelTypeDiscord,
+				Discord: &kaalmv1beta1.AgentChannelDiscord{
+					Path: "/channels/team-a/discord", CredentialsRef: kaalmv1beta1.LocalObjectReference{Name: ref}},
+			},
+		},
+		webhook("team-a", "callback-no-url", bearer("inbound"), callback(false)),
+		webhook("team-a", "other", bearer("other"), nil),
+		webhook("team-b", "other-ns", bearer(ref), nil),
+	}
+	key := types.NamespacedName{Namespace: "team-a", Name: ref}
+	ctx := context.Background()
+
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelSecretRef, channelSecretRefIndex).
+		WithObjects(objs...).Build()
+	var names []string
+	for _, req := range (&AgentChannelReconciler{Client: c}).channelsForSecret(ctx, key) {
+		if req.Namespace != "team-a" {
+			t.Errorf("enqueued %s outside the Secret's namespace", req)
+		}
+		names = append(names, req.Name)
+	}
+	sort.Strings(names)
+	if got, want := strings.Join(names, ","), "bearer,callback,discord,hmac"; got != want {
+		t.Errorf("channelsForSecret enqueued %q, want %q", got, want)
+	}
+
+	// The lookup goes through the index: a cache without it cannot answer.
+	unindexed := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	if reqs := (&AgentChannelReconciler{Client: unindexed}).channelsForSecret(ctx, key); reqs != nil {
+		t.Errorf("channelsForSecret without the %s index answered %v; want the indexed lookup", IndexChannelSecretRef, reqs)
 	}
 }
 
@@ -1376,25 +1430,9 @@ func TestChannel_WhatsAppRequiresEveryKey(t *testing.T) {
 	}
 	expectChannelReady(t, "ch-wa", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 
-	// Adding the missing key makes it Ready on the next pass.
-	eventually(t, func() error {
-		var sec corev1.Secret
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-wa-creds"}, &sec); err != nil {
-			return err
-		}
-		sec.Data["accessToken"] = []byte("t")
-		return testClient.Update(ctxT(), &sec)
-	})
-	// The reconciler watches no Secrets; it re-checks on its requeue cadence
-	// (a minute). Touch the channel so the test observes the recovery now.
-	eventually(t, func() error {
-		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-wa"}, &ch); err != nil {
-			return err
-		}
-		ch.Annotations = map[string]string{"test/touch": "1"}
-		return testClient.Update(ctxT(), &ch)
-	})
+	// Adding the missing key makes it Ready at once: the Secret's change
+	// re-runs the channel.
+	editSecret(t, "ch-wa-creds", func(s *corev1.Secret) { s.Data["accessToken"] = []byte("t") })
 	expectChannelReady(t, "ch-wa", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
 }
 
@@ -1631,7 +1669,6 @@ func TestChannel_UnlabeledSecretNotOptedIn(t *testing.T) {
 	assertCheckRole(t, "ch-nolabel", []string{"ch-nolabel-secret"})
 
 	editSecret(t, "ch-nolabel-secret", func(s *corev1.Secret) { s.Labels = channelCredentialLabels() })
-	touchChannel(t, "ch-nolabel", "labeled")
 	expectChannelReady(t, "ch-nolabel", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
 	expectCredsRole(t, "ch-nolabel", []string{"ch-nolabel-secret"})
 }
@@ -1711,7 +1748,6 @@ func TestChannel_LabelRemovedShrinksGatewayRole(t *testing.T) {
 	editSecret(t, "ch-unlabel-secret", func(s *corev1.Secret) {
 		delete(s.Labels, kaalmv1beta1.LabelChannelCredential)
 	})
-	touchChannel(t, "ch-unlabel", "unlabeled")
 	expectChannelReady(t, "ch-unlabel", metav1.ConditionFalse, kaalmv1beta1.ReasonSecretNotOptedIn)
 	expectCredsRole(t, "ch-unlabel", nil)
 	// The bindings stay; they grant nothing while the Role has no rules.
@@ -1720,6 +1756,33 @@ func TestChannel_LabelRemovedShrinksGatewayRole(t *testing.T) {
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-unlabel-creds-gateway"}, &rb); err != nil {
 		t.Errorf("gateway RoleBinding removed: %v", err)
 	}
+}
+
+// A channel whose Secret does not exist yet turns Ready once the Secret is
+// created, with no edit to the channel.
+func TestChannel_SecretCreatedAfterChannelBecomesReady(t *testing.T) {
+	mkWorkloadClass(t, "chc-late", nil)
+	mkWorkloadAgent(t, "ch-agent-late", "chc-late", nil)
+	mkChannel(t, "ch-late", "ch-agent-late", "/channels/default/ch-late", nil)
+	expectChannelReady(t, "ch-late", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
+
+	mkChannelSecret(t, "ch-late-secret")
+	expectChannelReady(t, "ch-late", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+}
+
+// Deleting the Secret a Ready channel uses takes the channel down at once.
+func TestChannel_SecretDeletedTakesChannelDown(t *testing.T) {
+	mkWorkloadClass(t, "chc-secdel", nil)
+	mkWorkloadAgent(t, "ch-agent-secdel", "chc-secdel", nil)
+	mkChannelSecret(t, "ch-secdel-secret")
+	mkChannel(t, "ch-secdel", "ch-agent-secdel", "/channels/default/ch-secdel", nil)
+	expectChannelReady(t, "ch-secdel", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
+
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "ch-secdel-secret"}}
+	if err := testClient.Delete(ctxT(), sec); err != nil {
+		t.Fatalf("delete secret: %v", err)
+	}
+	expectChannelReady(t, "ch-secdel", metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 }
 
 // Rule 46: a bearer callbackAuth Secret must list the callbackUrl host in
@@ -1750,7 +1813,6 @@ func TestChannel_CallbackHostNotApproved(t *testing.T) {
 	editSecret(t, "ch-cbhost-callback", func(s *corev1.Secret) {
 		s.Annotations[kaalmv1beta1.AnnotationCallbackHosts] = "other.invalid, KAALM-CBHOST.invalid"
 	})
-	touchChannel(t, "ch-cbhost", "approved")
 	expectChannelReady(t, "ch-cbhost", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
 
 	// Editing the callbackUrl to an unlisted host is caught too.
