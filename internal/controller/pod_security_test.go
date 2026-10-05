@@ -36,7 +36,7 @@ func hasVolume(pod *corev1.Pod, name string) bool {
 }
 
 // A class with no security block yields the restricted baseline on both
-// kinds of Pod, with an emptyDir at /tmp (#194).
+// kinds of Pod, with an emptyDir at /tmp.
 func TestDesiredPods_RestrictedBaseline(t *testing.T) {
 	class := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "plain"},
 		Spec: kaalmv1beta1.AgentClassSpec{Image: kaalmv1beta1.AgentClassImage{DefaultImage: "img"}}}

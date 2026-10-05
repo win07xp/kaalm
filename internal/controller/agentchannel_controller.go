@@ -506,7 +506,7 @@ func (r *AgentChannelReconciler) ensureCredentialRole(
 	}
 	// Read from the informer before writing: a create that is expected to
 	// fail AlreadyExists is still a POST the apiserver has to reject, and the
-	// reconciler runs every minute for every channel (#174).
+	// reconciler runs every minute for every channel.
 	var currentRB rbacv1.RoleBinding
 	err := r.Get(ctx, types.NamespacedName{Namespace: rb.Namespace, Name: rb.Name}, &currentRB)
 	switch {
@@ -551,7 +551,7 @@ func (r *AgentChannelReconciler) removeControllerCredsBinding(
 // updateStatusIfChanged writes the channel's status only when a pass changed
 // it. The reconciler requeues every channel every minute, and a status write
 // per pass was the largest single write the controller made under load,
-// with nothing in it new (#174).
+// with nothing in it new.
 func (r *AgentChannelReconciler) updateStatusIfChanged(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, before *kaalmv1beta1.AgentChannelStatus,
 ) error {

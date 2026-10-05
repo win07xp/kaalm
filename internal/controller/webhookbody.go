@@ -22,8 +22,8 @@ import "net/http"
 // conversion listener requires no client authentication by design (the
 // apiserver presents no certificate), and controller-runtime's conversion
 // handler decodes the body with no limit of its own, so without a cap any
-// in-cluster caller can stream an unbounded body into controller memory
-// (#152). 64 MiB is far above any real review: the apiserver batches the
+// in-cluster caller can stream an unbounded body into controller memory.
+// 64 MiB is far above any real review: the apiserver batches the
 // objects of one API request, and Kaalm resources are kilobytes each.
 const MaxConversionBodyBytes = 64 << 20
 

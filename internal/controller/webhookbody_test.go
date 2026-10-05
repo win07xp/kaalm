@@ -57,7 +57,7 @@ func TestMaxBytesHandler(t *testing.T) {
 
 // TestConversionHandlerBounded proves the wrapper composes with the real
 // conversion handler: an oversized POST answers an error response rather
-// than streaming into memory (#152).
+// than streaming into memory.
 func TestConversionHandlerBounded(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := kaalmv1alpha1.AddToScheme(scheme); err != nil {

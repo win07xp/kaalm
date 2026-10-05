@@ -81,7 +81,7 @@ func createControlled(ctx context.Context, c client.Client, owner, obj client.Ob
 // reference, only when no object of its name exists. It reads first: for
 // the cached kinds the read comes from the informer, so a child that exists
 // costs no API call, while a create expected to fail AlreadyExists is still
-// a POST the apiserver must reject (#174, as AgentReconciler's
+// a POST the apiserver must reject (as AgentReconciler's
 // ensureServiceAccount does). An existing object owner does not control is
 // a ChildConflictError; one being deleted counts as present. Any other read
 // error is returned and nothing is created.

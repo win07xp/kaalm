@@ -48,7 +48,7 @@ func TestParseDNSSelector(t *testing.T) {
 }
 
 // The zero DNSSelector selects the defaults, and a custom selector reaches the
-// DNS egress rule of both the Agent and the AgentTask policy (#197).
+// DNS egress rule of both the Agent and the AgentTask policy.
 func TestDesiredNetworkPolicies_DNSSelector(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sup", Namespace: "team-a"}}
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "team-a"}}

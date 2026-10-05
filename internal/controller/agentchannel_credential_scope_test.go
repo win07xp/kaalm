@@ -141,8 +141,7 @@ func fakeCredsRoleNames(t *testing.T, c client.Client, ch *kaalmv1beta1.AgentCha
 }
 
 // A channel stopped by the Agent, service, or path check keeps no credential
-// Role wider than its labeled Secrets, and loses the old controller binding
-// (#421).
+// Role wider than its labeled Secrets, and loses the old controller binding.
 func TestChannel_GateScopesCredentialRole(t *testing.T) {
 	agent := func(mutate func(*kaalmv1beta1.Agent)) *kaalmv1beta1.Agent {
 		ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}}

@@ -200,7 +200,7 @@ func largeCatalog() string {
 }
 
 // A catalog over 1 MiB that the broker serves under its default cap passes
-// the probe too (#413).
+// the probe too.
 func TestMCPToolHealthChecker_LargeCatalogHealthy(t *testing.T) {
 	srv := httptest.NewServer(mcpTestHandlerWithTools(t, largeCatalog()))
 	defer srv.Close()

@@ -76,7 +76,7 @@ const activatorShutdownTimeout = 5 * time.Second
 // connection that arrives before the server starts serving.
 func (s *ActivatorServer) Listen() (*manager.Server, error) {
 	// The serving cert is re-read per handshake and ClientCAs rebuilt per
-	// connection, so cert-manager rotation applies without a restart (#149).
+	// connection, so cert-manager rotation applies without a restart.
 	// Probes present no cert; the activate handler enforces per-path.
 	loader := &tlsutil.CertLoader{CertFile: s.CertFile, KeyFile: s.KeyFile, CAFile: s.CAFile}
 	tlsCfg, err := loader.ServerMTLSConfig(tls.VerifyClientCertIfGiven)

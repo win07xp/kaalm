@@ -336,7 +336,7 @@ func misconfiguredBudgetObjects(name, period string) []client.Object {
 
 // A provider that fails a credential or configuration check still mirrors
 // gateway readiness, reduces the budget and agent-spend partials, and keeps
-// the one-minute budget cadence; the probe still never runs (#425).
+// the one-minute budget cadence; the probe still never runs.
 func TestModelProvider_FailedCheckStillReducesBudget(t *testing.T) {
 	ctx := context.Background()
 	period := gateway.PeriodKey("monthly", time.Now())
@@ -583,7 +583,7 @@ func staleBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
 }
 
 // A provider that stops tracking a budget, or whose budget ConfigMap is
-// gone, clears the budget status nothing maintains any more (#446).
+// gone, clears the budget status nothing maintains any more.
 func TestModelProvider_BudgetOffClearsBudgetStatus(t *testing.T) {
 	ctx := context.Background()
 	period := gateway.PeriodKey("monthly", time.Now())
@@ -671,7 +671,7 @@ func TestModelProvider_BudgetOffClearsBudgetStatus(t *testing.T) {
 }
 
 // Turning a budget off drops the provider's canonical-spend series, and
-// only that provider's (#446).
+// only that provider's.
 func TestModelProvider_BudgetOffDropsCanonicalGauge(t *testing.T) {
 	period := gateway.PeriodKey("monthly", time.Now())
 	providerBudgetCanonical.WithLabelValues("gauge-off", "team-a", period).Set(95)

@@ -987,7 +987,7 @@ func (r *AgentReconciler) ensureServiceAccount(ctx context.Context, agent *kaalm
 	}
 	// Read from the informer before writing: a create that is expected to
 	// fail AlreadyExists is still a POST the apiserver has to reject, once
-	// per agent per pass (#174).
+	// per agent per pass.
 	var current corev1.ServiceAccount
 	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current)
 	if err == nil {
@@ -1535,7 +1535,7 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// bookkeeping the Agent never reads), and for a model provider the
 		// spec or the set of namespaces its budget blocks. Without the
 		// predicates every in-use count the class reconciler wrote and every
-		// ten-second budget publish re-enqueued the whole fleet (#174).
+		// ten-second budget publish re-enqueued the whole fleet.
 		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(r.agentsForClass),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.agentsForProvider),
@@ -1674,7 +1674,7 @@ func (r *AgentReconciler) agentsForToolProvider(ctx context.Context, obj client.
 // updateStatusIfChanged writes the Agent's status only when a pass changed
 // it: every Agent reconciles on its periodic requeue and on every event
 // from its children, and a status write per pass was one of the three
-// per-agent writes a settled fleet paid for every pass (#174).
+// per-agent writes a settled fleet paid for every pass.
 func (r *AgentReconciler) updateStatusIfChanged(
 	ctx context.Context, agent *kaalmv1beta1.Agent, before *kaalmv1beta1.AgentStatus,
 ) error {

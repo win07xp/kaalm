@@ -132,7 +132,7 @@ func expectTaskCertificate(t *testing.T, c client.Client, task *kaalmv1beta1.Age
 }
 
 // A task Certificate deleted while the task runs is re-created with the same
-// Secret name, and the task keeps its phase, Ready, and Pod (#424).
+// Secret name, and the task keeps its phase, Ready, and Pod.
 func TestTask_CertificateDeletedWhileRunningIsRecreated(t *testing.T) {
 	mkWorkloadClass(t, "wc-cert-restore", nil)
 	pod := provisionRunningTask(t, "cert-restore", "wc-cert-restore", nil)
@@ -347,7 +347,8 @@ func agentReportedChildren(t *testing.T, task *kaalmv1beta1.AgentTask) []client.
 }
 
 // The pre-Pod pass reads each child before creating it, so children that
-// exist cost no create (#174's rule, for tasks).
+// exist cost no create (createIfMissing's read-before-create rule, applied
+// to tasks).
 func TestEnsureTaskChildren_ReadsBeforeCreating(t *testing.T) {
 	task := restoreTask("reads-first", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
 	task.Spec.Completion.Condition = ""
@@ -365,7 +366,7 @@ func TestEnsureTaskChildren_ReadsBeforeCreating(t *testing.T) {
 
 // A running task's deleted children come back with new UIDs while its Pod
 // keeps running, and the task still completes through the re-created
-// mailbox (#445).
+// mailbox.
 func TestTask_DeletedChildrenRecreatedWhileRunning(t *testing.T) {
 	mkWorkloadClass(t, "wc-child-restore", nil)
 	pod := provisionRunningTask(t, "child-restore", "wc-child-restore", nil)

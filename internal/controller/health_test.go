@@ -65,7 +65,7 @@ func TestHTTPProbe_HealthyWithinTimeout(t *testing.T) {
 }
 
 // TestHTTPProbe_RedirectIsRefused: the probe's default client never follows
-// a redirect (#153): Go's cross-host header stripping does not cover
+// a redirect: Go's cross-host header stripping does not cover
 // x-api-key. The 302 answer classifies as a transient error, and the
 // redirect target is never requested.
 func TestHTTPProbe_RedirectIsRefused(t *testing.T) {
