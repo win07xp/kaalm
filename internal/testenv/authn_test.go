@@ -31,7 +31,7 @@ import (
 // TestBackdatedCertAuthn_SurvivesBackwardClockStep proves the admin
 // credentials stay valid when the wall clock steps back right after they are
 // minted, which is what makes the apiserver answer 401 on a host whose clock
-// is stepped backward (#310).
+// is stepped backward.
 func TestBackdatedCertAuthn_SurvivesBackwardClockStep(t *testing.T) {
 	authn, err := newBackdatedCertAuthn()
 	if err != nil {

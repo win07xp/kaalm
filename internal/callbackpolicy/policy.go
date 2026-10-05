@@ -56,7 +56,7 @@ func New(entries []string) Policy {
 }
 
 // NewFromCSVStrict builds a Policy from a comma-separated flag value and
-// rejects entries the lenient constructor would silently misread (#155): an
+// rejects entries the lenient constructor would silently misread: an
 // entry containing "/" must parse as a CIDR, because a typo'd CIDR would
 // otherwise demote to a DNS suffix that never matches; a bare IP address
 // becomes a single-address CIDR so it matches by resolved address; anything
@@ -121,7 +121,7 @@ func dnsSuffixShaped(s string) bool {
 // but outside net.IP.IsPrivate: RFC 6598 shared address space (100.64.0.0/10,
 // the Pod or Service CIDR in several managed clusters and CNIs) and RFC 2544
 // benchmarking space (198.18.0.0/15). Denied by default at the same tier as
-// private space, so the allowlist can open them deliberately (rule 22, #154).
+// private space, so the allowlist can open them deliberately (rule 22).
 var internalInPractice = mustCIDRs("100.64.0.0/10", "198.18.0.0/15")
 
 func mustCIDRs(entries ...string) []*net.IPNet {

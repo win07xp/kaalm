@@ -275,7 +275,7 @@ func largeListResult() string {
 }
 
 // A zero-value Client reads a catalog over 1 MiB, in either encoding,
-// because its default limit is the broker's default cap (#413).
+// because its default limit is the broker's default cap.
 func TestClient_LargeToolsList(t *testing.T) {
 	for _, sse := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sse=%v", sse), func(t *testing.T) {

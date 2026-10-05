@@ -46,7 +46,7 @@ import (
 // read is then a cache hit and a rotation lands on the watch event, which is
 // the contract docs/src/security/credentials.md describes. Without a watcher
 // every read is a live GET through the client's rate limiter, which is what
-// capped every gateway replica at 20 requests per second (#170) and
+// capped every gateway replica at 20 requests per second and
 // throttled the controller's per-minute channel validation.
 //
 // Subscribers learn when a watched Secret changes, so a caller can act on a

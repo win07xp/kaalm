@@ -102,9 +102,9 @@ func writeRotated(t *testing.T, path string, content []byte, bump time.Duration)
 	}
 }
 
-// TestDialTLSContext_ReloadsPerDial proves the #149 contract for the client
-// half: new connections pick up rotated client certificates and rotated CA
-// bundles without rebuilding the http.Client.
+// TestDialTLSContext_ReloadsPerDial proves the restart-free rotation contract
+// for the client half: new connections pick up rotated client certificates
+// and rotated CA bundles without rebuilding the http.Client.
 func TestDialTLSContext_ReloadsPerDial(t *testing.T) {
 	caA := newTestPKI(t, "ca-a")
 	caB := newTestPKI(t, "ca-b")
@@ -169,9 +169,10 @@ func TestDialTLSContext_ReloadsPerDial(t *testing.T) {
 	}
 }
 
-// TestServerMTLSConfig_RebuildsClientCAs proves the #149 contract for the
-// listener half: the ClientCAs pool handed to a new connection reflects the
-// bundle on disk, and the serving cert resolves through the loader.
+// TestServerMTLSConfig_RebuildsClientCAs proves the restart-free rotation
+// contract for the listener half: the ClientCAs pool handed to a new
+// connection reflects the bundle on disk, and the serving cert resolves
+// through the loader.
 func TestServerMTLSConfig_RebuildsClientCAs(t *testing.T) {
 	caA := newTestPKI(t, "ca-a")
 	caB := newTestPKI(t, "ca-b")
