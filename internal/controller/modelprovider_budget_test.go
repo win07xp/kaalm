@@ -406,67 +406,8 @@ func TestModelProvider_FailedCheckStillReducesBudget(t *testing.T) {
 				t.Errorf("probe ran %d times, want 0", n)
 			}
 
-			var got kaalmv1beta1.ModelProvider
-			if err := c.Get(ctx, types.NamespacedName{Name: name}, &got); err != nil {
-				t.Fatal(err)
-			}
-			if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady); c == nil ||
-				c.Status != metav1.ConditionFalse || c.Reason != tc.reason {
-				t.Errorf("Ready = %+v, want False %s", c, tc.reason)
-			}
-			if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable); c == nil ||
-				c.Status != metav1.ConditionTrue || c.Reason != "GatewayReady" {
-				t.Errorf("GatewayReachable = %+v, want True GatewayReady", c)
-			}
-			var current, archived bool
-			for _, u := range got.Status.BudgetUsage {
-				switch {
-				case u.Namespace == "team-a" && u.Period == period:
-					current = u.State == "Blocked" && u.SpentUSD == "95.00"
-				case u.Namespace == "team-z" && u.Period == "1999-01":
-					archived = true
-				}
-			}
-			if !current || !archived {
-				t.Errorf("budgetUsage = %+v, want team-a Blocked at 95.00 and team-z archived", got.Status.BudgetUsage)
-			}
-			if got.Status.ClusterSpentUSD != "95.00" {
-				t.Errorf("clusterSpentUSD = %q, want 95.00", got.Status.ClusterSpentUSD)
-			}
-			if tc.config {
-				if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible); c == nil ||
-					c.Status != metav1.ConditionTrue || c.Message != "stale finding" {
-					t.Errorf("FallbackIneligible = %+v, want it kept as it was", c)
-				}
-			}
-
-			var cm corev1.ConfigMap
-			if err := c.Get(ctx, types.NamespacedName{Namespace: testOperatorNamespace,
-				Name: gateway.BudgetConfigMapName(name)}, &cm); err != nil {
-				t.Fatal(err)
-			}
-			if cm.Data[gateway.CanonicalKey] != `{"team-a":"95.00"}` {
-				t.Errorf("_canonical = %q, want team-a 95.00", cm.Data[gateway.CanonicalKey])
-			}
-			if _, ok := cm.Data[gateway.RetiredKey]; !ok {
-				t.Error("_retired not written")
-			}
-			for _, k := range []string{name + "-gw-dead", name + "-gw-old"} {
-				if _, ok := cm.Data[k]; ok {
-					t.Errorf("budget key %s not pruned", k)
-				}
-			}
-			var spend corev1.ConfigMap
-			if err := c.Get(ctx, types.NamespacedName{Namespace: testOperatorNamespace,
-				Name: gateway.AgentSpendConfigMapName(name)}, &spend); err != nil {
-				t.Fatal(err)
-			}
-			if _, ok := spend.Data[gateway.CanonicalKey]; !ok {
-				t.Error("agent-spend _canonical not written")
-			}
-			if _, ok := spend.Data[name+"-gw-dead"]; ok {
-				t.Error("agent-spend dead key not pruned")
-			}
+			expectMisconfiguredStatus(t, c, name, period, tc.reason, tc.config)
+			expectMisconfiguredFold(t, c, name)
 		})
 	}
 
@@ -496,6 +437,82 @@ func TestModelProvider_FailedCheckStillReducesBudget(t *testing.T) {
 			t.Errorf("GatewayReachable = %+v, want True", c)
 		}
 	})
+}
+
+// expectMisconfiguredStatus checks a misconfigured provider's status after
+// one pass: Ready names reason, GatewayReachable and the budget usage are
+// fresh, and, after a configuration exit, FallbackIneligible is kept.
+func expectMisconfiguredStatus(t *testing.T, c client.Client, name, period, reason string, config bool) {
+	t.Helper()
+	ctx := context.Background()
+	var got kaalmv1beta1.ModelProvider
+	if err := c.Get(ctx, types.NamespacedName{Name: name}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady); c == nil ||
+		c.Status != metav1.ConditionFalse || c.Reason != reason {
+		t.Errorf("Ready = %+v, want False %s", c, reason)
+	}
+	if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable); c == nil ||
+		c.Status != metav1.ConditionTrue || c.Reason != "GatewayReady" {
+		t.Errorf("GatewayReachable = %+v, want True GatewayReady", c)
+	}
+	var current, archived bool
+	for _, u := range got.Status.BudgetUsage {
+		switch {
+		case u.Namespace == "team-a" && u.Period == period:
+			current = u.State == "Blocked" && u.SpentUSD == "95.00"
+		case u.Namespace == "team-z" && u.Period == "1999-01":
+			archived = true
+		}
+	}
+	if !current || !archived {
+		t.Errorf("budgetUsage = %+v, want team-a Blocked at 95.00 and team-z archived", got.Status.BudgetUsage)
+	}
+	if got.Status.ClusterSpentUSD != "95.00" {
+		t.Errorf("clusterSpentUSD = %q, want 95.00", got.Status.ClusterSpentUSD)
+	}
+	if config {
+		if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionFallbackIneligible); c == nil ||
+			c.Status != metav1.ConditionTrue || c.Message != "stale finding" {
+			t.Errorf("FallbackIneligible = %+v, want it kept as it was", c)
+		}
+	}
+
+}
+
+// expectMisconfiguredFold checks the budget and agent-spend ConfigMaps were
+// reduced: canonical written, dead and old-period keys pruned.
+func expectMisconfiguredFold(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	ctx := context.Background()
+	var cm corev1.ConfigMap
+	if err := c.Get(ctx, types.NamespacedName{Namespace: testOperatorNamespace,
+		Name: gateway.BudgetConfigMapName(name)}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	if cm.Data[gateway.CanonicalKey] != `{"team-a":"95.00"}` {
+		t.Errorf("_canonical = %q, want team-a 95.00", cm.Data[gateway.CanonicalKey])
+	}
+	if _, ok := cm.Data[gateway.RetiredKey]; !ok {
+		t.Error("_retired not written")
+	}
+	for _, k := range []string{name + "-gw-dead", name + "-gw-old"} {
+		if _, ok := cm.Data[k]; ok {
+			t.Errorf("budget key %s not pruned", k)
+		}
+	}
+	var spend corev1.ConfigMap
+	if err := c.Get(ctx, types.NamespacedName{Namespace: testOperatorNamespace,
+		Name: gateway.AgentSpendConfigMapName(name)}, &spend); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := spend.Data[gateway.CanonicalKey]; !ok {
+		t.Error("agent-spend _canonical not written")
+	}
+	if _, ok := spend.Data[name+"-gw-dead"]; ok {
+		t.Error("agent-spend dead key not pruned")
+	}
 }
 
 // End to end: a provider stopped at a configuration check still folds a
