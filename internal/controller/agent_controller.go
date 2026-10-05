@@ -69,12 +69,12 @@ const (
 var gateRequeue = 30 * time.Second
 
 // AgentReconciler owns the full child-resource tree for a persistent agent:
-// Certificate, ServiceAccount, Service, PVC, NetworkPolicy, and the Pod, with
-// Pod creation gated on certificate readiness. It drives the Pending ->
-// Provisioning -> Running path of the Agent state machine plus Degraded,
-// Failed, and Terminating. The Idle/Hibernation cycle, activity fan-out, and
-// wake handling are gateway-coupled and land in a later phase. See
-// docs/src/controller/reconcilers/agent.md.
+// Certificate, ServiceAccount, Service, PVC, NetworkPolicy, and the Pod. Pod
+// creation and replacement wait until the Certificate is Ready; an existing
+// Pod keeps running meanwhile. It drives the whole Agent state machine:
+// Pending -> Provisioning -> Running, the Idle and Hibernation cycle from the
+// gateway's activity data, wake handling, and Degraded, Failed, and
+// Terminating. See docs/src/controller/reconcilers/agent.md.
 type AgentReconciler struct {
 	client.Client
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
