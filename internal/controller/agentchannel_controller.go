@@ -260,10 +260,19 @@ func (r *AgentChannelReconciler) scopeCredentialRoles(
 	}
 	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), channel, channelCheckRoleName(channel.Name),
 		r.OperatorNamespace, refs); err != nil {
+		reason, msg = kaalmv1beta1.ReasonInvalidReference, "ensuring the credential check Role failed: "+err.Error()
 		if _, ok := asChildConflict(err); ok {
-			return kaalmv1beta1.ReasonChildConflict, err.Error()
+			reason, msg = kaalmv1beta1.ReasonChildConflict, err.Error()
 		}
-		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential check Role failed: " + err.Error()
+		// Without the check Role no label can be read, so no Secret counts
+		// as opted in (readChannelSecrets follows the same rule for a failed
+		// read): the gateway's Role is emptied. The Secrets are not read,
+		// since every read would be Forbidden and retried. The next pass
+		// retries both writes.
+		if err := r.ensureCredentialRole(ctx, channel, nil); err != nil {
+			log.FromContext(ctx).V(1).Info("emptying the channel credential Role failed", "error", err)
+		}
+		return reason, msg
 	}
 	reason, msg, optedIn := r.validateSecrets(ctx, channel)
 	if err := r.ensureCredentialRole(ctx, channel, optedIn); err != nil {

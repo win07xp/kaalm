@@ -247,3 +247,31 @@ func TestChannel_GatedPassWritesNothing(t *testing.T) {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, time.Minute)
 	}
 }
+
+// Without its check Role the controller cannot read a label, so no Secret
+// counts as opted in: the credential Role is emptied, not left granting
+// every referenced Secret.
+func TestChannel_CheckRoleConflictEmptiesCredentialRole(t *testing.T) {
+	cases := []struct {
+		name   string
+		extra  []client.Object
+		reason string
+	}{
+		{"valid Agent", []client.Object{
+			&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}},
+		}, kaalmv1beta1.ReasonChildConflict},
+		{"no Agent", nil, kaalmv1beta1.ReasonAgentNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := scopeFakeChannel("/channels/default/gate-ch")
+			foreign := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: channelCheckRoleName(ch.Name), Namespace: "default"}}
+			objs := append(preScopeObjects(t, ch), foreign)
+			c := scopeReconcile(t, ch, append(objs, tc.extra...)...)
+			expectFakeReady(t, c, ch, tc.reason)
+			if got := fakeCredsRoleNames(t, c, ch); len(got) != 0 {
+				t.Errorf("credential Role grants %v, want no Secret", got)
+			}
+		})
+	}
+}
