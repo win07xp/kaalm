@@ -26,7 +26,7 @@ Every gateway error is a JSON object with a single top-level `error`:
 
 `Retry-After`, when present, is integer seconds, never an HTTP date.
 
-Three responses on the `:8443` listener are not in this envelope. A JSON-RPC header mismatch on the tool broker is a JSON-RPC error object with code `-32020` and HTTP status `400` ([The tool plane](../tool-plane.md)). The broker's stream cap is a JSON-RPC error event ([Tool broker stream cap](#tool-broker-stream-cap)). Upstream provider errors relayed through the LLM proxy are the provider's own body. A stream that fails after it starts ends with an [error event](#mid-stream-error-event) instead of an error response.
+Three responses on the `:8443` listener are not in this envelope. A JSON-RPC header mismatch on the tool broker is a JSON-RPC error object with code `-32020` and HTTP status `400` ([The tool plane](../tool-plane.md)). A tool broker stream that fails after it starts ends with a JSON-RPC error event ([Tool broker stream error event](#tool-broker-stream-error-event)). Upstream provider errors relayed through the LLM proxy are the provider's own body. A stream that fails after it starts ends with an [error event](#mid-stream-error-event) instead of an error response.
 
 ## LLM Gateway error responses
 
@@ -42,7 +42,7 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 405 | `invalid_request` | no | | A method other than `POST` on `/v1/mcp/{toolProvider}`, or the wrong method on an internal mTLS path ([Listener TLS](../listener-tls.md)); the response carries `Allow` |
 | 409 | `stale_pod` | yes | | `POST /v1/task/complete`: the calling Pod is not the task's current Pod ([409 Conflict](task-complete.md#409-conflict)) |
 | 413 | `request_too_large` | no | | The body exceeds `gateway.maxLLMRequestBodyBytes` (default 4 MiB) on a proxy path, or `gateway.mcpMaxBodyBytes` (default 4 MiB) on the broker |
-| 413 | `response_too_large` | no | | A buffered or `tools/list` response from the tool provider exceeds `gateway.mcpMaxBodyBytes` (default 4 MiB). A stream already under way reports it as a [JSON-RPC error event](#tool-broker-stream-cap) instead |
+| 413 | `response_too_large` | no | | A buffered or `tools/list` response from the tool provider exceeds `gateway.mcpMaxBodyBytes` (default 4 MiB). A stream already under way reports it as a [JSON-RPC error event](#tool-broker-stream-error-event) instead |
 | 429 | `rate_limited` | yes | Seconds until the bucket admits again, at least 1 ([Retry-After](../llm/budgets-and-rate-limits.md#retry-after)) | The per-namespace request bucket for the model or tool provider is empty, or the model's token bucket is at or below zero |
 | 429 | `budget_exhausted` | no after a block; yes after throttles only | seconds to the next period, or the throttle's `1` | The provider, or the provider and every fallback, is budget-blocked or throttled |
 | 429 | `budget_throttled` | yes | `1` | Hard enforcement: the boundary admission slot is held by another request |
@@ -52,10 +52,10 @@ The `:8443` listener raises these on the three LLM proxy paths and on `/v1/mcp/{
 | 503 | `provider_unavailable` | no | | Every attempt in the fallback walk failed to connect |
 | 503 | `budget_state_unavailable` | yes | `1` | Hard enforcement: the replica cannot verify budget state and fails closed |
 | 503 | `tool_unavailable` | yes | `1` | The tool server is unreachable, redirects, or answers with a `5xx` |
-| 503 | `tool_unavailable` | yes | | The credential Secret is unreadable, or reading the tool server's response failed |
+| 503 | `tool_unavailable` | yes | | The credential Secret is unreadable, or reading the tool server's response failed. A stream already under way reports it as a [JSON-RPC error event](#tool-broker-stream-error-event) instead |
 | 503 | `tool_unavailable` | no | | The tool server rejects the gateway credential, or returns an unparseable `tools/list` response |
 | 504 | `provider_timeout` | no | | Every attempt in the fallback walk timed out |
-| 504 | `tool_timeout` | yes | | The brokered call exceeded `gateway.mcpUpstreamTimeout` (default 120s) |
+| 504 | `tool_timeout` | yes | | The brokered call exceeded `gateway.mcpUpstreamTimeout` (default 120s). A stream already under way reports it as a [JSON-RPC error event](#tool-broker-stream-error-event) instead |
 
 Notes on the rows:
 
@@ -91,22 +91,30 @@ data: {"error":{"type":"provider_error","message":"the provider stream failed be
 
 The event carries no `retryable` field. The agent has partial output, so whether to retry the whole request is its own decision. Usage that arrived before the failure is settled as spend.
 
-### Tool broker stream cap
+### Tool broker stream error event
 
-A tool server's SSE response that passes `gateway.mcpMaxBodyBytes` has already sent its status line, so the broker cannot answer `413`. It relays the stream up to the cap, does not forward the line that passes it, and ends the stream with one JSON-RPC error event:
+A tool broker SSE stream that fails after its status line is sent ends with one JSON-RPC error event for the request's `id`, code `-32603`. Once a stream has started, the caller cannot get a `413`, `503`, or `504`, so the event is where the failure shows up. For a stream that passes the size cap:
 
 ```text
 data: {"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"tool provider response exceeds 4194304 bytes; the stream is truncated","data":{"type":"response_too_large"}}}
 ```
 
-This is a JSON-RPC message, not the gateway envelope, so the caller's MCP client reads it and raises a failed call.
+This is a JSON-RPC message, not the gateway envelope, so the caller's MCP client reads it and raises a failed call. A line the failure cut off is not forwarded, so the error event is the next complete message the caller parses.
 
 | Field | Value |
 |---|---|
 | `id` | The `id` of the request that opened the stream |
 | `error.code` | `-32603` |
-| `error.data.type` | `response_too_large` |
+| `error.data.type` | One of the values in the next table |
 | `error.message` | Free text. Branch on `error.data.type`, not the message. |
+
+| `error.data.type` | Raised when |
+|---|---|
+| `response_too_large` | The stream passes `gateway.mcpMaxBodyBytes` (default 4 MiB) |
+| `tool_timeout` | `gateway.mcpUpstreamTimeout` (default 120s) passes while the stream is under way |
+| `tool_unavailable` | Reading the tool server's stream failed for any other reason, such as a dropped connection |
+
+The event carries no `retryable` field. The caller may already have progress events, and a `tools/call` may already have run at the tool server, so whether to retry is the caller's decision.
 
 ## User Gateway error responses
 

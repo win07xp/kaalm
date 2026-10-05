@@ -39,6 +39,12 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   resource. If an admission webhook or a Pod Security policy denied the Pod,
   the message names the webhook or policy. Fix the cause, and the Pod follows
   within 30 seconds.
+- **A rejected write of another object**: reason `ChildWriteRejected`, and the
+  message names the object (such as the Service or PVC) and the cause. If it
+  says `exceeded quota`, run `kubectl describe resourcequota -n NAMESPACE`. If
+  a webhook or policy denied the write, the message names it. Fix the cause,
+  and the Agent continues within 30 seconds. A `Running` Agent can also show
+  this reason while its Pod keeps serving.
 
 An image or namespace the class does not allow is not a `Provisioning`
 symptom: the Agent goes `Degraded` instead.
@@ -65,7 +71,7 @@ symptom: the Agent goes `Degraded` instead.
   *condition*, reason `BudgetExhausted` (see S10). LLM calls return
   `429 budget_exhausted` and the provider status shows `state: Blocked` for
   the namespace. The condition clears when the budget frees up (period reset,
-  ceiling increase, or spend drop).
+  ceiling increase, spend drop, or the budget is turned off).
 
 ## Agent never goes `Idle` or `Hibernated`
 
@@ -262,8 +268,9 @@ Read the error type; the three cases behave differently:
 kubectl describe agenttask TASK_NAME     # conditions carry the reason
 ```
 
-A task with `Ready=False` and reason `PodCreateRejected` has no Pod because the
-apiserver refused it. The causes and checks are the same as for an Agent (see
+A task with `Ready=False` and reason `PodCreateRejected` or `ChildWriteRejected`
+has no Pod because the apiserver refused the Pod or another object it needs.
+The causes and checks are the same as for an Agent (see
 [Agent stuck in `Pending` or `Provisioning`](#agent-stuck-in-pending-or-provisioning)).
 The task waits in `Provisioning` and checks again every 30 seconds. If the
 cause is still there after five minutes, the attempt fails with reason

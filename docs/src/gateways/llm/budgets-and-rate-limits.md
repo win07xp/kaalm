@@ -18,7 +18,7 @@ Five data movements make up the exchange. The first four run in every replica; t
 | Count | replica | Every LLM call | Adds the call's cost to its in-memory counter |
 | Publish | replica | Every 10s, and immediately on settle inside the hard-mode boundary region | Writes its own key |
 | Fold | replica | Every ConfigMap watch event, with the 10s tick as a backstop | Rebuilds its enforcement view from peers' current-period keys and `_retired` |
-| Reduce | reconciler | Every reconcile pass: event-driven, plus a requeue at the provider's health-check interval (60s by default) | Writes `_retired`, `_canonical`, and `status.budgetUsage` from every key |
+| Reduce | reconciler | Every reconcile pass, including a pass where the provider fails a check. Passes are event-driven plus timed requeues ([ModelProviderReconciler Timing](../../controller/reconcilers/modelprovider.md#timing)) | Writes `_retired`, `_canonical`, and `status.budgetUsage` from every key |
 
 ![Sequence diagram of the replica side of the exchange. At startup a replica reads _canonical to seed its counter. On every LLM call it increments the in-memory counter. Every 10 seconds each replica server-side-applies its own key. On every ConfigMap watch event a replica folds its peers' partials plus _retired into its enforcement view.](../../diagrams/budget-exchange-publish.svg)
 

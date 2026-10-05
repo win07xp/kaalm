@@ -66,7 +66,8 @@ not issued the certificate yet; a running Pod keeps serving and keeps its
 phase while new or replacement Pods wait; see
 [AgentReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agent.md#certificate-wait-with-a-running-pod)),
 `PodCreateRejected` (the apiserver refused the Pod create; the message says
-why),
+why), `ChildWriteRejected` (the apiserver refused a write of another object,
+such as the Service or PVC; the message says which and why),
 `ChildConflict` (an object the Agent does not own already has the name of
 one of its children, such as its NetworkPolicy; the message names it, and
 deleting it lets the Agent continue, unless an AgentTask of the same name owns
@@ -93,9 +94,13 @@ but terminal here).
 
 Conditions: `Ready` (provisioning gate; `ChildConflict` holds a task
 without a Pod, as it holds an Agent (an Agent of the same name can own the
-conflicting object, with the same fix as above), and `PodCreateRejected` holds a task
-whose Pod create the apiserver refused until the five-minute provisioning
-deadline fails the attempt) and `Completed` (terminal verdict,
+conflicting object, with the same fix as above), and `PodCreateRejected` or
+`ChildWriteRejected` holds a task whose Pod create or other write the apiserver
+refused until the five-minute provisioning deadline fails the attempt. On a
+task with a Pod, `ChildConflict` and `ChildWriteRejected` are reported while
+the task keeps running and can still complete, time out, or retry; see
+[AgentTaskReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agenttask.md#task-child-resource-convergence))
+and `Completed` (terminal verdict,
 reason `TaskSucceeded`, `TaskFailed`, `TimeoutExceeded`, or
 `TimeoutSucceeded`). A completion call from the wrong Pod is refused with
 `409 stale_pod` (retryable by the task), and one against a finished task

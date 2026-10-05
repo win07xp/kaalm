@@ -95,14 +95,22 @@ never on the message:
 | 413 | `request_too_large`, `response_too_large` | no | The request or the server's response exceeded the broker's body cap. If the answer is a stream already under way, you get a JSON-RPC error event instead; the note after the table covers it |
 | 429 | `rate_limited` | after `Retry-After` | Your namespace hit the provider's `requestsPerMinute` ceiling. `Retry-After` is the seconds until your namespace's bucket admits a call again. It can be minutes when the provider's `requestsPerMinute` is below the gateway replica count |
 | 503 | `tool_unavailable` | per `error.retryable` | The tool server is unreachable, answered with a 5xx, rejected the injected credential, or sent a `tools/list` answer the broker cannot parse; a platform problem, not yours. The first two are retryable; the last two are not |
-| 504 | `tool_timeout` | yes | The call exceeded the broker's upstream timeout |
+| 504 | `tool_timeout` | yes | The call exceeded the broker's upstream timeout. On a stream already under way you get the error event in the note below instead |
 
-A response stream that passes the body cap ends with a JSON-RPC error as its
-last event instead of a `413`: code `-32603`, `error.data.type`
-`response_too_large`. Your MCP SDK raises it as a failed call. The fix is the
-same as for the `413`: ask for less, or ask the platform team about
-`gateway.mcpMaxBodyBytes`. The event's fields are in
-[Error reference](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/api/errors.md#tool-broker-stream-cap).
+A response stream that fails after it started ends with a JSON-RPC error as
+its last event, code `-32603`, which your MCP SDK raises as a failed call.
+Branch on `error.data.type`:
+
+- `response_too_large`: ask for less, or ask the platform team about
+  `gateway.mcpMaxBodyBytes`.
+- `tool_timeout`: the call ran past the broker's timeout. If the tool is slow
+  by design, ask the platform team about `gateway.mcpUpstreamTimeout`.
+- `tool_unavailable`: the tool server dropped the stream. This is a platform
+  problem, not yours.
+
+The event has no retryable flag. The tool may already have run, so decide per
+tool whether retrying is safe. The event's fields are in
+[Error reference](https://github.com/win07xp/kaalm/blob/main/docs/src/gateways/api/errors.md#tool-broker-stream-error-event).
 
 A protocol-level 4xx from the tool server itself relays verbatim (an
 expired upstream session's 404, for example), so normal MCP session

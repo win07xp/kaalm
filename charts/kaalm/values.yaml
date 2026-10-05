@@ -157,7 +157,8 @@ gateway:
   maxMessageBodyBytes: 1Mi
   maxLLMRequestBodyBytes: 4Mi
   # Request and response body cap for a brokered MCP tool call (the gateway's
-  # --mcp-max-body-bytes).
+  # --mcp-max-body-bytes). The controller's ToolProvider health probe reads up
+  # to the same size (the controller's --mcp-max-body-bytes).
   mcpMaxBodyBytes: 4Mi
   # Dedicated health/readiness port (kubelet probes).
   healthPort: 8081
