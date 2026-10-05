@@ -478,8 +478,8 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		Eventually(func() string { return phase("agent", "up-keeper") }, "300s", "5s").Should(Equal("Running"))
 		Eventually(func() string { return keeperCondition("Ready", "status") }, "120s", "5s").Should(Equal("True"))
 		Eventually(func() string { return keeperCondition("PodUpToDate", "reason") }, "120s", "5s").
-			Should(Equal("PodCurrent"))
-		// Exact: a PodCurrent message from before the delete names
+			Should(Equal("Current"))
+		// Exact: a Current message from before the delete names
 		// up-keeper-tls, a prefix of the new name.
 		Eventually(func() string { return keeperCondition("PodUpToDate", "message") }, "120s", "5s").
 			Should(Equal("agent Pod matches the derived spec and mounts the Certificate's TLS Secret " + want))
