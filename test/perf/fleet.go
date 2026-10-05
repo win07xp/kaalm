@@ -66,7 +66,7 @@ func loadgenAgentObj(ns, class, image string, providers []string) *kaalmv1beta1.
 
 // activeClass is the max-active fleet's class: the same BestEffort shape as
 // the e2e class, with every lifecycle timer at zero so nothing ever idles.
-// It admits the three perf providers so the loadgen agent identity can call
+// It admits the four perf providers so the loadgen agent identity can call
 // them (an empty allowedProviders admits none).
 func activeClass() *kaalmv1beta1.AgentClass {
 	c := &kaalmv1beta1.AgentClass{

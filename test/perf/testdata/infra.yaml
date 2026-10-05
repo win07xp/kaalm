@@ -1,6 +1,6 @@
 # In-cluster infrastructure for the perf harness (test/perf), applied once per
 # run before any phase. Everything the fleet needs that is not itself under
-# measurement: the namespace, the mock LLM provider it forwards to, the three
+# measurement: the namespace, the mock LLM provider it forwards to, the four
 # ModelProviders the gateway legs target, the channel secrets, and the load
 # generator's ServiceAccount.
 apiVersion: v1
@@ -120,7 +120,7 @@ type: Opaque
 stringData:
   token: dummy-mock-credential
 ---
-# Three providers on one mock, told apart by endpoint prefix so the mock's
+# Four providers on one mock, told apart by endpoint prefix so the mock's
 # per-prefix counters and the gateway's per-provider histograms separate the
 # legs. Health probes are off: the mock's liveness is not under measurement.
 #
