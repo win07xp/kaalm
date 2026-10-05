@@ -1153,13 +1153,7 @@ func (r *AgentReconciler) convergePod(
 	// runs before the crash-loop check, so a change replaces a crash-looping
 	// Pod; that is how a rollout halted by a failed replacement recovers.
 	waiting := false
-	cause := ""
-	mounted := tlsSecretOf(pod)
-	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
-		cause = "derived Pod spec changed"
-	} else if mounted != "" && tlsSecret != "" && mounted != tlsSecret {
-		cause = fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s", tlsSecret, mounted)
-	}
+	cause, mounted := podDriftCause(pod, eff, tlsSecret)
 	if cause != "" && !certHeld {
 		replace, err := r.admitDriftReplacement(ctx, agent, class, cause)
 		if err != nil {
@@ -1216,6 +1210,21 @@ func (r *AgentReconciler) convergePod(
 		ready(false, "PodNotReady", "agent Pod is not ready")
 	}
 	return waiting, false, nil
+}
+
+// podDriftCause says why pod no longer matches the Agent, or "" when it does,
+// and returns the Secret the Pod's TLS volume names. The spec hash is checked
+// first; the TLS Secret counts only when the Pod has a TLS volume and the
+// Certificate names a Secret.
+func podDriftCause(pod *corev1.Pod, eff effectiveAgentSpec, tlsSecret string) (cause, mounted string) {
+	mounted = tlsSecretOf(pod)
+	switch {
+	case pod.Annotations[annotationPodSpecHash] != podSpecHash(eff):
+		return "derived Pod spec changed", mounted
+	case mounted != "" && tlsSecret != "" && mounted != tlsSecret:
+		return fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s", tlsSecret, mounted), mounted
+	}
+	return "", mounted
 }
 
 // withDriftRetry makes sure an Agent waiting for a drift slot is retried
