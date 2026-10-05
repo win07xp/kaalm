@@ -77,6 +77,29 @@ func createControlled(ctx context.Context, c client.Client, owner, obj client.Ob
 	return rejectedWrite("creating", c.Scheme(), obj, err)
 }
 
+// createIfMissing creates obj, which already carries the owner's controller
+// reference, only when no object of its name exists. It reads first: for
+// the cached kinds the read comes from the informer, so a child that exists
+// costs no API call, while a create expected to fail AlreadyExists is still
+// a POST the apiserver must reject (#174, as AgentReconciler's
+// ensureServiceAccount does). An existing object owner does not control is
+// a ChildConflictError; one being deleted counts as present. Any other read
+// error is returned and nothing is created.
+func createIfMissing(ctx context.Context, c client.Client, owner, obj client.Object) error {
+	current, ok := obj.DeepCopyObject().(client.Object)
+	if !ok {
+		return fmt.Errorf("%T is not a client.Object", obj)
+	}
+	err := c.Get(ctx, types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, current)
+	if err == nil {
+		return requireControlled(c.Scheme(), owner, current)
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	return createControlled(ctx, c, owner, obj)
+}
+
 // verifyControlled reads the object named like obj and checks that owner
 // controls it. obj itself is left unchanged.
 func verifyControlled(ctx context.Context, c client.Client, owner, obj client.Object) error {

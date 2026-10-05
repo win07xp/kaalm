@@ -711,30 +711,24 @@ func (r *AgentTaskReconciler) taskViolation(
 	return "", ""
 }
 
-// ensureTaskChildren converges the SA, PVC, NetworkPolicy, FQDN policy, and, for
-// agentReported tasks only, the completion mailbox with its scoped RBAC.
+// ensureTaskChildren converges the SA, PVC, NetworkPolicy, the completion
+// mailbox with its scoped RBAC (agentReported tasks only), and the FQDN
+// policy before the Pod is created; restoreTaskChildren covers the time
+// after. Each child is read before it is created, so one that exists costs
+// no API call.
 func (r *AgentTaskReconciler) ensureTaskChildren(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
 ) error {
 	// A name taken by an object the task does not control is a
 	// ChildConflictError: adopting it would run the Pod under a policy or
 	// grant Kaalm did not write.
-	create := func(obj client.Object) error {
+	for _, obj := range desiredTaskChildren(task, class, eff, r.OperatorNamespace, r.DNS) {
 		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
 			return err
 		}
-		return createControlled(ctx, r.Client, task, obj)
-	}
-	if err := create(desiredTaskServiceAccount(task)); err != nil {
-		return err
-	}
-	if eff.PersistenceOn {
-		if err := create(desiredTaskPVC(task, class, eff)); err != nil {
+		if err := createIfMissing(ctx, r.Client, task, obj); err != nil {
 			return err
 		}
-	}
-	if err := create(desiredTaskNetworkPolicy(task, class, r.OperatorNamespace, r.DNS)); err != nil {
-		return err
 	}
 	hosts := class.Spec.Network.Egress.AllowedHosts
 	supported, err := fqdnSupported(r.FQDNSupport)
@@ -746,21 +740,7 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 		}
 		supported = false
 	}
-	if err := ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported); err != nil {
-		return err
-	}
-	if isAgentReported(task) {
-		if err := create(desiredCompletionConfigMap(task)); err != nil {
-			return err
-		}
-		if err := create(desiredCompletionRole(task)); err != nil {
-			return err
-		}
-		if err := create(desiredCompletionRoleBinding(task, r.OperatorNamespace)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
 }
 
 // restoreTaskChildren re-creates children deleted while the task has a live

@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -353,6 +354,27 @@ func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operato
 			Volumes: volumes,
 		},
 	}
+}
+
+// desiredTaskChildren lists a task's per-attempt children other than the
+// Certificate, the FQDN policy, and the Secret-access Roles, which have
+// their own paths: the ServiceAccount, the PVC when persistence is on, the
+// NetworkPolicy, and, for agentReported tasks, the completion mailbox with
+// its Role and RoleBinding.
+func desiredTaskChildren(
+	task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
+	operatorNamespace string, dns DNSSelector,
+) []client.Object {
+	objs := []client.Object{desiredTaskServiceAccount(task)}
+	if eff.PersistenceOn {
+		objs = append(objs, desiredTaskPVC(task, class, eff))
+	}
+	objs = append(objs, desiredTaskNetworkPolicy(task, class, operatorNamespace, dns))
+	if isAgentReported(task) {
+		objs = append(objs, desiredCompletionConfigMap(task), desiredCompletionRole(task),
+			desiredCompletionRoleBinding(task, operatorNamespace))
+	}
+	return objs
 }
 
 // desiredTaskNetworkPolicy mirrors the Agent policy minus every ingress rule:

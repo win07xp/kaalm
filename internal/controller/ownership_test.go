@@ -379,3 +379,85 @@ func TestCreateControlled_WrapsRejection(t *testing.T) {
 		t.Error("a name conflict must not count as a rejected write")
 	}
 }
+
+// countingCreates is an interceptor that counts Create calls and fails Get
+// with getErr when it is set.
+func countingCreates(creates *int, getErr error) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			*creates++
+			return c.Create(ctx, obj, opts...)
+		},
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption) error {
+			if getErr != nil {
+				return getErr
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+// createIfMissing reads before it writes: a child that exists costs no
+// create, a foreign one is a conflict, and a missing one is created.
+func TestCreateIfMissing(t *testing.T) {
+	scheme := testScheme(t)
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "cim", Namespace: "default", UID: "task-uid"}}
+	newSA := func() *corev1.ServiceAccount {
+		sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "task-cim", Namespace: "default"}}
+		if err := controllerutil.SetControllerReference(task, sa, scheme); err != nil {
+			t.Fatal(err)
+		}
+		return sa
+	}
+	build := func(creates *int, getErr error, objs ...client.Object) client.Client {
+		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+			WithInterceptorFuncs(countingCreates(creates, getErr)).Build()
+	}
+
+	t.Run("missing is created", func(t *testing.T) {
+		var creates int
+		c := build(&creates, nil)
+		if err := createIfMissing(ctxT(), c, task, newSA()); err != nil {
+			t.Fatal(err)
+		}
+		if creates != 1 {
+			t.Errorf("creates = %d, want 1", creates)
+		}
+	})
+	t.Run("present and controlled", func(t *testing.T) {
+		var creates int
+		c := build(&creates, nil, newSA())
+		if err := createIfMissing(ctxT(), c, task, newSA()); err != nil || creates != 0 {
+			t.Errorf("err = %v, creates = %d; want nil and 0", err, creates)
+		}
+	})
+	t.Run("present and foreign", func(t *testing.T) {
+		var creates int
+		foreign := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "task-cim", Namespace: "default"}}
+		c := build(&creates, nil, foreign)
+		err := createIfMissing(ctxT(), c, task, newSA())
+		if _, ok := asChildConflict(err); !ok || creates != 0 {
+			t.Errorf("err = %v, creates = %d; want a ChildConflictError and 0", err, creates)
+		}
+	})
+	t.Run("being deleted counts as present", func(t *testing.T) {
+		var creates int
+		sa := newSA()
+		sa.Finalizers = []string{"test/hold"}
+		c := build(&creates, nil, sa)
+		if err := c.Delete(ctxT(), sa); err != nil {
+			t.Fatal(err)
+		}
+		if err := createIfMissing(ctxT(), c, task, newSA()); err != nil || creates != 0 {
+			t.Errorf("err = %v, creates = %d; want nil and 0", err, creates)
+		}
+	})
+	t.Run("read error", func(t *testing.T) {
+		var creates int
+		c := build(&creates, errors.New("cache unavailable"))
+		if err := createIfMissing(ctxT(), c, task, newSA()); err == nil || creates != 0 {
+			t.Errorf("err = %v, creates = %d; want the read error and 0", err, creates)
+		}
+	})
+}

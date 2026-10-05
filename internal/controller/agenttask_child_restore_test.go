@@ -288,3 +288,39 @@ func TestDriveRunning_RestoresReadyAfterClassGate(t *testing.T) {
 	}
 	expectStoredReady(t, storedTask(t, c, task), metav1.ConditionTrue, "PodRunning")
 }
+
+// agentReportedChildren are every child desiredTaskChildren lists for an
+// agentReported task without persistence, each controlled by task.
+func agentReportedChildren(t *testing.T, task *kaalmv1beta1.AgentTask) []client.Object {
+	t.Helper()
+	objs := []client.Object{
+		desiredTaskServiceAccount(task),
+		desiredTaskNetworkPolicy(task, &kaalmv1beta1.AgentClass{}, "kaalm-system", DNSSelector{}),
+		desiredCompletionConfigMap(task),
+		desiredCompletionRole(task),
+		desiredCompletionRoleBinding(task, "kaalm-system"),
+	}
+	for _, obj := range objs {
+		if err := controllerutil.SetControllerReference(task, obj, testScheme(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return objs
+}
+
+// The pre-Pod pass reads each child before creating it, so children that
+// exist cost no create (#174's rule, for tasks).
+func TestEnsureTaskChildren_ReadsBeforeCreating(t *testing.T) {
+	task := restoreTask("reads-first", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
+	task.Spec.Completion.Condition = ""
+	var creates int
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(agentReportedChildren(t, task)...).
+		WithInterceptorFuncs(countingCreates(&creates, nil)).Build()
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system"}
+	if err := r.ensureTaskChildren(context.Background(), task, &kaalmv1beta1.AgentClass{}, effectiveTaskSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 0 {
+		t.Errorf("creates = %d, want 0 when every child exists", creates)
+	}
+}
