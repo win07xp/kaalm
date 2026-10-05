@@ -79,19 +79,42 @@ func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, gw Ga
 }
 
 // Handler builds the console mux: the read API under /api/v1 (bearer token
-// or session), and the server-rendered pages.
+// or session), and the server-rendered pages. Every response under /api/
+// uses the JSON envelope: an unknown path answers 404 and a wrong method
+// 405. The page routes keep the mux's plain-text errors.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// The read API (docs/src/console/overview.md, The Read API). Additive
 	// within a minor series.
-	mux.HandleFunc("GET /api/v1/namespaces", s.requireAPI(s.apiNamespaces))
-	mux.HandleFunc("GET /api/v1/namespaces/{ns}/agents", s.requireAPI(s.apiFleet))
-	mux.HandleFunc("GET /api/v1/namespaces/{ns}/agents/{name}", s.requireAPI(s.apiAgent))
-	mux.HandleFunc("GET /api/v1/namespaces/{ns}/tasks", s.requireAPI(s.apiTasks))
-	mux.HandleFunc("GET /api/v1/namespaces/{ns}/channels", s.requireAPI(s.apiChannels))
-	mux.HandleFunc("GET /api/v1/namespaces/{ns}/spend", s.requireAPI(s.apiSpend))
-	mux.HandleFunc("POST /api/v1/namespaces/{ns}/agents/{name}/chat", s.requireAPI(s.apiChat))
+	routes := []struct {
+		method, path string
+		h            http.HandlerFunc
+	}{
+		{http.MethodGet, "/api/v1/namespaces", s.apiNamespaces},
+		{http.MethodGet, "/api/v1/namespaces/{ns}/agents", s.apiFleet},
+		{http.MethodGet, "/api/v1/namespaces/{ns}/agents/{name}", s.apiAgent},
+		{http.MethodGet, "/api/v1/namespaces/{ns}/tasks", s.apiTasks},
+		{http.MethodGet, "/api/v1/namespaces/{ns}/channels", s.apiChannels},
+		{http.MethodGet, "/api/v1/namespaces/{ns}/spend", s.apiSpend},
+		{http.MethodPost, "/api/v1/namespaces/{ns}/agents/{name}/chat", s.apiChat},
+	}
+	// A method pattern wins over its method-less twin, which wins over the
+	// /api/ catch-all, so each answer is the most specific one.
+	var paths []string
+	methods := map[string][]string{}
+	for _, rt := range routes {
+		mux.HandleFunc(rt.method+" "+rt.path, s.requireAPI(rt.h))
+		if _, seen := methods[rt.path]; !seen {
+			paths = append(paths, rt.path)
+		}
+		methods[rt.path] = append(methods[rt.path], rt.method)
+	}
+	for _, p := range paths {
+		mux.HandleFunc(p, apiMethodNotAllowed(methods[p]))
+	}
+	mux.HandleFunc("/api/", apiNotFound)
+	mux.HandleFunc("/api", apiNotFound)
 
 	s.uiRoutes(mux)
 	return mux

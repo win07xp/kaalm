@@ -42,8 +42,8 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// credentialRecords returns the "llm credential unavailable" records in buf.
-func credentialRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
+// logRecords returns the records in buf whose message is msg.
+func logRecords(t *testing.T, buf *bytes.Buffer, msg string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -54,7 +54,7 @@ func credentialRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("log line is not JSON: %v (%s)", err, line)
 		}
-		if rec["msg"] == "llm credential unavailable" {
+		if rec["msg"] == msg {
 			out = append(out, rec)
 		}
 	}
@@ -85,7 +85,7 @@ func TestLLMProxy_CredentialRefusalLoggedOncePerMinute(t *testing.T) {
 
 	send()
 	send()
-	recs := credentialRecords(t, buf)
+	recs := logRecords(t, buf, "llm credential unavailable")
 	if len(recs) != 1 {
 		t.Fatalf("want 1 credential record within a minute, got %d (%s)", len(recs), buf.String())
 	}
@@ -99,7 +99,7 @@ func TestLLMProxy_CredentialRefusalLoggedOncePerMinute(t *testing.T) {
 
 	clock = clock.Add(time.Minute)
 	send()
-	if got := len(credentialRecords(t, buf)); got != 2 {
+	if got := len(logRecords(t, buf, "llm credential unavailable")); got != 2 {
 		t.Errorf("want a second record after a minute, got %d", got)
 	}
 }
@@ -126,7 +126,7 @@ func TestLLMProxy_CredentialRefusalLoggedWhenFallbackServes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("backup should serve the request, got %d", resp.StatusCode)
 	}
-	recs := credentialRecords(t, buf)
+	recs := logRecords(t, buf, "llm credential unavailable")
 	if len(recs) != 1 || recs[0]["provider"] != "prov" {
 		t.Fatalf("want one credential record naming prov, got %v", recs)
 	}
@@ -158,7 +158,7 @@ func TestForwardOnce_CancelledContextNotLogged(t *testing.T) {
 	if !res.fallilable || res.class != classConnect || res.err == nil {
 		t.Errorf("cancelled refusal = %+v, want fallilable connect-class error", res)
 	}
-	if got := len(credentialRecords(t, buf)); got != 0 {
+	if got := len(logRecords(t, buf, "llm credential unavailable")); got != 0 {
 		t.Fatalf("cancelled request should not log, got %d records", got)
 	}
 
@@ -166,7 +166,7 @@ func TestForwardOnce_CancelledContextNotLogged(t *testing.T) {
 	if !res.fallilable || res.class != classConnect {
 		t.Errorf("live refusal = %+v, want fallilable connect-class", res)
 	}
-	if got := len(credentialRecords(t, buf)); got != 1 {
+	if got := len(logRecords(t, buf, "llm credential unavailable")); got != 1 {
 		t.Errorf("live request after a cancelled one should log once, got %d records", got)
 	}
 }

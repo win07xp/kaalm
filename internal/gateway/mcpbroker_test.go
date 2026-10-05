@@ -22,9 +22,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -83,6 +87,12 @@ func mcpCall(tool string) map[string]any {
 // error.type, returning the decoded body message.
 func expectMCPError(t *testing.T, resp *http.Response, status int, errType string) string {
 	t.Helper()
+	return expectMCPErrorBody(t, resp, status, errType).Message
+}
+
+// expectMCPErrorBody is expectMCPError returning the whole decoded error.
+func expectMCPErrorBody(t *testing.T, resp *http.Response, status int, errType string) errorBody {
+	t.Helper()
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != status {
 		body, _ := io.ReadAll(resp.Body)
@@ -96,7 +106,7 @@ func expectMCPError(t *testing.T, resp *http.Response, status int, errType strin
 	if envelope.Error.Type != errType {
 		t.Fatalf("error.type = %q, want %q (raw body: %s)", envelope.Error.Type, errType, raw)
 	}
-	return envelope.Error.Message
+	return envelope.Error
 }
 
 func TestMCPBroker_MTLSHappyPath(t *testing.T) {
@@ -324,6 +334,94 @@ func TestMCPBroker_ToolsListFullForBearerTier(t *testing.T) {
 	}
 }
 
+// toolsListUpstreamError is an upstream tools/list answer carrying a
+// JSON-RPC error with data.
+const toolsListUpstreamError = `{"jsonrpc":"2.0","id":3,"error":{"code":-32022,` +
+	`"message":"unsupported protocol version","data":{"supported":["2025-06-18"]}}}`
+
+// relayToolsList serves upstream as the tools/list answer, in JSON or as one
+// SSE event, and returns the broker's reply body after checking it is a 200
+// normalized to JSON.
+func relayToolsList(t *testing.T, mode, upstream string) []byte {
+	t.Helper()
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		if mode == "sse" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", upstream)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, upstream)
+	})
+	h.seedToolRoute()
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+		map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	return raw
+}
+
+// An upstream JSON-RPC error on tools/list reaches the caller whole, its
+// data included (#414).
+func TestMCPBroker_ToolsListRelaysUpstreamError(t *testing.T) {
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := relayToolsList(t, mode, toolsListUpstreamError)
+			var got struct {
+				Error struct {
+					Code    int             `json:"code"`
+					Message string          `json:"message"`
+					Data    json.RawMessage `json:"data"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("decode %s: %v", raw, err)
+			}
+			if got.Error.Code != -32022 || got.Error.Message != "unsupported protocol version" {
+				t.Errorf("error = %+v, want code -32022 and the upstream message", got.Error)
+			}
+			if string(got.Error.Data) != `{"supported":["2025-06-18"]}` {
+				t.Errorf("error.data = %s, want the upstream data unchanged (body: %s)", got.Error.Data, raw)
+			}
+		})
+	}
+}
+
+// A re-encoded tools/list answer carries result or error, never both:
+// JSON-RPC 2.0 allows one, and strict MCP clients reject the pair.
+func TestMCPBroker_ToolsListAnswerCarriesOneMember(t *testing.T) {
+	list := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search"},{"name":"fetch_page"}]}}`
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, c := range []struct {
+				name, upstream, want, absent string
+			}{
+				{"success", list, "result", "error"},
+				{"error", toolsListUpstreamError, "error", "result"},
+			} {
+				var members map[string]json.RawMessage
+				raw := relayToolsList(t, mode, c.upstream)
+				if err := json.Unmarshal(raw, &members); err != nil {
+					t.Fatalf("%s: decode %s: %v", c.name, raw, err)
+				}
+				if _, ok := members[c.want]; !ok {
+					t.Errorf("%s: reply has no %q member: %s", c.name, c.want, raw)
+				}
+				if _, ok := members[c.absent]; ok {
+					t.Errorf("%s: reply carries %q too: %s", c.name, c.absent, raw)
+				}
+			}
+		})
+	}
+}
+
 func TestMCPBroker_SessionOwnership(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -488,6 +586,126 @@ func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
 		expectMCPError(t, resp, http.StatusGatewayTimeout, errToolTimeout)
 	})
+}
+
+// Errors the buffered relay raises name the provider, as every broker error
+// does (#412).
+func TestMCPBroker_BufferedRelayErrors(t *testing.T) {
+	t.Run("response too large names the provider", func(t *testing.T) {
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":7,"result":{"blob":%q}}`, strings.Repeat("y", 4096))
+		})
+		h.server.Config.MCPMaxBodyBytes = 1024
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		body := expectMCPErrorBody(t, resp, http.StatusRequestEntityTooLarge, errResponseTooLarge)
+		if body.Provider != "search" {
+			t.Errorf("provider = %q, want search", body.Provider)
+		}
+		if body.Retryable {
+			t.Error("response_too_large must not be retryable")
+		}
+	})
+
+	// The upstream timeout covers the response body too: a tool server
+	// that sends headers and then stalls is a timeout, not unavailable.
+	t.Run("response read times out", func(t *testing.T) {
+		blocked := make(chan struct{})
+		h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"jsonrpc":`)
+			w.(http.Flusher).Flush()
+			select {
+			case <-blocked:
+			case <-r.Context().Done():
+			}
+		})
+		// LIFO: blocked must close before the harness cleanup waits on the
+		// parked handler.
+		t.Cleanup(func() { close(blocked) })
+		h.server.Config.MCPUpstreamTimeout = 200 * time.Millisecond
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		retryAfter := resp.Header.Get("Retry-After")
+		body := expectMCPErrorBody(t, resp, http.StatusGatewayTimeout, errToolTimeout)
+		if body.Provider != "search" || !body.Retryable || retryAfter != "" {
+			t.Errorf("envelope = %+v, Retry-After %q; want provider search, retryable, no Retry-After", body, retryAfter)
+		}
+		if got := mcpCalls(h, "web_search", errToolTimeout); got != 1 {
+			t.Errorf("tool_timeout calls = %v, want 1", got)
+		}
+	})
+
+	// The tools/list relay parses the answer before it relays it; a read
+	// that hits the upstream timeout there is a timeout too, in either
+	// encoding.
+	for _, enc := range []struct{ name, ct, partial string }{
+		{"tools/list read times out json", "application/json", `{"jsonrpc":`},
+		{"tools/list read times out sse", "text/event-stream",
+			"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"},
+	} {
+		t.Run(enc.name, func(t *testing.T) {
+			blocked := make(chan struct{})
+			h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set("Content-Type", enc.ct)
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, enc.partial)
+				w.(http.Flusher).Flush()
+				select {
+				case <-blocked:
+				case <-r.Context().Done():
+				}
+			})
+			t.Cleanup(func() { close(blocked) })
+			h.server.Config.MCPUpstreamTimeout = 200 * time.Millisecond
+			h.seedToolRoute()
+			cert := agentCert(t, h.ca)
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+				map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+			retryAfter := resp.Header.Get("Retry-After")
+			body := expectMCPErrorBody(t, resp, http.StatusGatewayTimeout, errToolTimeout)
+			if body.Provider != "search" || !body.Retryable || retryAfter != "" {
+				t.Errorf("envelope = %+v, Retry-After %q; want provider search, retryable, no Retry-After", body, retryAfter)
+			}
+		})
+	}
+}
+
+// TestRelayMCPBuffered_ReadFailure drives the read-error branch directly: a
+// connection reset mid-body is timing-dependent over a real socket.
+func TestRelayMCPBuffered_ReadFailure(t *testing.T) {
+	rec := httptest.NewRecorder()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
+			Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET})),
+	}
+	_, status, errType, detail := relayMCPBuffered(rec, resp, 1024, "search")
+	if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
+		t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
+	}
+	body := expectMCPErrorBody(t, rec.Result(), http.StatusServiceUnavailable, errToolUnavailable)
+	if body.Provider != "search" {
+		t.Errorf("provider = %q, want search", body.Provider)
+	}
+	if !body.Retryable {
+		t.Error("a read failure must be retryable")
+	}
+	// The transport error names the tool server's address, which is
+	// platform tier: it goes to the audit detail, not to the caller.
+	if strings.Contains(body.Message, "10.43.7.9") {
+		t.Errorf("caller message leaks the tool server address: %q", body.Message)
+	}
+	if !strings.Contains(detail, "10.43.7.9") {
+		t.Errorf("audit detail = %q, want the transport error", detail)
+	}
 }
 
 // retryable is set per cause, not by status: two 503s can disagree, and a
@@ -1191,4 +1409,79 @@ func TestMCPBroker_ModernToolsListRewritesCacheScope(t *testing.T) {
 	if parsed.Result.TTLMs != 60000 {
 		t.Fatalf("ttlMs = %d, want the upstream hint preserved", parsed.Result.TTLMs)
 	}
+}
+
+// TestRelayFilteredToolsList_FailureDetail pins the audit detail on the
+// tools/list relay's failures: the caller message stays fixed, and the
+// cause goes to the audit record, as on the buffered relay.
+func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
+	h.server.Config.MCPMaxBodyBytes = 1024
+	msg := mcpRequest{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "tools/list"}
+
+	t.Run("read failure", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
+				Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET})),
+		}
+		_, status, errType, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
+			t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
+		}
+		body := expectMCPErrorBody(t, rec.Result(), http.StatusServiceUnavailable, errToolUnavailable)
+		if strings.Contains(body.Message, "10.43.7.9") {
+			t.Errorf("caller message leaks the tool server address: %q", body.Message)
+		}
+		if !strings.HasPrefix(detail, body.Message+": ") || !strings.Contains(detail, "10.43.7.9") {
+			t.Errorf("audit detail = %q, want the caller message and the transport error", detail)
+		}
+		// A failed read is a transport fault, retryable as on the buffered
+		// relay; only a list that arrived whole and will not parse is not.
+		if !body.Retryable {
+			t.Error("read failure retryable = false, want true")
+		}
+		if want := `reading the response from tool provider "search" failed`; body.Message != want {
+			t.Errorf("message = %q, want %q", body.Message, want)
+		}
+	})
+
+	t.Run("unparseable list", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader("not json")),
+		}
+		_, status, errType, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
+			t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
+		}
+		body := expectMCPErrorBody(t, rec.Result(), http.StatusServiceUnavailable, errToolUnavailable)
+		if body.Retryable {
+			t.Error("unparseable list retryable = true, want false")
+		}
+		if want := "tool provider returned an unparseable tools/list response"; body.Message != want {
+			t.Errorf("message = %q, want %q", body.Message, want)
+		}
+		if !strings.HasPrefix(detail, body.Message+": ") {
+			t.Errorf("audit detail = %q, want the caller message and the parse error", detail)
+		}
+	})
+
+	t.Run("response too large", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", 4096))),
+		}
+		_, status, _, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		body := expectMCPErrorBody(t, rec.Result(), http.StatusRequestEntityTooLarge, errResponseTooLarge)
+		if status != http.StatusRequestEntityTooLarge || detail != body.Message {
+			t.Errorf("outcome = (%d, detail %q), want (413, the caller message %q)", status, detail, body.Message)
+		}
+	})
 }

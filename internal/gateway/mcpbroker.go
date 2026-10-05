@@ -338,8 +338,9 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	forwarded := false
 
 	// tctx becomes the tool.call span context once the route is authorized;
-	// the deny closure captures the variable, so late denials carry the
-	// error status onto the span (early ones hit the noop span, harmlessly).
+	// the deny closure captures the variable, so late denials and relay
+	// failures carry the error status onto the span (early denials hit the
+	// noop span, harmlessly).
 	tctx := r.Context()
 
 	// retryable is set per cause, as the LLM proxy does, never derived from
@@ -465,7 +466,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Retryable: the proxy treats a credential read failure as a
 		// connect-class failure, and the Secret read can be transient.
-		slog.Warn("mcp credential unavailable", "provider", tp.Name, "error", err)
+		s.logToolCredentialRefusal(r.Context(), tp.Name, err)
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
 			"tool provider credential is unavailable", true, 0, msg.Method, toolName)
 		return
@@ -534,40 +535,75 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	var respBytes int64
 	var relayStatus int
 	var relayErrType string
+	var relayDetail string
 	switch {
 	case msg.Method == "tools/list" && resp.StatusCode < 300:
-		respBytes, relayStatus, relayErrType = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
+		respBytes, relayStatus, relayErrType, relayDetail = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
 	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
 		respBytes, relayErrType = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID)
 		relayStatus = resp.StatusCode
 	default:
-		respBytes, relayStatus, relayErrType = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes())
+		respBytes, relayStatus, relayErrType, relayDetail = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes(), providerName)
 	}
-	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, "",
+	if relayErrType != "" {
+		spanError(tctx, relayErrType)
+	}
+	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, relayDetail,
 		start, reqBytes, respBytes, forwarded)
+}
+
+// logToolCredentialRefusal writes the credential-refusal warning, paced per
+// ToolProvider. A done context means the caller left, which is not a
+// credential problem, so it neither logs nor spends the provider's slot.
+func (s *Server) logToolCredentialRefusal(ctx context.Context, provider string, err error) {
+	if ctx.Err() == nil && s.toolCredentialLog.allow(provider, credentialLogInterval) {
+		slog.Warn("mcp credential unavailable", "provider", provider, "error", err)
+	}
 }
 
 // relayFilteredToolsList buffers a tools/list response (either encoding),
 // filters the tool set to the caller's grant, and replies as plain JSON: the
-// model never sees a tool it cannot call. It returns the outcome triple the
-// caller funnels into mcpResult.
+// model never sees a tool it cannot call. It returns the outcome the caller
+// funnels into mcpResult, the audit detail included.
 func (s *Server) relayFilteredToolsList(
 	w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter, providerName string,
-) (respBytes int64, status int, errType string) {
+) (respBytes int64, status int, errType, detail string) {
 	// Reading one byte past the cap tells a list that passes it apart from
 	// one that ends exactly at it.
 	maxBytes := s.mcpMaxBodyBytes()
 	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
-	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), lr, msg.ID)
+	rr := &readErrRecorder{r: lr}
+	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), rr, msg.ID)
 	if err != nil && lr.N <= 0 {
+		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
-			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes), Provider: providerName}, 0)
-		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
+			Message: msg, Provider: providerName}, 0)
+		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		// The upstream timeout covers the response, not only its headers.
+		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
+		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusGatewayTimeout, errToolTimeout, msg
+	}
+	if err != nil && rr.err != nil {
+		// A failed read is a transport fault, retryable as on the buffered
+		// relay. Its error names the tool server's address, which is
+		// platform tier: the cause goes to the audit detail, and the caller
+		// gets a fixed message.
+		msg := fmt.Sprintf("reading the response from tool provider %q failed", providerName)
+		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + rr.err.Error()
 	}
 	if err != nil {
+		// The list arrived whole and does not parse: a retry gets the same
+		// answer.
+		msg := "tool provider returned an unparseable tools/list response"
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
-			Message: "tool provider returned an unparseable tools/list response", Provider: providerName}, 0)
-		return 0, http.StatusServiceUnavailable, errToolUnavailable
+			Message: msg, Provider: providerName}, 0)
+		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
 	if parsed.Error == nil && parsed.Result != nil {
 		var result map[string]json.RawMessage
@@ -596,29 +632,60 @@ func (s *Server) relayFilteredToolsList(
 	}
 	encoded, err := json.Marshal(parsed)
 	if err != nil {
+		msg := "re-encoding tools/list response"
 		writeError(w, http.StatusInternalServerError, errorBody{Type: errInternalUnavailable,
-			Message: "re-encoding tools/list response", Provider: providerName, Retryable: true}, 0)
-		return 0, http.StatusInternalServerError, errInternalUnavailable
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusInternalServerError, errInternalUnavailable, msg + ": " + err.Error()
 	}
 	bodyLog("mcp response", encoded)
 	w.Header().Set("Content-Type", "application/json")
 	n, _ := w.Write(encoded)
-	return int64(n), http.StatusOK, ""
+	return int64(n), http.StatusOK, "", ""
+}
+
+// readErrRecorder passes reads through and keeps the first error other than
+// io.EOF, so a caller can tell a failed read apart from a body that arrived
+// whole and does not parse.
+type readErrRecorder struct {
+	r   io.Reader
+	err error
+}
+
+func (rr *readErrRecorder) Read(p []byte) (int, error) {
+	n, err := rr.r.Read(p)
+	if err != nil && err != io.EOF && rr.err == nil {
+		rr.err = err
+	}
+	return n, err
 }
 
 // relayMCPBuffered copies a JSON response through, capped. It returns the
-// outcome triple the caller funnels into mcpResult.
-func relayMCPBuffered(w http.ResponseWriter, resp *http.Response, maxBytes int64) (respBytes int64, status int, errType string) {
+// outcome the caller funnels into mcpResult, the audit detail included.
+func relayMCPBuffered(
+	w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
+) (respBytes int64, status int, errType, detail string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if errors.Is(err, context.DeadlineExceeded) {
+		// The upstream timeout covers the response, not only its headers.
+		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
+		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusGatewayTimeout, errToolTimeout, msg
+	}
 	if err != nil {
+		// The transport error names the tool server's address, which is
+		// platform tier: it goes to the audit detail, and the caller gets a
+		// fixed message, as on the unreachable path.
+		msg := fmt.Sprintf("reading the response from tool provider %q failed", providerName)
 		writeError(w, http.StatusServiceUnavailable, errorBody{Type: errToolUnavailable,
-			Message: "reading tool provider response: " + err.Error(), Retryable: true}, 0)
-		return 0, http.StatusServiceUnavailable, errToolUnavailable
+			Message: msg, Provider: providerName, Retryable: true}, 0)
+		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
 	if int64(len(body)) > maxBytes {
+		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
-			Message: fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)}, 0)
-		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge
+			Message: msg, Provider: providerName}, 0)
+		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
 	}
 	bodyLog("mcp response", body)
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -626,7 +693,7 @@ func relayMCPBuffered(w http.ResponseWriter, resp *http.Response, maxBytes int64
 	}
 	w.WriteHeader(resp.StatusCode)
 	n, _ := w.Write(body)
-	return int64(n), resp.StatusCode, ""
+	return int64(n), resp.StatusCode, "", ""
 }
 
 // relayMCPStream forwards SSE events as they arrive, flushing per line,

@@ -1,0 +1,121 @@
+/*
+Copyright 2026 The Kaalm Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package gateway
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+const mcpCredentialMsg = "mcp credential unavailable"
+
+// refusedToolHarness seeds the tool route with the ToolProvider's
+// credential refused, and a fake clock on the broker's log throttle.
+func refusedToolHarness(t *testing.T) (*harness, *time.Time) {
+	t.Helper()
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h.seedToolRoute()
+	delete(h.store.toolCreds, "search")
+	clock := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	h.server.toolCredentialLog.now = func() time.Time { return clock }
+	return h, &clock
+}
+
+func sendRefusedToolCall(t *testing.T, h *harness) {
+	t.Helper()
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+}
+
+func TestMCPBroker_CredentialRefusalLoggedOncePerMinute(t *testing.T) {
+	buf := captureSlog(t)
+	h, clock := refusedToolHarness(t)
+
+	sendRefusedToolCall(t, h)
+	sendRefusedToolCall(t, h)
+	recs := logRecords(t, buf, mcpCredentialMsg)
+	if len(recs) != 1 {
+		t.Fatalf("want 1 credential record within a minute, got %d (%s)", len(recs), buf.String())
+	}
+	if rec := recs[0]; rec["level"] != "WARN" || rec["provider"] != "search" {
+		t.Errorf("record = %v, want level WARN and provider search", rec)
+	}
+	if e, _ := recs[0]["error"].(string); !strings.Contains(e, "no credential for search") {
+		t.Errorf("error field %q should carry the store's reason", e)
+	}
+	// The per-call audit record is not paced.
+	if got := len(logRecords(t, buf, "mcp call")); got != 2 {
+		t.Errorf("want an audit record per refused call, got %d", got)
+	}
+
+	*clock = clock.Add(time.Minute)
+	sendRefusedToolCall(t, h)
+	if got := len(logRecords(t, buf, mcpCredentialMsg)); got != 2 {
+		t.Errorf("want a second record after a minute, got %d", got)
+	}
+}
+
+// A ModelProvider and a ToolProvider can share a name: an LLM refusal
+// line must not hold back the tool one.
+func TestMCPBroker_CredentialLogSeparateFromLLM(t *testing.T) {
+	buf := captureSlog(t)
+	h, _ := refusedToolHarness(t)
+	h.server.credentialLog.allow("search", credentialLogInterval)
+
+	sendRefusedToolCall(t, h)
+	if got := len(logRecords(t, buf, mcpCredentialMsg)); got != 1 {
+		t.Fatalf("want 1 tool credential record, got %d", got)
+	}
+}
+
+// A caller that left is not a credential problem: no line, and no slot
+// spent that would hide the next live refusal.
+func TestMCPBroker_CancelledContextNotLogged(t *testing.T) {
+	buf := captureSlog(t)
+	h, _ := refusedToolHarness(t)
+
+	call := func(ctx context.Context) {
+		t.Helper()
+		body, _ := json.Marshal(mcpCall("web_search"))
+		req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		ctx = context.WithValue(ctx, callerKey{}, &caller{Namespace: "team-a"})
+		rec := httptest.NewRecorder()
+		h.server.handleMCPBroker(rec, req.WithContext(ctx))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503 (%s)", rec.Code, rec.Body)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	call(ctx)
+	if got := len(logRecords(t, buf, mcpCredentialMsg)); got != 0 {
+		t.Fatalf("cancelled request should not log, got %d records", got)
+	}
+	call(context.Background())
+	if got := len(logRecords(t, buf, mcpCredentialMsg)); got != 1 {
+		t.Errorf("live request after a cancelled one should log once, got %d records", got)
+	}
+}

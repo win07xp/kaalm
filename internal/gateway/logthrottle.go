@@ -21,10 +21,16 @@ import (
 	"time"
 )
 
+// credentialLogInterval paces the credential-refusal warning of the LLM
+// proxy and the MCP broker: one line per provider per minute per replica.
+// The refusal repeats on every request until the Secret is fixed, and the
+// ModelProvider or ToolProvider status already carries the cause.
+const credentialLogInterval = time.Minute
+
 // logThrottle paces a log line per key: allow grants at most one line per key
 // in each interval. The zero value is ready to use. Entries are never pruned,
-// because the keys are ModelProvider names and that set is bounded by the
-// cluster's provider count.
+// because the keys are ModelProvider or ToolProvider names (one throttle per
+// plane) and that set is bounded by the cluster's provider count.
 type logThrottle struct {
 	mu   sync.Mutex
 	last map[string]time.Time

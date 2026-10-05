@@ -395,11 +395,6 @@ func (s *Server) candidateRequest(
 	return outBody, inboundPath, adapter, candAdapter, model
 }
 
-// credentialLogInterval paces the credential-refusal warning: one line per
-// provider per minute per replica. The refusal repeats on every request until
-// the Secret is fixed, and the ModelProvider status already carries the cause.
-const credentialLogInterval = time.Minute
-
 // forwardOnce forwards the request to a single candidate provider under the
 // forwarded-header contract and classifies the outcome for the fallback walk.
 // The attempt runs under an attemptWatchdog: UpstreamTimeout bounds the wait

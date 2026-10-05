@@ -171,6 +171,10 @@ type Server struct {
 
 	// credentialLog paces the LLM proxy's credential-refusal warning.
 	credentialLog logThrottle
+	// toolCredentialLog paces the MCP broker's credential-refusal warning.
+	// It is separate from credentialLog because a ModelProvider and a
+	// ToolProvider can share a name.
+	toolCredentialLog logThrottle
 
 	// AgentResolver resolves agent Service names for delivery dials; nil
 	// means net.DefaultResolver. Tests inject a counting fake.
