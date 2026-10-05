@@ -239,3 +239,15 @@ func TestEnsureFQDNPolicy_RejectedWrite(t *testing.T) {
 		t.Errorf("delete of a policy already gone: err = %v, want nil", err)
 	}
 }
+
+func TestRestoreFQDNPolicy_UnsupportedOrNoHostsTouchesNothing(t *testing.T) {
+	// A nil client would panic on any call.
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "t1", Namespace: "team"}}
+	if err := restoreFQDNPolicy(context.Background(), nil, nil, task, nil, []string{"x.example.com"},
+		DNSSelector{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreFQDNPolicy(context.Background(), nil, nil, task, nil, nil, DNSSelector{}, true); err != nil {
+		t.Fatal(err)
+	}
+}

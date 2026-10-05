@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -227,7 +228,7 @@ func (r *AgentTaskReconciler) drive(
 	case kaalmv1beta1.TaskPending, kaalmv1beta1.TaskProvisioning:
 		return r.driveProvisioning(ctx, task, class, eff, pod)
 	case kaalmv1beta1.TaskRunning:
-		return r.driveRunning(ctx, task, pod)
+		return r.driveRunning(ctx, task, class, eff, pod)
 	case kaalmv1beta1.TaskCompleting:
 		return ctrl.Result{}, r.driveCompleting(ctx, task, pod)
 	}
@@ -357,15 +358,18 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "ProvisioningDeadlineExceeded",
 			fmt.Sprintf("Pod %s not Ready within %s", pod.Name, provisioningDeadline))
 	}
-	return r.awaitPodReady(ctx, task)
+	return r.awaitPodReady(ctx, task, class, eff, pod)
 }
 
 // awaitPodReady ends a Provisioning pass whose Pod is not Ready yet, after
 // every state check: it re-creates a missing child, keeps Ready at
 // PodProvisioning (clearing a gate the pass no longer finds), and re-checks
 // soon.
-func (r *AgentTaskReconciler) awaitPodReady(ctx context.Context, task *kaalmv1beta1.AgentTask) (ctrl.Result, error) {
-	if err := r.restoreTaskChildren(ctx, task); err != nil {
+func (r *AgentTaskReconciler) awaitPodReady(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod,
+) (ctrl.Result, error) {
+	if err := r.restoreTaskChildren(ctx, task, class, eff, pod, false); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
@@ -409,7 +413,8 @@ func (r *AgentTaskReconciler) createRejected(
 // pass that finds the task still running re-creates a missing child after
 // those checks, so it never delays them.
 func (r *AgentTaskReconciler) driveRunning(
-	ctx context.Context, task *kaalmv1beta1.AgentTask, pod *corev1.Pod,
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod,
 ) (ctrl.Result, error) {
 	// agentReported: the mailbox is the completion signal.
 	if isAgentReported(task) {
@@ -449,7 +454,7 @@ func (r *AgentTaskReconciler) driveRunning(
 	if pod == nil || (isAgentReported(task) && pod.Status.Phase == corev1.PodFailed) {
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "PodDisrupted", "task Pod was lost mid-run")
 	}
-	return r.continueRunning(ctx, task, pod)
+	return r.continueRunning(ctx, task, class, eff, pod)
 }
 
 // continueRunning ends a Running pass whose Pod runs on, after every state
@@ -457,12 +462,13 @@ func (r *AgentTaskReconciler) driveRunning(
 // when a gate or conflict left it otherwise. A terminating Pod needs
 // neither; the next pass handles its loss.
 func (r *AgentTaskReconciler) continueRunning(
-	ctx context.Context, task *kaalmv1beta1.AgentTask, pod *corev1.Pod,
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod,
 ) (ctrl.Result, error) {
 	if !pod.DeletionTimestamp.IsZero() {
 		return runningRequeue(task), nil
 	}
-	if err := r.restoreTaskChildren(ctx, task); err != nil {
+	if err := r.restoreTaskChildren(ctx, task, class, eff, pod, true); err != nil {
 		return ctrl.Result{}, err
 	}
 	if !apimeta.IsStatusConditionTrue(task.Status.Conditions, kaalmv1beta1.ConditionReady) {
@@ -744,13 +750,54 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 }
 
 // restoreTaskChildren re-creates children deleted while the task has a live
-// Pod. It runs only after the pass's state checks (completion, timeout, Pod
-// loss, the provisioning deadline), so it never delays them, and it never
-// gates on readiness: the Pod keeps what it already mounted. In steady state
-// it costs only cache reads.
-func (r *AgentTaskReconciler) restoreTaskChildren(ctx context.Context, task *kaalmv1beta1.AgentTask) error {
+// Pod: the Certificate and the children desiredTaskChildren lists. It runs
+// only after the pass's state checks (completion, timeout, Pod loss, the
+// provisioning deadline), so it never delays them, and it never gates on
+// readiness: the Pod keeps what it already mounted. It only creates; a child
+// that exists is never updated or deleted, and a missing one is built from
+// the class as it now stands. The PVC comes back only when the Pod mounts
+// it. The FQDN policy is read live, so it is restored only when withFQDN is
+// set (Running passes, which are event-driven and few). The Secret-access
+// Roles are not restored: only pre-Pod checks read through them. Every
+// child is tried, and the failures come back joined, so a conflict on one
+// child does not stop the others. In steady state it costs only cache
+// reads.
+func (r *AgentTaskReconciler) restoreTaskChildren(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod, withFQDN bool,
+) error {
+	var errs []error
+	eff.PersistenceOn = podMountsClaim(pod, taskPVCName(task.Name))
+	for _, obj := range desiredTaskChildren(task, class, eff, r.OperatorNamespace, r.DNS) {
+		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		errs = append(errs, createIfMissing(ctx, r.Client, task, obj))
+	}
 	_, _, err := r.ensureTaskCertificate(ctx, task)
-	return err
+	errs = append(errs, err)
+	if hosts := class.Spec.Network.Egress.AllowedHosts; withFQDN && len(hosts) > 0 {
+		supported, err := fqdnSupported(r.FQDNSupport)
+		if err == nil {
+			err = restoreFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
+		}
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// podMountsClaim reports whether pod mounts the PersistentVolumeClaim claim.
+func podMountsClaim(pod *corev1.Pod, claim string) bool {
+	if pod == nil {
+		return false
+	}
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == claim {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureTaskCertificate creates the task's Certificate when it is missing and
@@ -848,7 +895,8 @@ func (r *AgentTaskReconciler) envSecretGate(
 // task waits, and a rejected write starts the provisioning deadline the way
 // a rejected Pod create does (prePod; class must be set then). With a Pod,
 // either only sets Ready: completion, timeout, and Pod loss are still acted
-// on each pass, since those checks run before any child write. The cause (a conflicting object with no owner reference, a
+// on each pass, since those checks run before any child write, and the
+// other missing children are still re-created on the same pass. The cause (a conflicting object with no owner reference, a
 // quota, a webhook) raises no watch event, so the gateRequeue requeue is
 // what notices it clearing; a running task is requeued sooner when its
 // timeout comes first.

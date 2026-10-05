@@ -134,3 +134,26 @@ func ensureFQDNPolicy(
 	current.Object["spec"] = desired.Object["spec"]
 	return rejectedWrite("updating", scheme, current, c.Update(ctx, current))
 }
+
+// restoreFQDNPolicy re-creates a missing FQDN policy for a task that has a
+// Pod. Such a task finishes under the class it started with, so an existing
+// policy is never updated or deleted, and a missing one is created from the
+// hosts the class lists now. With no FQDN support or no hosts it makes no
+// call. A cluster without the CiliumNetworkPolicy kind is not an error, as
+// in ensureFQDNPolicy.
+func restoreFQDNPolicy(
+	ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object,
+	podLabels map[string]string, hosts []string, dns DNSSelector, supported bool,
+) error {
+	if !supported || len(hosts) == 0 {
+		return nil
+	}
+	desired := desiredFQDNPolicy(owner, podLabels, hosts, dns)
+	if err := controllerutil.SetControllerReference(owner, desired, scheme); err != nil {
+		return err
+	}
+	if err := createIfMissing(ctx, c, owner, desired); err != nil && !apimeta.IsNoMatchError(err) {
+		return err
+	}
+	return nil
+}
