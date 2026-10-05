@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -28,9 +29,11 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -262,22 +265,50 @@ func TestHeldRequeue(t *testing.T) {
 	}
 }
 
-// A conflict on a running task uses the held requeue, so it never pushes the
-// timeout back.
-func TestChildBlocked_ConflictKeepsTimeoutRequeue(t *testing.T) {
-	task := restoreTask("held-conflict", kaalmv1beta1.TaskRunning, true, "PodRunning")
-	task.Spec.Completion.Timeout = metav1.Duration{Duration: 10 * time.Second}
-	r, c := restoreReconciler(t, task)
-	stored := storedTask(t, c, task)
-	res, err := r.childBlocked(context.Background(), stored, nil, false,
-		&ChildConflictError{Kind: "Certificate", Name: task.Name + "-tls", OwnerKind: "AgentTask"})
-	if err != nil {
-		t.Fatal(err)
+// A child the task cannot write holds a running task on the held requeue,
+// so neither a conflict nor a rejected write pushes the timeout back. The
+// reconciler's gate is 30s here (the package's gateRequeue is shortened for
+// envtest), so a return of the bare gate interval fails the 5s bound.
+func TestChildBlocked_HeldRequeueKeepsTimeout(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"conflict", &ChildConflictError{Kind: "Certificate", Name: "held-tls", OwnerKind: "AgentTask"},
+			kaalmv1beta1.ReasonChildConflict},
+		{"rejected write", &ChildWriteRejectedError{Op: "creating", Kind: "Certificate", Name: "held-tls",
+			Err: apierrors.NewForbidden(schema.GroupResource{Resource: "certificates"}, "held-tls", errors.New("exceeded quota"))},
+			kaalmv1beta1.ReasonChildWriteRejected},
 	}
-	if want := heldRequeue(stored, gateRequeue); res != want {
-		t.Errorf("result = %+v, want %+v", res, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, timeout := range []time.Duration{10 * time.Second, 0} {
+				task := restoreTask("held-requeue", kaalmv1beta1.TaskRunning, true, "PodRunning")
+				task.Spec.Completion.Timeout = metav1.Duration{Duration: timeout}
+				started := metav1.NewTime(time.Now().Add(-5 * time.Second))
+				task.Status.StartTime = &started
+				r, c := restoreReconciler(t, task)
+				r.gateInterval = 30 * time.Second
+				res, err := r.childBlocked(context.Background(), storedTask(t, c, task), nil, false, tc.err)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if timeout > 0 {
+					if d := res.RequeueAfter; d <= 0 || d > 5*time.Second {
+						t.Errorf("timeout 10s, 5s left: RequeueAfter = %v, want at most 5s", d)
+					}
+				} else if res.RequeueAfter != 30*time.Second {
+					t.Errorf("no timeout: RequeueAfter = %v, want 30s", res.RequeueAfter)
+				}
+				stored := storedTask(t, c, task)
+				expectStoredReady(t, stored, metav1.ConditionFalse, tc.reason)
+				if stored.Status.Phase != kaalmv1beta1.TaskRunning {
+					t.Errorf("phase = %s, want Running", stored.Status.Phase)
+				}
+			}
+		})
 	}
-	expectStoredReady(t, storedTask(t, c, task), metav1.ConditionFalse, kaalmv1beta1.ReasonChildConflict)
 }
 
 // A running task whose AgentClass was deleted and came back drops the stale

@@ -81,6 +81,18 @@ type AgentTaskReconciler struct {
 	// production passes the FQDNProbe shared with the AgentClassReconciler.
 	// nil means unsupported: no CiliumNetworkPolicy is synthesized.
 	FQDNSupport func() (bool, error)
+	// gateInterval overrides gateRequeue for childBlocked's hold. Zero means
+	// gateRequeue; tests set it so they need not change the package
+	// variable the envtest manager reads.
+	gateInterval time.Duration
+}
+
+// heldGate is the re-check interval childBlocked holds a task for.
+func (r *AgentTaskReconciler) heldGate() time.Duration {
+	if r.gateInterval > 0 {
+		return r.gateInterval
+	}
+	return gateRequeue
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agenttasks,verbs=get;list;watch;update;patch;delete
@@ -911,7 +923,7 @@ func (r *AgentTaskReconciler) childBlocked(
 		if err := r.gateTask(ctx, task, kaalmv1beta1.ReasonChildWriteRejected, cr.Error()); err != nil {
 			return ctrl.Result{}, err
 		}
-		return heldRequeue(task, gateRequeue), nil
+		return heldRequeue(task, r.heldGate()), nil
 	}
 	cc, ok := asChildConflict(err)
 	if !ok {
@@ -926,11 +938,11 @@ func (r *AgentTaskReconciler) childBlocked(
 		}
 		r.Recorder.Event(task, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
 	}
-	return heldRequeue(task, gateRequeue), nil
+	return heldRequeue(task, r.heldGate()), nil
 }
 
 // heldRequeue is the requeue for a task held by a child it cannot write:
-// gate (the callers pass gateRequeue), or a running task's timeout deadline
+// gate (childBlocked passes heldGate), or a running task's timeout deadline
 // when that comes first, so the hold never delays the timeout.
 func heldRequeue(task *kaalmv1beta1.AgentTask, gate time.Duration) ctrl.Result {
 	if task.Status.Phase == kaalmv1beta1.TaskRunning {
