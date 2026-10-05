@@ -199,7 +199,7 @@ kubectl -n kaalm-system port-forward deploy/kaalm-gateway 6060:6060
 go tool pprof -http=:8000 http://127.0.0.1:6060/debug/pprof/profile?seconds=30
 ```
 
-Leave both values at `0` in production. The [load harness](load-and-scale.md) turns them on for the load cluster so a profile can be taken during any phase.
+Leave both values at `0` in production. The [performance harness](performance-and-scale.md) turns them on for its cluster so a profile can be taken during any phase.
 
 ## See also
 

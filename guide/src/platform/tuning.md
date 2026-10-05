@@ -147,5 +147,5 @@ multi-hour idle timeouts. See
 
 *How this works: design book pages Operations, Deployment (the values
 table and the replica floors), Operations, Observability (the Logs and
-Profiling sections), and Operations, Load and scale (what the harness measured at
+Profiling sections), and Operations, Performance and scale (what the harness measured at
 each setting).*
