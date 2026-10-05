@@ -55,7 +55,7 @@ func TestAgent_PodCreateRejectedKeepsResuming(t *testing.T) {
 	}
 	r := &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system"}
 	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080}
-	_, rejected, err := r.convergePod(context.Background(), agent, &kaalmv1beta1.AgentClass{}, eff, "woken-tls")
+	_, rejected, err := r.convergePod(context.Background(), agent, &kaalmv1beta1.AgentClass{}, eff, "woken-tls", false)
 	if err != nil || !rejected {
 		t.Fatalf("convergePod = (rejected %v, err %v), want (true, nil)", rejected, err)
 	}

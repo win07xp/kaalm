@@ -1493,7 +1493,7 @@ func TestEnsureChildren_CreateErrorsPropagate(t *testing.T) {
 		t.Error("ensureCertificate must surface a create error")
 	}
 	// convergePod finds no Pod and fails to create one.
-	if _, _, err := ar.convergePod(ctx, agent, class, eff, "a-tls"); err == nil {
+	if _, _, err := ar.convergePod(ctx, agent, class, eff, "a-tls", false); err == nil {
 		t.Error("convergePod must surface a create error")
 	}
 
@@ -1545,7 +1545,7 @@ func TestEnsureCertificate_KeepsExistingSecretName(t *testing.T) {
 	}
 
 	eff := effectiveAgentSpec{Image: "img:v1", HealthPort: 8080, ServicePort: 8080}
-	if _, _, err := r.convergePod(ctx, agent, &kaalmv1beta1.AgentClass{}, eff, name); err != nil {
+	if _, _, err := r.convergePod(ctx, agent, &kaalmv1beta1.AgentClass{}, eff, name, false); err != nil {
 		t.Fatalf("convergePod: %v", err)
 	}
 	var pods corev1.PodList
