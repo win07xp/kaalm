@@ -808,8 +808,8 @@ func (r *AgentReconciler) enterOrStayDegraded(
 // BudgetExhausted); otherwise it is removed. This never touches status.phase:
 // budget exhaustion is a recoverable runtime state, not a lifecycle transition,
 // so the agent keeps running and the signal clears on its own when the provider
-// reports the namespace unblocked (period reset, budget increase, or spend
-// drop), driven by the ModelProvider watch. When the condition first appears a
+// reports the namespace unblocked (period reset, budget increase, spend
+// drop, or the budget is turned off), driven by the ModelProvider watch. When the condition first appears a
 // BudgetExhausted Warning event is emitted, so `kubectl describe agent` shows
 // it. Provider Get errors are tolerated (a missing or unreadable provider is
 // the degrade path's concern, not this one): the condition reflects what could

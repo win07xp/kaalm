@@ -25,6 +25,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -564,4 +565,106 @@ func TestModelProvider_BudgetFoldRunsWhileMisconfigured(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// staleBudgetStatus is the status a provider kept from when it tracked a
+// budget: team-a Blocked, 95.00 spent, and BoundaryMarginRaised.
+func staleBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
+	period := gateway.PeriodKey("monthly", time.Now())
+	mp.Status.BudgetUsage = []kaalmv1beta1.ModelProviderBudgetUsage{{
+		Namespace: "team-a", Period: period, SpentUSD: "95.00", PercentUsed: 95, State: "Blocked",
+	}}
+	mp.Status.ClusterSpentUSD = "95.00"
+	mp.Status.Conditions = append(mp.Status.Conditions, metav1.Condition{
+		Type: kaalmv1beta1.ConditionBoundaryMarginRaised, Status: metav1.ConditionTrue,
+		Reason: kaalmv1beta1.ReasonBoundaryMarginRaised, Message: "raised", LastTransitionTime: metav1.Now(),
+	})
+}
+
+// A provider that stops tracking a budget, or whose budget ConfigMap is
+// gone, clears the budget status nothing maintains any more (#446).
+func TestModelProvider_BudgetOffClearsBudgetStatus(t *testing.T) {
+	ctx := context.Background()
+	period := gateway.PeriodKey("monthly", time.Now())
+	block := []kaalmv1beta1.ModelProviderBudgetPolicy{{AtPercent: 80, Action: "block"}}
+	cases := []struct {
+		name   string
+		budget kaalmv1beta1.ModelProviderBudget
+		mutate func(*kaalmv1beta1.ModelProvider)
+		withCM bool
+		reason string // the Ready reason a failing check sets, if any
+	}{
+		{name: "period none", budget: kaalmv1beta1.ModelProviderBudget{
+			Period: "none", PerNamespaceUSD: "100", Policies: block}, withCM: true},
+		{name: "budget removed"},
+		{name: "budget ConfigMap missing", budget: kaalmv1beta1.ModelProviderBudget{
+			Period: "monthly", PerNamespaceUSD: "100", Policies: block}},
+		{name: "period none on a provider that fails a check", budget: kaalmv1beta1.ModelProviderBudget{
+			Period: "none", PerNamespaceUSD: "100", Policies: block},
+			mutate: func(mp *kaalmv1beta1.ModelProvider) { mp.Spec.AllowedNamespaces = []string{"*", "["} },
+			reason: kaalmv1beta1.ReasonInvalidNamespacePattern},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := fmt.Sprintf("mp-budget-off-%d", i)
+			mp := eventsProvider(name, func(mp *kaalmv1beta1.ModelProvider) {
+				mp.Spec.Budget = tc.budget
+				if tc.mutate != nil {
+					tc.mutate(mp)
+				}
+			})
+			staleBudgetStatus(mp)
+			objs := []client.Object{mp, providerKey(name)}
+			var cmData map[string]string
+			if tc.withCM {
+				extra := misconfiguredBudgetObjects(name, period)
+				objs = append(objs, extra[0], extra[1])
+				cmData = extra[1].(*corev1.ConfigMap).Data
+			}
+			r, rec := eventsProviderReconciler(t, &statusConflicts{}, nil, objs...)
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+			if _, err := r.Reconcile(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			var got kaalmv1beta1.ModelProvider
+			if err := r.Get(ctx, req.NamespacedName, &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Status.BudgetUsage) != 0 || got.Status.ClusterSpentUSD != "" {
+				t.Errorf("budgetUsage = %+v, clusterSpentUSD = %q; want both empty",
+					got.Status.BudgetUsage, got.Status.ClusterSpentUSD)
+			}
+			if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised); c != nil {
+				t.Errorf("BoundaryMarginRaised = %+v, want it removed", c)
+			}
+			if tc.reason != "" {
+				if c := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady); c == nil || c.Reason != tc.reason {
+					t.Errorf("Ready = %+v, want reason %s", c, tc.reason)
+				}
+			}
+			if ev := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonBoundaryMarginRaised); len(ev) != 0 {
+				t.Errorf("BoundaryMarginRaised events = %q, want none", ev)
+			}
+			if tc.withCM {
+				var cm corev1.ConfigMap
+				if err := r.Get(ctx, types.NamespacedName{Namespace: testOperatorNamespace,
+					Name: gateway.BudgetConfigMapName(name)}, &cm); err != nil {
+					t.Fatal(err)
+				}
+				if !equality.Semantic.DeepEqual(cm.Data, cmData) {
+					t.Errorf("budget ConfigMap changed: %v", cm.Data)
+				}
+			}
+			if _, err := r.Reconcile(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			var again kaalmv1beta1.ModelProvider
+			if err := r.Get(ctx, req.NamespacedName, &again); err != nil {
+				t.Fatal(err)
+			}
+			if again.ResourceVersion != got.ResourceVersion {
+				t.Error("a steady pass wrote status again")
+			}
+		})
+	}
 }

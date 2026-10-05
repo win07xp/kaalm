@@ -89,10 +89,25 @@ func budgetRequeue(mp *kaalmv1beta1.ModelProvider, res ctrl.Result) ctrl.Result 
 	return ctrl.Result{RequeueAfter: time.Minute}
 }
 
+// clearBudgetStatus empties the budget status of a provider whose budget
+// nothing maintains: budgetUsage, clusterSpentUSD, and the
+// BoundaryMarginRaised condition. Without a period the gateway neither
+// counts nor enforces a budget, and without the budget ConfigMap no
+// replica's spend is visible, so the reducer has nothing to report. Leftover
+// figures would claim a state that nothing enforces, and Agents read
+// budgetUsage for BudgetExhausted. Nil, not an empty slice, so a steady pass
+// compares equal to the stored status and writes nothing.
+func clearBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
+	mp.Status.BudgetUsage = nil
+	mp.Status.ClusterSpentUSD = ""
+	apimeta.RemoveStatusCondition(&mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)
+}
+
 // reconcileBudget is the reducer over the per-replica partials in the
 // kaalm-budget-{provider} ConfigMap: prune keys with no live gateway Pod,
 // archive and drop stale-period entries, sum current-period partials, write
-// _canonical, and populate status.budgetUsage. See
+// _canonical, and populate status.budgetUsage. It clears the budget status
+// when the provider tracks no budget or the ConfigMap is absent. See
 // docs/src/gateways/llm/budgets-and-rate-limits.md.
 func (r *ModelProviderReconciler) reconcileBudget(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider, liveGateways map[string]bool,
@@ -100,6 +115,7 @@ func (r *ModelProviderReconciler) reconcileBudget(
 	scheme := mp.Spec.Budget.Period
 	currentPeriod := gateway.PeriodKey(scheme, time.Now())
 	if currentPeriod == "" {
+		clearBudgetStatus(mp)
 		return nil
 	}
 
@@ -107,7 +123,10 @@ func (r *ModelProviderReconciler) reconcileBudget(
 	key := types.NamespacedName{Namespace: r.OperatorNamespace, Name: gateway.BudgetConfigMapName(mp.Name)}
 	if err := r.Get(ctx, key, &cm); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil // no replica has written yet
+			// No replica has published yet, or the ConfigMap was deleted;
+			// either way the gateway's peer view is empty too.
+			clearBudgetStatus(mp)
+			return nil
 		}
 		return err
 	}

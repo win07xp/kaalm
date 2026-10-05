@@ -232,3 +232,40 @@ func TestAgent_BudgetExhaustedEmitsWarningOnce(t *testing.T) {
 		t.Errorf("BudgetExhausted emitted %d times while the condition held, want 1", n)
 	}
 }
+
+// Turning the provider's budget off clears its Blocked entry, so the Agent
+// leaves BudgetExhausted with nothing else to do (#446).
+func TestAgent_BudgetConditionClearsWhenBudgetTurnedOff(t *testing.T) {
+	mkBlockingProvider(t, "s10-off", "s10-off-gw-0")
+	setProviderSpend(t, "s10-off", "s10-off-gw-0", "250.00")
+	mkClass(t, "s10-off-class", "s10-off")
+	mkAgent(t, "s10-off-agent", "s10-off-class", "s10-off")
+	eventually(t, func() error {
+		if c := agentDegraded(t, "s10-off-agent"); c == nil || c.Status != metav1.ConditionTrue {
+			return errString("Degraded not True yet")
+		}
+		return nil
+	})
+
+	eventually(t, func() error {
+		var mp kaalmv1beta1.ModelProvider
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "s10-off"}, &mp); err != nil {
+			return err
+		}
+		mp.Spec.Budget.Period = "none"
+		return testClient.Update(ctxT(), &mp)
+	})
+	eventually(t, func() error {
+		if c := agentDegraded(t, "s10-off-agent"); c != nil {
+			return errString("Degraded still present: " + string(c.Status))
+		}
+		var mp kaalmv1beta1.ModelProvider
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "s10-off"}, &mp); err != nil {
+			return err
+		}
+		if len(mp.Status.BudgetUsage) != 0 || mp.Status.ClusterSpentUSD != "" {
+			return fmt.Errorf("budgetUsage = %+v, clusterSpentUSD = %q", mp.Status.BudgetUsage, mp.Status.ClusterSpentUSD)
+		}
+		return nil
+	})
+}
