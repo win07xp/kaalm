@@ -272,3 +272,19 @@ func TestChildBlocked_ConflictKeepsTimeoutRequeue(t *testing.T) {
 	}
 	expectStoredReady(t, storedTask(t, c, task), metav1.ConditionFalse, kaalmv1beta1.ReasonChildConflict)
 }
+
+// A running task whose AgentClass was deleted and came back drops the stale
+// Ready=False InvalidReference the class gate left.
+func TestDriveRunning_RestoresReadyAfterClassGate(t *testing.T) {
+	task := restoreTask("run-class-back", kaalmv1beta1.TaskRunning, false, kaalmv1beta1.ReasonInvalidReference)
+	pod := restorePod(t, task, corev1.PodRunning, true)
+	cert := desiredTaskCertificate(task, CertLifetime{})
+	if err := controllerutil.SetControllerReference(task, cert, testScheme(t)); err != nil {
+		t.Fatal(err)
+	}
+	r, c := restoreReconciler(t, task, pod, cert)
+	if _, err := r.driveRunning(context.Background(), storedTask(t, c, task), pod); err != nil {
+		t.Fatalf("driveRunning: %v", err)
+	}
+	expectStoredReady(t, storedTask(t, c, task), metav1.ConditionTrue, "PodRunning")
+}
