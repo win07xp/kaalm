@@ -51,7 +51,7 @@ func TestParseBackoff(t *testing.T) {
 	}
 
 	// A malformed entry is a startup error, never a silently shortened
-	// schedule (#155).
+	// schedule.
 	for _, raw := range []string{"1s,not-a-duration,25s", "garbage"} {
 		if _, err := parseBackoff(raw); err == nil {
 			t.Errorf("parseBackoff(%q) must error", raw)

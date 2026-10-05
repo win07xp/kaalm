@@ -455,7 +455,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentTask")
 		os.Exit(1)
 	}
-	// Must parse strictly and identically to the gateway's flag (#155).
+	// Must parse strictly and identically to the gateway's flag.
 	managerCallbackPolicy, err := callbackpolicy.NewFromCSVStrict(callbackAllowlist)
 	if err != nil {
 		setupLog.Error(err, "parsing --callback-url-allowlist")
@@ -495,7 +495,7 @@ func main() {
 		}
 		// The body cap is the deny half of the listener's posture: conversion
 		// is a pure function with nothing to extract, but the handler decodes
-		// without a limit and the port requires no client auth (#152).
+		// without a limit and the port requires no client auth.
 		mgr.GetWebhookServer().Register("/convert", controller.MaxBytesHandler(
 			webhookconversion.NewWebhookHandler(mgr.GetScheme()), controller.MaxConversionBodyBytes))
 		// A replica is Ready only once the conversion listener is up, so the
