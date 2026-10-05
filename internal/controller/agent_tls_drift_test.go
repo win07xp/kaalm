@@ -91,7 +91,7 @@ func TestConvergePod_TLSSecretMismatchReplacesPod(t *testing.T) {
 	rec := record.NewFakeRecorder(10)
 	r := &AgentReconciler{Client: c, Recorder: rec, OperatorNamespace: "kaalm-system"}
 
-	waiting, rejected, err := r.convergePod(ctx, agent, slotClass(nil), tlsDriftEff, "legacy-tls-0f1e2d3c")
+	waiting, rejected, err := r.convergePod(ctx, agent, slotClass(nil), tlsDriftEff, "legacy-tls-0f1e2d3c", false)
 	if err != nil || waiting || rejected {
 		t.Fatalf("convergePod = (%v, %v, %v), want (false, false, nil)", waiting, rejected, err)
 	}
@@ -120,7 +120,7 @@ func TestConvergePod_TLSSecretMismatchReplacesPod(t *testing.T) {
 		t.Errorf("events = %q, want a Normal SpecDrift naming both Secrets", events)
 	}
 
-	if _, _, err := r.convergePod(ctx, agent, slotClass(nil), tlsDriftEff, "legacy-tls-0f1e2d3c"); err != nil {
+	if _, _, err := r.convergePod(ctx, agent, slotClass(nil), tlsDriftEff, "legacy-tls-0f1e2d3c", false); err != nil {
 		t.Fatalf("second convergePod: %v", err)
 	}
 	pods := ownedPodsOf(t, c, agent)
@@ -143,7 +143,7 @@ func TestConvergePod_TLSSecretMismatchWaitsForSlot(t *testing.T) {
 	r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
 
 	class := slotClass(ptrIntOrString(intstr.FromInt32(1)))
-	waiting, _, err := r.convergePod(ctx, agent, class, tlsDriftEff, "legacy-tls-0f1e2d3c")
+	waiting, _, err := r.convergePod(ctx, agent, class, tlsDriftEff, "legacy-tls-0f1e2d3c", false)
 	if err != nil || !waiting {
 		t.Fatalf("convergePod = (waiting %v, err %v), want (true, nil)", waiting, err)
 	}
@@ -197,7 +197,7 @@ func TestConvergePod_TLSSecretMatchKeepsPod(t *testing.T) {
 			mkReadyPod(t, c, agent, tlsDriftEff, "legacy-tls", tc.mutate)
 			r := &AgentReconciler{Client: c, Recorder: record.NewFakeRecorder(10), OperatorNamespace: "kaalm-system"}
 
-			waiting, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff, "legacy-tls")
+			waiting, _, err := r.convergePod(context.Background(), agent, slotClass(nil), tlsDriftEff, "legacy-tls", false)
 			if err != nil || waiting {
 				t.Fatalf("convergePod = (waiting %v, err %v), want (false, nil)", waiting, err)
 			}

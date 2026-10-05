@@ -71,7 +71,7 @@ The rule "absence of data is not evidence of inactivity" is the first row. Unrea
 
 ## Hibernation mechanics
 
-Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. The Service remains (with no endpoints) while the Agent is hibernated. Wake is triggered by the [User Gateway](../gateways/user/activation-and-activity.md#the-activator) (on channel message arrival) or manual annotation, not by traffic to the Service.
+Hibernation scales the Pod to zero by deleting the Pod and keeping the PVC. On wake, the controller recreates the Pod with the same PVC mount. An `Idle` Agent whose Certificate is not Ready waits to hibernate until it is, because its wake could not create a Pod ([Certificate wait with a running Pod](reconcilers/agent.md#certificate-wait-with-a-running-pod)). The Service remains (with no endpoints) while the Agent is hibernated. Wake is triggered by the [User Gateway](../gateways/user/activation-and-activity.md#the-activator) (on channel message arrival) or manual annotation, not by traffic to the Service.
 
 Hibernation presupposes the PVC: `spec.lifecycle.hibernationEnabled: true` with `spec.persistence.enabled: false` is refused at reconcile time (`Degraded, reason=HibernationRequiresPersistence`, [rule 29](../resources/validation/class-policy.md)). Without a PVC there is nothing to carry state, including the dedup buffer that [the runtime contract](../runtime/contract.md) item 7 requires, across the delete and recreate cycle.
 

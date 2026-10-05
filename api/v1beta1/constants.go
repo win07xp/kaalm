@@ -156,6 +156,7 @@ const (
 	ReasonChildConflict              = "ChildConflict"
 	ReasonPodCurrent                 = "Current"
 	ReasonReplacementPending         = "ReplacementPending"
+	ReasonCertificateNotReady        = "CertificateNotReady" // Ready: Certificate not Ready; PodUpToDate: drift waits for it
 	ReasonReplacing                  = "Replacing"
 	ReasonIdleDetectionDisabled      = "Disabled" // IdleDetection: no effective idle timeout
 	ReasonSpecDriftPending           = "SpecDriftPending"

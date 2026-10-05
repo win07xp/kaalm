@@ -41,15 +41,18 @@ partition "5 to 7: hibernation, gates, Certificate" {
   elseif (class CIDRs valid; image,\nexistingClaim, pull Secrets,\nenv Secrets, handler\nConfigMap present?) then (no)
     :Ready=False; requeue 30s\nfor an unwatched object;
     kill
-  elseif (Certificate Ready?) then (no)
-    :Pending to Provisioning\nrequeue 5s;
+  elseif (Certificate not Ready,\nno Pod?) then (yes)
+    :Provisioning\n(Resuming if woken)\nrequeue 5s;
     kill
-  else (yes)
+  else (no)
   endif
 }
 
 partition "8 to 11: children, Pod, activity, status" {
   :SA, Service, PVC,\nNetworkPolicy;
+  if (Certificate not Ready,\nPod exists?) then (yes)
+    :Ready=False CertificateNotReady;\nPod creation, replacement,\nand hibernation wait;
+  endif
   if (Pod?) then (none)
     :create the Pod;
     if (the API server\nrejects it?) then (yes)

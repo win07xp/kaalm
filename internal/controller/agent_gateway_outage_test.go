@@ -109,7 +109,7 @@ func TestEvaluateActivity_GatewayOutageBacksOff(t *testing.T) {
 	eff := effectiveAgentSpec{IdleTimeout: time.Minute}
 
 	agent := &kaalmv1beta1.Agent{Status: kaalmv1beta1.AgentStatus{Phase: kaalmv1beta1.AgentRunning}}
-	res := r.evaluateActivity(context.Background(), agent, eff)
+	res := r.evaluateActivity(context.Background(), agent, eff, false)
 	if res.RequeueAfter != 30*time.Second {
 		t.Errorf("first failed pass: RequeueAfter = %v, want 30s", res.RequeueAfter)
 	}
@@ -121,7 +121,7 @@ func TestEvaluateActivity_GatewayOutageBacksOff(t *testing.T) {
 	// Ninety seconds into the outage (for example after a controller
 	// restart), the next pass waits two minutes.
 	agent.Status.Conditions = gatewayReachableCond(metav1.ConditionFalse, now.Add(-90*time.Second))
-	res = r.evaluateActivity(context.Background(), agent, eff)
+	res = r.evaluateActivity(context.Background(), agent, eff, false)
 	if res.RequeueAfter != 2*time.Minute {
 		t.Errorf("90s into the outage: RequeueAfter = %v, want 2m", res.RequeueAfter)
 	}

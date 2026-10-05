@@ -51,6 +51,10 @@ const (
 	// certWaitRequeue is the backoff while waiting for cert-manager to issue
 	// the per-Agent Certificate (first issuance typically takes seconds).
 	certWaitRequeue = 5 * time.Second
+	// certWaitMsg is the Ready message while the Certificate is not Ready,
+	// and certWaitServingMsg the one when the Agent's current Pod is Ready.
+	certWaitMsg        = "waiting for cert-manager to issue the agent certificate"
+	certWaitServingMsg = certWaitMsg + "; the current Pod keeps serving"
 	// crashLoopThreshold is the restart count at which a CrashLoopBackOff
 	// container marks the Agent Failed.
 	crashLoopThreshold = 5
@@ -65,12 +69,12 @@ const (
 var gateRequeue = 30 * time.Second
 
 // AgentReconciler owns the full child-resource tree for a persistent agent:
-// Certificate, ServiceAccount, Service, PVC, NetworkPolicy, and the Pod, with
-// Pod creation gated on certificate readiness. It drives the Pending ->
-// Provisioning -> Running path of the Agent state machine plus Degraded,
-// Failed, and Terminating. The Idle/Hibernation cycle, activity fan-out, and
-// wake handling are gateway-coupled and land in a later phase. See
-// docs/src/controller/reconcilers/agent.md.
+// Certificate, ServiceAccount, Service, PVC, NetworkPolicy, and the Pod. Pod
+// creation and replacement wait until the Certificate is Ready; an existing
+// Pod keeps running meanwhile. It drives the whole Agent state machine:
+// Pending -> Provisioning -> Running, the Idle and Hibernation cycle from the
+// gateway's activity data, wake handling, and Degraded, Failed, and
+// Terminating. See docs/src/controller/reconcilers/agent.md.
 type AgentReconciler struct {
 	client.Client
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
@@ -245,19 +249,19 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return gateResult, nil
 	}
 
-	// Step 7: ensure the Certificate and gate Pod creation on its readiness.
+	// Step 7: ensure the Certificate and hold Pod work on its readiness. With
+	// no Pod, the pass ends and waits. With a Pod, the Pod keeps the
+	// certificate it mounted, so the children and the activity step still
+	// converge, and only Pod creation, replacement, and hibernation wait.
 	tlsSecret, certReady, err := r.ensureCertificate(ctx, &agent)
 	if err != nil {
 		return r.childConflict(ctx, &agent, statusBefore, err)
 	}
-	if !certReady {
-		if agent.Status.Phase == kaalmv1beta1.AgentPending {
-			r.setPhase(&agent, kaalmv1beta1.AgentProvisioning, "")
-		}
-		r.setReady(&agent, false, "CertificateNotReady", "waiting for cert-manager to issue the agent certificate")
-		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
-			return ctrl.Result{}, err
-		}
+	certHeld, noPod, err := r.awaitCertificate(ctx, &agent, statusBefore, certReady)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if noPod {
 		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
 	}
 
@@ -267,7 +271,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// Step 9: converge the Pod and derive the phase from it.
-	driftWaiting, createRejected, err := r.convergePod(ctx, &agent, &class, eff, tlsSecret)
+	driftWaiting, createRejected, err := r.convergePod(ctx, &agent, &class, eff, tlsSecret, certHeld)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -277,7 +281,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// one the Pod step just moved out of Running, loses GatewayReachable.
 	res := ctrl.Result{}
 	if r.activityStepRuns(&agent, eff.IdleTimeout) {
-		res = r.evaluateActivity(ctx, &agent, eff)
+		res = r.evaluateActivity(ctx, &agent, eff, certHeld)
 	} else {
 		apimeta.RemoveStatusCondition(&agent.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable)
 	}
@@ -290,6 +294,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if createRejected && !res.Requeue && (res.RequeueAfter == 0 || res.RequeueAfter > gateRequeue) {
 		res.RequeueAfter = gateRequeue
 	}
+	if certHeld {
+		res = withCertWaitRetry(res)
+	}
 
 	// Step 11: write status only when the pass changed it.
 	if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
@@ -297,6 +304,47 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	logger.V(1).Info("reconciled Agent", "phase", agent.Status.Phase)
 	return res, nil
+}
+
+// awaitCertificate decides how a pass goes on while the Agent's Certificate
+// is not Ready. With no Pod, the Agent waits (waitForCertificateWithoutPod),
+// the status is written, and noPod tells the caller to end the pass. With a
+// Pod, held tells the caller to go on and hold only Pod creation,
+// replacement, and hibernation.
+func (r *AgentReconciler) awaitCertificate(
+	ctx context.Context, agent *kaalmv1beta1.Agent, before *kaalmv1beta1.AgentStatus, certReady bool,
+) (held, noPod bool, err error) {
+	if certReady {
+		return false, false, nil
+	}
+	pod, err := r.ownedPod(ctx, agent)
+	if err != nil {
+		return false, false, err
+	}
+	if pod != nil {
+		return true, false, nil
+	}
+	r.waitForCertificateWithoutPod(agent)
+	return false, true, r.updateStatusIfChanged(ctx, agent, before)
+}
+
+// withCertWaitRetry makes sure a pass held on the Certificate is retried
+// within certWaitRequeue when nothing else requeues it. The Certificate
+// watch is the normal trigger; this retry is the fallback.
+func withCertWaitRetry(res ctrl.Result) ctrl.Result {
+	if !res.Requeue && res.RequeueAfter == 0 {
+		res.RequeueAfter = certWaitRequeue
+	}
+	return res
+}
+
+// waitForCertificateWithoutPod holds an Agent that has no Pod until its
+// Certificate is Ready: a woken Agent stays Resuming, every other Agent is
+// Provisioning, and the Pod is created once the Certificate is Ready.
+func (r *AgentReconciler) waitForCertificateWithoutPod(agent *kaalmv1beta1.Agent) {
+	r.setPhase(agent, podPendingPhase(agent), "waiting for the agent certificate")
+	agent.Status.PodName = ""
+	r.setReady(agent, false, kaalmv1beta1.ReasonCertificateNotReady, certWaitMsg)
 }
 
 // childConflict turns a ChildConflictError into Ready=False ChildConflict, a
@@ -432,9 +480,12 @@ func (r *AgentReconciler) driveHibernating(ctx context.Context, agent *kaalmv1be
 // evaluateActivity reads the gateway activity data and drives Running <->
 // Idle and Idle -> Hibernating. Absence of data is not evidence of
 // inactivity: unreachable gateways preserve the phase, and silence counts
-// only once a replica has been up for idleTimeout.
+// only once a replica has been up for idleTimeout. While the Agent's
+// Certificate is not Ready (hibernationHeld), an Idle Agent keeps its Pod,
+// because a wake could not create one; it hibernates on the first pass after
+// the Certificate is Ready.
 func (r *AgentReconciler) evaluateActivity(
-	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec,
+	ctx context.Context, agent *kaalmv1beta1.Agent, eff effectiveAgentSpec, hibernationHeld bool,
 ) ctrl.Result {
 	now := r.now()
 	reachable, total, err := r.Activity.NamespaceActivity(ctx, agent.Namespace)
@@ -524,7 +575,7 @@ func (r *AgentReconciler) evaluateActivity(
 			(synthetic || agent.Status.LastActivityTime.After(*silenceStart)) {
 			silenceStart = &agent.Status.LastActivityTime.Time
 		}
-		if eff.HibernationEnabled && now.Sub(*silenceStart) > eff.IdleTimeout+eff.HibernationDelay {
+		if eff.HibernationEnabled && !hibernationHeld && now.Sub(*silenceStart) > eff.IdleTimeout+eff.HibernationDelay {
 			r.setPhase(agent, kaalmv1beta1.AgentHibernating,
 				fmt.Sprintf("idle for %s past the idle timeout", eff.HibernationDelay))
 			return ctrl.Result{Requeue: true}
@@ -1028,17 +1079,25 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // hash mismatch or a TLS volume that names a Secret other than tlsSecret; both
 // kinds share the maxUnavailableOnDrift slots. The Secret name stays out of
 // the hash, so a Certificate that kept its pre-v1.1.0 name replaces no Pod on
-// upgrade.
+// upgrade. While the Certificate is not Ready (certHeld), it reads the Pod as
+// usual but never creates or replaces one, takes no drift slot, and reports
+// Ready=False CertificateNotReady.
 func (r *AgentReconciler) convergePod(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
-	tlsSecret string,
+	tlsSecret string, certHeld bool,
 ) (driftWaiting, createRejected bool, err error) {
 	pod, err := r.ownedPod(ctx, agent)
 	if err != nil {
 		return false, false, err
 	}
+	ready := func(ok bool, reason, msg string) { r.setPodReady(agent, certHeld, ok, reason, msg) }
 
 	if pod == nil {
+		if certHeld {
+			// The Pod went away after Reconcile's read.
+			r.waitForCertificateWithoutPod(agent)
+			return false, false, nil
+		}
 		desired := desiredPod(agent, eff, r.OperatorNamespace, tlsSecret)
 		if err := controllerutil.SetControllerReference(agent, desired, r.Scheme()); err != nil {
 			return false, false, err
@@ -1065,7 +1124,7 @@ func (r *AgentReconciler) convergePod(
 	// owned-Pod watch to fire when it is gone.
 	if !pod.DeletionTimestamp.IsZero() {
 		r.setPhase(agent, podPendingPhase(agent), "previous Pod terminating")
-		r.setReady(agent, false, "PodProvisioning", "previous Pod terminating")
+		ready(false, "PodProvisioning", "previous Pod terminating")
 		return false, false, nil
 	}
 
@@ -1075,7 +1134,7 @@ func (r *AgentReconciler) convergePod(
 		r.Recorder.Event(agent, corev1.EventTypeWarning, "PodDisrupted",
 			fmt.Sprintf("Pod %s is terminal (%s); re-provisioning", pod.Name, pod.Status.Phase))
 		r.setPhase(agent, podPendingPhase(agent), "replacing a terminal Pod")
-		r.setReady(agent, false, "PodDisrupted", "replacing a terminal Pod")
+		ready(false, "PodDisrupted", "replacing a terminal Pod")
 		return false, false, r.Delete(ctx, pod)
 	}
 
@@ -1094,14 +1153,8 @@ func (r *AgentReconciler) convergePod(
 	// runs before the crash-loop check, so a change replaces a crash-looping
 	// Pod; that is how a rollout halted by a failed replacement recovers.
 	waiting := false
-	cause := ""
-	mounted := tlsSecretOf(pod)
-	if pod.Annotations[annotationPodSpecHash] != podSpecHash(eff) {
-		cause = "derived Pod spec changed"
-	} else if mounted != "" && tlsSecret != "" && mounted != tlsSecret {
-		cause = fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s", tlsSecret, mounted)
-	}
-	if cause != "" {
+	cause, mounted := podDriftCause(pod, eff, tlsSecret)
+	if cause != "" && !certHeld {
 		replace, err := r.admitDriftReplacement(ctx, agent, class, cause)
 		if err != nil {
 			return false, false, err
@@ -1111,6 +1164,14 @@ func (r *AgentReconciler) convergePod(
 			return false, false, r.Delete(ctx, pod)
 		}
 		waiting = true
+	} else if cause != "" {
+		// The replacement waits for the Certificate without a drift slot. A
+		// Replacing Agent whose Pod is not Ready keeps its slot, which counts
+		// that unavailability.
+		if podUpToDateReason(agent) != kaalmv1beta1.ReasonReplacing || podReady(pod) {
+			r.setPodUpToDate(agent, metav1.ConditionFalse, kaalmv1beta1.ReasonCertificateNotReady,
+				cause+"; the replacement waits for the agent certificate, and the current Pod keeps running")
+		}
 	}
 
 	// Persistent crash loop marks the Agent Failed (any -> Failed).
@@ -1120,7 +1181,7 @@ func (r *AgentReconciler) convergePod(
 				cs.State.Waiting.Reason == "ImagePullBackOff") {
 			r.setPhase(agent, kaalmv1beta1.AgentFailed,
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Reason))
-			r.setReady(agent, false, cs.State.Waiting.Reason,
+			ready(false, cs.State.Waiting.Reason,
 				fmt.Sprintf("container %s: %s", cs.Name, cs.State.Waiting.Message))
 			return waiting, false, nil
 		}
@@ -1133,8 +1194,8 @@ func (r *AgentReconciler) convergePod(
 		if agent.Status.Phase != kaalmv1beta1.AgentIdle {
 			r.setPhase(agent, kaalmv1beta1.AgentRunning, "Pod is Ready")
 		}
-		r.setReady(agent, true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")
-		if !waiting {
+		ready(true, kaalmv1beta1.ReasonPodRunning, "agent Pod is ready")
+		if cause == "" {
 			// A Ready Pod on the current spec that mounts the Certificate's
 			// Secret frees the drift slot. The message names the Secret only
 			// when the TLS check compared one.
@@ -1146,9 +1207,24 @@ func (r *AgentReconciler) convergePod(
 		}
 	} else {
 		r.setPhase(agent, podPendingPhase(agent), "Pod is not Ready")
-		r.setReady(agent, false, "PodNotReady", "agent Pod is not ready")
+		ready(false, "PodNotReady", "agent Pod is not ready")
 	}
 	return waiting, false, nil
+}
+
+// podDriftCause says why pod no longer matches the Agent, or "" when it does,
+// and returns the Secret the Pod's TLS volume names. The spec hash is checked
+// first; the TLS Secret counts only when the Pod has a TLS volume and the
+// Certificate names a Secret.
+func podDriftCause(pod *corev1.Pod, eff effectiveAgentSpec, tlsSecret string) (cause, mounted string) {
+	mounted = tlsSecretOf(pod)
+	switch {
+	case pod.Annotations[annotationPodSpecHash] != podSpecHash(eff):
+		return "derived Pod spec changed", mounted
+	case mounted != "" && tlsSecret != "" && mounted != tlsSecret:
+		return fmt.Sprintf("the Agent's Certificate names TLS Secret %s and the Pod mounts %s", tlsSecret, mounted), mounted
+	}
+	return "", mounted
 }
 
 // withDriftRetry makes sure an Agent waiting for a drift slot is retried
@@ -1195,6 +1271,21 @@ func (r *AgentReconciler) admitDriftReplacement(
 		return false, err
 	}
 	return true, nil
+}
+
+// setPodReady writes the Ready condition convergePod derives from the Pod.
+// While the Certificate is held it is always False CertificateNotReady, so
+// Ready never flips within a pass, and ok only picks the message.
+func (r *AgentReconciler) setPodReady(agent *kaalmv1beta1.Agent, certHeld, ok bool, reason, msg string) {
+	if !certHeld {
+		r.setReady(agent, ok, reason, msg)
+		return
+	}
+	held := certWaitMsg
+	if ok {
+		held = certWaitServingMsg
+	}
+	r.setReady(agent, false, kaalmv1beta1.ReasonCertificateNotReady, held)
 }
 
 func (r *AgentReconciler) setPodUpToDate(agent *kaalmv1beta1.Agent, status metav1.ConditionStatus, reason, msg string) {
