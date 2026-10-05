@@ -177,6 +177,11 @@ func TestTracing_ToolCallRelayFailureMarksSpan(t *testing.T) {
 				"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"blob\":\""+
 				strings.Repeat("z", 4096)+"\"}}\n\n")
 		}, mcpCall("web_search"), codes.Error, errResponseTooLarge},
+		{"stream breaks partway", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Content-Length", "4096")
+			_, _ = fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n")
+		}, mcpCall("web_search"), codes.Error, errToolUnavailable},
 		{"upstream 5xx denied", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadGateway)
 		}, mcpCall("web_search"), codes.Error, errToolUnavailable},
