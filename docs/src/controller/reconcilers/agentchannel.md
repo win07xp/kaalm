@@ -28,7 +28,7 @@ The reconciler fans `GET /v1/channels/health?namespace={ns}` out to every gatewa
 
 ### Async ConfigMap pruning
 
-The reconciler deletes the `kaalm-async-*` ConfigMaps in `kaalm-system` that carry this channel's labels (`kaalm.io/channel-namespace`, `kaalm.io/channel-name`) and whose `kaalm.io/expires-at` annotation is in the past. The prune runs on every pass, including a pass where a check fails. A channel that goes invalid can still hold records it wrote while `Ready`, and the gateway writes none while the channel is not `Ready`, so this prune is the only thing that removes the expired ones. The 1-hour TTL is enforced here because a cross-namespace ownerRef cannot express the linkage; see [Response persistence](../../gateways/api/async-responses.md#response-persistence).
+The reconciler deletes the `kaalm-async-*` ConfigMaps in `kaalm-system` that carry this channel's labels (`kaalm.io/channel-namespace`, `kaalm.io/channel-name`) and that have expired. A record with no readable expiry counts as expired once it is old enough; see [Labels and expiry](../../gateways/api/async-responses.md#response-persistence). The prune runs on every pass, including a pass where a check fails. A channel that goes invalid can still hold records it wrote while `Ready`, and the gateway writes none while the channel is not `Ready`, so this prune is the only thing that removes the expired ones. The 1-hour TTL is enforced here because a cross-namespace ownerRef cannot express the linkage; see [Response persistence](../../gateways/api/async-responses.md#response-persistence).
 
 ## What it checks
 

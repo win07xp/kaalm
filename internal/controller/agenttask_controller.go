@@ -59,6 +59,8 @@ var provisioningDeadline = 5 * time.Minute
 // and task-lifecycle.md.
 type AgentTaskReconciler struct {
 	client.Client
+	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
+	claimsWarned      claimsWarnings
 	Recorder          record.EventRecorder
 	OperatorNamespace string
 	// DNS selects the peers of the DNS egress rule on every task NetworkPolicy.
@@ -97,6 +99,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if !task.DeletionTimestamp.IsZero() {
+		r.claimsWarned.forget(task.UID)
 		return r.reconcileDelete(ctx, &task)
 	}
 	if controllerutil.AddFinalizer(&task, kaalmv1beta1.TaskFinalizer) {
@@ -123,9 +126,13 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Terminal phases only wait out their TTL.
+	// A settled task's claims no longer matter, so it does not warn.
 	if isTerminalTaskPhase(task.Status.Phase) {
+		r.claimsWarned.forget(task.UID)
 		return r.handleTTL(ctx, &task)
 	}
+	// Rule 53: advisory, with no condition.
+	r.claimsWarned.note(r.Recorder, &task, "spec.resources", task.Spec.Resources.Claims)
 
 	// System-namespace guard (same SAN-integrity rule as Agents).
 	if task.Namespace == r.OperatorNamespace {

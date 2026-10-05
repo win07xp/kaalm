@@ -324,7 +324,8 @@ func clampResources(res corev1.ResourceRequirements, maxLimits corev1.ResourceLi
 }
 
 // imageAllowed reports whether image matches at least one path.Match glob in
-// allowed. An empty list allows any image.
+// allowed. An empty list allows any image. A malformed pattern matches
+// nothing; the AgentClassReconciler reports it on Ready (rule 52).
 func imageAllowed(image string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true

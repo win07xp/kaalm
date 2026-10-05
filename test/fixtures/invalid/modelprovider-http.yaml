@@ -1,4 +1,5 @@
 # endpoint must be HTTPS
+# expect: spec.endpoint in body should match '^https://'
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata: {name: insecure}

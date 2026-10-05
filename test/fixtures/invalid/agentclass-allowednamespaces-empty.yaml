@@ -1,4 +1,5 @@
 # allowedNamespaces must not be an empty list (rule 47)
+# expect: allowedNamespaces must list at least one pattern
 apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata: {name: no-namespaces}

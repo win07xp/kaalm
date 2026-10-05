@@ -166,10 +166,11 @@ func TestConvergePod_TLSSecretMismatchWaitsForSlot(t *testing.T) {
 // Pod.
 func TestConvergePod_TLSSecretMatchKeepsPod(t *testing.T) {
 	cases := []struct {
-		name   string
-		mutate func(*corev1.Pod)
+		name    string
+		mutate  func(*corev1.Pod)
+		wantMsg string
 	}{
-		{"same Secret", nil},
+		{"same Secret", nil, "agent Pod matches the derived spec and mounts the Certificate's TLS Secret legacy-tls"},
 		{"no TLS volume", func(p *corev1.Pod) {
 			vols := p.Spec.Volumes[:0]
 			for _, v := range p.Spec.Volumes {
@@ -187,7 +188,7 @@ func TestConvergePod_TLSSecretMatchKeepsPod(t *testing.T) {
 				}
 				p.Spec.Containers[i].VolumeMounts = mounts
 			}
-		}},
+		}, "agent Pod matches the derived spec"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,8 +205,8 @@ func TestConvergePod_TLSSecretMatchKeepsPod(t *testing.T) {
 				t.Fatalf("want the Pod kept, got %d Pods", len(pods))
 			}
 			if cond := podUpToDate(agent); cond == nil || cond.Status != metav1.ConditionTrue ||
-				cond.Reason != kaalmv1beta1.ReasonPodCurrent {
-				t.Errorf("PodUpToDate = %+v, want True Current", cond)
+				cond.Reason != kaalmv1beta1.ReasonPodCurrent || cond.Message != tc.wantMsg {
+				t.Errorf("PodUpToDate = %+v, want True Current with message %q", cond, tc.wantMsg)
 			}
 		})
 	}

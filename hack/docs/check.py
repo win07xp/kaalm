@@ -37,6 +37,17 @@ Checks, per book:
   listed figure is a byte-exact copy of its design-book source, and nothing
   else sits in guide/src/diagrams.
 
+Across the repository, outside the books:
+
+- every book page that a Go file under api/, cmd/, internal/, or test/ cites by
+  path (`docs/src/...md`, also `guide/src` and `learn/src`) exists, and its
+  `#anchor` names a heading on that page, under the same slug rules as
+  in-book links. API type comments are the CRD field descriptions that
+  `kubectl explain` shows, so a comment is held to the book's link rules. Only
+  the path and the `#anchor` are checked: a section named in prose after the
+  path, such as `tool-plane.md (The Broker)`, is not. Renaming a heading means
+  updating these comments as well as the in-book links.
+
 Also runs diagram_check.py over docs/src/diagrams.
 
 Usage: check.py [--time-report] [--ratchet-report]
@@ -69,6 +80,12 @@ INLINE_CODE = re.compile(r"`[^`]*`")
 LINK_TARGET = re.compile(r"\]\([^)]*\)")
 HTML_TAG = re.compile(r"<[^>]+>")
 CITED_PATH = re.compile(r"\b((?:config/samples|test/e2e/testdata)/[\w./-]+\.ya?ml)\b")
+# Go trees whose comments cite book pages; API type comments become the CRD
+# descriptions that `kubectl explain` shows.
+GO_DOC_DIRS = ("api", "cmd", "internal", "test")
+# A book page cited from Go: group 1 is the repo-relative page, group 2 the
+# optional anchor.
+GO_DOC_REF = re.compile(r"\b((?:docs|guide|learn)/src/[\w./-]+?\.md)\b(?:#([\w-]+))?")
 DASHES = re.compile("[–—]")
 # Ginkgo node labels, checked against the scenario coverage map and against
 # spec labels quoted on other pages.
@@ -408,6 +425,22 @@ class Checker:
                     if name not in listed:
                         self.problems.append(f"{rel}:{n}: embeds {name}, which is not listed in guide/src/diagrams/SOURCES")
 
+    def check_go_doc_refs(self) -> None:
+        """Every book page a Go file cites by path exists, and its #anchor names
+        a heading there. A renamed heading otherwise breaks these citations
+        silently, since no book link points at them."""
+        for d in GO_DOC_DIRS:
+            for f in sorted((ROOT / d).rglob("*.go")):
+                rel = f.relative_to(ROOT).as_posix()
+                text = f.read_text(encoding="utf-8")
+                for m in GO_DOC_REF.finditer(text):
+                    n = text.count("\n", 0, m.start()) + 1
+                    dest = ROOT / m.group(1)
+                    if not dest.is_file():
+                        self.problems.append(f"{rel}:{n}: link target does not exist: {m.group(0)}")
+                    elif m.group(2) and m.group(2) not in self.anchors(dest):
+                        self.problems.append(f"{rel}:{n}: no heading for anchor: {m.group(0)}")
+
     def check_coverage_map(self) -> None:
         path = ROOT / COVERAGE_MAP
         text = path.read_text(encoding="utf-8")
@@ -489,6 +522,7 @@ def main(argv: list[str]) -> int:
     for book in BOOKS:
         checker.check_book(book)
     checker.check_guide_figures()
+    checker.check_go_doc_refs()
     checker.check_coverage_map()
     checker.check_diagrams()
     for p in checker.problems:

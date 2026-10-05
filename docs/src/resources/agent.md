@@ -137,6 +137,8 @@ status:
 
 Both halves matter. The name is used verbatim as one DNS label in the certificate SAN and as the Service name, both capped at 63, where Kubernetes would otherwise allow 253. And the no-dots restriction is a security requirement: the gateway reads an agent's namespace by splitting the `{name}.{namespace}.svc.cluster.local` SAN on dots, so a name such as `admin.svc` would shift which label is read as the namespace. The gateway's label-count check is defense in depth against the same pattern ([Workload identity](../gateways/llm/workload-identity.md)). The AgentTask schema carries the same rule.
 
+An Agent cannot share its name with an AgentTask in the same namespace ([An Agent and an AgentTask cannot share a name](../runtime/child-resources.md#an-agent-and-an-agenttask-cannot-share-a-name)).
+
 ### Persistent is the only agent mode
 
 An Agent is always a long-lived workload. AgentTask serves the ephemeral use case; there is no scheduled or cron-style mode.

@@ -45,6 +45,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | Agent | `SystemNamespaceForbidden`, `InvalidReference`, `ExistingClaimNotFound`, `ImagePullSecretMissing`, `SecretNotOptedIn` (rule 48), `HandlerConfigMapNotFound` | Warning | a reconcile-time validation failure sets `Ready=False` with the reason |
 | Agent, AgentTask | `PodCreateRejected` | Warning | the API server rejects the Pod create and `Ready=False` first takes this reason; not repeated on each 30-second re-check, and not when only the message changes, as quota counts do |
 | Agent, AgentTask | `ChildConflict` | Warning | a child object that the workload would own already exists and is not owned by it; fires again when the message changes, such as when a different child conflicts |
+| Agent, AgentTask, AgentClass | `ResourceClaimsIgnored` | Warning | the object's resources block sets container `claims` ([rule 53](../resources/validation/class-policy.md)); `Ready` is unaffected. The message names the field and the claims. It is emitted when the claims first appear or change, not on every pass, and once more after a controller restart or leader change while they remain. An Agent warns about its own `spec.resources` only, and claims in class defaults warn on the class. A terminal AgentTask does not emit it, and the class emits it only after its status write succeeds |
 | AgentTask | `TaskSucceeded`; `TaskFailed`, `TimeoutExceeded`, `TimeoutSucceeded`, and the provisioning and class reasons | Normal; Warning | the task settles, or a retry starts; see [Event reasons](task-lifecycle.md#event-reasons) |
 | AgentTask | `SystemNamespaceForbidden`, `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn` (rule 48) | Warning | a pre-Pod reconcile-time gate sets `Ready=False` with the reason; see [Event reasons](task-lifecycle.md#event-reasons) |
 | ModelProvider | `ProviderUnhealthy` | Warning | every probe pass that fails for a reason other than the credential |
@@ -62,7 +63,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | AgentClass | `FQDNPolicyUnsupported` | Warning | the `FQDNPolicySupported` condition first turns `False`: `allowedHosts` is set on a CNI without FQDN egress, so the hosts are ignored |
 | AgentClass | `BelowRestrictedBaseline` | Warning | the `SecurityBaseline` condition first turns `False` because a `security` field falls below the restricted Pod Security Standard |
 | AgentClass | `DeprecatedFieldSet` | Warning | the `DeprecatedFields` condition first turns `True` because the class sets a deprecated field (`network.allowHostNetwork: true`); a steady finding sends nothing |
-| AgentClass | `InvalidReference`, `InvalidCIDR`, `InvalidNamespacePattern` (rule 51) | Warning | a reconcile-time validation failure sets `Ready=False` with the reason |
+| AgentClass | `InvalidReference`, `InvalidCIDR`, `InvalidNamespacePattern` (rule 51), `InvalidImagePattern` (rule 52) | Warning | a reconcile-time validation failure sets `Ready=False` with the reason |
 | ModelProvider, ToolProvider, AgentClass | `DeletionBlocked` | Warning | the finalizer's delete hold first appears, naming a referrer ([Cluster-scoped resources](finalizers.md#cluster-scoped-resources)) |
 
 ## Observability

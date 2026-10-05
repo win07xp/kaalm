@@ -860,6 +860,94 @@ func TestChannel_GatePruneErrorKeepsStatus(t *testing.T) {
 	}
 }
 
+// A prune error on a valid pass is returned, but the pass's status write
+// (Ready=True, phase) has already happened, as on a failing pass (#433).
+func TestChannel_ValidPruneErrorKeepsStatus(t *testing.T) {
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "ch-valid", Namespace: "default"}}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch-valid-secret", Namespace: "default", Labels: channelCredentialLabels()},
+		Data:       map[string][]byte{"token": []byte("hook-token")},
+	}
+	ch := &kaalmv1beta1.AgentChannel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ch-valid", Namespace: "default",
+			Finalizers: []string{kaalmv1beta1.ChannelFinalizer},
+		},
+		Spec: kaalmv1beta1.AgentChannelSpec{
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "ch-valid"},
+			Webhook: &kaalmv1beta1.AgentChannelWebhook{
+				Path: "/channels/default/ch-valid",
+				Auth: kaalmv1beta1.ChannelAuth{
+					Type:      "bearer",
+					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "ch-valid-secret", Key: "token"},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
+		WithObjects(agent, sec, ch).WithStatusSubresource(ch).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.ConfigMapList); ok {
+					return errString("list failed")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
+	key := types.NamespacedName{Namespace: "default", Name: "ch-valid"}
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err == nil {
+		t.Fatal("want the prune error, got nil")
+	}
+	if res != (reconcile.Result{}) {
+		t.Errorf("result = %+v, want zero alongside an error", res)
+	}
+	var got kaalmv1beta1.AgentChannel
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	cond := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != kaalmv1beta1.ReasonAgentReachable {
+		t.Errorf("Ready = %+v, want True/AgentReachable", cond)
+	}
+	if got.Status.Phase != kaalmv1beta1.ChannelActive {
+		t.Errorf("phase = %q, want Active", got.Status.Phase)
+	}
+}
+
+// A normal pass prunes a record with no parseable expiry once its
+// creationTimestamp is past twice the TTL, the rule the orphan pruner uses
+// (#433).
+func TestChannel_PruneFallsBackToCreationTime(t *testing.T) {
+	now := time.Now()
+	objs := []client.Object{
+		asyncRecord("kaalm-async-fb-bad-old", "default", "ch-fb", "not-a-time", now.Add(-3*time.Hour)),
+		asyncRecord("kaalm-async-fb-missing-old", "default", "ch-fb", "", now.Add(-3*time.Hour)),
+		asyncRecord("kaalm-async-fb-bad-young", "default", "ch-fb", "not-a-time", now.Add(-90*time.Minute)),
+		asyncRecord("kaalm-async-fb-expired", "default", "ch-fb", rfc(now.Add(-time.Minute)), now.Add(-61*time.Minute)),
+		asyncRecord("kaalm-async-fb-live", "default", "ch-fb", rfc(now.Add(30*time.Minute)), now.Add(-30*time.Minute)),
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	r := &AgentChannelReconciler{Client: c, OperatorNamespace: orphanTestNS}
+	ch := &kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Name: "ch-fb", Namespace: "default"}}
+	if err := r.pruneAsyncConfigMaps(context.Background(), ch, false); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	for name, want := range map[string]bool{
+		"kaalm-async-fb-bad-old":     false,
+		"kaalm-async-fb-missing-old": false,
+		"kaalm-async-fb-bad-young":   true,
+		"kaalm-async-fb-expired":     false,
+		"kaalm-async-fb-live":        true,
+	} {
+		if got := recordExists(t, c, name); got != want {
+			t.Errorf("%s exists = %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestChannel_PruneExpiredAsyncConfigMaps(t *testing.T) {
 	mkWorkloadClass(t, "chc-prune", nil)
 	mkWorkloadAgent(t, "ch-agent-prune", "chc-prune", nil)

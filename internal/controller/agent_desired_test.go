@@ -240,6 +240,15 @@ func TestImageAllowed(t *testing.T) {
 	if !imageAllowed("anything", nil) {
 		t.Error("empty allowlist must allow any image")
 	}
+	// Rule 52 leaves matching alone: a malformed entry matches nothing, and
+	// the valid entries still admit their images.
+	mixed := []string{"[", "registry.internal/agents/*"}
+	if !imageAllowed("registry.internal/agents/support:v1", mixed) {
+		t.Error("a valid entry next to a malformed one must still admit its image")
+	}
+	if imageAllowed("evil.io/x", mixed) {
+		t.Error("a malformed entry must match nothing")
+	}
 }
 
 func TestNamespaceAllowed(t *testing.T) {

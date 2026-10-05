@@ -69,7 +69,7 @@ The Roles and RoleBindings the reconciler created for the channel are owner-refe
 
 A leader-only runnable runs one pass when its replica becomes leader and then every 10 minutes. Each pass checks the `kaalm-async-*` ConfigMaps in `kaalm-system` and deletes a record when both of the following are true:
 
-- It's expired: its `kaalm.io/expires-at` time has passed.
+- It's expired, by the rule under [Labels and expiry](../gateways/api/async-responses.md#response-persistence), which covers a record with a missing or malformed `kaalm.io/expires-at` annotation.
 - Its channel no longer exists, read from the `kaalm.io/channel-namespace` and `kaalm.io/channel-name` labels. A record with no channel labels has no channel to look up and counts as orphaned once expired.
 
 A record whose channel exists is left to that channel's own expiry prune and finalizer sweep, even while the channel is being deleted. A failed pass is retried on the next tick. So a stray record left behind by the race above lingers at most about 10 minutes past its expiry.

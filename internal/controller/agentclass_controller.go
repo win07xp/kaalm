@@ -47,7 +47,9 @@ import (
 // docs/src/controller/reconcilers/agentclass.md.
 type AgentClassReconciler struct {
 	client.Client
-	Recorder record.EventRecorder
+	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
+	claimsWarned claimsWarnings
+	Recorder     record.EventRecorder
 	// FQDNSupport reports whether the CNI can enforce FQDN egress policies;
 	// production passes a shared FQDNProbe. nil means unsupported.
 	FQDNSupport func() (bool, error)
@@ -74,6 +76,7 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if !ac.DeletionTimestamp.IsZero() {
+		r.claimsWarned.forget(ac.UID)
 		return r.reconcileDelete(ctx, &ac)
 	}
 
@@ -101,8 +104,10 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	badCIDRs := invalidCIDRs(&ac)
 	problems = append(problems, badCIDRs...)
 	problems = append(problems, invalidHosts(&ac)...)
-	badPatterns := invalidNamespacePatterns(ac.Spec.AllowedNamespaces)
-	problems = append(problems, badPatterns...)
+	badNamespacePatterns := invalidNamespacePatterns(ac.Spec.AllowedNamespaces)
+	problems = append(problems, badNamespacePatterns...)
+	badImagePatterns := invalidImagePatterns(ac.Spec.Image.AllowedImages)
+	problems = append(problems, badImagePatterns...)
 
 	// warnings are the advisory findings that first appear on this pass,
 	// emitted after the status write below records them.
@@ -214,9 +219,13 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		sort.Strings(problems)
 		// The message lists every problem; the reason follows a fixed
 		// precedence: a malformed CIDR (rule 19), then a malformed
-		// allowedNamespaces pattern (rule 51), then InvalidReference.
+		// allowedNamespaces pattern (rule 51), then a malformed allowedImages
+		// pattern (rule 52), then InvalidReference.
 		reason := kaalmv1beta1.ReasonInvalidReference
-		if len(badPatterns) > 0 {
+		if len(badImagePatterns) > 0 {
+			reason = kaalmv1beta1.ReasonInvalidImagePattern
+		}
+		if len(badNamespacePatterns) > 0 {
 			reason = kaalmv1beta1.ReasonInvalidNamespacePattern
 		}
 		if len(badCIDRs) > 0 {
@@ -244,6 +253,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if invalid != nil {
 		r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
 	}
+	// Rule 53 is advisory with no condition, so its rising edge is held in
+	// memory; noting it after the status write keeps a failed write silent.
+	r.claimsWarned.note(r.Recorder, &ac, "spec.resources.defaults", ac.Spec.Resources.Defaults.Claims)
 	logger.V(1).Info("reconciled AgentClass", "ready", len(problems) == 0, "agents", usage.agents, "tasks", usage.tasks)
 	return ctrl.Result{}, nil
 }

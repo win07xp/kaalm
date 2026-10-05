@@ -1,4 +1,5 @@
 # maxUnavailableOnDrift must be at least 1 (rule 44)
+# expect: maxUnavailableOnDrift must be an integer of at least 1 or a percentage from 1% to 100%
 apiVersion: kaalm.io/v1beta1
 kind: AgentClass
 metadata: {name: no-slots}

@@ -35,7 +35,8 @@ Prerequisites (the chart does NOT install these):
   1. cert-manager, running with --enable-certificate-owner-ref=true
   2. trust-manager, with --trust-namespace matching
      certManager.clusterResourceNamespace (default "cert-manager")
-  3. a NetworkPolicy-enforcing CNI (kindnet/flannel do not qualify)
+  3. a CNI that enforces NetworkPolicy: the agent NetworkPolicies Kaalm
+     creates have no effect without one
 
 Check the rollout:
   kubectl -n {{ .Release.Namespace }} rollout status deploy/kaalm-controller
