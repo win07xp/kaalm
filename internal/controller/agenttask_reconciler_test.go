@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1364,8 +1366,18 @@ func TestAgentTask_EventsFollowTheStatusWrite(t *testing.T) {
 	}{{
 		name: "ChildConflict", prefix: "Warning " + kaalmv1beta1.ReasonChildConflict, steady: true,
 		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
-			_, err := r.childConflict(ctxT(), task,
+			_, err := r.childBlocked(ctxT(), task, nil, false,
 				&ChildConflictError{Kind: "Service", Name: task.Name, OwnerKind: "AgentTask"})
+			return err
+		},
+	}, {
+		name: "ChildWriteRejected", prefix: "Warning " + kaalmv1beta1.ReasonChildWriteRejected, steady: true,
+		step: func(r *AgentTaskReconciler, task *kaalmv1beta1.AgentTask) error {
+			_, err := r.childBlocked(ctxT(), task, nil, false, &ChildWriteRejectedError{
+				Op: "creating", Kind: "NetworkPolicy", Name: task.Name,
+				Err: apierrors.NewForbidden(schema.GroupResource{Resource: "networkpolicies"}, task.Name,
+					errors.New("denied by policy webhook")),
+			})
 			return err
 		},
 	}, {

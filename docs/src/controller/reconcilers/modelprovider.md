@@ -12,15 +12,17 @@ It reads the credential Secret in `kaalm-system`, the other ModelProviders along
 
 ### Budget reconciliation
 
-The reconciler reduces the per-replica spend partials in `kaalm-budget-{name}`. It writes `_canonical`, `status.budgetUsage` per namespace, `status.clusterSpentUSD`, and the `kaalm_provider_budget_canonical_usd` gauge, and reduces the per-agent counters in `kaalm-agentspend-{name}` into that ConfigMap only ([Per-workload spend](../../gateways/llm/budgets-and-rate-limits.md#per-workload-spend)). [The reducer](../../gateways/llm/budgets-and-rate-limits.md#the-reducer) specifies how each key is handled, and [Budget state management](../../gateways/llm/budgets-and-rate-limits.md#budget-state-management) gives the format.
+The reconciler reduces the per-replica spend partials in `kaalm-budget-{name}`. It writes `_canonical`, `status.budgetUsage` per namespace, `status.clusterSpentUSD`, and the `kaalm_provider_budget_canonical_usd` gauge, and reduces the per-agent counters in `kaalm-agentspend-{name}` into that ConfigMap only ([Per-workload spend](../../gateways/llm/budgets-and-rate-limits.md#per-workload-spend)). [The reducer](../../gateways/llm/budgets-and-rate-limits.md#the-reducer) specifies how each key is handled, and [Budget state management](../../gateways/llm/budgets-and-rate-limits.md#budget-state-management) gives the format. The reduction runs on every pass, including a pass that fails a check ([What it checks](#what-it-checks)).
 
-A replica's `_marginExceeded` flag sets the `BoundaryMarginRaised` condition. The condition clears with `reason=MarginSufficient` when no replica reports the flag. The matching `Warning` event fires once, when the condition first turns on.
+When the provider tracks no budget (`budget.period` is `none`, or `budget` is removed) or `kaalm-budget-{name}` does not exist, the pass clears `status.budgetUsage`, `status.clusterSpentUSD`, the `BoundaryMarginRaised` condition, and the provider's `kaalm_provider_budget_canonical_usd` series. Without a period the gateway neither counts nor enforces a budget, and without the ConfigMap no replica's spend is visible. Agents read `budgetUsage` for `BudgetExhausted`, so a stale `Blocked` entry would keep them `Degraded` with nothing blocking them. The ConfigMaps themselves are left as they are.
+
+A replica's `_marginExceeded` flag sets the `BoundaryMarginRaised` condition. The condition clears with `reason=MarginSufficient` when no replica reports the flag, and it is removed when the provider stops tracking a budget (see the previous paragraph). The matching `Warning` event fires once, when the condition first turns on.
 
 On period rollover, the previous period's totals are archived to status in the first pass after the boundary ([Timing](#timing) gives the lag). Per-request enforcement never waits on it.
 
 ## What it checks
 
-The checks run in the order of the following table. A failing credential or configuration check ends the pass before the gateway mirror, the budget reduction, and the probe, so `GatewayReachable` and `budgetUsage` keep their last values and `Healthy` goes `Unknown` with `NotProbed`. A stale `Healthy=True` beside `Ready=False` would read as a working provider.
+The checks run in the order of the following table. Every pass except a held delete mirrors gateway readiness and reduces the budget and agent-spend partials before the checks run, because neither needs a valid credential or spec, and the gateway keeps counting spend while the provider is `Ready=False`. So `GatewayReachable`, `budgetUsage`, `clusterSpentUSD`, `BoundaryMarginRaised`, and the `BudgetExhausted` condition on Agents stay current on a misconfigured provider. A failing credential or configuration check still ends the pass before the probe, so `Healthy` goes `Unknown` with `NotProbed`. A stale `Healthy=True` beside `Ready=False` would read as a working provider.
 
 | Check | Reason when it fails | Rule |
 |---|---|---|
@@ -105,13 +107,13 @@ A ModelProvider is cluster-scoped and has no phase. [ModelProvider status](../..
 
 - **`Ready`** is `True` with `reason: CredentialsValid` when every check passes, and `False` with the reason from [What it checks](#what-it-checks) otherwise. A provider whose probe fails with `ProviderUnhealthy` stays `Ready=True`.
 - **`Healthy`** is `True` or `False` only from a probe in the same pass ([Liveness probe](#liveness-probe)). A pass that ends without one sets `Unknown` with `NotProbed`: a failing credential or configuration check, a disabled probe, or a held delete. [ModelProvider status](../../resources/modelprovider.md#status) gives the meaning.
-- **`GatewayReachable`** is `True` with `GatewayReady` when at least one gateway Pod in `kaalm-system` is Ready, else `False` with `GatewayUnavailable`. The value is cluster-wide, the same on every provider that passes the credential and configuration checks.
+- **`GatewayReachable`** is `True` with `GatewayReady` when at least one gateway Pod in `kaalm-system` is Ready, else `False` with `GatewayUnavailable`. The value is cluster-wide, the same on every provider. A provider whose delete is held keeps its last value.
 - **`BoundaryMarginRaised`** and `status.budgetUsage` come from [Budget reconciliation](#budget-reconciliation). The advisory conditions `MaxOutputTokensUnset`, `FallbackIneligible`, and `DegradeTargetNotCheapest` come from the checks above.
 - **Events.** Every `Ready=False` reason raises a `Warning` event with the same reason, once, when it first appears on `Ready`. [Event emission](../operations.md#event-emission) lists the rest.
 
 ## Timing
 
-- **A failing credential or configuration check.** The pass ends with no requeue, so an event re-runs it. A change to the credential Secret, including its label or annotation, re-evaluates every provider that names it at once. A spec edit re-runs the checks at once. A change to any ModelProvider re-enqueues every other provider that declares a fallback, so a chain recovers when a missing provider appears or a bad one is fixed.
+- **A failing credential or configuration check.** The pass requeues every minute when the provider has a budget period, so the reduction and rollover keep running; without a period, only events re-run it. A change to the credential Secret, including its label or annotation, re-evaluates every provider that names it at once. A spec edit re-runs the checks at once. A change to any ModelProvider re-enqueues every other provider that declares a fallback, so a chain recovers when a missing provider appears or a bad one is fixed.
 - **After the configuration checks.** A pass requeues at the probe's next delay when the probe ran ([Probe backoff](#probe-backoff)). With the probe disabled, it requeues every minute for a provider with a budget period, so the reduction keeps running. With neither, only events re-run it.
 - **Gateway readiness.** A gateway Pod's creation, deletion, or change of Ready state re-enqueues every provider at once.
 - **Spend.** A replica's write to the budget ConfigMap re-enqueues its provider between timed passes. A period rollover is archived in the first pass after the boundary: the next requeue at the latest, or sooner when such a write arrives.

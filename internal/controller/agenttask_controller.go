@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -46,10 +47,10 @@ import (
 
 // provisioningDeadline bounds how long an attempt may go without a Ready Pod
 // before it fails: an image-pull or scheduling failure, counted from Pod
-// creation, and a rejected Pod create, counted from the attempt's first
-// rejection (status.podCreateRejectedTime). A documented constant, not a
-// spec field (docs/src/controller/task-lifecycle.md). A variable so tests
-// can shorten it.
+// creation, and a rejected Pod create or child write, counted from the
+// attempt's first rejection (status.createRejectedTime). A documented
+// constant, not a spec field (docs/src/controller/task-lifecycle.md). A
+// variable so tests can shorten it.
 var provisioningDeadline = 5 * time.Minute
 
 // AgentTaskReconciler drives the run-to-completion state machine: Pending ->
@@ -80,6 +81,18 @@ type AgentTaskReconciler struct {
 	// production passes the FQDNProbe shared with the AgentClassReconciler.
 	// nil means unsupported: no CiliumNetworkPolicy is synthesized.
 	FQDNSupport func() (bool, error)
+	// gateInterval overrides gateRequeue for childBlocked's hold. Zero means
+	// gateRequeue; tests set it so they need not change the package
+	// variable the envtest manager reads.
+	gateInterval time.Duration
+}
+
+// heldGate is the re-check interval childBlocked holds a task for.
+func (r *AgentTaskReconciler) heldGate() time.Duration {
+	if r.gateInterval > 0 {
+		return r.gateInterval
+	}
+	return gateRequeue
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agenttasks,verbs=get;list;watch;update;patch;delete
@@ -154,12 +167,15 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// prePod: the attempt has no Pod yet, so a rejected child write is
+	// bounded by the provisioning deadline.
+	prePod := pod == nil && (task.Status.Phase == kaalmv1beta1.TaskPending ||
+		task.Status.Phase == kaalmv1beta1.TaskProvisioning)
 
 	// Pre-Pod validation runs only when provisioning a new Pod (initial
 	// provisioning and the Provisioning re-entry of a backoff retry).
 	// In-flight tasks continue under the class snapshot taken at Pod creation.
-	if pod == nil && (task.Status.Phase == kaalmv1beta1.TaskPending ||
-		task.Status.Phase == kaalmv1beta1.TaskProvisioning) {
+	if prePod {
 		if reason, msg := r.taskViolation(ctx, &task, &class, eff); reason != "" {
 			// Terminal: AgentTask has no Degraded phase. A task that never had
 			// a Pod has no class bounds yet; record them in the settling
@@ -173,7 +189,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// holds no standing read: the scoped Role comes first.
 		if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), &task, taskPullSecretRoleName(task.Name),
 			r.OperatorNamespace, eff.ImagePullSecrets); err != nil {
-			return r.childConflict(ctx, &task, err)
+			return r.childBlocked(ctx, &task, &class, true, err)
 		}
 		for _, ref := range eff.ImagePullSecrets {
 			var sec corev1.Secret
@@ -189,7 +205,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, err
 			}
 		}
-		if handled, res, err := r.envSecretGate(ctx, &task, eff); handled {
+		if handled, res, err := r.envSecretGate(ctx, &task, &class, eff); handled {
 			return res, err
 		}
 		if eff.Image == "" {
@@ -209,7 +225,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Failed phase with a live retry has already transitioned to Provisioning.
 	res, err := r.drive(ctx, &task, &class, eff, pod)
 	if err != nil {
-		return r.childConflict(ctx, &task, err)
+		return r.childBlocked(ctx, &task, &class, prePod, err)
 	}
 	logger.V(1).Info("reconciled AgentTask", "phase", task.Status.Phase)
 	return res, nil
@@ -224,7 +240,7 @@ func (r *AgentTaskReconciler) drive(
 	case kaalmv1beta1.TaskPending, kaalmv1beta1.TaskProvisioning:
 		return r.driveProvisioning(ctx, task, class, eff, pod)
 	case kaalmv1beta1.TaskRunning:
-		return r.driveRunning(ctx, task, pod)
+		return r.driveRunning(ctx, task, class, eff, pod)
 	case kaalmv1beta1.TaskCompleting:
 		return ctrl.Result{}, r.driveCompleting(ctx, task, pod)
 	}
@@ -232,7 +248,9 @@ func (r *AgentTaskReconciler) drive(
 }
 
 // driveProvisioning creates the child tree, gates on the Certificate, creates
-// the Pod, and watches it to Ready or an early failure.
+// the Pod, and watches it to Ready or an early failure. A pass still waiting
+// on the Pod re-creates a missing child after the state checks, so it never
+// delays them.
 func (r *AgentTaskReconciler) driveProvisioning(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
 	eff effectiveTaskSpec, pod *corev1.Pod,
@@ -260,15 +278,16 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			return ctrl.Result{}, err
 		}
 		if err := r.Create(ctx, desired); err != nil {
-			if !isPodCreateRejection(err) {
+			if !isWriteRejection(err) {
 				return ctrl.Result{}, err
 			}
-			return r.podCreateRejected(ctx, task, class, err)
+			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonPodCreateRejected,
+				"Pod create rejected", err.Error())
 		}
 		r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 		r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
 		task.Status.PodName = desired.Name
-		task.Status.PodCreateRejectedTime = nil
+		task.Status.CreateRejectedTime = nil
 		// The class snapshot for this attempt: a retry's new Pod copies the
 		// bounds again from the class as it then stands.
 		task.Status.ClassBounds = classTaskBounds(class)
@@ -303,7 +322,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			task.Status.CurrentPodUID = string(pod.UID)
 		}
 		task.Status.PodName = pod.Name
-		task.Status.PodCreateRejectedTime = nil
+		task.Status.CreateRejectedTime = nil
 		if err := r.Status().Update(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -351,43 +370,63 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "ProvisioningDeadlineExceeded",
 			fmt.Sprintf("Pod %s not Ready within %s", pod.Name, provisioningDeadline))
 	}
+	return r.awaitPodReady(ctx, task, class, eff, pod)
+}
+
+// awaitPodReady ends a Provisioning pass whose Pod is not Ready yet, after
+// every state check: it re-creates a missing child, keeps Ready at
+// PodProvisioning (clearing a gate the pass no longer finds), and re-checks
+// soon.
+func (r *AgentTaskReconciler) awaitPodReady(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod,
+) (ctrl.Result, error) {
+	if err := r.restoreTaskChildren(ctx, task, class, eff, pod, false); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
 	return ctrl.Result{RequeueAfter: certWaitRequeue}, r.Status().Update(ctx, task)
 }
 
-// podCreateRejected holds a task whose Pod create the API server rejected:
-// Provisioning with Ready=False PodCreateRejected, re-checked on gateRequeue
-// because the cause (a RuntimeClass, a quota, a webhook) is not watched. The
-// provisioning deadline counts from the attempt's first rejection, recorded
-// in status so a controller restart keeps it; past the deadline the attempt
-// fails or retries like a Pod that never became Ready.
-func (r *AgentTaskReconciler) podCreateRejected(
-	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, err error,
+// createRejected holds a task whose Pod create, or a write of another
+// child it needs before the Pod, the API server rejected: Provisioning with
+// Ready=False reason, re-checked on gateRequeue because the cause (a
+// RuntimeClass, a quota, a webhook) is not watched. The provisioning
+// deadline counts from the attempt's first rejection, recorded in status so
+// a controller restart keeps it; past the deadline the attempt fails or
+// retries like a Pod that never became Ready, with a message of what and
+// msg.
+func (r *AgentTaskReconciler) createRejected(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, reason, what, msg string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
-	if task.Status.PodCreateRejectedTime == nil {
-		task.Status.PodCreateRejectedTime = &now
+	if task.Status.CreateRejectedTime == nil {
+		task.Status.CreateRejectedTime = &now
 	}
 	task.Status.PodName = ""
-	if now.Sub(task.Status.PodCreateRejectedTime.Time) > provisioningDeadline {
+	if now.Sub(task.Status.CreateRejectedTime.Time) > provisioningDeadline {
 		// A task that settles without ever having a Pod has no class bounds
 		// yet; record them so the class default TTL still reaches it.
 		if task.Status.Retries >= task.Spec.Completion.BackoffLimit && task.Status.ClassBounds == nil {
 			task.Status.ClassBounds = classTaskBounds(class)
 		}
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "ProvisioningDeadlineExceeded",
-			fmt.Sprintf("Pod create rejected for longer than %s: %s", provisioningDeadline, err.Error()))
+			fmt.Sprintf("%s for longer than %s: %s", what, provisioningDeadline, msg))
 	}
 	r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
-	if err := r.gateTask(ctx, task, kaalmv1beta1.ReasonPodCreateRejected, err.Error()); err != nil {
+	if err := r.gateTask(ctx, task, reason, msg); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
 // driveRunning watches for completion, timeout, and mid-run Pod loss, in that
-// precedence order: a completion already in the mailbox beats a lost Pod.
+// precedence order: a completion already in the mailbox beats a lost Pod. A
+// pass that finds the task still running re-creates a missing child after
+// those checks, so it never delays them.
 func (r *AgentTaskReconciler) driveRunning(
-	ctx context.Context, task *kaalmv1beta1.AgentTask, pod *corev1.Pod,
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod,
 ) (ctrl.Result, error) {
 	// agentReported: the mailbox is the completion signal.
 	if isAgentReported(task) {
@@ -426,6 +465,29 @@ func (r *AgentTaskReconciler) driveRunning(
 	// Mid-run Pod loss with an empty mailbox is a retryable failure.
 	if pod == nil || (isAgentReported(task) && pod.Status.Phase == corev1.PodFailed) {
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "PodDisrupted", "task Pod was lost mid-run")
+	}
+	return r.continueRunning(ctx, task, class, eff, pod)
+}
+
+// continueRunning ends a Running pass whose Pod runs on, after every state
+// check: it re-creates a missing child and restores Ready=True PodRunning
+// when a gate or conflict left it otherwise. A terminating Pod needs
+// neither; the next pass handles its loss.
+func (r *AgentTaskReconciler) continueRunning(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod,
+) (ctrl.Result, error) {
+	if !pod.DeletionTimestamp.IsZero() {
+		return runningRequeue(task), nil
+	}
+	if err := r.restoreTaskChildren(ctx, task, class, eff, pod, true); err != nil {
+		return ctrl.Result{}, err
+	}
+	if !apimeta.IsStatusConditionTrue(task.Status.Conditions, kaalmv1beta1.ConditionReady) {
+		r.setTaskReady(task, true, "PodRunning", "task Pod is running")
+		if err := r.Status().Update(ctx, task); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	return runningRequeue(task), nil
 }
@@ -517,7 +579,7 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 	task.Status.ArtifactValues = nil
 	task.Status.AgentReportedStatus = ""
 	task.Status.AgentReportedMessage = ""
-	task.Status.PodCreateRejectedTime = nil
+	task.Status.CreateRejectedTime = nil
 	r.setTaskPhase(task, kaalmv1beta1.TaskFailed)
 	r.setTaskReady(task, false, reason, msg)
 	if err := r.Status().Update(ctx, task); err != nil {
@@ -572,7 +634,7 @@ func (r *AgentTaskReconciler) settle(
 	r.setTaskPhase(task, phase)
 	now := metav1.Now()
 	task.Status.CompletionTime = &now
-	task.Status.PodCreateRejectedTime = nil
+	task.Status.CreateRejectedTime = nil
 	completed := metav1.ConditionFalse
 	if phase == kaalmv1beta1.TaskSucceeded {
 		completed = metav1.ConditionTrue
@@ -667,30 +729,24 @@ func (r *AgentTaskReconciler) taskViolation(
 	return "", ""
 }
 
-// ensureTaskChildren converges the SA, PVC, NetworkPolicy, FQDN policy, and, for
-// agentReported tasks only, the completion mailbox with its scoped RBAC.
+// ensureTaskChildren converges the SA, PVC, NetworkPolicy, the completion
+// mailbox with its scoped RBAC (agentReported tasks only), and the FQDN
+// policy before the Pod is created; restoreTaskChildren covers the time
+// after. Each child is read before it is created, so one that exists costs
+// no API call.
 func (r *AgentTaskReconciler) ensureTaskChildren(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
 ) error {
 	// A name taken by an object the task does not control is a
 	// ChildConflictError: adopting it would run the Pod under a policy or
 	// grant Kaalm did not write.
-	create := func(obj client.Object) error {
+	for _, obj := range desiredTaskChildren(task, class, eff, r.OperatorNamespace, r.DNS) {
 		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
 			return err
 		}
-		return createControlled(ctx, r.Client, task, obj)
-	}
-	if err := create(desiredTaskServiceAccount(task)); err != nil {
-		return err
-	}
-	if eff.PersistenceOn {
-		if err := create(desiredTaskPVC(task, class, eff)); err != nil {
+		if err := createIfMissing(ctx, r.Client, task, obj); err != nil {
 			return err
 		}
-	}
-	if err := create(desiredTaskNetworkPolicy(task, class, r.OperatorNamespace, r.DNS)); err != nil {
-		return err
 	}
 	hosts := class.Spec.Network.Egress.AllowedHosts
 	supported, err := fqdnSupported(r.FQDNSupport)
@@ -702,28 +758,66 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 		}
 		supported = false
 	}
-	if err := ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported); err != nil {
-		return err
+	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
+}
+
+// restoreTaskChildren re-creates children deleted while the task has a live
+// Pod: the Certificate and the children desiredTaskChildren lists. It runs
+// only after the pass's state checks (completion, timeout, Pod loss, the
+// provisioning deadline), so it never delays them, and it never gates on
+// readiness: the Pod keeps what it already mounted. It only creates; a child
+// that exists is never updated or deleted, and a missing one is built from
+// the class as it now stands. The PVC comes back only when the Pod mounts
+// it. The FQDN policy is read live, so it is restored only when withFQDN is
+// set (Running passes, which are event-driven and few). The Secret-access
+// Roles are not restored: only pre-Pod checks read through them. Every
+// child is tried, and the failures come back joined, so a conflict on one
+// child does not stop the others. In steady state it costs only cache
+// reads.
+func (r *AgentTaskReconciler) restoreTaskChildren(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+	eff effectiveTaskSpec, pod *corev1.Pod, withFQDN bool,
+) error {
+	var errs []error
+	eff.PersistenceOn = podMountsClaim(pod, taskPVCName(task.Name))
+	for _, obj := range desiredTaskChildren(task, class, eff, r.OperatorNamespace, r.DNS) {
+		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		errs = append(errs, createIfMissing(ctx, r.Client, task, obj))
 	}
-	if isAgentReported(task) {
-		if err := create(desiredCompletionConfigMap(task)); err != nil {
-			return err
+	_, _, err := r.ensureTaskCertificate(ctx, task)
+	errs = append(errs, err)
+	if hosts := class.Spec.Network.Egress.AllowedHosts; withFQDN && len(hosts) > 0 {
+		supported, err := fqdnSupported(r.FQDNSupport)
+		if err == nil {
+			err = restoreFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
 		}
-		if err := create(desiredCompletionRole(task)); err != nil {
-			return err
-		}
-		if err := create(desiredCompletionRoleBinding(task, r.OperatorNamespace)); err != nil {
-			return err
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// podMountsClaim reports whether pod mounts the PersistentVolumeClaim claim.
+func podMountsClaim(pod *corev1.Pod, claim string) bool {
+	if pod == nil {
+		return false
+	}
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == claim {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // ensureTaskCertificate creates the task's Certificate when it is missing and
 // reports whether it is Ready. Once the Certificate exists and the task
 // controls it, it also returns the Secret name the Certificate writes
 // (spec.secretName), which the Pod mounts. An existing Certificate is never
-// updated, so it keeps the Secret name it was created with.
+// updated, so it keeps the Secret name it was created with. While the task
+// has a live Pod, restoreTaskChildren calls it too and ignores readiness.
 func (r *AgentTaskReconciler) ensureTaskCertificate(ctx context.Context, task *kaalmv1beta1.AgentTask) (string, bool, error) {
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: task.Namespace, Name: taskCertificateName(task.Name)}
@@ -784,11 +878,11 @@ func (r *AgentTaskReconciler) ownedTaskPod(ctx context.Context, task *kaalmv1bet
 // provisioning continue on a later pass. handled reports whether the pass
 // ends here, with res and err as its result.
 func (r *AgentTaskReconciler) envSecretGate(
-	ctx context.Context, task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec,
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
 ) (handled bool, res ctrl.Result, err error) {
 	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), task, taskEnvSecretRoleName(task.Name),
 		r.OperatorNamespace, envSecretRefs(eff.Env)); err != nil {
-		res, err := r.childConflict(ctx, task, err)
+		res, err := r.childBlocked(ctx, task, class, true, err)
 		return true, res, err
 	}
 	reason, msg, err := checkEnvSecrets(ctx, liveSecretReader(r.SecretReader, r.Client), task.Namespace, eff.Env)
@@ -804,14 +898,33 @@ func (r *AgentTaskReconciler) envSecretGate(
 	return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
 }
 
-// childConflict turns a ChildConflictError into Ready=False ChildConflict, a
-// Warning event, and a slow requeue, and passes any other error through. The
-// phase is left as it is: the task waits, without a Pod, until the
-// conflicting object is gone. The object is not watched (it has no owner
-// reference), so the requeue is what notices its removal.
-func (r *AgentTaskReconciler) childConflict(
-	ctx context.Context, task *kaalmv1beta1.AgentTask, err error,
+// childBlocked reports a child the pass cannot converge, and passes any
+// other error through. A ChildConflictError (the name is taken by an object
+// the task does not control) gives Ready=False ChildConflict; a
+// ChildWriteRejectedError (the API server refused a create, update, or
+// delete of the child) gives Ready=False ChildWriteRejected. Either way a
+// Warning event reports it and the phase is kept. Before a Pod exists the
+// task waits, and a rejected write starts the provisioning deadline the way
+// a rejected Pod create does (prePod; class must be set then). With a Pod,
+// either only sets Ready: completion, timeout, and Pod loss are still acted
+// on each pass, since those checks run before any child write, and the
+// other missing children are still re-created on the same pass. The cause (a conflicting object with no owner reference, a
+// quota, a webhook) raises no watch event, so the gateRequeue requeue is
+// what notices it clearing; a running task is requeued sooner when its
+// timeout comes first.
+func (r *AgentTaskReconciler) childBlocked(
+	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, prePod bool, err error,
 ) (ctrl.Result, error) {
+	if cr, ok := asChildWriteRejected(err); ok {
+		if prePod {
+			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonChildWriteRejected,
+				"child write rejected", cr.Error())
+		}
+		if err := r.gateTask(ctx, task, kaalmv1beta1.ReasonChildWriteRejected, cr.Error()); err != nil {
+			return ctrl.Result{}, err
+		}
+		return heldRequeue(task, r.heldGate()), nil
+	}
 	cc, ok := asChildConflict(err)
 	if !ok {
 		return ctrl.Result{}, err
@@ -825,7 +938,19 @@ func (r *AgentTaskReconciler) childConflict(
 		}
 		r.Recorder.Event(task, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
 	}
-	return ctrl.Result{RequeueAfter: gateRequeue}, nil
+	return heldRequeue(task, r.heldGate()), nil
+}
+
+// heldRequeue is the requeue for a task held by a child it cannot write:
+// gate (childBlocked passes heldGate), or a running task's timeout deadline
+// when that comes first, so the hold never delays the timeout.
+func heldRequeue(task *kaalmv1beta1.AgentTask, gate time.Duration) ctrl.Result {
+	if task.Status.Phase == kaalmv1beta1.TaskRunning {
+		if d := runningRequeue(task).RequeueAfter; d > 0 && d < gate {
+			return ctrl.Result{RequeueAfter: d}
+		}
+	}
+	return ctrl.Result{RequeueAfter: gate}
 }
 
 // runningRequeue schedules the next pass at the deadline of the effective

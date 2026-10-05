@@ -16,11 +16,13 @@ Bold lines are ownership, blue lines are Role grants, grey dashed lines are read
 
 ### Per-channel credential Roles
 
-The check Role lets the reconciler read the label on every Secret the channel names. The credential Role lists only the labeled Secrets, and the gateway reads through it. [Operator ServiceAccount](../../security/rbac.md#operator-serviceaccount) names both Roles and their bindings. The reconciler rebuilds the credential Role from what it read, so the Role stops granting a Secret that lost its label or that the channel no longer references, from the next pass that reaches the Role check.
+The check Role lets the reconciler read the label on every Secret the channel names. The credential Role lists only the labeled Secrets, and the gateway reads through it. [Operator ServiceAccount](../../security/rbac.md#operator-serviceaccount) names both Roles and their bindings. The reconciler rebuilds the credential Role from what it read on every pass of a channel outside the operator namespace, including a pass where the Agent, service, or path check fails. So the Role stops granting a Secret that lost its label or that the channel no longer references from the next pass, and a channel that is not `Ready` never keeps a grant wider than its labeled Secrets, such as one written before the channel stopped at that check.
+
+When the check Role cannot be written (`ChildConflict` or `InvalidReference`), the reconciler cannot read the labels, so the credential Role has no rules until the check Role can be written. A conflict on the check Role therefore also cuts the gateway's grant.
 
 A Role or RoleBinding of one of these names that the channel does not control is never written; see [Child ownership](agent.md#child-ownership).
 
-The operator needs no binding to the credential Role, because the check Role already covers every Secret name the credential Role lists. The reconciler deletes a RoleBinding named `kaalm-channel-{name}-creds-controller` when the channel controls it, so an existing binding is removed on the next pass that reaches the Role check. A binding of that name that the channel does not control is left alone and does not set `ChildConflict`.
+The operator needs no binding to the credential Role, because the check Role already covers every Secret name the credential Role lists. The reconciler deletes a RoleBinding named `kaalm-channel-{name}-creds-controller` when the channel controls it, so an existing binding is removed on the next pass. A binding of that name that the channel does not control is left alone and does not set `ChildConflict`.
 
 ### Channel health poll
 
@@ -32,7 +34,7 @@ The reconciler deletes the `kaalm-async-*` ConfigMaps in `kaalm-system` that car
 
 ## What it checks
 
-The first failing check in the following table sets `Ready=False` with its reason code, and the later checks do not run.
+The first failing check in the following table sets `Ready=False` with its reason code, so the table order decides which reason `Ready` shows: the Secret reasons appear only once the earlier checks pass. The Role writes and the Secret reads still run on every pass after the operator-namespace check.
 
 | Check | Reason when it fails | Rule |
 |---|---|---|
@@ -46,7 +48,7 @@ The first failing check in the following table sets `Ready=False` with its reaso
 
 Rules 16 and 39 are apply-time CRD CEL checks, so they are not here. For each Secret, the label and host checks come before the key checks, so status says nothing about the keys of a Secret that has not opted in.
 
-A channel that fails an earlier check neither creates nor changes its Roles.
+A channel that fails an earlier check still has its Roles, scoped to the labeled Secrets it names ([Per-channel credential Roles](#per-channel-credential-roles)).
 
 ## What it reports
 
@@ -70,8 +72,8 @@ The phase is a memoryless reduction of the bound Agent's phase, recomputed on ev
 
 ## Timing
 
-- **A change to a Secret the channel references.** Creating or deleting the Secret, adding or removing the `kaalm.io/channel-credential` label, editing the `kaalm.io/callback-hosts` annotation, or changing a key re-runs the channel at once, so a fix needs no channel edit and no wait. The operator already watches each Secret it has read for the channel. A channel that fails an earlier check (Agent, service, path, or Role write) has read no Secret yet, so it picks up Secret changes on the pass after that check passes.
-- **A failing channel.** A failing channel re-checks every minute, `AgentNotFound` included, with two exceptions below. For a channel that fails a check after its Agent is found, this is the fallback for a Secret change the watch has not reported, such as one made while the Secret's watch is still starting. For `AgentNotFound`, it is what prunes records that expire later, because once the Agent is deleted no watch event re-runs the channel. A `ChildConflict` channel re-checks every 30 seconds, because removing the conflicting object raises no event. `SystemNamespaceForbidden` has no timed re-check. Creating the Agent still re-runs an `AgentNotFound` channel at once.
+- **A change to a Secret the channel references.** Creating or deleting the Secret, adding or removing the `kaalm.io/channel-credential` label, editing the `kaalm.io/callback-hosts` annotation, or changing a key re-runs the channel at once, so a fix needs no channel edit and no wait. The operator already watches each Secret it has read for the channel. A channel stopped at the Agent, service, or path check has already read its Secrets, so a Secret change re-runs it at once and its credential Role follows the label. Only a channel whose check Role cannot be written has read no Secret.
+- **A failing channel.** A failing channel re-checks every minute, `AgentNotFound` included, with two exceptions below. For every failing channel, this is the fallback for a Secret change the watch has not reported, such as one made while the Secret's watch is still starting. For `AgentNotFound`, it is also what prunes records that expire later, because once the Agent is deleted no watch event re-runs the channel. A `ChildConflict` channel re-checks every 30 seconds, because removing the conflicting object raises no event. `SystemNamespaceForbidden` has no timed re-check. Creating the Agent still re-runs an `AgentNotFound` channel at once.
 - **A change to the bound Agent.** It shows at once.
 - **A path conflict.** It resolves as soon as a competing channel is created, deleted, or moves to another path. A `Ready=True` channel turns `PathConflict` at once when a new or moved channel wins the path (it wins a `creationTimestamp` tie by name under [rule 15](../../resources/validation/channels.md), or the clock went back), and the next turns `Ready` when the winner leaves. A deleted channel holds its path until the object leaves the API server.
 - **Health and pruning.** Health runs only on a valid pass, so `PlatformConnected` is re-evaluated at least once a minute on a valid channel, from gateway data up to 15 seconds old. Pruning runs on every pass, so the re-check cadence bounds how long an expired record lingers, valid or not; see Cleanup under [Response persistence](../../gateways/api/async-responses.md#response-persistence) for the bound.

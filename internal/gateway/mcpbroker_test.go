@@ -17,8 +17,11 @@ limitations under the License.
 package gateway
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -884,6 +887,74 @@ func TestMCPBroker_SizeCaps(t *testing.T) {
 			t.Fatalf("want the filtered list, got %s", body)
 		}
 	})
+
+	// The SSE line bound follows the cap, not a fixed 1 MiB (#413).
+	sseToolsList := func(t *testing.T, body string, maxBytes int64) *http.Response {
+		t.Helper()
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, body)
+		})
+		h.server.Config.MCPMaxBodyBytes = maxBytes
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+			map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+	listWith := func(description string) string {
+		return fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search","description":%q},`+
+			`{"name":"fetch_page"}]}}`, description)
+	}
+	expectFiltered := func(t *testing.T, resp *http.Response) {
+		t.Helper()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %.300s", resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), "web_search") || strings.Contains(string(body), "fetch_page") {
+			t.Fatalf("want the filtered list, got %.300s", body)
+		}
+	}
+
+	t.Run("tools/list SSE line over 1 MiB under the cap is served", func(t *testing.T) {
+		body := "data: " + listWith(strings.Repeat("d", 2<<20)) + "\n\n"
+		expectFiltered(t, sseToolsList(t, body, 4<<20))
+	})
+
+	t.Run("tools/list SSE line over the cap is 413", func(t *testing.T) {
+		body := "data: " + listWith(strings.Repeat("d", 3<<20)) + "\n\n"
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, body)
+		})
+		h.server.Config.MCPMaxBodyBytes = 2 << 20
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+			map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			raw, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 413: %.300s", resp.StatusCode, raw)
+		}
+		var envelope struct {
+			Error errorBody `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&envelope)
+		if envelope.Error.Type != errResponseTooLarge || envelope.Error.Provider != "search" {
+			t.Fatalf("error = %+v, want type %q with provider search", envelope.Error, errResponseTooLarge)
+		}
+		if got := mcpCalls(h, "", errResponseTooLarge); got != 1 {
+			t.Errorf("response_too_large counter = %v, want 1", got)
+		}
+	})
+
+	t.Run("tools/list SSE at the cap without a trailing newline is served", func(t *testing.T) {
+		body := "data: " + listWith(strings.Repeat("d", 100000))
+		expectFiltered(t, sseToolsList(t, body, int64(len(body))))
+	})
 }
 
 // lastSSEData returns the data of the stream's last event.
@@ -899,9 +970,10 @@ func lastSSEData(t *testing.T, stream string) string {
 	return ""
 }
 
-// expectStreamCapEvent asserts the stream ends with the broker's cap event:
-// a JSON-RPC error for request id 7 carrying data.type response_too_large.
-func expectStreamCapEvent(t *testing.T, stream string) {
+// expectStreamErrorEvent asserts the stream ends with the broker's error
+// event: a JSON-RPC error for request id 7 carrying data.type errType. It
+// returns the error message.
+func expectStreamErrorEvent(t *testing.T, stream, errType string) string {
 	t.Helper()
 	var msg struct {
 		ID    json.RawMessage `json:"id"`
@@ -917,9 +989,10 @@ func expectStreamCapEvent(t *testing.T, stream string) {
 	if err := json.Unmarshal([]byte(data), &msg); err != nil {
 		t.Fatalf("last event is not JSON: %v: %q", err, data)
 	}
-	if string(msg.ID) != "7" || msg.Error.Code != mcp.CodeInternalError || msg.Error.Data.Type != errResponseTooLarge {
-		t.Fatalf("last event = %s, want id 7, code %d, data.type %q", data, mcp.CodeInternalError, errResponseTooLarge)
+	if string(msg.ID) != "7" || msg.Error.Code != mcp.CodeInternalError || msg.Error.Data.Type != errType {
+		t.Fatalf("last event = %s, want id 7, code %d, data.type %q", data, mcp.CodeInternalError, errType)
 	}
+	return msg.Error.Message
 }
 
 // A stream that passes the cap after its status line is sent ends with a
@@ -958,7 +1031,7 @@ func TestMCPBroker_StreamSizeCap(t *testing.T) {
 		if strings.Contains(body, "zzzz") {
 			t.Fatalf("the line that passes the cap must not be forwarded: %q", body)
 		}
-		expectStreamCapEvent(t, body)
+		expectStreamErrorEvent(t, body, errResponseTooLarge)
 		if got := mcpCalls(h, "web_search", errResponseTooLarge); got != 1 {
 			t.Errorf("response_too_large counter = %v, want 1", got)
 		}
@@ -974,7 +1047,7 @@ func TestMCPBroker_StreamSizeCap(t *testing.T) {
 		if strings.Contains(body, "zzzz") {
 			t.Fatalf("the oversized line must not be forwarded: %.200q", body)
 		}
-		expectStreamCapEvent(t, body)
+		expectStreamErrorEvent(t, body, errResponseTooLarge)
 		if got := mcpCalls(h, "web_search", errResponseTooLarge); got != 1 {
 			t.Errorf("response_too_large counter = %v, want 1", got)
 		}
@@ -994,8 +1067,251 @@ func TestMCPBroker_StreamSizeCap(t *testing.T) {
 
 		h = streamHarness(t, stream, int64(len(stream))-1)
 		_, body = call(t, h)
-		expectStreamCapEvent(t, body)
+		expectStreamErrorEvent(t, body, errResponseTooLarge)
 	})
+}
+
+// A stream that times out or breaks after its status line is sent ends
+// with the same JSON-RPC error event as the cap, typed by the cause, and the
+// call counts under that type instead of ok (#411).
+func TestMCPBroker_StreamUpstreamFailure(t *testing.T) {
+	const progress = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"
+	call := func(t *testing.T, h *harness) (*http.Response, string) {
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp, string(raw)
+	}
+
+	t.Run("upstream timeout mid-stream", func(t *testing.T) {
+		blocked := make(chan struct{})
+		h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, progress)
+			w.(http.Flusher).Flush()
+			select {
+			case <-blocked:
+			case <-r.Context().Done():
+			}
+		})
+		// LIFO: blocked must close before the harness cleanup waits on the
+		// parked handler.
+		t.Cleanup(func() { close(blocked) })
+		h.server.Config.MCPUpstreamTimeout = 200 * time.Millisecond
+		h.seedToolRoute()
+		resp, body := call(t, h)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		if !strings.Contains(body, "notifications/progress") {
+			t.Fatalf("events before the timeout must be relayed: %q", body)
+		}
+		msg := expectStreamErrorEvent(t, body, errToolTimeout)
+		if want := `tool provider "search" did not finish the stream within the upstream timeout; the stream is truncated`; msg != want {
+			t.Errorf("message = %q, want %q", msg, want)
+		}
+		if got := mcpCalls(h, "web_search", errToolTimeout); got != 1 {
+			t.Errorf("tool_timeout counter = %v, want 1", got)
+		}
+		if got := mcpCalls(h, "web_search", "ok"); got != 0 {
+			t.Errorf("ok counter = %v, want 0", got)
+		}
+	})
+
+	t.Run("connection broken mid-stream", func(t *testing.T) {
+		const partial = "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"res"
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Content-Length", "4096")
+			_, _ = fmt.Fprint(w, progress+partial)
+		})
+		h.seedToolRoute()
+		_, body := call(t, h)
+		if !strings.Contains(body, "notifications/progress") {
+			t.Fatalf("events before the break must be relayed: %q", body)
+		}
+		for _, line := range strings.Split(body, "\n") {
+			if line == partial {
+				t.Fatalf("the line the break cut off must not be forwarded: %q", body)
+			}
+		}
+		msg := expectStreamErrorEvent(t, body, errToolUnavailable)
+		if want := `reading the stream from tool provider "search" failed; the stream is truncated`; msg != want {
+			t.Errorf("message = %q, want %q", msg, want)
+		}
+		if got := mcpCalls(h, "web_search", errToolUnavailable); got != 1 {
+			t.Errorf("tool_unavailable counter = %v, want 1", got)
+		}
+		if got := mcpCalls(h, "web_search", "ok"); got != 0 {
+			t.Errorf("ok counter = %v, want 0", got)
+		}
+	})
+}
+
+// The transport error of a broken stream names the tool server's address,
+// which is platform tier: it goes to the audit detail, never to the caller.
+func TestRelayMCPStream_UpstreamFailureDetail(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body: io.NopCloser(io.MultiReader(
+			strings.NewReader("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"),
+			iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
+				Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET}))),
+	}
+	_, errType, detail := relayMCPStream(rec, req, resp, 1<<20, json.RawMessage("7"), "search")
+	if errType != errToolUnavailable {
+		t.Fatalf("errType = %q, want %q", errType, errToolUnavailable)
+	}
+	if !strings.Contains(detail, "10.43.7.9") {
+		t.Errorf("audit detail = %q, want the transport error", detail)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "10.43.7.9") {
+		t.Errorf("caller stream leaks the tool server address: %q", body)
+	}
+	if !strings.Contains(body, "notifications/progress") {
+		t.Errorf("events before the break must be relayed: %q", body)
+	}
+}
+
+// failingBody is a response body whose reads fail with err.
+type failingBody struct{ err error }
+
+func (b failingBody) Read([]byte) (int, error) { return 0, b.err }
+func (b failingBody) Close() error             { return nil }
+
+// A caller that left is not a tool failure: the read the departure cancels
+// gets no error event and no tool error type.
+func TestRelayMCPStream_CallerGoneIsNotAToolFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil).WithContext(ctx)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       failingBody{err: context.Canceled},
+	}
+	_, errType, detail := relayMCPStream(rec, req, resp, 1<<20, json.RawMessage("7"), "search")
+	if errType == errToolTimeout || errType == errToolUnavailable {
+		t.Errorf("errType = %q, want neither tool_timeout nor tool_unavailable", errType)
+	}
+	if errType != "client_closed" {
+		t.Errorf("errType = %q, want client_closed", errType)
+	}
+	if detail != "" {
+		t.Errorf("detail = %q, want empty", detail)
+	}
+	if strings.Contains(rec.Body.String(), "jsonrpc") {
+		t.Errorf("a departed caller must get no event: %q", rec.Body.String())
+	}
+}
+
+// failingWriter is a ResponseWriter whose writes fail, as a write to a
+// connection the caller closed does.
+type failingWriter struct{ header http.Header }
+
+func (w *failingWriter) Header() http.Header       { return w.header }
+func (w *failingWriter) WriteHeader(int)           {}
+func (w *failingWriter) Write([]byte) (int, error) { return 0, errors.New("write: broken pipe") }
+
+// A stream the caller abandons counts as client_closed, with no event and
+// no detail, whichever exit notices the departure (#444).
+func TestRelayMCPStream_CallerGone(t *testing.T) {
+	const events = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n"
+	newResp := func() *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(events)),
+		}
+	}
+
+	t.Run("caller gone between lines", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil).WithContext(ctx)
+		_, errType, detail := relayMCPStream(rec, req, newResp(), 1<<20, json.RawMessage("7"), "search")
+		if errType != "client_closed" || detail != "" {
+			t.Errorf("outcome = (%q, %q), want (client_closed, empty)", errType, detail)
+		}
+		if strings.Contains(rec.Body.String(), "data:") {
+			t.Errorf("a departed caller must get nothing: %q", rec.Body.String())
+		}
+	})
+
+	t.Run("downstream write fails", func(t *testing.T) {
+		w := &failingWriter{header: http.Header{}}
+		req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil)
+		_, errType, detail := relayMCPStream(w, req, newResp(), 1<<20, json.RawMessage("7"), "search")
+		if errType != "client_closed" || detail != "" {
+			t.Errorf("outcome = (%q, %q), want (client_closed, empty)", errType, detail)
+		}
+	})
+}
+
+// newAbandonHarness is a harness whose tool server sends one progress event
+// and then waits, so the caller can leave mid-stream.
+func newAbandonHarness(t *testing.T) *harness {
+	t.Helper()
+	blocked := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-blocked:
+		case <-r.Context().Done():
+		}
+	})
+	// LIFO: blocked must close before the harness cleanup waits on the
+	// parked handler.
+	t.Cleanup(func() { close(blocked) })
+	h.seedToolRoute()
+	return h
+}
+
+// abandonStream calls the tool, reads until the progress event, and closes
+// the response. The harness speaks HTTP/1.1, so the close drops the
+// connection and the gateway cancels the request context.
+func abandonStream(t *testing.T, h *harness) {
+	t.Helper()
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	br := bufio.NewReader(resp.Body)
+	for {
+		line, err := br.ReadString('\n')
+		if strings.Contains(line, "notifications/progress") {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream ended before the progress event: %v", err)
+		}
+	}
+	_ = resp.Body.Close()
+}
+
+// A caller that disconnects mid-stream counts as client_closed, not ok and
+// not a tool failure.
+func TestMCPBroker_StreamCallerGone(t *testing.T) {
+	h := newAbandonHarness(t)
+	abandonStream(t, h)
+	waitFor(t, func() bool { return mcpCalls(h, "web_search", "client_closed") == 1 })
+	for _, status := range []string{"ok", errToolUnavailable, errToolTimeout} {
+		if got := mcpCalls(h, "web_search", status); got != 0 {
+			t.Errorf("%s counter = %v, want 0", status, got)
+		}
+	}
 }
 
 func TestMCPBroker_RateLimited(t *testing.T) {

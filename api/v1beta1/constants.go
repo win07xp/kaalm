@@ -172,6 +172,10 @@ const (
 	// ReasonPodCreateRejected: the API server refused the workload's Pod
 	// create (Ready=False on Agent and AgentTask).
 	ReasonPodCreateRejected = "PodCreateRejected"
+	// ReasonChildWriteRejected: the API server refused a create, update, or
+	// delete of a workload's child object other than the Pod (Ready=False
+	// on Agent and AgentTask).
+	ReasonChildWriteRejected = "ChildWriteRejected"
 	// ReasonResourceClaimsIgnored: rule 53, an advisory Warning event on an
 	// Agent, AgentTask, or AgentClass whose resources block sets container
 	// claims, which the controller drops; Ready is unaffected.

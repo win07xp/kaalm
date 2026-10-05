@@ -81,3 +81,27 @@ func TestControllerArgs_CertLifetimeFromValues(t *testing.T) {
 		}
 	}
 }
+
+// The ToolProvider health probe reads what the broker reads: the controller
+// gets the gateway's MCP cap, including the gateway's fallback to the LLM
+// body cap when the MCP cap is 0 (#413).
+func TestControllerArgs_MCPMaxBodyBytesFollowsTheGateway(t *testing.T) {
+	cases := []struct {
+		name string
+		set  []string
+		want string
+	}{
+		{"default", nil, "--mcp-max-body-bytes=4194304"},
+		{"mcp cap set", []string{"--set", "gateway.mcpMaxBodyBytes=8Mi"}, "--mcp-max-body-bytes=8388608"},
+		{"mcp cap 0 falls back to the LLM cap",
+			[]string{"--set", "gateway.mcpMaxBodyBytes=0", "--set", "gateway.maxLLMRequestBodyBytes=8Mi"},
+			"--mcp-max-body-bytes=8388608"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if args := renderControllerArgs(t, tc.set...); !slices.Contains(args, tc.want) {
+				t.Errorf("args %v lack %s", args, tc.want)
+			}
+		})
+	}
+}

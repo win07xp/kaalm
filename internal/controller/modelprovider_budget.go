@@ -23,11 +23,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -76,10 +78,40 @@ func (r *ModelProviderReconciler) setGatewayReachable(mp *kaalmv1beta1.ModelProv
 	apimeta.SetStatusCondition(&mp.Status.Conditions, cond)
 }
 
+// budgetRequeue returns res, or a one-minute requeue when res schedules
+// none and the provider tracks a budget period: a budget-tracked provider
+// re-reconciles every minute so the spend roll-up and the period rollover
+// stay fresh without ConfigMap events, including on a pass that fails a
+// check.
+func budgetRequeue(mp *kaalmv1beta1.ModelProvider, res ctrl.Result) ctrl.Result {
+	if res.RequeueAfter != 0 || gateway.PeriodKey(mp.Spec.Budget.Period, time.Now()) == "" {
+		return res
+	}
+	return ctrl.Result{RequeueAfter: time.Minute}
+}
+
+// clearBudgetStatus empties the budget status of a provider whose budget
+// nothing maintains: budgetUsage, clusterSpentUSD, and the
+// BoundaryMarginRaised condition. Without a period the gateway neither
+// counts nor enforces a budget, and without the budget ConfigMap no
+// replica's spend is visible, so the reducer has nothing to report. Leftover
+// figures would claim a state that nothing enforces, and Agents read
+// budgetUsage for BudgetExhausted. Nil, not an empty slice, so a steady pass
+// compares equal to the stored status and writes nothing. The provider's
+// kaalm_provider_budget_canonical_usd series go too, so dashboards stop
+// showing the old spend.
+func clearBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
+	mp.Status.BudgetUsage = nil
+	mp.Status.ClusterSpentUSD = ""
+	apimeta.RemoveStatusCondition(&mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)
+	providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": mp.Name})
+}
+
 // reconcileBudget is the reducer over the per-replica partials in the
 // kaalm-budget-{provider} ConfigMap: prune keys with no live gateway Pod,
 // archive and drop stale-period entries, sum current-period partials, write
-// _canonical, and populate status.budgetUsage. See
+// _canonical, and populate status.budgetUsage. It clears the budget status
+// when the provider tracks no budget or the ConfigMap is absent. See
 // docs/src/gateways/llm/budgets-and-rate-limits.md.
 func (r *ModelProviderReconciler) reconcileBudget(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider, liveGateways map[string]bool,
@@ -87,6 +119,7 @@ func (r *ModelProviderReconciler) reconcileBudget(
 	scheme := mp.Spec.Budget.Period
 	currentPeriod := gateway.PeriodKey(scheme, time.Now())
 	if currentPeriod == "" {
+		clearBudgetStatus(mp)
 		return nil
 	}
 
@@ -94,7 +127,10 @@ func (r *ModelProviderReconciler) reconcileBudget(
 	key := types.NamespacedName{Namespace: r.OperatorNamespace, Name: gateway.BudgetConfigMapName(mp.Name)}
 	if err := r.Get(ctx, key, &cm); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil // no replica has written yet
+			// No replica has published yet, or the ConfigMap was deleted;
+			// either way the gateway's peer view is empty too.
+			clearBudgetStatus(mp)
+			return nil
 		}
 		return err
 	}

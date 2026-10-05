@@ -1026,7 +1026,7 @@
           "sort": "desc"
         }
       },
-      "description": "Brokered MCP calls; status is ok, a broker error type, or upstream_error."
+      "description": "Brokered MCP calls; status is ok, a broker error type, client_closed (the caller disconnected mid-stream), or upstream_error."
     },
     {
       "id": 19,

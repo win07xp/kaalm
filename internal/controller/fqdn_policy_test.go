@@ -25,6 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -211,4 +214,40 @@ func TestAgentTask_FQDNPolicy(t *testing.T) {
 	mkTask(t, "fqdn-task", "wc-task-fqdn", nil)
 	eventually(t, func() error { return markCertReadyErr("fqdn-task") })
 	expectFQDNHosts(t, "fqdn-task", "AgentTask", "api.example.com")
+}
+
+// An update or delete of the FQDN policy that the API server refuses comes
+// back as a rejected write; a delete of a policy already gone is no error.
+func TestEnsureFQDNPolicy_RejectedWrite(t *testing.T) {
+	scheme := testScheme(t)
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "fq", Namespace: "default", UID: "agent-uid"}}
+	newClient := func(notFoundOnDelete bool) client.Client {
+		u := desiredFQDNPolicy(agent, agentPodLabels(agent), []string{"a.example.com"}, DNSSelector{})
+		if err := controllerutil.SetControllerReference(agent, u, scheme); err != nil {
+			t.Fatal(err)
+		}
+		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(u).
+			WithInterceptorFuncs(rejectingWrites(notFoundOnDelete)).Build()
+	}
+	err := ensureFQDNPolicy(ctxT(), newClient(false), scheme, agent, agentPodLabels(agent),
+		[]string{"b.example.com"}, DNSSelector{}, true)
+	expectWriteRejected(t, err, "updating", "CiliumNetworkPolicy")
+	err = ensureFQDNPolicy(ctxT(), newClient(false), scheme, agent, agentPodLabels(agent), nil, DNSSelector{}, true)
+	expectWriteRejected(t, err, "deleting", "CiliumNetworkPolicy")
+	if err := ensureFQDNPolicy(ctxT(), newClient(true), scheme, agent, agentPodLabels(agent), nil,
+		DNSSelector{}, true); err != nil {
+		t.Errorf("delete of a policy already gone: err = %v, want nil", err)
+	}
+}
+
+func TestRestoreFQDNPolicy_UnsupportedOrNoHostsTouchesNothing(t *testing.T) {
+	// A nil client would panic on any call.
+	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "t1", Namespace: "team"}}
+	if err := restoreFQDNPolicy(context.Background(), nil, nil, task, nil, []string{"x.example.com"},
+		DNSSelector{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreFQDNPolicy(context.Background(), nil, nil, task, nil, nil, DNSSelector{}, true); err != nil {
+		t.Fatal(err)
+	}
 }

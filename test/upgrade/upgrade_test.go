@@ -100,6 +100,27 @@ func podUID(pod string) string {
 	return lastLine(out)
 }
 
+// agentUID reads an Agent's metadata.uid.
+func agentUID(name string) string {
+	out, _ := utils.Kubectl("get", "agent", name, "-n", ns, "-o", "jsonpath={.metadata.uid}")
+	return lastLine(out)
+}
+
+// keeperStatusPod reads the keeper's status.podName. Unlike keeperPod, it
+// never names a Pod that is still terminating once its replacement exists:
+// the controller sets it when it creates the new Pod.
+func keeperStatusPod() string {
+	out, _ := utils.Kubectl("get", "agent", "up-keeper", "-n", ns, "-o", "jsonpath={.status.podName}")
+	return lastLine(out)
+}
+
+// keeperCondition reads one field of the keeper's condition condType.
+func keeperCondition(condType, field string) string {
+	out, _ := utils.Kubectl("get", "agent", "up-keeper", "-n", ns,
+		"-o", `jsonpath={.status.conditions[?(@.type=="`+condType+`")].`+field+`}`)
+	return lastLine(out)
+}
+
 // The S21 story in order: the old world, the window, the upgrade, and what
 // survived. Ordered and stateful on purpose; every later assertion depends
 // on the world the earlier steps built.
@@ -400,6 +421,73 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 			"-o", "jsonpath={.items[0].metadata.name}")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tlsVolumeSecret(lastLine(out))).To(Equal("up-sleeper-tls"))
+	})
+
+	// This It comes last, for three reasons. "kept every workload" asserts
+	// the keeper keeps its Pod UID and the up-keeper-tls name, so it must
+	// run first. The Ready gates run before the Certificate step, so a
+	// keeper still held by rule 48 would never re-create its Certificate;
+	// the env-Secret It clears that gate. And keeperPodName and keeperPodUID
+	// are stale after this It, so nothing may follow it. The behavior is
+	// docs/src/controller/change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced.
+	It("replaces the keeper Pod when its Certificate is re-created with a UID-suffixed Secret", func() {
+		By("the keeper's Certificate still names the pre-upgrade Secret")
+		Expect(certSecretName("up-keeper")).To(Equal("up-keeper-tls"))
+		uid := agentUID("up-keeper")
+		Expect(len(uid)).To(BeNumerically(">=", 8))
+		// 8 matches certSecretUIDChars in internal/controller/agent_desired.go.
+		want := "up-keeper-tls-" + uid[:8]
+
+		By("deleting the Certificate, as an operator might")
+		_, err := utils.Kubectl("delete", "certificate.cert-manager.io", "up-keeper-tls", "-n", ns)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("the controller re-creates it with the UID-suffixed Secret name")
+		Eventually(func() string { return certSecretName("up-keeper") }, "120s", "2s").Should(Equal(want))
+
+		By("cert-manager deletes the old Secret with its Certificate (--enable-certificate-owner-ref)")
+		Eventually(func() string {
+			out, err := utils.Kubectl("get", "secret", "up-keeper-tls", "-n", ns)
+			if err == nil {
+				return "still exists"
+			}
+			return out
+		}, "120s", "5s").Should(ContainSubstring("NotFound"))
+
+		By("the keeper Pod is replaced and mounts the new Secret")
+		Eventually(func() string {
+			p := keeperStatusPod()
+			if p == "" || p == keeperPodName {
+				return "old or none: " + p
+			}
+			return tlsVolumeSecret(p)
+		}, "300s", "5s").Should(Equal(want))
+		newPod := keeperStatusPod()
+		Expect(podUID(newPod)).NotTo(Equal(keeperPodUID))
+
+		By("the replacement names both Secrets, so it came from the TLS check and not from spec drift")
+		Eventually(func() string {
+			out, _ := utils.Kubectl("get", "events", "-n", ns,
+				"--field-selector", "involvedObject.name=up-keeper,reason=SpecDrift",
+				"-o", "jsonpath={.items[*].message}")
+			return out
+		}, "60s", "5s").Should(ContainSubstring(
+			"the Agent's Certificate names TLS Secret " + want + " and the Pod mounts up-keeper-tls"))
+
+		By("the keeper is Running and Ready on the new Pod, which mounts the Certificate's Secret")
+		Eventually(func() string { return phase("agent", "up-keeper") }, "300s", "5s").Should(Equal("Running"))
+		Eventually(func() string { return keeperCondition("Ready", "status") }, "120s", "5s").Should(Equal("True"))
+		Eventually(func() string { return keeperCondition("PodUpToDate", "reason") }, "120s", "5s").
+			Should(Equal("Current"))
+		// Exact: a Current message from before the delete names
+		// up-keeper-tls, a prefix of the new name.
+		Eventually(func() string { return keeperCondition("PodUpToDate", "message") }, "120s", "5s").
+			Should(Equal("agent Pod matches the derived spec and mounts the Certificate's TLS Secret " + want))
+
+		By("the memory volume came with it")
+		out, err := utils.Kubectl("exec", "-n", ns, newPod, "--", "cat", "/var/agent/memory/upgrade-marker")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("survived-the-upgrade"))
 	})
 })
 

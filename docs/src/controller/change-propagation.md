@@ -8,7 +8,7 @@ When a developer edits an Agent's spec, the controller detects drift by hash com
 
 The hash covers the image, command, args, env, resources, the provider names, and the handler ConfigMap name (never its content). It also covers every Pod input the AgentClass controls, as derived for the Pod: the Pod and container security contexts with the `restricted` baseline merged in, `automountServiceAccountToken`, `runtimeClassName`, the image pull policy and pull Secrets, the termination grace period, and the `podMetadata` labels and annotations. Kaalm replaces the Pod on any change to a hashed input, for a clean process restart, even where Kubernetes would allow an in-place change such as an image or resources. On a hash mismatch the Agent transitions to `Provisioning`, the Pod is deleted with its `terminationGracePeriodSeconds`, and a new Pod is created from the new spec. The PVC, Service, Certificate, ServiceAccount, and NetworkPolicy are preserved.
 
-Fields outside the hash are never applied to a live Pod: the reconciler patches only the two hash annotations of a live Pod ([An upgrade that changes the hash formula replaces no Pod](#an-upgrade-that-changes-the-hash-formula-replaces-no-pod)). A change to such a field takes effect when the Pod is next replaced for another reason. The exception is the name of the TLS Secret the Pod mounts ([A Pod that mounts another TLS Secret is replaced](#a-pod-that-mounts-another-tls-secret-is-replaced)). The Service and the NetworkPolicy are converged in place, so a `spec.service.port` change or a class egress change reaches a running Agent without a restart.
+Fields outside the hash are never applied to a live Pod: the reconciler patches only the two hash annotations of a live Pod ([An upgrade that changes the hash formula replaces no Pod](#an-upgrade-that-changes-the-hash-formula-replaces-no-pod)). A change to such a field takes effect when the Pod is next replaced for another reason. The exception is the name of the TLS Secret the Pod mounts ([A Pod that mounts another TLS Secret is replaced](#a-pod-that-mounts-another-tls-secret-is-replaced)). The Service and the NetworkPolicy are converged in place, so a `spec.service.port` change or a class egress change reaches a running Agent without a restart. If the API server rejects the in-place update, such as a policy webhook refusing the new NetworkPolicy, the old object stays and the Agent shows `Ready=False, reason=ChildWriteRejected` with its Pod kept ([A rejected child write](operations.md#a-rejected-child-write)).
 
 ### Effect by phase
 
@@ -41,7 +41,7 @@ This happens when someone deletes a Certificate whose Secret is named `{name}-tl
 
 The replacement is a drift replacement. It takes a `maxUnavailableOnDrift` slot, sets `PodUpToDate` to `Replacing` or `ReplacementPending`, and emits `SpecDrift` or `SpecDriftPending`. The event and condition messages name both Secrets, so you can tell why a Pod restarted with no spec edit. The Pod keeps its mounted certificate until it expires, so the replacement has no reason to bypass the cap.
 
-The Secret name stays out of the Pod spec hash, so an upgrade that keeps a Certificate's existing name replaces no Pod. AgentTask Pods are not compared: a task Pod is short-lived, and a retry's Pod mounts the name the current Certificate holds.
+The Secret name stays out of the Pod spec hash, so an upgrade that keeps a Certificate's existing name replaces no Pod. AgentTask Pods are not compared: a task Pod is short-lived, and a retry's Pod mounts the name the current Certificate holds. A deleted task Certificate is re-created while the Pod keeps the certificate it mounted ([AgentTask certificate](reconcilers/agenttask.md#agenttask-certificate)).
 
 ### An upgrade that changes the hash formula replaces no Pod
 
@@ -101,7 +101,7 @@ AgentTask has no `Degraded` phase. Where an Agent would degrade, the task settle
 
 | Task state at the edit | Effect |
 |---|---|
-| has a Pod (`Provisioning` with a Pod, `Running`, `Completing`) | none; the task finishes under the class snapshot its Pod was created from. If the edit removes the task's namespace from the class's `allowedNamespaces` (rule 47) or from a referenced provider's `allowedNamespaces`, the gateway refuses the task's LLM and tool calls |
+| has a Pod (`Provisioning` with a Pod, `Running`, `Completing`) | none; the task finishes under the class snapshot its Pod was created from. A child the reconciler re-creates after it was deleted is built from the class as it now stands ([Task child-resource convergence](reconcilers/agenttask.md#task-child-resource-convergence)). If the edit removes the task's namespace from the class's `allowedNamespaces` (rule 47) or from a referenced provider's `allowedNamespaces`, the gateway refuses the task's LLM and tool calls |
 | no Pod yet (`Pending`, or `Provisioning` before creation), or retrying from `Failed` | the pre-Pod class check runs against the new class; a violation settles the task `Failed` at once, whatever `backoffLimit` remains |
 | terminal (`Succeeded`, `Failed`, `TimedOut`) | none; the task proceeds to TTL cleanup |
 

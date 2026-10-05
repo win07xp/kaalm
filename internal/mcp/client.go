@@ -28,9 +28,9 @@ import (
 	"sync/atomic"
 )
 
-// maxResponseBytes bounds how much of an upstream response the client reads.
-// The probe's answers are small; anything larger is a misbehaving server.
-const maxResponseBytes = 1 << 20
+// DefaultMaxResponseBytes is the limit a zero Client.MaxResponseBytes uses.
+// It equals the default of the gateway's --mcp-max-body-bytes.
+const DefaultMaxResponseBytes int64 = 4 << 20
 
 // Client speaks MCP streamable HTTP to one server. The zero HTTPClient falls
 // back to http.DefaultClient; bound calls with a context deadline or a
@@ -42,8 +42,20 @@ type Client struct {
 	Credential string
 	// HTTPClient issues the requests. Nil means http.DefaultClient.
 	HTTPClient *http.Client
+	// MaxResponseBytes is the most of one response the client reads, an SSE
+	// stream or a JSON body. Zero or negative means DefaultMaxResponseBytes.
+	// The ToolProvider probe sets it to the broker's cap, so the two agree
+	// on what fits.
+	MaxResponseBytes int64
 
 	nextID atomic.Int64
+}
+
+func (c *Client) maxResponseBytes() int64 {
+	if c.MaxResponseBytes <= 0 {
+		return DefaultMaxResponseBytes
+	}
+	return c.MaxResponseBytes
 }
 
 // Initialize runs the MCP handshake: the initialize call, then the
@@ -145,7 +157,7 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 		// Auth statuses stay HTTPError: the credential verdict outranks
 		// whatever body came with it.
 		if httpResp.StatusCode != http.StatusUnauthorized && httpResp.StatusCode != http.StatusForbidden {
-			raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBytes))
+			raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, c.maxResponseBytes()))
 			var errResp Response
 			if json.Unmarshal(raw, &errResp) == nil && errResp.Error != nil {
 				return Response{}, nil, errResp.Error
@@ -162,9 +174,15 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 	if err != nil {
 		return Response{}, nil, err
 	}
-	resp, err := ParseResponse(httpResp.Header.Get("Content-Type"),
-		io.LimitReader(httpResp.Body, maxResponseBytes), rawID)
+	// Reading one byte past the limit tells an answer that passes it apart
+	// from one that ends exactly at it.
+	limit := c.maxResponseBytes()
+	lr := &io.LimitedReader{R: httpResp.Body, N: limit + 1}
+	resp, err := ParseResponse(httpResp.Header.Get("Content-Type"), lr, rawID, int(limit)+1)
 	if err != nil {
+		if lr.N <= 0 {
+			return Response{}, nil, fmt.Errorf("response exceeds %d bytes", limit)
+		}
 		return Response{}, nil, err
 	}
 	if resp.Error != nil {
@@ -176,10 +194,15 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 // ParseResponse decodes the JSON-RPC response matching rawID from an MCP
 // streamable-HTTP response body: a plain JSON object, or an SSE stream whose
 // events are scanned for the matching response (other events are skipped).
-// Shared by the probe client and the broker's tools/list filter.
-func ParseResponse(contentType string, r io.Reader, rawID []byte) (Response, error) {
+// Shared by the probe client and the broker's tools/list filter. The caller
+// bounds the reader; maxLineBytes bounds one SSE line, and the JSON branch
+// ignores it. Callers pass the reader's limit plus one, so a body that ends
+// exactly at the limit with no trailing newline still parses, and a longer
+// line reads through to the limit, where the caller can tell an over-limit
+// body from a malformed one.
+func ParseResponse(contentType string, r io.Reader, rawID []byte, maxLineBytes int) (Response, error) {
 	if strings.HasPrefix(contentType, "text/event-stream") {
-		return readSSEResponse(r, rawID)
+		return readSSEResponse(r, rawID, maxLineBytes)
 	}
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -195,9 +218,9 @@ func ParseResponse(contentType string, r io.Reader, rawID []byte) (Response, err
 // readSSEResponse scans an SSE stream for the JSON-RPC response whose id
 // matches the request. Other events (server notifications, unrelated ids)
 // are skipped; the stream ending without a match is an error.
-func readSSEResponse(r io.Reader, rawID []byte) (Response, error) {
+func readSSEResponse(r io.Reader, rawID []byte, maxLineBytes int) (Response, error) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxResponseBytes)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	var data strings.Builder
 	flush := func() (Response, bool) {
 		defer data.Reset()

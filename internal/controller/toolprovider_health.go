@@ -55,6 +55,11 @@ type MCPToolHealthChecker struct {
 	// Client is the HTTP client. If nil, a client bounded by the provider's
 	// healthCheck.timeoutSeconds (default 10s) is used per probe.
 	Client *http.Client
+	// MaxResponseBytes is the most of one server answer the probe reads. The
+	// manager sets it from --mcp-max-body-bytes, the broker's cap, so a
+	// catalog the broker serves passes the probe. Zero means
+	// mcp.DefaultMaxResponseBytes.
+	MaxResponseBytes int64
 }
 
 // Probe implements ToolHealthChecker.
@@ -80,7 +85,8 @@ func (h *MCPToolHealthChecker) Probe(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	client := &mcp.Client{Endpoint: provider.Spec.Endpoint, Credential: credential, HTTPClient: cl}
+	client := &mcp.Client{Endpoint: provider.Spec.Endpoint, Credential: credential, HTTPClient: cl,
+		MaxResponseBytes: h.MaxResponseBytes}
 	session, err := client.Discover(ctx)
 	if errors.Is(err, mcp.ErrLegacyServer) {
 		session, err = client.Initialize(ctx)

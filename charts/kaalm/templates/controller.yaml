@@ -73,6 +73,10 @@ spec:
             - --zap-log-level={{ .Values.controller.logLevel }}
             - --client-qps={{ .Values.controller.client.qps }}
             - --client-burst={{ .Values.controller.client.burst }}
+            {{- /* The ToolProvider probe reads what the broker reads, including
+                 the gateway's fallback to the LLM body cap when the MCP cap
+                 is 0. */}}
+            - --mcp-max-body-bytes={{ include "kaalm.bytes" (.Values.gateway.mcpMaxBodyBytes | default .Values.gateway.maxLLMRequestBodyBytes) }}
             {{- if .Values.controller.pprofPort }}
             - --pprof-bind-address=:{{ .Values.controller.pprofPort }}
             {{- end }}

@@ -149,11 +149,11 @@ MCP revision **2026-07-28** makes the protocol stateless. Kaalm is dual-era for 
 
 ### Limits and SSRF protection
 
-Request and response bodies are capped by `gateway.mcpMaxBodyBytes` (default 4 MiB), and each call carries an upstream timeout, `gateway.mcpUpstreamTimeout` (default 120s). Both are separate from the LLM proxy's body and first-byte settings. Over the body cap: `413 request_too_large` for the request, `413 response_too_large` for a buffered response. The cap also covers `tools/list` in both encodings, so an oversized list is a `413`, not a `503`: raise `gateway.mcpMaxBodyBytes` or trim the server's catalog.
+Request and response bodies are capped by `gateway.mcpMaxBodyBytes` (default 4 MiB), and each call carries an upstream timeout, `gateway.mcpUpstreamTimeout` (default 120s). Both are separate from the LLM proxy's body and first-byte settings. Over the body cap: `413 request_too_large` for the request, `413 response_too_large` for a buffered response. The cap also covers `tools/list` in both encodings, so an oversized list is a `413`, not a `503`: raise `gateway.mcpMaxBodyBytes` or trim the server's catalog. The ToolProvider health probe reads up to the same cap, so a list the broker serves also passes the probe ([ToolProviderReconciler](../controller/reconcilers/toolprovider.md#what-it-checks)).
 
-A stream is relayed up to the cap, and the line that passes it is not forwarded. The stream then ends with one JSON-RPC error event for the request's id, code `-32603`, `data.type` `response_too_large`. The status line is already sent, so a `413` is impossible. A JSON-RPC error is what the caller's MCP SDK raises as a failed call, the same reasoning as the `-32020` answer above. The event's exact fields are in the [error reference](api/errors.md#tool-broker-stream-cap).
+A stream is relayed up to the cap, and the line that passes it is not forwarded. The stream then ends with one JSON-RPC error event for the request's id, code `-32603`, `data.type` `response_too_large`. The status line is already sent, so a `413` is impossible. A JSON-RPC error is what the caller's MCP SDK raises as a failed call, the same reasoning as the `-32020` answer above. The event's exact fields are in the [error reference](api/errors.md#tool-broker-stream-error-event).
 
-The timeout is one deadline for each call, response included: exceeding it gives `504 tool_timeout`, retryable.
+The timeout is one deadline for each call, response included: exceeding it gives `504 tool_timeout`, retryable. On a stream already under way the status line is sent, so passing the deadline ends the stream with the error event (`data.type` `tool_timeout`) instead, and a dropped upstream connection mid-stream ends it with `tool_unavailable`. The [error reference](api/errors.md#tool-broker-stream-error-event) has the event's fields.
 
 ToolProvider endpoints are operator-declared configuration, like ModelProvider endpoints, so they get the trust provider endpoints get rather than the full callback policy ([rule 22](../resources/validation/channels.md)) that user-supplied callback URLs receive. The schema requires `https://`, and the broker never follows redirects, which closes the confused-deputy path a compromised tool server could otherwise open.
 
@@ -165,16 +165,16 @@ Every brokered call emits one `info`-level structured log line. Bodies are never
 |---|---|
 | `namespace`, `workload`, `workload_kind` | the caller; the workload fields appear for mTLS callers only |
 | `provider`, `method`, `tool` | the ToolProvider, the JSON-RPC method, and the real tool name |
-| `status`, `error_type` | the HTTP status and the wire error type, when the broker produced the error |
-| `detail` | the denial reason, for example which gate refused or that a session id belongs to another caller. For a `503 tool_unavailable` when the tool server is unreachable or its response could not be read, it also carries the transport error, which the caller's message leaves out because it names the tool server's address |
+| `status`, `error_type` | the HTTP status, and the wire error type when the broker produced the error or `client_closed` when the caller left mid-stream |
+| `detail` | the denial reason, for example which gate refused or that a session id belongs to another caller. For a `503 tool_unavailable` when the tool server is unreachable or its response could not be read, and for a stream the broker ended because reading it failed, it also carries the transport error, which the caller's message leaves out because it names the tool server's address |
 | `duration_seconds`, `request_bytes`, `response_bytes` | timing and sizes |
 
 | Metric | Labels | Notes |
 |---|---|---|
-| `kaalm_tool_calls_total` | `provider`, `namespace`, `tool`, `status` | `status` is `ok` for a relayed 2xx, the wire error type for every failure the broker produces (`access_denied`, `tool_denied`, `rate_limited`, `header_mismatch`, and the rest of the [error vocabulary](api/errors.md)), and `upstream_error` for a relayed non-2xx |
+| `kaalm_tool_calls_total` | `provider`, `namespace`, `tool`, `status` | `status` is `ok` for a relayed 2xx, the wire error type for every failure the broker produces (`access_denied`, `tool_denied`, `rate_limited`, `header_mismatch`, and the rest of the [error vocabulary](api/errors.md)), `client_closed` when the caller disconnected before the broker finished relaying the response stream, and `upstream_error` for a relayed non-2xx. `client_closed` is not a wire error type: no caller receives it, so it is not in the error vocabulary |
 | `kaalm_tool_call_duration_seconds` | `provider`, `tool` | forwarded calls only, so local denials, which complete in microseconds, do not pull the percentiles toward zero |
 
-A stream ended by the cap counts as `response_too_large` on `kaalm_tool_calls_total` and in the audit `error_type`, while the audit `status` is the HTTP status the broker already sent, which is the upstream's status: usually `200`, but a relayed 4xx event stream keeps its 4xx.
+A stream the broker ends with the error event counts as its `data.type` (`response_too_large`, `tool_timeout`, or `tool_unavailable`) on `kaalm_tool_calls_total` and in the audit `error_type`, so these failures do not count as `ok`. The audit `status` is the HTTP status the broker already sent, which is the upstream's status: usually `200`, but a relayed 4xx event stream keeps its 4xx. A stream the caller abandons gets no event, because nobody is left to read it. It counts as `client_closed` the same way. The tool server may still have run the call, so `client_closed` does not say whether a `tools/call` took effect.
 
 The `tool` label is bounded by the **declared** catalog. On a provider with `spec.tools`, cataloged ids appear verbatim and anything else collapses to `uncataloged`. On a provider without one, every tool collapses, because wire-supplied names are unbounded and a compromised server could inflate the label set at will. The audit record always carries the real name. Declare catalogs for this reason, per the [cardinality rules](../operations/observability.md#cardinality).
 
@@ -194,6 +194,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Rate limit exceeded | `429 rate_limited`, computed [`Retry-After`](llm/budgets-and-rate-limits.md#retry-after) |
 | Oversized request, buffered response, or `tools/list` response | `413 request_too_large` or `413 response_too_large` |
 | Response stream passes the cap after it started | JSON-RPC error event, code `-32603`, `data.type` `response_too_large`; the stream ends |
+| Response stream times out or breaks after it started | JSON-RPC error event, code `-32603`, `data.type` `tool_timeout` or `tool_unavailable`; the stream ends |
 | Session id bound to another caller | `403 access_denied` |
 | Credential Secret unreadable, unlabeled, or not approving the endpoint host | `503 tool_unavailable`, retryable |
 | Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, retryable, `Retry-After: 1` |

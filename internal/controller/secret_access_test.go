@@ -25,6 +25,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,6 +35,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/secretwatch"
@@ -348,4 +350,57 @@ func (l *labeledReader) Get(_ context.Context, _ client.ObjectKey, obj client.Ob
 	l.calls++
 	obj.SetLabels(map[string]string{kaalmv1beta1.LabelWorkloadSecret: kaalmv1beta1.AnnotationTrue})
 	return nil
+}
+
+// An update or delete of the Secret-access Role or RoleBinding that the API
+// server refuses comes back as a rejected write; a delete of an object
+// already gone is no error.
+func TestEnsureControllerSecretAccess_RejectedWrite(t *testing.T) {
+	scheme := testScheme(t)
+	owner := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sa", Namespace: "default", UID: "agent-uid"}}
+	const roleName = "kaalm-agent-sa-pull"
+	newClient := func(notFoundOnDelete bool) client.Client {
+		role := &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: "default"},
+			Rules: []rbacv1.PolicyRule{{
+				APIGroups: []string{""}, Resources: []string{"secrets"},
+				ResourceNames: []string{"old"}, Verbs: []string{"get", "watch"},
+			}},
+		}
+		rb := &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: "default"},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: roleName},
+		}
+		for _, obj := range []client.Object{role, rb} {
+			if err := controllerutil.SetControllerReference(owner, obj, scheme); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(role, rb).
+			WithInterceptorFuncs(rejectingWrites(notFoundOnDelete)).Build()
+	}
+
+	err := ensureControllerSecretAccess(ctxT(), newClient(false), scheme, owner, roleName, "kaalm-system",
+		[]corev1.LocalObjectReference{{Name: "new"}})
+	expectWriteRejected(t, err, "updating", "Role")
+	err = ensureControllerSecretAccess(ctxT(), newClient(false), scheme, owner, roleName, "kaalm-system", nil)
+	expectWriteRejected(t, err, "deleting", "RoleBinding")
+	if err := ensureControllerSecretAccess(ctxT(), newClient(true), scheme, owner, roleName, "kaalm-system",
+		nil); err != nil {
+		t.Errorf("delete of objects already gone: err = %v, want nil", err)
+	}
+}
+
+// The Role delete is reported too, once its RoleBinding is gone.
+func TestEnsureControllerSecretAccess_RoleDeleteRejected(t *testing.T) {
+	scheme := testScheme(t)
+	owner := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "sa", Namespace: "default", UID: "agent-uid"}}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "kaalm-agent-sa-pull", Namespace: "default"}}
+	if err := controllerutil.SetControllerReference(owner, role, scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(role).
+		WithInterceptorFuncs(rejectingWrites(false)).Build()
+	err := ensureControllerSecretAccess(ctxT(), c, scheme, owner, role.Name, "kaalm-system", nil)
+	expectWriteRejected(t, err, "deleting", "Role")
 }

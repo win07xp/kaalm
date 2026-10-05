@@ -42,7 +42,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
-	"github.com/win07xp/kaalm/internal/gateway"
 )
 
 const defaultHealthInterval = 60 * time.Second
@@ -98,12 +97,28 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	mp.Status.ObservedGeneration = mp.Generation
 
+	// The gateway-reachability mirror and the budget and agent-spend
+	// reducers need neither a valid credential nor a valid spec, and the
+	// gateway keeps counting spend while the provider is Ready=False, so
+	// they run before the checks that can end the pass.
+	liveGateways, readyGateways, err := r.gatewayPods(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	r.setGatewayReachable(&mp, readyGateways)
+	if err := r.reconcileBudget(ctx, &mp, liveGateways); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileAgentSpend(ctx, &mp, liveGateways); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Credentials.
 	credential, credReason, credMsg := r.credential(ctx, &mp)
 	if credReason != kaalmv1beta1.ReasonCredentialsValid {
 		r.setReadyFalse(&mp, credReason, credMsg)
 		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+credReason)
-		return r.finish(ctx, &mp, ctrl.Result{})
+		return r.finish(ctx, &mp, budgetRequeue(&mp, ctrl.Result{}))
 	}
 
 	// Config validation: fallback tree, degrade targets, hard pricing, and
@@ -118,23 +133,9 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		reason, msg := readyFalseFromProblems(problems)
 		r.setReadyFalse(&mp, reason, msg)
 		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+reason)
-		return r.finish(ctx, &mp, ctrl.Result{})
+		return r.finish(ctx, &mp, budgetRequeue(&mp, ctrl.Result{}))
 	}
 	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Budget reconciliation (the reducer over gateway partials) and the
-	// gateway-reachability mirror.
-	liveGateways, readyGateways, err := r.gatewayPods(ctx)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	r.setGatewayReachable(&mp, readyGateways)
-	if err := r.reconcileBudget(ctx, &mp, liveGateways); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileAgentSpend(ctx, &mp, liveGateways); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -168,11 +169,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	r.setReady(&mp, true, kaalmv1beta1.ReasonCredentialsValid, "provider is valid")
-	// Budget-tracked providers re-reconcile on a short cadence so the spend
-	// roll-up and rollover stay fresh even without ConfigMap events.
-	if requeue.RequeueAfter == 0 && gateway.PeriodKey(mp.Spec.Budget.Period, time.Now()) != "" {
-		requeue = ctrl.Result{RequeueAfter: time.Minute}
-	}
+	requeue = budgetRequeue(&mp, requeue)
 	logger.V(1).Info("reconciled ModelProvider", "type", mp.Spec.Type)
 	return r.finish(ctx, &mp, requeue)
 }

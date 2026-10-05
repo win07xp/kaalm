@@ -119,6 +119,12 @@ Each `budgetUsage` entry carries the namespace, the period key, `spentUSD`,
 synced periodically from the gateway ledgers, so it can lag live spend by a
 sync interval. It is the display surface, not the enforcement counter.
 
+With `period: none` the provider tracks no spend, so `budgetUsage` and
+`clusterSpentUSD` are empty. Turning a budget off clears them, along with any
+`BudgetExhausted` condition on Agents. See the design book's
+[ModelProviderReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/modelprovider.md#budget-reconciliation)
+page.
+
 ## Rate limits
 
 ```yaml

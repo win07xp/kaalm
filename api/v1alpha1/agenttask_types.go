@@ -155,12 +155,13 @@ type AgentTaskStatus struct {
 	// created before this field existed, and its own values apply unbounded.
 	// +optional
 	ClassBounds *AgentTaskClassBounds `json:"classBounds,omitempty"`
-	// PodCreateRejectedTime is when the API server first rejected the
-	// current attempt's Pod create. It is cleared when a Pod is created or
-	// the attempt fails. The provisioning deadline counts from it while no
-	// Pod exists.
+	// CreateRejectedTime is when the API server first rejected a write the
+	// current attempt needs before it has a Pod: the Pod create, or a
+	// create, update, or delete of another child. It is cleared when a Pod
+	// is created or the attempt fails. The provisioning deadline counts from
+	// it while no Pod exists.
 	// +optional
-	PodCreateRejectedTime *metav1.Time `json:"podCreateRejectedTime,omitempty"`
+	CreateRejectedTime *metav1.Time `json:"createRejectedTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

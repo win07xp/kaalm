@@ -19,8 +19,11 @@ limitations under the License.
 // Package upgrade holds the S21 upgrade e2e: install the previous released
 // chart on a fresh cluster, load it with v1alpha1 workloads, run the two
 // documented upgrade steps to the local build, and assert that nothing was
-// recreated and nothing was lost. It runs through make e2e-upgrade, never
-// as part of make e2e: it owns the release the cluster starts from.
+// recreated and nothing was lost. A final step then deletes the keeper's
+// pre-upgrade Certificate and checks that the keeper's Pod moves to the
+// UID-suffixed Secret of the re-created Certificate. It runs through make
+// e2e-upgrade, never as part of make e2e: it owns the release the cluster
+// starts from.
 package upgrade
 
 import (

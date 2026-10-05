@@ -214,13 +214,13 @@ func ensureControllerSecretAccess(
 		// nothing, a Role with no binding is only clutter.
 		if rbFound {
 			if err := c.Delete(ctx, &currentRB); err != nil && !apierrors.IsNotFound(err) {
-				return err
+				return rejectedWrite("deleting", scheme, &currentRB, err)
 			}
 		}
 		if !found {
 			return nil
 		}
-		return client.IgnoreNotFound(c.Delete(ctx, &current))
+		return rejectedWrite("deleting", scheme, &current, client.IgnoreNotFound(c.Delete(ctx, &current)))
 	}
 
 	rules := []rbacv1.PolicyRule{{
@@ -240,7 +240,7 @@ func ensureControllerSecretAccess(
 	} else if !equality.Semantic.DeepEqual(current.Rules, rules) {
 		current.Rules = rules
 		if err := c.Update(ctx, &current); err != nil {
-			return err
+			return rejectedWrite("updating", scheme, &current, err)
 		}
 	}
 

@@ -131,7 +131,7 @@ Whichever of the two provisions first keeps the names. The other reports `Ready=
 
 The names stay taken until the other workload is deleted, not only until it stops running. A settled AgentTask keeps them until its `ttlSecondsAfterFinished` deletes it ([The class bounds timeout and retention](../resources/agenttask.md#the-class-bounds-timeout-and-retention)) or you delete it, and a hibernated Agent keeps them.
 
-To clear the clash, delete one of the two workloads, and recreate it under another name if you still need it. Don't delete the child instead. An Agent re-creates a deleted child on its next pass (a hibernated Agent, when it wakes), and a running AgentTask's NetworkPolicy is its Pod's network boundary.
+To clear the clash, delete one of the two workloads, and recreate it under another name if you still need it. Don't delete the child instead. An Agent re-creates a deleted child on its next pass (a hibernated Agent, when it wakes), and so does an AgentTask with a Pod ([Task child-resource convergence](../controller/reconcilers/agenttask.md#task-child-resource-convergence)). Whichever pass comes first keeps the name, and the other workload still reports `ChildConflict`. If the Agent takes the NetworkPolicy, the running task's Pod is left without its own egress boundary.
 
 No apply-time check catches the clash, because Kaalm runs no admission webhook and a schema rule cannot see other objects ([No admission webhooks](../controller/overview.md#no-admission-webhooks)).
 

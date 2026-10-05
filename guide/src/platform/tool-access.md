@@ -150,8 +150,9 @@ reached the tool server.
 On the metrics side:
 
 - `kaalm_tool_calls_total{provider, namespace, tool, status}` counts every
-  brokered call. `status` is `ok`, an error type such as `tool_denied`, or
-  `upstream_error` for a server-side failure the broker relayed.
+  brokered call. `status` is `ok`, an error type such as `tool_denied`,
+  `client_closed` when the calling workload disconnected before the response
+  finished, or `upstream_error` for a server-side failure the broker relayed.
 - `kaalm_tool_call_duration_seconds{provider, tool}` observes forwarded
   calls only, so local denials cannot drag the percentiles down.
 

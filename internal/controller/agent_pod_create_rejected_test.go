@@ -164,35 +164,45 @@ func TestAgent_MissingRuntimeClassLeavesNoPod(t *testing.T) {
 }
 
 // mkQuotaNamespace creates namespace ns with a ResourceQuota "pods" that
-// admits no Pod. envtest runs ResourceQuota admission but no quota
-// controller, so the test writes the quota's status itself. It returns once
-// a probe Pod create is refused with "exceeded quota".
+// admits no Pod. It returns once a probe Pod create is refused with
+// "exceeded quota".
 func mkQuotaNamespace(t *testing.T, ns string) {
+	t.Helper()
+	mkResourceQuota(t, ns, corev1.ResourcePods, func() client.Object {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "quota-probe-", Namespace: ns},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "registry.test/agents/demo:v1"}}},
+		}
+	})
+}
+
+// mkResourceQuota creates namespace ns (if needed) with a ResourceQuota,
+// named after res, that admits none of res. envtest runs ResourceQuota
+// admission but no quota controller, so the test writes the quota's status
+// itself. It returns once creating probe() is refused with "exceeded quota".
+func mkResourceQuota(t *testing.T, ns string, res corev1.ResourceName, probe func() client.Object) {
 	t.Helper()
 	if err := testClient.Create(ctxT(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil &&
 		!apierrors.IsAlreadyExists(err) {
 		t.Fatalf("create namespace: %v", err)
 	}
 	q := &corev1.ResourceQuota{
-		ObjectMeta: metav1.ObjectMeta{Name: "pods", Namespace: ns},
-		Spec:       corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{corev1.ResourcePods: resource.MustParse("0")}},
+		ObjectMeta: metav1.ObjectMeta{Name: string(res), Namespace: ns},
+		Spec:       corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{res: resource.MustParse("0")}},
 	}
 	if err := testClient.Create(ctxT(), q); err != nil {
 		t.Fatalf("create quota: %v", err)
 	}
-	setPodQuota(t, ns, 0)
+	setQuota(t, ns, res, 0)
 	eventually(t, func() error {
-		probe := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{GenerateName: "quota-probe-", Namespace: ns},
-			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "registry.test/agents/demo:v1"}}},
-		}
-		err := testClient.Create(ctxT(), probe)
+		obj := probe()
+		err := testClient.Create(ctxT(), obj)
 		if err == nil {
-			_ = testClient.Delete(ctxT(), probe)
-			return errString("probe pod admitted, quota not enforced yet")
+			_ = testClient.Delete(ctxT(), obj)
+			return errString("probe admitted, quota not enforced yet")
 		}
 		if !apierrors.IsForbidden(err) || !strings.Contains(err.Error(), "exceeded quota") {
-			return fmt.Errorf("probe pod create: %v, want Forbidden exceeded quota", err)
+			return fmt.Errorf("probe create: %v, want Forbidden exceeded quota", err)
 		}
 		return nil
 	})
@@ -202,10 +212,17 @@ func mkQuotaNamespace(t *testing.T, ns string) {
 // no Pod used.
 func setPodQuota(t *testing.T, ns string, pods int) {
 	t.Helper()
-	hard := corev1.ResourceList{corev1.ResourcePods: *resource.NewQuantity(int64(pods), resource.DecimalSI)}
+	setQuota(t, ns, corev1.ResourcePods, pods)
+}
+
+// setQuota sets the hard limit of the quota named after res, in spec and
+// status, with none of res used.
+func setQuota(t *testing.T, ns string, res corev1.ResourceName, n int) {
+	t.Helper()
+	hard := corev1.ResourceList{res: *resource.NewQuantity(int64(n), resource.DecimalSI)}
 	eventually(t, func() error {
 		var q corev1.ResourceQuota
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: ns, Name: "pods"}, &q); err != nil {
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: ns, Name: string(res)}, &q); err != nil {
 			return err
 		}
 		q.Spec.Hard = hard
@@ -213,7 +230,7 @@ func setPodQuota(t *testing.T, ns string, pods int) {
 			return err
 		}
 		q.Status.Hard = hard
-		q.Status.Used = corev1.ResourceList{corev1.ResourcePods: resource.MustParse("0")}
+		q.Status.Used = corev1.ResourceList{res: resource.MustParse("0")}
 		return testClient.Status().Update(ctxT(), &q)
 	})
 }

@@ -164,6 +164,10 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
+	// The credential Roles follow the Secret labels on every pass, whatever
+	// the checks below find; their result is reported in its own slot.
+	credReason, credMsg := r.scopeCredentialRoles(ctx, &channel)
+
 	// Step 1: resolve agentRef (an Agent, never an AgentTask).
 	var agent kaalmv1beta1.Agent
 	agentErr := r.Get(ctx, types.NamespacedName{Namespace: channel.Namespace, Name: channel.Spec.AgentRef.Name}, &agent)
@@ -184,7 +188,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Steps 2 and 3 validation chain; the first failure reports and stops.
-	if reason, msg := r.validateChannel(ctx, &channel, &agent); reason != "" {
+	if reason, msg := r.validateChannel(ctx, &channel, &agent, credReason, credMsg); reason != "" {
 		// A failing channel is not Ready, so the unresolved-host Warning has
 		// nothing to add; clear it so it fires afresh once the channel passes.
 		r.forgetCallbackResolution(&channel)
@@ -232,12 +236,60 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
+// scopeCredentialRoles runs step 3: the per-channel check Role, the one
+// read of every referenced Secret, and the gateway's credential Role. It
+// runs on every pass outside the operator namespace, before the Agent,
+// service, and path checks, because the credential Role must follow the
+// Secret labels whatever those checks find: a channel that is not Ready
+// never keeps a grant wider than its labeled Secrets. None of its inputs
+// depends on those checks. Once the Roles have converged, a pass costs only
+// cache reads. It returns the first failure as a reason and message, which
+// validateChannel reports after the earlier checks.
+func (r *AgentChannelReconciler) scopeCredentialRoles(
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel,
+) (reason, msg string) {
+	// Step 3: the controller-only check Role must exist BEFORE any Secret
+	// read: the operator has no standing Secret read in user namespaces, and
+	// RBAC has no label-scoped grant, so it needs get and watch on every
+	// referenced name to see the rule 45 label. The gateway's Role follows
+	// the reads and lists only the Secrets that opted in.
+	names := authSecretNames(channel)
+	refs := make([]corev1.LocalObjectReference, 0, len(names))
+	for _, n := range names {
+		refs = append(refs, corev1.LocalObjectReference{Name: n})
+	}
+	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), channel, channelCheckRoleName(channel.Name),
+		r.OperatorNamespace, refs); err != nil {
+		reason, msg = kaalmv1beta1.ReasonInvalidReference, "ensuring the credential check Role failed: "+err.Error()
+		if _, ok := asChildConflict(err); ok {
+			reason, msg = kaalmv1beta1.ReasonChildConflict, err.Error()
+		}
+		// Without the check Role no label can be read, so no Secret counts
+		// as opted in (readChannelSecrets follows the same rule for a failed
+		// read): the gateway's Role is emptied. The Secrets are not read,
+		// since every read would be Forbidden and retried. The next pass
+		// retries both writes.
+		if err := r.ensureCredentialRole(ctx, channel, nil); err != nil {
+			log.FromContext(ctx).V(1).Info("emptying the channel credential Role failed", "error", err)
+		}
+		return reason, msg
+	}
+	reason, msg, optedIn := r.validateSecrets(ctx, channel)
+	if err := r.ensureCredentialRole(ctx, channel, optedIn); err != nil {
+		if _, ok := asChildConflict(err); ok {
+			return kaalmv1beta1.ReasonChildConflict, err.Error()
+		}
+		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential Role failed: " + err.Error()
+	}
+	return reason, msg
+}
+
 // validateChannel runs steps 2 and 3: service enabled, path shape, path
-// conflict, the per-channel check and credential Roles, Secret validation
-// (rules 25, 40, 45, and 46), and rule 22. Returns a non-empty reason on the
-// first failure.
+// conflict, then the result of scopeCredentialRoles (the Role writes and
+// Secret validation, rules 25, 40, 45, and 46), passed in as credReason and
+// credMsg, and rule 22. Returns a non-empty reason on the first failure.
 func (r *AgentChannelReconciler) validateChannel(
-	ctx context.Context, channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent,
+	ctx context.Context, channel *kaalmv1beta1.AgentChannel, agent *kaalmv1beta1.Agent, credReason, credMsg string,
 ) (string, string) {
 	// Step 2: the Agent must expose a Service (delivery target).
 	if agent.Spec.Service != nil && !agent.Spec.Service.Enabled {
@@ -274,32 +326,8 @@ func (r *AgentChannelReconciler) validateChannel(
 			}
 		}
 	}
-	// Step 3: the controller-only check Role must exist BEFORE any Secret
-	// read: the operator has no standing Secret read in user namespaces, and
-	// RBAC has no label-scoped grant, so it needs get and watch on every
-	// referenced name to see the rule 45 label. The gateway's Role follows
-	// the reads and lists only the Secrets that opted in.
-	names := authSecretNames(channel)
-	refs := make([]corev1.LocalObjectReference, 0, len(names))
-	for _, n := range names {
-		refs = append(refs, corev1.LocalObjectReference{Name: n})
-	}
-	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), channel, channelCheckRoleName(channel.Name),
-		r.OperatorNamespace, refs); err != nil {
-		if _, ok := asChildConflict(err); ok {
-			return kaalmv1beta1.ReasonChildConflict, err.Error()
-		}
-		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential check Role failed: " + err.Error()
-	}
-	reason, msg, optedIn := r.validateSecrets(ctx, channel)
-	if err := r.ensureCredentialRole(ctx, channel, optedIn); err != nil {
-		if _, ok := asChildConflict(err); ok {
-			return kaalmv1beta1.ReasonChildConflict, err.Error()
-		}
-		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential Role failed: " + err.Error()
-	}
-	if reason != "" {
-		return reason, msg
+	if credReason != "" {
+		return credReason, credMsg
 	}
 	// Rule 22: callbackUrl must be HTTPS and must not point into internal
 	// address space (reconcile-time half; the gateway re-checks pre-dial).
