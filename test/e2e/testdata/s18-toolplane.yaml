@@ -2,9 +2,7 @@
 # same pattern as mockprovider) that REQUIRES the bearer token held in
 # kaalm-system, a ToolProvider brokering it, and a dedicated class + agent
 # carrying the grant chain (class allowlist; workload grant narrowed to
-# web_search). The health probe stays disabled following the ModelProvider
-# e2e precedent: the controller's probe client trusts system roots only, so
-# it cannot verify the cluster-CA cert (issue #86 tracks the trust knob).
+# web_search).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
