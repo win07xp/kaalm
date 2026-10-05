@@ -28,6 +28,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -74,6 +75,18 @@ func (r *ModelProviderReconciler) setGatewayReachable(mp *kaalmv1beta1.ModelProv
 		cond.Message = "no Ready gateway Pods in " + r.OperatorNamespace
 	}
 	apimeta.SetStatusCondition(&mp.Status.Conditions, cond)
+}
+
+// budgetRequeue returns res, or a one-minute requeue when res schedules
+// none and the provider tracks a budget period: a budget-tracked provider
+// re-reconciles every minute so the spend roll-up and the period rollover
+// stay fresh without ConfigMap events, including on a pass that fails a
+// check.
+func budgetRequeue(mp *kaalmv1beta1.ModelProvider, res ctrl.Result) ctrl.Result {
+	if res.RequeueAfter != 0 || gateway.PeriodKey(mp.Spec.Budget.Period, time.Now()) == "" {
+		return res
+	}
+	return ctrl.Result{RequeueAfter: time.Minute}
 }
 
 // reconcileBudget is the reducer over the per-replica partials in the
