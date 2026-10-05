@@ -43,9 +43,9 @@ func caPEM(pki *activatorPKI) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pki.caCert.Raw})
 }
 
-// The probe client's configured CA trust: a configured bundle is honored additively, and a CA
-// rotated in place is picked up without a new client (the restart-free
-// contract every other outbound trust pool keeps).
+// The probe client's configured CA trust: a configured bundle is honored
+// additively, and a CA rotated in place is picked up without a new client
+// (the restart-free contract every other outbound trust pool keeps).
 func TestProbeClient_TrustsConfiguredCAAndFollowsRotation(t *testing.T) {
 	pki := newActivatorPKI(t)
 	srv := tlsServer(t, pki)
