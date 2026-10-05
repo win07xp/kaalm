@@ -59,7 +59,7 @@ func expectTokenRateLimited(t *testing.T, h *harness, retryAfter string) {
 
 // TestProxy_TokensPerMinuteBlocksAfterLargeCall: a buffered response's
 // settled input plus output tokens are debited, so the next request is
-// refused (#202).
+// refused.
 func TestProxy_TokensPerMinuteBlocksAfterLargeCall(t *testing.T) {
 	h := tpmHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

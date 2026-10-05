@@ -508,7 +508,7 @@ func (s *Server) mcpUpstreamTimeout() time.Duration {
 // The default transport keeps two idle connections per host. A provider is
 // one host serving every concurrent request, so with more callers than
 // that nearly every request dialed and ran a full TLS handshake: 40% of
-// gateway CPU at 32 callers under the load baseline (#174). The per-host
+// gateway CPU at 32 callers under the load baseline. The per-host
 // limit is sized for hundreds of in-flight requests to one provider; the
 // total bounds the pool across every provider a gateway forwards to.
 const (
@@ -549,7 +549,7 @@ func (s *Server) upstream() *http.Client {
 		s.upstreamClient = &http.Client{
 			Transport: transport,
 			// A refused redirect surfaces as a connect-class failure, so the
-			// fallback walk continues past it (#153).
+			// fallback walk continues past it.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
 		}
 	})

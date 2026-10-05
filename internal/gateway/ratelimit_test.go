@@ -48,7 +48,7 @@ func rlTokenProvider(rpm, tpm int32) *kaalmv1beta1.ModelProvider {
 // TestRateLimiter_TokenDebitBlocksNextRequest: a large debit drives the
 // token bucket below zero, so the next request is refused with a
 // Retry-After computed from the debt, and admitted again once the bucket
-// refills above zero (#202).
+// refills above zero.
 func TestRateLimiter_TokenDebitBlocksNextRequest(t *testing.T) {
 	rl := NewRateLimiter(func() int { return 1 })
 	now := time.Now()
@@ -114,7 +114,7 @@ func TestRateLimiter_TokenDebtClampedAtOneBurst(t *testing.T) {
 
 // TestRateLimiter_TokenDebtReclampedWhenReplicasGrow: a debt taken at a
 // larger share is re-clamped to minus one burst at the current share once
-// the replica count grows, so it still blocks for at most a minute (#377).
+// the replica count grows, so it still blocks for at most a minute.
 func TestRateLimiter_TokenDebtReclampedWhenReplicasGrow(t *testing.T) {
 	replicas := 1
 	rl := NewRateLimiter(func() int { return replicas })
@@ -136,7 +136,7 @@ func TestRateLimiter_TokenDebtReclampedWhenReplicasGrow(t *testing.T) {
 // TestRateLimiter_TokenDebtReclampedBeforeRefill: the re-clamp runs before
 // the elapsed refill is credited, so when no call reaches the key before the
 // replica count grows partway through, the key admits again one minute after
-// the debit (#377).
+// the debit.
 func TestRateLimiter_TokenDebtReclampedBeforeRefill(t *testing.T) {
 	replicas := 1
 	rl := NewRateLimiter(func() int { return replicas })
@@ -163,7 +163,7 @@ func TestRateLimiter_TokenDebtReclampedBeforeRefill(t *testing.T) {
 
 // TestRateLimiter_TokenDebtReclampedWhenCeilingDrops: lowering
 // tokensPerMinute shrinks the share like a replica-count increase, and the
-// debt is re-clamped the same way (#377).
+// debt is re-clamped the same way.
 func TestRateLimiter_TokenDebtReclampedWhenCeilingDrops(t *testing.T) {
 	rl := NewRateLimiter(func() int { return 1 })
 	now := time.Now()
@@ -380,7 +380,7 @@ func TestAllowTool_BucketsAndNoLimit(t *testing.T) {
 
 // TestAllowTool_RetryAfterFromBucket: a refused call reports the seconds
 // until the tool bucket holds a call again, computed as for the LLM request
-// bucket (#346).
+// bucket.
 func TestAllowTool_RetryAfterFromBucket(t *testing.T) {
 	rl := NewRateLimiter(nil)
 	now := time.Now()
@@ -401,8 +401,8 @@ func TestAllowTool_RetryAfterFromBucket(t *testing.T) {
 
 // TestAllowTool_FewerCallsThanReplicas: with requestsPerMinute below the
 // replica count, the tool bucket still holds one whole call, so the key is
-// admitted once per refill instead of refused forever (#345), and a refusal
-// reports the wait until the next call fits (#346).
+// admitted once per refill instead of refused forever, and a refusal
+// reports the wait until the next call fits.
 func TestAllowTool_FewerCallsThanReplicas(t *testing.T) {
 	rl := NewRateLimiter(func() int { return 3 })
 	now := time.Now()
@@ -419,7 +419,7 @@ func TestAllowTool_FewerCallsThanReplicas(t *testing.T) {
 	}
 	now = now.Add(60 * time.Second)
 	// About 0.67 of a call has refilled, so a third of a call (30s) is
-	// missing. The exact 30s wait is not rounded up to 31 (#361).
+	// missing. The exact 30s wait is not rounded up to 31.
 	if ok, wait := rl.AllowTool(tp, "team-a"); ok || wait != 30 {
 		t.Errorf("after 60s = (%v, %d), want (false, 30)", ok, wait)
 	}
@@ -461,9 +461,9 @@ func TestAllowHeartbeat_BurstAndRefill(t *testing.T) {
 // TestRateLimiter_FewerRequestsThanReplicas: when requestsPerMinute is below
 // the replica count, each replica's share is below one request, yet the
 // request bucket still holds one whole request, so the key is admitted once
-// per refill instead of refused forever (#202). Sixty seconds after the
+// per refill instead of refused forever. Sixty seconds after the
 // drain, a third of a request (30s) is missing, and the refusal reports
-// exactly 30 (#361).
+// exactly 30.
 func TestRateLimiter_FewerRequestsThanReplicas(t *testing.T) {
 	rl := NewRateLimiter(func() int { return 3 })
 	now := time.Now()
@@ -488,7 +488,7 @@ func TestRateLimiter_FewerRequestsThanReplicas(t *testing.T) {
 }
 
 // TestRetryAfterSeconds: the Retry-After is the ceiling of the exact wait,
-// so float error in a whole-second wait does not add a second (#361), a
+// so float error in a whole-second wait does not add a second, a
 // real fraction still rounds up, and the result is at least 1.
 func TestRetryAfterSeconds(t *testing.T) {
 	// Built from runtime values, as production does: a constant expression

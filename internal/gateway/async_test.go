@@ -88,7 +88,7 @@ func TestPatchWithRetry_ContextCancel(t *testing.T) {
 
 // patchDropSignals runs patchWithRetry against a failing store and returns
 // the patch-failed counter for the namespace and the error log lines that
-// name requestID: every drop must produce exactly one of each (#208).
+// name requestID: every drop must produce exactly one of each.
 // A zero cutoff runs under a context that never ends.
 func patchDropSignals(t *testing.T, cutoff time.Duration, backoff []time.Duration, requestID string) (float64, []map[string]any) {
 	t.Helper()

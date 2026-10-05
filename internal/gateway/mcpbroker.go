@@ -44,7 +44,7 @@ import (
 // docs/src/gateways/tool-plane.md (The Broker).
 
 // errNoRedirects marks a refused outbound redirect. No gateway client follows
-// them (#153): the broker's reasoning, closing the confused-deputy path a
+// them: the broker's reasoning, closing the confused-deputy path a
 // compromised server could open, holds for every outbound leg, and on the
 // provider leg Go's cross-host header stripping does not cover x-api-key.
 var errNoRedirects = errors.New("outbound redirects are refused")

@@ -105,7 +105,7 @@ func TestTaskComplete_HappyPath(t *testing.T) {
 	}
 }
 
-// TestTaskComplete_InformerLagLiveFallback covers the new-Pod window (#148):
+// TestTaskComplete_InformerLagLiveFallback covers the new-Pod window:
 // the calling Pod is not in the informer cache yet, but the live
 // namespace-narrowed lookup finds it, so the middleware cross-check and the
 // UID gate both pass and the completion lands.

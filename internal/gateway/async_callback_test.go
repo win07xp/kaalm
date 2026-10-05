@@ -117,7 +117,7 @@ func TestDialCallbackOnce_SuccessAndSigning(t *testing.T) {
 }
 
 // TestDialCallbackOnce_RedirectRefused: the callback dialer never follows a
-// redirect (#153). The pinned transport already keeps one on the checked
+// redirect. The pinned transport already keeps one on the checked
 // host; refusing makes the posture explicit and the attempt fails as a
 // transport error (the retried bucket).
 func TestDialCallbackOnce_RedirectRefused(t *testing.T) {

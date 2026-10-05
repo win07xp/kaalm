@@ -42,7 +42,7 @@ func (u Usage) isZero() bool {
 // providerAdapter carries the per-provider knowledge: request-format paths,
 // credential header shape, usage extraction (buffered and streamed), and
 // streaming request fixups. Anthropic and OpenAI/OpenAI-compatible are the
-// served types; google-vertex is reserved (#147) and keeps only its
+// served types; google-vertex is reserved and keeps only its
 // outbound adapter pieces.
 type providerAdapter interface {
 	// formatName identifies the request format for logs and metrics.
@@ -74,8 +74,8 @@ func adapterForPath(urlPath string) (providerAdapter, bool) {
 		return openaiAdapter{}, true
 	}
 	// No Vertex-format path is routed: google-vertex is a reserved type in
-	// this release (request-handling.md, The google-vertex type is reserved;
-	// #147). The mux never routes anything else here either; this guard is
+	// this release (request-handling.md, The google-vertex type is reserved).
+	// The mux never routes anything else here either; this guard is
 	// for handler-level callers.
 	return nil, false
 }

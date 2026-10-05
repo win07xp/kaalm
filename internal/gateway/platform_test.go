@@ -73,7 +73,7 @@ func (c *eventCapture) Eventf(object runtime.Object, _, reason, messageFmt strin
 }
 
 // TestReplyRefused_BoundsEventDetail: a 64 KiB platform error body must not
-// travel into the Warning event or the health observation (#151).
+// travel into the Warning event or the health observation.
 func TestReplyRefused_BoundsEventDetail(t *testing.T) {
 	capture := &eventCapture{}
 	s := &Server{ChannelHealth: NewChannelHealthStore(0), Recorder: capture}

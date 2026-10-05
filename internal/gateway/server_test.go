@@ -121,7 +121,7 @@ type fakeStore struct {
 	creds     map[string]string
 	podsByIP  map[string]*corev1.Pod
 	// livePodsByIP backs PodByIPLive: Pods visible to the live fallback but
-	// not the informer, the new-Pod window (#148).
+	// not the informer, the new-Pod window.
 	livePodsByIP map[string]*corev1.Pod
 	channels     map[string]*kaalmv1beta1.AgentChannel // key: webhook path
 	secrets      map[string]string                     // key: ns/name/key

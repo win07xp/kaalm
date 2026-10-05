@@ -485,7 +485,7 @@ func TestDiscord_RefusedReplyRecordsCallbackRejected(t *testing.T) {
 }
 
 // discordCommandWith is discordCommand with caller-chosen reply-context
-// fields, for the crafted-segment tests (#150).
+// fields, for the crafted-segment tests.
 func discordCommandWith(appID, token, guild, channel, user, message string) []byte {
 	raw, _ := json.Marshal(map[string]any{
 		"id": "1290000000000000001", "application_id": appID, "type": discordInteractionCommand,
@@ -528,7 +528,7 @@ func TestDiscordSnowflakeAndTokenShape(t *testing.T) {
 // TestDiscord_CraftedReplySegmentsAreRefusedBeforeAnyDial: a channel owner
 // controls the verifying key and can sign interactions with arbitrary
 // application ids and tokens; a crafted value must terminate as a refused
-// reply without a single request to the platform API (#150).
+// reply without a single request to the platform API.
 func TestDiscord_CraftedReplySegmentsAreRefusedBeforeAnyDial(t *testing.T) {
 	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -551,7 +551,7 @@ func TestDiscord_CraftedReplySegmentsAreRefusedBeforeAnyDial(t *testing.T) {
 
 // TestDiscord_BotFallbackRefusesCraftedChannelID: the bot-token fallback
 // appends the interaction's channel id to the API base; a non-snowflake
-// value is refused before the fallback dials (#150).
+// value is refused before the fallback dials.
 func TestDiscord_BotFallbackRefusesCraftedChannelID(t *testing.T) {
 	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

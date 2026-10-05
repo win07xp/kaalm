@@ -72,7 +72,7 @@ type KubeAsyncRecords struct {
 	// Reader counts pending records from the gateway's ConfigMap informer,
 	// as the AgentChannel resource page specifies; nil (tests) falls back
 	// to a live List through Client. Under the load baseline the live List
-	// was one apiserver LIST per async message (#174).
+	// was one apiserver LIST per async message.
 	Reader client.Reader
 }
 
@@ -281,7 +281,7 @@ func (s *Server) runAsyncPipeline(
 // A payload that never lands is dropped (v1 limitation), and every drop
 // produces exactly one kaalm_channel_async_patch_failed_total increment and
 // one error log: after the last attempt fails, and when the pipeline context
-// ends during a backoff sleep (#208).
+// ends during a backoff sleep.
 func (s *Server) patchWithRetry(ctx context.Context, requestID, namespace string, payload []byte) {
 	backoff := append([]time.Duration{0}, s.Config.CallbackBackoff...)
 	var lastErr error
@@ -376,7 +376,7 @@ func (s *Server) sendCallback(
 		if err == nil && status >= 200 && status <= 299 {
 			// The resolved, pinned address is the one dial-time input no
 			// versioned artifact can reproduce; denials already record theirs
-			// in the health observation, so successes log it here (#139).
+			// in the health observation, so successes log it here.
 			slog.Info("callback delivered", "requestId", requestID,
 				"channel", channel.Spec.Path(), "host", host, "resolvedIP", ip.String())
 			return callbackDelivered
@@ -420,8 +420,8 @@ const callbackConnectTimeout = 5 * time.Second
 
 // callbackHTTPClient returns the one pooled client for callback delivery.
 // Every attempt used to build its own transport and never close it, so a
-// gateway's open connections grew with every callback it had ever sent
-// (#172). The pool is keyed by the URL's host; a pooled connection was
+// gateway's open connections grew with every callback it had ever sent.
+// The pool is keyed by the URL's host; a pooled connection was
 // dialed to the IP that passed the range check at its dial time, and every
 // attempt still re-resolves and re-checks before it may reuse one.
 func (s *Server) callbackHTTPClient() *http.Client {
@@ -436,7 +436,7 @@ func (s *Server) callbackHTTPClient() *http.Client {
 		s.callbackClient = &http.Client{
 			Transport: transport,
 			// The pinned dial already keeps a redirect from leaving the
-			// checked host; refusing them outright removes the ambiguity (#153).
+			// checked host; refusing them outright removes the ambiguity.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
 		}
 	})

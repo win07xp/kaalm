@@ -23,7 +23,7 @@ import (
 	"strings"
 )
 
-// The adapter for the RESERVED google-vertex type (#147): no inbound path is
+// The adapter for the RESERVED google-vertex type: no inbound path is
 // routed and the OAuth2 token minting the platform requires is not
 // implemented, so the type is not servable in this release. The outbound
 // pieces below (usage extraction, URL-path model rewriting, the ?alt=sse
