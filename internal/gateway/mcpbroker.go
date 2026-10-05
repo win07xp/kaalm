@@ -265,6 +265,12 @@ type mcpRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
+// toolStatusClientClosed is the outcome of a brokered call whose caller
+// disconnected before the broker finished relaying the response stream. It
+// is a metric status and an audit error_type only, never a wire error type,
+// because no caller receives it.
+const toolStatusClientClosed = "client_closed"
+
 // mcpResult is the single funnel every terminal broker outcome passes
 // through. It emits the per-call audit record (one info-level structured log
 // line, never bodies) and the broker metrics. tp is nil when the call died
@@ -704,7 +710,7 @@ func relayMCPBuffered(
 // (tool_timeout), or when the upstream read fails for any other reason
 // (tool_unavailable). On those failures the line the failure cut off is not
 // forwarded, so the event parses as its own message. A caller that left
-// gets no event and no error type. It returns the upstream bytes relayed
+// gets no event, and the call's error type is client_closed. It returns the upstream bytes relayed
 // downstream, the error type, and the audit detail; only the detail carries
 // the transport error, because it can name the tool server's address.
 func relayMCPStream(
@@ -751,7 +757,7 @@ func relayMCPStream(
 	for scanner.Scan() {
 		select {
 		case <-r.Context().Done():
-			return written, "", ""
+			return written, toolStatusClientClosed, ""
 		default:
 		}
 		if consumed > maxBytes {
@@ -768,7 +774,7 @@ func relayMCPStream(
 		n, err := w.Write(append(line, '\n'))
 		written += int64(n)
 		if err != nil {
-			return written, "", ""
+			return written, toolStatusClientClosed, ""
 		}
 		flush()
 	}
@@ -789,7 +795,7 @@ func relayMCPStream(
 	case r.Context().Err() != nil:
 		// The upstream request derives from the caller's context, so a
 		// caller that left cancels the read: not a tool failure.
-		return written, "", ""
+		return written, toolStatusClientClosed, ""
 	case errors.Is(err, context.DeadlineExceeded):
 		msg := fmt.Sprintf("tool provider %q did not finish the stream within the upstream timeout; "+
 			"the stream is truncated", providerName)

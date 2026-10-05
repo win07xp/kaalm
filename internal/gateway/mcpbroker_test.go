@@ -17,9 +17,11 @@ limitations under the License.
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1132,11 +1134,115 @@ func TestRelayMCPStream_CallerGoneIsNotAToolFailure(t *testing.T) {
 	if errType == errToolTimeout || errType == errToolUnavailable {
 		t.Errorf("errType = %q, want neither tool_timeout nor tool_unavailable", errType)
 	}
+	if errType != "client_closed" {
+		t.Errorf("errType = %q, want client_closed", errType)
+	}
 	if detail != "" {
 		t.Errorf("detail = %q, want empty", detail)
 	}
 	if strings.Contains(rec.Body.String(), "jsonrpc") {
 		t.Errorf("a departed caller must get no event: %q", rec.Body.String())
+	}
+}
+
+// failingWriter is a ResponseWriter whose writes fail, as a write to a
+// connection the caller closed does.
+type failingWriter struct{ header http.Header }
+
+func (w *failingWriter) Header() http.Header       { return w.header }
+func (w *failingWriter) WriteHeader(int)           {}
+func (w *failingWriter) Write([]byte) (int, error) { return 0, errors.New("write: broken pipe") }
+
+// A stream the caller abandons counts as client_closed, with no event and
+// no detail, whichever exit notices the departure (#444).
+func TestRelayMCPStream_CallerGone(t *testing.T) {
+	const events = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n"
+	newResp := func() *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(events)),
+		}
+	}
+
+	t.Run("caller gone between lines", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil).WithContext(ctx)
+		_, errType, detail := relayMCPStream(rec, req, newResp(), 1<<20, json.RawMessage("7"), "search")
+		if errType != "client_closed" || detail != "" {
+			t.Errorf("outcome = (%q, %q), want (client_closed, empty)", errType, detail)
+		}
+		if strings.Contains(rec.Body.String(), "data:") {
+			t.Errorf("a departed caller must get nothing: %q", rec.Body.String())
+		}
+	})
+
+	t.Run("downstream write fails", func(t *testing.T) {
+		w := &failingWriter{header: http.Header{}}
+		req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil)
+		_, errType, detail := relayMCPStream(w, req, newResp(), 1<<20, json.RawMessage("7"), "search")
+		if errType != "client_closed" || detail != "" {
+			t.Errorf("outcome = (%q, %q), want (client_closed, empty)", errType, detail)
+		}
+	})
+}
+
+// newAbandonHarness is a harness whose tool server sends one progress event
+// and then waits, so the caller can leave mid-stream.
+func newAbandonHarness(t *testing.T) *harness {
+	t.Helper()
+	blocked := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-blocked:
+		case <-r.Context().Done():
+		}
+	})
+	// LIFO: blocked must close before the harness cleanup waits on the
+	// parked handler.
+	t.Cleanup(func() { close(blocked) })
+	h.seedToolRoute()
+	return h
+}
+
+// abandonStream calls the tool, reads until the progress event, and closes
+// the response. The harness speaks HTTP/1.1, so the close drops the
+// connection and the gateway cancels the request context.
+func abandonStream(t *testing.T, h *harness) {
+	t.Helper()
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+	br := bufio.NewReader(resp.Body)
+	for {
+		line, err := br.ReadString('\n')
+		if strings.Contains(line, "notifications/progress") {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream ended before the progress event: %v", err)
+		}
+	}
+	_ = resp.Body.Close()
+}
+
+// A caller that disconnects mid-stream counts as client_closed, not ok and
+// not a tool failure.
+func TestMCPBroker_StreamCallerGone(t *testing.T) {
+	h := newAbandonHarness(t)
+	abandonStream(t, h)
+	waitFor(t, func() bool { return mcpCalls(h, "web_search", "client_closed") == 1 })
+	for _, status := range []string{"ok", errToolUnavailable, errToolTimeout} {
+		if got := mcpCalls(h, "web_search", status); got != 0 {
+			t.Errorf("%s counter = %v, want 0", status, got)
+		}
 	}
 }
 

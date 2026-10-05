@@ -219,6 +219,28 @@ func TestTracing_ToolCallRelayFailureMarksSpan(t *testing.T) {
 	}
 }
 
+// A call whose caller disconnected mid-stream marks the tool.call span
+// with client_closed (#444).
+func TestTracing_ToolCallCallerGoneMarksSpan(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	h := newAbandonHarness(t)
+	h.server.Tracing = newTestTracing(exp)
+	abandonStream(t, h)
+	var call *tracetest.SpanStub
+	waitFor(t, func() bool {
+		for _, s := range exp.GetSpans() {
+			if s.Name == "tool.call" {
+				call = &s
+				return true
+			}
+		}
+		return false
+	})
+	if call.Status.Code != codes.Error || call.Status.Description != "client_closed" {
+		t.Errorf("tool.call status = (%v, %q), want (Error, client_closed)", call.Status.Code, call.Status.Description)
+	}
+}
+
 func assertChild(t *testing.T, byName map[string]tracetest.SpanStub, child, parent string) {
 	t.Helper()
 	if byName[child].Parent.SpanID() != byName[parent].SpanContext.SpanID() {
