@@ -1135,6 +1135,13 @@ func TestChannel_SystemNamespaceForbidden(t *testing.T) {
 		}
 		return nil
 	})
+	// No Role is ever written in the operator namespace.
+	for _, name := range []string{"kaalm-channel-ch-sys-check", "kaalm-channel-ch-sys-creds"} {
+		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: testSystemNamespace, Name: name}, &rbacv1.Role{})
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("Role %s in the operator namespace: err = %v, want NotFound", name, err)
+		}
+	}
 }
 
 // ---- AgentChannel: rule 25 callbackAuth Secret checks ----
@@ -2040,6 +2047,22 @@ func TestChannel_LabelRemovedShrinksGatewayRole(t *testing.T) {
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-unlabel-creds-gateway"}, &rb); err != nil {
 		t.Errorf("gateway RoleBinding removed: %v", err)
 	}
+}
+
+// A channel whose Agent does not exist still keeps its credential Role to
+// the labeled Secrets, and the Role follows a label change (#421).
+func TestChannel_AgentNotFoundCredentialRoleFollowsLabel(t *testing.T) {
+	mkChannelSecret(t, "ch-gated-label-secret")
+	mkChannel(t, "ch-gated-label", "no-such-agent", "/channels/default/ch-gated-label", nil)
+	expectChannelReady(t, "ch-gated-label", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
+	expectCredsRole(t, "ch-gated-label", []string{"ch-gated-label-secret"})
+	assertCheckRole(t, "ch-gated-label", []string{"ch-gated-label-secret"})
+
+	editSecret(t, "ch-gated-label-secret", func(s *corev1.Secret) {
+		delete(s.Labels, kaalmv1beta1.LabelChannelCredential)
+	})
+	expectCredsRole(t, "ch-gated-label", nil)
+	expectChannelReady(t, "ch-gated-label", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
 }
 
 // A channel whose Secret does not exist yet turns Ready once the Secret is
