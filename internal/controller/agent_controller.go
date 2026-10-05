@@ -240,7 +240,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// the rule 48 env-Secret gate among them.
 	gated, gateResult, err := r.readyGates(ctx, &agent, &class, eff)
 	if err != nil {
-		return r.childConflict(ctx, &agent, statusBefore, err)
+		return r.childBlocked(ctx, &agent, statusBefore, err)
 	}
 	if gated {
 		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
@@ -255,7 +255,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// converge, and only Pod creation, replacement, and hibernation wait.
 	tlsSecret, certReady, err := r.ensureCertificate(ctx, &agent)
 	if err != nil {
-		return r.childConflict(ctx, &agent, statusBefore, err)
+		return r.childBlocked(ctx, &agent, statusBefore, err)
 	}
 	certHeld, noPod, err := r.awaitCertificate(ctx, &agent, statusBefore, certReady)
 	if err != nil {
@@ -267,7 +267,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// Step 8: converge the non-Pod children.
 	if err := r.ensureChildren(ctx, &agent, &class, eff); err != nil {
-		return r.childConflict(ctx, &agent, statusBefore, err)
+		return r.childBlocked(ctx, &agent, statusBefore, err)
 	}
 
 	// Step 9: converge the Pod and derive the phase from it.
@@ -347,16 +347,30 @@ func (r *AgentReconciler) waitForCertificateWithoutPod(agent *kaalmv1beta1.Agent
 	r.setReady(agent, false, kaalmv1beta1.ReasonCertificateNotReady, certWaitMsg)
 }
 
-// childConflict turns a ChildConflictError into Ready=False ChildConflict, a
-// Warning event, and a slow requeue, and passes any other error through. The
-// conflict is not a reconcile error: nothing the controller retries can clear
-// it, so backoff retries would only fill the log. The pass ends before the Pod
-// is converged, so no Pod is created, and a running Pod is left alone. The
-// conflicting object is not watched (it has no owner reference), so the
-// requeue is what notices its removal.
-func (r *AgentReconciler) childConflict(
+// childBlocked reports a child the pass cannot converge, and passes any
+// other error through. A ChildConflictError (the name is taken by an object
+// the Agent does not control) gives Ready=False ChildConflict; a
+// ChildWriteRejectedError (the API server refused a create, update, or
+// delete of the child) gives Ready=False ChildWriteRejected. Either way a
+// Warning event reports it, the phase is kept, and the pass requeues after
+// gateRequeue. Neither is a reconcile error: nothing the controller retries
+// can clear it, so backoff retries would only fill the log. The pass ends
+// before the Pod is converged, so no Pod is created, and a running Pod is
+// left alone. The cause (a conflicting object with no owner reference, a
+// quota, a webhook) raises no watch event, so the requeue is what notices it
+// clearing.
+func (r *AgentReconciler) childBlocked(
 	ctx context.Context, agent *kaalmv1beta1.Agent, before *kaalmv1beta1.AgentStatus, err error,
 ) (ctrl.Result, error) {
+	if cr, ok := asChildWriteRejected(err); ok {
+		// The event fires only when the reason first appears: the message
+		// carries quota counts that change between passes.
+		r.setReadyGate(agent, kaalmv1beta1.ReasonChildWriteRejected, cr.Error())
+		if err := r.updateStatusIfChanged(ctx, agent, before); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: gateRequeue}, nil
+	}
 	cc, ok := asChildConflict(err)
 	if !ok {
 		return ctrl.Result{}, err
@@ -1070,7 +1084,7 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 // class has a drift slot free, mark the Agent Failed on a persistent crash
 // loop, and derive Running from readiness. Until the Pod is Ready, a woken
 // Agent stays Resuming and any other Agent is Provisioning (podPendingPhase).
-// A Pod create the API server rejects (isPodCreateRejection) sets that phase
+// A Pod create the API server rejects (isWriteRejection) sets that phase
 // with Ready=False PodCreateRejected and clears podName; any other creation
 // error returns without a phase change, so the pass retries with backoff. It
 // reports whether the Agent has drifted and waits for a slot, and whether the
@@ -1103,7 +1117,7 @@ func (r *AgentReconciler) convergePod(
 			return false, false, err
 		}
 		if err := r.Create(ctx, desired); err != nil {
-			if !isPodCreateRejection(err) {
+			if !isWriteRejection(err) {
 				return false, false, err
 			}
 			// A rejection holds like a gate: the cause is fixed outside the

@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,7 +31,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -331,5 +337,45 @@ func TestAgent_RetainedPVCReusedOthersConflict(t *testing.T) {
 	expectAgentReadyReason(t, "own-pvc-foreign", kaalmv1beta1.ReasonChildConflict)
 	if pod := agentPod(t, "own-pvc-foreign"); pod != nil {
 		t.Fatalf("an Agent whose PVC is controlled by another object must not get a Pod, found %s", pod.Name)
+	}
+}
+
+// createControlled reports a create the API server rejects as a
+// ChildWriteRejectedError, and still reports a name held by another object
+// as a ChildConflictError.
+func TestCreateControlled_WrapsRejection(t *testing.T) {
+	scheme := testScheme(t)
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "a1", Namespace: "default", UID: "agent-uid"}}
+	newPolicy := func() *networkingv1.NetworkPolicy {
+		np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "a1", Namespace: "default"}}
+		if err := controllerutil.SetControllerReference(agent, np, scheme); err != nil {
+			t.Fatal(err)
+		}
+		return np
+	}
+
+	rejecting := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			return apierrors.NewForbidden(schema.GroupResource{Group: "networking.k8s.io", Resource: "networkpolicies"},
+				"a1", errors.New("denied by policy webhook"))
+		},
+	}).Build()
+	err := createControlled(ctxT(), rejecting, agent, newPolicy())
+	cr, ok := asChildWriteRejected(err)
+	if !ok {
+		t.Fatalf("createControlled = %v, want a ChildWriteRejectedError", err)
+	}
+	if cr.Op != "creating" || cr.Kind != "NetworkPolicy" || cr.Name != "a1" {
+		t.Errorf("error = %+v, want creating NetworkPolicy a1", cr)
+	}
+
+	foreign := platformPolicy("a1")
+	taken := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+	err = createControlled(ctxT(), taken, agent, newPolicy())
+	if _, ok := asChildConflict(err); !ok {
+		t.Fatalf("createControlled over a foreign object = %v, want a ChildConflictError", err)
+	}
+	if _, ok := asChildWriteRejected(err); ok {
+		t.Error("a name conflict must not count as a rejected write")
 	}
 }

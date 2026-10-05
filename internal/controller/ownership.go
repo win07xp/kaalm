@@ -67,13 +67,14 @@ func requireControlled(scheme *runtime.Scheme, owner, obj client.Object) error {
 
 // createControlled creates obj, which already carries the owner's controller
 // reference. When the name is taken it reads the existing object and returns
-// a ChildConflictError unless owner controls it.
+// a ChildConflictError unless owner controls it. A create the API server
+// rejects (isWriteRejection) comes back as a ChildWriteRejectedError.
 func createControlled(ctx context.Context, c client.Client, owner, obj client.Object) error {
 	err := c.Create(ctx, obj)
-	if !apierrors.IsAlreadyExists(err) {
-		return err
+	if apierrors.IsAlreadyExists(err) {
+		return verifyControlled(ctx, c, owner, obj)
 	}
-	return verifyControlled(ctx, c, owner, obj)
+	return rejectedWrite("creating", c.Scheme(), obj, err)
 }
 
 // verifyControlled reads the object named like obj and checks that owner
