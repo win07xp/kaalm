@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,6 +34,12 @@ import (
 // mcpTestHandler is a minimal MCP streamable-HTTP server: enough protocol
 // for the probe's initialize + tools/list sequence.
 func mcpTestHandler(t *testing.T) http.HandlerFunc {
+	return mcpTestHandlerWithTools(t, `[{"name":"web_search"}]`)
+}
+
+// mcpTestHandlerWithTools is mcpTestHandler answering tools/list with
+// toolsJSON.
+func mcpTestHandlerWithTools(t *testing.T, toolsJSON string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     *int64 `json:"id"`
@@ -51,7 +58,7 @@ func mcpTestHandler(t *testing.T) http.HandlerFunc {
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/list":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[{"name":"web_search"}]}}`, *req.ID)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":%s}}`, *req.ID, toolsJSON)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 		}
@@ -184,5 +191,33 @@ func TestMCPToolHealthChecker_RedirectNotFollowed(t *testing.T) {
 	}
 	if res.Healthy {
 		t.Fatalf("probe = %+v, want a redirecting endpoint to be unhealthy", res)
+	}
+}
+
+// largeCatalog is a tools/list catalog with a 2 MiB description.
+func largeCatalog() string {
+	return fmt.Sprintf(`[{"name":"web_search","description":%q}]`, strings.Repeat("d", 2<<20))
+}
+
+// A catalog over 1 MiB that the broker serves under its default cap passes
+// the probe too (#413).
+func TestMCPToolHealthChecker_LargeCatalogHealthy(t *testing.T) {
+	srv := httptest.NewServer(mcpTestHandlerWithTools(t, largeCatalog()))
+	defer srv.Close()
+	res := (&MCPToolHealthChecker{}).Probe(context.Background(), tpForEndpoint(srv.URL, nil), "tok")
+	if !res.Healthy || res.Err != nil {
+		t.Fatalf("probe = %+v, want Healthy", res)
+	}
+}
+
+// A catalog over the configured limit fails the probe with a message naming
+// the limit, not as an auth failure.
+func TestMCPToolHealthChecker_CatalogOverTheLimitUnhealthy(t *testing.T) {
+	srv := httptest.NewServer(mcpTestHandlerWithTools(t, largeCatalog()))
+	defer srv.Close()
+	res := (&MCPToolHealthChecker{MaxResponseBytes: 1 << 20}).Probe(context.Background(),
+		tpForEndpoint(srv.URL, nil), "tok")
+	if res.Healthy || res.AuthFailed || res.Err == nil || !strings.Contains(res.Err.Error(), "exceeds 1048576 bytes") {
+		t.Fatalf("probe = %+v, want an error naming the 1 MiB limit", res)
 	}
 }

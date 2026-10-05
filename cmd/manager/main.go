@@ -56,6 +56,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
 	"github.com/win07xp/kaalm/internal/controller"
+	"github.com/win07xp/kaalm/internal/mcp"
 	"github.com/win07xp/kaalm/internal/profiling"
 	"github.com/win07xp/kaalm/internal/secretwatch"
 	"github.com/win07xp/kaalm/internal/storagemigration"
@@ -98,6 +99,7 @@ func main() {
 	var certLifetime controller.CertLifetime
 	var clientQPS float64
 	var clientBurst int
+	var mcpMaxBodyBytes int64
 	var dnsNamespaceLabels, dnsPodLabels string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -131,6 +133,9 @@ func main() {
 	flag.StringVar(&probeCA, "probe-ca", "",
 		"Comma-separated CA bundle paths trusted for provider health probes, added to the system roots. "+
 			"Empty keeps system roots only.")
+	flag.Int64Var(&mcpMaxBodyBytes, "mcp-max-body-bytes", mcp.DefaultMaxResponseBytes,
+		"The largest MCP response the ToolProvider health probe reads; "+
+			"the chart sets it to the gateway's --mcp-max-body-bytes.")
 	flag.StringVar(&activatorAddr, "activator-addr", ":9443", "The activator/probe listener address.")
 	flag.StringVar(&callbackAllowlist, "callback-url-allowlist", "",
 		"Comma-separated DNS-name suffixes and CIDR blocks whose AgentChannel.callbackUrl targets are permitted "+
@@ -367,7 +372,7 @@ func main() {
 		Client:            mgr.GetClient(),
 		Recorder:          mgr.GetEventRecorderFor("toolprovider-controller"),
 		OperatorNamespace: operatorNamespace,
-		Health:            &controller.MCPToolHealthChecker{Client: probeClient},
+		Health:            &controller.MCPToolHealthChecker{Client: probeClient, MaxResponseBytes: mcpMaxBodyBytes},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ToolProvider")
 		os.Exit(1)

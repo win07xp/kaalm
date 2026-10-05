@@ -44,7 +44,9 @@ type mockServer struct {
 	t         *testing.T
 	sse       bool
 	sessionID string
-	calls     []call
+	// listResult, when non-empty, is the tools/list result.
+	listResult string
+	calls      []call
 }
 
 func (m *mockServer) handler() http.HandlerFunc {
@@ -72,7 +74,11 @@ func (m *mockServer) handler() http.HandlerFunc {
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/list":
-			m.respond(w, req, `{"tools":[{"name":"web_search","description":"search"},{"name":"fetch_page"}]}`)
+			result := m.listResult
+			if result == "" {
+				result = `{"tools":[{"name":"web_search","description":"search"},{"name":"fetch_page"}]}`
+			}
+			m.respond(w, req, result)
 		default:
 			m.t.Errorf("mock: unexpected method %q", req.Method)
 			w.WriteHeader(http.StatusBadRequest)
@@ -260,4 +266,67 @@ func TestParseResponse_SSELineBound(t *testing.T) {
 	if _, err := ParseResponse("application/json", strings.NewReader(line), []byte("3"), 16); err != nil {
 		t.Fatalf("JSON body: %v", err)
 	}
+}
+
+// largeListResult is a tools/list result with a 2 MiB description.
+func largeListResult() string {
+	return fmt.Sprintf(`{"tools":[{"name":"web_search","description":%q},{"name":"fetch_page"}]}`,
+		strings.Repeat("d", 2<<20))
+}
+
+// A zero-value Client reads a catalog over 1 MiB, in either encoding,
+// because its default limit is the broker's default cap (#413).
+func TestClient_LargeToolsList(t *testing.T) {
+	for _, sse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sse=%v", sse), func(t *testing.T) {
+			mock := &mockServer{t: t, sse: sse, listResult: largeListResult()}
+			srv := httptest.NewServer(mock.handler())
+			defer srv.Close()
+			tools := initAndList(t, &Client{Endpoint: srv.URL})
+			if len(tools) != 2 || tools[0].Name != "web_search" {
+				t.Fatalf("tools = %d entries, want web_search and fetch_page", len(tools))
+			}
+		})
+	}
+}
+
+// MaxResponseBytes bounds what the client reads: an answer over it fails
+// with a message naming the limit, in either encoding.
+func TestClient_ResponseLimit(t *testing.T) {
+	for _, sse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sse=%v", sse), func(t *testing.T) {
+			mock := &mockServer{t: t, sse: sse, listResult: largeListResult()}
+			srv := httptest.NewServer(mock.handler())
+			defer srv.Close()
+
+			c := &Client{Endpoint: srv.URL, MaxResponseBytes: 1 << 20}
+			session, err := c.Initialize(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.ListTools(context.Background(), session)
+			if err == nil || !strings.Contains(err.Error(), "exceeds 1048576 bytes") {
+				t.Fatalf("err = %v, want the 1 MiB limit named", err)
+			}
+
+			c = &Client{Endpoint: srv.URL, MaxResponseBytes: 4 << 20}
+			if tools := initAndList(t, c); len(tools) != 2 {
+				t.Fatalf("tools = %d entries under a 4 MiB limit, want 2", len(tools))
+			}
+		})
+	}
+
+	t.Run("json body exactly at the limit", func(t *testing.T) {
+		// A fresh client's first request carries id 1.
+		const body = `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"web_search"}]}}`
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, body)
+		}))
+		defer srv.Close()
+		c := &Client{Endpoint: srv.URL, MaxResponseBytes: int64(len(body))}
+		if _, err := c.ListTools(context.Background(), Session{}); err != nil {
+			t.Fatalf("a body exactly at the limit: %v", err)
+		}
+	})
 }
