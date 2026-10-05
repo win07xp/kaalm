@@ -40,7 +40,8 @@ referenced provider reports the namespace budget-blocked, and `PodUpToDate`
 (`True` with `Current` when the Pod matches the derived spec and mounts the
 Certificate's TLS Secret ([Change propagation](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced)); `False` with
 `Replacing` while the Agent holds one of the class's `maxUnavailableOnDrift`
-slots, or `ReplacementPending` while it waits for one and its current Pod
+slots, `ReplacementPending` while it waits for one, or `CertificateNotReady`
+while the replacement waits for the certificate; in the last two cases the current Pod
 keeps running). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
 changes the phase.
 
@@ -60,7 +61,10 @@ malformed `allowedCIDRs` entry),
 `ImagePullSecretMissing`, `SecretNotOptedIn` (an env Secret is missing or
 lacks the label `kaalm.io/workload-secret: "true"`; a running Pod stays in
 place and the phase is kept), `ExistingClaimNotFound` (the adopted PVC is
-missing), `HandlerConfigMapNotFound`, `CertificateNotReady`,
+missing), `HandlerConfigMapNotFound`, `CertificateNotReady` (cert-manager has
+not issued the certificate yet; a running Pod keeps serving and keeps its
+phase while new or replacement Pods wait; see
+[AgentReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agent.md#certificate-wait-with-a-running-pod)),
 `PodCreateRejected` (the apiserver refused the Pod create; the message says
 why),
 `ChildConflict` (an object the Agent does not own already has the name of

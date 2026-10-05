@@ -41,7 +41,7 @@ The table lists every transition in the order the reconciler evaluates them. Row
 
 ### Waiting on the Certificate
 
-Provisioning waits on the per-Agent `Certificate` before creating the Pod, so the Pod never hangs on a missing projected Secret. While cert-manager issues it, the Agent shows `Ready=False, reason=CertificateNotReady` and the pass requeues every five seconds. A `Pending` Agent moves to `Provisioning`; an Agent in any other phase, such as `Running` or `Idle`, keeps its phase, and that pass skips the Pod and activity work. See [What it checks](reconcilers/agent.md#what-it-checks).
+The controller waits on the per-Agent `Certificate` before creating a Pod, so the Pod never hangs on a missing projected Secret. While cert-manager issues it, the Agent shows `Ready=False, reason=CertificateNotReady`. With no Pod, the Agent waits in `Provisioning` (`Resuming` if woken) and the pass requeues every five seconds; this includes a `Running` or `Idle` Agent whose Pod was lost. With a Pod, the phase comes from that Pod as usual, and only Pod creation, replacement, and hibernation wait. See [Certificate wait with a running Pod](reconcilers/agent.md#certificate-wait-with-a-running-pod).
 
 ### Involuntary Pod disruption
 
