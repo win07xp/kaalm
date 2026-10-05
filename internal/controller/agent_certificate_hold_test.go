@@ -518,21 +518,20 @@ func TestConvergePod_CertHeldPhaseFromPod(t *testing.T) {
 		}}
 	}
 	cases := []struct {
-		name      string
-		phase     kaalmv1beta1.AgentPhase
-		status    func(*corev1.Pod)
-		want      kaalmv1beta1.AgentPhase
-		serving   bool
-		wantPods  int
-		terminate bool
+		name     string
+		phase    kaalmv1beta1.AgentPhase
+		status   func(*corev1.Pod)
+		want     kaalmv1beta1.AgentPhase
+		serving  bool
+		wantPods int
 	}{
-		{"idle stays idle", kaalmv1beta1.AgentIdle, nil, kaalmv1beta1.AgentIdle, true, 1, false},
-		{"resuming waits", kaalmv1beta1.AgentResuming, podNotReady, kaalmv1beta1.AgentResuming, false, 1, false},
-		{"crash loop fails", kaalmv1beta1.AgentRunning, crashLoop, kaalmv1beta1.AgentFailed, false, 1, false},
+		{"idle stays idle", kaalmv1beta1.AgentIdle, nil, kaalmv1beta1.AgentIdle, true, 1},
+		{"resuming waits", kaalmv1beta1.AgentResuming, podNotReady, kaalmv1beta1.AgentResuming, false, 1},
+		{"crash loop fails", kaalmv1beta1.AgentRunning, crashLoop, kaalmv1beta1.AgentFailed, false, 1},
 		{"terminal pod removed", kaalmv1beta1.AgentRunning, func(p *corev1.Pod) {
 			podNotReady(p)
 			p.Status.Phase = corev1.PodFailed
-		}, kaalmv1beta1.AgentProvisioning, false, 0, true},
+		}, kaalmv1beta1.AgentProvisioning, false, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
