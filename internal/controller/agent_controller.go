@@ -1020,7 +1020,7 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *kaalmv1beta1
 		current.Spec.Ports[0].TargetPort != desired.Spec.Ports[0].TargetPort {
 		current.Spec.Ports = desired.Spec.Ports
 		if err := r.Update(ctx, &current); err != nil {
-			return err
+			return rejectedWrite("updating", r.Scheme(), &current, err)
 		}
 	}
 	agent.Status.Endpoint = fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", agent.Name, agent.Namespace, eff.ServicePort)
@@ -1076,7 +1076,7 @@ func (r *AgentReconciler) ensureNetworkPolicy(
 		return nil
 	}
 	current.Spec = desired.Spec
-	return r.Update(ctx, &current)
+	return rejectedWrite("updating", r.Scheme(), &current, r.Update(ctx, &current))
 }
 
 // convergePod implements Pod convergence: create when missing, replace when

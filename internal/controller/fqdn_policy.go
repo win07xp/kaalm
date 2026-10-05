@@ -118,7 +118,7 @@ func ensureFQDNPolicy(
 		if !found {
 			return nil
 		}
-		return client.IgnoreNotFound(c.Delete(ctx, current))
+		return rejectedWrite("deleting", scheme, current, client.IgnoreNotFound(c.Delete(ctx, current)))
 	}
 
 	desired := desiredFQDNPolicy(owner, podLabels, hosts, dns)
@@ -132,5 +132,5 @@ func ensureFQDNPolicy(
 		return nil
 	}
 	current.Object["spec"] = desired.Object["spec"]
-	return c.Update(ctx, current)
+	return rejectedWrite("updating", scheme, current, c.Update(ctx, current))
 }

@@ -17,15 +17,22 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -177,4 +184,62 @@ func TestAgent_ChildWriteRejectedKeepsRunningPod(t *testing.T) {
 	if p := podIn(t, ns, "kaalm.io/agent", name); p == nil || p.UID != podUID {
 		t.Fatalf("pod = %v, want the running Pod %s kept", p, podUID)
 	}
+}
+
+// rejectingWrites is an interceptor whose Update and Delete fail with
+// Forbidden, as a policy webhook's denial does.
+func rejectingWrites(notFoundOnDelete bool) interceptor.Funcs {
+	denied := func(obj client.Object) error {
+		return apierrors.NewForbidden(schema.GroupResource{Resource: "objects"}, obj.GetName(),
+			errors.New("denied by policy webhook"))
+	}
+	return interceptor.Funcs{
+		Update: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.UpdateOption) error {
+			return denied(obj)
+		},
+		Delete: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.DeleteOption) error {
+			if notFoundOnDelete {
+				return apierrors.NewNotFound(schema.GroupResource{Resource: "objects"}, obj.GetName())
+			}
+			return denied(obj)
+		},
+	}
+}
+
+// expectWriteRejected checks err is a ChildWriteRejectedError for op and
+// kind.
+func expectWriteRejected(t *testing.T, err error, op, kind string) {
+	t.Helper()
+	cr, ok := asChildWriteRejected(err)
+	if !ok {
+		t.Fatalf("err = %v, want a ChildWriteRejectedError", err)
+	}
+	if cr.Op != op || cr.Kind != kind {
+		t.Errorf("error = %+v, want %s %s", cr, op, kind)
+	}
+}
+
+// An in-place update of the Agent's Service or NetworkPolicy that the API
+// server refuses comes back as a rejected write.
+func TestAgent_ChildUpdateRejected(t *testing.T) {
+	scheme := testScheme(t)
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "upd", Namespace: "default", UID: "agent-uid"}}
+	class := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}}
+	eff := effectiveAgentSpec{HealthPort: 8080, ServicePort: 8080}
+
+	svc := desiredService(agent, eff)
+	svc.Spec.Ports[0].Port = 9999
+	np := desiredNetworkPolicy(agent, class, eff, "kaalm-system", DNSSelector{})
+	np.Spec.PolicyTypes = nil
+	for _, obj := range []client.Object{svc, np} {
+		if err := controllerutil.SetControllerReference(agent, obj, scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(svc, np).
+		WithInterceptorFuncs(rejectingWrites(false)).Build()
+	r := &AgentReconciler{Client: c, OperatorNamespace: "kaalm-system"}
+
+	expectWriteRejected(t, r.ensureService(ctxT(), agent, eff), "updating", "Service")
+	expectWriteRejected(t, r.ensureNetworkPolicy(ctxT(), agent, class, eff), "updating", "NetworkPolicy")
 }
