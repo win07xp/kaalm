@@ -1031,8 +1031,8 @@ func (in *AgentTaskStatus) DeepCopyInto(out *AgentTaskStatus) {
 		*out = new(AgentTaskClassBounds)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.PodCreateRejectedTime != nil {
-		in, out := &in.PodCreateRejectedTime, &out.PodCreateRejectedTime
+	if in.CreateRejectedTime != nil {
+		in, out := &in.CreateRejectedTime, &out.CreateRejectedTime
 		*out = (*in).DeepCopy()
 	}
 }
