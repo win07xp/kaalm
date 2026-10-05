@@ -43,7 +43,7 @@ spec:
 ---
 # Async channel so the caller gets a 202 + requestId and retrieves the reply by
 # polling. No callbackUrl: the pipeline stores the result on the poll record,
-# sidestepping the SSRF guard on in-cluster callback IPs (that is issue #11).
+# sidestepping the SSRF guard on in-cluster callback IPs.
 apiVersion: kaalm.io/v1beta1
 kind: AgentChannel
 metadata:

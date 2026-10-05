@@ -98,7 +98,7 @@ func (g *GatewayActivityClient) httpClient() (*http.Client, error) {
 // dials: its own certificate as the client identity, the Kaalm CA as trust,
 // and SAN verification pinned to the gateway Service DNS. Certificate and
 // pool are re-read per connection so rotation applies without a controller
-// restart (#149).
+// restart.
 func newGatewayMTLSClient(certFile, keyFile, caFile, operatorNamespace string) (*http.Client, error) {
 	loader := &tlsutil.CertLoader{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
 	if _, err := loader.Certificate(); err != nil {

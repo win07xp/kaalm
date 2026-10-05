@@ -23,7 +23,7 @@ limitations under the License.
 // stepped backward right after minting turns every admin request into 401
 // Unauthorized. WSL2 does exactly that when systemd-timesyncd and the Hyper-V
 // time sync disagree: the clock steps back a second or two about every 30
-// seconds (#310). Second, a start that fails after the control plane came
+// seconds. Second, a start that fails after the control plane came
 // up stops it, so the kube-apiserver and etcd do not outlive the test binary.
 package testenv
 

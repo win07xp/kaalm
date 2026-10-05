@@ -90,7 +90,7 @@ spec:
   credentialsRef:
     name: e2e-mock-key
     key: token
-  # Probes on (#86): the controller reaches the mock's kaalm-ca certificate
+  # Probes on: the controller reaches the mock's kaalm-ca certificate
   # through gateway.trustClusterCAForUpstream, set by make e2e-deploy, which
   # governs probe trust as well as forwarding. The short interval keeps the
   # Healthy assertion fast.

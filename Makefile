@@ -107,7 +107,7 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
 
 .PHONY: audit-drift
-audit-drift: ## Report which #139 audit verdicts need a re-walk (hack/audit/manifest.txt).
+audit-drift: ## Report which listener authz and SSRF audit verdicts need a re-walk (hack/audit/manifest.txt).
 	hack/audit/drift-check.sh
 
 ##@ Build
@@ -205,7 +205,7 @@ chart-package: chart-sync ## Package the chart into dist/ (VERSION defaults to C
 		helm package $(CHART_DIR) --version $$V --app-version $$V --destination dist
 
 PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
-# Both report-only flags were emptied at the end of the #142 audit, so the
+# Both report-only flags (--time-report, --ratchet-report) are off, so the
 # time-bound wording lint and the wording and figure ratchets are fatal.
 DOCS_CHECK_FLAGS ?=
 
@@ -327,7 +327,7 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 dashboards-verify: ## Verify config/grafana against the live e2e cluster (run after make e2e): throwaway Prometheus+Grafana, provisioning, every panel query.
 	hack/dashboards-verify.sh
 
-# The released chart the upgrade e2e starts from. Release readiness (#115)
+# The released chart the upgrade e2e starts from. Release readiness
 # bumps this to the newly released version after each release. The upgrade
 # workflow also runs from 0.5.0, the last release before the graduation.
 PREV_CHART_VERSION ?= 1.0.0
@@ -346,7 +346,7 @@ e2e-upgrade: chart-sync ## One-shot S21 upgrade e2e: fresh cluster, install the 
 	UPGRADE_PREV_VERSION=$(PREV_CHART_VERSION) go test ./test/upgrade/... -tags upgrade -v -timeout 30m
 
 .PHONY: e2e-cilium
-e2e-cilium: ## FQDN egress proof: fresh k3d cluster with Cilium, install the chart, run the FQDN spec (allowedHosts, #193).
+e2e-cilium: ## FQDN egress proof: fresh k3d cluster with Cilium, install the chart, run the FQDN spec (allowedHosts).
 	-k3d cluster delete $(CLUSTER)
 	CNI=cilium hack/k3d-up.sh
 	$(MAKE) e2e-images

@@ -234,7 +234,7 @@ func TestAgent_BudgetExhaustedEmitsWarningOnce(t *testing.T) {
 }
 
 // Turning the provider's budget off clears its Blocked entry, so the Agent
-// leaves BudgetExhausted with nothing else to do (#446).
+// leaves BudgetExhausted with nothing else to do.
 func TestAgent_BudgetConditionClearsWhenBudgetTurnedOff(t *testing.T) {
 	mkBlockingProvider(t, "s10-off", "s10-off-gw-0")
 	setProviderSpend(t, "s10-off", "s10-off-gw-0", "250.00")

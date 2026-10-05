@@ -259,7 +259,7 @@ func TestChannel_PathConflictNewerLoses(t *testing.T) {
 	// creationTimestamp has 1-second resolution, so the sleep normally makes B
 	// the newer channel and the test exercises "newer loses". The apiserver
 	// stamps it from the wall clock, though, and a backward clock jump inside
-	// the sleep can reverse the order (#321). expectPathConflict therefore
+	// the sleep can reverse the order. expectPathConflict therefore
 	// picks the loser from the stored timestamps, not from creation order.
 	time.Sleep(1100 * time.Millisecond)
 	mkChannel(t, "ch-conf-b", "ch-agent-conf", "/channels/default/shared-path", nil)
@@ -289,7 +289,7 @@ func pathConflictLoser(aName string, aCreated time.Time, bName string, bCreated 
 // returns the loser and the winner. Nothing re-runs the channels here: when
 // the loser is the channel that was Ready first (a timestamp tie it loses by
 // name, or a clock that went back), only the reconciler's re-enqueue of the
-// channels sharing a path makes it re-check and see that it lost (#326).
+// channels sharing a path makes it re-check and see that it lost.
 func expectPathConflict(t *testing.T, a, b string) (loser, winner string) {
 	t.Helper()
 	created := func(name string) time.Time {
@@ -320,7 +320,7 @@ func setChannelPath(t *testing.T, name, path string) {
 
 // TestChannel_PathConflictExistingChannelLoses: a channel that moves onto a
 // path held by a newer Ready channel wins it, and the newer channel turns
-// PathConflict at once, not on its one-minute requeue (#326). Nothing touches
+// PathConflict at once, not on its one-minute requeue. Nothing touches
 // the Agent: only the other channel's change re-runs the loser.
 func TestChannel_PathConflictExistingChannelLoses(t *testing.T) {
 	mkWorkloadClass(t, "chc-pcx", nil)
@@ -339,7 +339,7 @@ func TestChannel_PathConflictExistingChannelLoses(t *testing.T) {
 }
 
 // TestChannel_PathConflictLoserWinsWhenWinnerLeaves: when the winner moves
-// to another path or is deleted, the loser becomes Ready at once (#326).
+// to another path or is deleted, the loser becomes Ready at once.
 func TestChannel_PathConflictLoserWinsWhenWinnerLeaves(t *testing.T) {
 	mkWorkloadClass(t, "chc-pcl", nil)
 	mkWorkloadAgent(t, "ch-agent-pcl", "chc-pcl", nil)
@@ -381,7 +381,7 @@ func TestChannel_PathConflictLoserWinsWhenWinnerLeaves(t *testing.T) {
 // TestChannelPathSiblings: a channel's create, delete, or move to another
 // path enqueues the other channels on each path it touched, in its own
 // namespace; an update that keeps the path, such as a status write, enqueues
-// nothing (#326).
+// nothing.
 func TestChannelPathSiblings(t *testing.T) {
 	onPath := func(ns, name, path string) *kaalmv1beta1.AgentChannel {
 		return &kaalmv1beta1.AgentChannel{
@@ -458,8 +458,7 @@ func TestChannelPathSiblings(t *testing.T) {
 }
 
 // TestChannelsForAgent: an Agent change enqueues the channels that bind that
-// Agent in its namespace, and no others, through the spec.agentRef index
-// (#329).
+// Agent in its namespace, and no others, through the spec.agentRef index.
 func TestChannelsForAgent(t *testing.T) {
 	bound := func(ns, name, agent string) *kaalmv1beta1.AgentChannel {
 		return &kaalmv1beta1.AgentChannel{
@@ -499,7 +498,7 @@ func TestChannelsForAgent(t *testing.T) {
 
 // TestChannelsForSecret: a Secret change enqueues the channels in its
 // namespace whose credentials reference it, through the referenced-Secret
-// index (#357).
+// index.
 func TestChannelsForSecret(t *testing.T) {
 	const ref = "shared"
 	cbURL := "https://example.com/hook"
@@ -861,7 +860,7 @@ func TestChannel_GatePruneErrorKeepsStatus(t *testing.T) {
 }
 
 // A prune error on a valid pass is returned, but the pass's status write
-// (Ready=True, phase) has already happened, as on a failing pass (#433).
+// (Ready=True, phase) has already happened, as on a failing pass.
 func TestChannel_ValidPruneErrorKeepsStatus(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "ch-valid", Namespace: "default"}}
 	sec := &corev1.Secret{
@@ -918,8 +917,7 @@ func TestChannel_ValidPruneErrorKeepsStatus(t *testing.T) {
 }
 
 // A normal pass prunes a record with no parseable expiry once its
-// creationTimestamp is past twice the TTL, the rule the orphan pruner uses
-// (#433).
+// creationTimestamp is past twice the TTL, the rule the orphan pruner uses.
 func TestChannel_PruneFallsBackToCreationTime(t *testing.T) {
 	now := time.Now()
 	objs := []client.Object{
@@ -1726,7 +1724,7 @@ func TestChannel_PathConflictAcrossTypes(t *testing.T) {
 // TestChannel_UnchangedPassWritesNoStatus: a pass that changes nothing in the
 // status writes nothing. The reconciler runs every channel every minute and
 // on every Agent change, so an unconditional status write was the largest
-// single write the controller made under load (#174).
+// single write the controller made under load.
 func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
 	mkWorkloadClass(t, "chc-quiet", nil)
 	mkWorkloadAgent(t, "ch-agent-quiet", "chc-quiet", nil)
@@ -2050,7 +2048,7 @@ func TestChannel_LabelRemovedShrinksGatewayRole(t *testing.T) {
 }
 
 // A channel whose Agent does not exist still keeps its credential Role to
-// the labeled Secrets, and the Role follows a label change (#421).
+// the labeled Secrets, and the Role follows a label change.
 func TestChannel_AgentNotFoundCredentialRoleFollowsLabel(t *testing.T) {
 	mkChannelSecret(t, "ch-gated-label-secret")
 	mkChannel(t, "ch-gated-label", "no-such-agent", "/channels/default/ch-gated-label", nil)

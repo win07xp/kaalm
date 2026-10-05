@@ -53,7 +53,7 @@ func renderControllerDNSArgs(t *testing.T, args ...string) []string {
 }
 
 // controller.networkPolicy.dnsSelector reaches the controller as the two
-// --dns-*-labels flags (#197).
+// --dns-*-labels flags.
 func TestControllerArgs_DNSSelector(t *testing.T) {
 	for _, tc := range []struct {
 		name string

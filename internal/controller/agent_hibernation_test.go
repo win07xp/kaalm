@@ -229,7 +229,7 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 
 // TestAgent_WakeDuringHibernating pins that a wake requested while the Pod is
 // still terminating is kept, not ignored: the Agent settles Hibernated and
-// then resumes (#207).
+// then resumes.
 func TestAgent_WakeDuringHibernating(t *testing.T) {
 	mkWorkloadClass(t, "wc-hibrace", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
@@ -414,7 +414,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 
 // TestAgent_WakeHoldsResumingUntilReady pins the wake phase sequence:
 // Hibernated, then Resuming for as long as the recreated Pod is not Ready,
-// then Running. A woken Agent never shows Provisioning (#206).
+// then Running. A woken Agent never shows Provisioning.
 func TestAgent_WakeHoldsResumingUntilReady(t *testing.T) {
 	mkWorkloadClass(t, "wc-resume", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Persistence.Enabled = true
@@ -480,8 +480,8 @@ func TestAgent_WakeHoldsResumingUntilReady(t *testing.T) {
 
 // TestAgent_WakePodCreateErrorKeepsResuming pins the wake-failure behavior: a
 // transient Pod-creation error during a wake returns the error for a requeue
-// and leaves the Agent in Resuming. It never sets Failed or Provisioning
-// (#206). A rejected create is covered in agent_pod_create_rejected_test.go.
+// and leaves the Agent in Resuming. It never sets Failed or Provisioning.
+// A rejected create is covered in agent_pod_create_rejected_test.go.
 func TestAgent_WakePodCreateErrorKeepsResuming(t *testing.T) {
 	agent := &kaalmv1beta1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "woken", Namespace: "default"},

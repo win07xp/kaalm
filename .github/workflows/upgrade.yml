@@ -7,10 +7,10 @@
 # release before the v0.6.0 API graduation. Only the second crosses the
 # graduation: the conversion window and the storage migration.
 #
-# Deliberately not part of ci.yml (decided 2026-08-22 on #114): most PRs
+# Deliberately not part of ci.yml: most PRs
 # cannot affect the upgrade path, so this runs only when a PR touches the
 # API, the shipped CRDs, the storage migrator, the spec itself, or this
-# file, plus on every release tag. Release readiness (#115) also runs
+# file, plus on every release tag. Release readiness also runs
 # make e2e-upgrade locally before tagging.
 name: upgrade
 

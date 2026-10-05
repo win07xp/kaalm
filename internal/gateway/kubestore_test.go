@@ -271,7 +271,7 @@ func TestKubeStore_ChannelByPath(t *testing.T) {
 // TestKubeStore_ChannelByPathPicksRule15Winner: when two Ready channels share
 // a path (the loser's status has not caught up yet), the gateway routes to
 // rule 15's winner, the earlier creationTimestamp with a tie to the lower
-// name, whatever order the cache lists them in (#326).
+// name, whatever order the cache lists them in.
 func TestKubeStore_ChannelByPathPicksRule15Winner(t *testing.T) {
 	ctx := context.Background()
 	t0 := metav1.NewTime(time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC))

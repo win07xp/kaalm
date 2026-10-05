@@ -17,7 +17,7 @@ limitations under the License.
 package gateway
 
 // Benchmarks for the pure functions on the gateway's request paths, the
-// ones CPU and allocation profiles under the load baseline ranked (#174).
+// ones CPU and allocation profiles under the load baseline ranked.
 // They need no cluster and are the regression guard the load harness
 // cannot be: run `make bench` before and after a change to one of these
 // paths and compare with benchstat.

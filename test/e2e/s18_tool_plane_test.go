@@ -176,9 +176,8 @@ var _ = Describe("Governed tool access (S18)", Ordered, func() {
 		// The S18 boundary is the tools surface: exactly one granted call
 		// forwarded, the denied and forged-session ones refused pre-forward
 		// (their 403s are asserted in the earlier specs). The initialize
-		// count stopped being exact when the controller's liveness probe
-		// (#86) began running its own initialize plus tools/list against
-		// this mock on a 15s cadence.
+		// count is not exact: the controller's liveness probe runs its own
+		// initialize plus tools/list against this mock on a 15s cadence.
 		Expect(intro.Methods["initialize"]).To(BeNumerically(">=", 1))
 		Expect(intro.Methods["tools/call"]).To(Equal(1))
 

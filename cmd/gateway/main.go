@@ -150,7 +150,7 @@ func main() {
 	// client, not a proxy's. The gateway's live reads (task-completion
 	// cross-checks, first-use Secret loads) must never queue behind a bucket
 	// that small: at 20 QPS a per-request GET capped every replica at 20
-	// requests per second (#170). The defaults are 100 and 200.
+	// requests per second. The defaults are 100 and 200.
 	restCfg.QPS = float32(clientQPS)
 	restCfg.Burst = clientBurst
 	// Secrets are never read through the shared informer cache. The gateway
@@ -276,7 +276,7 @@ func main() {
 		WhatsAppAPIBaseURL:       whatsAppAPIBaseURL,
 		// The count feeds the rate limiter's per-replica share and the
 		// hard budget's boundary margin on every request; a listing per
-		// request was measurable under load (#174), and a count a few
+		// request was measurable under load, and a count a few
 		// seconds stale is within the margin those two already carry.
 		Replicas: gateway.CachedCount(5*time.Second, func() int {
 			var pods corev1.PodList
@@ -467,7 +467,7 @@ func parseBackoff(raw string) ([]time.Duration, error) {
 		if err != nil {
 			// A skipped entry would silently shorten the retry schedule;
 			// failing startup keeps the schedule exactly what the operator
-			// wrote (#155).
+			// wrote.
 			return nil, fmt.Errorf("malformed backoff entry %q: %w", part, err)
 		}
 		out = append(out, d)
@@ -475,7 +475,7 @@ func parseBackoff(raw string) ([]time.Duration, error) {
 	return out, nil
 }
 
-// parseStartupPolicy applies the strict-parse contract (#155) to the
+// parseStartupPolicy applies the strict-parse contract to the
 // Helm-derived flags whose misreads would otherwise half-apply: a malformed
 // value fails startup. otlpEndpoint gets the same treatment inside
 // NewTracing, and the CA bundle paths inside validateCABundle.
@@ -511,7 +511,7 @@ func mustParseBackoff(raw, flagName string, logger *slog.Logger) []time.Duration
 
 // validatePlatformBaseURL rejects a malformed platform base URL: reply URLs
 // are built by appending path segments to it, so a bad value would otherwise
-// surface only as delivery failures at runtime (#155).
+// surface only as delivery failures at runtime.
 func validatePlatformBaseURL(value string) error {
 	u, err := url.Parse(value)
 	if err != nil {

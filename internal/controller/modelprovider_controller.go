@@ -650,7 +650,7 @@ func (r *ModelProviderReconciler) setHealthy(mp *kaalmv1beta1.ModelProvider, ok 
 // finish writes the provider's status only when the pass changed it against
 // what the informer holds: the reconciler runs on every budget ConfigMap
 // event, and a status write per pass is an update event for every watcher
-// whether or not anything in it moved (#174). The events the pass held go
+// whether or not anything in it moved. The events the pass held go
 // out only when its write succeeds. A pass that finds its status already
 // stored drops them: the pass that stored it sent them.
 func (r *ModelProviderReconciler) finish(

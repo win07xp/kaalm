@@ -126,7 +126,7 @@ func provisionRunningTask(t *testing.T, name, className string, mutate func(*kaa
 	// StartTime is written in the same status update that sets Running and
 	// is never set anywhere else, so it is the durable witness of the
 	// transition: a task with a short completion timeout can settle before a
-	// poll samples the Running phase on a loaded machine (#145).
+	// poll samples the Running phase on a loaded machine.
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
 		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
@@ -1288,7 +1288,7 @@ func TestPodExitMessage(t *testing.T) {
 
 // A retry holds while the old Pod is still terminating: the identity gate
 // stays closed, no backoff unit is spent on the old Pod's terminal state, and
-// the replacement is created once it is gone (#209).
+// the replacement is created once it is gone.
 func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
 	mkWorkloadClass(t, "tc-hold", nil)
 	oldPod := provisionRunningTask(t, "t-hold", "tc-hold", func(task *kaalmv1beta1.AgentTask) {

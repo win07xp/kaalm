@@ -62,7 +62,7 @@ func TestCrossCheckLive_Fallback(t *testing.T) {
 	if a.crossCheckLive(r, "team-a") {
 		t.Error("miss on both lookups must fail")
 	}
-	// Informer miss, live hit in the SAN namespace: pass (#148).
+	// Informer miss, live hit in the SAN namespace: pass.
 	fs.livePodsByIP["10.0.0.7"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"}}
 	if !a.crossCheckLive(r, "team-a") {
 		t.Error("live fallback hit must pass")
@@ -145,7 +145,7 @@ func TestDualModePaths_BearerErrorBranches(t *testing.T) {
 
 // TestInternalPaths_SourceIPCrossCheck: the controller and console SANs name
 // operator-namespace Services, so the source IP must resolve to a Pod in the
-// operator namespace. The SAN alone is not enough (#237).
+// operator namespace. The SAN alone is not enough.
 func TestInternalPaths_SourceIPCrossCheck(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	controllerCert := h.ca.issue(t, "kaalm-controller.kaalm-system.svc.cluster.local")
@@ -194,7 +194,7 @@ func TestInternalPaths_SourceIPCrossCheck(t *testing.T) {
 
 // TestInternalPaths_MethodEnforced: a wrong method on every mTLS path
 // (heartbeat, task completion, activity, channel health, test chat, and
-// spend) is 405 invalid_request with an Allow header (#237, #274).
+// spend) is 405 invalid_request with an Allow header.
 func TestInternalPaths_MethodEnforced(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	h.seedRoute()
@@ -248,7 +248,7 @@ func TestInternalPaths_MethodEnforced(t *testing.T) {
 }
 
 // TestHeartbeat_RateCapped: past the per-agent burst the heartbeat answers
-// 429 rate_limited with Retry-After; another agent has its own bucket (#237).
+// 429 rate_limited with Retry-After; another agent has its own bucket.
 func TestHeartbeat_RateCapped(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	h.seedRoute()

@@ -14,7 +14,7 @@ import (
 	"github.com/win07xp/kaalm/test/utils"
 )
 
-// Per-workload spend (#100): two agent-identity callers with distinct call
+// Per-workload spend: two agent-identity callers with distinct call
 // counts produce two distinct rows on the console's spend surface, the
 // unattributed-vs-attested split holds, and the rows sum to the namespace
 // figure the ModelProvider status reports.

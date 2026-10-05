@@ -60,7 +60,7 @@ type KubeStore struct {
 	// Secrets serves every Secret read from per-object watches. Nil reads
 	// Secrets through Reader instead, which in production is the uncached
 	// path: the cache is disabled for Secrets (cmd/gateway), so each read is
-	// a live GET behind the client's rate limiter (#170).
+	// a live GET behind the client's rate limiter.
 	Secrets *secretwatch.Watcher
 }
 
@@ -272,7 +272,7 @@ func secretKey(sec *corev1.Secret, namespace, name, key string) (string, error) 
 // returned Pod shares memory with the informer cache and is read-only:
 // the lookup runs once per authenticated request, and a deep copy of the
 // Pod per request was a quarter of the gateway's allocations under the
-// load baseline (#174).
+// load baseline.
 func (k *KubeStore) PodByIP(ctx context.Context, ip string) (*corev1.Pod, bool) {
 	var pods corev1.PodList
 	if err := k.Reader.List(ctx, &pods, client.MatchingFields{PodIPIndex: ip},

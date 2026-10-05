@@ -81,7 +81,7 @@ func TestProbeFQDNPolicySupport(t *testing.T) {
 	}
 
 	// Tetragon installs TracingPolicy in cilium.io/v1alpha1 on any CNI, so
-	// the cilium.io group alone is not Cilium (#273).
+	// the cilium.io group alone is not Cilium.
 	tetragon := fakeDiscovery{resources: map[string][]string{
 		"apps/v1":            {"deployments"},
 		"cilium.io/v1alpha1": {"tracingpolicies", "tracingpoliciesnamespaced"},
@@ -99,7 +99,7 @@ func TestProbeFQDNPolicySupport(t *testing.T) {
 	}
 
 	// Calico's CRD group exists on open-source Calico, which has no
-	// domain-based egress, and Kaalm writes no Calico policy (#273).
+	// domain-based egress, and Kaalm writes no Calico policy.
 	calico := fakeDiscovery{resources: map[string][]string{
 		"apps/v1":                  {"deployments"},
 		"crd.projectcalico.org/v1": {"networkpolicies"},

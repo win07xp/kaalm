@@ -397,7 +397,7 @@ func (d *discordAdapter) apiBaseURL() string {
 // platform API URLs. The channel owner controls the verifying public key, so
 // a hostile owner can sign interactions with arbitrary values; each segment
 // is shape-validated before use and path-escaped at the use site so a
-// crafted value cannot traverse the operator-set base URL (#150).
+// crafted value cannot traverse the operator-set base URL.
 
 // discordSnowflake reports whether s is shaped like a Discord snowflake id:
 // one to twenty ASCII digits.

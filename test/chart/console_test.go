@@ -65,7 +65,7 @@ func renderConsole(t *testing.T, args ...string) (rbacv1.ClusterRole, appsv1.Dep
 }
 
 // The console ClusterRole grants only the kaalm.io kinds the data layer
-// reads (#224): Agent, AgentTask, AgentChannel, and ModelProvider.
+// reads: Agent, AgentTask, AgentChannel, and ModelProvider.
 func TestConsole_ClusterRoleGrantsOnlyTheKindsItReads(t *testing.T) {
 	role, _ := renderConsole(t)
 	var kinds []string

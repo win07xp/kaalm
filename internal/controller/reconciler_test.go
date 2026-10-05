@@ -1104,7 +1104,7 @@ func costSanityFindings(t *testing.T, models []kaalmv1beta1.ModelProviderModel, 
 }
 
 // A target tied for the lowest cost is not flagged, whichever of the tied
-// models comes first in spec.models (#325).
+// models comes first in spec.models.
 func TestCostSanity_TiedCheapestIsNotFlagged(t *testing.T) {
 	models := []kaalmv1beta1.ModelProviderModel{
 		{ID: "a", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "3"},
@@ -1119,7 +1119,7 @@ func TestCostSanity_TiedCheapestIsNotFlagged(t *testing.T) {
 }
 
 // A target without both prices has an unknown cost, so the check skips it
-// rather than flagging it (#325).
+// rather than flagging it.
 func TestCostSanity_UnpricedTargetIsNotFlagged(t *testing.T) {
 	models := []kaalmv1beta1.ModelProviderModel{
 		{ID: "cheap", CostPer1MInputTokens: "1", CostPer1MOutputTokens: "1"},

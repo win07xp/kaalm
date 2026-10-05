@@ -88,8 +88,8 @@ func eventsProviderReconciler(
 }
 
 // Each Ready=False reason a ModelProvider reports needs a person to fix it,
-// so it is a Warning event on its rising edge (#312), sent only after the
-// status write that records it succeeds (#309).
+// so it is a Warning event on its rising edge, sent only after the
+// status write that records it succeeds.
 func TestModelProvider_ReadyFalseWarningsFollowTheStatusWrite(t *testing.T) {
 	unpriced := func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Budget = hardBudgetSpec()

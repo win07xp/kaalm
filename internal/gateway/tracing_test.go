@@ -36,7 +36,7 @@ func newTestTracing(exp sdktrace.SpanExporter) *Tracing {
 	return &Tracing{tracer: tp.Tracer("test"), prop: propagation.TraceContext{}, tp: tp}
 }
 
-// The #98 proof: one channel message yields one trace whose spans connect
+// End-to-end tracing: one channel message yields one trace whose spans connect
 // across all three hops. The fake agent copies the delivery's traceparent
 // onto its LLM call, exactly what the runtime does, so the chain is
 // channel.receive > agent.deliver > llm.request > llm.forward.
@@ -143,7 +143,7 @@ func TestTracing_ToolCallSpansParentOntoCallerContext(t *testing.T) {
 }
 
 // A relay failure marks the tool.call span with its error type, as a
-// denial does (#415); a stream cut at the cap is otherwise a 200.
+// denial does; a stream cut at the cap is otherwise a 200.
 func TestTracing_ToolCallRelayFailureMarksSpan(t *testing.T) {
 	toolsList := map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
 	cases := []struct {
@@ -220,7 +220,7 @@ func TestTracing_ToolCallRelayFailureMarksSpan(t *testing.T) {
 }
 
 // A call whose caller disconnected mid-stream marks the tool.call span
-// with client_closed (#444).
+// with client_closed.
 func TestTracing_ToolCallCallerGoneMarksSpan(t *testing.T) {
 	exp := tracetest.NewInMemoryExporter()
 	h := newAbandonHarness(t)

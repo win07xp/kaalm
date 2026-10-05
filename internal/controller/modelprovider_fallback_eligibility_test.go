@@ -238,7 +238,7 @@ func TestModelProvider_FallbackEligibilityScan(t *testing.T) {
 // The scan's findings grow when other people act (a new team's Agents use
 // the primary from a namespace the fallback does not admit), so the Warning
 // announces each added finding, naming only the new ones, and stays quiet
-// when the set is unchanged or shrinks (#324). The condition message always
+// when the set is unchanged or shrinks. The condition message always
 // lists the full current set.
 func TestModelProvider_FallbackIneligibleWarnsOnAddedFindings(t *testing.T) {
 	mp := eventsProvider("ev-mp-grow", func(mp *kaalmv1beta1.ModelProvider) {

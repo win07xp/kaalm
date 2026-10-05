@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drift-check.sh: report which #139 audit verdicts need a manual re-walk.
+# drift-check.sh: report which listener authz and SSRF audit verdicts need a manual re-walk.
 #
 # Reads hack/audit/manifest.txt and diffs each verdict's paths from the
 # audited commit to HEAD. An empty diff means the verdict stands and needs

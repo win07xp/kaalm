@@ -140,7 +140,7 @@ func TestIntegration_FallbackExhaustionMaps503(t *testing.T) {
 }
 
 // TestIntegration_UpstreamRedirectIsRefused: the provider client never
-// follows a redirect (#153): Go strips Authorization cross-host but not
+// follows a redirect: Go strips Authorization cross-host but not
 // x-api-key, so following would re-send an Anthropic-format credential to
 // the redirect target. One request reaches the upstream; the refusal
 // classifies as a connect failure and exhausts as provider_unavailable.

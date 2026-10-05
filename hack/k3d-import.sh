@@ -2,7 +2,7 @@
 # Import images into a k3d cluster and verify they actually landed.
 #
 # `k3d image import` can log "failed to import images in node ..." and then
-# print "Successfully imported" and exit 0 (see issue #40). The usual cause is a
+# print "Successfully imported" and exit 0. The usual cause is a
 # race reading the tarball out of the shared image volume:
 #
 #   ctr: open /k3d/images/k3d-<cluster>-images-<ts>.tar: no such file or directory

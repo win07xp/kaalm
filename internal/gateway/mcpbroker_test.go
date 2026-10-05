@@ -372,7 +372,7 @@ func relayToolsList(t *testing.T, mode, upstream string) []byte {
 }
 
 // An upstream JSON-RPC error on tools/list reaches the caller whole, its
-// data included (#414).
+// data included.
 func TestMCPBroker_ToolsListRelaysUpstreamError(t *testing.T) {
 	for _, mode := range []string{"json", "sse"} {
 		t.Run(mode, func(t *testing.T) {
@@ -592,7 +592,7 @@ func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 }
 
 // Errors the buffered relay raises name the provider, as every broker error
-// does (#412).
+// does.
 func TestMCPBroker_BufferedRelayErrors(t *testing.T) {
 	t.Run("response too large names the provider", func(t *testing.T) {
 		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -830,7 +830,7 @@ func TestMCPBroker_SizeCaps(t *testing.T) {
 	})
 
 	// An oversized tools/list, in either encoding, is the cap and not a
-	// parse failure: 413, not 503 (#395).
+	// parse failure: 413, not 503.
 	for _, mode := range []string{"json", "sse"} {
 		t.Run("tools/list response too large/"+mode, func(t *testing.T) {
 			list := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search","description":%q}]}}`,
@@ -888,7 +888,7 @@ func TestMCPBroker_SizeCaps(t *testing.T) {
 		}
 	})
 
-	// The SSE line bound follows the cap, not a fixed 1 MiB (#413).
+	// The SSE line bound follows the cap, not a fixed 1 MiB.
 	sseToolsList := func(t *testing.T, body string, maxBytes int64) *http.Response {
 		t.Helper()
 		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -997,7 +997,7 @@ func expectStreamErrorEvent(t *testing.T, stream, errType string) string {
 
 // A stream that passes the cap after its status line is sent ends with a
 // JSON-RPC error event the caller's SDK raises, and the metric records
-// response_too_large (#395).
+// response_too_large.
 func TestMCPBroker_StreamSizeCap(t *testing.T) {
 	streamHarness := func(t *testing.T, stream string, maxBytes int64) *harness {
 		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -1073,7 +1073,7 @@ func TestMCPBroker_StreamSizeCap(t *testing.T) {
 
 // A stream that times out or breaks after its status line is sent ends
 // with the same JSON-RPC error event as the cap, typed by the cause, and the
-// call counts under that type instead of ok (#411).
+// call counts under that type instead of ok.
 func TestMCPBroker_StreamUpstreamFailure(t *testing.T) {
 	const progress = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"
 	call := func(t *testing.T, h *harness) (*http.Response, string) {
@@ -1222,7 +1222,7 @@ func (w *failingWriter) WriteHeader(int)           {}
 func (w *failingWriter) Write([]byte) (int, error) { return 0, errors.New("write: broken pipe") }
 
 // A stream the caller abandons counts as client_closed, with no event and
-// no detail, whichever exit notices the departure (#444).
+// no detail, whichever exit notices the departure.
 func TestRelayMCPStream_CallerGone(t *testing.T) {
 	const events = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n" +
 		"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n"
@@ -1321,7 +1321,7 @@ func TestMCPBroker_RateLimited(t *testing.T) {
 	})
 	h.seedToolRoute()
 	// 2 calls per minute on 3 replicas: each replica's share is 2/3 call per
-	// minute, so a drained bucket holds a call again after 90 seconds (#346).
+	// minute, so a drained bucket holds a call again after 90 seconds.
 	h.server.RateLimiter.Replicas = func() int { return 3 }
 	now := time.Now()
 	h.server.RateLimiter.now = func() time.Time { return now }

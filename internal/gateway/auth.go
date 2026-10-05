@@ -86,7 +86,7 @@ func (a *Authenticator) crossCheck(r *http.Request, namespace string) bool {
 // crossCheckLive is crossCheck with the task-complete fallback: an informer
 // miss falls back to a live List narrowed to the SAN-derived namespace, so a
 // Pod completing inside the new-Pod informer-lag window is not rejected with
-// a terminal 401 (workload-identity.md, Informer-lag fallback; #148). The
+// a terminal 401 (workload-identity.md, Informer-lag fallback). The
 // spec scopes the fallback to /v1/task/complete alone: heartbeats are
 // periodic and recover on the next tick, and giving them the fallback would
 // turn an informer resync into a fleet-wide live-List stampede.

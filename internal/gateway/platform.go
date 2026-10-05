@@ -258,7 +258,7 @@ func (s *Server) platformClient() (*http.Client, error) {
 	return &http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}},
 		Timeout:   s.callbackReadTimeout(),
-		// Refused like every outbound leg (#153); the reply schedule treats
+		// Refused like every outbound leg; the reply schedule treats
 		// it as a transport failure and retries, then reports exhaustion.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirects },
 	}, nil
@@ -319,8 +319,7 @@ func (s *Server) sendPlatformRequest(
 // maxReplyRefusalDetail bounds how much of a platform API's response body a
 // refusal detail quotes. The detail reaches etcd twice, as the Warning event
 // and through the channel health condition, so the quote stays a prefix just
-// long enough to carry a Discord or Meta error code, never a 64 KiB body
-// (#151).
+// long enough to carry a Discord or Meta error code, never a 64 KiB body.
 const maxReplyRefusalDetail = 512
 
 // truncatedReplyBody renders a platform response body for a refusal detail:

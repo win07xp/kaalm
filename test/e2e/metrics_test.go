@@ -31,7 +31,7 @@ import (
 	"github.com/win07xp/kaalm/test/utils"
 )
 
-// The gauges the dashboards plot (#97) are computed on scrape from live
+// The gauges the dashboards plot are computed on scrape from live
 // state, so the proof is the wire: scrape both components after the spend
 // and console fixtures have produced state and read the series back.
 var _ = Describe("Metric catalog on the wire (#97)", Ordered, func() {

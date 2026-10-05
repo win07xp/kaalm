@@ -1,4 +1,4 @@
-# Callers for the per-workload spend e2e (#100): curl pods that mount the
+# Callers for the per-workload spend e2e: curl pods that mount the
 # certificate Secret each Agent in spend.yaml uses, an attested agent-identity
 # LLM call without teaching the starter handler to speak to providers. Each
 # Agent's Secret name is the spec.secretName of its Certificate {name}-tls, so

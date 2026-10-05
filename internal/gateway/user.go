@@ -426,7 +426,7 @@ func (s *Server) deliverToAgent(
 
 // Delivery attempt outcomes, the "outcome" label of
 // kaalm_channel_delivery_attempts_total. The failure classes name the layer
-// that failed so a retry rate can be read back to a cause (#172).
+// that failed so a retry rate can be read back to a cause.
 const (
 	deliveryOutcomeOK        = "ok"
 	deliveryOutcomeDNS       = "dns"       // name resolution failed or timed out
@@ -530,8 +530,7 @@ const agentMaxIdleConns = 1024
 // rotation applies to new connections without a restart. The client is
 // shared and pooled: the previous per-attempt transport dialed and ran a
 // handshake for every delivery, then kept the connection open forever, so a
-// gateway's open connections grew with every message it had ever delivered
-// (#172).
+// gateway's open connections grew with every message it had ever delivered.
 func (s *Server) agentHTTPClient() (*http.Client, error) {
 	s.agentClientOnce.Do(func() {
 		var loader *tlsutil.CertLoader
@@ -719,7 +718,7 @@ func (s *Server) dialAgentTLS(loader *tlsutil.CertLoader) func(ctx context.Conte
 // NewControllerActivator builds the production activator client from the
 // gateway's own TLS identity, pinned to the controller Service DNS. Wake
 // dials re-read the certificate and trust pool per connection so leaf and CA
-// rotation apply without a gateway restart (#149).
+// rotation apply without a gateway restart.
 func NewControllerActivator(operatorNamespace, certFile, keyFile, caFile string) (*ControllerActivator, error) {
 	loader := &tlsutil.CertLoader{CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
 	if _, err := loader.Certificate(); err != nil {

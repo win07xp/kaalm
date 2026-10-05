@@ -39,7 +39,7 @@ func TestPolicy_DefaultDeniesInternalAllowsPublic(t *testing.T) {
 		{"169.254.169.254", false},
 		{"fe80::1", false},
 		{"0.0.0.0", false},
-		// Internal-in-practice space outside net.IP.IsPrivate (rule 22, #154):
+		// Internal-in-practice space outside net.IP.IsPrivate (rule 22):
 		// RFC 6598 shared address space and RFC 2544 benchmarking space,
 		// including the IPv4-in-IPv6 form a dual-stack resolver can return.
 		{"100.64.0.1", false},
@@ -153,7 +153,7 @@ func TestNewFromCSVStrict(t *testing.T) {
 		t.Error("a single-address entry must not widen to neighbors")
 	}
 
-	// Malformed entries fail instead of half-applying (#155).
+	// Malformed entries fail instead of half-applying.
 	for _, bad := range []string{
 		"10.0.0/8",          // typo'd CIDR: contains "/" but does not parse
 		"192.168.0.0/33",    // impossible mask

@@ -49,7 +49,7 @@ const (
 // they were minted. envtest's own CertAuthn stamps NotBefore with the mint
 // time, so a wall clock stepped back by even a second or two right after
 // minting makes the admin certificate "not yet valid" and the apiserver
-// answers 401 Unauthorized until the clock catches up (#310).
+// answers 401 Unauthorized until the clock catches up.
 type backdatedCertAuthn struct {
 	caCert *x509.Certificate
 	caKey  crypto.Signer

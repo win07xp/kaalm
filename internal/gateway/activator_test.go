@@ -66,7 +66,7 @@ func TestControllerActivator_Wake(t *testing.T) {
 	}
 }
 
-// TestControllerActivator_WakeRetry pins the single retry (#207): a transport
+// TestControllerActivator_WakeRetry pins the single retry: a transport
 // error or a 5xx is retried once on a fresh connection, a 4xx never is, and
 // the retry stays inside the caller's deadline.
 func TestControllerActivator_WakeRetry(t *testing.T) {
@@ -235,7 +235,7 @@ func TestWakeAndDeliver_Hibernated(t *testing.T) {
 }
 
 // TestWakeAndDeliver_Hibernating pins that a message arriving while the Pod
-// is being deleted requests a wake instead of failing delivery (#207).
+// is being deleted requests a wake instead of failing delivery.
 func TestWakeAndDeliver_Hibernating(t *testing.T) {
 	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

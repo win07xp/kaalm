@@ -33,7 +33,7 @@ import (
 // FallbackIneligible, InvalidNamespacePattern), and the message lists every problem. The reason comes
 // from which check failed, never from the message text, so a model, key, or
 // provider name that contains "degradeTo", "unpriced", or "modelMap" does not
-// change it (#334).
+// change it.
 func TestModelProvider_ReadyFalseReasonPrecedence(t *testing.T) {
 	priced := func(id string) kaalmv1beta1.ModelProviderModel {
 		return kaalmv1beta1.ModelProviderModel{ID: id, CostPer1MInputTokens: "1", CostPer1MOutputTokens: "2"}

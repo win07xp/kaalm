@@ -21,7 +21,7 @@ import (
 	"testing"
 )
 
-// TestVertexPathsNotServed locks the reserved status (#147): google-vertex
+// TestVertexPathsNotServed locks the reserved status: google-vertex
 // has no inbound surface, so Vertex-shaped paths resolve no adapter, exactly
 // like any unrecognized path.
 func TestVertexPathsNotServed(t *testing.T) {

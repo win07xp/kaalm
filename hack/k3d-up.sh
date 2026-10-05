@@ -10,7 +10,7 @@
 # Reuse is for the inner loop. Beware that a long-lived cluster eventually stops
 # enforcing NetworkPolicies after enough policy churn, which fails the e2e deny
 # probe and silently makes the allow-path assertions vacuous; `make e2e`
-# therefore recreates the cluster from scratch. See issue #35.
+# therefore recreates the cluster from scratch.
 set -euo pipefail
 
 CLUSTER="${CLUSTER:-kaalm-dev}"

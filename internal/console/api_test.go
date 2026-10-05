@@ -384,7 +384,7 @@ func TestListLimit(t *testing.T) {
 }
 
 // Every answer under /api/ is the JSON envelope, an unknown path and a
-// wrong method included; the page routes keep the mux's plain text (#427).
+// wrong method included; the page routes keep the mux's plain text.
 func TestAPI_UnmatchedRoutesAnswerTheEnvelope(t *testing.T) {
 	h := newAPIHarness(t)
 	cases := []struct {

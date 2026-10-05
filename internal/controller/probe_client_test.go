@@ -43,9 +43,9 @@ func caPEM(pki *activatorPKI) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pki.caCert.Raw})
 }
 
-// The #86 probe trust: a configured bundle is honored additively, and a CA
-// rotated in place is picked up without a new client (the restart-free
-// contract every other outbound trust pool keeps).
+// The probe client's configured CA trust: a configured bundle is honored
+// additively, and a CA rotated in place is picked up without a new client
+// (the restart-free contract every other outbound trust pool keeps).
 func TestProbeClient_TrustsConfiguredCAAndFollowsRotation(t *testing.T) {
 	pki := newActivatorPKI(t)
 	srv := tlsServer(t, pki)
@@ -62,8 +62,8 @@ func TestProbeClient_TrustsConfiguredCAAndFollowsRotation(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	// The same endpoint under system roots only: refused. This is exactly
-	// the pre-#86 failure mode of the nil-Client default.
+	// The same endpoint under system roots only: refused. This is how
+	// the nil-Client default fails without a configured bundle.
 	if _, err := (&http.Client{}).Get(srv.URL); err == nil {
 		t.Fatal("a system-roots client trusted the private CA")
 	}
@@ -89,7 +89,7 @@ func TestProbeClient_TrustsConfiguredCAAndFollowsRotation(t *testing.T) {
 	}
 }
 
-// #217: the CA-trusting probe transport keeps what http.DefaultTransport
+// The CA-trusting probe transport keeps what http.DefaultTransport
 // gives the nil-client path and the gateway's forwarding transport: proxy
 // from the environment, HTTP/2, and dial and TLS-handshake bounds. Only the
 // trust pool differs. A rebuild after CA rotation keeps them too.
