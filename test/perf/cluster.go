@@ -1,4 +1,4 @@
-//go:build loadtest
+//go:build perftest
 
 /*
 Copyright 2026 The Kaalm Authors.
@@ -43,7 +43,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// cluster is the harness's view of the load cluster: a typed client for the
+// cluster is the harness's view of the perf cluster: a typed client for the
 // objects it creates and watches, a clientset for logs and raw API paths, and
 // the context name every kubectl shell-out pins to, so a stray current-context
 // can never point the run at the shared e2e cluster.
@@ -85,7 +85,7 @@ func connect(kubeContext string) (*cluster, error) {
 	return &cluster{context: kubeContext, cfg: cfg, c: c, cs: cs}, nil
 }
 
-// kubectl runs kubectl pinned to the load cluster's context; a failure
+// kubectl runs kubectl pinned to the perf cluster's context; a failure
 // carries the command's output.
 func (k *cluster) kubectl(args ...string) error {
 	full := append([]string{"--context", k.context}, args...)

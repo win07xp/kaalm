@@ -1,4 +1,4 @@
-//go:build loadtest
+//go:build perftest
 
 /*
 Copyright 2026 The Kaalm Authors.

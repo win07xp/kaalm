@@ -1,4 +1,4 @@
-//go:build loadtest
+//go:build perftest
 
 /*
 Copyright 2026 The Kaalm Authors.
@@ -110,11 +110,11 @@ func runHarness(args []string) error {
 	}
 	h := &harness{cfg: cfg, k: k, sum: &summary{StartedAt: time.Now(), Config: cfg, Commit: gitCommit()}}
 	if cfg.Out == "" {
-		cfg.Out = filepath.Join("test", "load", "results", h.sum.StartedAt.Format("2006-01-02T15-04-05")+".json")
+		cfg.Out = filepath.Join("test", "perf", "results", h.sum.StartedAt.Format("2006-01-02T15-04-05")+".json")
 		h.cfg.Out = cfg.Out
 	}
 
-	h.logf("load harness against context %s, phases %s", cfg.Context, strings.Join(cfg.Phases, ","))
+	h.logf("perf harness against context %s, phases %s", cfg.Context, strings.Join(cfg.Phases, ","))
 	if err := h.preflightCluster(ctx); err != nil {
 		return err
 	}
@@ -291,7 +291,7 @@ func gitCommit() string {
 func (h *harness) printTable() {
 	s := h.sum
 	fmt.Println()
-	fmt.Printf("== load summary (%s, %s) ==\n", s.Commit, s.FinishedAt.Sub(s.StartedAt).Round(time.Second))
+	fmt.Printf("== perf summary (%s, %s) ==\n", s.Commit, s.FinishedAt.Sub(s.StartedAt).Round(time.Second))
 	fmt.Printf("host: %d CPUs, %.0f MiB; %d nodes; %s\n",
 		s.Environment.HostCPUs, s.Environment.HostMemTotalMiB, len(s.Environment.Nodes), s.Environment.KubernetesVersion)
 	if g := s.Gateway; g != nil {

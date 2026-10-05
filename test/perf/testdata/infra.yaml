@@ -1,4 +1,4 @@
-# In-cluster infrastructure for the load harness (test/load), applied once per
+# In-cluster infrastructure for the perf harness (test/perf), applied once per
 # run before any phase. Everything the fleet needs that is not itself under
 # measurement: the namespace, the mock LLM provider it forwards to, the three
 # ModelProviders the gateway legs target, the channel secrets, and the load
@@ -6,47 +6,47 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: load
+  name: perf
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: loadgen
-  namespace: load
+  namespace: perf
 ---
 # The channels' inbound bearer; the gateway reads it through the scoped grant
 # the AgentChannel reconciler creates.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: load-hook
-  namespace: load
+  name: perf-hook
+  namespace: perf
   labels:
     kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
-  token: load-webhook-bearer-token
+  token: perf-webhook-bearer-token
 ---
 # The callback signing key for async replies pushed to the mock's receiver.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: load-callback-hmac
-  namespace: load
+  name: perf-callback-hmac
+  namespace: perf
   labels:
     kaalm.io/channel-credential: "true"
 type: Opaque
 stringData:
-  key: load-callback-hmac-key
+  key: perf-callback-hmac-key
 ---
-# The mock provider, the same test double the e2e suite uses, in the load
+# The mock provider, the same test double the e2e suite uses, in the perf
 # namespace so its Service name matches the gateway's callback allowlist
-# (make load-deploy sets gateway.callbackUrl.allowlist={mock-provider.load.svc}).
+# (make perf-deploy sets gateway.callbackUrl.allowlist={mock-provider.perf.svc}).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: mock-provider-tls
-  namespace: load
+  namespace: perf
 spec:
   secretName: mock-provider-tls
   issuerRef:
@@ -55,14 +55,14 @@ spec:
   usages:
     - server auth
   dnsNames:
-    - mock-provider.load.svc
-    - mock-provider.load.svc.cluster.local
+    - mock-provider.perf.svc
+    - mock-provider.perf.svc.cluster.local
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mock-provider
-  namespace: load
+  namespace: perf
   labels:
     app: mock-provider
 spec:
@@ -98,7 +98,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mock-provider
-  namespace: load
+  namespace: perf
 spec:
   selector:
     app: mock-provider
@@ -110,12 +110,12 @@ spec:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: load-mock-key
+  name: perf-mock-key
   namespace: kaalm-system
   labels:
     kaalm.io/provider-credential: "true"
   annotations:
-    kaalm.io/provider-hosts: mock-provider.load.svc
+    kaalm.io/provider-hosts: mock-provider.perf.svc
 type: Opaque
 stringData:
   token: dummy-mock-credential
@@ -124,22 +124,22 @@ stringData:
 # per-prefix counters and the gateway's per-provider histograms separate the
 # legs. Health probes are off: the mock's liveness is not under measurement.
 #
-# load-fast: soft budget, the mock answers immediately. The gateway's own
+# perf-fast: soft budget, the mock answers immediately. The gateway's own
 # per-request cost is what this leg's histogram shows.
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
-  name: load-fast
+  name: perf-fast
 spec:
   type: openai-compatible
-  endpoint: https://mock-provider.load.svc:8443/ok/fast
+  endpoint: https://mock-provider.perf.svc:8443/ok/fast
   credentialsRef:
-    name: load-mock-key
+    name: perf-mock-key
     key: token
   healthCheck:
     enabled: false
   allowedNamespaces:
-    - load
+    - perf
   budget:
     period: daily
     perNamespaceUSD: "1000000"
@@ -148,22 +148,22 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-# load-slow: soft budget, the mock answers after 50 ms, so the leg reflects
+# perf-slow: soft budget, the mock answers after 50 ms, so the leg reflects
 # realistic concurrency against a provider that takes time.
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
-  name: load-slow
+  name: perf-slow
 spec:
   type: openai-compatible
-  endpoint: https://mock-provider.load.svc:8443/slow50/slow
+  endpoint: https://mock-provider.perf.svc:8443/slow50/slow
   credentialsRef:
-    name: load-mock-key
+    name: perf-mock-key
     key: token
   healthCheck:
     enabled: false
   allowedNamespaces:
-    - load
+    - perf
   budget:
     period: daily
     perNamespaceUSD: "1000000"
@@ -172,22 +172,22 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-# load-hard: hard budget enforcement with a ceiling nothing reaches, so the
+# perf-hard: hard budget enforcement with a ceiling nothing reaches, so the
 # leg measures what synchronous ledger admission costs, not a block.
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
-  name: load-hard
+  name: perf-hard
 spec:
   type: openai-compatible
-  endpoint: https://mock-provider.load.svc:8443/ok/hard
+  endpoint: https://mock-provider.perf.svc:8443/ok/hard
   credentialsRef:
-    name: load-mock-key
+    name: perf-mock-key
     key: token
   healthCheck:
     enabled: false
   allowedNamespaces:
-    - load
+    - perf
   budget:
     period: daily
     perNamespaceUSD: "1000000"
@@ -202,23 +202,23 @@ spec:
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
 ---
-# load-limited: load-fast with request and token rate limits set far above
+# perf-limited: perf-fast with request and token rate limits set far above
 # any rate the leg reaches, so every request runs the limiter (admission,
 # then the token debit once usage settles) and none is refused.
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider
 metadata:
-  name: load-limited
+  name: perf-limited
 spec:
   type: openai-compatible
-  endpoint: https://mock-provider.load.svc:8443/ok/limited
+  endpoint: https://mock-provider.perf.svc:8443/ok/limited
   credentialsRef:
-    name: load-mock-key
+    name: perf-mock-key
     key: token
   healthCheck:
     enabled: false
   allowedNamespaces:
-    - load
+    - perf
   budget:
     period: daily
     perNamespaceUSD: "1000000"

@@ -367,76 +367,76 @@ e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the
 	# cache knows nothing about, and a replayed transcript is not a gate.
 	go test ./test/e2e/... -tags e2e -v -timeout 20m -count=1
 
-##@ Load test (#140, the scale proof)
+##@ Performance
 
-# The load harness runs on its own cluster, never the shared e2e one: it needs
+# The perf harness runs on its own cluster, never the shared e2e one: it needs
 # more nodes and a raised kubelet max-pods, and a ramp to several hundred
 # agents is not something to do next to a functional suite. The numbers it
-# produces publish in docs/src/operations/load-and-scale.md; the run is a
+# produces publish in docs/src/operations/performance-and-scale.md; the run is a
 # per-release local gate, not CI (see that page for why).
-LOAD_CLUSTER ?= kaalm-load
-# The load deploy opens the pprof listeners so a profile can be taken during
+PERF_CLUSTER ?= kaalm-perf
+# The perf deploy opens the pprof listeners so a profile can be taken during
 # any phase; 0 turns them off.
-LOAD_PPROF_PORT ?= 6060
+PERF_PPROF_PORT ?= 6060
 # Benchmark repetitions; benchstat wants several to report a confidence interval.
 BENCH_COUNT ?= 6
-LOAD_AGENT_NODES ?= 2
-LOAD_MAX_PODS ?= 250
-LOADGEN_IMG ?= registry.test/load/loadgen:load
-# Extra flags for `load run` (see test/load/config.go), for example
-# LOAD_FLAGS='-ramp-target 300 -phases gateway,ramp'.
-LOAD_FLAGS ?=
+PERF_AGENT_NODES ?= 2
+PERF_MAX_PODS ?= 250
+PERF_LOADGEN_IMG ?= registry.test/perf/loadgen:perf
+# Extra flags for `perf run` (see test/perf/config.go), for example
+# PERF_FLAGS='-ramp-target 300 -phases gateway,ramp'.
+PERF_FLAGS ?=
 
-.PHONY: load-up
-load-up: ## Create the load cluster: 1 server + $(LOAD_AGENT_NODES) agents, max-pods $(LOAD_MAX_PODS), cert-manager, trust-manager.
-	CLUSTER=$(LOAD_CLUSTER) K3D_AGENTS=$(LOAD_AGENT_NODES) K3D_MAX_PODS=$(LOAD_MAX_PODS) hack/k3d-up.sh
+.PHONY: perf-up
+perf-up: ## Create the perf cluster: 1 server + $(PERF_AGENT_NODES) agents, max-pods $(PERF_MAX_PODS), cert-manager, trust-manager.
+	CLUSTER=$(PERF_CLUSTER) K3D_AGENTS=$(PERF_AGENT_NODES) K3D_MAX_PODS=$(PERF_MAX_PODS) hack/k3d-up.sh
 
-.PHONY: load-down
-load-down: ## Delete the load cluster.
-	k3d cluster delete $(LOAD_CLUSTER)
+.PHONY: perf-down
+perf-down: ## Delete the perf cluster.
+	k3d cluster delete $(PERF_CLUSTER)
 
-.PHONY: load-images
-load-images: ## Build and import what the load run needs: controller, gateway, mock provider, the Go agent, and the load generator.
+.PHONY: perf-images
+perf-images: ## Build and import what the perf run needs: controller, gateway, mock provider, the Go agent, and the load generator.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
 	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
-	docker build -t $(LOADGEN_IMG) -f test/load/Dockerfile .
-	CLUSTER=$(LOAD_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(LOADGEN_IMG)
+	docker build -t $(PERF_LOADGEN_IMG) -f test/perf/Dockerfile .
+	CLUSTER=$(PERF_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(PERF_LOADGEN_IMG)
 
 .PHONY: bench
 bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into benchstat to compare.
 	go test ./internal/gateway/ -run '^$$' -bench . -benchmem -count $(BENCH_COUNT)
 
-.PHONY: load-deploy
-load-deploy: chart-sync ## Install the chart onto the load cluster with the mock provider trusted for upstream and callbacks.
-	helm --kube-context k3d-$(LOAD_CLUSTER) upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
+.PHONY: perf-deploy
+perf-deploy: chart-sync ## Install the chart onto the perf cluster with the mock provider trusted for upstream and callbacks.
+	helm --kube-context k3d-$(PERF_CLUSTER) upgrade --install kaalm charts/kaalm -n kaalm-system --create-namespace \
 		--set certManager.clusterResourceNamespace=cert-manager \
 		--set gateway.trustClusterCAForUpstream=true \
 		--set gateway.trustClusterCAForCallbacks=true \
-		--set 'gateway.callbackUrl.allowlist={mock-provider.load.svc}' \
-		--set controller.pprofPort=$(LOAD_PPROF_PORT) \
-		--set gateway.pprofPort=$(LOAD_PPROF_PORT) \
+		--set 'gateway.callbackUrl.allowlist={mock-provider.perf.svc}' \
+		--set controller.pprofPort=$(PERF_PPROF_PORT) \
+		--set gateway.pprofPort=$(PERF_PPROF_PORT) \
 		--wait --timeout 5m
 	# The image tags are fixed, so an upgrade with no template change would
 	# leave the Pods on whatever image they started with. Restart both so a
 	# run always measures the images just imported.
-	kubectl --context k3d-$(LOAD_CLUSTER) -n kaalm-system rollout restart deploy/kaalm-controller deploy/kaalm-gateway
-	kubectl --context k3d-$(LOAD_CLUSTER) -n kaalm-system rollout status deploy/kaalm-controller --timeout=3m
-	kubectl --context k3d-$(LOAD_CLUSTER) -n kaalm-system rollout status deploy/kaalm-gateway --timeout=3m
+	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout restart deploy/kaalm-controller deploy/kaalm-gateway
+	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout status deploy/kaalm-controller --timeout=3m
+	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout status deploy/kaalm-gateway --timeout=3m
 
-.PHONY: load-run
-load-run: ## Run the harness against an existing load cluster (the inner loop); results land in test/load/results/.
-	go run -tags loadtest ./test/load run -context k3d-$(LOAD_CLUSTER) -loadgen-image $(LOADGEN_IMG) $(LOAD_FLAGS)
+.PHONY: perf-run
+perf-run: ## Run the harness against an existing perf cluster (the inner loop); results land in test/perf/results/.
+	go run -tags perftest ./test/perf run -context k3d-$(PERF_CLUSTER) -loadgen-image $(PERF_LOADGEN_IMG) $(PERF_FLAGS)
 
-.PHONY: load
-load: ## One-shot scale proof: fresh load cluster, images, chart, the full run.
-	-k3d cluster delete $(LOAD_CLUSTER)
-	$(MAKE) load-up
-	$(MAKE) load-images
-	$(MAKE) load-deploy
-	$(MAKE) load-run
+.PHONY: perf
+perf: ## One-shot scale proof: fresh perf cluster, images, chart, the full run.
+	-k3d cluster delete $(PERF_CLUSTER)
+	$(MAKE) perf-up
+	$(MAKE) perf-images
+	$(MAKE) perf-deploy
+	$(MAKE) perf-run
 
 ##@ Dependencies
 

@@ -1,4 +1,4 @@
-//go:build loadtest
+//go:build perftest
 
 /*
 Copyright 2026 The Kaalm Authors.
@@ -41,11 +41,11 @@ import (
 // made it, so a phase can tear down exactly its own objects and a re-run on a
 // dirty cluster starts by clearing them.
 const (
-	phaseLabel         = "load.kaalm.io/phase"
-	hookSecretName     = "load-hook"          // the channels' inbound bearer (testdata/infra.yaml)
-	callbackSecretName = "load-callback-hmac" // the callback signing key (testdata/infra.yaml)
-	activeClassName    = "load-active"
-	churnClassName     = "load-churn"
+	phaseLabel         = "perf.kaalm.io/phase"
+	hookSecretName     = "perf-hook"          // the channels' inbound bearer (testdata/infra.yaml)
+	callbackSecretName = "perf-callback-hmac" // the callback signing key (testdata/infra.yaml)
+	activeClassName    = "perf-active"
+	churnClassName     = "perf-churn"
 	// loadgenAgentName is the Agent whose identity the mTLS gateway legs
 	// borrow: the controller issues its certificate (SAN
 	// {name}.{ns}.svc.cluster.local) and the loadgen Job presents it, so
@@ -66,7 +66,7 @@ func loadgenAgentObj(ns, class, image string, providers []string) *kaalmv1beta1.
 
 // activeClass is the max-active fleet's class: the same BestEffort shape as
 // the e2e class, with every lifecycle timer at zero so nothing ever idles.
-// It admits the three load providers so the loadgen agent identity can call
+// It admits the three perf providers so the loadgen agent identity can call
 // them (an empty allowedProviders admits none).
 func activeClass() *kaalmv1beta1.AgentClass {
 	c := &kaalmv1beta1.AgentClass{

@@ -26,7 +26,7 @@ limitations under the License.
 //	/ok        (default) -> 200 chat completion with non-zero usage
 //	/fail                -> 503 (a fallbackable status, drives fallback tests)
 //	/bigusage            -> 200 with large usage (drives budget-exhaustion tests)
-//	/slow<ms>            -> 200 after <ms> milliseconds (the load harness's
+//	/slow<ms>            -> 200 after <ms> milliseconds (the perf harness's
 //	                        realistic-latency provider)
 //
 // GET .../v1/models returns 200 for probe compatibility. POST /callback records
@@ -178,7 +178,7 @@ func behaviorFor(path string) (status int, in, out int64) {
 }
 
 // delayFor reads a simulated upstream latency off a "/slow<ms>" prefix, so the
-// load harness can measure the gateway against a provider that takes realistic
+// perf harness can measure the gateway against a provider that takes realistic
 // time to answer. Any other prefix answers immediately.
 func delayFor(path string) time.Duration {
 	const prefix = "/slow"
