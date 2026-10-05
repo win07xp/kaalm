@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -96,11 +97,14 @@ func budgetRequeue(mp *kaalmv1beta1.ModelProvider, res ctrl.Result) ctrl.Result 
 // replica's spend is visible, so the reducer has nothing to report. Leftover
 // figures would claim a state that nothing enforces, and Agents read
 // budgetUsage for BudgetExhausted. Nil, not an empty slice, so a steady pass
-// compares equal to the stored status and writes nothing.
+// compares equal to the stored status and writes nothing. The provider's
+// kaalm_provider_budget_canonical_usd series go too, so dashboards stop
+// showing the old spend.
 func clearBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
 	mp.Status.BudgetUsage = nil
 	mp.Status.ClusterSpentUSD = ""
 	apimeta.RemoveStatusCondition(&mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)
+	providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": mp.Name})
 }
 
 // reconcileBudget is the reducer over the per-replica partials in the

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -666,5 +667,27 @@ func TestModelProvider_BudgetOffClearsBudgetStatus(t *testing.T) {
 				t.Error("a steady pass wrote status again")
 			}
 		})
+	}
+}
+
+// Turning a budget off drops the provider's canonical-spend series, and
+// only that provider's (#446).
+func TestModelProvider_BudgetOffDropsCanonicalGauge(t *testing.T) {
+	period := gateway.PeriodKey("monthly", time.Now())
+	providerBudgetCanonical.WithLabelValues("gauge-off", "team-a", period).Set(95)
+	providerBudgetCanonical.WithLabelValues("gauge-keep", "team-a", period).Set(10)
+	mp := eventsProvider("gauge-off", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "none"}
+	})
+	r, _ := eventsProviderReconciler(t, &statusConflicts{}, nil, mp, providerKey("gauge-off"))
+	if _, err := r.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: types.NamespacedName{Name: "gauge-off"}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": "gauge-off"}); n != 0 {
+		t.Errorf("gauge-off series left = %d, want 0", n)
+	}
+	if n := providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": "gauge-keep"}); n != 1 {
+		t.Errorf("gauge-keep series = %d, want 1 (untouched)", n)
 	}
 }
