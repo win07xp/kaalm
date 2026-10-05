@@ -68,7 +68,7 @@ func ruleForPort(np networkingv1.NetworkPolicy, port int32) *networkingv1.Networ
 }
 
 // The chart ships default-deny ingress for its own Pods, with the metrics
-// ports open only to networkPolicy.metricsFrom (#218).
+// ports open only to networkPolicy.metricsFrom.
 func TestNetworkPolicy_Defaults(t *testing.T) {
 	nps := renderNetworkPolicies(t)
 	if len(nps) != 2 {

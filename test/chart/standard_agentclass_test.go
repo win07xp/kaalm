@@ -100,7 +100,7 @@ func TestStandardAgentClass_AllowedProvidersComeFromValues(t *testing.T) {
 // standardAgentClass.allowedNamespaces renders into spec.allowedNamespaces
 // only when it lists something: unset admits every namespace, and the CRD
 // rejects an empty list (rule 47), so an empty value must omit the field. The
-// entries are quoted, so a bare "*" is not read as a YAML alias (#371).
+// entries are quoted, so a bare "*" is not read as a YAML alias.
 func TestStandardAgentClass_AllowedNamespacesComeFromValues(t *testing.T) {
 	if got := renderStandardClass(t).Spec.AllowedNamespaces; got != nil {
 		t.Errorf("default render lists allowedNamespaces %q, want the field unset", got)
@@ -120,7 +120,7 @@ func TestStandardAgentClass_AllowedNamespacesComeFromValues(t *testing.T) {
 }
 
 // The standard class writes the restricted baseline out, so the rendered
-// object shows what runs (#194).
+// object shows what runs.
 func TestStandardAgentClass_DeclaresRestrictedBaseline(t *testing.T) {
 	ac := renderStandardClass(t)
 	ps, cs := ac.Spec.Security.PodSecurityContext, ac.Spec.Security.ContainerSecurityContext

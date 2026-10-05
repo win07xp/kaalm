@@ -1,7 +1,7 @@
 # S10: a provider pointed at the mock's /bigusage prefix (~5M+5M tokens/call).
 # At the configured prices one call costs ~$15, so a $10 per-namespace budget
 # with a block-at-100% policy blocks the next call. A dedicated AgentClass and
-# Agent reference the provider so the budget Degraded condition (issue #2) is
+# Agent reference the provider so the budget Degraded condition is
 # reachable (a hard-degraded Agent would skip the budget check).
 apiVersion: kaalm.io/v1beta1
 kind: ModelProvider

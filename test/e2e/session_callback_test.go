@@ -132,7 +132,7 @@ var _ = Describe("Session identity and async callback", Ordered, func() {
 		// The callback succeeded, so the async pipeline returned without patching
 		// the polling record: the endpoint knows the requestId and reports it
 		// pending (202) rather than 404. Polling-serves-the-payload is proven by
-		// the S7 wake path (#9).
+		// the S7 wake path.
 		poll := fmt.Sprintf("https://127.0.0.1:%d/v1/channels/responses/%s?channelPath=%s",
 			gwPort, accepted.RequestID, "/channels/e2e/s15-channel")
 		status, _, err := utils.GetWithBearer(poll, "s15-webhook-bearer-token")

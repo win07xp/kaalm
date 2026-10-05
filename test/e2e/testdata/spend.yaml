@@ -1,4 +1,4 @@
-# Fixtures for the per-workload spend e2e (#100): the provider, class, and
+# Fixtures for the per-workload spend e2e: the provider, class, and
 # two Agents that spend-callers.yaml calls through with distinct call counts,
 # so the console must show two distinct rows that sum to the namespace
 # figure. The provider points at the shared mock's /bigusage arm (5M+5M

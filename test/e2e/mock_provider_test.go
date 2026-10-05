@@ -11,7 +11,7 @@ import (
 
 // Mock provider integration: proves the gateway forwards an authenticated LLM
 // request to an in-cluster upstream over TLS and gets usage back. This is the
-// infra the S4/S10 (#8) and S12/S15 (#11) scenarios build on.
+// infra the S4/S10 and S12/S15 scenarios build on.
 var _ = Describe("Mock LLM provider", Ordered, func() {
 	It("deploys the mock and reconciles its ModelProvider to Ready", func() {
 		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/mockprovider.yaml")

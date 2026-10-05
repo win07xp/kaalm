@@ -100,7 +100,7 @@ spec:
   tools:
     - id: web_search
     - id: fetch_page
-  # Probes on (#86): a real controller-side MCP initialize plus tools/list
+  # Probes on: a real controller-side MCP initialize plus tools/list
   # against the mock's kaalm-ca certificate, trusted through
   # gateway.trustClusterCAForUpstream (set by make e2e-deploy).
   healthCheck:
