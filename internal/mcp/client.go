@@ -163,7 +163,7 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 		return Response{}, nil, err
 	}
 	resp, err := ParseResponse(httpResp.Header.Get("Content-Type"),
-		io.LimitReader(httpResp.Body, maxResponseBytes), rawID)
+		io.LimitReader(httpResp.Body, maxResponseBytes), rawID, maxResponseBytes+1)
 	if err != nil {
 		return Response{}, nil, err
 	}
@@ -176,10 +176,15 @@ func (c *Client) post(ctx context.Context, session Session, msg request) (Respon
 // ParseResponse decodes the JSON-RPC response matching rawID from an MCP
 // streamable-HTTP response body: a plain JSON object, or an SSE stream whose
 // events are scanned for the matching response (other events are skipped).
-// Shared by the probe client and the broker's tools/list filter.
-func ParseResponse(contentType string, r io.Reader, rawID []byte) (Response, error) {
+// Shared by the probe client and the broker's tools/list filter. The caller
+// bounds the reader; maxLineBytes bounds one SSE line, and the JSON branch
+// ignores it. Callers pass the reader's limit plus one, so a body that ends
+// exactly at the limit with no trailing newline still parses, and a longer
+// line reads through to the limit, where the caller can tell an over-limit
+// body from a malformed one.
+func ParseResponse(contentType string, r io.Reader, rawID []byte, maxLineBytes int) (Response, error) {
 	if strings.HasPrefix(contentType, "text/event-stream") {
-		return readSSEResponse(r, rawID)
+		return readSSEResponse(r, rawID, maxLineBytes)
 	}
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -195,9 +200,9 @@ func ParseResponse(contentType string, r io.Reader, rawID []byte) (Response, err
 // readSSEResponse scans an SSE stream for the JSON-RPC response whose id
 // matches the request. Other events (server notifications, unrelated ids)
 // are skipped; the stream ending without a match is an error.
-func readSSEResponse(r io.Reader, rawID []byte) (Response, error) {
+func readSSEResponse(r io.Reader, rawID []byte, maxLineBytes int) (Response, error) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxResponseBytes)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	var data strings.Builder
 	flush := func() (Response, bool) {
 		defer data.Reset()

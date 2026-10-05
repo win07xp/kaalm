@@ -887,6 +887,74 @@ func TestMCPBroker_SizeCaps(t *testing.T) {
 			t.Fatalf("want the filtered list, got %s", body)
 		}
 	})
+
+	// The SSE line bound follows the cap, not a fixed 1 MiB (#413).
+	sseToolsList := func(t *testing.T, body string, maxBytes int64) *http.Response {
+		t.Helper()
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, body)
+		})
+		h.server.Config.MCPMaxBodyBytes = maxBytes
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+			map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+	listWith := func(description string) string {
+		return fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"web_search","description":%q},`+
+			`{"name":"fetch_page"}]}}`, description)
+	}
+	expectFiltered := func(t *testing.T, resp *http.Response) {
+		t.Helper()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %.300s", resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), "web_search") || strings.Contains(string(body), "fetch_page") {
+			t.Fatalf("want the filtered list, got %.300s", body)
+		}
+	}
+
+	t.Run("tools/list SSE line over 1 MiB under the cap is served", func(t *testing.T) {
+		body := "data: " + listWith(strings.Repeat("d", 2<<20)) + "\n\n"
+		expectFiltered(t, sseToolsList(t, body, 4<<20))
+	})
+
+	t.Run("tools/list SSE line over the cap is 413", func(t *testing.T) {
+		body := "data: " + listWith(strings.Repeat("d", 3<<20)) + "\n\n"
+		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, body)
+		})
+		h.server.Config.MCPMaxBodyBytes = 2 << 20
+		h.seedToolRoute()
+		cert := agentCert(t, h.ca)
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+			map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			raw, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 413: %.300s", resp.StatusCode, raw)
+		}
+		var envelope struct {
+			Error errorBody `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&envelope)
+		if envelope.Error.Type != errResponseTooLarge || envelope.Error.Provider != "search" {
+			t.Fatalf("error = %+v, want type %q with provider search", envelope.Error, errResponseTooLarge)
+		}
+		if got := mcpCalls(h, "", errResponseTooLarge); got != 1 {
+			t.Errorf("response_too_large counter = %v, want 1", got)
+		}
+	})
+
+	t.Run("tools/list SSE at the cap without a trailing newline is served", func(t *testing.T) {
+		body := "data: " + listWith(strings.Repeat("d", 100000))
+		expectFiltered(t, sseToolsList(t, body, int64(len(body))))
+	})
 }
 
 // lastSSEData returns the data of the stream's last event.

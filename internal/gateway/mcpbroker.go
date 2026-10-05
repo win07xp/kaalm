@@ -579,7 +579,7 @@ func (s *Server) relayFilteredToolsList(
 	maxBytes := s.mcpMaxBodyBytes()
 	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
 	rr := &readErrRecorder{r: lr}
-	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), rr, msg.ID)
+	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), rr, msg.ID, int(maxBytes)+1)
 	if err != nil && lr.N <= 0 {
 		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,

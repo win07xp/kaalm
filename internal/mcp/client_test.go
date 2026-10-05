@@ -17,6 +17,7 @@ limitations under the License.
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -241,5 +243,21 @@ func TestClient_Timeout(t *testing.T) {
 	defer cancel()
 	if _, err := (&Client{Endpoint: srv.URL}).Initialize(ctx); err == nil {
 		t.Fatal("Initialize succeeded past its context deadline")
+	}
+}
+
+// The SSE line bound is the caller's: a long line parses under a large
+// bound and fails at a small one, and a JSON body ignores the bound.
+func TestParseResponse_SSELineBound(t *testing.T) {
+	line := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"result":{"blob":%q}}`, strings.Repeat("d", 2<<20))
+	stream := "data: " + line + "\n\n"
+	if _, err := ParseResponse("text/event-stream", strings.NewReader(stream), []byte("3"), 4<<20); err != nil {
+		t.Fatalf("4 MiB bound: %v", err)
+	}
+	if _, err := ParseResponse("text/event-stream", strings.NewReader(stream), []byte("3"), 1<<20); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("1 MiB bound: err = %v, want bufio.ErrTooLong", err)
+	}
+	if _, err := ParseResponse("application/json", strings.NewReader(line), []byte("3"), 16); err != nil {
+		t.Fatalf("JSON body: %v", err)
 	}
 }
