@@ -31,8 +31,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// The chapter's stated authorization values (docs/src/console/overview.md,
-// Authentication): SubjectAccessReview results and token re-validation cache
+// The chapter's stated authorization values (docs/src/console/overview.md#authentication): SubjectAccessReview results and token re-validation cache
 // for 5 minutes; a login session lives at most 24 hours.
 const (
 	sarCacheTTL     = 5 * time.Minute

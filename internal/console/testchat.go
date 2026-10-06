@@ -83,7 +83,7 @@ func (c *GatewayChatClient) Chat(ctx context.Context, namespace, agent, userID, 
 }
 
 // WorkloadSpend reads the per-workload spend view for one namespace
-// (docs/src/gateways/api/internal-endpoints.md, GET /v1/spend).
+// (docs/src/gateways/api/internal-endpoints.md#get-v1spend).
 func (c *GatewayChatClient) WorkloadSpend(ctx context.Context, namespace string) (int, []byte, error) {
 	return c.do(ctx, http.MethodGet, "/v1/spend?namespace="+url.QueryEscape(namespace), nil)
 }

@@ -26,8 +26,7 @@ import (
 )
 
 // S24: a fallback edge that crosses formats, proven in both directions
-// against the mock provider (docs/src/gateways/llm/fallback.md, Crossing
-// formats).
+// against the mock provider (docs/src/gateways/llm/fallback.md#crossing-formats).
 var _ = Describe("Cross-format fallback (S24)", Ordered, func() {
 	BeforeAll(func() {
 		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/mockprovider.yaml")

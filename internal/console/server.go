@@ -85,7 +85,7 @@ func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, gw Ga
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// The read API (docs/src/console/overview.md, The Read API). Additive
+	// The read API (docs/src/console/overview.md#the-read-api). Additive
 	// within a minor series.
 	routes := []struct {
 		method, path string

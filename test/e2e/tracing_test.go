@@ -34,7 +34,7 @@ import (
 // starter handler answers "ask ..." by calling the model through the
 // gateway with the handler's ctx, so the runtime's trace-context
 // propagation is what connects the LLM spans to the delivery
-// (docs/src/appendix/scenarios.md, S20).
+// (docs/src/appendix/scenarios.md#s20-follow-one-message-across-the-hops).
 var _ = Describe("Tracing across the hops (S20)", Ordered, func() {
 	It("renders no tracing flags on a default install", func() {
 		out, err := utils.Helm("template", "kaalm", "charts/kaalm")

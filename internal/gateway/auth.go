@@ -230,8 +230,7 @@ func (a *Authenticator) ControllerPaths(next http.HandlerFunc) http.HandlerFunc 
 // client cert whose SAN matches the console Service DNS. The gateway does not
 // re-authorize the human behind the request; the console runs TokenReview and
 // SubjectAccessReview before calling, and possession of the console SAN
-// carries that authorization (docs/src/security/rbac.md, Internal Endpoint
-// Authentication). The source IP must resolve to a Pod in the operator
+// carries that authorization (docs/src/security/rbac.md#internal-endpoint-authentication). The source IP must resolve to a Pod in the operator
 // namespace, as on ControllerPaths.
 func (a *Authenticator) ConsolePaths(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -32,7 +32,7 @@ import (
 // against its class, mirroring the provider checks of rules 3 to 5. Shared by
 // the Agent reconciler (recoverable Degraded, all reasons collected) and the
 // AgentTask reconciler (terminal Failed, first reason wins). See
-// docs/src/gateways/tool-plane.md (Grants).
+// docs/src/gateways/tool-plane.md#grants.
 func toolGrantViolations(
 	ctx context.Context, c client.Reader, namespace string,
 	grants []kaalmv1beta1.AgentToolGrant, class *kaalmv1beta1.AgentClass,

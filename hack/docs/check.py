@@ -43,10 +43,10 @@ Across the repository, outside the books:
   path (`docs/src/...md`, also `guide/src` and `learn/src`) exists, and its
   `#anchor` names a heading on that page, under the same slug rules as
   in-book links. API type comments are the CRD field descriptions that
-  `kubectl explain` shows, so a comment is held to the book's link rules. Only
-  the path and the `#anchor` are checked: a section named in prose after the
-  path, such as `tool-plane.md (The Broker)`, is not. Renaming a heading means
-  updating these comments as well as the in-book links.
+  `kubectl explain` shows, so a comment is held to the book's link rules. Name
+  a section with its `#anchor`, because a section named in prose after the
+  path is not checked. Renaming a heading means updating these comments as
+  well as the in-book links.
 
 Also runs diagram_check.py over docs/src/diagrams.
 

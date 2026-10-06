@@ -180,7 +180,7 @@ func (m *Metrics) UsageMissing(provider, model string) {
 // ToolCall counts one brokered MCP call. status is "ok", a wire error type,
 // "client_closed" (the caller disconnected mid-stream), or "upstream_error";
 // tool is already bounded by the declared catalog (see
-// docs/src/gateways/tool-plane.md, Audit and Metering).
+// docs/src/gateways/tool-plane.md#audit-and-metering).
 func (m *Metrics) ToolCall(provider, namespace, tool, status string) {
 	if m == nil {
 		return

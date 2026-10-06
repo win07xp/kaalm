@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package chart renders the Helm chart offline (helm template, no cluster) and
 // asserts what the shipped default objects grant. This is the chart half of
-// docs/src/operations/deployment.md, Sample resources.
+// docs/src/operations/deployment.md#sample-resources.
 package chart
 
 import (

@@ -41,7 +41,7 @@ import (
 // the same dual-mode auth as the LLM proxy paths. It authenticates the
 // workload, enforces the grant chain at call time, injects the tool server
 // credential, wraps session ids, and relays. See
-// docs/src/gateways/tool-plane.md (The Broker).
+// docs/src/gateways/tool-plane.md#the-broker.
 
 // errNoRedirects marks a refused outbound redirect. No gateway client follows
 // them: the broker's reasoning, closing the confused-deputy path a
@@ -273,7 +273,7 @@ const toolStatusClientClosed = "client_closed"
 // before the ToolProvider resolved; forwarded marks calls that reached the
 // upstream and gates the duration histogram, which observes real upstream
 // latency rather than microsecond-scale local denials. See
-// docs/src/gateways/tool-plane.md (Audit and Metering).
+// docs/src/gateways/tool-plane.md#audit-and-metering.
 func (s *Server) mcpResult(
 	c *caller, tp *kaalmv1beta1.ToolProvider, provider, method, tool string,
 	status int, errType, detail string, start time.Time, reqBytes, respBytes int64, forwarded bool,

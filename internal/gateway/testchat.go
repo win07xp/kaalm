@@ -32,7 +32,7 @@ import (
 )
 
 // testChatRequest is the console's internal request shape
-// (docs/src/gateways/api/internal-endpoints.md, POST /v1/test-chat).
+// (docs/src/gateways/api/internal-endpoints.md#post-v1test-chat).
 type testChatRequest struct {
 	Namespace string `json:"namespace"`
 	Agent     string `json:"agent"`

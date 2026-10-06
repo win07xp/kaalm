@@ -78,7 +78,7 @@ type Config struct {
 	// UpstreamTimeout.
 	MCPUpstreamTimeout time.Duration
 	// SessionKey is the gateway-shared HMAC key binding MCP session ids to
-	// caller identities (docs/src/gateways/tool-plane.md, The Broker).
+	// caller identities (docs/src/gateways/tool-plane.md#the-broker).
 	SessionKey []byte
 	// DisableSourceIPCheck skips the source-IP cross-check (dev/test only).
 	DisableSourceIPCheck bool
@@ -300,7 +300,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.Auth.DualModePaths(s.handleLLMProxy))
 	mux.HandleFunc("/v1/completions", s.Auth.DualModePaths(s.handleLLMProxy))
 	// The tool plane's broker surface, on the shared dual-mode
-	// caller-identity profile (docs/src/gateways/tool-plane.md, The Broker).
+	// caller-identity profile (docs/src/gateways/tool-plane.md#the-broker).
 	mux.HandleFunc("/v1/mcp/", s.Auth.DualModePaths(s.handleMCPBroker))
 
 	// Agent-report paths: mTLS-only, kind split at the handler. The

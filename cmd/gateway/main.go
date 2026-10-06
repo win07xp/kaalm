@@ -160,7 +160,7 @@ func main() {
 	// cluster-scoped LIST and the read would hang waiting for a sync that
 	// never lands. Secret reads go through secretwatch.Watcher instead: one
 	// GET-backed, name-filtered watch per referenced Secret. See
-	// docs/src/security/rbac.md (gateway Secret access).
+	// docs/src/security/rbac.md#namespaced-grants-in-kaalm-system.
 	cl, err := cluster.New(restCfg, func(o *cluster.Options) {
 		o.Scheme = scheme
 		o.Client.Cache = &client.CacheOptions{
@@ -397,7 +397,7 @@ func main() {
 // of them and /readyz can report each by name. Registered lazily, an
 // informer would first sync inside a live request. The list is every kind
 // KubeStore reads from the cache, and matches the table in
-// docs/src/gateways/llm/operations.md (Gateway readiness).
+// docs/src/gateways/llm/operations.md#gateway-readiness.
 func requestPathInformers(c cache.Cache, logger *slog.Logger) []gateway.InformerSync {
 	objects := []struct {
 		name string

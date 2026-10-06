@@ -25,8 +25,7 @@ import (
 	"github.com/win07xp/kaalm/test/utils"
 )
 
-// The dual-era tool plane (docs/src/gateways/tool-plane.md, Protocol
-// Revisions): a 2026-07-28-only mock beside S18's legacy mock, the probe
+// The dual-era tool plane (docs/src/gateways/tool-plane.md#protocol-revisions): a 2026-07-28-only mock beside S18's legacy mock, the probe
 // negotiating each era, and the broker enforcing the modern posture. S18's
 // own spec keeps proving the legacy posture on the same cluster.
 var _ = Describe("MCP 2026-07-28 revision (S18, dual-era)", Ordered, func() {

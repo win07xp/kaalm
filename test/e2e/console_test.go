@@ -34,7 +34,8 @@ func consoleClient() *http.Client {
 // S19: the operator console. Enable it, log in with a namespaced token, see
 // the fleet with a hibernated agent shown as such, test-chat it awake, and
 // watch an unauthorized token see nothing
-// (docs/src/appendix/scenarios.md, S19; docs/src/console/overview.md).
+// (docs/src/appendix/scenarios.md#s19-see-the-fleet-without-kubectl;
+// docs/src/console/overview.md).
 var _ = Describe("Operator console (S19)", Ordered, func() {
 	var viewerToken string
 

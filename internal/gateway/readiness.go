@@ -49,7 +49,7 @@ type readinessCheck struct {
 }
 
 // readyzHandler answers the readiness probe with the four checks in
-// docs/src/gateways/llm/operations.md (Gateway readiness): a local TLS dial
+// docs/src/gateways/llm/operations.md#gateway-readiness: a local TLS dial
 // of each listener, the informer sync state, and the serving certificate.
 // Every check reports one line; any failure answers 503.
 func (s *Server) readyzHandler(clusterAddr, userAddr net.Addr, servingCert func() error) http.HandlerFunc {

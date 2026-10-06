@@ -732,7 +732,7 @@ func authSecretRefs(auth *kaalmv1beta1.ChannelAuth) []*kaalmv1beta1.SecretKeyRef
 
 // The credential Secret keys the platform adapters read (rule 40). The
 // gateway reads the same keys; the names are the contract in
-// docs/src/resources/agentchannel.md, Platform types.
+// docs/src/resources/agentchannel.md#platform-types.
 const (
 	discordKeyPublicKey    = "publicKey"
 	discordKeyBotToken     = "botToken"

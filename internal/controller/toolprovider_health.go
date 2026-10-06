@@ -49,8 +49,7 @@ type ToolHealthChecker interface {
 // selects the stateless 2026-07-28 form and the probe completes with a
 // _meta-versioned tools/list; any answer that is not a recognized modern
 // JSON-RPC error selects the legacy form, the initialize handshake
-// followed by tools/list (docs/src/gateways/tool-plane.md, Protocol
-// Revisions).
+// followed by tools/list (docs/src/gateways/tool-plane.md#protocol-revisions).
 type MCPToolHealthChecker struct {
 	// Client is the HTTP client. If nil, a client bounded by the provider's
 	// healthCheck.timeoutSeconds (default 10s) is used per probe.

@@ -1374,7 +1374,7 @@ func podReady(pod *corev1.Pod) bool {
 
 // reconcileDelete implements the agent finalizer: gracefully terminate the Pod
 // if one exists, apply pvcRetention by rewriting the PVC's ownerRef, then
-// release the finalizer. See docs/src/controller/finalizers.md (Agent).
+// release the finalizer. See docs/src/controller/finalizers.md#agent.
 func (r *AgentReconciler) reconcileDelete(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	if !controllerutil.ContainsFinalizer(agent, kaalmv1beta1.AgentFinalizer) {
 		return nil
