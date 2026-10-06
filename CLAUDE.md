@@ -30,7 +30,7 @@ Prose rules for every book, README, and release note:
 
 ```bash
 make runtime-test                       # agentruntime module + Go starter tests (-race); go.work spans agentruntime + starter-go
-make cover-check                        # coverage gate (>=85% union coverage, same as CI)
+make cover-check                        # fails below 85% union coverage, same as CI
 make test-race                          # unit and envtest suites under -race, same as CI
 make e2e                                # full k3d e2e suite
 ```

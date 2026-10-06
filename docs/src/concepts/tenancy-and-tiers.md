@@ -14,9 +14,9 @@ Kaalm can be adopted at two depths, and several behaviors in the design branch o
 
 Existing workloads call the gateway with projected ServiceAccount tokens and get LLM traffic with spend tracking, budgets, and rate limits, and nothing else. They own no Agent, AgentTask, or AgentChannel. The chart ships a `standard` AgentClass, but no workload in this tier references it.
 
-Because there is no Agent, AgentTask, or AgentClass to consult, provider access is gated by `ModelProvider.allowedNamespaces` alone.
+Because there is no Agent, AgentTask, or AgentClass to consult, `ModelProvider.allowedNamespaces` alone decides which providers a workload can use.
 
-**Egress is the platform team's responsibility.** Kaalm synthesizes no NetworkPolicy for these Pods. Budgets, rate limits, and provider gating are enforced at the gateway, so they hold only if traffic goes through the gateway, and the platform team must write NetworkPolicies in those namespaces that deny egress to provider addresses except through it.
+**Egress is the platform team's responsibility.** Kaalm synthesizes no NetworkPolicy for these Pods. Budgets, rate limits, and the provider access checks are enforced at the gateway, so they hold only if traffic goes through the gateway, and the platform team must write NetworkPolicies in those namespaces that deny egress to provider addresses except through it.
 
 ### Full lifecycle tier
 
@@ -38,7 +38,7 @@ Tenant isolation is layered. No single layer is the boundary; they compose, and 
 
 The controller ServiceAccount holds the cluster-scoped surface: CRD watches and child-object management. The gateway ServiceAccount's credential reach is `kaalm-system` plus the per-channel and per-task Roles with `resourceNames`-bounded access in user namespaces ([RBAC and authentication](../security/rbac.md)).
 
-### Provider access gating
+### Provider access checks
 
 For a full-lifecycle workload, an Agent or AgentTask can use a provider only when all three of these admit it:
 
@@ -48,13 +48,13 @@ For a full-lifecycle workload, an Agent or AgentTask can use a provider only whe
 | `AgentClass.allowedProviders` | The platform team, on the class |
 | `ModelProvider.allowedNamespaces` | The platform team, on the provider |
 
-Each is enforced twice: at reconcile time as rules 3 to 5, and at request time by the gateway. A fourth check sits in front of the class layer: when `AgentClass.allowedNamespaces` is set, the class must admit the workload's namespace (rule 47, [AgentClass](../resources/agentclass.md#allowednamespaces-keeps-a-class-to-some-teams)). A gateway-only-tier caller has no Agent, AgentTask, or AgentClass to consult, so `ModelProvider.allowedNamespaces` alone gates it.
+Each is enforced twice: at reconcile time as rules 3 to 5, and at request time by the gateway. A fourth check sits in front of the class layer: when `AgentClass.allowedNamespaces` is set, the class must admit the workload's namespace (rule 47, [AgentClass](../resources/agentclass.md#allowednamespaces-keeps-a-class-to-some-teams)). A gateway-only-tier caller has no Agent, AgentTask, or AgentClass to consult, so `ModelProvider.allowedNamespaces` alone decides.
 
 Separately, the requested model must exist in `ModelProvider.spec.models`. That check is model resolution, not a tenancy boundary, and it applies to both tiers ([Model identification](../gateways/llm/request-handling.md#model-identification)).
 
-![The gate chain the gateway applies to a request carrying a qualified model name, in the order it runs. Identify the caller from an mTLS certificate SAN (full lifecycle tier) or a TokenReview-verified bearer token (gateway-only tier), then cross-check the source IP against a Pod in that namespace (401 unauthorized). A caller with a workload passes Gate A: the workload and its class exist, the providerRef is in spec.providers, the class's allowedNamespaces admits the caller's namespace, and the providerRef is in the class's allowedProviders (403 access_denied); a gateway-only caller skips it. Then the providerRef must name a ModelProvider (400 invalid_request), Gate B checks the namespace against allowedNamespaces (403 access_denied), and Gate C resolves the model (400 invalid_request). Budget, rate limit, and forwarding follow.](../diagrams/provider-access-gates.svg)
+![The chain of checks the gateway applies to a request carrying a qualified model name, in the order it runs. Identify the caller from an mTLS certificate SAN (full lifecycle tier) or a TokenReview-verified bearer token (gateway-only tier), then cross-check the source IP against a Pod in that namespace (401 unauthorized). A caller with a workload passes check A, the class check: the workload and its class exist, the providerRef is in spec.providers, the class's allowedNamespaces admits the caller's namespace, and the providerRef is in the class's allowedProviders (403 access_denied); a gateway-only caller skips it. Then the providerRef must name a ModelProvider (400 invalid_request), check B, the namespace check, tests the namespace against allowedNamespaces (403 access_denied), and check C resolves the model (400 invalid_request). Budget, rate limit, and forwarding follow.](../diagrams/provider-access-checks.svg)
 
-Gate A is the only gate that needs a workload and a class to read, so it is the only one a gateway-only caller skips, and it runs before the provider is looked up so that a full-lifecycle caller cannot learn which provider names exist without passing it. Gates A and B are tenancy decisions and answer `403 access_denied`; an unknown provider name and Gate C are resolution failures and answer `400 invalid_request`. The tool plane applies the same chain, gate for gate, with the class's `allowedToolProviders` in place of `allowedProviders` ([Grants](../gateways/tool-plane.md#grants)). What follows the chain, budgets, the rate limiter, and the fallback walk, is on [Request handling](../gateways/llm/request-handling.md#request-flow).
+Check A, the *class check*, is the only check that needs a workload and a class to read, so it is the only one a gateway-only caller skips. It runs before the provider is looked up so that a full-lifecycle caller cannot learn which provider names exist without passing it. It answers `403 access_denied` when the workload's `providers`, the class's `allowedNamespaces`, or the class's `allowedProviders` does not admit the request. Check B, the *namespace check*, answers `403 access_denied` when `ModelProvider.allowedNamespaces` does not admit the calling namespace. Checks A and B are tenancy decisions; an unknown provider name and check C are resolution failures and answer `400 invalid_request`. The tool plane applies the same chain, check for check, with the class's `allowedToolProviders` in place of `allowedProviders` ([Grants](../gateways/tool-plane.md#grants)). What follows the chain, budgets, the rate limiter, and the fallback walk, is on [Request handling](../gateways/llm/request-handling.md#request-flow).
 
 ### Per-namespace throughput and spend isolation
 

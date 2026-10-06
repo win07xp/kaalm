@@ -167,6 +167,8 @@ WORDING_PATTERNS = [
     r"\bmachinery\b",
     r"\bplumbing\b",
     r"\bload-bearing\b",
+    # "feature gate" is the Kubernetes term and stays.
+    r"(?<!feature )\bgat(?:e|es|ed|ing)\b",
 ]
 WORDING_RE = re.compile("|".join(WORDING_PATTERNS), re.IGNORECASE)
 

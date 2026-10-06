@@ -29,8 +29,8 @@ Ingress, and no LoadBalancer; how the console is exposed is your decision.
 ## 2. Give someone access
 
 The console authenticates with Kubernetes itself. A person pastes
-a bearer token; the console validates it with a `TokenReview`, then gates
-every namespace read with a `SubjectAccessReview`:
+a bearer token; the console validates it with a `TokenReview`, then checks it with a
+`SubjectAccessReview`:
 
 - To see a namespace, the token must be allowed to `list` `agents.kaalm.io`
   there.

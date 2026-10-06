@@ -177,7 +177,7 @@ your own must too (runtime contract item 6).
   was created. The Pod is not stopped at completion: a container that keeps
   running after it reports stays up until the TTL.
 - A crashed task Pod is retried only when `completion.backoffLimit` is above
-  zero; the default is no retries. Class-gate failures (image not allowed,
+  zero; the default is no retries. Failures of a class check (image not allowed,
   provider denied) settle `Failed` without retries, and
   `kubectl describe agenttask` names the reason.
 

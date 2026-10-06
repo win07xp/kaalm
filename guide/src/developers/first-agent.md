@@ -79,7 +79,7 @@ The children are all in your namespace:
 kubectl get pod,pvc,svc,serviceaccount,certificate,networkpolicy -n team-demo
 ```
 
-The provider's own health does not gate this: an agent reaches `Running`
+The provider's own health does not affect this: an agent reaches `Running`
 while its ModelProvider is `Ready=False`, and finds out when it calls the
 model.
 

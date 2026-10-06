@@ -20,7 +20,7 @@ Phases, in lifecycle order:
 | `Hibernating` | Pod being torn down, PVC retained |
 | `Hibernated` | No Pod; storage and identity parked |
 | `Resuming` | Waking: Pod recreating after a wake trigger, until it is Ready |
-| `Degraded` | The Agent fails a class gate (image, provider or tool grant revoked, deleted, or narrowed, or a namespace the class no longer admits); the Pod keeps running |
+| `Degraded` | The Agent no longer passes its class checks (image, provider or tool grant revoked, deleted, or narrowed, or a namespace the class no longer admits); the Pod keeps running |
 | `Failed` | Crash-looping, or the image cannot be pulled |
 | `Terminating` | Deletion in progress, finalizer running |
 
@@ -46,10 +46,10 @@ keeps running). None of `ProvidersReady`, `Degraded`, or `PodUpToDate`
 changes the phase.
 
 `Ready=False` reasons that move the phase to `Degraded` (the message names
-the failed gate): `NamespaceNotAllowed` (the class sets `allowedNamespaces`
+the failed check): `NamespaceNotAllowed` (the class sets `allowedNamespaces`
 and none of its patterns matches the Agent's namespace; it is checked first,
-so it is the reason shown when several gates fail), `ClassConstraintViolation` (an image, provider, or tool
-grant does not pass its class or allowlist gate), `ToolNotInCatalog` (a
+so it is the reason shown when several checks fail), `ClassConstraintViolation` (an image, provider, or tool
+grant does not pass its class or allowlist check), `ToolNotInCatalog` (a
 granted tool is outside the ToolProvider's declared catalog),
 `PersistenceNotAllowed`, `HibernationNotAllowed`,
 `HibernationRequiresPersistence`, and `HandlerMountNotAllowed` (the class
@@ -88,11 +88,11 @@ with event reason `WakeIgnored`.
 Phases: `Pending`, `Provisioning`, `Running`, `Completing` (result being
 recorded), then one of `Succeeded`, `Failed`, `TimedOut`; `Terminating` on
 delete. There is no Degraded: a task that cannot run fails, including a
-task whose provider or tool grant fails a gate, or whose namespace the
+task whose provider or tool grant fails a check, or whose namespace the
 class does not admit, at provisioning (same reasons as the Agent's Degraded,
 but terminal here).
 
-Conditions: `Ready` (provisioning gate; `ChildConflict` holds a task
+Conditions: `Ready` (the checks before the Pod; `ChildConflict` holds a task
 without a Pod, as it holds an Agent (an Agent of the same name can own the
 conflicting object, with the same fix as above), and `PodCreateRejected` or
 `ChildWriteRejected` holds a task whose Pod create or other write the apiserver
@@ -289,7 +289,7 @@ kubectl get agents,agenttasks,agentchannels -n NAMESPACE
 # The cluster-scoped set
 kubectl get agentclasses,modelproviders,toolproviders
 
-# Any agent failing a class or provider gate, cluster-wide (a budget block keeps its phase)
+# Any agent failing a class or provider check, cluster-wide (a budget block keeps its phase)
 kubectl get agents -A | grep Degraded
 
 # Why exactly is this resource not Ready

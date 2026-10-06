@@ -1,5 +1,5 @@
-@startuml task-completion-gates
-' Every gate on POST /v1/task/complete in the order the gateway runs them:
+@startuml task-completion-checks
+' Every check on POST /v1/task/complete in the order the gateway runs them:
 ' the mTLS profile in middleware, then the handler. Each row is an elseif
 ' cascade, which PlantUML lays out left to right. Triggers, wire messages,
 ' and rationale are the prose on docs/src/gateways/api/task-complete.md.

@@ -1,6 +1,6 @@
-@startuml provider-access-gates
-' The gate chain every LLM request passes, in the order the gateway runs
-' it (internal/gateway/auth.go, routing.go), and the gate that does not
+@startuml provider-access-checks
+' The checks every LLM request passes, in the order the gateway runs
+' it (internal/gateway/auth.go, routing.go), and the check that does not
 ' exist in the gateway-only tier. Source of truth:
 ' docs/src/concepts/tenancy-and-tiers.md
 !include _style.puml
@@ -19,7 +19,7 @@ if (Pod at the source IP in that namespace?) then (no)
   kill
 endif
 if (caller has a workload?) then (yes)
-  if (**Gate A**: workload and class exist,\nproviderRef in spec.providers,\nclass allowedNamespaces admits the\nnamespace, and providerRef in\nclass allowedProviders?) then (no)
+  if (**Check A**: workload and class exist,\nproviderRef in spec.providers,\nclass allowedNamespaces admits the\nnamespace, and providerRef in\nclass allowedProviders?) then (no)
     :**403** access_denied; <<#FFCDD2>>
     kill
   endif
@@ -29,11 +29,11 @@ if (providerRef names a ModelProvider?) then (no)
   :**400** invalid_request; <<#FFCDD2>>
   kill
 endif
-if (**Gate B**: calling namespace in\nModelProvider allowedNamespaces?) then (no)
+if (**Check B**: calling namespace in\nModelProvider allowedNamespaces?) then (no)
   :**403** access_denied; <<#FFCDD2>>
   kill
 endif
-if (**Gate C**: modelId in\nModelProvider models?) then (no)
+if (**Check C**: modelId in\nModelProvider models?) then (no)
   :**400** invalid_request; <<#FFCDD2>>
   kill
 endif

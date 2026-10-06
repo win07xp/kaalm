@@ -40,7 +40,7 @@ Agent containers execute LLM-generated code and are the untrusted actor inside a
 
 #### What granting allowHandlerMounts means
 
-Granting the gate makes ConfigMap write access in a namespace equivalent to code execution as that namespace's handler-mounting Agents, with their ServiceAccount, certificate identity, and gateway access, effective at the next Pod recreation. Grant it on dedicated classes whose namespaces treat every ConfigMap author as a code author. Injected code runs under the same containment as reviewed code: the class security context, a RoleBinding-less ServiceAccount, the synthesized NetworkPolicy, and the optional RuntimeClass. A cross-namespace reference is unrepresentable because `configMapRef` is a local reference ([AgentClass](../resources/agentclass.md#spec), rules 30 and 31).
+Granting `allowHandlerMounts` makes ConfigMap write access in a namespace equivalent to code execution as that namespace's handler-mounting Agents, with their ServiceAccount, certificate identity, and gateway access, effective at the next Pod recreation. Grant it on dedicated classes whose namespaces treat every ConfigMap author as a code author. Injected code runs under the same containment as reviewed code: the class security context, a RoleBinding-less ServiceAccount, the synthesized NetworkPolicy, and the optional RuntimeClass. A cross-namespace reference is unrepresentable because `configMapRef` is a local reference ([AgentClass](../resources/agentclass.md#spec), rules 30 and 31).
 
 ## Credential storage and rotation
 
@@ -101,7 +101,7 @@ Gateway-only workloads have no Agent resource and so no `allowedProviders` to co
 
 #### Fallback edges and allowedProviders
 
-A fallback candidate is re-checked against its own `allowedNamespaces` and catalog, but not against the workload's class `allowedProviders`. The workload gates govern what a caller may request; a fallback edge is declared by the platform team on the provider they own ([Fallback logic](../gateways/llm/fallback.md)). A platform team that does not want traffic reaching a provider through fallback does not declare the edge.
+A fallback candidate is re-checked against its own `allowedNamespaces` and catalog, but not against the workload's class `allowedProviders`. The workload's own checks govern what a caller may request; a fallback edge is declared by the platform team on the provider they own ([Fallback logic](../gateways/llm/fallback.md)). A platform team that does not want traffic reaching a provider through fallback does not declare the edge.
 
 #### What flows back from a failed provider call
 
@@ -109,7 +109,7 @@ Only a non-fallbackable provider answer (`400`, `422`, and the other 4xx statuse
 
 ## Tool plane
 
-Tool credentials follow the same containment as provider keys, and the broker gates every call before it reads one ([The broker](../gateways/tool-plane.md#the-broker)).
+Tool credentials follow the same containment as provider keys, and the broker runs every access check before it reads one ([The broker](../gateways/tool-plane.md#the-broker)).
 
 | Threat | Mitigation | Decision |
 |---|---|---|
@@ -203,7 +203,7 @@ The [console](../console/overview.md) is optional and off by default. Its caller
 | Threat | Mitigation | Decision |
 |---|---|---|
 | A console session cookie is stolen or replayed | The cookie is `Secure`, `HttpOnly`, `SameSite=Strict`; sessions live in console memory and expire with the pasted token or after 24 hours; a restart invalidates every session ([Console](../console/overview.md)). | Accepted within those bounds |
-| A caller views namespaces their token does not grant | The console fixes the identity at login with `TokenReview` and gates every namespace read with a `SubjectAccessReview` ([S19](../appendix/scenarios.md#s19-see-the-fleet-without-kubectl)). | Mitigated |
+| A caller views namespaces their token does not grant | The console fixes the identity at login with `TokenReview` and requires a `SubjectAccessReview` to pass for every namespace read ([S19](../appendix/scenarios.md#s19-see-the-fleet-without-kubectl)). | Mitigated |
 | Cross-site request forgery against test-chat | The `SameSite=Strict` cookie is the control. See [Why SameSite is the CSRF control](#why-samesite-is-the-csrf-control). | Mitigated |
 
 #### Why SameSite is the CSRF control

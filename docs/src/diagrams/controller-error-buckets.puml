@@ -21,7 +21,7 @@ partition "retry, or degrade" {
   endif
 }
 
-partition "gate, or fail" {
+partition "not ready, or fail" {
   if (a dependency missing:\nimage, Secret, PVC,\nConfigMap, Certificate?) then (yes)
     :Ready=False,\nrequeue 30s or 5s,\nnone for image;
     kill

@@ -56,7 +56,7 @@ The decisions that matter:
   `Ready=False` with reason `InvalidImagePattern` naming the entry. Check the
   class's `Ready` after you edit the list.
 - **`allowedProviders`** narrows which ModelProviders workloads of this class
-  may use. This gate stacks with the provider's own namespace allowlist: a
+  may use. This check stacks with the provider's own namespace allowlist: a
   request must pass both.
 - **`allowedNamespaces`** keeps the class to chosen team namespaces, as
   `path.Match` globs such as `team-*`. Unset admits every namespace, and an
@@ -129,7 +129,7 @@ Pinning `allowedImages` to exactly the published base images keeps the grant
 narrow: mounted code runs only inside the runtime you chose, never inside an
 image that a broader `allowedImages` list admits. Setting
 `allowHandlerMounts` back to `false` later degrades existing Agents that mount
-handlers, with reason `HandlerMountNotAllowed`. As with the other class gates in
+handlers, with reason `HandlerMountNotAllowed`. As with the other class checks in
 [Changing a class later](#changing-a-class-later), the Pod keeps running and
 the Agent recovers when the class or the Agent changes back.
 
@@ -271,5 +271,5 @@ Plan tightening as a deprecation, not an eviction.
 
 *How this works: design book pages Resources, AgentClass (every field),
 Controller, Change propagation (exactly what a class edit triggers), and
-Concepts, Multi-tenancy and adoption tiers (how the class gate stacks with the other two
-access gates).*
+Concepts, Multi-tenancy and adoption tiers (how the class check stacks with the other two
+access checks).*

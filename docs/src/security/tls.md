@@ -107,7 +107,7 @@ Both controllers are cluster-critical dependencies. Monitor them as such.
 ## Lifecycle of an AgentTask TLS client certificate
 
 1. **Created** by the AgentTaskReconciler ([AgentTask certificate](../controller/reconcilers/agenttask.md#agenttask-certificate)): a `Certificate` named `{taskName}-tls` in the task's namespace with an ownerRef to the AgentTask, the same `issuerRef`, one SAN `{taskName}.{namespace}.task.kaalm.io`, and usage `client auth` only. A task has no Service and is never a delivery target, so the certificate never serves TLS.
-2. **Stored** as `{taskName}-tls-{uid}` in the task's namespace, named by the same rule and held by the same Ready gate as an Agent's.
+2. **Stored** as `{taskName}-tls-{uid}` in the task's namespace, named by the same rule and held by the same Certificate wait as an Agent's.
 3. **Mounted** at the same paths. The task presents the certificate on LLM requests and task completion.
 4. **Verified** by the gateway against `kaalm-ca` on every call, reading the namespace from the SAN.
 5. **Rotated** as an Agent certificate is: the task's HTTP client reloads on the directory watch.
@@ -115,7 +115,7 @@ Both controllers are cluster-critical dependencies. Monitor them as such.
 
 ## The two lifecycles side by side
 
-![Both reconcilers create a per-workload Certificate, the Agent's with Service SANs and both usages and the AgentTask's with one task SAN and client auth only, and hold the Pod with CertificateNotReady, requeued every five seconds, until cert-manager reports it Ready.](../diagrams/cert-create-gate.svg)
+![Both reconcilers create a per-workload Certificate, the Agent's with Service SANs and both usages and the AgentTask's with one task SAN and client auth only, and hold the Pod with CertificateNotReady, requeued every five seconds, until cert-manager reports it Ready.](../diagrams/cert-before-pod.svg)
 
 ![The per-workload certificate in use: mounted at /var/run/kaalm, presented by the Agent on LLM requests and heartbeats and by the AgentTask on LLM requests and task completion, with the AgentTask's heartbeat rejected 403; both re-issued within renewBefore and reloaded on the directory watch; both removed by the ownerRef cascade.](../diagrams/cert-runtime.svg)
 
@@ -127,4 +127,4 @@ Both controllers are cluster-critical dependencies. Monitor them as such.
 | Presents on | LLM requests, heartbeats, tool calls | LLM requests, task completion, tool calls |
 | Heartbeat | Accepted | `403` |
 
-Every difference follows from one fact: an Agent has a Service and is a delivery target, and an AgentTask is neither. The Ready gate is identical, and it is what keeps a Pod from starting against a Secret cert-manager has not written.
+Every difference follows from one fact: an Agent has a Service and is a delivery target, and an AgentTask is neither. The wait for a Ready Certificate is identical, and it is what keeps a Pod from starting against a Secret cert-manager has not written.

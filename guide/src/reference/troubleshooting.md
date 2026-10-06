@@ -13,7 +13,7 @@ kubectl describe agent AGENT_NAME        # conditions carry the reason
   the Agent waits before any child is created.
 - **Env Secret missing or unlabeled**: reason `SecretNotOptedIn`; see
   [Workload is `Ready=False` with `SecretNotOptedIn`](#workload-is-readyfalse-with-secretnotoptedin).
-- **Certificate not issued** (`Provisioning`): the Pod is gated on its
+- **Certificate not issued** (`Provisioning`): the Pod waits for its
   serving certificate. `kubectl get certificates -n NAMESPACE` and check
   cert-manager logs.
 - **PVC unbound** (`Provisioning`): `kubectl get pvc -n NAMESPACE`; usually a
@@ -63,7 +63,7 @@ symptom: the Agent goes `Degraded` instead.
 - **Namespace not admitted by the class**: reason `NamespaceNotAllowed`. A
   new Agent gets no Pod. A running Agent keeps its Pod,
   and its LLM and tool calls return `403`. This reason shows first when
-  several gates fail. Ask your platform team to add the namespace to the
+  several checks fail. Ask your platform team to add the namespace to the
   class ([Keep a class to some
   teams](../platform/managing-access.md#keep-a-class-to-some-teams)), or
   point the Agent at another class.
@@ -226,7 +226,7 @@ a hibernation-enabled agent.
 
 ## LLM call returns `403 access_denied`
 
-One of the gates denied; the error message names which:
+One of the access checks failed; the error message names which:
 
 - not in the workload's `spec.providers`,
 - namespace not in the AgentClass `allowedNamespaces` (the class sets the
@@ -298,7 +298,7 @@ in `Failed` until then or until you delete it.
   With neither set, the task sits until you delete it. Either
   report from the image, or set `completion.condition: exitCode`.
 - The completion call is rejected: only the task's current Pod may report
-  (an identity gate against stale retries); a completion sent by anything
+  (the Pod UID check rejects a report from an old Pod after a retry); a completion sent by anything
   else is refused.
 
 ## Deleting a provider, tool provider, or class never finishes

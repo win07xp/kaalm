@@ -25,7 +25,7 @@ If the grant does not take effect, `kubectl describe agent` names the
 reason: `ClassConstraintViolation` (the class does not allow the provider,
 the provider does not exist, or your namespace is not admitted) or
 `ToolNotInCatalog` (you named a tool outside the provider's declared
-catalog). An Agent degrades recoverably and comes back when the gate opens;
+catalog). An Agent degrades recoverably and comes back when the check passes;
 an AgentTask denied at provisioning fails terminally.
 
 ## 2. Point your MCP client at the broker
@@ -90,7 +90,7 @@ never on the message:
 
 | Status | `error.type` | Retry? | What it means for you |
 |---|---|---|---|
-| 403 | `access_denied` | no | A tenancy gate: namespace, class, or session ownership. The fix is in the specs, not your code |
+| 403 | `access_denied` | no | A tenancy check failed: namespace, class, or session ownership. The fix is in the specs, not your code |
 | 403 | `tool_denied` | no | The named tool is outside your grant, or the method is off the broker's allowlist |
 | 413 | `request_too_large`, `response_too_large` | no | The request or the server's response exceeded the broker's body cap. If the answer is a stream already under way, you get a JSON-RPC error event instead; the note after the table covers it |
 | 429 | `rate_limited` | after `Retry-After` | Your namespace hit the provider's `requestsPerMinute` ceiling. `Retry-After` is the seconds until your namespace's bucket admits a call again. It can be minutes when the provider's `requestsPerMinute` is below the gateway replica count |

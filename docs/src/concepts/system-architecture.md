@@ -73,7 +73,7 @@ The controller runs as a Deployment in `kaalm-system` and hosts six reconcilers,
 | [ModelProvider](../controller/reconcilers/modelprovider.md) | ModelProvider | Validates the spec, resolves the credential, probes the upstream, folds spend into status |
 | [ToolProvider](../controller/reconcilers/toolprovider.md) | ToolProvider | Resolves the optional credential and probes the server with MCP |
 | [AgentClass](../controller/reconcilers/agentclass.md) | AgentClass | Validates references and egress entries and counts the workloads in use |
-| [AgentChannel](../controller/reconcilers/agentchannel.md) | AgentChannel | Validates the channel and sets `Ready`, which gates routing; reduces the gateway's health observations into `PlatformConnected` |
+| [AgentChannel](../controller/reconcilers/agentchannel.md) | AgentChannel | Validates the channel and sets `Ready`, which decides whether the channel receives traffic; reduces the gateway's health observations into `PlatformConnected` |
 
 Leader election is on, so the reconcilers run on one replica and the Deployment survives a replica loss. Three listeners run on every replica, leader or not: the activator on `:9443`, the CRD conversion webhook on `:9444`, and metrics on `:8080`; a plain-HTTP probe listener on `:8081` serves the kubelet ([The binary](../controller/overview.md#the-binary)).
 
@@ -105,7 +105,7 @@ An AgentClass selects the workload backend with [`spec.runtime.backend`](../reso
 
 ### MCP
 
-Kaalm does not mandate MCP, but MCP is the tool protocol it brokers. The gateway's [tool plane](../gateways/tool-plane.md) carries tool traffic with credential injection, tenancy gates, and per-call audit. Direct egress is the supported alternative: an agent container may connect to an MCP server itself, and what Kaalm governs then is egress, through the class's [`network.egress.allowedCIDRs`](../resources/agentclass.md#spec). On a Cilium cluster, the class's `allowedHosts` also opens egress to named hosts. Kaalm brokers access to tool servers; it does not run them.
+Kaalm does not mandate MCP, but MCP is the tool protocol it brokers. The gateway's [tool plane](../gateways/tool-plane.md) carries tool traffic with credential injection, tenancy checks, and per-call audit. Direct egress is the supported alternative: an agent container may connect to an MCP server itself, and what Kaalm governs then is egress, through the class's [`network.egress.allowedCIDRs`](../resources/agentclass.md#spec). On a Cilium cluster, the class's `allowedHosts` also opens egress to named hosts. Kaalm brokers access to tool servers; it does not run them.
 
 ### LLM providers
 

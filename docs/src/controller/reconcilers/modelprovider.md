@@ -33,7 +33,7 @@ The checks run in the order of the following table. Every pass, a held delete in
 | Every `modelMap` key names one of the provider's own models and every value one of the fallback's | `InvalidModelMap` | [41](../../resources/validation/providers.md#providers-fallback-and-budgets) |
 | Every `budget.policies[].degradeTo` names a model in `spec.models` | `InvalidDegradeTarget` | [18](../../resources/validation/providers.md#providers-fallback-and-budgets) |
 | Under hard enforcement, every model is priced | `HardBudgetUnpriced` | [33](../../resources/validation/providers.md#providers-fallback-and-budgets) |
-| Every `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-gates-on-providers-and-tools) |
+| Every `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-checks-on-providers-and-tools) |
 | The upstream accepts the credential (skipped when `healthCheck.enabled` is `false`) | `CredentialsInvalid` | |
 
 The five configuration rows run together, and the `Ready` message lists every problem found. When more than one fails, the reason is `InvalidDegradeTarget` if any degrade target is bad, else `HardBudgetUnpriced`, else `InvalidModelMap`, else `FallbackIneligible`, else `InvalidNamespacePattern`. [Provider credentials](../../resources/validation/providers.md#provider-credentials) states what the early end on a credential failure protects.

@@ -75,7 +75,7 @@ What each block does:
 - **`models`** is the catalog. Agents request models as
   `anthropic-shared/claude-opus-4-6`; a model not in this list is rejected.
   The prices drive budget accounting, so keep them current.
-- **`allowedNamespaces`** is the tenancy gate. Globs are supported
+- **`allowedNamespaces`** is the namespace check. Globs are supported
   (`team-*`); an empty list means no namespace may use the provider.
 - **`budget`** caps spend per namespace per calendar period, with escalating
   policies as the budget is consumed. Details on policies, rate limits, and

@@ -74,7 +74,7 @@ What each block does:
 - **`endpoint`** must be `https://`; the schema rejects anything else because
   the gateway forwards the credential to this URL. The broker never follows
   redirects, so give the final URL.
-- **`allowedNamespaces`** is the tenancy gate, read exactly as
+- **`allowedNamespaces`** is the namespace check, read exactly as
   ModelProvider's: globs are supported, and an empty list means no namespace
   may use the provider.
 - **`tools`** is the optional declared catalog, and it is a ceiling: grants
@@ -92,7 +92,7 @@ What each block does:
 
 ## 3. Open the grant chain
 
-Tool access stacks the same three gates as model access
+Tool access stacks the same three checks as model access
 ([Managing team access](managing-access.md)): the class must allow the
 provider, the provider must admit the namespace, and the workload must ask
 for it. You set the first (the second is step 2 above); the team sets the
@@ -109,7 +109,7 @@ the provider in their Agent's or AgentTask's `spec.tools`, optionally
 narrowed to named tools; that side is covered in
 [Calling tools through the gateway](../developers/calling-tools.md).
 
-A grant that fails any gate is visible in status, not silently ignored: an
+A grant that fails any check is visible in status, not silently ignored: an
 Agent goes `Degraded` with reason `ClassConstraintViolation` (provider not
 in the class allowlist, missing, or namespace not admitted) or
 `ToolNotInCatalog` (a granted tool is outside the declared catalog). An AgentTask denied at provisioning

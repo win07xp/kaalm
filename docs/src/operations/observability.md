@@ -100,10 +100,10 @@ This is a hard rule because logs are typically shipped to lower-trust aggregatio
 
 ### Debug build for body logging
 
-A separate **debug build**, gated by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies on the LLM proxy paths, and tool-call request and response bodies on the MCP broker routes, for testing an image against the [runtime contract](../runtime/contract.md) and for integration debugging. Body logging exists only in that build:
+A separate **debug build**, enabled by the Go build tag `kaalm_debug_logs` at compile time, can log prompt and response bodies on the LLM proxy paths, and tool-call request and response bodies on the MCP broker routes, for testing an image against the [runtime contract](../runtime/contract.md) and for integration debugging. Body logging exists only in that build:
 
 - The published images are default builds. A debug build emits a startup banner, so an operator who runs one notices.
-- There is **no runtime Helm value, environment variable, feature flag, or administration endpoint** that flips body logging on in a default build. The gate is build-time only.
+- There is **no runtime Helm value, environment variable, feature flag, or administration endpoint** that flips body logging on in a default build. The switch is build-time only.
 
 ## Kubernetes Events
 

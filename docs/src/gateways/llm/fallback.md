@@ -89,7 +89,7 @@ The primary is always spoken to in the caller's format, so nothing changes until
 
 ### The model on the other side
 
-A caller asks for `anthropic-shared/claude-sonnet-4-6`, and an `openai` fallback has no such model, so the mapped-model check would skip every cross-format candidate. The edge carries the mapping: each `spec.fallback[]` entry is a `FallbackReference` with a `name` and an optional `modelMap` from this provider's model ids to the fallback's ([ModelProvider](../../resources/modelprovider.md#fallback-trees)). The check tests the mapped model, or the requested model itself when the map has no entry (the same-type case, or a compatible provider that offers the same id). Rule 41 validates the map at reconcile time: every key is one of this provider's models and every value one of the fallback's. The budget gate, the request body, and spend accounting all use the mapped model.
+A caller asks for `anthropic-shared/claude-sonnet-4-6`, and an `openai` fallback has no such model, so the mapped-model check would skip every cross-format candidate. The edge carries the mapping: each `spec.fallback[]` entry is a `FallbackReference` with a `name` and an optional `modelMap` from this provider's model ids to the fallback's ([ModelProvider](../../resources/modelprovider.md#fallback-trees)). The check tests the mapped model, or the requested model itself when the map has no entry (the same-type case, or a compatible provider that offers the same id). Rule 41 validates the map at reconcile time: every key is one of this provider's models and every value one of the fallback's. The budget check, the request body, and spend accounting all use the mapped model.
 
 ### What translates
 

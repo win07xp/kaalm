@@ -198,10 +198,10 @@ The console authenticates humans with the cluster's own `TokenReview` and
    minutes, even if the browser never returns. JSON API callers skip sessions and send
    `Authorization: Bearer` on every request; those reviews are cached for
    five minutes, so a revoked token works for up to five minutes.
-3. **Authorization.** Every namespace-scoped read is gated by a
-   `SubjectAccessReview`: the caller must be allowed to `list`
-   `agents.kaalm.io` in the namespace to see any of its panels. Test-chat is
-   gated separately: the caller must be allowed to `create`
+3. **Authorization.** Every namespace-scoped read needs a
+   `SubjectAccessReview` to pass: the caller must be allowed to `list`
+   `agents.kaalm.io` in the namespace to see any of its panels. Test-chat has
+   its own check: the caller must be allowed to `create`
    `agentchannels.kaalm.io` in the namespace, because an AgentChannel is the
    standing form of what test-chat does once. Results are cached for five
    minutes, so a changed grant takes up to five minutes to show. The
@@ -209,12 +209,12 @@ The console authenticates humans with the cluster's own `TokenReview` and
    `agents.kaalm.io` cluster-wide, and otherwise only the namespaces where
    the caller may. If a review fails, the namespace list request answers
    `503` instead of silently dropping the namespace.
-4. **The reads' identity.** The `SubjectAccessReview` is the gate; the reads
+4. **The reads' identity.** The `SubjectAccessReview` decides whether the caller may read; the reads
    themselves run under the console's ServiceAccount. The console does not
    impersonate the caller.
 
 `ModelProvider` is cluster-scoped, but the spend panel shows only the budget
-rows of the namespace being viewed, and the namespace gate covers them.
+rows of the namespace being viewed, and the `list` check on `agents.kaalm.io` in that namespace covers them.
 
 ## Test-chat
 

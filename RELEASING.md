@@ -31,7 +31,7 @@ The tag drives everything; nothing in `Chart.yaml` needs editing first.
 
 ## Before you tag
 
-Run these checks on the commit you plan to tag, because the tag publishes at once. Pushing a `v*` tag also starts the [upgrade workflow](.github/workflows/upgrade.yml), which runs `make e2e-upgrade` in CI. That run starts after the tag exists and does not gate the release, so a failure there cannot stop it. The performance run happens only on your machine.
+Run these checks on the commit you plan to tag, because the tag publishes at once. Pushing a `v*` tag also starts the [upgrade workflow](.github/workflows/upgrade.yml), which runs `make e2e-upgrade` in CI. That run starts after the tag exists, so a failure there cannot stop the release. The performance run happens only on your machine.
 
 1. Run the upgrade test from the latest release:
 

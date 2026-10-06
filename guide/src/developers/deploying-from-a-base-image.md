@@ -109,7 +109,7 @@ rollbacks trustworthy.
 
 The moment your handler needs a dependency the base image does not bundle,
 move to the `FROM` pattern: same base image, same handler file, plus a
-one-line `pip install`. The `allowHandlerMounts` gate does not apply: a `FROM`
+one-line `pip install`. The `allowHandlerMounts` setting does not apply: a `FROM`
 build passes ordinary image review through `allowedImages`.
 [Building your own agent image](building-your-own-image.md) points to the
 worked example, `examples/starter-python`. If the dependency
@@ -133,5 +133,5 @@ you need is an agent framework, see
 
 *How this works: design book pages Runtime, Reference base images (the
 image contract, the handler resolution rules, and the `FROM` pattern), and
-Resources, Validation and defaulting (rules 30 and 31, the class gate and
+Resources, Validation and defaulting (rules 30 and 31, the class grant and
 the missing-ConfigMap condition).*

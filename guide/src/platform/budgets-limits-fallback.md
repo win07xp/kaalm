@@ -77,7 +77,7 @@ budget:
       action: block
 ```
 
-Three validation gates apply: hard requires at least one `block` policy
+Three validation rules apply: hard requires at least one `block` policy
 (rejected at apply time otherwise), every model in the catalog must be
 priced (`Ready=False, reason=HardBudgetUnpriced` until it is), and
 `boundaryMarginPercent` must sit strictly below every block threshold (also

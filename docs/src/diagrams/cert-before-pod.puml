@@ -1,4 +1,4 @@
-@startuml cert-create-gate
+@startuml cert-before-pod
 ' Both reconcilers create a per-workload Certificate and hold the Pod until it is Ready.
 ' Source of truth: docs/src/security/tls.md
 !include _style.puml

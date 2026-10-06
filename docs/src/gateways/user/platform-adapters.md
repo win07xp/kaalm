@@ -12,7 +12,7 @@ All three are inbound HTTP: authenticate a caller, normalize a payload, deliver 
 
 ## The platform adapter interface
 
-Platform adapters follow a plugin pattern so a type can be added without changing the gateway's route. The route resolves the channel and applies the size check and the `Ready` gate, then hands a platform channel to its adapter:
+Platform adapters follow a plugin pattern so a type can be added without changing the gateway's route. The route resolves the channel and applies the size check and the `Ready` check, then hands a platform channel to its adapter:
 
 ```go
 type platformAdapter interface {
@@ -44,7 +44,7 @@ The Discord and WhatsApp adapters share one design: verify the platform's signat
 
 The acknowledgement divides the flow. Everything before it happens with the platform waiting (Discord allows 3 seconds, WhatsApp expects a prompt `200`); everything after it happens with the platform gone, which is why both adapters are async only and why an error at the end of the pipeline travels back as a reply rather than as a status code.
 
-1. **Size check and routing gate**, unchanged from [Request flow](overview.md#request-flow), steps 2 and 3: `413` above `gateway.maxMessageBodyBytes`, `401` for a path not registered to a `Ready=True` channel.
+1. **Size check and routing check**, unchanged from [Request flow](overview.md#request-flow), steps 2 and 3: `413` above `gateway.maxMessageBodyBytes`, `401` for a path not registered to a `Ready=True` channel.
 2. **Verification handshakes.** A WhatsApp verification `GET` is answered with its `hub.challenge` when `hub.mode` is `subscribe` and `hub.verify_token` matches the channel's `verifyToken`, else `401`. A Discord `PING` (interaction type 1) is answered with `PONG` after its signature is checked. During URL registration Discord also sends a `PING` with a bad signature on purpose and expects `401`. Both prove the URL to the platform when the operator saves it and go no further: no envelope, and no health observation unless verification fails, which is recorded like any inbound auth failure.
 3. **Authenticate.** Discord: Ed25519 verification of `X-Signature-Ed25519` over `X-Signature-Timestamp` concatenated with the raw body, using the channel's `publicKey`; a timestamp more than 300s from the gateway's clock is rejected, the same replay bound the [polling endpoint](../api/async-responses.md#polling-fallback) uses. WhatsApp: HMAC-SHA256 over the raw body with `appSecret`, compared in constant time against `X-Hub-Signature-256` after stripping `sha256=`; it is the webhook adapter's `hmac` path with the header, prefix, and encoding fixed. Failures are `401` and a `failure` observation with `reason: WebhookAuthFailed`. A body that does not parse is `400`.
 4. **Kind.** Only a Discord application command (type 2) and a WhatsApp message produce an envelope. A Discord component interaction gets a deferred update, an autocomplete gets an empty choice list, and a modal submit gets a fixed ephemeral refusal; none is an observation.

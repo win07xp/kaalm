@@ -1,5 +1,5 @@
 @startuml task-retry-race
-' An AgentTask retry: the currentPodUID gate closes, the old Pod goes, the
+' An AgentTask retry: the currentPodUID is cleared, the old Pod goes, the
 ' mailbox is reset, and in one pass the new Pod is created and its UID is
 ' written to status.currentPodUID.
 ' The rules behind each step are the prose on
@@ -14,7 +14,7 @@ participant "Old Pod" as OP
 participant "New Pod" as NP
 
 R -> S : 1. retries+1, currentPodUID=""
-group gate closed
+group Pod UID check rejects
   R -> OP : 2. delete
   OP ->> G : late /v1/task/complete
   G -->> OP : 409 stale_pod

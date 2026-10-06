@@ -10,7 +10,7 @@ The Discord and WhatsApp channel types share the route and the path rules but re
 
 The route is served on the user listener, `:8080`, with TLS from `kaalm-gateway-tls`. External callers reach it through the Ingress the operator provisions ([TLS and Ingress](../user/overview.md#tls-and-ingress)). The gateway applies no per-channel or per-IP rate limit on this route: the inbound controls are the body cap and the channel's auth, and rate limiting belongs at the Ingress. The LLM rate limits bound provider load after delivery, not inbound requests.
 
-## Routing gate
+## Only Ready channels receive traffic
 
 The gateway routes a path only while its AgentChannel is `Ready=True` and not `Terminating`. A channel that fails validation (bad path, path conflict, missing Agent, missing or unlabeled auth Secret, invalid `callbackUrl`) receives no traffic, and a request to its path answers `401` exactly as an unregistered path does.
 

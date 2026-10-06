@@ -1,6 +1,6 @@
 # The tool plane
 
-The **tool plane** is gateway-brokered access to MCP tool servers, governed the way LLM access is governed: the agent calls the gateway, the gateway authenticates the workload, applies the tenancy gates, injects the credential, and forwards.
+The **tool plane** is gateway-brokered access to MCP tool servers, governed the way LLM access is governed: the agent calls the gateway, the gateway authenticates the workload, applies the tenancy checks, injects the credential, and forwards.
 
 Without the broker, tool traffic is the ungoverned twin of LLM traffic: a class-wide CIDR exception in the default-deny egress policy, with the tool server's credential in the agent pod, unmetered and absent from the audit log. That is the arrangement [Credential handling](../security/credentials.md) forbids for LLM keys, and the reason LLM traffic has no direct provider egress ([Multi-tenancy and adoption tiers](../concepts/tenancy-and-tiers.md#networkpolicy-as-the-cross-tenant-boundary)).
 
@@ -54,7 +54,7 @@ All four join the class-mismatch handling family of rules 2 through 5: a violati
 
 ## Grants
 
-Access is granted per server and narrowed per tool, mirroring the provider grant chain gate for gate:
+Access is granted per server and narrowed per tool, mirroring the provider grant chain check for check:
 
 ```yaml
 # AgentClass.spec
@@ -70,11 +70,11 @@ tools:
 
 The inner `tools` list narrows the grant. Empty or omitted means every tool the server offers, bounded by the declared catalog when one exists.
 
-Grants live on both workload kinds: an AgentTask declares `spec.tools` exactly as an Agent does, and rules 35 to 38 gate it the same way. A violation settles as terminal `Failed` rather than recoverable `Degraded`, because tasks have no Degraded phase, the split rules 2, 5, and 24 already follow.
+Grants live on both workload kinds: an AgentTask declares `spec.tools` exactly as an Agent does, and rules 35 to 38 apply to it the same way. A violation settles as terminal `Failed` rather than recoverable `Degraded`, because tasks have no Degraded phase, the split rules 2, 5, and 24 already follow.
 
 ![Flowchart of every check on POST /v1/mcp/{toolProvider} in the order the broker runs them, as four rows. Route and namespace: ToolProvider exists, else 400 invalid_request; caller namespace in allowedNamespaces, else 403 access_denied. Workload grant, for mTLS callers only: ToolProvider in the workload's spec.tools providerRef, the AgentClass allowedNamespaces admits the caller's namespace, and ToolProvider in the AgentClass allowedToolProviders, else 403 access_denied. Request: token bucket per namespace and ToolProvider, else 429 rate_limited; body within the cap, else 413 request_too_large; one JSON-RPC message, else 400 invalid_request; method on the allowlist, else 403 tool_denied. Tool and session: modern headers match the body, else 400 with JSON-RPC error -32020; tools/call names a tool in the grant and catalog, else 403 tool_denied; a legacy session id is owned by this caller, else 403 access_denied; then inject the credential and forward.](../diagrams/tool-grant-chain.svg)
 
-The figure is the [provider gate chain](../concepts/tenancy-and-tiers.md#provider-access-gating) with per-tool checks added. The namespace, grant, and class gates answer `403 access_denied`, as the LLM chain does. The method allowlist and the tool check answer `403 tool_denied`, a distinct type so per-tool policy is auditable on its own. What each check reads is tabled under [The broker](#the-broker).
+The figure is the [provider access checks](../concepts/tenancy-and-tiers.md#provider-access-checks) with per-tool checks added. The namespace, grant, and class checks answer `403 access_denied`, as the LLM chain does. The method allowlist and the tool check answer `403 tool_denied`, a distinct type so per-tool policy is auditable on its own. What each check reads is tabled under [The broker](#the-broker).
 
 A gateway-only caller carries no workload identity, so the workload grant row does not apply to it: its access is `allowedNamespaces`, the declared catalog, and the method allowlist ([Workload identity](llm/workload-identity.md)). A `tools/list` answer is filtered by the tool check instead of rejected by it, so the model never sees a tool it cannot call.
 
@@ -84,14 +84,14 @@ Brokered tool traffic terminates on the `:8443` listener as `POST /v1/mcp/{toolP
 
 ![Sequence diagram of one brokered tool call. The agent container POSTs to /v1/mcp/{toolProvider} on the gateway broker at :8443 with a JSON-RPC body. The broker establishes the caller identity, runs the checks in order, reads the credential from a Secret in kaalm-system, strips inbound auth and injects the credential, and forwards to the tool server with no redirects and an upstream timeout. Three outcomes: unreachable, redirect, 401, 403, or 5xx is 503 tool_unavailable; a timeout is 504 tool_timeout; a response, JSON or an SSE stream, has tools/list filtered with cacheScope set to private and a legacy Mcp-Session-Id wrapped, then is relayed. The call ends with one audit line and the metrics.](../diagrams/tool-broker-flow.svg)
 
-The checks in step 3, in the order the broker runs them. The workload grant, class namespace gate, and class allowlist apply to mTLS callers only; the rest apply to both tiers. Each failure's status is under [Failure modes](#failure-modes).
+The checks in step 3, in the order the broker runs them. The workload grant, class namespace check, and class allowlist apply to mTLS callers only; the rest apply to both tiers. Each failure's status is under [Failure modes](#failure-modes).
 
 | Check | Reads |
 |---|---|
 | ToolProvider exists | the path segment |
-| Namespace gate | `allowedNamespaces`, exact name or glob |
+| Namespace check | `allowedNamespaces`, exact name or glob |
 | Workload grant | the Agent or AgentTask `spec.tools[].providerRef` |
-| Class namespace gate | the AgentClass `allowedNamespaces`, when set |
+| Class namespace check | the AgentClass `allowedNamespaces`, when set |
 | Class allowlist | the AgentClass `allowedToolProviders` |
 | Rate limit | the token bucket for the (namespace, ToolProvider) pair |
 | Body cap | the request body against the broker's cap |
@@ -159,14 +159,14 @@ ToolProvider endpoints are operator-declared configuration, like ModelProvider e
 
 ## Audit and metering
 
-Every brokered call emits one `info`-level structured log line. Bodies are never logged: tool-call content is the category the [log-redaction rule](../operations/observability.md#pii-safety) names as sensitive. The bodylog debug facility covers the MCP routes under its existing gate, for operators who accept that trade during an investigation.
+Every brokered call emits one `info`-level structured log line. Bodies are never logged: tool-call content is the category the [log-redaction rule](../operations/observability.md#pii-safety) names as sensitive. The bodylog debug facility, which exists only in a debug image, covers the MCP routes too, for operators who accept that trade during an investigation.
 
 | Field | Value |
 |---|---|
 | `namespace`, `workload`, `workload_kind` | the caller; the workload fields appear for mTLS callers only |
 | `provider`, `method`, `tool` | the ToolProvider, the JSON-RPC method, and the real tool name |
 | `status`, `error_type` | the HTTP status, and the wire error type when the broker produced the error or `client_closed` when the caller left before the broker finished answering, not only mid-stream. A call the caller abandoned before the broker sent a status line logs `status` `499`, which no caller ever receives. An abandoned stream keeps the status it already sent |
-| `detail` | the denial reason, for example which gate refused or that a session id belongs to another caller. For a `503 tool_unavailable` when the tool server is unreachable or its response could not be read, and for a stream the broker ended because reading it failed, it also carries the transport error, which the caller's message leaves out because it names the tool server's address |
+| `detail` | the denial reason, for example which check refused or that a session id belongs to another caller. For a `503 tool_unavailable` when the tool server is unreachable or its response could not be read, and for a stream the broker ended because reading it failed, it also carries the transport error, which the caller's message leaves out because it names the tool server's address |
 | `duration_seconds`, `request_bytes`, `response_bytes` | timing and sizes |
 
 | Metric | Labels | Notes |
@@ -186,7 +186,7 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 |---|---|
 | Method other than `POST` | `405 invalid_request` |
 | Unknown ToolProvider name in the path | `400 invalid_request` |
-| Namespace, grant, or class gate fails | `403 access_denied`, the type the LLM tenancy chain uses |
+| Namespace, grant, or class check fails | `403 access_denied`, the type the LLM tenancy chain uses |
 | Tool outside the grant or catalog | `403 tool_denied` |
 | JSON-RPC method outside the allowlist | `403 tool_denied` |
 | Batch array, or not a JSON-RPC message | `400 invalid_request` |

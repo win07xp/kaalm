@@ -1,6 +1,6 @@
 # Reference and access rules
 
-This page states the rules that make a reference resolve (rules 1, 3, 13, 23, 27, 31, 35, and 48) and the access gates on providers and tools (rules 4, 5, 36, 37, 38, and 51). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
+This page states the rules that make a reference resolve (rules 1, 3, 13, 23, 27, 31, 35, and 48) and the access checks on providers and tools (rules 4, 5, 36, 37, 38, and 51). [Validation and defaulting](../validation-and-defaulting.md) indexes every rule and says where each is enforced.
 
 ## Referenced objects must exist
 
@@ -16,22 +16,22 @@ This page states the rules that make a reference resolve (rules 1, 3, 13, 23, 27
 
 **Rule 31: The handler ConfigMap must exist where the Agent runs.** `Agent.spec.handler.configMapRef.name` must name a ConfigMap in the Agent's namespace. *Reconcile time, before the Pod is created; `Ready=False, reason=HandlerConfigMapNotFound`, message naming the namespace and ConfigMap.* A clear condition beats a Pod wedged in `ContainerCreating` on a missing volume source. The reconciler adds no ownerRef and tracks no content ([Handler update semantics](../../runtime/base-images.md#handler-update-semantics)).
 
-**Rule 48: A workload's env may read only Secrets that opted in.** Every Secret that an Agent's or AgentTask's `spec.env` reads through `valueFrom.secretKeyRef` must exist in the workload's namespace and carry the label `kaalm.io/workload-secret` with the exact value `"true"`. Optional references (`optional: true`) are checked too, and a missing optional Secret also gates. Only `spec.env` is checked, not the `KAALM_*` variables the controller injects. *Reconcile time, before the Pod is created and never as an apply-time rejection; `Ready=False, reason=SecretNotOptedIn`, and a `Warning` event with the same reason when the reason first appears on `Ready`.*
+**Rule 48: A workload's env may read only Secrets that opted in.** Every Secret that an Agent's or AgentTask's `spec.env` reads through `valueFrom.secretKeyRef` must exist in the workload's namespace and carry the label `kaalm.io/workload-secret` with the exact value `"true"`. Optional references (`optional: true`) are checked too, and a missing optional Secret also fails the check. Only `spec.env` is checked, not the `KAALM_*` variables the controller injects. *Reconcile time, before the Pod is created and never as an apply-time rejection; `Ready=False, reason=SecretNotOptedIn`, and a `Warning` event with the same reason when the reason first appears on `Ready`.*
 
 The condition message names the environment variable and the Secret, and is the same for a missing Secret and an unlabeled one, so status does not tell a developer whether a Secret name exists. A `secretKeyRef` with an empty name gets `Ready=False, reason=InvalidReference`. A labeled Secret that lacks the referenced key is not checked: the Pod shows `CreateContainerConfigError`.
 
-The two kinds gate differently:
+The two kinds react differently to a failing check:
 
-- An Agent is checked on every pass that reaches the ready gates ([Ready gates](../../controller/reconcilers/agent.md#ready-gates)). A running Pod stays in place when its Secret loses the label or is deleted: the Agent keeps its phase and shows `Ready=False`, and no replacement Pod is made (for drift, Pod loss, or wake) until the Secret is labeled or the reference is removed. Labeling the Secret clears the gate on the next pass.
-- An AgentTask is checked only while it has no Pod and is `Pending` or `Provisioning`, which covers the first attempt and every `backoffLimit` retry. The gate is not terminal: the task stays out of `Failed` and waits. A task that has a Pod or has finished is not checked, so a finished task needs no label ([AgentTaskReconciler](../../controller/reconcilers/agenttask.md)).
+- An Agent is checked on every pass that reaches the Pod creation checks ([Pod creation checks](../../controller/reconcilers/agent.md#pod-creation-checks)). A running Pod stays in place when its Secret loses the label or is deleted: the Agent keeps its phase and shows `Ready=False`, and no replacement Pod is made (for drift, Pod loss, or wake) until the Secret is labeled or the reference is removed. Labeling the Secret clears the condition on the next pass.
+- An AgentTask is checked only while it has no Pod and is `Pending` or `Provisioning`, which covers the first attempt and every `backoffLimit` retry. The failure is not terminal: the task stays out of `Failed` and waits. A task that has a Pod or has finished is not checked, so a finished task needs no label ([AgentTaskReconciler](../../controller/reconcilers/agenttask.md)).
 
 While the check fails, either kind re-checks every 30 seconds, because Secrets are not watched. The label is separate from `kaalm.io/channel-credential` (rule 45) and `kaalm.io/provider-credential` (rule 49): each label covers one use, and a Secret used two ways needs both labels. There is no per-class or global switch, and the rule applies in every namespace, including one where developers can manage Secrets ([Roles for people](../../security/rbac.md#persona-roles)). A workload can name any Secret in its namespace, so the label separates a Secret meant for workloads from every other Secret there; whoever manages Secrets sets it, and writing a workload does not. To read the label, the operator reads every Secret the env names, labeled or not, under a per-workload Role ([Per-workload env-Secret Role](../../security/rbac.md#operator-serviceaccount)).
 
 **Rule 35: Tool references must resolve.** Every `tools[].providerRef` on an Agent or AgentTask must name an existing ToolProvider. *Reconcile time; the class-mismatch handling, `reason=ClassConstraintViolation`.* The rule 3 analog for the [tool plane](../../gateways/tool-plane.md).
 
-## Access gates on providers and tools
+## Access checks on providers and tools
 
-Rules 4, 5, 36, and 37, with rules 3 and 35, are the gate chain drawn on [Core concepts](../../concepts/core-concepts.md#the-custom-resources): the class allows the provider, the workload asks for it, and the provider admits the namespace. All of them run at reconcile time, because each compares two resources, and all of them share one outcome: `phase=Degraded, reason=ClassConstraintViolation` on an Agent, `phase=Failed` on an AgentTask.
+Rules 4, 5, 36, and 37, with rules 3 and 35, are the access checks drawn on [Core concepts](../../concepts/core-concepts.md#the-custom-resources): the class allows the provider, the workload asks for it, and the provider admits the namespace. All of them run at reconcile time, because each compares two resources, and all of them share one outcome: `phase=Degraded, reason=ClassConstraintViolation` on an Agent, `phase=Failed` on an AgentTask.
 
 **Rule 4: A provider must admit the workload's namespace.** Every referenced ModelProvider must list the workload's namespace in `allowedNamespaces`.
 
