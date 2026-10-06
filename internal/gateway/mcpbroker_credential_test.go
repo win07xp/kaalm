@@ -174,7 +174,7 @@ func TestMCPBroker_CredentialReadCallerGone(t *testing.T) {
 	cancel()
 	rec := httptest.NewRecorder()
 	h.server.handleMCPBroker(rec, req.WithContext(ctx))
-	if got := mcpCalls(h, "web_search", toolStatusClientClosed); got != 1 {
+	if got := mcpCalls(h, "web_search", outcomeClientClosed); got != 1 {
 		t.Errorf("client_closed counter = %v, want 1", got)
 	}
 	if got := mcpCalls(h, "web_search", errToolUnavailable); got != 0 {

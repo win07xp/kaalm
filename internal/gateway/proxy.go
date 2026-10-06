@@ -265,7 +265,7 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 	})
 	if !ok {
 		status, body, retryAfter := exhaustionError(st.observed, st.maxRetryAfter, st.budgetBlocked, providerName)
-		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, "error")
+		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, outcomeError)
 		spanError(ctx, body.Type)
 		writeError(w, status, body, retryAfter)
 		return
@@ -278,7 +278,9 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 // formats), a stream through the relay (translated event by event when it
 // crossed), or a buffered body with usage read by the serving candidate's
 // adapter and, when it crossed, the body translated back. debitTokens takes
-// the settled usage off the token rate limit that admitted the request.
+// the settled usage off the token rate limit that admitted the request. A
+// stream is counted on kaalm_llm_requests_total when its relay ends, so the
+// status says how it ended.
 func (s *Server) writeWalkResult(
 	ctx context.Context, w http.ResponseWriter, res forwardResult, adapter providerAdapter,
 	inboundFormat llmtranslate.Format, namespace, workload string, modelID, answered *string,
@@ -305,7 +307,7 @@ func (s *Server) writeWalkResult(
 		if res.settle != nil {
 			res.settle(0)
 		}
-		s.Metrics.LLMRequest(res.provider, *modelID, namespace, "error")
+		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcomeError)
 		// The llm.request server span stays unset, as tool.call does for a
 		// relayed upstream 4xx: the gateway handled the request correctly
 		// (the OpenTelemetry HTTP server-span convention), and the failed
@@ -322,16 +324,17 @@ func (s *Server) writeWalkResult(
 		return
 	}
 
-	s.Metrics.LLMRequest(res.provider, *modelID, namespace, "ok")
 	if isSSE(res.resp) {
 		var translator llmtranslate.Stream
 		if crossing {
 			translator = llmtranslate.NewStream(res.format, inboundFormat, *modelID)
 		}
-		s.relayStream(w, res.resp, servingAdapter, translator, formatForType(adapter.formatName()),
+		outcome := s.relayStream(ctx, w, res.resp, servingAdapter, translator, formatForType(adapter.formatName()),
 			namespace, workload, res.chosen, *modelID, res.settle, debitTokens)
+		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
 		return
 	}
+	s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcomeOK)
 	if usage, ok := servingAdapter.extractUsage(res.body); ok {
 		s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle, debitTokens)
 	} else {
@@ -581,16 +584,22 @@ func isSSE(resp *http.Response) bool {
 
 // relayStream forwards SSE chunks as they arrive with no buffering, folding
 // usage out of the events the adapter recognizes. Spend is recorded, and the
-// tokens debited from the token rate limit, after the stream ends. A stream that ends without usage settles at zero spend and is
-// reported by usageMissing. When the upstream read fails after the status is
-// sent (the idle bound passed, or the connection broke), the relay ends the
-// stream with one error event in the caller's format, so the agent can tell a
-// truncated stream from a complete one.
+// tokens debited from the token rate limit, after the stream ends. A stream
+// that ends without usage settles at zero spend and is reported by
+// usageMissing. When the upstream read fails after the status is sent (the
+// idle bound passed, or the connection broke), the relay ends the stream
+// with one error event in the caller's format, so the agent can tell a
+// truncated stream from a complete one. It returns the outcome for
+// kaalm_llm_requests_total and marks the llm.request span (ctx) the same
+// way: ok, error for a stream the provider broke or let go idle, or
+// client_closed for a caller that left, which gets no event. ctx derives
+// from the caller's request context, and the upstream read from ctx, so
+// ctx.Err() is set only when the caller left.
 func (s *Server) relayStream(
-	w http.ResponseWriter, resp *http.Response, adapter providerAdapter, translator llmtranslate.Stream,
-	callerFormat llmtranslate.Format, namespace, workload string, provider *kaalmv1beta1.ModelProvider,
-	modelID string, settle func(float64), debitTokens func(Usage),
-) {
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter providerAdapter,
+	translator llmtranslate.Stream, callerFormat llmtranslate.Format, namespace, workload string,
+	provider *kaalmv1beta1.ModelProvider, modelID string, settle func(float64), debitTokens func(Usage),
+) string {
 	copyDownstreamHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
@@ -613,6 +622,10 @@ func (s *Server) relayStream(
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	callerLeft := func() string {
+		spanError(ctx, outcomeClientClosed)
+		return outcomeClientClosed
+	}
 	writeLine := func(line []byte) bool {
 		if _, err := w.Write(append(line, '\n')); err != nil {
 			return false
@@ -631,36 +644,44 @@ func (s *Server) relayStream(
 		}
 		if translator == nil {
 			if !writeLine(line) {
-				return
+				return callerLeft()
 			}
 			continue
 		}
 		for _, out := range translator.Feed(line) {
 			if !writeLine(out) {
-				return
+				return callerLeft()
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if ctx.Err() != nil {
+			// The upstream read derives from the caller's context: a caller
+			// that left cancels it. No one is there to read an event.
+			return callerLeft()
+		}
 		// The status is already sent, so the truncation is signaled in the
 		// body. No fallback after the first byte, and no translator Finish:
 		// its closing events would make the stream look complete.
 		slog.Warn("SSE relay read error", "namespace", namespace,
 			"provider", provider.Name, "model", modelID, "err", err)
+		spanError(ctx, streamErrorType(err))
 		for _, out := range streamErrorEvent(callerFormat, provider.Name, err) {
 			if !writeLine(out) {
-				return
+				// The provider failure came first.
+				break
 			}
 		}
-		return
+		return outcomeError
 	}
 	if translator != nil {
 		for _, out := range translator.Finish() {
 			if !writeLine(out) {
-				return
+				return callerLeft()
 			}
 		}
 	}
+	return outcomeOK
 }
 
 // anthropicErrorEvent is the Anthropic SSE event name, and data type, of a
@@ -669,12 +690,12 @@ const anthropicErrorEvent = "error"
 
 // streamErrorEvent renders the event that ends a truncated stream, in the
 // caller's format: an Anthropic "error" event, or an OpenAI-style data line
-// carrying the gateway error envelope. The type is provider_timeout when the
-// idle bound ended the stream, otherwise provider_error.
+// carrying the gateway error envelope. Its type is streamErrorType's.
 func streamErrorEvent(callerFormat llmtranslate.Format, provider string, cause error) [][]byte {
-	errType, message := errProviderError, "the provider stream failed before it completed; the response is truncated"
-	if errors.Is(cause, errUpstreamIdle) {
-		errType, message = errProviderTimeout, "the provider sent no data within the upstream timeout; the response is truncated"
+	errType := streamErrorType(cause)
+	message := "the provider stream failed before it completed; the response is truncated"
+	if errType == errProviderTimeout {
+		message = "the provider sent no data within the upstream timeout; the response is truncated"
 	}
 	type eventError struct {
 		Type     string `json:"type"`
@@ -692,6 +713,16 @@ func streamErrorEvent(callerFormat llmtranslate.Format, provider string, cause e
 		Error eventError `json:"error"`
 	}{Error: eventError{Type: errType, Message: message, Provider: provider}})
 	return [][]byte{append([]byte("data: "), data...), {}}
+}
+
+// streamErrorType is the error type of a stream the provider did not finish:
+// provider_timeout when the idle bound ended it, otherwise provider_error.
+// The error event and the llm.request span both carry it.
+func streamErrorType(cause error) string {
+	if errors.Is(cause, errUpstreamIdle) {
+		return errProviderTimeout
+	}
+	return errProviderError
 }
 
 // usageMissing reports a 2xx response that settles at zero spend because it

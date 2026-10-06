@@ -297,3 +297,83 @@ func TestProxy_CountsResponsesWithoutUsage(t *testing.T) {
 		})
 	}
 }
+
+// llmStreamHarness serves one streamed chat completion that ends as mode
+// says: "clean" (usage and [DONE]), "break" (the connection drops after one
+// chunk), "stall" (no data past the idle bound), or "abandon" (the tool
+// server keeps the stream open; the caller leaves).
+func llmStreamHarness(t *testing.T, mode string) *harness {
+	t.Helper()
+	blocked := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(w, `data: {"choices":[{"delta":{"content":"hel"}}]}`)
+		switch mode {
+		case "clean":
+			writeSSE(w, `data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, `data: [DONE]`)
+		case "break":
+			panic(http.ErrAbortHandler)
+		case "stall":
+			stall(r)
+		case "abandon":
+			select {
+			case <-blocked:
+			case <-r.Context().Done():
+			}
+		}
+	})
+	// LIFO: blocked must close before the harness cleanup waits on the
+	// parked handler.
+	t.Cleanup(func() { close(blocked) })
+	h.seedRoute()
+	h.server.Config.UpstreamTimeout = streamTimeout
+	return h
+}
+
+// callStream makes the streamed call; for "abandon" it closes the response
+// after the first chunk, otherwise it reads the stream to its end.
+func callStream(t *testing.T, h *harness, mode string) {
+	t.Helper()
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"),
+		map[string]any{"model": "prov/m1", "stream": true}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if mode != "abandon" {
+		_, _ = io.ReadAll(resp.Body)
+		return
+	}
+	buf := make([]byte, 1)
+	var seen strings.Builder
+	for !strings.Contains(seen.String(), `"hel"`) {
+		if _, err := resp.Body.Read(buf); err != nil {
+			t.Fatalf("stream ended before the first chunk: %v", err)
+		}
+		seen.Write(buf)
+	}
+}
+
+// A streamed request is counted when its relay ends: a stream the provider
+// breaks or lets go idle is an error, and one the caller abandons is
+// client_closed.
+func TestProxy_CountsStreamOutcomes(t *testing.T) {
+	statuses := []string{"ok", "error", "rate_limited", "client_closed"}
+	for _, tc := range []struct{ mode, want string }{
+		{"clean", "ok"}, {"break", "error"}, {"stall", "error"}, {"abandon", "client_closed"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			h := llmStreamHarness(t, tc.mode)
+			m := NewMetrics(prometheus.NewRegistry())
+			h.server.Metrics = m
+			callStream(t, h, tc.mode)
+			count := func(status string) float64 {
+				return testutil.ToFloat64(m.llmRequests.WithLabelValues("prov", "m1", "team-a", status))
+			}
+			waitFor(t, func() bool { return count(tc.want) == 1 })
+			for _, status := range statuses {
+				if status != tc.want && count(status) != 0 {
+					t.Errorf("%s counter = %v, want 0", status, count(status))
+				}
+			}
+		})
+	}
+}

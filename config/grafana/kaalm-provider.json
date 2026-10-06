@@ -230,7 +230,7 @@
         "justifyMode": "auto",
         "wideLayout": true
       },
-      "description": "Share of requests that did not end ok (error or rate_limited)."
+      "description": "Share of requests that did not end ok (error, rate_limited, or client_closed)."
     },
     {
       "id": 25,

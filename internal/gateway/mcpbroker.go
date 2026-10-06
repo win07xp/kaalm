@@ -261,13 +261,6 @@ type mcpRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
-// toolStatusClientClosed is the outcome of a brokered call whose caller
-// disconnected before the broker finished answering: while the call was
-// forwarded, while a buffered or tools/list response was read, or while a
-// stream was relayed. It is a metric status and an audit error_type only,
-// never a wire error type, because no caller receives it.
-const toolStatusClientClosed = "client_closed"
-
 // statusClientClosedRequest is the audit status of a call whose caller left
 // before the broker sent a status line. No caller receives it; proxies
 // conventionally log this code for a client that closed the request. A
@@ -366,8 +359,8 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	// caller leaving can cause the failure (a read or a forward), never in
 	// place of a denial, so denials stay audited under their own type.
 	closed := func(method, tool string) {
-		spanError(tctx, toolStatusClientClosed)
-		s.mcpResult(c, tp, providerName, method, tool, statusClientClosedRequest, toolStatusClientClosed, "",
+		spanError(tctx, outcomeClientClosed)
+		s.mcpResult(c, tp, providerName, method, tool, statusClientClosedRequest, outcomeClientClosed, "",
 			start, reqBytes, 0, forwarded)
 	}
 
@@ -649,7 +642,7 @@ func (s *Server) relayFilteredToolsList(
 		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
 	}
 	if err != nil && ctx.Err() != nil {
-		return 0, statusClientClosedRequest, toolStatusClientClosed, ""
+		return 0, statusClientClosedRequest, outcomeClientClosed, ""
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// The upstream timeout covers the response, not only its headers.
@@ -739,7 +732,7 @@ func relayMCPBuffered(
 ) (respBytes int64, status int, errType, detail string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil && ctx.Err() != nil {
-		return 0, statusClientClosedRequest, toolStatusClientClosed, ""
+		return 0, statusClientClosedRequest, outcomeClientClosed, ""
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// The upstream timeout covers the response, not only its headers.
@@ -827,7 +820,7 @@ func relayMCPStream(
 	for scanner.Scan() {
 		select {
 		case <-r.Context().Done():
-			return written, toolStatusClientClosed, ""
+			return written, outcomeClientClosed, ""
 		default:
 		}
 		if consumed > maxBytes {
@@ -844,7 +837,7 @@ func relayMCPStream(
 		n, err := w.Write(append(line, '\n'))
 		written += int64(n)
 		if err != nil {
-			return written, toolStatusClientClosed, ""
+			return written, outcomeClientClosed, ""
 		}
 		flush()
 	}
@@ -865,7 +858,7 @@ func relayMCPStream(
 	case r.Context().Err() != nil:
 		// The upstream request derives from the caller's context, so a
 		// caller that left cancels the read: not a tool failure.
-		return written, toolStatusClientClosed, ""
+		return written, outcomeClientClosed, ""
 	case errors.Is(err, context.DeadlineExceeded):
 		msg := fmt.Sprintf("tool provider %q did not finish the stream within the upstream timeout; "+
 			"the stream is truncated", providerName)

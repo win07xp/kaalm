@@ -336,6 +336,44 @@ func TestTracing_ToolCallCallerGoneMarksSpan(t *testing.T) {
 	}
 }
 
+// A stream that does not complete marks the llm.request span: with the
+// error event's type when the provider broke it or let it go idle, with
+// client_closed when the caller left. A clean stream leaves it Unset.
+func TestTracing_LLMStreamOutcomeMarksSpan(t *testing.T) {
+	cases := []struct {
+		mode string
+		code codes.Code
+		desc string
+	}{
+		{"clean", codes.Unset, ""},
+		{"break", codes.Error, errProviderError},
+		{"stall", codes.Error, errProviderTimeout},
+		{"abandon", codes.Error, "client_closed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode, func(t *testing.T) {
+			exp := tracetest.NewInMemoryExporter()
+			h := llmStreamHarness(t, tc.mode)
+			h.server.Tracing = newTestTracing(exp)
+			callStream(t, h, tc.mode)
+			var span *tracetest.SpanStub
+			waitFor(t, func() bool {
+				for _, s := range exp.GetSpans() {
+					if s.Name == "llm.request" {
+						span = &s
+						return true
+					}
+				}
+				return false
+			})
+			if span.Status.Code != tc.code || span.Status.Description != tc.desc {
+				t.Errorf("llm.request status = (%v, %q), want (%v, %q)",
+					span.Status.Code, span.Status.Description, tc.code, tc.desc)
+			}
+		})
+	}
+}
+
 func assertChild(t *testing.T, byName map[string]tracetest.SpanStub, child, parent string) {
 	t.Helper()
 	if byName[child].Parent.SpanID() != byName[parent].SpanContext.SpanID() {

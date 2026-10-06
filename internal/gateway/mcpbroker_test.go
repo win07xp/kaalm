@@ -1794,7 +1794,7 @@ func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
 		resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
 			Body: failingBody{err: context.Canceled}}
 		n, status, errType, detail := h.server.relayFilteredToolsList(gone, rec, resp, msg, &toolFilter{}, "search")
-		if n != 0 || status != statusClientClosedRequest || errType != toolStatusClientClosed || detail != "" {
+		if n != 0 || status != statusClientClosedRequest || errType != outcomeClientClosed || detail != "" {
 			t.Errorf("outcome = (%d, %d, %q, %q), want (0, 499, client_closed, empty)", n, status, errType, detail)
 		}
 		if rec.Body.Len() != 0 {
@@ -1857,7 +1857,7 @@ func TestRelayMCPBuffered_CallerGone(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
 		Body: failingBody{err: context.Canceled}}
 	n, status, errType, detail := relayMCPBuffered(gone, rec, resp, 1024, "search")
-	if n != 0 || status != statusClientClosedRequest || errType != toolStatusClientClosed || detail != "" {
+	if n != 0 || status != statusClientClosedRequest || errType != outcomeClientClosed || detail != "" {
 		t.Errorf("outcome = (%d, %d, %q, %q), want (0, 499, client_closed, empty)", n, status, errType, detail)
 	}
 	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
@@ -1945,7 +1945,7 @@ func TestMCPBroker_CallerGoneBeforeAnswer(t *testing.T) {
 			buf := captureSlog(t)
 			h, arrived := callerGoneHarness(t, tc.mode)
 			leaveBeforeAnswer(t, h, arrived, tc.body)
-			waitFor(t, func() bool { return mcpCalls(h, tc.tool, toolStatusClientClosed) == 1 })
+			waitFor(t, func() bool { return mcpCalls(h, tc.tool, outcomeClientClosed) == 1 })
 			for _, status := range []string{errToolUnavailable, errToolTimeout} {
 				if got := mcpCalls(h, tc.tool, status); got != 0 {
 					t.Errorf("%s counter = %v, want 0", status, got)
@@ -1955,7 +1955,7 @@ func TestMCPBroker_CallerGoneBeforeAnswer(t *testing.T) {
 			if len(recs) != 1 {
 				t.Fatalf("audit records = %d, want 1", len(recs))
 			}
-			if recs[0]["error_type"] != toolStatusClientClosed || recs[0]["status"] != float64(statusClientClosedRequest) {
+			if recs[0]["error_type"] != outcomeClientClosed || recs[0]["status"] != float64(statusClientClosedRequest) {
 				t.Errorf("audit record = %v, want error_type client_closed and status 499", recs[0])
 			}
 			if _, ok := recs[0]["detail"]; ok {
@@ -1974,7 +1974,7 @@ func TestMCPBroker_RequestBodyCallerGone(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)))
 	rec := httptest.NewRecorder()
 	h.server.handleMCPBroker(rec, req.WithContext(ctx))
-	if got := mcpCalls(h, "", toolStatusClientClosed); got != 1 {
+	if got := mcpCalls(h, "", outcomeClientClosed); got != 1 {
 		t.Errorf("client_closed counter = %v, want 1", got)
 	}
 	if got := mcpCalls(h, "", errInvalidRequest); got != 0 {

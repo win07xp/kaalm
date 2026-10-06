@@ -65,7 +65,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	f := promauto.With(reg)
 	return &Metrics{
 		llmRequests: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "kaalm_llm_requests_total", Help: "LLM proxy requests by outcome.",
+			Name: "kaalm_llm_requests_total",
+			Help: "LLM proxy requests by outcome: ok, error, rate_limited, or client_closed.",
 		}, []string{labelProvider, labelModel, labelNamespace, labelStatus}),
 		llmDuration: f.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "kaalm_llm_request_duration_seconds", Help: "LLM proxy request duration.",
@@ -127,7 +128,28 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	}
 }
 
-// LLMRequest counts one proxied request by outcome (ok | error | rate_limited).
+// outcomeClientClosed is a status of both kaalm_llm_requests_total and
+// kaalm_tool_calls_total, and a span status description: the caller
+// disconnected before the gateway finished answering. For a tool call that
+// is while the call was forwarded, while a buffered or tools/list response
+// was read, or while a stream was relayed; for an LLM request, while a
+// stream was relayed. It is never a wire error type, because no caller
+// receives it.
+const outcomeClientClosed = "client_closed"
+
+// outcomeOK and outcomeError are the kaalm_llm_requests_total statuses of a
+// request relayed in full and of one that failed.
+const (
+	outcomeOK    = "ok"
+	outcomeError = "error"
+)
+
+// LLMRequest counts one proxied request by outcome (ok | error |
+// rate_limited | client_closed): ok is a 2xx relayed in full; error is an
+// error the gateway answered with, a provider's non-2xx relayed, or a
+// stream the provider broke or let go idle; rate_limited is a request the
+// gateway's rate limit refused; client_closed is a caller that left before
+// a stream finished.
 func (m *Metrics) LLMRequest(provider, model, namespace, status string) {
 	if m == nil {
 		return
