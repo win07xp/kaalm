@@ -99,8 +99,8 @@ TOP_LEVEL_PREFIX = re.compile(r"var\s+_\s*=\s*")
 # Each key is a container label; each value is the reason it has no row.
 NON_SCENARIO_SPECS = {
     "Mock LLM provider": "test infrastructure; it checks the in-cluster mock upstream that the LLM scenarios use",
-    "Metric catalog on the wire (#97)": "the metric catalog, not an acceptance scenario",
-    "Per-workload spend (#100)": "per-workload spend attribution, not an acceptance scenario",
+    "Metric catalog on the wire": "the metric catalog, not an acceptance scenario",
+    "Per-workload spend": "per-workload spend attribution, not an acceptance scenario",
     "FQDN egress on a Cilium CNI": (
         "runs only under `make e2e-cilium`, which selects it with -ginkgo.focus=\"FQDN\"; "
         "the map's prose describes it. A rename must keep \"FQDN\" or update the Makefile focus"

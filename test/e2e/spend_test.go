@@ -18,7 +18,7 @@ import (
 // counts produce two distinct rows on the console's spend surface, the
 // unattributed-vs-attested split holds, and the rows sum to the namespace
 // figure the ModelProvider status reports.
-var _ = Describe("Per-workload spend (#100)", Ordered, func() {
+var _ = Describe("Per-workload spend", Ordered, func() {
 	It("provisions the provider, agents, and callers", func() {
 		// Self-contained: every fixture this spec touches is applied here
 		// (kubectl apply is idempotent when other specs share them).

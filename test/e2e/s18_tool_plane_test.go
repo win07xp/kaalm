@@ -79,7 +79,7 @@ var _ = Describe("Governed tool access (S18)", Ordered, func() {
 			return utils.ResourceField("agent", "e2e", "s18-agent", "{.status.phase}")
 		}, "180s", "5s").Should(Equal("Running"))
 
-		By("the controller's own MCP probe (initialize, tools/list) succeeds on-cluster (#86)")
+		By("the controller's own MCP probe (initialize, tools/list) succeeds on-cluster")
 		Eventually(func() (string, error) {
 			return utils.ResourceField("toolprovider", "", "search-tools",
 				`{.status.conditions[?(@.type=="Healthy")].status}`)

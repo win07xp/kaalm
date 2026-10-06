@@ -52,5 +52,5 @@ done
 
 echo "ERROR: k3d image import did not land these images after ${ATTEMPTS} attempts:" >&2
 printf '     %s\n' ${absent} >&2
-echo "The cluster would start pods that cannot pull them; failing now rather than at the deploy timeout. See issue #40." >&2
+echo "The cluster would start pods that cannot pull them; failing now rather than at the deploy timeout." >&2
 exit 1
