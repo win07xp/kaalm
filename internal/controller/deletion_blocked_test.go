@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -183,4 +187,112 @@ func TestAgentClass_DeleteBlockedIsVisible(t *testing.T) {
 		deleteObject(t, &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "default"}})
 	}
 	expectGone(t, types.NamespacedName{Name: "db-ac"}, &kaalmv1beta1.AgentClass{})
+}
+
+// heldDeleteClient is a fake client holding objs and an AgentClass that
+// lists the provider name in both allowed lists, with every referrer index
+// a provider delete reads.
+func heldDeleteClient(t *testing.T, provider string, status client.Object, objs ...client.Object) client.Client {
+	t.Helper()
+	class := &kaalmv1beta1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "held-class"},
+		Spec: kaalmv1beta1.AgentClassSpec{
+			AllowedProviders:     []kaalmv1beta1.LocalObjectReference{{Name: provider}},
+			AllowedToolProviders: []kaalmv1beta1.LocalObjectReference{{Name: provider}},
+		},
+	}
+	none := func(client.Object) []string { return nil }
+	allowed := func(tools bool) client.IndexerFunc {
+		return func(o client.Object) []string {
+			refs := o.(*kaalmv1beta1.AgentClass).Spec.AllowedProviders
+			if tools {
+				refs = o.(*kaalmv1beta1.AgentClass).Spec.AllowedToolProviders
+			}
+			var names []string
+			for _, r := range refs {
+				names = append(names, r.Name)
+			}
+			return names
+		}
+	}
+	return fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(append(objs, class, status)...).WithStatusSubresource(status).
+		WithIndex(&kaalmv1beta1.Agent{}, IndexProviderRef, none).
+		WithIndex(&kaalmv1beta1.AgentTask{}, IndexProviderRef, none).
+		WithIndex(&kaalmv1beta1.Agent{}, IndexToolProviderRef, none).
+		WithIndex(&kaalmv1beta1.AgentTask{}, IndexToolProviderRef, none).
+		WithIndex(&kaalmv1beta1.AgentClass{}, IndexAllowedProviders, allowed(false)).
+		WithIndex(&kaalmv1beta1.AgentClass{}, IndexAllowedToolProviders, allowed(true)).
+		Build()
+}
+
+// staleHoldConds are the conditions of a delete hold that began before the
+// held pass set Healthy: Ready=False DeletionBlocked naming the class, and
+// Healthy True from the last probe.
+func staleHoldConds() []metav1.Condition {
+	now := metav1.Now()
+	return []metav1.Condition{
+		{Type: kaalmv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: kaalmv1beta1.ReasonDeletionBlocked,
+			Message: deletionBlockedMessage([]string{"AgentClass held-class"}), LastTransitionTime: now},
+		{Type: kaalmv1beta1.ConditionHealthy, Status: metav1.ConditionTrue, Reason: kaalmv1beta1.ReasonUpstreamReachable,
+			Message: "reachable", LastTransitionTime: now},
+	}
+}
+
+// expectHeldHealthy checks Healthy=Unknown NotProbed for a held delete and
+// that the pass sent no event: the hold itself is not new.
+func expectHeldHealthy(t *testing.T, conds []metav1.Condition, rec *record.FakeRecorder) {
+	t.Helper()
+	c := condition(conds, kaalmv1beta1.ConditionHealthy)
+	if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != kaalmv1beta1.ReasonNotProbed ||
+		!strings.Contains(c.Message, "deletion is held") {
+		t.Errorf("Healthy = %+v, want Unknown NotProbed for a held delete", c)
+	}
+	select {
+	case e := <-rec.Events:
+		t.Errorf("unexpected event %q", e)
+	default:
+	}
+}
+
+// A ToolProvider hold whose DeletionBlocked message is unchanged still
+// refreshes a stale Healthy.
+func TestToolProvider_HeldDeleteRefreshesStaleHealthy(t *testing.T) {
+	now := metav1.Now()
+	tp := eventsToolProvider("held-tp")
+	tp.DeletionTimestamp = &now
+	tp.Status.Conditions = staleHoldConds()
+	c := heldDeleteClient(t, tp.Name, tp)
+	rec := record.NewFakeRecorder(8)
+	r := &ToolProviderReconciler{Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: tp.Name}}); err != nil {
+		t.Fatal(err)
+	}
+	var got kaalmv1beta1.ToolProvider
+	if err := c.Get(context.Background(), types.NamespacedName{Name: tp.Name}, &got); err != nil {
+		t.Fatal(err)
+	}
+	expectHeldHealthy(t, got.Status.Conditions, rec)
+}
+
+// A ModelProvider hold whose DeletionBlocked message is unchanged still
+// refreshes a stale Healthy.
+func TestModelProvider_HeldDeleteRefreshesStaleHealthy(t *testing.T) {
+	now := metav1.Now()
+	mp := probedProvider("held-mp", metav1.ConditionTrue, time.Now().Add(-time.Hour))
+	mp.DeletionTimestamp = &now
+	mp.Status.Conditions = staleHoldConds()
+	c := heldDeleteClient(t, mp.Name, mp)
+	rec := record.NewFakeRecorder(8)
+	r := &ModelProviderReconciler{
+		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: mp.Name}}); err != nil {
+		t.Fatal(err)
+	}
+	var got kaalmv1beta1.ModelProvider
+	if err := c.Get(context.Background(), types.NamespacedName{Name: mp.Name}, &got); err != nil {
+		t.Fatal(err)
+	}
+	expectHeldHealthy(t, got.Status.Conditions, rec)
 }

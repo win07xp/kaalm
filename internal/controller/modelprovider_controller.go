@@ -187,9 +187,10 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	if len(refs) > 0 {
 		// Hold while any Agent, AgentTask, or AgentClass references it, and
 		// say so on Ready. Their watches re-enqueue us when a referrer goes
-		// away. Healthy rides along on the first DeletionBlocked write.
+		// away. Healthy says the probe does not run during the hold.
+		before := slices.Clone(mp.Status.Conditions)
 		setHealthyNotProbed(&mp.Status.Conditions, "deletion is held")
-		return holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, refs)
+		return holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, before, refs)
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return r.Update(ctx, mp)

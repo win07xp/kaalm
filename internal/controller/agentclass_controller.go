@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 
@@ -272,7 +273,8 @@ func (r *AgentClassReconciler) reconcileDelete(ctx context.Context, ac *kaalmv1b
 	if len(refs) > 0 {
 		// Hold until the last reference is removed, and say so on Ready. The
 		// watches on Agent/AgentTask re-enqueue us when a referrer goes away.
-		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, ac, &ac.Status.Conditions, refs)
+		before := slices.Clone(ac.Status.Conditions)
+		return ctrl.Result{}, holdDeletion(ctx, r.Client, r.Recorder, ac, &ac.Status.Conditions, before, refs)
 	}
 	controllerutil.RemoveFinalizer(ac, kaalmv1beta1.ClassFinalizer)
 	return ctrl.Result{}, r.Update(ctx, ac)
