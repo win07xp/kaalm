@@ -55,15 +55,17 @@ The probe sends `GET {spec.endpoint}/v1/models`, the provider's model-list call,
 
 For `google-vertex` the probe mints an OAuth2 access token from the credential and requests the publisher-model list; see [The google-vertex probe](#the-google-vertex-probe). An `openai-compatible` server that expects a different header rejects the probe, which shows as `CredentialsInvalid` on a `401` or `403`.
 
-The probe never follows a redirect, so a redirecting endpoint cannot receive the credential headers at another host. A redirect counts as a transient error, the last row below. Each probe is bounded by `healthCheck.timeoutSeconds` (default 10s). The probe is a second credential egress; [Health probes are a second credential egress](../../security/credentials.md#health-probes-are-a-second-credential-egress) states its bound.
+The probe never follows a redirect, so a redirecting endpoint cannot receive the credential headers at another host. A redirect lands in the last row below. Each probe is bounded by `healthCheck.timeoutSeconds` (default 10s). The probe is a second credential egress; [Health probes are a second credential egress](../../security/credentials.md#health-probes-are-a-second-credential-egress) states its bound.
 
 | Outcome | Conditions | Requeue |
 |---|---|---|
 | `2xx` | `Healthy=True, reason=UpstreamReachable` | the healthy interval |
 | `401` or `403` (for `google-vertex`, also the failures under [The google-vertex probe](#the-google-vertex-probe)) | `Healthy=False` and `Ready=False`, both `reason=CredentialsInvalid`, and a `Warning` event when `Ready` first takes that reason; the pass ends | the failing backoff |
-| other error, network failure, or `5xx` | `Healthy=False, reason=ProviderUnhealthy` and a `Warning` event on every failing pass; `Ready` stays `True` | the failing backoff |
+| any other status (a `3xx` redirect, a `404`, a `5xx`) or a network failure | `Healthy=False, reason=ProviderUnhealthy` and a `Warning` event on every failing pass; `Ready` stays `True` | the failing backoff |
 
 The `401` and `403` class matches the credential problems in [Fallback triggers](../../gateways/llm/fallback.md#fallback-triggers).
+
+The `Healthy` message carries the HTTP status or the network error. A `404` or a redirect from a wrong `spec.endpoint` path persists: the provider stays `Healthy=False` until the endpoint is fixed.
 
 ### The google-vertex probe
 

@@ -178,8 +178,13 @@ names the host, so `kubectl describe agentchannel` shows the typo.
 - `Healthy`: the periodic upstream probe, run against every provider type
   (`UpstreamReachable` when good, `ProviderUnhealthy` when not, or
   `CredentialsInvalid` when the probe itself is refused). A probe that keeps
-  failing is checked less often over time. Ready with Healthy `False`
-  (`ProviderUnhealthy`) means valid config, unreachable provider. `Unknown`
+  failing is checked less often over time. Ready `True` with Healthy `False`
+  and `ProviderUnhealthy` means the config is valid but the probe failed:
+  either the provider is unreachable, or it answered with an error status
+  other than `401` or `403`, such as a `404` from a wrong endpoint path. Read
+  the condition message (`kubectl describe`) for the HTTP status or the
+  network error. A `404` from a wrong path does not clear by itself; it clears
+  when `spec.endpoint` is fixed. `Unknown`
   with `NotProbed` means the probe did not run: `Ready` is `False` for a
   Secret or configuration reason, `healthCheck.enabled` is `false`, or a
   delete is held. The message names which. When `Ready` is `False`, fix that first; `Healthy` updates when the

@@ -98,6 +98,7 @@ The three phase gauges carry no `_total` suffix, which OpenMetrics reserves for 
 
 - Reconcilers run under envtest, a real `kube-apiserver` and `etcd`, with the fake client used only for isolated helpers. The suite injects fakes at the three points where a reconciler would leave the cluster: the `ProviderHealthChecker` and `ToolHealthChecker` interfaces behind the probes, and the `ActivityClient` behind the activity and channel-health fan-outs. State machine transitions are table tests over those fakes.
 - `make cover-check` gates union coverage at 85 percent, the same gate CI runs.
+- CI also runs `make test-race`, the same unit and envtest suites under the race detector, in its own job so the coverage job's time does not change. A data race in a reconciler or a test fails CI, and the command reproduces it locally.
 - End-to-end tests run against a k3d cluster with a stub LLM provider (an HTTP server answering canned completions with fake token counts) and mock MCP, Discord, and WhatsApp servers; [Scenario coverage](../appendix/scenario-coverage.md) maps them to the acceptance scenarios.
 
 The controller holds no assumptions about specific LLM providers. Because agents never talk to providers directly and all LLM traffic goes through the gateway, substituting a stub at that one point covers the whole system.
