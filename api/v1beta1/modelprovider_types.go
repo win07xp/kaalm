@@ -224,7 +224,9 @@ type ModelProviderBudgetUsage struct {
 	Period    string `json:"period"`
 	// SpentUSD is spend so far this period, as a decimal string.
 	SpentUSD string `json:"spentUSD"`
-	// PercentUsed is spend against the per-namespace ceiling.
+	// PercentUsed is the worse of two ratios: the namespace's spend against
+	// perNamespaceUSD, and the provider's cluster-wide spend against clusterUSD.
+	// An unset ceiling adds no ratio.
 	PercentUsed int32 `json:"percentUsed"`
 	// State is the enforcement state for this namespace.
 	// +kubebuilder:validation:Enum=Normal;Throttled;Blocked
