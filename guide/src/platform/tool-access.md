@@ -168,9 +168,26 @@ kubectl get toolproviders
 
 The columns read as ModelProvider's do: `Ready` means the spec is valid and
 the credential Secret, when one is named, resolves and carries the label and
-host annotation from step 1; `Healthy` reports the periodic probe. Ready
-with Healthy `False` (`ProviderUnhealthy`) means valid config, unreachable
-server, and it recovers on its own when the probe succeeds again.
+host annotation from step 1; `Healthy` reports the periodic probe.
+
+`Healthy` `False` with `ProviderUnhealthy` means the probe failed. Read the
+reason in the `Healthy` condition message:
+
+```bash
+kubectl describe toolprovider PROVIDER_NAME
+```
+
+Replace `PROVIDER_NAME` with the ToolProvider name. What happens next depends
+on the cause:
+
+- **The server is unreachable.** `Healthy` recovers on its own once a probe
+  succeeds. A failing probe runs less often over time, so recovery can take up
+  to 10 minutes at the default interval.
+- **The server's `tools/list` answer is larger than `gateway.mcpMaxBodyBytes`.**
+  `Healthy` stays `False` until you raise the value or trim the server's
+  catalog.
+- **The server does not speak MCP.** `Healthy` stays `False` until
+  `spec.endpoint` points at an MCP server.
 
 ---
 

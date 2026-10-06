@@ -36,6 +36,8 @@ When the API server rejects a create, update, or delete of a child other than th
 - The controller re-checks every 30 seconds, because a quota or a webhook raises no watch event.
 - An AgentTask with no Pod fails the attempt once a write has been rejected for five minutes ([The clock starts at Ready](task-lifecycle.md#the-clock-starts-at-ready)). An AgentTask with a Pod keeps running ([Timing](reconcilers/agenttask.md#timing)).
 
+An AgentChannel reports the same reason when the API server refuses a write of one of its Roles or RoleBindings, and re-checks every 30 seconds ([Per-channel credential Roles](reconcilers/agentchannel.md#per-channel-credential-roles)).
+
 ## Event emission
 
 The controller emits these Events. Each reason is a stable string; the message carries the detail. An Event reports either a state or an occurrence:
@@ -69,7 +71,7 @@ The controller emits these Events. Each reason is a stable string; the message c
 | ToolProvider | `CredentialsInvalid` | Warning | the probe gets a `401` or `403` from the tool server and sets `Ready=False` with the reason |
 | AgentChannel | `CallbackHostUnresolved` | Warning | the `callbackUrl` host does not resolve at reconcile time; the channel stays `Ready=True` ([rule 22](../resources/validation/channels.md)). Emitted when the unresolved host first appears or changes, not on every pass |
 | AgentChannel | `SecretNotOptedIn`, `CallbackHostNotApproved` | Warning | a referenced Secret has not opted in ([rule 45](../resources/validation/channels.md)), or a bearer `callbackAuth` Secret does not approve the `callbackUrl` host (rule 46). The message names the Secret and never its keys |
-| AgentChannel | `SystemNamespaceForbidden`, `AgentNotFound`, and every other `Ready=False` reason `validateChannel` returns (`AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `ChildConflict`, `InvalidReference`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, and `InvalidCallbackUrl`) | Warning | a reconcile-time validation failure sets `Ready=False` with the reason |
+| AgentChannel | `SystemNamespaceForbidden`, `AgentNotFound`, and every other `Ready=False` reason `validateChannel` returns (`AgentServiceDisabled`, `InvalidPath`, `PathConflict`, `ChildConflict`, `ChildWriteRejected`, `CredentialsMissing`, `CredentialsInvalid`, `CallbackAuthMissing`, `CallbackAuthInvalid`, and `InvalidCallbackUrl`) | Warning | a reconcile-time validation failure sets `Ready=False` with the reason |
 | AgentClass | `FQDNPolicyUnsupported` | Warning | the `FQDNPolicySupported` condition first turns `False`: `allowedHosts` is set on a CNI without FQDN egress, so the hosts are ignored |
 | AgentClass | `BelowRestrictedBaseline` | Warning | the `SecurityBaseline` condition first turns `False` because a `security` field falls below the restricted Pod Security Standard |
 | AgentClass | `DeprecatedFieldSet` | Warning | the `DeprecatedFields` condition first turns `True` because the class sets a deprecated field (`network.allowHostNetwork: true`); a steady finding sends nothing |

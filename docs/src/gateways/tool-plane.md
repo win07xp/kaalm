@@ -198,12 +198,14 @@ Metering is **rate limits and audit, not budgets**. Tool calls carry no token-pr
 | Session id bound to another caller | `403 access_denied` |
 | Credential Secret unreadable, unlabeled, or not approving the endpoint host | `503 tool_unavailable`, retryable |
 | Tool server unreachable, redirecting, or 5xx | `503 tool_unavailable`, retryable, `Retry-After: 1` |
-| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable, with a `Warning` event, `reason=CredentialsInvalid`, recorded on the ToolProvider for the rejected call. The health probe separately sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid` ([ToolProviderReconciler](../controller/reconcilers/toolprovider.md)) |
+| Tool server rejects the gateway credential (401 or 403) | `503 tool_unavailable`, not retryable, with a `Warning` event, `reason=CredentialsInvalid`, recorded on the ToolProvider for every rejected call (see the note after the table). The health probe separately sets `Healthy` and `Ready` to `False` with reason `CredentialsInvalid` ([ToolProviderReconciler](../controller/reconcilers/toolprovider.md)) |
 | `tools/list` response within the cap that the broker cannot parse | `503 tool_unavailable`, not retryable |
 | Tool call exceeds the upstream timeout | `504 tool_timeout`, retryable |
 | Other protocol-level 4xx from the server | relayed verbatim (an expired session's 404, for example), so MCP session semantics survive the broker |
 
 The rows are in the [error schema](api/errors.md#llm-gateway-error-responses) with the rest of the cluster listener's error types. `retryable` follows the cause, not the status: the two `503` rows marked not retryable repeat until an operator fixes the credential or the tool server.
+
+A rejected credential is logged as the warning `tool server rejected the gateway credential`, with the ToolProvider name and the status. Each gateway replica logs it at most once a minute per ToolProvider, so expect one line per replica, not one per rejected call. The `Warning` event is recorded for every rejected call, and the event recorder folds repeats into one event with a count.
 
 ## Relationship to direct egress
 

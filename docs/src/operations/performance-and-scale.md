@@ -35,7 +35,7 @@ make perf-down                  # delete the cluster
 
 The harness checks one host prerequisite before it starts: `fs.inotify.max_user_instances` of at least 512 and `fs.inotify.max_user_watches` of at least 524288. The k3d nodes share the host kernel, and a few hundred Pods exhaust the defaults with confusing symptoms. It also records the node count, allocatable Pods, and kubelet version without enforcing them; `make perf-up` creates one server and two agents at 250 Pods each, because the kubelet default of 110 caps a fleet long before memory does.
 
-The harness is a release-time local gate, listed in the release checklist, not a CI job: its numbers mean something only against the baseline on the same environment, which shared CI runners cannot reproduce.
+The harness is a release-time local gate, listed in the [release checklist](https://github.com/win07xp/kaalm/blob/main/RELEASING.md#before-you-tag), not a CI job: its numbers mean something only against the baseline on the same environment, which shared CI runners cannot reproduce.
 
 ## The baseline environment
 
@@ -195,7 +195,7 @@ The baseline is one developer machine. The numbers that transfer are the per-uni
 - **Provider latency.** Real providers answer in hundreds of milliseconds to seconds, so the gateway's own cost, which the immediate legs isolate, is a small fraction of every request. Compare against the 50 ms leg.
 - **Memory and nodes.** The ramp stops where host memory runs out on one machine. On a real cluster the fleet ceiling is the sum of node capacity divided by the per-agent figure, plus whatever the agent image itself needs beyond the starter.
 - **Certificate issuance.** Every agent gates on a cert-manager Certificate before its Pod exists, so starting a fleet is paced by cert-manager's issuance rate. A production cert-manager can be tuned and scaled; the baseline runs the default single replica.
-- **The CNI.** k3d's flannel enforces NetworkPolicy through kube-router, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which lands inside wake latency. Cilium and Calico program policies differently and typically faster.
+- **The CNI.** k3s enforces NetworkPolicy with its embedded kube-router policy controller, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which lands inside wake latency. Cilium and Calico program policies differently and typically faster.
 - **Storage.** The local-path provisioner backs the churn fleet's PVCs and provisions each volume through a helper Pod. A CSI driver changes both the provisioning latency and the hibernate-and-wake cost.
 - **The apiserver.** k3s runs a single embedded apiserver on SQLite-backed storage. The controller's reconcile latency and the hold phase's callback records are apiserver-bound at scale; a multi-member etcd behaves differently under the same write rate.
 - **The knobs.** `controller.maxConcurrentReconciles` (default 4), the two replica counts, and the API client rate limits are the chart values that change throughput ([Configuration reference](deployment.md#configuration-reference)). The rate limits are per replica: `controller.client.qps` and `controller.client.burst` default to controller-runtime's 20 requests per second with a burst of 30, and `gateway.client.qps` and `gateway.client.burst` default to 100 per second with a burst of 200.

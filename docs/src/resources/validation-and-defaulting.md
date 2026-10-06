@@ -86,7 +86,7 @@ Other pages cite rules by number, so the numbering never changes. This table is 
 
 Two families behave differently from the rest. The class-mismatch family (rules 2 to 5, 24, 26, 29, 30, 35 to 38, and 47) is recoverable on an Agent and terminal on an AgentTask, and a change to an AgentClass or ModelProvider can trigger any of its rules on a workload that was fine a moment ago ([Change propagation](../controller/change-propagation.md#agentclass-change-handling)). The cap family (rules 6 to 10, 42, and 43) never rejects: the effective value is the smaller of what the workload asked for and the class cap.
 
-Three reconcile-time outcomes carry no number. A failure to write either per-channel Role (the controller-only check Role or the gateway's credential Role) sets `Ready=False, reason=InvalidReference` on the AgentChannel. The two ModelProvider advisory checks, `DegradeTargetNotCheapest` and `MaxOutputTokensUnset`, each set an advisory condition, emit a `Warning` event when it turns `True`, and leave `Ready` unaffected ([ModelProvider](modelprovider.md#degradeto-validation)).
+Three reconcile-time outcomes carry no number. A failure to write a per-channel Role or its RoleBinding (the controller-only check Role or the gateway's credential Role) sets `Ready=False` on the AgentChannel: `reason=ChildConflict` when an object of that name exists that the channel does not control, and `reason=ChildWriteRejected` when the API server refuses the write. The two ModelProvider advisory checks, `DegradeTargetNotCheapest` and `MaxOutputTokensUnset`, each set an advisory condition, emit a `Warning` event when it turns `True`, and leave `Ready` unaffected ([ModelProvider](modelprovider.md#degradeto-validation)).
 
 ### The rules
 
