@@ -47,7 +47,7 @@ func (b *BudgetLedger) Utilization(provider *kaalmv1beta1.ModelProvider) (period
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
+	l := b.ledgerFor(provider.Name, provider.UID, provider.Spec.Budget.Period)
 	out := map[string]float64{}
 	for ns := range l.own {
 		out[ns] = l.spent(ns) / ceiling

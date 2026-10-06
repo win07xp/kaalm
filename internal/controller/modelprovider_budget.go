@@ -121,9 +121,10 @@ func (r *ModelProviderReconciler) deleteSpendConfigMaps(ctx context.Context, nam
 }
 
 // reconcileBudget is the reducer over the per-replica partials in the
-// kaalm-budget-{provider} ConfigMap: prune keys with no live gateway Pod,
-// archive and drop stale-period entries, sum current-period partials, write
-// _canonical, and populate status.budgetUsage. It clears the budget status
+// kaalm-budget-{provider} ConfigMap: delete keys written for another
+// provider UID (a deleted provider of the same name), prune keys with no live
+// gateway Pod, archive and drop stale-period entries, sum current-period
+// partials, write _canonical, and populate status.budgetUsage. It clears the budget status
 // when the provider tracks no budget or the ConfigMap is absent. See
 // docs/src/gateways/llm/budgets-and-rate-limits.md.
 func (r *ModelProviderReconciler) reconcileBudget(
@@ -148,7 +149,7 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		return err
 	}
 
-	fold := foldBudgetKeys(&cm, liveGateways, currentPeriod)
+	fold := foldBudgetKeys(&cm, liveGateways, currentPeriod, string(mp.UID))
 	current, previous, previousPeriod := fold.current, fold.previous, fold.previousPeriod
 	changed := fold.changed
 
@@ -157,7 +158,7 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		current[ns] += v
 	}
 	if fold.retiredChanged {
-		rawRetired, err := json.Marshal(gateway.RetiredPartial(currentPeriod, fold.retired))
+		rawRetired, err := json.Marshal(gateway.RetiredPartial(currentPeriod, fold.retired, string(mp.UID)))
 		if err != nil {
 			return err
 		}
@@ -226,8 +227,10 @@ type budgetFold struct {
 // current-period totals into the retired view (deleting a key must not
 // delete the spend it recorded; load-bearing under hard enforcement, where a
 // rollout would otherwise erase every replaced replica's published spend),
-// and archiving prior-period entries.
-func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentPeriod string) budgetFold {
+// and archiving prior-period entries. A key tagged with another provider UID
+// was written for a deleted provider of the same name; it is deleted before
+// anything else reads it.
+func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentPeriod, providerUID string) budgetFold {
 	f := budgetFold{
 		current:  map[string]float64{},
 		retired:  map[string]float64{},
@@ -242,7 +245,14 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 		if k == gateway.CanonicalKey {
 			continue
 		}
-		period, spend, margin, err := gateway.ParseBudgetPartial(raw)
+		period, spend, margin, uid, err := gateway.ParseBudgetPartial(raw)
+		if err == nil && uid != "" && uid != providerUID {
+			// Written for a deleted provider of the same name: never this
+			// provider's spend, current or archived.
+			delete(cm.Data, k)
+			f.changed = true
+			continue
+		}
 		switch {
 		case k == gateway.RetiredKey:
 			// Reconciler-owned: carried while current, archived at rollover.

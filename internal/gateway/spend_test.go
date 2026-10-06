@@ -145,7 +145,7 @@ func TestBudgetPublisher_WorkloadExchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent-spend ConfigMap missing: %v", err)
 	}
-	period, spend, _, err := ParseBudgetPartial(cm.Data["gw-0"])
+	period, spend, _, _, err := ParseBudgetPartial(cm.Data["gw-0"])
 	if err != nil || period == "" || spend["team-a/agent/sup"] != 12.5 {
 		t.Fatalf("workload partial = period %q spend %+v err %v", period, spend, err)
 	}
@@ -153,7 +153,7 @@ func TestBudgetPublisher_WorkloadExchange(t *testing.T) {
 	// The budget ConfigMap must NOT carry workload keys: the enforcement
 	// fold sums every non-underscore key as namespace spend.
 	bcm, _ := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{})
-	_, bspend, _, _ := ParseBudgetPartial(bcm.Data["gw-0"])
+	_, bspend, _, _, _ := ParseBudgetPartial(bcm.Data["gw-0"])
 	if _, leaked := bspend["team-a/agent/sup"]; leaked {
 		t.Fatal("workload key leaked into the budget partial")
 	}

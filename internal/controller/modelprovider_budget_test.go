@@ -130,7 +130,7 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 		if !exists {
 			return errString("_retired not written on prune")
 		}
-		retPeriod, retSpend, _, err := gateway.ParseBudgetPartial(retiredRaw)
+		retPeriod, retSpend, _, _, err := gateway.ParseBudgetPartial(retiredRaw)
 		if err != nil {
 			return err
 		}
@@ -763,5 +763,59 @@ func TestModelProvider_HeldDeleteStillReducesBudget(t *testing.T) {
 	}
 	if len(rec.Events) != 0 {
 		t.Errorf("a steady hold sent %q", <-rec.Events)
+	}
+}
+
+// Keys written for a deleted provider of the same name (tagged with its UID)
+// are deleted without being summed, retired, or archived; untagged keys
+// count as the current provider's.
+func TestModelProvider_BudgetReducerDropsOtherIncarnation(t *testing.T) {
+	ctx := context.Background()
+	period := gateway.PeriodKey("monthly", time.Now())
+	tagged := func(p, ns, usd string) string {
+		return fmt.Sprintf(`{"period":%q,%q:%q,"_providerUID":"uid-old"}`, p, ns, usd)
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.BudgetConfigMapName("inc"), Namespace: testOperatorNamespace},
+		Data: map[string]string{
+			"gw-0":             tagged(period, "team-a", "90.00"),
+			"gw-1":             fmt.Sprintf(`{"period":%q,"team-a":"5.00"}`, period),
+			gateway.RetiredKey: tagged(period, "team-a", "7.00"),
+			"gw-9":             tagged(period, "team-a", "3.00"),
+			"gw-8":             tagged("1999-01", "team-a", "4.00"),
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(cm).Build()
+	r := &ModelProviderReconciler{Client: c, OperatorNamespace: testOperatorNamespace}
+	mp := eventsProvider("inc", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.UID = "uid-new"
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	if err := r.reconcileBudget(ctx, mp, map[string]bool{"gw-0": true, "gw-1": true}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cm), &got); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range got.Data {
+		if strings.Contains(v, "uid-old") {
+			t.Errorf("key %s written for the old provider survived: %s", k, v)
+		}
+	}
+	if got.Data[gateway.CanonicalKey] != `{"team-a":"5.00"}` {
+		t.Errorf("_canonical = %s, want only the untagged 5.00", got.Data[gateway.CanonicalKey])
+	}
+	if raw, ok := got.Data[gateway.RetiredKey]; ok {
+		if _, _, _, uid, err := gateway.ParseBudgetPartial(raw); err != nil || uid != "uid-new" {
+			t.Errorf("_retired = %s, want tagged uid-new", raw)
+		}
+	}
+	want := []kaalmv1beta1.ModelProviderBudgetUsage{{
+		Namespace: "team-a", Period: period, SpentUSD: "5.00", PercentUsed: 5, State: kaalmv1beta1.BudgetStateNormal,
+	}}
+	if !equality.Semantic.DeepEqual(mp.Status.BudgetUsage, want) {
+		t.Errorf("budgetUsage = %+v, want %+v", mp.Status.BudgetUsage, want)
 	}
 }

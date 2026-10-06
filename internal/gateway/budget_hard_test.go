@@ -194,7 +194,7 @@ func TestHardAdmit_FailClosed(t *testing.T) {
 	if d, s := b.Admit(mp, "team-a", "agent/test"); !d.Unavailable || s != nil {
 		t.Fatalf("stale-dirty admit = %+v, want fail-closed", d)
 	}
-	b.MarkPublished("prov", b.now())
+	b.MarkPublished(mp, b.now())
 	if d, s := b.Admit(mp, "team-a", "agent/test"); d.Unavailable || s == nil {
 		t.Fatalf("post-publish admit = %+v, want admission", d)
 	} else {
@@ -204,7 +204,7 @@ func TestHardAdmit_FailClosed(t *testing.T) {
 	// Read path: no successful fold within the window.
 	b2, nanos2 := fakeClockLedger(mp)
 	b2.Add(mp2ForProv(mp), "team-a", "agent/test", 96)
-	b2.MarkPublished("prov", b2.now()) // write path clean
+	b2.MarkPublished(mp, b2.now()) // write path clean
 	advance(nanos2, 31*time.Second)
 	if d, s := b2.Admit(mp, "team-a", "agent/test"); !d.Unavailable || s != nil {
 		t.Fatalf("stale-fold admit = %+v, want fail-closed", d)
@@ -221,7 +221,7 @@ func TestHardAdmit_FailClosed(t *testing.T) {
 	snapshot := b3.now()
 	advance(nanos3, 5*time.Second)
 	b3.Add(mp, "team-a", "agent/test", 96) // dirty at t+5
-	b3.MarkPublished("prov", snapshot)
+	b3.MarkPublished(mp, snapshot)
 	b3.mu.Lock()
 	stillDirty := !b3.providers["prov"].dirtySince.IsZero()
 	b3.mu.Unlock()
@@ -264,7 +264,7 @@ func TestHardAdmit_EffectiveMarginAndWireFlag(t *testing.T) {
 		s2(0)
 	}
 
-	period, spend, marginRaised, ok := b.OwnPartial("prov")
+	period, spend, marginRaised, ok := b.OwnPartial(mp)
 	if !ok || !marginRaised {
 		t.Fatalf("OwnPartial marginRaised=%v ok=%v, want true", marginRaised, ok)
 	}
@@ -272,14 +272,14 @@ func TestHardAdmit_EffectiveMarginAndWireFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotPeriod, gotSpend, gotFlag, err := ParseBudgetPartial(string(raw))
+	gotPeriod, gotSpend, gotFlag, _, err := ParseBudgetPartial(string(raw))
 	if err != nil || !gotFlag || gotPeriod != period {
 		t.Fatalf("round trip: period=%q flag=%v err=%v", gotPeriod, gotFlag, err)
 	}
 	if _, exists := gotSpend[marginExceededField]; exists {
 		t.Fatal("the flag leaked into the spend map")
 	}
-	folded := FoldPartials(map[string]string{"gw-1": string(raw)}, "gw-0", period)
+	folded := FoldPartials(map[string]string{"gw-1": string(raw)}, "gw-0", period, "")
 	if folded[marginExceededField] != 0 {
 		t.Fatal("fold counted the margin flag as namespace spend")
 	}
@@ -312,8 +312,8 @@ func TestHardAdmit_RaceHammer(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 200; i++ {
 			b.FoldPeers(mp, map[string]float64{"team-a": 96})
-			b.OwnPartial("prov")
-			b.MarkPublished("prov", b.now())
+			b.OwnPartial(mp)
+			b.MarkPublished(mp, b.now())
 		}
 	}()
 	wg.Wait()
@@ -398,7 +398,7 @@ func TestBudgetPublisher_SettleKick(t *testing.T) {
 		cm, err := client.CoreV1().ConfigMaps("kaalm-system").Get(ctx, BudgetConfigMapName("prov"), metav1.GetOptions{})
 		if err == nil {
 			if raw, ok := cm.Data["gw-0"]; ok {
-				_, spend, _, perr := ParseBudgetPartial(raw)
+				_, spend, _, _, perr := ParseBudgetPartial(raw)
 				if perr == nil && spend["team-a"] == 97 {
 					break // settle-published without waiting for the 1h tick
 				}

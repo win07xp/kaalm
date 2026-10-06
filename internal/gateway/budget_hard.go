@@ -19,6 +19,8 @@ package gateway
 import (
 	"sync"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
@@ -130,7 +132,7 @@ func (b *BudgetLedger) Admit(provider *kaalmv1beta1.ModelProvider, namespace, wo
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l := b.ledgerFor(provider.Name, scheme)
+	l := b.ledgerFor(provider.Name, provider.UID, scheme)
 	u := utilizationLocked(budget, l, namespace)
 	d := b.decide(budget, u)
 	if !hardActive(provider) || d.Action == kaalmv1beta1.BudgetActionBlock {
@@ -189,12 +191,12 @@ func (b *BudgetLedger) Admit(provider *kaalmv1beta1.ModelProvider, namespace, wo
 	}
 	d.BoundaryEngaged = true
 
-	providerName := provider.Name
+	providerName, uid := provider.Name, provider.UID
 	capturedPeriod := l.period
 	var once sync.Once
 	settle := func(costUSD float64) {
 		once.Do(func() {
-			b.settle(providerName, scheme, capturedPeriod, namespace, workload, keys, token, costUSD)
+			b.settle(providerName, uid, scheme, capturedPeriod, namespace, workload, keys, token, costUSD)
 		})
 	}
 	return d, settle
@@ -204,10 +206,12 @@ func (b *BudgetLedger) Admit(provider *kaalmv1beta1.ModelProvider, namespace, wo
 // critical section, so the next admit always sees the previous request's
 // real spend. A settle that crosses a period rollover lands its cost in the
 // current period (the same attribution a midnight-spanning call gets under
-// soft mode) and skips slot mutation via the token mismatch.
-func (b *BudgetLedger) settle(providerName, scheme, capturedPeriod, namespace, workload string, keys []string, token uint64, costUSD float64) {
+// soft mode) and skips slot mutation via the token mismatch. A settle for a
+// provider deleted and recreated since admission lands in a detached ledger:
+// its cost is dropped and it frees none of the new provider's slots.
+func (b *BudgetLedger) settle(providerName string, uid types.UID, scheme, capturedPeriod, namespace, workload string, keys []string, token uint64, costUSD float64) {
 	b.mu.Lock()
-	l := b.ledgerFor(providerName, scheme)
+	l := b.ledgerFor(providerName, uid, scheme)
 	if l.period == capturedPeriod {
 		for _, k := range keys {
 			if l.adm[k] == token {

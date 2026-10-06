@@ -28,6 +28,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -70,11 +71,21 @@ type budgetPartial struct {
 	// it is the underscore-prefixed, non-numeric "_marginExceeded" field, so
 	// an older parser cannot mistake it for namespace spend.
 	MarginExceeded bool `json:"-"`
+	// ProviderUID is the UID of the ModelProvider the spend was counted for,
+	// on the wire as the "_providerUID" field. A provider deleted and
+	// recreated under the same name has a new UID, so folds skip the old
+	// one's values and the reducer deletes them. Empty (an untagged value)
+	// counts as the current provider's.
+	ProviderUID string `json:"-"`
 }
 
 // marginExceededField is the flag field inside a partial. Underscore-prefixed
 // fields are flags, never spend; values are never bare numbers.
 const marginExceededField = "_marginExceeded"
+
+// providerUIDField is the provider tag inside a partial (see
+// budgetPartial.ProviderUID).
+const providerUIDField = "_providerUID"
 
 // MarshalJSON flattens period and the namespace map into one object, matching
 // the documented ConfigMap layout.
@@ -86,16 +97,19 @@ func (p budgetPartial) MarshalJSON() ([]byte, error) {
 	if p.MarginExceeded {
 		out[marginExceededField] = "true"
 	}
+	if p.ProviderUID != "" {
+		out[providerUIDField] = p.ProviderUID
+	}
 	return json.Marshal(out)
 }
 
 // ParseBudgetPartial decodes a per-replica ConfigMap value. Underscore-
-// prefixed fields are flags, not spend; the only defined one is returned as
-// marginExceeded.
-func ParseBudgetPartial(raw string) (period string, spend map[string]float64, marginExceeded bool, err error) {
+// prefixed fields are flags or the provider tag, never spend: the margin
+// flag is returned as marginExceeded and the tag as providerUID.
+func ParseBudgetPartial(raw string) (period string, spend map[string]float64, marginExceeded bool, providerUID string, err error) {
 	var flat map[string]string
 	if err := json.Unmarshal([]byte(raw), &flat); err != nil {
-		return "", nil, false, err
+		return "", nil, false, "", err
 	}
 	spend = map[string]float64{}
 	for k, v := range flat {
@@ -104,8 +118,11 @@ func ParseBudgetPartial(raw string) (period string, spend map[string]float64, ma
 			continue
 		}
 		if strings.HasPrefix(k, "_") {
-			if k == marginExceededField && v == "true" {
+			switch {
+			case k == marginExceededField && v == "true":
 				marginExceeded = true
+			case k == providerUIDField:
+				providerUID = v
 			}
 			continue
 		}
@@ -115,17 +132,17 @@ func ParseBudgetPartial(raw string) (period string, spend map[string]float64, ma
 		}
 		spend[k] = f
 	}
-	return period, spend, marginExceeded, nil
+	return period, spend, marginExceeded, providerUID, nil
 }
 
 // RetiredPartial builds the reconciler-owned _retired accumulator value in
-// the same wire shape as a replica partial.
-func RetiredPartial(period string, spend map[string]float64) any {
+// the same wire shape as a replica partial, tagged with the provider's UID.
+func RetiredPartial(period string, spend map[string]float64, providerUID string) any {
 	out := map[string]string{}
 	for ns, v := range spend {
 		out[ns] = strconv.FormatFloat(v, 'f', 2, 64)
 	}
-	return budgetPartial{Period: period, Spend: out}
+	return budgetPartial{Period: period, Spend: out, ProviderUID: providerUID}
 }
 
 // PeriodKey computes the budget period identifier for a scheme at time t
@@ -196,6 +213,11 @@ type BudgetLedger struct {
 
 	mu        sync.Mutex
 	providers map[string]*providerLedger
+	// superseded holds the UIDs of providers whose name now belongs to a
+	// newer provider. A call that still carries one (an in-flight settle, a
+	// request that read the old object) gets a detached ledger that is never
+	// stored, so it can neither write into nor rebind the new provider's.
+	superseded map[types.UID]struct{}
 }
 
 // rateBucketWidth is the observed-spend-rate bucket, matching the publish
@@ -207,6 +229,8 @@ const rateBucketWidth = 10 * time.Second
 const clusterSlotKey = ""
 
 type providerLedger struct {
+	// uid is the UID of the provider this ledger counts for.
+	uid    types.UID
 	period string
 	own    map[string]float64
 	peers  map[string]float64
@@ -245,21 +269,38 @@ func NewBudgetLedger() *BudgetLedger {
 		kick:            make(chan string, 64),
 		stalenessWindow: 3 * defaultPublishInterval,
 		providers:       map[string]*providerLedger{},
+		superseded:      map[types.UID]struct{}{},
+	}
+}
+
+// newProviderLedger builds an empty ledger for one provider incarnation.
+func newProviderLedger(period string, uid types.UID) *providerLedger {
+	return &providerLedger{
+		uid:    uid,
+		period: period,
+		own:    map[string]float64{}, peers: map[string]float64{},
+		ownW: map[string]float64{}, peersW: map[string]float64{},
+		adm: map[string]uint64{},
 	}
 }
 
 // ledgerFor returns the provider's ledger, rolling the period over (and
-// resetting counters) when the clock has crossed a boundary.
-func (b *BudgetLedger) ledgerFor(providerName, scheme string) *providerLedger {
+// resetting counters) when the clock has crossed a boundary. A provider
+// recreated under the same name (a new uid) gets a fresh ledger, so it never
+// inherits the deleted provider's spend; a call for a superseded uid gets a
+// detached ledger that is not stored. Caller holds b.mu.
+func (b *BudgetLedger) ledgerFor(providerName string, uid types.UID, scheme string) *providerLedger {
 	period := PeriodKey(scheme, b.now())
+	if _, old := b.superseded[uid]; old {
+		return newProviderLedger(period, uid)
+	}
 	l, ok := b.providers[providerName]
+	if ok && l.uid != uid {
+		b.superseded[l.uid] = struct{}{}
+		ok = false
+	}
 	if !ok {
-		l = &providerLedger{
-			period: period,
-			own:    map[string]float64{}, peers: map[string]float64{},
-			ownW: map[string]float64{}, peersW: map[string]float64{},
-			adm: map[string]uint64{},
-		}
+		l = newProviderLedger(period, uid)
 		b.providers[providerName] = l
 	}
 	if l.period != period {
@@ -291,7 +332,7 @@ func (b *BudgetLedger) Add(provider *kaalmv1beta1.ModelProvider, namespace, work
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l := b.ledgerFor(provider.Name, scheme)
+	l := b.ledgerFor(provider.Name, provider.UID, scheme)
 	l.own[namespace] += costUSD
 	l.ownW[namespace+"/"+workload] += costUSD
 	b.trackLocked(l, costUSD)
@@ -305,7 +346,7 @@ func (b *BudgetLedger) Add(provider *kaalmv1beta1.ModelProvider, namespace, work
 func (b *BudgetLedger) FoldPeers(provider *kaalmv1beta1.ModelProvider, peers map[string]float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
+	l := b.ledgerFor(provider.Name, provider.UID, provider.Spec.Budget.Period)
 	l.peers = peers
 	l.lastFoldOK = b.now()
 }
@@ -323,16 +364,27 @@ func (b *BudgetLedger) InitCanonical(provider *kaalmv1beta1.ModelProvider, canon
 func (b *BudgetLedger) FoldWorkloadPeers(provider *kaalmv1beta1.ModelProvider, peers map[string]float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l := b.ledgerFor(provider.Name, provider.Spec.Budget.Period)
+	l := b.ledgerFor(provider.Name, provider.UID, provider.Spec.Budget.Period)
 	l.peersW = peers
+}
+
+// boundLedger returns the stored ledger for provider only when it counts for
+// that provider's UID. It never rebinds: the publish path must not turn a
+// deleted provider's counters into the new one's.
+func (b *BudgetLedger) boundLedger(provider *kaalmv1beta1.ModelProvider) (*providerLedger, bool) {
+	l, exists := b.providers[provider.Name]
+	if !exists || l.uid != provider.UID {
+		return nil, false
+	}
+	return l, true
 }
 
 // OwnWorkloadPartial snapshots this replica's per-workload counters for
 // publishing, in the same wire shape as the budget partial.
-func (b *BudgetLedger) OwnWorkloadPartial(providerName string) (period string, spend map[string]string, ok bool) {
+func (b *BudgetLedger) OwnWorkloadPartial(provider *kaalmv1beta1.ModelProvider) (period string, spend map[string]string, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l, exists := b.providers[providerName]
+	l, exists := b.boundLedger(provider)
 	if !exists || len(l.ownW) == 0 {
 		return "", nil, false
 	}
@@ -383,10 +435,10 @@ func (b *BudgetLedger) WorkloadSpend(namespace string) map[string]WorkloadProvid
 }
 
 // OwnPartial snapshots this replica's counters for publishing.
-func (b *BudgetLedger) OwnPartial(providerName string) (period string, spend map[string]string, marginRaised, ok bool) {
+func (b *BudgetLedger) OwnPartial(provider *kaalmv1beta1.ModelProvider) (period string, spend map[string]string, marginRaised, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l, exists := b.providers[providerName]
+	l, exists := b.boundLedger(provider)
 	if !exists || len(l.own) == 0 {
 		return "", nil, false, false
 	}
@@ -400,10 +452,10 @@ func (b *BudgetLedger) OwnPartial(providerName string) (period string, spend map
 // MarkPublished records a successful partial publish whose ledger snapshot
 // was taken at snapshot. It clears the write-path staleness signal unless a
 // newer settle landed after the snapshot.
-func (b *BudgetLedger) MarkPublished(providerName string, snapshot time.Time) {
+func (b *BudgetLedger) MarkPublished(provider *kaalmv1beta1.ModelProvider, snapshot time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l, exists := b.providers[providerName]
+	l, exists := b.boundLedger(provider)
 	if !exists {
 		return
 	}
@@ -540,7 +592,7 @@ func (b *BudgetLedger) Enforce(provider *kaalmv1beta1.ModelProvider, namespace s
 		return budgetDecision{}
 	}
 	b.mu.Lock()
-	u := utilizationLocked(budget, b.ledgerFor(provider.Name, budget.Period), namespace)
+	u := utilizationLocked(budget, b.ledgerFor(provider.Name, provider.UID, budget.Period), namespace)
 	b.mu.Unlock()
 	return b.decide(budget, u)
 }
@@ -618,11 +670,12 @@ func (p *BudgetPublisher) tick(ctx context.Context) {
 
 func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
 	snapshot := p.clock()
-	period, spend, marginRaised, ok := p.Ledger.OwnPartial(provider.Name)
+	period, spend, marginRaised, ok := p.Ledger.OwnPartial(provider)
 	if !ok {
 		return
 	}
-	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend, MarginExceeded: marginRaised})
+	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend, MarginExceeded: marginRaised,
+		ProviderUID: string(provider.UID)})
 	if err != nil {
 		return
 	}
@@ -634,7 +687,7 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.Mo
 		slog.Warn("budget partial publish failed", "provider", provider.Name, "error", err)
 		return
 	}
-	p.Ledger.MarkPublished(provider.Name, snapshot)
+	p.Ledger.MarkPublished(provider, snapshot)
 	p.publishWorkloads(ctx, provider)
 }
 
@@ -644,11 +697,11 @@ func (p *BudgetPublisher) publish(ctx context.Context, provider *kaalmv1beta1.Mo
 // sees workload keys. Best-effort: workload spend is visibility, not
 // enforcement, so a failed publish only logs.
 func (p *BudgetPublisher) publishWorkloads(ctx context.Context, provider *kaalmv1beta1.ModelProvider) {
-	period, spend, ok := p.Ledger.OwnWorkloadPartial(provider.Name)
+	period, spend, ok := p.Ledger.OwnWorkloadPartial(provider)
 	if !ok {
 		return
 	}
-	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend})
+	raw, err := json.Marshal(budgetPartial{Period: period, Spend: spend, ProviderUID: string(provider.UID)})
 	if err != nil {
 		return
 	}
@@ -674,7 +727,7 @@ func (p *BudgetPublisher) fold(ctx context.Context, provider *kaalmv1beta1.Model
 		slog.Warn("budget fold read failed", "provider", provider.Name, "error", err)
 		return
 	}
-	p.Ledger.FoldPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock())))
+	p.Ledger.FoldPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock()), string(provider.UID)))
 	p.foldWorkloads(ctx, provider)
 }
 
@@ -688,20 +741,22 @@ func (p *BudgetPublisher) foldWorkloads(ctx context.Context, provider *kaalmv1be
 		}
 		return
 	}
-	p.Ledger.FoldWorkloadPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock())))
+	p.Ledger.FoldWorkloadPeers(provider, FoldPartials(cm.Data, p.PodName, PeriodKey(provider.Spec.Budget.Period, p.clock()), string(provider.UID)))
 }
 
 // FoldPartials sums every current-period partial in a budget ConfigMap except
 // the caller's own key: peers plus the reconciler's _retired accumulator.
-// _canonical is never on the enforcement path.
-func FoldPartials(data map[string]string, ownPodName, currentPeriod string) map[string]float64 {
+// _canonical is never on the enforcement path. A value tagged with another
+// provider UID was written for a deleted provider of the same name and is
+// skipped; an untagged value counts as the current provider's.
+func FoldPartials(data map[string]string, ownPodName, currentPeriod, providerUID string) map[string]float64 {
 	peers := map[string]float64{}
 	for key, raw := range data {
 		if key == ownPodName || key == CanonicalKey {
 			continue
 		}
-		period, spend, _, err := ParseBudgetPartial(raw)
-		if err != nil || period != currentPeriod {
+		period, spend, _, uid, err := ParseBudgetPartial(raw)
+		if err != nil || period != currentPeriod || (uid != "" && uid != providerUID) {
 			continue
 		}
 		for ns, v := range spend {

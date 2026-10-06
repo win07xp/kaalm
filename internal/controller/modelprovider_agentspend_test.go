@@ -20,12 +20,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/gateway"
@@ -120,7 +123,7 @@ func TestAgentSpendReducer(t *testing.T) {
 
 	// The dead replica's current-period spend folded into _retired on top of
 	// the existing accumulator.
-	period, retired, _, err := gateway.ParseBudgetPartial(got.Data[gateway.RetiredKey])
+	period, retired, _, _, err := gateway.ParseBudgetPartial(got.Data[gateway.RetiredKey])
 	if err != nil || period != currentPeriod {
 		t.Fatalf("_retired = %q err %v", got.Data[gateway.RetiredKey], err)
 	}
@@ -151,5 +154,45 @@ func TestAgentSpendReducer(t *testing.T) {
 	}
 	if got.ResourceVersion != before {
 		t.Error("an unchanged pass must not update the ConfigMap")
+	}
+}
+
+// The agent-spend reducer drops keys written for a deleted provider of the
+// same name, the same way the budget reducer does.
+func TestModelProvider_AgentSpendDropsOtherIncarnation(t *testing.T) {
+	ctx := context.Background()
+	period := gateway.PeriodKey("monthly", time.Now())
+	tagged := func(usd string) string {
+		return fmt.Sprintf(`{"period":%q,"team-a/agent/x":%q,"_providerUID":"uid-old"}`, period, usd)
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.AgentSpendConfigMapName("inc"), Namespace: testOperatorNamespace},
+		Data: map[string]string{
+			"gw-0":             tagged("90.00"),
+			"gw-1":             fmt.Sprintf(`{"period":%q,"team-a/agent/x":"5.00"}`, period),
+			gateway.RetiredKey: tagged("7.00"),
+			"gw-9":             tagged("3.00"),
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(cm).Build()
+	r := &ModelProviderReconciler{Client: c, OperatorNamespace: testOperatorNamespace}
+	mp := eventsProvider("inc", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.UID = "uid-new"
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	if err := r.reconcileAgentSpend(ctx, mp, map[string]bool{"gw-0": true, "gw-1": true}); err != nil {
+		t.Fatal(err)
+	}
+	var got corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cm), &got); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range got.Data {
+		if strings.Contains(v, "uid-old") {
+			t.Errorf("key %s written for the old provider survived: %s", k, v)
+		}
+	}
+	if got.Data[gateway.CanonicalKey] != `{"team-a/agent/x":"5.00"}` {
+		t.Errorf("_canonical = %s, want only the untagged 5.00", got.Data[gateway.CanonicalKey])
 	}
 }

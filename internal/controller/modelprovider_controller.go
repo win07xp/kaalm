@@ -192,7 +192,7 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	// the spend ConfigMaps go before the finalizer. They stay while the
 	// delete is held: referrers still spend, and the gateway still counts it.
 	if err := r.deleteSpendConfigMaps(ctx, mp.Name); err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
