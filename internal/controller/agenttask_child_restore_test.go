@@ -578,6 +578,37 @@ func expectKeptCIDRs(want ...string) func() error {
 	}
 }
 
+// writtenSince reports whether obj is a copy written after the given
+// resourceVersions. testClient reads from the manager's cache, which can
+// still hold the copy from before an edit or the edit itself; a revert
+// check passes only on a later write.
+func writtenSince(obj client.Object, rvs ...string) error {
+	if slices.Contains(rvs, obj.GetResourceVersion()) {
+		return fmt.Errorf("%T %s not rewritten yet", obj, obj.GetName())
+	}
+	return nil
+}
+
+// editObject applies edit to the named object and updates it, retrying on
+// conflicts. It returns the resourceVersions of the copy it edited and of
+// the edit.
+func editObject(t *testing.T, key types.NamespacedName, obj client.Object, edit func()) (before, after string) {
+	t.Helper()
+	eventually(t, func() error {
+		if err := testClient.Get(ctxT(), key, obj); err != nil {
+			return err
+		}
+		before = obj.GetResourceVersion()
+		edit()
+		if err := testClient.Update(ctxT(), obj); err != nil {
+			return err
+		}
+		after = obj.GetResourceVersion()
+		return nil
+	})
+	return before, after
+}
+
 // Edits to a running task's NetworkPolicy, completion Role, and RoleBinding
 // are put back, and the task keeps its Pod and phase.
 func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
@@ -595,33 +626,24 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantNP := np.Spec.DeepCopy()
-	eventually(t, func() error {
-		if err := testClient.Get(ctxT(), key("child-revert"), &np); err != nil {
-			return err
-		}
+	npBefore, npEdit := editObject(t, key("child-revert"), &np, func() {
 		np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
 			To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}},
 		})
-		return testClient.Update(ctxT(), &np)
 	})
-	eventually(t, func() error {
-		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &role); err != nil {
-			return err
-		}
+	roleBefore, roleEdit := editObject(t, key(taskCompletionRoleName("child-revert")), &role, func() {
 		role.Rules[0].Verbs = append(role.Rules[0].Verbs, "get", "create")
-		return testClient.Update(ctxT(), &role)
 	})
-	eventually(t, func() error {
-		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &rb); err != nil {
-			return err
-		}
+	rbBefore, rbEdit := editObject(t, key(taskCompletionRoleName("child-revert")), &rb, func() {
 		rb.Subjects = append(rb.Subjects, rbacv1.Subject{Kind: "ServiceAccount", Name: "intruder", Namespace: "default"})
-		return testClient.Update(ctxT(), &rb)
 	})
 
 	eventually(t, func() error {
 		var got networkingv1.NetworkPolicy
 		if err := testClient.Get(ctxT(), key("child-revert"), &got); err != nil {
+			return err
+		}
+		if err := writtenSince(&got, npBefore, npEdit); err != nil {
 			return err
 		}
 		if !equality.Semantic.DeepEqual(got.Spec, *wantNP) {
@@ -631,11 +653,17 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRole); err != nil {
 			return err
 		}
+		if err := writtenSince(&gotRole, roleBefore, roleEdit); err != nil {
+			return err
+		}
 		if !equality.Semantic.DeepEqual(gotRole.Rules, desiredCompletionRole(task).Rules) {
 			return errString("Role edit not reverted yet")
 		}
 		var gotRB rbacv1.RoleBinding
 		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRB); err != nil {
+			return err
+		}
+		if err := writtenSince(&gotRB, rbBefore, rbEdit); err != nil {
 			return err
 		}
 		if len(gotRB.Subjects) != 1 {
@@ -667,15 +695,21 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	setClassCIDRs(t, "wc-np-keep", []string{"10.2.0.0/16"})
 	consistently(t, 2*time.Second, expectKeptCIDRs("10.1.0.0/16"))
 
+	npKey := types.NamespacedName{Namespace: "default", Name: "np-keep"}
+	var edited networkingv1.NetworkPolicy
+	before, edit := editObject(t, npKey, &edited, func() {
+		edited.Spec.Egress[len(edited.Spec.Egress)-1].To[0].IPBlock.CIDR = "0.0.0.0/0"
+	})
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &np); err != nil {
+		if err := testClient.Get(ctxT(), npKey, &np); err != nil {
 			return err
 		}
-		np.Spec.Egress[len(np.Spec.Egress)-1].To[0].IPBlock.CIDR = "0.0.0.0/0"
-		return testClient.Update(ctxT(), &np)
+		if err := writtenSince(&np, before, edit); err != nil {
+			return err
+		}
+		return expectKeptCIDRs("10.1.0.0/16")()
 	})
-	eventually(t, expectKeptCIDRs("10.1.0.0/16"))
 
 	// testClient reads from the manager's cache, which can still hold the
 	// deleted policy for a moment; wait for the restored one by its UID.
