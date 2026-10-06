@@ -49,8 +49,8 @@ type Store interface {
 	PodByIP(ctx context.Context, ip string) (*corev1.Pod, bool)
 	// PodByIPLive resolves a source IP to a Pod with a live apiserver List,
 	// narrowed to one namespace. It is the report-path fallback for the
-	// new-Pod window where the informer has not observed the Pod yet
-	// (docs/src/gateways/api/task-complete.md, check 3). The
+	// new-Pod window where the informer has not observed the Pod yet (check 3
+	// in docs/src/gateways/api/task-complete.md#checks-before-the-write). The
 	// namespace comes from the caller's certificate SAN, so the live query
 	// never searches beyond the namespace the certificate attests.
 	PodByIPLive(ctx context.Context, namespace, ip string) (*corev1.Pod, bool)

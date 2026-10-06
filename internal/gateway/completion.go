@@ -116,8 +116,9 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 	// Check 7, the Pod UID check: the calling Pod's UID must match
 	// status.currentPodUID. The Pod is resolved from the source IP, with the
 	// live namespace-narrowed fallback on an informer miss (check 3 in
-	// docs/src/gateways/api/task-complete.md). A 409 and retryable, because the benign
-	// informer-lag race on currentPodUID itself shares this rejection.
+	// docs/src/gateways/api/task-complete.md#checks-before-the-write). A 409
+	// and retryable, because the benign informer-lag race on currentPodUID
+	// itself shares this rejection.
 	if !s.Config.DisableSourceIPCheck {
 		ip := sourceIP(r)
 		pod, found := s.Store.PodByIP(r.Context(), ip)
