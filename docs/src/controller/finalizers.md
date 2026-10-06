@@ -11,7 +11,7 @@ Each reconciler adds its finalizer on the first reconcile of a resource:
 | Agent | `kaalm.io/agent-finalizer` | terminates the Pod, applies `pvcRetention`, releases |
 | AgentTask | `kaalm.io/task-finalizer` | terminates the Pod, releases |
 | AgentChannel | `kaalm.io/channel-finalizer` | runs the gateway handshake, sweeps the async records, releases |
-| ModelProvider | `kaalm.io/provider-finalizer` | holds while referenced |
+| ModelProvider | `kaalm.io/provider-finalizer` | holds while referenced, deletes its spend ConfigMaps, releases |
 | ToolProvider | `kaalm.io/toolprovider-finalizer` | holds while referenced |
 | AgentClass | `kaalm.io/class-finalizer` | holds while referenced |
 
@@ -46,7 +46,7 @@ ModelProvider, ToolProvider, and AgentClass are cluster-scoped and carry no phas
 
 The hold is by reference, not by validity: a workload whose reference violates a validation rule still pins its provider or class. While the hold lasts, the reconciler sets `Ready=False, reason=DeletionBlocked`. The condition message names a referrer, and the total count when more than one object holds the delete, so `kubectl describe` and a hung `kubectl delete` both point somewhere useful. A `Warning` event with the same reason fires when the hold first appears.
 
-No gateway-side teardown is needed for a provider. The gateway's own watch drops it from its routing table, and its credential Secret is an independent resource the platform team deletes separately. Gateway-only-tier callers hold no Agent or AgentTask reference and never block a delete; their next request to a deleted provider fails with `400 invalid_request`.
+No gateway-side teardown is needed for a provider. The gateway's own watch drops it from its routing table, and its credential Secret is an independent resource the platform team deletes separately. Releasing a ModelProvider does delete its budget and agent-spend ConfigMaps, so the next provider with that name starts from zero spend ([When a provider is deleted](../gateways/llm/budgets-and-rate-limits.md#when-a-provider-is-deleted)). Gateway-only-tier callers hold no Agent or AgentTask reference and never block a delete; their next request to a deleted provider fails with `400 invalid_request`.
 
 ## AgentChannel
 

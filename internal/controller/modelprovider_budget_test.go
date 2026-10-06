@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -130,7 +131,7 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 		if !exists {
 			return errString("_retired not written on prune")
 		}
-		retPeriod, retSpend, _, err := gateway.ParseBudgetPartial(retiredRaw)
+		retPeriod, retSpend, _, _, err := gateway.ParseBudgetPartial(retiredRaw)
 		if err != nil {
 			return err
 		}
@@ -570,11 +571,14 @@ func TestModelProvider_BudgetFoldRunsWhileMisconfigured(t *testing.T) {
 }
 
 // staleBudgetStatus is the status a provider kept from when it tracked a
-// budget: team-a Blocked, 95.00 spent, and BoundaryMarginRaised.
+// budget: team-a Blocked, 95.00 spent, a previous-period row, and
+// BoundaryMarginRaised.
 func staleBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
 	period := gateway.PeriodKey("monthly", time.Now())
 	mp.Status.BudgetUsage = []kaalmv1beta1.ModelProviderBudgetUsage{{
 		Namespace: "team-a", Period: period, SpentUSD: "95.00", PercentUsed: 95, State: "Blocked",
+	}, {
+		Namespace: "team-a", Period: "1999-01", SpentUSD: "40.00", PercentUsed: 40, State: "Normal",
 	}}
 	mp.Status.ClusterSpentUSD = "95.00"
 	mp.Status.Conditions = append(mp.Status.Conditions, metav1.Condition{
@@ -622,6 +626,8 @@ func TestModelProvider_BudgetOffClearsBudgetStatus(t *testing.T) {
 				extra := misconfiguredBudgetObjects(name, period)
 				objs = append(objs, extra[0], extra[1])
 				cmData = extra[1].(*corev1.ConfigMap).Data
+				cmData[gateway.PreviousKey] = fmt.Sprintf(
+					`{"period":"1999-01","archivedIn":%q,"sources":{"gw-old":{"team-a":"40.00"}}}`, period)
 			}
 			r, rec := eventsProviderReconciler(t, &statusConflicts{}, nil, objs...)
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
@@ -763,5 +769,110 @@ func TestModelProvider_HeldDeleteStillReducesBudget(t *testing.T) {
 	}
 	if len(rec.Events) != 0 {
 		t.Errorf("a steady hold sent %q", <-rec.Events)
+	}
+}
+
+// Keys written for a deleted provider of the same name (tagged with its UID)
+// are deleted without being summed, retired, or archived; untagged keys
+// count as the current provider's.
+func TestModelProvider_BudgetReducerDropsOtherIncarnation(t *testing.T) {
+	ctx := context.Background()
+	period := gateway.PeriodKey("monthly", time.Now())
+	tagged := func(p, ns, usd string) string {
+		return fmt.Sprintf(`{"period":%q,%q:%q,"_providerUID":"uid-old"}`, p, ns, usd)
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.BudgetConfigMapName("inc"), Namespace: testOperatorNamespace},
+		Data: map[string]string{
+			"gw-0":             tagged(period, "team-a", "90.00"),
+			"gw-1":             fmt.Sprintf(`{"period":%q,"team-a":"5.00"}`, period),
+			gateway.RetiredKey: tagged(period, "team-a", "7.00"),
+			"gw-9":             tagged(period, "team-a", "3.00"),
+			"gw-8":             tagged("1999-01", "team-a", "4.00"),
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(cm).Build()
+	r := &ModelProviderReconciler{Client: c, OperatorNamespace: testOperatorNamespace}
+	mp := eventsProvider("inc", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.UID = "uid-new"
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	if err := r.reconcileBudget(ctx, mp, map[string]bool{"gw-0": true, "gw-1": true}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cm), &got); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range got.Data {
+		if strings.Contains(v, "uid-old") {
+			t.Errorf("key %s written for the old provider survived: %s", k, v)
+		}
+	}
+	if got.Data[gateway.CanonicalKey] != `{"team-a":"5.00"}` {
+		t.Errorf("_canonical = %s, want only the untagged 5.00", got.Data[gateway.CanonicalKey])
+	}
+	if raw, ok := got.Data[gateway.RetiredKey]; ok {
+		if _, _, _, uid, err := gateway.ParseBudgetPartial(raw); err != nil || uid != "uid-new" {
+			t.Errorf("_retired = %s, want tagged uid-new", raw)
+		}
+	}
+	want := []kaalmv1beta1.ModelProviderBudgetUsage{{
+		Namespace: "team-a", Period: period, SpentUSD: "5.00", PercentUsed: 5, State: kaalmv1beta1.BudgetStateNormal,
+	}}
+	if !equality.Semantic.DeepEqual(mp.Status.BudgetUsage, want) {
+		t.Errorf("budgetUsage = %+v, want %+v", mp.Status.BudgetUsage, want)
+	}
+}
+
+// canonicalSeries maps a provider's gauge series to their values, keyed
+// "namespace/period".
+func canonicalSeries(t *testing.T, provider string) map[string]float64 {
+	t.Helper()
+	out := map[string]float64{}
+	for _, l := range budgetCanonicalSeries(provider) {
+		out[l[labelNamespace]+"/"+l["period"]] = testutil.ToFloat64(providerBudgetCanonical.With(l))
+	}
+	return out
+}
+
+// The canonical gauge carries only the current period's per-namespace
+// totals: a past period's series, or a namespace's that left the current
+// totals, would otherwise keep its last value for the life of the process.
+func TestModelProvider_BudgetGaugeDropsStaleSeries(t *testing.T) {
+	ctx := context.Background()
+	period := gateway.PeriodKey("monthly", time.Now())
+	t.Cleanup(func() {
+		providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": "gauge-roll"})
+		providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": "gauge-roll-other"})
+	})
+	providerBudgetCanonical.WithLabelValues("gauge-roll", "team-a", "1999-01").Set(30)
+	providerBudgetCanonical.WithLabelValues("gauge-roll", "team-z", "1999-01").Set(7)
+	providerBudgetCanonical.WithLabelValues("gauge-roll", "team-gone", period).Set(5)
+	providerBudgetCanonical.WithLabelValues("gauge-roll-other", "team-a", "1999-01").Set(1)
+
+	mp := eventsProvider("gauge-roll", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	gw := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gauge-roll-gw-0", Namespace: testOperatorNamespace, Labels: gatewayPodLabels},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.BudgetConfigMapName("gauge-roll"), Namespace: testOperatorNamespace},
+		Data:       map[string]string{"gauge-roll-gw-0": fmt.Sprintf(`{"period":%q,"team-a":"40.00"}`, period)},
+	}
+	r, _ := eventsProviderReconciler(t, &statusConflicts{}, nil, mp, providerKey("gauge-roll"), gw, cm)
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "gauge-roll"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"team-a/" + period: 40}
+	if got := canonicalSeries(t, "gauge-roll"); !equality.Semantic.DeepEqual(got, want) {
+		t.Errorf("gauge-roll series = %v, want %v", got, want)
+	}
+	if got := canonicalSeries(t, "gauge-roll-other"); len(got) != 1 {
+		t.Errorf("another provider's series = %v, want it untouched", got)
 	}
 }

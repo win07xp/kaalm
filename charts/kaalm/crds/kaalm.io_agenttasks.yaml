@@ -418,6 +418,30 @@ spec:
                   maxTaskTimeout:
                     type: string
                 type: object
+              classEgress:
+                description: |-
+                  ClassEgress records the class's network.egress lists when the current
+                  Pod is created. While the task has a Pod, its NetworkPolicy and
+                  CiliumNetworkPolicy are built from them and an edit to either is
+                  reverted, so a later edit to the class doesn't reach the task. Nil means
+                  the current Pod was created before this field existed; those two
+                  policies are then only re-created, from the class as it now stands.
+                properties:
+                  allowedCIDRs:
+                    description: |-
+                      AllowedCIDRs are CIDR blocks permitted for egress, enforced on any CNI that
+                      implements standard NetworkPolicy.
+                    items:
+                      type: string
+                    type: array
+                  allowedHosts:
+                    description: |-
+                      AllowedHosts are DNS names permitted for egress, enforced only on Cilium,
+                      which supports FQDN policies.
+                    items:
+                      type: string
+                    type: array
+                type: object
               completionTime:
                 format: date-time
                 type: string
@@ -914,6 +938,30 @@ spec:
                     type: integer
                   maxTaskTimeout:
                     type: string
+                type: object
+              classEgress:
+                description: |-
+                  ClassEgress records the class's network.egress lists when the current
+                  Pod is created. While the task has a Pod, its NetworkPolicy and
+                  CiliumNetworkPolicy are built from them and an edit to either is
+                  reverted, so a later edit to the class doesn't reach the task. Nil means
+                  the current Pod was created before this field existed; those two
+                  policies are then only re-created, from the class as it now stands.
+                properties:
+                  allowedCIDRs:
+                    description: |-
+                      AllowedCIDRs are CIDR blocks permitted for egress, enforced on any CNI that
+                      implements standard NetworkPolicy.
+                    items:
+                      type: string
+                    type: array
+                  allowedHosts:
+                    description: |-
+                      AllowedHosts are DNS names permitted for egress, enforced only on Cilium,
+                      which supports FQDN policies.
+                    items:
+                      type: string
+                    type: array
                 type: object
               completionTime:
                 format: date-time

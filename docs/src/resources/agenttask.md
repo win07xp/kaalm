@@ -101,6 +101,9 @@ status:
   retries: 0
   classBounds:
     defaultTaskTimeout: "1h0m0s"
+  classEgress:
+    allowedCIDRs: ["10.20.0.0/16"]
+    allowedHosts: ["api.github.com"]
   artifactValues:
     pr-url: "https://github.com/acme/widgets/pull/587"
     summary: "Fixed null pointer in WidgetService.get(). Added regression test."
@@ -111,7 +114,7 @@ status:
 | Field | Meaning |
 |---|---|
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
-| `Ready` | `True` with `PodRunning` once the Pod is Ready. Otherwise `False`: `PodProvisioning` or `PodTerminating` while the attempt waits on its Pod, the failure or settle reason (such as `TaskSucceeded`) after an attempt fails or the task settles, or the reason of a gate that holds the task without failing it: `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `SystemNamespaceForbidden`, `ChildConflict`, `CertificateNotReady`, `PodCreateRejected` (the API server refused the Pod create, and the message is its error), or `ChildWriteRejected` (the API server refused a write of another child, and the message names the child and the error). The provisioning deadline fails the attempt if either rejection lasts. For `SecretNotOptedIn`, see [Env Secrets must opt in](#env-secrets-must-opt-in). The reconciler page lists the reasons in [What it reports](../controller/reconcilers/agenttask.md#what-it-reports). |
+| `Ready` | `True` with `PodRunning` once the Pod is Ready. Otherwise `False`: `PodProvisioning` or `PodTerminating` while the attempt waits on its Pod, the failure or settle reason (such as `TaskSucceeded`) after an attempt fails or the task settles, or the reason of a gate that holds the task without failing it: `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `SystemNamespaceForbidden`, `ChildConflict`, `CertificateNotReady`, `PodCreateRejected` (the API server refused the Pod create, and the message is its error), or `ChildWriteRejected` (the API server refused a write of another child, or a retry's delete of its old Pod or reset of its completion ConfigMap, and the message names the object and the error). The provisioning deadline fails the attempt if either rejection lasts, except a retry's hold, which has no deadline and leaves the task in `Failed` until the cause is fixed ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). For `SecretNotOptedIn`, see [Env Secrets must opt in](#env-secrets-must-opt-in). The reconciler page lists the reasons in [What it reports](../controller/reconcilers/agenttask.md#what-it-reports). |
 | `Completed` | Set when the task settles: `True` for `Succeeded`, `False` for any other terminal phase. The reason names why it settled: `TaskSucceeded` and `TaskFailed` in the common cases, otherwise `TimeoutSucceeded`, `TimeoutExceeded`, `PodDisrupted`, `PodStartFailed`, `ProvisioningDeadlineExceeded`, a container's waiting reason such as `InvalidImageName` or `ErrImageNeverPull` once `backoffLimit` is spent, or a class-violation reason. The message explains why it settled, for example the agent's reported message, the container's exit summary, or the validation failure. |
 | `startTime` | Set when the task moves to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
 | `completionTime` | Set when the task settles. |
@@ -122,6 +125,7 @@ status:
 | `artifactValues` | The values the container reported, keyed by declared name. |
 | `agentReportedStatus`, `agentReportedMessage` | The `status` (`success` or `failure`) and `message` from the completion report. |
 | `classBounds` | A copy of the class's `defaultTaskTimeout`, `maxTaskTimeout`, `defaultTTLSecondsAfterFinished`, and `maxTTLSecondsAfterFinished`, recorded when the current Pod was created, or when the task settled before any Pod existed. The effective timeout and TTL are derived within these bounds ([The class bounds timeout and retention](#the-class-bounds-timeout-and-retention)). |
+| `classEgress` | A copy of the class's `network.egress.allowedCIDRs` and `allowedHosts`, recorded when the current Pod was created, including a retry's Pod. While the Pod runs, the task's NetworkPolicy and CiliumNetworkPolicy are built from it, so a later class edit does not change the task's egress. Absent on a task whose Pod was created before the field existed ([Task child-resource convergence](../controller/reconcilers/agenttask.md#task-child-resource-convergence) says what that means for edits). |
 
 ## Design notes
 

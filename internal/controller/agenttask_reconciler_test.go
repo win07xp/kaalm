@@ -1238,21 +1238,70 @@ func TestTask_ExitCodeFailsBeforeReady(t *testing.T) {
 	expectTaskPhase(t, "t-failearly", kaalmv1beta1.TaskFailed)
 }
 
-// TestTask_CrashInterruptedRetryResumes covers the Reconcile entry that resumes
-// a Failed task with no completionTime (a retry interrupted mid-sequence).
+// TestTask_CrashInterruptedRetryResumes covers the Reconcile entry that
+// finishes a counted retry left half done (Failed with no completionTime):
+// the old Pod is deleted and a new one created, and the retry is not counted
+// again.
 func TestTask_CrashInterruptedRetryResumes(t *testing.T) {
 	mkWorkloadClass(t, "tc-resume", nil)
-	provisionRunningTask(t, "t-resume", "tc-resume", nil)
+	oldPod := provisionRunningTask(t, "t-resume", "tc-resume", func(task *kaalmv1beta1.AgentTask) {
+		task.Spec.Completion.BackoffLimit = 2
+	})
+	// A finalizer keeps the old Pod terminating once deleted, so the hold
+	// on it can be observed.
+	oldPod.Finalizers = append(oldPod.Finalizers, "kaalm.io/test-hold")
+	if err := testClient.Update(ctxT(), oldPod); err != nil {
+		t.Fatalf("add finalizer: %v", err)
+	}
 
-	// Simulate the crash-interrupted state: Failed, but not yet settled.
+	// The state a retry leaves after its counting write: Failed, not settled,
+	// the retry counted, and the gate closed.
 	eventually(t, func() error {
 		task := getTask(t, "t-resume")
 		task.Status.Phase = kaalmv1beta1.TaskFailed
 		task.Status.CompletionTime = nil
+		task.Status.Retries = 1
+		task.Status.CurrentPodUID = ""
 		return testClient.Status().Update(ctxT(), task)
 	})
-	// The reconciler resumes it; the still-ready Pod carries it back to Running.
-	expectTaskPhase(t, "t-resume", kaalmv1beta1.TaskRunning)
+	eventually(t, func() error {
+		var got corev1.Pod
+		if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(oldPod), &got); err != nil {
+			return err
+		}
+		if got.DeletionTimestamp.IsZero() {
+			return errString("old Pod not deleted yet")
+		}
+		task := getTask(t, "t-resume")
+		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
+		if task.Status.Phase != kaalmv1beta1.TaskProvisioning || c == nil || c.Reason != "PodTerminating" {
+			return errString("task not holding on the terminating Pod yet")
+		}
+		if task.Status.Retries != 1 || task.Status.CurrentPodUID != "" {
+			return fmt.Errorf("retries=%d currentPodUID=%q, want 1 and empty",
+				task.Status.Retries, task.Status.CurrentPodUID)
+		}
+		return nil
+	})
+
+	var got corev1.Pod
+	if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(oldPod), &got); err != nil {
+		t.Fatal(err)
+	}
+	got.Finalizers = nil
+	if err := testClient.Update(ctxT(), &got); err != nil {
+		t.Fatalf("remove finalizer: %v", err)
+	}
+	eventually(t, func() error {
+		newPod := taskPod(t, "t-resume")
+		if newPod == nil || newPod.UID == oldPod.UID {
+			return errString("no replacement pod yet")
+		}
+		if r := getTask(t, "t-resume").Status.Retries; r != 1 {
+			return fmt.Errorf("retries = %d, want 1", r)
+		}
+		return nil
+	})
 }
 
 // TestReadMailbox_NotFoundIsEmpty covers readMailbox's NotFound path directly.

@@ -129,6 +129,14 @@ func classTaskBounds(class *kaalmv1beta1.AgentClass) *kaalmv1beta1.AgentTaskClas
 	}
 }
 
+// classTaskEgress copies the class's egress lists for the record kept in
+// status.classEgress at Pod creation, so a later class edit cannot reach it.
+// It is never nil: a class with no egress records an empty value, which
+// stays distinct from the nil of a Pod created before the record existed.
+func classTaskEgress(class *kaalmv1beta1.AgentClass) *kaalmv1beta1.AgentClassEgress {
+	return class.Spec.Network.Egress.DeepCopy()
+}
+
 // effectiveTaskTimeout derives the task's completion timeout from its current
 // spec within bounds, like the Agent timings (rule 42): the task's own value,
 // else the default, clamped to the max. Nil bounds, a task that predates the
@@ -360,16 +368,18 @@ func desiredTaskPod(task *kaalmv1beta1.AgentTask, eff effectiveTaskSpec, operato
 // Certificate, the FQDN policy, and the Secret-access Roles, which have
 // their own paths: the ServiceAccount, the PVC when persistence is on, the
 // NetworkPolicy, and, for agentReported tasks, the completion mailbox with
-// its Role and RoleBinding.
+// its Role and RoleBinding. The NetworkPolicy admits allowedCIDRs, which the
+// caller takes from the class as it now stands or from status.classEgress;
+// the PVC's storage class always comes from class.
 func desiredTaskChildren(
 	task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
-	operatorNamespace string, dns DNSSelector,
+	allowedCIDRs []string, operatorNamespace string, dns DNSSelector,
 ) []client.Object {
 	objs := []client.Object{desiredTaskServiceAccount(task)}
 	if eff.PersistenceOn {
 		objs = append(objs, desiredTaskPVC(task, class, eff))
 	}
-	objs = append(objs, desiredTaskNetworkPolicy(task, class, operatorNamespace, dns))
+	objs = append(objs, desiredTaskNetworkPolicy(task, allowedCIDRs, operatorNamespace, dns))
 	if isAgentReported(task) {
 		objs = append(objs, desiredCompletionConfigMap(task), desiredCompletionRole(task),
 			desiredCompletionRoleBinding(task, operatorNamespace))
@@ -379,9 +389,10 @@ func desiredTaskChildren(
 
 // desiredTaskNetworkPolicy mirrors the Agent policy minus every ingress rule:
 // tasks have no listener and are not delivery targets. ingress stays an
-// explicit empty list to document deny-all intent.
+// explicit empty list to document deny-all intent. allowedCIDRs are the
+// class's egress CIDRs the policy admits.
 func desiredTaskNetworkPolicy(
-	task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, operatorNamespace string, dns DNSSelector,
+	task *kaalmv1beta1.AgentTask, allowedCIDRs []string, operatorNamespace string, dns DNSSelector,
 ) *networkingv1.NetworkPolicy {
 	protoTCP := corev1.ProtocolTCP
 	protoUDP := corev1.ProtocolUDP
@@ -404,7 +415,7 @@ func desiredTaskNetworkPolicy(
 			{Protocol: &protoUDP, Port: &dnsPort}, {Protocol: &protoTCP, Port: &dnsPort},
 		}},
 	}
-	for _, cidr := range class.Spec.Network.Egress.AllowedCIDRs {
+	for _, cidr := range allowedCIDRs {
 		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
 			To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: cidr}}},
 		})

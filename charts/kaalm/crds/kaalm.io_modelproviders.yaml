@@ -305,15 +305,22 @@ spec:
             description: ModelProviderStatus is the observed state of a ModelProvider.
             properties:
               budgetUsage:
-                description: BudgetUsage is per-namespace spend for the current period.
+                description: |-
+                  BudgetUsage is per-namespace spend for the current period and, from the
+                  first pass after a rollover until the next rollover, for the previous
+                  period; each entry's period tells them apart. A previous-period entry's
+                  state is always Normal, because the gateway enforces only the current
+                  period. See docs/src/resources/modelprovider.md#status.
                 items:
                   description: ModelProviderBudgetUsage is per-namespace spend.
                   properties:
                     namespace:
                       type: string
                     percentUsed:
-                      description: PercentUsed is spend against the per-namespace
-                        ceiling.
+                      description: |-
+                        PercentUsed is the worse of two ratios: the namespace's spend against
+                        perNamespaceUSD, and the provider's cluster-wide spend against clusterUSD.
+                        An unset ceiling adds no ratio.
                       format: int32
                       type: integer
                     period:
@@ -339,7 +346,7 @@ spec:
                 type: array
               clusterSpentUSD:
                 description: ClusterSpentUSD is total spend across namespaces for
-                  the period.
+                  the current period.
                 type: string
               conditions:
                 description: |-
@@ -694,15 +701,22 @@ spec:
             description: ModelProviderStatus is the observed state of a ModelProvider.
             properties:
               budgetUsage:
-                description: BudgetUsage is per-namespace spend for the current period.
+                description: |-
+                  BudgetUsage is per-namespace spend for the current period and, from the
+                  first pass after a rollover until the next rollover, for the previous
+                  period; each entry's period tells them apart. A previous-period entry's
+                  state is always Normal, because the gateway enforces only the current
+                  period. See docs/src/resources/modelprovider.md#status.
                 items:
                   description: ModelProviderBudgetUsage is per-namespace spend.
                   properties:
                     namespace:
                       type: string
                     percentUsed:
-                      description: PercentUsed is spend against the per-namespace
-                        ceiling.
+                      description: |-
+                        PercentUsed is the worse of two ratios: the namespace's spend against
+                        perNamespaceUSD, and the provider's cluster-wide spend against clusterUSD.
+                        An unset ceiling adds no ratio.
                       format: int32
                       type: integer
                     period:
@@ -728,7 +742,7 @@ spec:
                 type: array
               clusterSpentUSD:
                 description: ClusterSpentUSD is total spend across namespaces for
-                  the period.
+                  the current period.
                 type: string
               conditions:
                 description: |-

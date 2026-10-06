@@ -54,7 +54,7 @@ func FoldBudgetConfigMapEvent(ctx context.Context, obj any, podName string, stor
 		if currentPeriod == "" {
 			return
 		}
-		ledger.FoldWorkloadPeers(provider, FoldPartials(cm.Data, podName, currentPeriod))
+		ledger.FoldWorkloadPeers(provider, FoldPartials(cm.Data, podName, currentPeriod, string(provider.UID)))
 		return
 	}
 	providerName, ok := strings.CutPrefix(cm.Name, budgetConfigMapPrefix)
@@ -69,5 +69,5 @@ func FoldBudgetConfigMapEvent(ctx context.Context, obj any, podName string, stor
 	if currentPeriod == "" {
 		return
 	}
-	ledger.FoldPeers(provider, FoldPartials(cm.Data, podName, currentPeriod))
+	ledger.FoldPeers(provider, FoldPartials(cm.Data, podName, currentPeriod, string(provider.UID)))
 }

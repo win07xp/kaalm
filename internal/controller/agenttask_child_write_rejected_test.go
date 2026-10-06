@@ -17,16 +17,25 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -164,4 +173,162 @@ func TestTask_ChildWriteRejectedDeadline(t *testing.T) {
 	if p := podIn(t, ns, "kaalm.io/task", name); p != nil {
 		t.Errorf("pod %s exists, want none", p.Name)
 	}
+}
+
+// retryRejecter is a fake client whose targeted write fails Forbidden while
+// on is set: the Delete of a Pod, or the Update of a ConfigMap.
+func retryRejecter(t *testing.T, on *bool, objs ...client.Object) client.Client {
+	t.Helper()
+	forbidden := func(resource, name string) error {
+		return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name, errors.New("denied by webhook"))
+	}
+	return fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*corev1.Pod); ok && *on {
+					return forbidden("pods", obj.GetName())
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*corev1.ConfigMap); ok && *on {
+					return forbidden("configmaps", obj.GetName())
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+		}).Build()
+}
+
+// expectHeldRetry checks a stored task waits mid-retry: Failed with no
+// completionTime, one retry counted, Ready=False ChildWriteRejected.
+func expectHeldRetry(t *testing.T, c client.Client, task *kaalmv1beta1.AgentTask) {
+	t.Helper()
+	got := storedTask(t, c, task)
+	if got.Status.Phase != kaalmv1beta1.TaskFailed || got.Status.CompletionTime != nil || got.Status.Retries != 1 {
+		t.Errorf("phase=%s completionTime=%v retries=%d, want Failed, nil, 1",
+			got.Status.Phase, got.Status.CompletionTime, got.Status.Retries)
+	}
+	expectStoredReady(t, got, metav1.ConditionFalse, kaalmv1beta1.ReasonChildWriteRejected)
+}
+
+// A retry whose delete of the old Pod is rejected holds in Failed with
+// Ready=False ChildWriteRejected, then finishes once the delete goes
+// through, without counting the retry again.
+func TestTaskRetry_PodDeleteRejectedHoldsThenResumes(t *testing.T) {
+	ctx := context.Background()
+	task := restoreTask("retry-del", kaalmv1beta1.TaskProvisioning, false, "PodProvisioning")
+	task.Finalizers = []string{kaalmv1beta1.TaskFinalizer}
+	task.Spec.Completion.BackoffLimit = 2
+	pod := restorePod(t, task, corev1.PodFailed, false)
+	on := true
+	c := retryRejecter(t, &on, task, pod)
+	rec := record.NewFakeRecorder(16)
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)}
+
+	err := r.retry(ctx, storedTask(t, c, task), "PodStartFailed", "pod failed")
+	cr, ok := asChildWriteRejected(err)
+	if !ok || cr.Op != "deleting" || cr.Kind != "Pod" {
+		t.Fatalf("retry error = %v, want a rejected Pod delete", err)
+	}
+	if _, err := r.childBlocked(ctx, storedTask(t, c, task), nil, false, err); err != nil {
+		t.Fatal(err)
+	}
+	expectHeldRetry(t, c, task)
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	expectHeldRetry(t, c, task)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Errorf("old Pod gone while its delete is rejected: %v", err)
+	}
+
+	on = false
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Errorf("old Pod still present after the hold cleared: %v", err)
+	}
+	got := storedTask(t, c, task)
+	if got.Status.Phase != kaalmv1beta1.TaskProvisioning || got.Status.Retries != 1 {
+		t.Errorf("phase=%s retries=%d, want Provisioning and 1", got.Status.Phase, got.Status.Retries)
+	}
+	events := drainEvents(rec)
+	if got := withPrefix(events, "Warning PodStartFailed"); len(got) != 1 || !strings.Contains(got[0], "retrying (1/2)") {
+		t.Errorf("retry events = %q, want one retrying (1/2)", got)
+	}
+	if got := withPrefix(events, "Warning "+kaalmv1beta1.ReasonChildWriteRejected); len(got) != 1 {
+		t.Errorf("ChildWriteRejected events = %q, want 1", got)
+	}
+}
+
+// A retry whose mailbox reset is rejected holds the same way; the next
+// attempt never starts with the old attempt's payload in the mailbox.
+func TestTaskRetry_MailboxResetRejectedHoldsThenResumes(t *testing.T) {
+	ctx := context.Background()
+	task := restoreTask("retry-mbox", kaalmv1beta1.TaskProvisioning, false, "PodProvisioning")
+	task.Finalizers = []string{kaalmv1beta1.TaskFinalizer}
+	task.Spec.Completion = kaalmv1beta1.AgentTaskCompletion{Condition: completionAgentReported, BackoffLimit: 2}
+	task.Status.CurrentPodUID = "old-pod-uid"
+	cm := desiredCompletionConfigMap(task)
+	cm.Data = map[string]string{"status": "failure"}
+	if err := controllerutil.SetControllerReference(task, cm, testScheme(t)); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	c := retryRejecter(t, &on, task, cm)
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(16)}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)}
+
+	err := r.retry(ctx, storedTask(t, c, task), "PodStartFailed", "pod failed")
+	if cr, ok := asChildWriteRejected(err); !ok ||
+		!strings.Contains(cr.Error(), fmt.Sprintf("updating ConfigMap %q", taskCompletionCMName(task.Name))) {
+		t.Fatalf("retry error = %v, want a rejected mailbox update", err)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	expectHeldRetry(t, c, task)
+	var mbox corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cm), &mbox); err != nil || mbox.Data["status"] != "failure" {
+		t.Errorf("mailbox = %v (%v), want the old payload kept during the hold", mbox.Data, err)
+	}
+
+	on = false
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cm), &mbox); err != nil || len(mbox.Data) != 0 {
+		t.Errorf("mailbox = %v (%v), want it reset", mbox.Data, err)
+	}
+	got := storedTask(t, c, task)
+	if got.Status.Phase != kaalmv1beta1.TaskProvisioning || got.Status.Retries != 1 || got.Status.CurrentPodUID != "" {
+		t.Errorf("phase=%s retries=%d currentPodUID=%q, want Provisioning, 1, empty",
+			got.Status.Phase, got.Status.Retries, got.Status.CurrentPodUID)
+	}
+}
+
+// A rejected write on a task mid-retry keeps the Failed phase that marks
+// the steps still to finish; it never starts the provisioning deadline.
+func TestChildBlocked_FailedTaskKeepsPhase(t *testing.T) {
+	task := restoreTask("failed-held", kaalmv1beta1.TaskFailed, false, "PodStartFailed")
+	task.Status.StartTime = nil
+	r, c := restoreReconciler(t, task)
+	r.gateInterval = 30 * time.Second
+	rejected := &ChildWriteRejectedError{Op: "updating", Kind: "ConfigMap", Name: "failed-held-completion",
+		Err: apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "failed-held-completion", errors.New("denied"))}
+	res, err := r.childBlocked(context.Background(), storedTask(t, c, task), &kaalmv1beta1.AgentClass{}, true, rejected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter != 30*time.Second {
+		t.Errorf("RequeueAfter = %v, want 30s", res.RequeueAfter)
+	}
+	got := storedTask(t, c, task)
+	if got.Status.Phase != kaalmv1beta1.TaskFailed || got.Status.CreateRejectedTime != nil {
+		t.Errorf("phase=%s createRejectedTime=%v, want Failed and nil", got.Status.Phase, got.Status.CreateRejectedTime)
+	}
+	expectStoredReady(t, got, metav1.ConditionFalse, kaalmv1beta1.ReasonChildWriteRejected)
 }

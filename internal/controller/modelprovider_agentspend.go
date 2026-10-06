@@ -31,8 +31,9 @@ import (
 )
 
 // reconcileAgentSpend is the reducer over the per-replica workload partials
-// in the kaalm-agentspend-{provider} ConfigMap: prune keys with no live
-// gateway Pod (folding their current-period spend into _retired first, so a
+// in the kaalm-agentspend-{provider} ConfigMap: delete keys written for
+// another provider UID (a deleted provider of the same name), prune keys with
+// no live gateway Pod (folding their current-period spend into _retired first, so a
 // rollout does not erase the breakdown), drop stale-period entries, and
 // write _canonical for fresh-replica seeding. Deliberately narrower than the
 // budget reducer: workload spend keeps the current period only, writes no
@@ -67,7 +68,13 @@ func (r *ModelProviderReconciler) reconcileAgentSpend(
 		if k == gateway.CanonicalKey {
 			continue
 		}
-		period, spend, _, err := gateway.ParseBudgetPartial(raw)
+		period, spend, _, uid, err := gateway.ParseBudgetPartial(raw)
+		if err == nil && uid != "" && uid != string(mp.UID) {
+			// Written for a deleted provider of the same name.
+			delete(cm.Data, k)
+			changed = true
+			continue
+		}
 		switch {
 		case k == gateway.RetiredKey:
 			if err == nil && period == currentPeriod {
@@ -96,7 +103,7 @@ func (r *ModelProviderReconciler) reconcileAgentSpend(
 	}
 
 	if retiredChanged {
-		rawRetired, err := json.Marshal(gateway.RetiredPartial(currentPeriod, retired))
+		rawRetired, err := json.Marshal(gateway.RetiredPartial(currentPeriod, retired, string(mp.UID)))
 		if err != nil {
 			return err
 		}

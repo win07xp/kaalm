@@ -155,6 +155,14 @@ type AgentTaskStatus struct {
 	// created before this field existed, and its own values apply unbounded.
 	// +optional
 	ClassBounds *AgentTaskClassBounds `json:"classBounds,omitempty"`
+	// ClassEgress records the class's network.egress lists when the current
+	// Pod is created. While the task has a Pod, its NetworkPolicy and
+	// CiliumNetworkPolicy are built from them and an edit to either is
+	// reverted, so a later edit to the class doesn't reach the task. Nil means
+	// the current Pod was created before this field existed; those two
+	// policies are then only re-created, from the class as it now stands.
+	// +optional
+	ClassEgress *AgentClassEgress `json:"classEgress,omitempty"`
 	// CreateRejectedTime is when the API server first rejected a write the
 	// current attempt needs before it has a Pod: the Pod create, or a
 	// create, update, or delete of another child. It is cleared when a Pod

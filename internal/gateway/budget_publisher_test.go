@@ -80,7 +80,7 @@ func TestBudgetPublisher_PublishAndFold(t *testing.T) {
 	if !ok {
 		t.Fatalf("own partial key missing: %v", cm.Data)
 	}
-	period, spend, _, err := ParseBudgetPartial(raw)
+	period, spend, _, _, err := ParseBudgetPartial(raw)
 	if err != nil || period != PeriodKey("monthly", time.Now()) || spend["team-a"] != 42 {
 		t.Errorf("published partial wrong: %q %v %v", period, spend, err)
 	}
@@ -226,5 +226,18 @@ func TestBudgetPublisher_RunDefaultInterval(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run with default interval did not return")
+	}
+}
+
+// The reducer's previous-period archive is never folded as spend, whatever
+// shape its value has.
+func TestFoldPartials_SkipsPreviousArchive(t *testing.T) {
+	period := PeriodKey("monthly", time.Now())
+	data := map[string]string{
+		"gw-1":      `{"period":"` + period + `","team-a":"5.00"}`,
+		"_previous": `{"period":"` + period + `","team-a":"40.00"}`,
+	}
+	if got := FoldPartials(data, "gw-0", period, ""); got["team-a"] != 5 {
+		t.Errorf("fold = %v, want team-a 5 (the _previous archive is not spend)", got)
 	}
 }

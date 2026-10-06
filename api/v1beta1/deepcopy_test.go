@@ -460,6 +460,10 @@ func newFullAgentTask() *AgentTask {
 				DefaultTTLSecondsAfterFinished: ptr(int32(1800)),
 				MaxTTLSecondsAfterFinished:     ptr(int32(18000)),
 			},
+			ClassEgress: &AgentClassEgress{
+				AllowedCIDRs: []string{"10.0.0.0/8"},
+				AllowedHosts: []string{"api.example.com"},
+			},
 		},
 	}
 }
@@ -476,6 +480,8 @@ func mutateAgentTask(a *AgentTask) {
 	*a.Status.StartTime = metav1.NewTime(time.Unix(999, 0))
 	*a.Status.CreateRejectedTime = metav1.NewTime(time.Unix(999, 0))
 	a.Status.ArtifactValues["output-1"] = mutatedStr
+	a.Status.ClassEgress.AllowedCIDRs[0] = mutatedStr
+	a.Status.ClassEgress.AllowedHosts[0] = mutatedStr
 }
 
 func TestAgentTaskDeepCopy(t *testing.T) {

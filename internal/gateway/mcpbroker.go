@@ -261,11 +261,11 @@ type mcpRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
-// toolStatusClientClosed is the outcome of a brokered call whose caller
-// disconnected before the broker finished relaying the response stream. It
-// is a metric status and an audit error_type only, never a wire error type,
-// because no caller receives it.
-const toolStatusClientClosed = "client_closed"
+// statusClientClosedRequest is the audit status of a call whose caller left
+// before the broker sent a status line. No caller receives it; proxies
+// conventionally log this code for a client that closed the request. A
+// stream keeps the status it already sent.
+const statusClientClosedRequest = 499
 
 // mcpResult is the single funnel every terminal broker outcome passes
 // through. It emits the per-call audit record (one info-level structured log
@@ -354,6 +354,15 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, errorBody{Type: errType, Message: message,
 			Provider: providerName, Retryable: retryable}, retryAfter)
 	}
+	// closed records a call whose caller left before the broker answered
+	// and writes nothing: no one is there to read it. Use it only where the
+	// caller leaving can cause the failure (a read or a forward), never in
+	// place of a denial, so denials stay audited under their own type.
+	closed := func(method, tool string) {
+		spanError(tctx, outcomeClientClosed)
+		s.mcpResult(c, tp, providerName, method, tool, statusClientClosedRequest, outcomeClientClosed, "",
+			start, reqBytes, 0, forwarded)
+	}
 
 	if r.Method != http.MethodPost {
 		deny(http.StatusMethodNotAllowed, errInvalidRequest, "MCP broker accepts POST only", false, 0, "", "")
@@ -389,6 +398,12 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &tooLarge) {
 			deny(http.StatusRequestEntityTooLarge, errRequestTooLarge,
 				fmt.Sprintf("request body exceeds %d bytes", s.mcpMaxBodyBytes()), false, 0, "", "")
+			return
+		}
+		if r.Context().Err() != nil {
+			// net/http cancels the request context when the connection
+			// read fails: the caller left mid-upload.
+			closed("", "")
 			return
 		}
 		deny(http.StatusBadRequest, errInvalidRequest, "reading request body: "+err.Error(), false, 0, "", "")
@@ -466,6 +481,12 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 	credential, err := s.Store.ToolCredential(r.Context(), tp)
 	if err != nil {
+		if r.Context().Err() != nil {
+			// The Secret read runs with the caller's context: a caller
+			// that left fails it, and the tool provider is not at fault.
+			closed(msg.Method, toolName)
+			return
+		}
 		// Retryable: the proxy treats a credential read failure as a
 		// connect-class failure, and the Secret read can be transient.
 		s.logToolCredentialRefusal(r.Context(), tp.Name, err)
@@ -491,6 +512,11 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	endForward(forwardSpanErr(resp, err))
 	if err != nil {
 		switch {
+		case r.Context().Err() != nil:
+			// The upstream request derives from the caller's context, so a
+			// caller that left cancels it: not a tool failure. Checked
+			// first, as on the stream relay.
+			closed(msg.Method, toolName)
 		case errors.Is(err, context.DeadlineExceeded):
 			deny(http.StatusGatewayTimeout, errToolTimeout,
 				fmt.Sprintf("tool provider %q did not answer within the upstream timeout", tp.Name), true, 0, msg.Method, toolName)
@@ -532,19 +558,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Mcp-Session-Id", wrapSessionID(s.Config.SessionKey, sid, identity))
 	}
 
-	var respBytes int64
-	var relayStatus int
-	var relayErrType string
-	var relayDetail string
-	switch {
-	case msg.Method == "tools/list" && resp.StatusCode < 300:
-		respBytes, relayStatus, relayErrType, relayDetail = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
-	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
-		respBytes, relayErrType, relayDetail = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID, providerName)
-		relayStatus = resp.StatusCode
-	default:
-		respBytes, relayStatus, relayErrType, relayDetail = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes(), providerName)
-	}
+	respBytes, relayStatus, relayErrType, relayDetail := s.relayMCP(w, r, resp, msg, filter, providerName)
 	if relayErrType != "" {
 		spanError(tctx, relayErrType)
 	}
@@ -578,6 +592,24 @@ func forwardSpanErr(resp *http.Response, err error) error {
 	return nil
 }
 
+// relayMCP relays the tool server's answer by its shape: a 2xx tools/list
+// filtered to the caller's grant, an event stream line by line, anything
+// else buffered. It returns the outcome the caller funnels into mcpResult.
+func (s *Server) relayMCP(
+	w http.ResponseWriter, r *http.Request, resp *http.Response, msg mcpRequest, filter *toolFilter,
+	providerName string,
+) (respBytes int64, status int, errType, detail string) {
+	switch {
+	case msg.Method == "tools/list" && resp.StatusCode < 300:
+		return s.relayFilteredToolsList(r.Context(), w, resp, msg, filter, providerName)
+	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
+		respBytes, errType, detail = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID, providerName)
+		return respBytes, resp.StatusCode, errType, detail
+	default:
+		return relayMCPBuffered(r.Context(), w, resp, s.mcpMaxBodyBytes(), providerName)
+	}
+}
+
 // logToolCredentialRefusal writes the credential-refusal warning, paced per
 // ToolProvider. A done context means the caller left, which is not a
 // credential problem, so it neither logs nor spends the provider's slot.
@@ -590,9 +622,12 @@ func (s *Server) logToolCredentialRefusal(ctx context.Context, provider string, 
 // relayFilteredToolsList buffers a tools/list response (either encoding),
 // filters the tool set to the caller's grant, and replies as plain JSON: the
 // model never sees a tool it cannot call. It returns the outcome the caller
-// funnels into mcpResult, the audit detail included.
+// funnels into mcpResult, the audit detail included. ctx is the caller's
+// request context: a read that fails because the caller left writes nothing
+// and returns client_closed.
 func (s *Server) relayFilteredToolsList(
-	w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter, providerName string,
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter,
+	providerName string,
 ) (respBytes int64, status int, errType, detail string) {
 	// Reading one byte past the cap tells a list that passes it apart from
 	// one that ends exactly at it.
@@ -606,7 +641,10 @@ func (s *Server) relayFilteredToolsList(
 			Message: msg, Provider: providerName}, 0)
 		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if err != nil && ctx.Err() != nil {
+		return 0, statusClientClosedRequest, outcomeClientClosed, ""
+	}
+	if err != nil && upstreamTimedOut(resp, err) {
 		// The upstream timeout covers the response, not only its headers.
 		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
 		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
@@ -685,13 +723,32 @@ func (rr *readErrRecorder) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// upstreamTimedOut reports whether a response read ended because the upstream
+// timeout passed. At the deadline the transport can end the body with a clean
+// io.EOF instead of the context error, so the upstream request's own context
+// is checked as well as the read error.
+func upstreamTimedOut(resp *http.Response, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return resp.Request != nil && errors.Is(resp.Request.Context().Err(), context.DeadlineExceeded)
+}
+
 // relayMCPBuffered copies a JSON response through, capped. It returns the
-// outcome the caller funnels into mcpResult, the audit detail included.
+// outcome the caller funnels into mcpResult, the audit detail included. ctx
+// is the caller's request context: a read that fails because the caller
+// left writes nothing and returns client_closed.
 func relayMCPBuffered(
-	w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
 ) (respBytes int64, status int, errType, detail string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
-	if errors.Is(err, context.DeadlineExceeded) {
+	if err != nil && ctx.Err() != nil {
+		return 0, statusClientClosedRequest, outcomeClientClosed, ""
+	}
+	// A body cut by the upstream timeout can end in a clean io.EOF, so a
+	// read with no error is checked too: relaying it would pass a truncated
+	// answer on as the upstream's status.
+	if upstreamTimedOut(resp, err) {
 		// The upstream timeout covers the response, not only its headers.
 		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
 		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
@@ -777,7 +834,7 @@ func relayMCPStream(
 	for scanner.Scan() {
 		select {
 		case <-r.Context().Done():
-			return written, toolStatusClientClosed, ""
+			return written, outcomeClientClosed, ""
 		default:
 		}
 		if consumed > maxBytes {
@@ -794,7 +851,7 @@ func relayMCPStream(
 		n, err := w.Write(append(line, '\n'))
 		written += int64(n)
 		if err != nil {
-			return written, toolStatusClientClosed, ""
+			return written, outcomeClientClosed, ""
 		}
 		flush()
 	}
@@ -804,6 +861,13 @@ func relayMCPStream(
 		msg := fmt.Sprintf("tool provider response exceeds %d bytes; the stream is truncated", maxBytes)
 		endWithError(msg, errResponseTooLarge)
 		return written, errResponseTooLarge, msg
+	case r.Context().Err() == nil && upstreamTimedOut(resp, err):
+		// Checked before a clean end: at the deadline the read can end in a
+		// clean io.EOF instead of the context error.
+		msg := fmt.Sprintf("tool provider %q did not finish the stream within the upstream timeout; "+
+			"the stream is truncated", providerName)
+		endWithError(msg, errToolTimeout)
+		return written, errToolTimeout, msg
 	case err == nil:
 		if tail != nil {
 			bodyLog("mcp stream", tail)
@@ -815,12 +879,7 @@ func relayMCPStream(
 	case r.Context().Err() != nil:
 		// The upstream request derives from the caller's context, so a
 		// caller that left cancels the read: not a tool failure.
-		return written, toolStatusClientClosed, ""
-	case errors.Is(err, context.DeadlineExceeded):
-		msg := fmt.Sprintf("tool provider %q did not finish the stream within the upstream timeout; "+
-			"the stream is truncated", providerName)
-		endWithError(msg, errToolTimeout)
-		return written, errToolTimeout, msg
+		return written, outcomeClientClosed, ""
 	default:
 		msg := fmt.Sprintf("reading the stream from tool provider %q failed; the stream is truncated", providerName)
 		endWithError(msg, errToolUnavailable)

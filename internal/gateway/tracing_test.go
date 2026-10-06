@@ -300,22 +300,77 @@ func TestTracing_ToolForwardMarksUpstreamErrorStatus(t *testing.T) {
 // A call whose caller disconnected mid-stream marks the tool.call span
 // with client_closed.
 func TestTracing_ToolCallCallerGoneMarksSpan(t *testing.T) {
-	exp := tracetest.NewInMemoryExporter()
-	h := newAbandonHarness(t)
-	h.server.Tracing = newTestTracing(exp)
-	abandonStream(t, h)
-	var call *tracetest.SpanStub
-	waitFor(t, func() bool {
-		for _, s := range exp.GetSpans() {
-			if s.Name == "tool.call" {
-				call = &s
-				return true
+	cases := []struct {
+		name  string
+		leave func(t *testing.T, exp *tracetest.InMemoryExporter)
+	}{
+		{"abandoned stream", func(t *testing.T, exp *tracetest.InMemoryExporter) {
+			h := newAbandonHarness(t)
+			h.server.Tracing = newTestTracing(exp)
+			abandonStream(t, h)
+		}},
+		{"left before the answer", func(t *testing.T, exp *tracetest.InMemoryExporter) {
+			h, arrived := callerGoneHarness(t, "silent")
+			h.server.Tracing = newTestTracing(exp)
+			leaveBeforeAnswer(t, h, arrived, mcpCall("web_search"))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exp := tracetest.NewInMemoryExporter()
+			tc.leave(t, exp)
+			var call *tracetest.SpanStub
+			waitFor(t, func() bool {
+				for _, s := range exp.GetSpans() {
+					if s.Name == "tool.call" {
+						call = &s
+						return true
+					}
+				}
+				return false
+			})
+			if call.Status.Code != codes.Error || call.Status.Description != "client_closed" {
+				t.Errorf("tool.call status = (%v, %q), want (Error, client_closed)", call.Status.Code, call.Status.Description)
 			}
-		}
-		return false
-	})
-	if call.Status.Code != codes.Error || call.Status.Description != "client_closed" {
-		t.Errorf("tool.call status = (%v, %q), want (Error, client_closed)", call.Status.Code, call.Status.Description)
+		})
+	}
+}
+
+// A stream that does not complete marks the llm.request span: with the
+// error event's type when the provider broke it or let it go idle, with
+// client_closed when the caller left. A clean stream leaves it Unset.
+func TestTracing_LLMStreamOutcomeMarksSpan(t *testing.T) {
+	cases := []struct {
+		mode string
+		code codes.Code
+		desc string
+	}{
+		{"clean", codes.Unset, ""},
+		{"break", codes.Error, errProviderError},
+		{"stall", codes.Error, errProviderTimeout},
+		{"abandon", codes.Error, "client_closed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode, func(t *testing.T) {
+			exp := tracetest.NewInMemoryExporter()
+			h := llmStreamHarness(t, tc.mode)
+			h.server.Tracing = newTestTracing(exp)
+			callStream(t, h, tc.mode)
+			var span *tracetest.SpanStub
+			waitFor(t, func() bool {
+				for _, s := range exp.GetSpans() {
+					if s.Name == "llm.request" {
+						span = &s
+						return true
+					}
+				}
+				return false
+			})
+			if span.Status.Code != tc.code || span.Status.Description != tc.desc {
+				t.Errorf("llm.request status = (%v, %q), want (%v, %q)",
+					span.Status.Code, span.Status.Description, tc.code, tc.desc)
+			}
+		})
 	}
 }
 

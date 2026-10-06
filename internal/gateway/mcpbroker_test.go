@@ -690,7 +690,7 @@ func TestRelayMCPBuffered_ReadFailure(t *testing.T) {
 		Body: io.NopCloser(iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
 			Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET})),
 	}
-	_, status, errType, detail := relayMCPBuffered(rec, resp, 1024, "search")
+	_, status, errType, detail := relayMCPBuffered(context.Background(), rec, resp, 1024, "search")
 	if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
 		t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
 	}
@@ -1743,7 +1743,7 @@ func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
 			Body: io.NopCloser(iotest.ErrReader(&net.OpError{Op: "read", Net: "tcp",
 				Addr: &net.TCPAddr{IP: net.IPv4(10, 43, 7, 9), Port: 8080}, Err: syscall.ECONNRESET})),
 		}
-		_, status, errType, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		_, status, errType, detail := h.server.relayFilteredToolsList(context.Background(), rec, resp, msg, &toolFilter{}, "search")
 		if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
 			t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
 		}
@@ -1771,7 +1771,7 @@ func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
 			Header:     http.Header{"Content-Type": {"application/json"}},
 			Body:       io.NopCloser(strings.NewReader("not json")),
 		}
-		_, status, errType, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		_, status, errType, detail := h.server.relayFilteredToolsList(context.Background(), rec, resp, msg, &toolFilter{}, "search")
 		if status != http.StatusServiceUnavailable || errType != errToolUnavailable {
 			t.Fatalf("outcome = (%d, %q), want (503, tool_unavailable)", status, errType)
 		}
@@ -1787,6 +1787,21 @@ func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
 		}
 	})
 
+	t.Run("caller gone", func(t *testing.T) {
+		gone, cancel := context.WithCancel(context.Background())
+		cancel()
+		rec := httptest.NewRecorder()
+		resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: failingBody{err: context.Canceled}}
+		n, status, errType, detail := h.server.relayFilteredToolsList(gone, rec, resp, msg, &toolFilter{}, "search")
+		if n != 0 || status != statusClientClosedRequest || errType != outcomeClientClosed || detail != "" {
+			t.Errorf("outcome = (%d, %d, %q, %q), want (0, 499, client_closed, empty)", n, status, errType, detail)
+		}
+		if rec.Body.Len() != 0 {
+			t.Errorf("wrote %q to a caller that left", rec.Body)
+		}
+	})
+
 	t.Run("response too large", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		resp := &http.Response{
@@ -1794,7 +1809,7 @@ func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
 			Header:     http.Header{"Content-Type": {"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", 4096))),
 		}
-		_, status, _, detail := h.server.relayFilteredToolsList(rec, resp, msg, &toolFilter{}, "search")
+		_, status, _, detail := h.server.relayFilteredToolsList(context.Background(), rec, resp, msg, &toolFilter{}, "search")
 		body := expectMCPErrorBody(t, rec.Result(), http.StatusRequestEntityTooLarge, errResponseTooLarge)
 		if status != http.StatusRequestEntityTooLarge || detail != body.Message {
 			t.Errorf("outcome = (%d, detail %q), want (413, the caller message %q)", status, detail, body.Message)
@@ -1829,5 +1844,143 @@ func TestJSONRPCError_MatchesMCPResponse(t *testing.T) {
 				t.Errorf("decode as mcp.Response: %+v, %v", resp, err)
 			}
 		})
+	}
+}
+
+// A buffered response read that fails because the caller left writes
+// nothing and counts client_closed; a timeout with the caller present is
+// still tool_timeout.
+func TestRelayMCPBuffered_CallerGone(t *testing.T) {
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: failingBody{err: context.Canceled}}
+	n, status, errType, detail := relayMCPBuffered(gone, rec, resp, 1024, "search")
+	if n != 0 || status != statusClientClosedRequest || errType != outcomeClientClosed || detail != "" {
+		t.Errorf("outcome = (%d, %d, %q, %q), want (0, 499, client_closed, empty)", n, status, errType, detail)
+	}
+	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
+		t.Errorf("wrote %q (Content-Type %q) to a caller that left", rec.Body, rec.Header().Get("Content-Type"))
+	}
+
+	rec = httptest.NewRecorder()
+	resp.Body = failingBody{err: context.DeadlineExceeded}
+	if _, status, errType, _ := relayMCPBuffered(context.Background(), rec, resp, 1024, "search"); status != http.StatusGatewayTimeout || errType != errToolTimeout {
+		t.Errorf("timeout with the caller present = (%d, %q), want (504, tool_timeout)", status, errType)
+	}
+}
+
+// callerGoneHarness is a harness whose tool server signals arrived and then
+// waits, after sending nothing (mode "silent") or a 200 with part of a JSON
+// body (mode "partial"), so the caller can leave before the broker answers.
+func callerGoneHarness(t *testing.T, mode string) (*harness, chan struct{}) {
+	t.Helper()
+	arrived := make(chan struct{}, 1)
+	release := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if mode == "partial" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"tools":[`)
+			w.(http.Flusher).Flush()
+		}
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	// LIFO: release must close before the harness cleanup waits on the
+	// parked handler.
+	t.Cleanup(func() { close(release) })
+	h.seedToolRoute()
+	return h, arrived
+}
+
+// leaveBeforeAnswer sends body and cancels the call once the tool server has
+// it, before the broker answers.
+func leaveBeforeAnswer(t *testing.T, h *harness, arrived chan struct{}, body map[string]any) {
+	t.Helper()
+	cert := agentCert(t, h.ca)
+	raw, _ := json.Marshal(body)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url("/v1/mcp/search"), bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := h.client(&cert).Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tool server never got the call")
+	}
+	cancel()
+	<-done
+}
+
+// A caller that leaves before the broker answers counts client_closed, not
+// a tool failure, whether the tool server had sent nothing or part of a
+// buffered or tools/list answer.
+func TestMCPBroker_CallerGoneBeforeAnswer(t *testing.T) {
+	cases := []struct {
+		name, mode, tool string
+		body             map[string]any
+	}{
+		{"no answer yet", "silent", "web_search", mcpCall("web_search")},
+		{"partial buffered answer", "partial", "web_search", mcpCall("web_search")},
+		{"partial tools/list answer", "partial", "", map[string]any{"jsonrpc": "2.0", "id": 7, "method": "tools/list"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := captureSlog(t)
+			h, arrived := callerGoneHarness(t, tc.mode)
+			leaveBeforeAnswer(t, h, arrived, tc.body)
+			waitFor(t, func() bool { return mcpCalls(h, tc.tool, outcomeClientClosed) == 1 })
+			for _, status := range []string{errToolUnavailable, errToolTimeout} {
+				if got := mcpCalls(h, tc.tool, status); got != 0 {
+					t.Errorf("%s counter = %v, want 0", status, got)
+				}
+			}
+			recs := logRecords(t, buf, "mcp call")
+			if len(recs) != 1 {
+				t.Fatalf("audit records = %d, want 1", len(recs))
+			}
+			if recs[0]["error_type"] != outcomeClientClosed || recs[0]["status"] != float64(statusClientClosedRequest) {
+				t.Errorf("audit record = %v, want error_type client_closed and status 499", recs[0])
+			}
+			if _, ok := recs[0]["detail"]; ok {
+				t.Errorf("audit record carries a detail: %v", recs[0]["detail"])
+			}
+		})
+	}
+}
+
+// A caller that disconnects mid-upload left; the request was not malformed.
+func TestMCPBroker_RequestBodyCallerGone(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h.seedToolRoute()
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), callerKey{}, &caller{Namespace: "team-a"}))
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)))
+	rec := httptest.NewRecorder()
+	h.server.handleMCPBroker(rec, req.WithContext(ctx))
+	if got := mcpCalls(h, "", outcomeClientClosed); got != 1 {
+		t.Errorf("client_closed counter = %v, want 1", got)
+	}
+	if got := mcpCalls(h, "", errInvalidRequest); got != 0 {
+		t.Errorf("invalid_request counter = %v, want 0", got)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("wrote %q to a caller that left", rec.Body)
 	}
 }

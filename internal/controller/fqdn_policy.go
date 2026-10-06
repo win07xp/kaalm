@@ -135,11 +135,12 @@ func ensureFQDNPolicy(
 	return rejectedWrite("updating", scheme, current, c.Update(ctx, current))
 }
 
-// restoreFQDNPolicy re-creates a missing FQDN policy for a task that has a
-// Pod. Such a task finishes under the class it started with, so an existing
-// policy is never updated or deleted, and a missing one is created from the
-// hosts the class lists now. With no FQDN support or no hosts it makes no
-// call. A cluster without the CiliumNetworkPolicy kind is not an error, as
+// restoreFQDNPolicy re-creates a missing FQDN policy for a task whose Pod
+// was created before status.classEgress existed. Such a task keeps the
+// earlier rule: an existing policy is never updated or deleted, and a
+// missing one is created from the hosts the class lists now. A task with the
+// record goes through ensureFQDNPolicy with the recorded hosts instead. With
+// no FQDN support or no hosts it makes no call. A cluster without the CiliumNetworkPolicy kind is not an error, as
 // in ensureFQDNPolicy.
 func restoreFQDNPolicy(
 	ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object,
