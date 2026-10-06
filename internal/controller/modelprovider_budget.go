@@ -241,6 +241,16 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 			dst[ns] += v
 		}
 	}
+	// Stale spend per old period: when keys of more than one old period
+	// remain (a controller down across two boundaries), only the newest is
+	// archived. Within one scheme, period keys sort by time.
+	stale := map[string]map[string]float64{}
+	archive := func(period string, spend map[string]float64) {
+		if stale[period] == nil {
+			stale[period] = map[string]float64{}
+		}
+		sum(stale[period], spend)
+	}
 	for k, raw := range cm.Data {
 		if k == gateway.CanonicalKey {
 			continue
@@ -262,8 +272,7 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 			if period == currentPeriod {
 				sum(f.retired, spend)
 			} else {
-				f.previousPeriod = period
-				sum(f.previous, spend)
+				archive(period, spend)
 				delete(cm.Data, k)
 				f.changed = true
 			}
@@ -272,8 +281,7 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 				sum(f.retired, spend)
 				f.retiredChanged = true
 			} else if err == nil && period != currentPeriod {
-				f.previousPeriod = period
-				sum(f.previous, spend)
+				archive(period, spend)
 			}
 			delete(cm.Data, k)
 			f.changed = true
@@ -287,10 +295,14 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 			// Rollover: archive the old-period totals and delete the stale
 			// key; the live replica rewrites a new-period partial on its
 			// next publish.
-			f.previousPeriod = period
-			sum(f.previous, spend)
+			archive(period, spend)
 			delete(cm.Data, k)
 			f.changed = true
+		}
+	}
+	for period, spend := range stale {
+		if period > f.previousPeriod {
+			f.previousPeriod, f.previous = period, spend
 		}
 	}
 	return f
