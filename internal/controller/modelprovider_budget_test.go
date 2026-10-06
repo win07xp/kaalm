@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/gateway"
@@ -689,5 +690,78 @@ func TestModelProvider_BudgetOffDropsCanonicalGauge(t *testing.T) {
 	}
 	if n := providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": "gauge-keep"}); n != 1 {
 		t.Errorf("gauge-keep series = %d, want 1 (untouched)", n)
+	}
+}
+
+// A provider whose delete a referrer holds still mirrors gateway readiness,
+// reduces the budget and agent-spend partials, and keeps the one-minute
+// budget cadence: referrers still route through it and the gateway keeps
+// counting its spend.
+func TestModelProvider_HeldDeleteStillReducesBudget(t *testing.T) {
+	ctx := context.Background()
+	name := "mp-held-budget"
+	period := gateway.PeriodKey("monthly", time.Now())
+	now := metav1.Now()
+	mp := probedProvider(name, metav1.ConditionTrue, time.Now().Add(-time.Hour))
+	mp.DeletionTimestamp = &now
+	mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{
+		Period: "monthly", PerNamespaceUSD: "100",
+		Policies: []kaalmv1beta1.ModelProviderBudgetPolicy{{AtPercent: 80, Action: "block"}},
+	}
+	mp.Status.Conditions = append(mp.Status.Conditions, metav1.Condition{
+		Type: kaalmv1beta1.ConditionGatewayReachable, Status: metav1.ConditionFalse,
+		Reason: "GatewayUnavailable", Message: "no gateway", LastTransitionTime: now,
+	})
+	c := heldDeleteClient(t, name, mp, misconfiguredBudgetObjects(name, period)...)
+	rec := record.NewFakeRecorder(16)
+	r := &ModelProviderReconciler{
+		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: newFakeHealth(),
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
+	res, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter != time.Minute {
+		t.Errorf("RequeueAfter = %v, want 1m", res.RequeueAfter)
+	}
+	expectMisconfiguredStatus(t, c, name, period, kaalmv1beta1.ReasonDeletionBlocked, false)
+	expectMisconfiguredFold(t, c, name)
+
+	var got kaalmv1beta1.ModelProvider
+	if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(&got, kaalmv1beta1.ProviderFinalizer) {
+		t.Error("finalizer removed while a referrer holds the delete")
+	}
+	var events []string
+	for len(rec.Events) > 0 {
+		events = append(events, <-rec.Events)
+	}
+	if len(events) != 1 || !strings.Contains(events[0], "Warning "+kaalmv1beta1.ReasonDeletionBlocked) {
+		t.Errorf("events = %q, want one DeletionBlocked Warning", events)
+	}
+
+	// The second pass drops the old period's archived entry, whose partial
+	// the first fold pruned; from then on the hold is steady.
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	var again kaalmv1beta1.ModelProvider
+	if err := c.Get(ctx, req.NamespacedName, &again); err != nil {
+		t.Fatal(err)
+	}
+	if again.ResourceVersion != got.ResourceVersion {
+		t.Errorf("a steady hold wrote the provider: resourceVersion %s -> %s", got.ResourceVersion, again.ResourceVersion)
+	}
+	if len(rec.Events) != 0 {
+		t.Errorf("a steady hold sent %q", <-rec.Events)
 	}
 }

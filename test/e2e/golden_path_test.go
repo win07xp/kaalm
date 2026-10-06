@@ -121,6 +121,6 @@ var _ = Describe("Golden path", Ordered, func() {
 		}, "60s", "5s").Should(ContainSubstring("000"),
 			"cross-namespace delivery was not blocked. If this is a long-lived k3d cluster, "+
 				"its CNI may have stopped enforcing NetworkPolicies: recreate it "+
-				"(k3d cluster delete kaalm-dev) and re-run. See issue #35.")
+				"(k3d cluster delete kaalm-dev) and re-run.")
 	})
 })

@@ -450,7 +450,7 @@ func TestProxy_AnthropicCredentialHeader(t *testing.T) {
 
 // A provider-side tool reported in the response usage lands on the
 // kaalm_llm_server_tool_use_total counter next to the token metrics
-// (docs/src/gateways/tool-plane.md, Provider-side tools).
+// (docs/src/gateways/tool-plane.md#provider-side-tools).
 func TestProxy_ServerToolUseMetric(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

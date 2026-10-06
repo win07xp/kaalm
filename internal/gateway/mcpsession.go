@@ -27,7 +27,7 @@ import (
 // upstream Mcp-Session-Id. The caller sees the upstream id bound to its own
 // identity under an HMAC keyed by gateway-shared material, so any replica
 // verifies that one workload cannot resume another's session, with no shared
-// session table. See docs/src/gateways/tool-plane.md (The Broker).
+// session table. See docs/src/gateways/tool-plane.md#the-broker.
 
 // callerIdentity is the stable identity string the session HMAC binds to:
 // namespace/Kind/name for workloads, ns/<namespace> for the bearer tier

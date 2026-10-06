@@ -166,7 +166,10 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// The credential Roles follow the Secret labels on every pass, whatever
 	// the checks below find; their result is reported in its own slot.
-	credReason, credMsg := r.scopeCredentialRoles(ctx, &channel)
+	credReason, credMsg, err := r.scopeCredentialRoles(ctx, &channel)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Step 1: resolve agentRef (an Agent, never an AgentTask).
 	var agent kaalmv1beta1.Agent
@@ -199,13 +202,13 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// reported (a Secret whose watch has not started or synced yet) and
 		// for checks no watch covers, and it keeps the channel's Secret
 		// watches in use so the watcher's idle janitor (one hour) never
-		// stops them. A child conflict re-checks sooner, on the workloads'
-		// cadence: the conflicting object carries no owner reference, so its
-		// removal raises no watch event. This re-check also runs the expiry
-		// prune, so an expired record of a failing channel goes within one
-		// interval.
+		// stops them. A child conflict or a refused Role write re-checks
+		// sooner, on the workloads' cadence: the conflicting object, or the
+		// policy that refused the write, raises no watch event for this
+		// channel when it goes. This re-check also runs the expiry prune, so
+		// an expired record of a failing channel goes within one interval.
 		requeue := time.Minute
-		if reason == kaalmv1beta1.ReasonChildConflict {
+		if reason == kaalmv1beta1.ReasonChildConflict || reason == kaalmv1beta1.ReasonChildWriteRejected {
 			requeue = gateRequeue
 		}
 		if err := r.gateChannel(ctx, &channel, statusBefore, reason, msg); err != nil {
@@ -244,10 +247,13 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // never keeps a grant wider than its labeled Secrets. None of its inputs
 // depends on those checks. Once the Roles have converged, a pass costs only
 // cache reads. It returns the first failure as a reason and message, which
-// validateChannel reports after the earlier checks.
+// validateChannel reports after the earlier checks: ChildConflict for a Role
+// or RoleBinding of the channel's name that it does not control,
+// ChildWriteRejected for a write the API server refused, or a Secret check's
+// reason. Any other write error is returned as err, for a backoff retry.
 func (r *AgentChannelReconciler) scopeCredentialRoles(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel,
-) (reason, msg string) {
+) (reason, msg string, err error) {
 	// Step 3: the controller-only check Role must exist BEFORE any Secret
 	// read: the operator has no standing Secret read in user namespaces, and
 	// RBAC has no label-scoped grant, so it needs get and watch on every
@@ -258,30 +264,35 @@ func (r *AgentChannelReconciler) scopeCredentialRoles(
 	for _, n := range names {
 		refs = append(refs, corev1.LocalObjectReference{Name: n})
 	}
-	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), channel, channelCheckRoleName(channel.Name),
-		r.OperatorNamespace, refs); err != nil {
-		reason, msg = kaalmv1beta1.ReasonInvalidReference, "ensuring the credential check Role failed: "+err.Error()
-		if _, ok := asChildConflict(err); ok {
-			reason, msg = kaalmv1beta1.ReasonChildConflict, err.Error()
-		}
+	if checkErr := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), channel, channelCheckRoleName(channel.Name),
+		r.OperatorNamespace, refs); checkErr != nil {
 		// Without the check Role no label can be read, so no Secret counts
 		// as opted in (readChannelSecrets follows the same rule for a failed
-		// read): the gateway's Role is emptied. The Secrets are not read,
-		// since every read would be Forbidden and retried. The next pass
-		// retries both writes.
+		// read): the gateway's Role is emptied, whatever the failure. The
+		// Secrets are not read, since every read would be Forbidden and
+		// retried. The next pass retries both writes.
 		if err := r.ensureCredentialRole(ctx, channel, nil); err != nil {
 			log.FromContext(ctx).V(1).Info("emptying the channel credential Role failed", "error", err)
 		}
-		return reason, msg
+		return roleWriteReason(checkErr)
 	}
 	reason, msg, optedIn := r.validateSecrets(ctx, channel)
 	if err := r.ensureCredentialRole(ctx, channel, optedIn); err != nil {
-		if _, ok := asChildConflict(err); ok {
-			return kaalmv1beta1.ReasonChildConflict, err.Error()
-		}
-		return kaalmv1beta1.ReasonInvalidReference, "ensuring the credential Role failed: " + err.Error()
+		return roleWriteReason(err)
 	}
-	return reason, msg
+	return reason, msg, nil
+}
+
+// roleWriteReason sorts a failed Role or RoleBinding write: a conflict or a
+// refused write becomes a Ready reason, anything else stays an error.
+func roleWriteReason(err error) (reason, msg string, _ error) {
+	if _, ok := asChildConflict(err); ok {
+		return kaalmv1beta1.ReasonChildConflict, err.Error(), nil
+	}
+	if cr, ok := asChildWriteRejected(err); ok {
+		return kaalmv1beta1.ReasonChildWriteRejected, cr.Error(), nil
+	}
+	return "", "", err
 }
 
 // validateChannel runs steps 2 and 3: service enabled, path shape, path
@@ -488,7 +499,7 @@ func (r *AgentChannelReconciler) ensureCredentialRole(
 		// stale access is retained.
 		current.Rules = rules
 		if err := r.Update(ctx, &current); err != nil {
-			return err
+			return rejectedWrite("updating", r.Scheme(), &current, err)
 		}
 	}
 
@@ -522,7 +533,7 @@ func (r *AgentChannelReconciler) ensureCredentialRole(
 		currentRB.RoleRef = rb.RoleRef
 		currentRB.Subjects = rb.Subjects
 		if err := r.Update(ctx, &currentRB); err != nil {
-			return err
+			return rejectedWrite("updating", r.Scheme(), &currentRB, err)
 		}
 	}
 	return r.removeControllerCredsBinding(ctx, channel)
@@ -545,7 +556,7 @@ func (r *AgentChannelReconciler) removeControllerCredsBinding(
 	if !metav1.IsControlledBy(&rb, channel) {
 		return nil
 	}
-	return client.IgnoreNotFound(r.Delete(ctx, &rb))
+	return rejectedWrite("deleting", r.Scheme(), &rb, client.IgnoreNotFound(r.Delete(ctx, &rb)))
 }
 
 // updateStatusIfChanged writes the channel's status only when a pass changed
@@ -721,7 +732,7 @@ func authSecretRefs(auth *kaalmv1beta1.ChannelAuth) []*kaalmv1beta1.SecretKeyRef
 
 // The credential Secret keys the platform adapters read (rule 40). The
 // gateway reads the same keys; the names are the contract in
-// docs/src/resources/agentchannel.md, Platform types.
+// docs/src/resources/agentchannel.md#platform-types.
 const (
 	discordKeyPublicKey    = "publicKey"
 	discordKeyBotToken     = "botToken"

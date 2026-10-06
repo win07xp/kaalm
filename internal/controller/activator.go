@@ -44,7 +44,7 @@ import (
 // handler is deliberately thin, patching kaalm.io/wake=true (with
 // kaalm.io/wake-trigger=channel) on the target Agent so the leader's existing
 // watch drives the actual wake. See
-// docs/src/gateways/user/activation-and-activity.md (The Activator).
+// docs/src/gateways/user/activation-and-activity.md#the-activator.
 //
 // It never depends on the manager's cache: the handler writes without
 // reading, and Listen returns a manager.Server, which the manager starts

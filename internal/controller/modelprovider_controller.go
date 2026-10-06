@@ -81,12 +81,12 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !mp.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, &mp)
-	}
 	// Events held for a status write that never happened (an error before
 	// finish) are dropped: the next pass derives them again.
 	defer r.events.take(&mp)
+	if !mp.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, &mp)
+	}
 
 	if controllerutil.AddFinalizer(&mp, kaalmv1beta1.ProviderFinalizer) {
 		if err := r.Update(ctx, &mp); err != nil {
@@ -176,23 +176,47 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 func (r *ModelProviderReconciler) reconcileDelete(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider,
-) error {
+) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(mp, kaalmv1beta1.ProviderFinalizer) {
-		return nil
+		return ctrl.Result{}, nil
 	}
 	refs, err := r.referrers(ctx, mp.Name)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	if len(refs) > 0 {
-		// Hold while any Agent, AgentTask, or AgentClass references it, and
-		// say so on Ready. Their watches re-enqueue us when a referrer goes
-		// away. Healthy rides along on the first DeletionBlocked write.
-		setHealthyNotProbed(&mp.Status.Conditions, "deletion is held")
-		return holdDeletion(ctx, r.Client, r.Recorder, mp, &mp.Status.Conditions, refs)
+		return r.holdDelete(ctx, mp, refs)
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
-	return r.Update(ctx, mp)
+	return ctrl.Result{}, r.Update(ctx, mp)
+}
+
+// holdDelete holds the delete while any Agent, AgentTask, or AgentClass
+// references the provider, and says so on Ready. Their watches re-enqueue
+// the provider when a referrer goes away. The referrers still route through
+// the provider and the gateway keeps counting its spend, so the
+// gateway-reachability mirror and the budget and agent-spend reducers run
+// as on every other pass; the probe does not. finish writes only a changed
+// status and sends the DeletionBlocked Warning only after that write.
+func (r *ModelProviderReconciler) holdDelete(
+	ctx context.Context, mp *kaalmv1beta1.ModelProvider, refs []string,
+) (ctrl.Result, error) {
+	liveGateways, readyGateways, err := r.gatewayPods(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	r.setGatewayReachable(mp, readyGateways)
+	if err := r.reconcileBudget(ctx, mp, liveGateways); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileAgentSpend(ctx, mp, liveGateways); err != nil {
+		return ctrl.Result{}, err
+	}
+	setHealthyNotProbed(&mp.Status.Conditions, "deletion is held")
+	if msg, first := setDeletionBlocked(&mp.Status.Conditions, refs); first {
+		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, msg)
+	}
+	return r.finish(ctx, mp, budgetRequeue(mp, ctrl.Result{}))
 }
 
 // credential resolves the provider's credential through

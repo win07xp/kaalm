@@ -16,8 +16,7 @@ limitations under the License.
 
 // Package llmtranslate rewrites LLM requests and responses between the
 // Anthropic messages format and the OpenAI chat completions format, for a
-// fallback edge that crosses them (docs/src/gateways/llm/fallback.md,
-// Crossing formats). It has no gateway dependencies: the gateway hands it
+// fallback edge that crosses them (docs/src/gateways/llm/fallback.md#crossing-formats). It has no gateway dependencies: the gateway hands it
 // parsed bodies, SSE lines, and the target model, and gets bytes back.
 package llmtranslate
 

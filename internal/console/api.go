@@ -28,8 +28,7 @@ import (
 	"time"
 )
 
-// The list routes' limit query parameter (docs/src/console/overview.md, The
-// read API): the default when absent, and the hard maximum a larger value
+// The list routes' limit query parameter (docs/src/console/overview.md#the-read-api): the default when absent, and the hard maximum a larger value
 // clamps to.
 const (
 	defaultListLimit = 100

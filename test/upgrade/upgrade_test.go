@@ -32,14 +32,10 @@ import (
 	"github.com/win07xp/kaalm/test/utils"
 )
 
-// prevVersion is the released chart the cluster starts from; the Makefile
-// pins it and release readiness bumps it each release.
-func prevVersion() string {
-	if v := os.Getenv("UPGRADE_PREV_VERSION"); v != "" {
-		return v
-	}
-	return "0.6.0"
-}
+// prevVersion is the released chart the cluster starts from. make
+// e2e-upgrade sets it from the Makefile's PREV_CHART_VERSION, the one place
+// the version is pinned, so there is no fallback here to drift from it.
+func prevVersion() string { return os.Getenv("UPGRADE_PREV_VERSION") }
 
 // prevPredatesGraduation reports whether the previous release predates the
 // v0.6.0 API graduation. Only such upgrades have the conversion window (the

@@ -1801,3 +1801,33 @@ func TestRelayFilteredToolsList_FailureDetail(t *testing.T) {
 		}
 	})
 }
+
+// The broker's own JSON-RPC errors have the shape of mcp.Response: the same
+// bytes a relayed upstream error decodes from, data included.
+func TestJSONRPCError_MatchesMCPResponse(t *testing.T) {
+	data := struct {
+		Type string `json:"type"`
+	}{"x"}
+	cases := []struct {
+		name string
+		id   json.RawMessage
+		data any
+		want string
+	}{
+		{"id and data", json.RawMessage("7"), data,
+			`{"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"m","data":{"type":"x"}}}`},
+		{"no id, no data", nil, nil, `{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"m"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := jsonrpcError(tc.id, mcp.CodeInternalError, "m", tc.data)
+			if string(got) != tc.want {
+				t.Errorf("jsonrpcError = %s, want %s", got, tc.want)
+			}
+			var resp mcp.Response
+			if err := json.Unmarshal(got, &resp); err != nil || resp.Error == nil || resp.Error.Code != mcp.CodeInternalError {
+				t.Errorf("decode as mcp.Response: %+v, %v", resp, err)
+			}
+		})
+	}
+}

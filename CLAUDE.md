@@ -41,5 +41,6 @@ make e2e                                # full k3d e2e suite
   in `agent_controller_test.go` and subject-named siblings such as
   `agent_drift_cap_test.go`); no generic names like `coverage_test.go`.
 - Code comments, build files, and scripts never cite issue or PR numbers:
-  they state the reason, and git history keeps the link.
+  they state the reason, and git history keeps the link. `make docs-check`
+  fails on a `#NNN` in code, build files, scripts, and workflows.
 - Bugs are fixed test first: a failing test that shows the bug, then the fix.

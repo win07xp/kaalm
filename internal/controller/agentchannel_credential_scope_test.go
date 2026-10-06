@@ -28,6 +28,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -272,5 +273,102 @@ func TestChannel_CheckRoleConflictEmptiesCredentialRole(t *testing.T) {
 				t.Errorf("credential Role grants %v, want no Secret", got)
 			}
 		})
+	}
+}
+
+// roleWriteFailure makes the fake client fail one write, named by verb
+// ("create" or "update") and object name, with err.
+func roleWriteFailure(verb, name string, err error) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if verb == "create" && obj.GetName() == name {
+				return err
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if verb == "update" && obj.GetName() == name {
+				return err
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+}
+
+// A per-channel Role or RoleBinding write the API server refuses is cluster
+// policy, not a wrong reference: Ready=False ChildWriteRejected, one Warning
+// event, and the conflict cadence, since a policy change raises no event.
+func TestChannel_RoleWriteRejectedIsChildWriteRejected(t *testing.T) {
+	forbidden := apierrors.NewForbidden(rbacv1.Resource("roles"), "x", nil)
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}}
+	cases := []struct {
+		name, verb, object string
+		preScope           bool
+	}{
+		{"check Role create", "create", "kaalm-channel-gate-ch-check", true},
+		{"credential Role create", "create", "kaalm-channel-gate-ch-creds", false},
+		{"gateway RoleBinding create", "create", "kaalm-channel-gate-ch-creds-gateway", false},
+		{"credential Role update", "update", "kaalm-channel-gate-ch-creds", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := scopeFakeChannel("/channels/default/gate-ch")
+			objs := preScopeObjects(t, ch)
+			if !tc.preScope {
+				objs = objs[:2] // the Secrets only
+			}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+				WithObjects(append(objs, agent, ch)...).WithStatusSubresource(ch).
+				WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
+				WithInterceptorFuncs(roleWriteFailure(tc.verb, tc.object, forbidden)).Build()
+			rec := record.NewFakeRecorder(10)
+			r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace, Recorder: rec}
+			res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ch)})
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			expectFakeReady(t, c, ch, kaalmv1beta1.ReasonChildWriteRejected)
+			if res.RequeueAfter != gateRequeue {
+				t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, gateRequeue)
+			}
+			close(rec.Events)
+			var events []string
+			for e := range rec.Events {
+				events = append(events, e)
+			}
+			if len(events) != 1 || !strings.Contains(events[0], "Warning "+kaalmv1beta1.ReasonChildWriteRejected) {
+				t.Errorf("events = %q, want one ChildWriteRejected Warning", events)
+			}
+			if tc.object == channelCheckRoleName(ch.Name) {
+				if got := fakeCredsRoleNames(t, c, ch); len(got) != 0 {
+					t.Errorf("credential Role grants %v, want no Secret", got)
+				}
+			}
+		})
+	}
+}
+
+// A transient Role write failure is a reconcile error retried with backoff,
+// not a status reason.
+func TestChannel_RoleWriteTransientErrorRetries(t *testing.T) {
+	ch := scopeFakeChannel("/channels/default/gate-ch")
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}}
+	unavailable := apierrors.NewServiceUnavailable("etcd is down")
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(append(preScopeObjects(t, ch)[:2], agent, ch)...).WithStatusSubresource(ch).
+		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
+		WithInterceptorFuncs(roleWriteFailure("create", channelRoleName(ch.Name), unavailable)).Build()
+	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ch)})
+	if !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("reconcile error = %v, want ServiceUnavailable", err)
+	}
+	var got kaalmv1beta1.AgentChannel
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ch), &got); err != nil {
+		t.Fatal(err)
+	}
+	if cond := apimeta.FindStatusCondition(got.Status.Conditions, kaalmv1beta1.ConditionReady); cond != nil &&
+		cond.Reason == kaalmv1beta1.ReasonInvalidReference {
+		t.Errorf("Ready = %+v, want no InvalidReference", cond)
 	}
 }

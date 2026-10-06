@@ -129,7 +129,7 @@ that fails the pre-dial check), or `CallbackRejected` (a callback receiver or
 a platform refused the reply).
 
 `Ready=True` carries reason `AgentReachable`. `Ready=False` reasons:
-`AgentNotFound` (the bound Agent does not exist), `InvalidReference`,
+`AgentNotFound` (the bound Agent does not exist),
 `AgentServiceDisabled` (the bound Agent has `service.enabled: false`),
 `InvalidPath`, `PathConflict`, `InvalidCallbackUrl`,
 `SystemNamespaceForbidden`, `CredentialsMissing` (the auth or platform
@@ -140,10 +140,13 @@ credential Secret is absent or lacks a required key), `CredentialsInvalid`
 lacks the label `kaalm.io/channel-credential: "true"`),
 `CallbackHostNotApproved` (a Secret used as a `bearer` `callbackAuth` token
 does not list the `callbackUrl` host in its `kaalm.io/callback-hosts`
-annotation), and `ChildConflict` (a Role or RoleBinding with the name of one
+annotation), `ChildConflict` (a Role or RoleBinding with the name of one
 of the channel's credential Roles exists and the channel does not own it; the
 channel re-checks every 30 seconds, so removing that object clears the
-conflict). The fixes for the two Secret reasons are in
+conflict), and `ChildWriteRejected` (the apiserver refused a write of one of
+the channel's credential Roles or RoleBindings, for example RBAC or an
+admission policy; the message names the object and the error, and the channel
+re-checks every 30 seconds). The fixes for the two Secret reasons are in
 [Troubleshooting](troubleshooting.md#channel-is-readyfalse-with-secretnotoptedin-or-callbackhostnotapproved).
 
 A `callbackUrl` host that does not resolve leaves the channel `Ready=True`,
@@ -229,10 +232,10 @@ Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
   `status.mcpRevision`); `UpstreamReachable` when good, `ProviderUnhealthy`
   when not, or `CredentialsInvalid` when the tool server rejects the probe's
   credential (`Ready` turns `False` with it, and the fix is the credential
-  Secret, not the server). As with ModelProvider, Ready with Healthy `False`
-  (`ProviderUnhealthy`) means valid config, unreachable server. `Unknown` with
-  `NotProbed`, as for ModelProvider. The probe trusts the same CAs as the
-  gateway's upstream path; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca).
+  Secret, not the server). `ProviderUnhealthy` means the probe failed, and the
+  condition message says why; see [Verify](../platform/tool-access.md#6-verify)
+  for what each cause needs. `Unknown` with `NotProbed`, as for ModelProvider.
+  The probe trusts the same CAs as the gateway's upstream path; see [Providing LLM access](../platform/llm-access.md#4-trust-a-private-ca).
 
 ## AgentClass
 

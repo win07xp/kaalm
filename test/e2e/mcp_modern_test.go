@@ -25,16 +25,17 @@ import (
 	"github.com/win07xp/kaalm/test/utils"
 )
 
-// The dual-era tool plane (docs/src/gateways/tool-plane.md, Protocol
-// Revisions): a 2026-07-28-only mock beside S18's legacy mock, the probe
-// negotiating each era, and the broker enforcing the modern posture. S18's
-// own spec keeps proving the legacy posture on the same cluster.
+// The dual-era tool plane (docs/src/gateways/tool-plane.md#protocol-revisions):
+// a 2026-07-28-only mock beside S18's legacy mock, the probe negotiating each
+// era, and the broker enforcing the modern posture. S18's own spec keeps
+// proving the legacy posture on the same cluster.
 var _ = Describe("MCP 2026-07-28 revision (S18, dual-era)", Ordered, func() {
 	BeforeAll(func() {
 		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/mcp-modern.yaml")
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() {
-			_, _ = utils.Kubectl("delete", "-f", "test/e2e/testdata/mcp-modern-caller.yaml", "--ignore-not-found", "--wait=false")
+			_, _ = utils.Kubectl("delete", "-f", "test/e2e/testdata/mcp-modern-caller.yaml",
+				"--ignore-not-found", "--wait=false")
 			_, _ = utils.Kubectl("delete", "-f", "test/e2e/testdata/mcp-modern.yaml", "--ignore-not-found", "--wait=false")
 		})
 	})

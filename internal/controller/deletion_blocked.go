@@ -22,6 +22,7 @@ import (
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
@@ -91,25 +92,35 @@ func deletionBlockedMessage(refs []string) string {
 	return fmt.Sprintf("deletion blocked: %d objects still reference it, including %s", len(refs), refs[0])
 }
 
-// holdDeletion makes a delete the finalizer holds visible: Ready=False with
-// reason DeletionBlocked and a message naming a referrer and the count, and a
-// Warning event when the hold first appears, emitted once the status write
-// succeeds. It writes status only when the condition changed, so a hold that
-// waits on the same referrers costs nothing per pass. conds is obj's
-// status.conditions.
-func holdDeletion(
-	ctx context.Context, c client.Client, rec record.EventRecorder,
-	obj client.Object, conds *[]metav1.Condition, refs []string,
-) error {
-	msg := deletionBlockedMessage(refs)
-	first := readyFalseIsNew(*conds, kaalmv1beta1.ReasonDeletionBlocked)
-	if prev := apimeta.FindStatusCondition(*conds, kaalmv1beta1.ConditionReady); !first && prev.Message == msg {
-		return nil
-	}
+// setDeletionBlocked sets Ready=False DeletionBlocked with a message naming
+// a referrer and the count. It returns the message and whether the hold is
+// new, so the caller sends the Warning event once its status write succeeds.
+func setDeletionBlocked(conds *[]metav1.Condition, refs []string) (msg string, first bool) {
+	msg = deletionBlockedMessage(refs)
+	first = readyFalseIsNew(*conds, kaalmv1beta1.ReasonDeletionBlocked)
 	apimeta.SetStatusCondition(conds, metav1.Condition{
 		Type: kaalmv1beta1.ConditionReady, Status: metav1.ConditionFalse,
 		Reason: kaalmv1beta1.ReasonDeletionBlocked, Message: msg,
 	})
+	return msg, first
+}
+
+// holdDeletion makes a delete the finalizer holds visible: Ready=False with
+// reason DeletionBlocked (setDeletionBlocked), and a Warning event when the
+// hold first appears, emitted once the status write succeeds. It writes
+// status only when a condition the pass set changed against before, the
+// conditions as the pass read them, so a hold that waits on the same
+// referrers costs nothing per pass, while one whose other conditions are
+// stale (a Healthy set before the hold began) is written once. conds is
+// obj's status.conditions.
+func holdDeletion(
+	ctx context.Context, c client.Client, rec record.EventRecorder,
+	obj client.Object, conds *[]metav1.Condition, before []metav1.Condition, refs []string,
+) error {
+	msg, first := setDeletionBlocked(conds, refs)
+	if equality.Semantic.DeepEqual(before, *conds) {
+		return nil
+	}
 	if err := c.Status().Update(ctx, obj); err != nil {
 		return err
 	}

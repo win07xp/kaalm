@@ -350,6 +350,7 @@ func runSuite(m *testing.M) int {
 		OperatorNamespace: testSystemNamespace,
 		SecretReader:      secretSource,
 		FQDNSupport:       fqdnSupportedInTests,
+		deadlineFor:       shortProvisioningDeadline,
 	}).SetupWithManager(mgr); err != nil {
 		return setupFailed("AgentTaskReconciler", err)
 	}
@@ -428,4 +429,25 @@ func consistently(t *testing.T, d time.Duration, fn func() error) {
 
 func condition(conds []metav1.Condition, condType string) *metav1.Condition {
 	return apimeta.FindStatusCondition(conds, condType)
+}
+
+// shortDeadlineLabel marks a test task whose provisioning deadline is one
+// second, so a deadline test need not change state the manager reads.
+const shortDeadlineLabel = "test.kaalm.io/short-provisioning-deadline"
+
+// shortProvisioningDeadline is the suite's AgentTaskReconciler.deadlineFor:
+// one second for a task carrying shortDeadlineLabel, the default otherwise.
+func shortProvisioningDeadline(task *kaalmv1beta1.AgentTask) time.Duration {
+	if task.Labels[shortDeadlineLabel] == "true" {
+		return time.Second
+	}
+	return 0
+}
+
+// withShortDeadline labels task for shortProvisioningDeadline.
+func withShortDeadline(task *kaalmv1beta1.AgentTask) {
+	if task.Labels == nil {
+		task.Labels = map[string]string{}
+	}
+	task.Labels[shortDeadlineLabel] = "true"
 }

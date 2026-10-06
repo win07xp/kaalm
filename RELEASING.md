@@ -29,6 +29,28 @@ That publishes, for the tag `vX.Y.Z`:
 
 The tag drives everything; nothing in `Chart.yaml` needs editing first.
 
+## Before you tag
+
+Run these checks on the commit you plan to tag, because the tag publishes at once. Pushing a `v*` tag also starts the [upgrade workflow](.github/workflows/upgrade.yml), which runs `make e2e-upgrade` in CI. That run starts after the tag exists and does not gate the release, so a failure there cannot stop it. The performance run happens only on your machine.
+
+1. Run the upgrade test from the latest release:
+
+   ```bash
+   make e2e-upgrade
+   ```
+
+   It installs the chart at `PREV_CHART_VERSION` from the Makefile, upgrades to your local build, and asserts that nothing was recreated or lost.
+
+2. Run the performance harness on the baseline environment:
+
+   ```bash
+   make perf
+   ```
+
+   Compare the new summary with the files in `test/perf/baseline/`, leg by leg. The numbers only mean something on the same environment, which is why this is a local check and not a CI job. [Performance and scale](docs/src/operations/performance-and-scale.md#the-baseline-environment) describes that environment.
+
+3. After the release publishes, set `PREV_CHART_VERSION` in the Makefile to the new version. The upgrade test reads the version only from there.
+
 ## Installing a published release
 
 ```bash

@@ -36,8 +36,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// The platform adapters (docs/src/gateways/user/platform-adapters.md, The
-// platform adapters). A platform adapter turns one platform's HTTP delivery
+// The platform adapters (docs/src/gateways/user/platform-adapters.md#the-platform-adapters). A platform adapter turns one platform's HTTP delivery
 // into envelopes and turns the agent's reply back into that platform's API
 // calls. Both halves are async by construction: the platform's request ends
 // at the acknowledgement, and the reply goes out later through the platform

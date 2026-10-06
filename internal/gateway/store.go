@@ -50,7 +50,7 @@ type Store interface {
 	// PodByIPLive resolves a source IP to a Pod with a live apiserver List,
 	// narrowed to one namespace. It is the report-path fallback for the
 	// new-Pod window where the informer has not observed the Pod yet
-	// (docs/src/gateways/api/task-complete.md, cross-check step 2). The
+	// (docs/src/gateways/api/task-complete.md#the-identity-gate, gate 3). The
 	// namespace comes from the caller's certificate SAN, so the live query
 	// never searches beyond the namespace the certificate attests.
 	PodByIPLive(ctx context.Context, namespace, ip string) (*corev1.Pod, bool)

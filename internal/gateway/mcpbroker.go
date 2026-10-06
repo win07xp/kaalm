@@ -41,7 +41,7 @@ import (
 // the same dual-mode auth as the LLM proxy paths. It authenticates the
 // workload, enforces the grant chain at call time, injects the tool server
 // credential, wraps session ids, and relays. See
-// docs/src/gateways/tool-plane.md (The Broker).
+// docs/src/gateways/tool-plane.md#the-broker.
 
 // errNoRedirects marks a refused outbound redirect. No gateway client follows
 // them: the broker's reasoning, closing the confused-deputy path a
@@ -135,21 +135,17 @@ func writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, mess
 }
 
 // jsonrpcError renders a JSON-RPC error response for the request id (null
-// when the request had none). data is omitted when nil.
+// when the request had none), in the mcp.Response shape a relayed upstream
+// error has. data is omitted when nil.
 func jsonrpcError(id json.RawMessage, code int, message string, data any) []byte {
 	if len(id) == 0 {
 		id = json.RawMessage("null")
 	}
-	type rpcError struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    any    `json:"data,omitempty"`
+	rpcErr := &mcp.RPCError{Code: code, Message: message}
+	if data != nil {
+		rpcErr.Data, _ = json.Marshal(data)
 	}
-	out, _ := json.Marshal(struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Error   rpcError        `json:"error"`
-	}{JSONRPC: "2.0", ID: id, Error: rpcError{Code: code, Message: message, Data: data}})
+	out, _ := json.Marshal(mcp.Response{JSONRPC: "2.0", ID: id, Error: rpcErr})
 	return out
 }
 
@@ -277,7 +273,7 @@ const toolStatusClientClosed = "client_closed"
 // before the ToolProvider resolved; forwarded marks calls that reached the
 // upstream and gates the duration histogram, which observes real upstream
 // latency rather than microsecond-scale local denials. See
-// docs/src/gateways/tool-plane.md (Audit and Metering).
+// docs/src/gateways/tool-plane.md#audit-and-metering.
 func (s *Server) mcpResult(
 	c *caller, tp *kaalmv1beta1.ToolProvider, provider, method, tool string,
 	status int, errType, detail string, start time.Time, reqBytes, respBytes int64, forwarded bool,
@@ -492,7 +488,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 	forwarded = true
 	resp, err := s.mcpHTTPClient().Do(upReq)
-	endForward(err)
+	endForward(forwardSpanErr(resp, err))
 	if err != nil {
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
@@ -519,9 +515,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	// ModelProvider. The health probe flips the resource's conditions
 	// independently.
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		slog.Warn("tool server rejected the gateway credential", "provider", tp.Name, "status", resp.StatusCode)
-		s.recordEvent(tp, kaalmv1beta1.ReasonCredentialsInvalid,
-			"tool server returned %d; credential rotation may be needed", resp.StatusCode)
+		s.noteToolCredentialRejected(tp, resp.StatusCode)
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
 			fmt.Sprintf("tool provider %q rejected the gateway credential", tp.Name), false, 0, msg.Method, toolName)
 		return
@@ -556,6 +550,32 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, relayDetail,
 		start, reqBytes, respBytes, forwarded)
+}
+
+// noteToolCredentialRejected reports a tool server's 401 or 403 to the
+// operator: a warning line paced per ToolProvider, and a Warning
+// CredentialsInvalid event on every call, which the event recorder folds
+// into one event with a count.
+func (s *Server) noteToolCredentialRejected(tp *kaalmv1beta1.ToolProvider, status int) {
+	if s.toolRejectedLog.allow(tp.Name, credentialLogInterval) {
+		slog.Warn("tool server rejected the gateway credential", "provider", tp.Name, "status", status)
+	}
+	s.recordEvent(tp, kaalmv1beta1.ReasonCredentialsInvalid,
+		"tool server returned %d; credential rotation may be needed", status)
+}
+
+// forwardSpanErr is the error the tool.forward client span ends with: the
+// transport error, or upstream_error for any upstream answer of 400 or
+// above, as llm.forward does. The tool.call server span leaves a relayed
+// upstream 4xx unset.
+func forwardSpanErr(resp *http.Response, err error) error {
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return errors.New("upstream_error")
+	}
+	return nil
 }
 
 // logToolCredentialRefusal writes the credential-refusal warning, paced per

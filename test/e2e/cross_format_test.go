@@ -26,8 +26,7 @@ import (
 )
 
 // S24: a fallback edge that crosses formats, proven in both directions
-// against the mock provider (docs/src/gateways/llm/fallback.md, Crossing
-// formats).
+// against the mock provider (docs/src/gateways/llm/fallback.md#crossing-formats).
 var _ = Describe("Cross-format fallback (S24)", Ordered, func() {
 	BeforeAll(func() {
 		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/mockprovider.yaml")
@@ -40,7 +39,9 @@ var _ = Describe("Cross-format fallback (S24)", Ordered, func() {
 		})
 
 		By("all four providers reconcile Ready: the crossing edges pass rules 12 and 41")
-		for _, name := range []string{"s24-anthropic-primary", "s24-openai-backup", "s24-openai-primary", "s24-anthropic-backup"} {
+		for _, name := range []string{
+			"s24-anthropic-primary", "s24-openai-backup", "s24-openai-primary", "s24-anthropic-backup",
+		} {
 			Eventually(func() (bool, error) {
 				return readyTrue("modelprovider", "", name)
 			}, "60s", "3s").Should(BeTrue(), name)

@@ -55,10 +55,11 @@ trust-manager have delivered their certificates and the CA bundle, and
 ## Trying Kaalm locally
 
 The repository automates a local k3d cluster with cert-manager and
-trust-manager installed. k3d's flannel enforces basic NetworkPolicies, which
-is enough for the agent-to-gateway rule, but not hostname egress
+trust-manager installed. k3s's embedded kube-router policy controller
+enforces basic NetworkPolicies (flannel is only the pod network), which is
+enough for the agent-to-gateway rule, but not hostname egress
 (`allowedHosts`), which needs Cilium. `CNI=cilium` installs Cilium in place
-of flannel:
+of both flannel and that controller:
 
 ```bash
 make k3d-up              # k3d cluster + cert-manager + trust-manager

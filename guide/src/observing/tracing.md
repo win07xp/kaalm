@@ -81,6 +81,12 @@ out or broke partway, shows as failed in the trace even when the agent got a
 [Observability](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/observability.md#tracing)
 page lists which outcomes mark the span.
 
+When a provider or tool server answers your agent's request with a 4xx and
+the gateway relays it unchanged, `llm.request` and `tool.call` stay unmarked.
+Look at `llm.forward` or `tool.forward` instead: they show that failure. The
+[Observability](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/observability.md#tracing)
+page gives the rule.
+
 Spans carry the correlation the logs already carry, as attributes:
 `kaalm.message_id`, `kaalm.namespace`, `kaalm.agent`, `kaalm.workload`,
 `kaalm.provider`, `kaalm.model`, `kaalm.channel_type`, `kaalm.method`, and

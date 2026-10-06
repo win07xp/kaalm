@@ -34,7 +34,7 @@ import (
 // The gauges the dashboards plot are computed on scrape from live
 // state, so the proof is the wire: scrape both components after the spend
 // and console fixtures have produced state and read the series back.
-var _ = Describe("Metric catalog on the wire (#97)", Ordered, func() {
+var _ = Describe("Metric catalog on the wire", Ordered, func() {
 	It("provisions the spend and console fixtures", func() {
 		for _, f := range []string{
 			"test/e2e/testdata/namespace.yaml",

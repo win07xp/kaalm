@@ -68,7 +68,7 @@ func (s *AgentChannelSpec) Path() string {
 }
 
 // AgentChannelDiscord configures the Discord Interactions endpoint adapter
-// (docs/src/resources/agentchannel.md, Platform types). Discord POSTs signed
+// (docs/src/resources/agentchannel.md#platform-types). Discord POSTs signed
 // interactions to path; the gateway answers through the interaction's
 // follow-up webhook.
 type AgentChannelDiscord struct {
@@ -104,7 +104,7 @@ type AgentChannelDiscord struct {
 }
 
 // AgentChannelWhatsApp configures the WhatsApp Cloud API webhook adapter
-// (docs/src/resources/agentchannel.md, Platform types). Meta verifies path
+// (docs/src/resources/agentchannel.md#platform-types). Meta verifies path
 // with a GET and POSTs signed events to it; the gateway replies through the
 // Graph API as the configured business number.
 type AgentChannelWhatsApp struct {

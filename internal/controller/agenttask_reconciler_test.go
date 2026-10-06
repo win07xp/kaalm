@@ -1191,12 +1191,9 @@ func TestTask_ProviderCRMissingIsTerminalFailed(t *testing.T) {
 // ---- AgentTask: the provisioning deadline fails a Pod that never starts ----
 
 func TestTask_ProvisioningDeadlineFails(t *testing.T) {
-	old := provisioningDeadline
-	provisioningDeadline = 1 * time.Second
-	defer func() { provisioningDeadline = old }()
-
 	mkWorkloadClass(t, "tc-deadline", nil)
 	mkTask(t, "t-deadline", "tc-deadline", func(task *kaalmv1beta1.AgentTask) {
+		withShortDeadline(task)
 		task.Spec.Completion.Condition = completionExitCode
 	})
 	eventually(t, func() error { return markCertReadyErr("t-deadline") })

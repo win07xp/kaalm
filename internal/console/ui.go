@@ -28,7 +28,7 @@ import (
 
 // The pages are the second face of the data layer: every template renders
 // exactly the DTOs the corresponding /api/v1 endpoint serves, plus page
-// chrome. The swap rule (docs/src/console/overview.md, The Swap Rule): a
+// chrome. The swap rule (docs/src/console/overview.md#the-swap-rule): a
 // richer frontend replaces these templates, never the API. Zero JavaScript;
 // the chat panel is an ordinary form POST.
 

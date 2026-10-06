@@ -58,7 +58,9 @@ func s22Command(guild, message string) json.RawMessage {
 		"id": "1290000000000000001", "application_id": "1230000000000000000", "type": 2,
 		"token": "e2e-interaction-token", "guild_id": guild, "channel_id": "987654321098765432",
 		"member": map[string]any{"user": map[string]any{"id": "555555555555555555", "username": "dev"}},
-		"data":   map[string]any{"name": "ask", "options": []map[string]any{{"name": "message", "type": 3, "value": message}}},
+		"data": map[string]any{
+			"name": "ask", "options": []map[string]any{{"name": "message", "type": 3, "value": message}},
+		},
 		"locale": "en-US",
 	})
 	return raw
@@ -108,27 +110,10 @@ var _ = Describe("Discord channel (S22)", Ordered, func() {
 	}
 
 	BeforeAll(func() {
-		_, _ = utils.Kubectl("apply", "-f", "test/e2e/testdata/agentclass.yaml")
-		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/discord.yaml")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(utils.WaitRollout("e2e", "mock-discord", "120s")).To(Succeed())
-		Eventually(func() (string, error) {
-			return utils.ResourceField("agent", "e2e", "s22-agent", "{.status.phase}")
-		}, "180s", "5s").Should(Equal("Running"))
-
-		By("the Discord channel reconciles to Ready with its credential Role scoped to the Secret")
-		Eventually(func() (string, error) {
-			return utils.ResourceField("agentchannel", "e2e", "s22-channel",
-				`{.status.conditions[?(@.type=="Ready")].status}`)
-		}, "90s", "3s").Should(Equal("True"))
-		names, err := utils.ResourceField("role", "e2e", "kaalm-channel-s22-channel-creds", "{.rules[0].resourceNames}")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(names).To(ContainSubstring("s22-discord-creds"))
-
-		port, stopFn, err := utils.PortForward("e2e", "mock-discord", "8080")
-		Expect(err).NotTo(HaveOccurred())
-		stop = stopFn
-		mockURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+		stop, mockURL = applyPlatformChannel(platformChannel{
+			Manifest: "test/e2e/testdata/discord.yaml", Mock: "mock-discord",
+			Agent: "s22-agent", Channel: "s22-channel", Secret: "s22-discord-creds", Platform: "Discord",
+		})
 	})
 
 	AfterAll(func() {
@@ -176,7 +161,10 @@ var _ = Describe("Discord channel (S22)", Ordered, func() {
 
 	It("acknowledges a slash command at once and delivers the reply through the follow-up webhook", func() {
 		before := len(replies())
-		ack := send(discordSend{Path: "/channels/e2e/s22-channel", Interaction: s22Command("123456789012345678", "Where is my order?")})
+		ack := send(discordSend{
+			Path:        "/channels/e2e/s22-channel",
+			Interaction: s22Command("123456789012345678", "Where is my order?"),
+		})
 		Expect(ack.Status).To(Equal(200))
 		Expect(string(ack.Body)).To(MatchJSON(`{"type":5}`))
 

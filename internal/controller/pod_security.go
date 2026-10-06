@@ -25,7 +25,7 @@ import (
 )
 
 // The restricted Pod Security Standard is the default for every workload Pod
-// (docs/src/security/model.md, Pod Security Standards). A class overrides it
+// (docs/src/security/model.md#pod-security-standards). A class overrides it
 // per field; a field the class leaves unset takes the baseline value.
 const (
 	tmpVolumeName = "tmp"

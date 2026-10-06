@@ -25,7 +25,7 @@ var _ = Describe("Mock LLM provider", Ordered, func() {
 			return readyTrue("modelprovider", "", "e2e-mock")
 		}, "60s", "3s").Should(BeTrue())
 
-		By("the liveness probe reaches the mock's kaalm-ca certificate through the probe trust knob (#86)")
+		By("the liveness probe reaches the mock's kaalm-ca certificate through the probe trust knob")
 		Eventually(func() (string, error) {
 			return utils.ResourceField("modelprovider", "", "e2e-mock",
 				`{.status.conditions[?(@.type=="Healthy")].status}`)

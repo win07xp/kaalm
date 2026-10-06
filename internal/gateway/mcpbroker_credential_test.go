@@ -119,3 +119,44 @@ func TestMCPBroker_CancelledContextNotLogged(t *testing.T) {
 		t.Errorf("live request after a cancelled one should log once, got %d records", got)
 	}
 }
+
+const toolRejectedMsg = "tool server rejected the gateway credential"
+
+// A tool server that rejects the gateway credential is logged once a minute
+// per ToolProvider, while the Warning event is recorded on every call (the
+// event recorder folds the repeats). The credential-unavailable line has its
+// own pacing and does not hold this one back.
+func TestMCPBroker_CredentialRejectionLoggedOncePerMinute(t *testing.T) {
+	buf := captureSlog(t)
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+	h.seedToolRoute()
+	capture := &eventCapture{}
+	h.server.Recorder = capture
+	clock := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	h.server.toolRejectedLog.now = func() time.Time { return clock }
+	h.server.toolCredentialLog.allow("search", credentialLogInterval)
+
+	cert := agentCert(t, h.ca)
+	call := func() {
+		t.Helper()
+		resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+		expectMCPError(t, resp, http.StatusServiceUnavailable, errToolUnavailable)
+	}
+	call()
+	call()
+	if got := len(logRecords(t, buf, toolRejectedMsg)); got != 1 {
+		t.Fatalf("want 1 rejection record within a minute, got %d (%s)", got, buf.String())
+	}
+	capture.mu.Lock()
+	events := len(capture.reasons)
+	capture.mu.Unlock()
+	if events != 2 {
+		t.Errorf("want a CredentialsInvalid event per call, got %d", events)
+	}
+
+	clock = clock.Add(time.Minute)
+	call()
+	if got := len(logRecords(t, buf, toolRejectedMsg)); got != 2 {
+		t.Errorf("want a second record after a minute, got %d", got)
+	}
+}
