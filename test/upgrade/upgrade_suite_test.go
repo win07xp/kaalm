@@ -28,6 +28,7 @@ package upgrade
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -35,6 +36,9 @@ import (
 )
 
 func TestUpgrade(t *testing.T) {
+	if os.Getenv("UPGRADE_PREV_VERSION") == "" {
+		t.Fatal("UPGRADE_PREV_VERSION is unset; run make e2e-upgrade, which sets it from PREV_CHART_VERSION")
+	}
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting kaalm upgrade e2e (S21)\n")
 	RunSpecs(t, "kaalm upgrade e2e")
