@@ -25,9 +25,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/util/version"
 
 	"github.com/win07xp/kaalm/test/utils"
 )
@@ -41,10 +43,29 @@ func prevVersion() string { return os.Getenv("UPGRADE_PREV_VERSION") }
 // v0.6.0 API graduation. Only such upgrades have the conversion window (the
 // old controller serves no webhook yet) and storage to migrate; a
 // post-graduation previous release already serves conversion and already
-// stores at v1beta1, and the spec asserts that instead. Versions are
-// dotted numbers, so the string comparison works within one digit series;
-// revisit at 0.10.0.
-func prevPredatesGraduation() bool { return prevVersion() < "0.6.0" }
+// stores at v1beta1, and the spec asserts that instead.
+func prevPredatesGraduation() bool { return predatesGraduation(prevVersion()) }
+
+// graduation is the release that moved the API to v1beta1.
+var graduation = version.MustParseSemantic("0.6.0")
+
+// predatesGraduation compares v as a semantic version; a malformed value
+// panics, which Ginkgo reports as a failure naming it.
+func predatesGraduation(v string) bool { return version.MustParseSemantic(v).LessThan(graduation) }
+
+func TestPredatesGraduation(t *testing.T) {
+	for v, want := range map[string]bool{
+		"0.5.0":  true,
+		"0.6.0":  false,
+		"0.10.0": false,
+		"1.0.0":  false,
+		"1.1.0":  false,
+	} {
+		if got := predatesGraduation(v); got != want {
+			t.Errorf("predatesGraduation(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
 
 const (
 	ns          = "up-e2e"
