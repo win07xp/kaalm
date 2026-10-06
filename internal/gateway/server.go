@@ -175,6 +175,10 @@ type Server struct {
 	// It is separate from credentialLog because a ModelProvider and a
 	// ToolProvider can share a name.
 	toolCredentialLog logThrottle
+	// toolRejectedLog paces the MCP broker's "tool server rejected the
+	// gateway credential" warning. It is separate from toolCredentialLog
+	// so neither warning holds back the other.
+	toolRejectedLog logThrottle
 
 	// AgentResolver resolves agent Service names for delivery dials; nil
 	// means net.DefaultResolver. Tests inject a counting fake.

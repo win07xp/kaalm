@@ -515,9 +515,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	// ModelProvider. The health probe flips the resource's conditions
 	// independently.
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		slog.Warn("tool server rejected the gateway credential", "provider", tp.Name, "status", resp.StatusCode)
-		s.recordEvent(tp, kaalmv1beta1.ReasonCredentialsInvalid,
-			"tool server returned %d; credential rotation may be needed", resp.StatusCode)
+		s.noteToolCredentialRejected(tp, resp.StatusCode)
 		deny(http.StatusServiceUnavailable, errToolUnavailable,
 			fmt.Sprintf("tool provider %q rejected the gateway credential", tp.Name), false, 0, msg.Method, toolName)
 		return
@@ -552,6 +550,18 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, relayDetail,
 		start, reqBytes, respBytes, forwarded)
+}
+
+// noteToolCredentialRejected reports a tool server's 401 or 403 to the
+// operator: a warning line paced per ToolProvider, and a Warning
+// CredentialsInvalid event on every call, which the event recorder folds
+// into one event with a count.
+func (s *Server) noteToolCredentialRejected(tp *kaalmv1beta1.ToolProvider, status int) {
+	if s.toolRejectedLog.allow(tp.Name, credentialLogInterval) {
+		slog.Warn("tool server rejected the gateway credential", "provider", tp.Name, "status", status)
+	}
+	s.recordEvent(tp, kaalmv1beta1.ReasonCredentialsInvalid,
+		"tool server returned %d; credential rotation may be needed", status)
 }
 
 // forwardSpanErr is the error the tool.forward client span ends with: the

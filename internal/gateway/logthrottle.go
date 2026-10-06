@@ -22,9 +22,10 @@ import (
 )
 
 // credentialLogInterval paces the credential-refusal warning of the LLM
-// proxy and the MCP broker: one line per provider per minute per replica.
-// The refusal repeats on every request until the Secret is fixed, and the
-// ModelProvider or ToolProvider status already carries the cause.
+// proxy and the MCP broker, and the broker's warning that a tool server
+// rejected the gateway credential: one line per provider per minute per
+// replica. Each repeats on every request until the credential is fixed, and
+// the ModelProvider or ToolProvider status already carries the cause.
 const credentialLogInterval = time.Minute
 
 // logThrottle paces a log line per key: allow grants at most one line per key
