@@ -300,22 +300,39 @@ func TestTracing_ToolForwardMarksUpstreamErrorStatus(t *testing.T) {
 // A call whose caller disconnected mid-stream marks the tool.call span
 // with client_closed.
 func TestTracing_ToolCallCallerGoneMarksSpan(t *testing.T) {
-	exp := tracetest.NewInMemoryExporter()
-	h := newAbandonHarness(t)
-	h.server.Tracing = newTestTracing(exp)
-	abandonStream(t, h)
-	var call *tracetest.SpanStub
-	waitFor(t, func() bool {
-		for _, s := range exp.GetSpans() {
-			if s.Name == "tool.call" {
-				call = &s
-				return true
+	cases := []struct {
+		name  string
+		leave func(t *testing.T, exp *tracetest.InMemoryExporter)
+	}{
+		{"abandoned stream", func(t *testing.T, exp *tracetest.InMemoryExporter) {
+			h := newAbandonHarness(t)
+			h.server.Tracing = newTestTracing(exp)
+			abandonStream(t, h)
+		}},
+		{"left before the answer", func(t *testing.T, exp *tracetest.InMemoryExporter) {
+			h, arrived := callerGoneHarness(t, "silent")
+			h.server.Tracing = newTestTracing(exp)
+			leaveBeforeAnswer(t, h, arrived, mcpCall("web_search"))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exp := tracetest.NewInMemoryExporter()
+			tc.leave(t, exp)
+			var call *tracetest.SpanStub
+			waitFor(t, func() bool {
+				for _, s := range exp.GetSpans() {
+					if s.Name == "tool.call" {
+						call = &s
+						return true
+					}
+				}
+				return false
+			})
+			if call.Status.Code != codes.Error || call.Status.Description != "client_closed" {
+				t.Errorf("tool.call status = (%v, %q), want (Error, client_closed)", call.Status.Code, call.Status.Description)
 			}
-		}
-		return false
-	})
-	if call.Status.Code != codes.Error || call.Status.Description != "client_closed" {
-		t.Errorf("tool.call status = (%v, %q), want (Error, client_closed)", call.Status.Code, call.Status.Description)
+		})
 	}
 }
 

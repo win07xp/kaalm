@@ -262,10 +262,17 @@ type mcpRequest struct {
 }
 
 // toolStatusClientClosed is the outcome of a brokered call whose caller
-// disconnected before the broker finished relaying the response stream. It
-// is a metric status and an audit error_type only, never a wire error type,
-// because no caller receives it.
+// disconnected before the broker finished answering: while the call was
+// forwarded, while a buffered or tools/list response was read, or while a
+// stream was relayed. It is a metric status and an audit error_type only,
+// never a wire error type, because no caller receives it.
 const toolStatusClientClosed = "client_closed"
+
+// statusClientClosedRequest is the audit status of a call whose caller left
+// before the broker sent a status line. No caller receives it; proxies
+// conventionally log this code for a client that closed the request. A
+// stream keeps the status it already sent.
+const statusClientClosedRequest = 499
 
 // mcpResult is the single funnel every terminal broker outcome passes
 // through. It emits the per-call audit record (one info-level structured log
@@ -353,6 +360,15 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		s.mcpResult(c, tp, providerName, method, tool, status, errType, message, start, reqBytes, 0, forwarded)
 		writeError(w, status, errorBody{Type: errType, Message: message,
 			Provider: providerName, Retryable: retryable}, retryAfter)
+	}
+	// closed records a call whose caller left before the broker answered
+	// and writes nothing: no one is there to read it. Use it only where the
+	// caller leaving can cause the failure (a read or a forward), never in
+	// place of a denial, so denials stay audited under their own type.
+	closed := func(method, tool string) {
+		spanError(tctx, toolStatusClientClosed)
+		s.mcpResult(c, tp, providerName, method, tool, statusClientClosedRequest, toolStatusClientClosed, "",
+			start, reqBytes, 0, forwarded)
 	}
 
 	if r.Method != http.MethodPost {
@@ -491,6 +507,11 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	endForward(forwardSpanErr(resp, err))
 	if err != nil {
 		switch {
+		case r.Context().Err() != nil:
+			// The upstream request derives from the caller's context, so a
+			// caller that left cancels it: not a tool failure. Checked
+			// first, as on the stream relay.
+			closed(msg.Method, toolName)
 		case errors.Is(err, context.DeadlineExceeded):
 			deny(http.StatusGatewayTimeout, errToolTimeout,
 				fmt.Sprintf("tool provider %q did not answer within the upstream timeout", tp.Name), true, 0, msg.Method, toolName)
@@ -538,12 +559,12 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	var relayDetail string
 	switch {
 	case msg.Method == "tools/list" && resp.StatusCode < 300:
-		respBytes, relayStatus, relayErrType, relayDetail = s.relayFilteredToolsList(w, resp, msg, filter, providerName)
+		respBytes, relayStatus, relayErrType, relayDetail = s.relayFilteredToolsList(r.Context(), w, resp, msg, filter, providerName)
 	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
 		respBytes, relayErrType, relayDetail = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID, providerName)
 		relayStatus = resp.StatusCode
 	default:
-		respBytes, relayStatus, relayErrType, relayDetail = relayMCPBuffered(w, resp, s.mcpMaxBodyBytes(), providerName)
+		respBytes, relayStatus, relayErrType, relayDetail = relayMCPBuffered(r.Context(), w, resp, s.mcpMaxBodyBytes(), providerName)
 	}
 	if relayErrType != "" {
 		spanError(tctx, relayErrType)
@@ -590,9 +611,12 @@ func (s *Server) logToolCredentialRefusal(ctx context.Context, provider string, 
 // relayFilteredToolsList buffers a tools/list response (either encoding),
 // filters the tool set to the caller's grant, and replies as plain JSON: the
 // model never sees a tool it cannot call. It returns the outcome the caller
-// funnels into mcpResult, the audit detail included.
+// funnels into mcpResult, the audit detail included. ctx is the caller's
+// request context: a read that fails because the caller left writes nothing
+// and returns client_closed.
 func (s *Server) relayFilteredToolsList(
-	w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter, providerName string,
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter,
+	providerName string,
 ) (respBytes int64, status int, errType, detail string) {
 	// Reading one byte past the cap tells a list that passes it apart from
 	// one that ends exactly at it.
@@ -605,6 +629,9 @@ func (s *Server) relayFilteredToolsList(
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
 			Message: msg, Provider: providerName}, 0)
 		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
+	}
+	if err != nil && ctx.Err() != nil {
+		return 0, statusClientClosedRequest, toolStatusClientClosed, ""
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// The upstream timeout covers the response, not only its headers.
@@ -686,11 +713,16 @@ func (rr *readErrRecorder) Read(p []byte) (int, error) {
 }
 
 // relayMCPBuffered copies a JSON response through, capped. It returns the
-// outcome the caller funnels into mcpResult, the audit detail included.
+// outcome the caller funnels into mcpResult, the audit detail included. ctx
+// is the caller's request context: a read that fails because the caller
+// left writes nothing and returns client_closed.
 func relayMCPBuffered(
-	w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
+	ctx context.Context, w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
 ) (respBytes int64, status int, errType, detail string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil && ctx.Err() != nil {
+		return 0, statusClientClosedRequest, toolStatusClientClosed, ""
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// The upstream timeout covers the response, not only its headers.
 		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
