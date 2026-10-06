@@ -49,7 +49,8 @@ const defaultHealthInterval = 60 * time.Second
 // ModelProviderReconciler validates a ModelProvider's credentials, fallback tree,
 // degrade targets, and allowedNamespaces patterns, reduces its budget partials, mirrors GatewayReachable
 // from gateway Pod readiness, probes it for liveness, and holds it in
-// Terminating while referenced. See
+// Terminating while referenced. When it releases the finalizer it deletes the
+// provider's budget and agent-spend ConfigMaps. See
 // docs/src/controller/reconcilers/modelprovider.md.
 type ModelProviderReconciler struct {
 	client.Client
@@ -186,6 +187,12 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	}
 	if len(refs) > 0 {
 		return r.holdDelete(ctx, mp, refs)
+	}
+	// A provider recreated under the same name must start at zero spend, so
+	// the spend ConfigMaps go before the finalizer. They stay while the
+	// delete is held: referrers still spend, and the gateway still counts it.
+	if err := r.deleteSpendConfigMaps(ctx, mp.Name); err != nil {
+		return err
 	}
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)

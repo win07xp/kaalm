@@ -107,6 +107,19 @@ func clearBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
 	providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": mp.Name})
 }
 
+// deleteSpendConfigMaps deletes the provider's budget and agent-spend
+// ConfigMaps, which the gateway writes with no owner reference. NotFound is
+// not an error: a provider with no spend has neither.
+func (r *ModelProviderReconciler) deleteSpendConfigMaps(ctx context.Context, name string) error {
+	for _, cmName := range []string{gateway.BudgetConfigMapName(name), gateway.AgentSpendConfigMapName(name)} {
+		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: r.OperatorNamespace, Name: cmName}}
+		if err := client.IgnoreNotFound(r.Delete(ctx, cm)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // reconcileBudget is the reducer over the per-replica partials in the
 // kaalm-budget-{provider} ConfigMap: prune keys with no live gateway Pod,
 // archive and drop stale-period entries, sum current-period partials, write
