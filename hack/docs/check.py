@@ -46,7 +46,12 @@ Across the repository, outside the books:
   `kubectl explain` shows, so a comment is held to the book's link rules. Name
   a section with its `#anchor`, because a section named in prose after the
   path is not checked. Renaming a heading means updating these comments as
-  well as the in-book links.
+  well as the in-book links;
+- no code comment, build file, script, or workflow cites an issue or PR
+  number (a `#` followed by digits): it states the reason instead, and git history keeps the
+  link. Tracked files under docs/, guide/, and learn/ are exempt, and so are
+  HTML, CSS, JSON, SVG, and Markdown files, where `#` starts colors and
+  anchors (see ISSUE_REF_SUFFIXES and ISSUE_REF_NAMES).
 
 Also runs diagram_check.py over docs/src/diagrams.
 
@@ -87,6 +92,14 @@ GO_DOC_DIRS = ("api", "cmd", "internal", "test")
 # optional anchor.
 GO_DOC_REF = re.compile(r"\b((?:docs|guide|learn)/src/[\w./-]+?\.md)\b(?:#([\w-]+))?")
 DASHES = re.compile("[–—]")
+# An issue or PR number: a '#' followed by digits, not an HTML entity
+# ('&#' and digits), a URL fragment ('/#' and digits), or part of a word or
+# hex color (#73BF69 has no word boundary after its digits).
+ISSUE_REF = re.compile(r"(?<![\w&#/])#\d+\b")
+# Tracked files outside the books that the issue-number check reads: code,
+# scripts, build files, and workflows.
+ISSUE_REF_SUFFIXES = (".go", ".py", ".sh", ".yml", ".yaml", ".mk", ".tpl", ".toml")
+ISSUE_REF_NAMES = ("Makefile", "go.mod", "go.work")
 # Ginkgo node labels, checked against the scenario coverage map and against
 # spec labels quoted on other pages.
 SPEC_DIRS = ("test/e2e", "test/upgrade")
@@ -441,6 +454,34 @@ class Checker:
                     elif m.group(2) and m.group(2) not in self.anchors(dest):
                         self.problems.append(f"{rel}:{n}: no heading for anchor: {m.group(0)}")
 
+    def check_issue_refs(self) -> None:
+        """No code comment, build file, script, or workflow cites an issue or
+        PR number: CLAUDE.md asks for the reason instead, and this keeps a
+        citation from coming back."""
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
+            ).stdout.decode("utf-8")
+        except (OSError, subprocess.CalledProcessError) as e:
+            self.problems.append(f"issue-number check: git ls-files failed: {e}")
+            return
+        for rel in sorted(filter(None, out.split("\0"))):
+            if rel.split("/", 1)[0] in BOOKS:
+                continue
+            path = pathlib.PurePosixPath(rel)
+            if not (
+                path.suffix in ISSUE_REF_SUFFIXES
+                or path.name in ISSUE_REF_NAMES
+                or path.name.startswith("Dockerfile")
+            ):
+                continue
+            f = ROOT / rel
+            if not f.is_file():
+                continue
+            for n, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                for hit in ISSUE_REF.findall(line):
+                    self.problems.append(f"{rel}:{n}: cites issue or PR number {hit}; state the reason instead")
+
     def check_coverage_map(self) -> None:
         path = ROOT / COVERAGE_MAP
         text = path.read_text(encoding="utf-8")
@@ -523,6 +564,7 @@ def main(argv: list[str]) -> int:
         checker.check_book(book)
     checker.check_guide_figures()
     checker.check_go_doc_refs()
+    checker.check_issue_refs()
     checker.check_coverage_map()
     checker.check_diagrams()
     for p in checker.problems:
