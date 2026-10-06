@@ -139,6 +139,11 @@ status:
       spentUSD: "412.00"
       percentUsed: 82
       state: "Throttled"
+    - namespace: "team-support"
+      period: "2026-03"
+      spentUSD: "301.20"
+      percentUsed: 60
+      state: "Normal"
   clusterSpentUSD: "699.50"
 ```
 
@@ -152,9 +157,11 @@ status:
 | `MaxOutputTokensUnset` | Advisory; never affects `Ready`. `True` with `MaxOutputTokensUnset` when a fallback edge from an `openai` or `openai-compatible` provider into an `anthropic` provider reaches models that declare no `maxOutputTokens`. The message lists each `provider/model` in sorted order. `False` with `MaxOutputTokensDeclared` once none remain. A provider with no findings carries no such condition. The `Warning` event fires on the transition to `True` ([What does not translate](../gateways/llm/fallback.md#what-does-not)). |
 | `BoundaryMarginRaised` | Hard enforcement only. `True` when a gateway replica observed traffic that needed a wider boundary margin than `hard.boundaryMarginPercent` configures ([Hard enforcement](../gateways/llm/budgets-and-rate-limits.md#hard-enforcement)). |
 
-`healthCheck.enabled: false` disables the probe and leaves `Healthy` `Unknown` with `NotProbed`; `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each request. A failing probe requeues on a backoff instead of the plain interval ([Probe backoff](../controller/reconcilers/modelprovider.md#probe-backoff)). `budgetUsage` is per-namespace spend for the current period, and `clusterSpentUSD` is the sum across namespaces. Both are empty while the provider tracks no budget (`period: none`), and turning a budget off clears them ([Budget reconciliation](../controller/reconcilers/modelprovider.md#budget-reconciliation) covers the details and the missing-ConfigMap case).
+`healthCheck.enabled: false` disables the probe and leaves `Healthy` `Unknown` with `NotProbed`; `intervalSeconds` (default 60) sets its cadence for a healthy provider and `timeoutSeconds` (default 10) bounds each request. A failing probe requeues on a backoff instead of the plain interval ([Probe backoff](../controller/reconcilers/modelprovider.md#probe-backoff)). `budgetUsage` is per-namespace spend. It holds the current period's entries and, from the first pass after a period rollover until the next rollover, the previous period's entries, so two periods can appear for a whole period. Each entry's `period` tells them apart; select on it when you sum or filter rows. `clusterSpentUSD` is the sum across namespaces for the current period only. Both are empty while the provider tracks no budget (`period: none`), and turning a budget off clears them, the previous-period entries included ([Budget reconciliation](../controller/reconcilers/modelprovider.md#budget-reconciliation) covers the details and the missing-ConfigMap case).
 
-Each `budgetUsage` entry's `state` is a per-namespace state machine over the current period:
+A previous-period entry's `state` is always `Normal`, because the gateway enforces only the current period. An alert or script that matches `state: Blocked` therefore still means blocked now. Its `percentUsed` is the period's final ratio against the ceilings as they stand now, so a ceiling edit since then explains a percentage that differs from what was enforced at the time.
+
+Each current-period `budgetUsage` entry's `state` is a per-namespace state machine:
 
 ![Per-namespace budget state for one ModelProvider and one period. The period opening enters Normal. Normal moves to Throttled when spend reaches a degrade policy's atPercent. Normal or Throttled move to Blocked when spend reaches a block policy's atPercent. A period rollover, or a spec edit that raises the ceiling or changes the policies, moves Throttled or Blocked back to Normal.](../diagrams/budget-namespace-states.svg)
 
@@ -209,3 +216,5 @@ Every `degradeTo` must name a model in the same provider's catalog (rule 18, `Re
 ### Deletion
 
 A ModelProvider is held in deletion while any Agent, AgentTask, or AgentClass references it; the finalizer releases when the last reference goes away ([Finalizers](../controller/finalizers.md)).
+
+Deleting a ModelProvider also removes the spend recorded for it. A ModelProvider created later under the same name starts with no spend, an empty `budgetUsage`, and no `Blocked` namespaces, even within the same period, so recreating a provider resets its budget for that period ([When a provider is deleted](../gateways/llm/budgets-and-rate-limits.md#when-a-provider-is-deleted)).

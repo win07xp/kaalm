@@ -277,6 +277,19 @@ cause is still there after five minutes, the attempt fails with reason
 `ProvisioningDeadlineExceeded`, and the task retries while `backoffLimit`
 allows.
 
+A task in phase `Failed` with `Ready=False`, reason `ChildWriteRejected`, and no
+`Completed` condition is not finished. It is a retry that is waiting to delete
+its old Pod or reset its completion ConfigMap:
+
+```bash
+kubectl describe agenttask TASK_NAME     # the Ready message names the object and the error
+```
+
+The message names the object and the error from the webhook, policy, or RBAC
+that refused the write. Once you fix the cause, the retry continues within 30
+seconds and counts no extra retry. The wait has no deadline, so the task stays
+in `Failed` until then or until you delete it.
+
 ## Task never completes
 
 - `completion.condition: agentReported` but the image never calls

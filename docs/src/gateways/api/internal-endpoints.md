@@ -163,6 +163,6 @@ GET /v1/spend?namespace=team-support
 |---|---|---|
 | `providers` | map | Keys are ModelProvider names with spend in the namespace this period; a namespace with no spend returns an empty map |
 | `period` | string | The provider's current budget period key |
-| `workloads` | map | USD as decimal strings per workload: `agent/{name}` and `task/{name}` from the attested certificate SAN, and `(unattributed)` for gateway-only-tier callers. The rows sum to the namespace figure in `ModelProvider.status.budgetUsage`, to within one publish and one reconcile interval. |
+| `workloads` | map | USD as decimal strings per workload: `agent/{name}` and `task/{name}` from the attested certificate SAN, and `(unattributed)` for gateway-only-tier callers. The rows sum to the namespace's current-period figure in `ModelProvider.status.budgetUsage`, to within one publish and one reconcile interval. |
 
 **Response codes:** `200 OK`. `400 invalid_request` when `namespace` is missing. `405 invalid_request` with `Allow: GET` when the method is not `GET`.

@@ -119,10 +119,29 @@ Each `budgetUsage` entry carries the namespace, the period key, `spentUSD`,
 synced periodically from the gateway ledgers, so it can lag live spend by a
 sync interval. It is the display surface, not the enforcement counter.
 
+After a period rollover, the list also holds the previous period's entries,
+with `state` `Normal`, until the next rollover. Filter on `period` to read
+current spend. The current period is the latest key:
+
+```bash
+kubectl get modelprovider anthropic-shared -o json \
+  | jq '.status.budgetUsage | (map(.period) | max) as $p | map(select(.period == $p))'
+```
+
+The design book's
+[ModelProvider](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/modelprovider.md#status)
+page gives the rule.
+
 With `period: none` the provider tracks no spend, so `budgetUsage` and
 `clusterSpentUSD` are empty. Turning a budget off clears them, along with any
 `BudgetExhausted` condition on Agents. See the design book's
 [ModelProviderReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/modelprovider.md#budget-reconciliation)
+page.
+
+Deleting a ModelProvider discards its spend for the current period. If you
+recreate it under the same name, every namespace's budget starts from zero. See
+the design book's
+[ModelProvider](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/modelprovider.md#deletion)
 page.
 
 ## Rate limits

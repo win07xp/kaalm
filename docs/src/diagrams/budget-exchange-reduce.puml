@@ -9,10 +9,10 @@ participant "ModelProvider\nReconciler" as rec #87CEEB
 participant "ModelProvider\nstatus" as st #87CEEB
 
 rec -> cm : read all keys
-cm --> rec : partials, _retired
-rec -> rec : old period:\narchive, delete key
+cm --> rec : partials, _retired,\n_previous
+rec -> rec : old period:\nmove into _previous,\ndelete key
 rec -> rec : dead replica:\nfold into _retired, delete key
 rec -> rec : sum current partials\nplus _retired
-rec -> cm : write _retired, _canonical
-rec -> st : budgetUsage,\nprevious-period archive
+rec -> cm : write _retired,\n_canonical, _previous
+rec -> st : budgetUsage for the current\nand previous periods
 @enduml

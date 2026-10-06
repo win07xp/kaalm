@@ -94,4 +94,6 @@ The gateway detects a streaming response (Server-Sent Events, SSE) from the upst
 
 A stream also ends this way when the provider goes silent for longer than the gap bound in step 8. The event is in the caller's format, whatever the serving provider's format is, and carries `provider_timeout` for the idle bound or `provider_error` for any other read failure. The [Mid-stream error event](../api/errors.md#mid-stream-error-event) reference shows the event in both formats.
 
+A stream that ends this way counts as `error` on `kaalm_llm_requests_total` and marks the `llm.request` span with the event's type. A caller that disconnects gets no event and counts as `client_closed`. [Observability](operations.md#observability) lists the `status` values.
+
 **Cross-format usage.** For a cross-format candidate, usage is read from the upstream's own events before translation. See [Provider adapters](provider-routing.md#provider-adapters).

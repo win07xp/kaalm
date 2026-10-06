@@ -238,6 +238,12 @@ Which class fields reach a running agent depends on the field:
   the existing NetworkPolicy without a restart.
 - `network.egress.allowedHosts` reaches the agent's CiliumNetworkPolicy without
   a restart, on Cilium only.
+- Those two egress edits do not reach a running task. A task records the
+  egress lists when its Pod is created, so an `allowedCIDRs` or `allowedHosts`
+  edit reaches only tasks whose Pod, including a retry's Pod, is created after
+  it. A running task keeps the egress it started with, so to tighten it
+  during an incident, delete the task or let it finish. See
+  [Change propagation](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/change-propagation.md#agenttask-handling-no-degraded-phase).
 - `lifecycle` defaults and ceilings apply on the next activity evaluation.
   The task timeout and TTL bounds are different: a task records them when
   its Pod is created, so an edit reaches only tasks whose Pod, including a

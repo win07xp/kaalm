@@ -99,7 +99,10 @@ conflicting object, with the same fix as above), and `PodCreateRejected` or
 refused until the five-minute provisioning deadline fails the attempt. On a
 task with a Pod, `ChildConflict` and `ChildWriteRejected` are reported while
 the task keeps running and can still complete, time out, or retry; see
-[AgentTaskReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agenttask.md#task-child-resource-convergence))
+[AgentTaskReconciler](https://github.com/win07xp/kaalm/blob/main/docs/src/controller/reconcilers/agenttask.md#task-child-resource-convergence).
+On a `Failed` task with no `Completed` condition, `ChildWriteRejected` means a
+retry is waiting, with no deadline; see
+[Task stuck in `Provisioning`](troubleshooting.md#task-stuck-in-provisioning))
 and `Completed` (terminal verdict,
 reason `TaskSucceeded`, `TaskFailed`, `TimeoutExceeded`, or
 `TimeoutSucceeded`). A completion call from the wrong Pod is refused with
@@ -205,7 +208,9 @@ kubectl get modelprovider PROVIDER_NAME -o jsonpath='{.status.budgetUsage}' | jq
 ```
 
 Each entry: namespace, period, `spentUSD`, `percentUsed`, and `state`
-(`Normal` / `Throttled` / `Blocked`).
+(`Normal` / `Throttled` / `Blocked`). After a period rollover, the list also
+holds the previous period's entries, always `Normal`, until the next rollover; see
+[ModelProvider](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/modelprovider.md#status).
 
 ## ToolProvider
 

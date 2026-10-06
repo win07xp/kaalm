@@ -18,7 +18,7 @@ Five data movements make up the exchange. The first four run in every replica; t
 | Count | replica | Every LLM call | Adds the call's cost to its in-memory counter |
 | Publish | replica | Every 10s, and immediately on settle inside the hard-mode boundary region | Writes its own key |
 | Fold | replica | Every ConfigMap watch event, with the 10s tick as a backstop | Rebuilds its enforcement view from peers' current-period keys and `_retired` |
-| Reduce | reconciler | Every reconcile pass, including a pass where the provider fails a check. Passes are event-driven plus timed requeues ([ModelProviderReconciler Timing](../../controller/reconcilers/modelprovider.md#timing)) | Writes `_retired`, `_canonical`, and `status.budgetUsage` from every key |
+| Reduce | reconciler | Every reconcile pass, including a pass where the provider fails a check. Passes are event-driven plus timed requeues ([ModelProviderReconciler Timing](../../controller/reconcilers/modelprovider.md#timing)) | Writes `_retired`, `_canonical`, `_previous`, and `status.budgetUsage` from every key |
 
 ![Sequence diagram of the replica side of the exchange. At startup a replica reads _canonical to seed its counter. On every LLM call it increments the in-memory counter. Every 10 seconds each replica server-side-applies its own key. On every ConfigMap watch event a replica folds its peers' partials plus _retired into its enforcement view.](../../diagrams/budget-exchange-publish.svg)
 
@@ -26,17 +26,19 @@ Each replica publishes its own key with server-side apply, so simultaneous write
 
 ```yaml
 data:
-  kaalm-gateway-0: '{"period": "2026-04", "team-support": "142.50", "team-ml": "87.30"}'
-  kaalm-gateway-1: '{"period": "2026-04", "team-support": "138.20", "team-ml": "91.10"}'
-  _retired: '{"period": "2026-04", "team-support": "12.10"}'
+  kaalm-gateway-0: '{"period": "2026-04", "_providerUID": "7d2c1a90-5b3e-4c1a-9d27-0e6f4b8a1c33", "team-support": "142.50", "team-ml": "87.30"}'
+  kaalm-gateway-1: '{"period": "2026-04", "_providerUID": "7d2c1a90-5b3e-4c1a-9d27-0e6f4b8a1c33", "team-support": "138.20", "team-ml": "91.10"}'
+  _retired: '{"period": "2026-04", "_providerUID": "7d2c1a90-5b3e-4c1a-9d27-0e6f4b8a1c33", "team-support": "12.10"}'
   _canonical: '{"team-support": "292.80", "team-ml": "178.40"}'
+  _previous: '{"period": "2026-03", "archivedIn": "2026-04", "providerUID": "7d2c1a90-5b3e-4c1a-9d27-0e6f4b8a1c33", "sources": {"kaalm-gateway-0": {"team-support": "150.00"}, "kaalm-gateway-1": {"team-support": "141.20"}}}'
 ```
 
-The ConfigMap holds three kinds of key:
+The ConfigMap holds four kinds of key:
 
-- **Per-replica keys** (`kaalm-gateway-0`, `kaalm-gateway-1`) are partials: one replica's view of its own spend, tagged with the `period` it belongs to. Underscore-prefixed fields inside a partial, such as `_marginExceeded` ([Hard enforcement](#hard-enforcement)), are flags, never spend. A flag value is never a bare number, so an older replica's parser cannot read it as a namespace total.
+- **Per-replica keys** (`kaalm-gateway-0`, `kaalm-gateway-1`) are partials: one replica's view of its own spend, tagged with the `period` it belongs to and the `_providerUID` of the ModelProvider it was written for ([When a provider is deleted](#when-a-provider-is-deleted)). Underscore-prefixed fields inside a partial, such as `_marginExceeded` ([Hard enforcement](#hard-enforcement)) and `_providerUID`, are flags or this tag, never spend. A flag value is never a bare number, so an older replica's parser cannot read it as a namespace total.
 - **`_retired`** is written only by the reconciler. When it prunes a terminated replica's current-period key, that key's totals fold into this period-tagged accumulator first, so spend a dead replica already published is never erased. Replicas fold `_retired` into their enforcement view like a peer partial.
 - **`_canonical`** is written only by the reconciler. It is the durable roll-up, including `_retired`.
+- **`_previous`** is written only by the reconciler. It holds the previous period's spend per source (each replica key and `_retired`) under `sources`, with the archived `period` and the period it was written in (`archivedIn`). Replicas never fold it, because the gateway enforces only the current period. Its value is a nested object, so no parser reads it as a namespace total, including an older replica's.
 
 ### Cross-replica enforcement view
 
@@ -46,17 +48,30 @@ The value a replica enforces against is its own live counter, plus every peer's 
 
 ### The reducer
 
-![Sequence diagram of one reconcile pass. The reconciler reads every key from the ConfigMap, archives and deletes old-period keys, folds dead replicas' current-period keys into _retired and deletes them, sums the current partials plus _retired, writes _retired and _canonical back, and updates ModelProvider status with budgetUsage and the previous-period archive.](../../diagrams/budget-exchange-reduce.svg)
+![Sequence diagram of one reconcile pass. The reconciler reads every key from the ConfigMap, moves old-period keys into _previous and deletes them, folds dead replicas' current-period keys into _retired and deletes them, sums the current partials plus _retired, writes _retired, _canonical, and _previous back, and updates ModelProvider status with the current and previous periods' budgetUsage.](../../diagrams/budget-exchange-reduce.svg)
 
 On every pass the reconciler handles each key by its `period` tag and by whether a live gateway Pod of that name exists:
 
 - A current-period key from a live replica is summed.
 - A current-period key from a replica that no longer exists is folded into `_retired`, then deleted. Deleting the key must not delete the spend it recorded. Under soft enforcement the fold prevents a small bounded undercount per rollout. Under hard enforcement it keeps the cap intact, because a rolling restart that erased each replaced replica's published spend would void the ceiling once per rollout.
-- An old-period key, from any replica and including `_retired`, is archived into the previous-period entry of `ModelProvider.status` and deleted.
+- An old-period key, from any replica and including `_retired`, is moved into `_previous` under its source name and deleted. Both happen in the same ConfigMap write, so a failed status write loses nothing, which is why the archive lives in the ConfigMap and not only in status. A replica can publish one more old-period partial after the boundary, because its tick publishes before it folds. A replica skips it when its ledger has already rolled to the new period, which happens at its first request or fold of that period, including a fold a peer's new-period publish triggers. So a source can appear again after it was archived. That partial is a newer snapshot of the same counter, so the reducer keeps the larger figure per namespace instead of adding the two, and the spend is never counted twice. Only the newest old period is kept.
+- A key tagged with another provider's UID is deleted without being summed, retired, or archived, so an earlier provider of the same name never enters this one's figures or its previous-period entry.
 
-The pass then writes `_retired`, `_canonical` (the current-period partials plus `_retired`), and `status.budgetUsage`.
+The pass then writes `_retired`, `_canonical` (the current-period partials plus `_retired`), `_previous`, and `status.budgetUsage`.
+
+`_previous` holds the previous period from the first pass after a rollover until the next rollover. At the next rollover, the new old-period keys replace it, and if none arrive it is dropped. [ModelProvider status](../../resources/modelprovider.md#status) covers what `budgetUsage` shows and how to tell the two periods apart.
 
 **Period rollover.** Periods roll over at midnight UTC; [Budget accounting](../../resources/modelprovider.md#budget-accounting) lists the daily, weekly, and monthly boundaries. Each replica detects the new period on its first request of the period, resets its counter, and publishes a new-period partial. Replicas transition independently, so the ConfigMap holds mixed-period entries for a window, and the `period` tag lets the reducer archive the old entries instead of summing them into the new period. Until every replica has published a new-period partial, `_canonical` is underestimated, which is acceptable for a soft guardrail.
+
+### When a provider is deleted
+
+The reconciler deletes `kaalm-budget-{name}` and `kaalm-agentspend-{name}` when it releases the provider's finalizer. While referrers hold the delete, both ConfigMaps stay, because their agents still spend.
+
+A replica's publish can race that delete, and a provider recreated under the same name must not inherit the old one's spend or `Blocked` state. So each per-replica key and `_retired` carries `_providerUID`, the UID of the ModelProvider it was written for:
+
+- A replica that sees the provider name with a new UID starts its counters from zero.
+- Folds skip keys tagged with another UID, and the reducer deletes them.
+- An untagged key counts as the current provider's, so a partial from a replica that doesn't write the tag still counts.
 
 ### Budget state on crash
 
@@ -86,11 +101,11 @@ Soft enforcement is spend visibility and guardrails, not a financial cap: it add
 
 The ledger also answers "which agent spent it". Beside the per-namespace enforcement counters, each replica accumulates per-workload spend keyed `{namespace}/{workload}`, where the workload is the attested `agent/{name}` or `task/{name}` from the caller's certificate SAN, or the visible `(unattributed)` bucket for gateway-only-tier callers, which authenticate by token and carry no workload identity. Keeping that bucket visible makes the per-workload rows always sum to the namespace figure. Workload spend rolls over with the same period reset as the namespace counters. Admission never reads it, so hard enforcement is unaffected.
 
-Persistence uses the same exchange in a second object, `kaalm-agentspend-{provider}`, with the same one-key-per-replica partials, period tag, and seed at startup. The reducer treats it like the budget ConfigMap: a pruned replica's current-period partial folds into `_retired` before its key is deleted, and old periods drop. The breakdown has its own ConfigMap for two reasons. Safety: the budget fold sums every non-underscore key in the budget ConfigMap as namespace spend, so workload keys inside it would silently corrupt utilization. Capacity: a ConfigMap is capped at about 1 MiB, and at the design target of 1000+ agents the workload keys need the room.
+Persistence uses the same exchange in a second object, `kaalm-agentspend-{provider}`, with the same one-key-per-replica partials, period tag, and seed at startup. The same provider tag and rules apply to it ([When a provider is deleted](#when-a-provider-is-deleted)). The reducer treats it like the budget ConfigMap: a pruned replica's current-period partial folds into `_retired` before its key is deleted, and old periods drop. The breakdown has its own ConfigMap for two reasons. Safety: the budget fold sums every non-underscore key in the budget ConfigMap as namespace spend, so workload keys inside it would silently corrupt utilization. Capacity: a ConfigMap is capped at about 1 MiB, and at the design target of 1000+ agents the workload keys need the room.
 
 Three deliberate boundaries:
 
-- The breakdown keeps the **current period only**. The namespace figures archive one prior generation in `ModelProvider.status`; the breakdown does not, and it never enters provider status at all, because namespaces times workloads would grow the CR against the same object cap.
+- The breakdown keeps the **current period only**. The namespace figures keep the previous period until the next rollover ([ModelProvider status](../../resources/modelprovider.md#status)); the breakdown does not, and it never enters provider status at all, because namespaces times workloads would grow the CR against the same object cap.
 - It never becomes a metric label. Per-workload resolution lives in the [console read API](../../console/overview.md) through the gateway's [GET /v1/spend](../api/internal-endpoints.md#get-v1spend), which any single replica answers, current to within one publish interval.
 - It is priced spend: calls to unpriced models cost zero and do not appear, the same soft-guardrail behavior the namespace figures have.
 

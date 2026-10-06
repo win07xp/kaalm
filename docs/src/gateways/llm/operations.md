@@ -45,7 +45,7 @@ Any single failure returns `503 Service Unavailable` with a body listing which c
 
 The gateway exposes Prometheus metrics on `:9090/metrics`:
 
-- `kaalm_llm_requests_total{provider,model,namespace,status}`
+- `kaalm_llm_requests_total{provider,model,namespace,status}` (status = ok|error|rate_limited|client_closed, one increment per request; the values are listed after this list)
 - `kaalm_llm_request_duration_seconds{provider,model}` (forwarded requests only, stream relay included, labeled with the provider that answered; local denials such as rate limiting and budget blocks are not observed)
 - `kaalm_llm_tokens_total{provider,model,namespace,direction}` (direction = input|output)
 - `kaalm_llm_spend_usd_total{provider,namespace}`
@@ -55,6 +55,17 @@ The gateway exposes Prometheus metrics on `:9090/metrics`:
 - `kaalm_llm_budget_boundary_events_total{provider,namespace,event}` (event = engaged|throttled|fail_closed|margin_raised; emitted only by hard-enforcement providers, see [Hard enforcement](budgets-and-rate-limits.md#hard-enforcement))
 - `kaalm_llm_server_tool_use_total{provider,namespace,tool}` (provider-side tool calls extracted from response usage, such as `web_search`; see [the tool plane](../tool-plane.md#provider-side-tools))
 - `kaalm_llm_usage_missing_total{provider,model}` (successful responses, streamed or not, that carried no usage and settled at zero spend; see [Streaming responses](request-handling.md#streaming-responses))
+
+The `status` values of `kaalm_llm_requests_total`:
+
+- `ok`: a 2xx relayed in full.
+- `error`: the gateway or the provider failed the request, including a stream the provider broke or that went idle partway ([Streaming responses](request-handling.md#streaming-responses)).
+- `rate_limited`: the gateway's rate limit refused the request.
+- `client_closed`: the caller disconnected before a stream finished.
+
+A streamed request is counted when its relay ends, so its `status` reflects how the stream ended: a stream that ended in an error event counts as `error`, not `ok`. `client_closed` is not a wire error type. No caller receives it, so it is not in the [error vocabulary](../api/errors.md).
+
+The share of requests with `status!="ok"`, which the provider dashboard's Error ratio panel plots, includes `rate_limited` and `client_closed`. Select `status="error"` to see provider failures alone, so an alert on provider health does not fire whenever agents abandon streams early.
 
 `kaalm_llm_budget_utilization` is the namespace's share of the provider's per-namespace ceiling, uncapped above 1. A provider without a per-namespace ceiling reports no series. Every replica reports the same ratio to within one publish interval, so dashboards aggregate it with `max`, not `sum`.
 
