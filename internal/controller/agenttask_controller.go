@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -302,8 +303,10 @@ func (r *AgentTaskReconciler) driveProvisioning(
 		task.Status.PodName = desired.Name
 		task.Status.CreateRejectedTime = nil
 		// The class snapshot for this attempt: a retry's new Pod copies the
-		// bounds again from the class as it then stands.
+		// bounds and the egress lists again from the class as it then
+		// stands, the lists the children were just brought to.
 		task.Status.ClassBounds = classTaskBounds(class)
+		task.Status.ClassEgress = classTaskEgress(class)
 		if isAgentReported(task) {
 			task.Status.CurrentPodUID = string(desired.UID)
 		}
@@ -323,13 +326,14 @@ func (r *AgentTaskReconciler) driveProvisioning(
 
 	// Repair the observed Pod's identity when the status write after its
 	// creation was lost (re-opens the gate after a retry). A podName that does
-	// not match shows the loss, so the class bounds are written with it. A Pod
-	// created before status.classBounds existed has a matching podName and
-	// keeps no bounds.
+	// not match shows the loss, so the class bounds and egress lists are
+	// written with it. A Pod created before status.classBounds or
+	// status.classEgress existed has a matching podName and keeps no record.
 	lost := task.Status.PodName != pod.Name
 	if lost || (isAgentReported(task) && task.Status.CurrentPodUID != string(pod.UID)) {
 		if lost {
 			task.Status.ClassBounds = classTaskBounds(class)
+			task.Status.ClassEgress = classTaskEgress(class)
 		}
 		if isAgentReported(task) {
 			task.Status.CurrentPodUID = string(pod.UID)
@@ -745,19 +749,23 @@ func (r *AgentTaskReconciler) taskViolation(
 // ensureTaskChildren converges the SA, PVC, NetworkPolicy, the completion
 // mailbox with its scoped RBAC (agentReported tasks only), and the FQDN
 // policy before the Pod is created; restoreTaskChildren covers the time
-// after. Each child is read before it is created, so one that exists costs
-// no API call.
+// after. The children are brought to the class as it now stands, the lists
+// the new Pod records: a drifted NetworkPolicy, Role, or RoleBinding is
+// updated, while the ServiceAccount, PVC, and ConfigMap are only created.
+// Each child is read from the cache first, so one that matches costs no API
+// call.
 func (r *AgentTaskReconciler) ensureTaskChildren(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
 ) error {
 	// A name taken by an object the task does not control is a
 	// ChildConflictError: adopting it would run the Pod under a policy or
 	// grant Kaalm did not write.
-	for _, obj := range desiredTaskChildren(task, class, eff, r.OperatorNamespace, r.DNS) {
+	children := desiredTaskChildren(task, class, eff, class.Spec.Network.Egress.AllowedCIDRs, r.OperatorNamespace, r.DNS)
+	for _, obj := range children {
 		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
 			return err
 		}
-		if err := createIfMissing(ctx, r.Client, task, obj); err != nil {
+		if err := convergeTaskChild(ctx, r.Client, task, obj); err != nil {
 			return err
 		}
 	}
@@ -774,42 +782,132 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 	return ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
 }
 
-// restoreTaskChildren re-creates children deleted while the task has a live
-// Pod: the Certificate and the children desiredTaskChildren lists. It runs
+// restoreTaskChildren keeps the children of a task that has a live Pod as
+// the reconciler wrote them: the Certificate and the children
+// desiredTaskChildren lists. A missing child is re-created, and an edited
+// NetworkPolicy, CiliumNetworkPolicy, completion Role, or RoleBinding is
+// reverted; the ServiceAccount, PVC, and ConfigMap are only re-created. The
+// two policies are built from status.classEgress, so a later class edit does
+// not reach the task; for a legacy task (no record, its Pod predates the
+// field) they are only re-created, from the class as it now stands. It runs
 // only after the pass's state checks (completion, timeout, Pod loss, the
 // provisioning deadline), so it never delays them, and it never gates on
-// readiness: the Pod keeps what it already mounted. It only creates; a child
-// that exists is never updated or deleted, and a missing one is built from
-// the class as it now stands. The PVC comes back only when the Pod mounts
-// it. The FQDN policy is read live, so it is restored only when withFQDN is
-// set (Running passes, which are event-driven and few). The Secret-access
-// Roles are not restored: only pre-Pod checks read through them. Every
-// child is tried, and the failures come back joined, so a conflict on one
-// child does not stop the others. In steady state it costs only cache
-// reads.
+// readiness: the Pod keeps what it already mounted. The PVC comes back only
+// when the Pod mounts it. The FQDN policy is read live, so it is touched
+// only when withFQDN is set (Running passes, which are event-driven and
+// few). The Secret-access Roles are not restored: only pre-Pod checks read
+// through them. Every child is tried, and the failures come back joined, so
+// a conflict on one child does not stop the others. In steady state it
+// costs only cache reads and makes no writes.
 func (r *AgentTaskReconciler) restoreTaskChildren(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
 	eff effectiveTaskSpec, pod *corev1.Pod, withFQDN bool,
 ) error {
 	var errs []error
 	eff.PersistenceOn = podMountsClaim(pod, taskPVCName(task.Name))
-	for _, obj := range desiredTaskChildren(task, class, eff, r.OperatorNamespace, r.DNS) {
+	egress, revert := taskPolicyEgress(task, class)
+	for _, obj := range desiredTaskChildren(task, class, eff, egress.AllowedCIDRs, r.OperatorNamespace, r.DNS) {
 		if err := controllerutil.SetControllerReference(task, obj, r.Scheme()); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		errs = append(errs, createIfMissing(ctx, r.Client, task, obj))
+		if _, isPolicy := obj.(*networkingv1.NetworkPolicy); isPolicy && !revert {
+			errs = append(errs, createIfMissing(ctx, r.Client, task, obj))
+			continue
+		}
+		errs = append(errs, convergeTaskChild(ctx, r.Client, task, obj))
 	}
 	_, _, err := r.ensureTaskCertificate(ctx, task)
 	errs = append(errs, err)
-	if hosts := class.Spec.Network.Egress.AllowedHosts; withFQDN && len(hosts) > 0 {
+	if hosts := egress.AllowedHosts; withFQDN && len(hosts) > 0 {
 		supported, err := fqdnSupported(r.FQDNSupport)
 		if err == nil {
-			err = restoreFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
+			if revert {
+				err = ensureFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
+			} else {
+				err = restoreFQDNPolicy(ctx, r.Client, r.Scheme(), task, taskPodLabels(task), hosts, r.DNS, supported)
+			}
 		}
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// taskPolicyEgress returns the egress lists a task with a Pod keeps its
+// policies to: status.classEgress, recorded at Pod creation, with revert
+// true. A task whose Pod predates the record gets the class as it now
+// stands, with revert false: its policies are only re-created, never
+// updated, so an upgrade changes no running task's egress.
+func taskPolicyEgress(
+	task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
+) (egress kaalmv1beta1.AgentClassEgress, revert bool) {
+	if task.Status.ClassEgress != nil {
+		return *task.Status.ClassEgress, true
+	}
+	return class.Spec.Network.Egress, false
+}
+
+// convergeTaskChild is the update-in-place sibling of createIfMissing for a
+// task's children. It reads the child from the cache and creates it when
+// missing. A NetworkPolicy, Role, or RoleBinding whose content differs from
+// desired is updated; any other kind (the ServiceAccount, the PVC, the
+// completion ConfigMap) is never updated. A RoleBinding's roleRef is
+// immutable, so one that differs is deleted, with a UID precondition so a
+// stale cache never deletes a binding already replaced, and created again.
+// An object the owner does not control is a ChildConflictError, with no
+// write; one being deleted counts as present. A rejected write comes back as
+// a ChildWriteRejectedError. The update carries the cached resourceVersion,
+// so a stale cache gets a conflict that is retried with backoff rather than
+// a write loop.
+func convergeTaskChild(ctx context.Context, c client.Client, owner, desired client.Object) error {
+	current, ok := desired.DeepCopyObject().(client.Object)
+	if !ok {
+		return fmt.Errorf("%T is not a client.Object", desired)
+	}
+	err := c.Get(ctx, types.NamespacedName{Namespace: desired.GetNamespace(), Name: desired.GetName()}, current)
+	if apierrors.IsNotFound(err) {
+		return createControlled(ctx, c, owner, desired)
+	}
+	if err != nil {
+		return err
+	}
+	if err := requireControlled(c.Scheme(), owner, current); err != nil {
+		return err
+	}
+	if !current.GetDeletionTimestamp().IsZero() {
+		return nil
+	}
+	switch cur := current.(type) {
+	case *networkingv1.NetworkPolicy:
+		d := desired.(*networkingv1.NetworkPolicy)
+		if equality.Semantic.DeepEqual(cur.Spec, d.Spec) {
+			return nil
+		}
+		cur.Spec = d.Spec
+	case *rbacv1.Role:
+		d := desired.(*rbacv1.Role)
+		if equality.Semantic.DeepEqual(cur.Rules, d.Rules) {
+			return nil
+		}
+		cur.Rules = d.Rules
+	case *rbacv1.RoleBinding:
+		d := desired.(*rbacv1.RoleBinding)
+		if cur.RoleRef != d.RoleRef {
+			uid := cur.UID
+			err := c.Delete(ctx, cur, client.Preconditions{UID: &uid})
+			if err := rejectedWrite("deleting", c.Scheme(), cur, client.IgnoreNotFound(err)); err != nil {
+				return err
+			}
+			return createControlled(ctx, c, owner, desired)
+		}
+		if equality.Semantic.DeepEqual(cur.Subjects, d.Subjects) {
+			return nil
+		}
+		cur.Subjects = d.Subjects
+	default:
+		return nil
+	}
+	return rejectedWrite("updating", c.Scheme(), current, c.Update(ctx, current))
 }
 
 // podMountsClaim reports whether pod mounts the PersistentVolumeClaim claim.

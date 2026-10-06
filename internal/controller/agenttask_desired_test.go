@@ -98,7 +98,7 @@ func TestDesiredCompletionRole_Scoping(t *testing.T) {
 func TestDesiredTaskNetworkPolicy_NoIngress(t *testing.T) {
 	task := &kaalmv1beta1.AgentTask{ObjectMeta: metav1.ObjectMeta{Name: "fix-42", Namespace: "team-a"}}
 	class := &kaalmv1beta1.AgentClass{}
-	np := desiredTaskNetworkPolicy(task, class, "kaalm-system", DNSSelector{})
+	np := desiredTaskNetworkPolicy(task, class.Spec.Network.Egress.AllowedCIDRs, "kaalm-system", DNSSelector{})
 	if np.Spec.Ingress == nil || len(np.Spec.Ingress) != 0 {
 		t.Errorf("task policy must declare an explicit empty ingress list, got %v", np.Spec.Ingress)
 	}
@@ -315,7 +315,7 @@ func TestDesiredTaskNetworkPolicy_AllowedCIDRs(t *testing.T) {
 			Egress: kaalmv1beta1.AgentClassEgress{AllowedCIDRs: []string{"203.0.113.0/24"}},
 		},
 	}}
-	np := desiredTaskNetworkPolicy(task, class, "kaalm-system", DNSSelector{})
+	np := desiredTaskNetworkPolicy(task, class.Spec.Network.Egress.AllowedCIDRs, "kaalm-system", DNSSelector{})
 	// gateway + DNS + one CIDR rule.
 	if len(np.Spec.Egress) != 3 {
 		t.Fatalf("want 3 egress rules, got %d", len(np.Spec.Egress))
@@ -400,5 +400,23 @@ func TestDeriveEffectiveTaskSpec_DropsClaims(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The egress record is a copy, and an empty class records an empty value,
+// not nil.
+func TestClassTaskEgress(t *testing.T) {
+	if got := classTaskEgress(&kaalmv1beta1.AgentClass{}); got == nil {
+		t.Fatal("classTaskEgress(empty class) = nil, want an empty record")
+	}
+	class := &kaalmv1beta1.AgentClass{}
+	class.Spec.Network.Egress = kaalmv1beta1.AgentClassEgress{
+		AllowedCIDRs: []string{"10.0.0.0/8"}, AllowedHosts: []string{"a.example.com"},
+	}
+	got := classTaskEgress(class)
+	class.Spec.Network.Egress.AllowedCIDRs[0] = "0.0.0.0/0"
+	class.Spec.Network.Egress.AllowedHosts[0] = "evil.example.com"
+	if got.AllowedCIDRs[0] != "10.0.0.0/8" || got.AllowedHosts[0] != "a.example.com" {
+		t.Errorf("record = %+v, changed with the class", got)
 	}
 }

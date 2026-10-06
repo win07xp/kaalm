@@ -25,6 +25,7 @@ import (
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -333,7 +334,7 @@ func agentReportedChildren(t *testing.T, task *kaalmv1beta1.AgentTask) []client.
 	t.Helper()
 	objs := []client.Object{
 		desiredTaskServiceAccount(task),
-		desiredTaskNetworkPolicy(task, &kaalmv1beta1.AgentClass{}, "kaalm-system", DNSSelector{}),
+		desiredTaskNetworkPolicy(task, nil, "kaalm-system", DNSSelector{}),
 		desiredCompletionConfigMap(task),
 		desiredCompletionRole(task),
 		desiredCompletionRoleBinding(task, "kaalm-system"),
@@ -465,10 +466,33 @@ func TestTask_NetworkPolicyDeletedWhileProvisioningIsRecreated(t *testing.T) {
 	}
 }
 
-// A running task's FQDN policy is created again when it is missing, from
-// the hosts the class lists now, and is never updated or deleted while the
-// Pod runs.
-func TestTask_FQDNPolicyRestoredCreateOnlyWhileRunning(t *testing.T) {
+// setFQDNHosts overwrites the hosts of the task's FQDN policy, the way an
+// edit by hand would.
+func setFQDNHosts(t *testing.T, name string, hosts ...string) {
+	t.Helper()
+	eventually(t, func() error {
+		u, err := getFQDNPolicy(name)
+		if err != nil {
+			return err
+		}
+		egress, _, _ := unstructured.NestedSlice(u.Object, "spec", "egress")
+		var fqdns []any
+		for _, h := range hosts {
+			fqdns = append(fqdns, map[string]any{"matchName": h})
+		}
+		egress[1].(map[string]any)["toFQDNs"] = fqdns
+		if err := unstructured.SetNestedSlice(u.Object, egress, "spec", "egress"); err != nil {
+			return err
+		}
+		return testClient.Update(ctxT(), u)
+	})
+}
+
+// A running task's FQDN policy keeps the hosts the class listed when the
+// Pod was created: a class edit does not reach it, an edit to the policy is
+// reverted at the next Running pass, and a deleted policy comes back with
+// those hosts.
+func TestTask_FQDNPolicyKeptToClassAtPodCreation(t *testing.T) {
 	mkWorkloadClass(t, "wc-fqdn-restore", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Network.Egress.AllowedHosts = []string{"a.example.com"}
 	})
@@ -488,6 +512,11 @@ func TestTask_FQDNPolicyRestoredCreateOnlyWhileRunning(t *testing.T) {
 		return nil
 	})
 
+	// The policy kind is not watched: a class edit brings the Running pass.
+	setFQDNHosts(t, "fqdn-restore", "evil.example.com")
+	setClassHosts(t, "wc-fqdn-restore", []string{"c.example.com"})
+	expectFQDNHosts(t, "fqdn-restore", "AgentTask", "a.example.com")
+
 	u, err := getFQDNPolicy("fqdn-restore")
 	if err != nil {
 		t.Fatal(err)
@@ -495,14 +524,164 @@ func TestTask_FQDNPolicyRestoredCreateOnlyWhileRunning(t *testing.T) {
 	if err := testClient.Delete(ctxT(), u); err != nil {
 		t.Fatal(err)
 	}
-	setClassHosts(t, "wc-fqdn-restore", []string{"c.example.com"})
-	expectFQDNHosts(t, "fqdn-restore", "AgentTask", "c.example.com")
+	setClassHosts(t, "wc-fqdn-restore", []string{"d.example.com"})
+	expectFQDNHosts(t, "fqdn-restore", "AgentTask", "a.example.com")
 
 	setClassHosts(t, "wc-fqdn-restore", nil)
 	consistently(t, 2*time.Second, func() error {
 		_, err := getFQDNPolicy("fqdn-restore")
 		return err
 	})
+}
+
+// setClassCIDRs sets a class's network.egress.allowedCIDRs.
+func setClassCIDRs(t *testing.T, class string, cidrs []string) {
+	t.Helper()
+	eventually(t, func() error {
+		var ac kaalmv1beta1.AgentClass
+		if err := testClient.Get(ctxT(), types.NamespacedName{Name: class}, &ac); err != nil {
+			return err
+		}
+		ac.Spec.Network.Egress.AllowedCIDRs = cidrs
+		return testClient.Update(ctxT(), &ac)
+	})
+}
+
+// npCIDRs lists the ipBlock CIDRs of a task's NetworkPolicy.
+func npCIDRs(name string) ([]string, error) {
+	var np networkingv1.NetworkPolicy
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &np); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, rule := range np.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.IPBlock != nil {
+				out = append(out, peer.IPBlock.CIDR)
+			}
+		}
+	}
+	return out, nil
+}
+
+func expectNPCIDRs(name string, want ...string) func() error {
+	return func() error {
+		got, err := npCIDRs(name)
+		if err != nil {
+			return err
+		}
+		if !slices.Equal(got, want) {
+			return fmt.Errorf("NetworkPolicy CIDRs = %v, want %v", got, want)
+		}
+		return nil
+	}
+}
+
+// Edits to a running task's NetworkPolicy, completion Role, and RoleBinding
+// are put back, and the task keeps its Pod and phase.
+func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
+	mkWorkloadClass(t, "wc-child-revert", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/8"}
+	})
+	pod := provisionRunningTask(t, "child-revert", "wc-child-revert", nil)
+	task := getTask(t, "child-revert")
+	key := func(name string) types.NamespacedName { return types.NamespacedName{Namespace: "default", Name: name} }
+
+	var np networkingv1.NetworkPolicy
+	var role rbacv1.Role
+	var rb rbacv1.RoleBinding
+	if err := testClient.Get(ctxT(), key("child-revert"), &np); err != nil {
+		t.Fatal(err)
+	}
+	wantNP := np.Spec.DeepCopy()
+	eventually(t, func() error {
+		if err := testClient.Get(ctxT(), key("child-revert"), &np); err != nil {
+			return err
+		}
+		np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}},
+		})
+		return testClient.Update(ctxT(), &np)
+	})
+	eventually(t, func() error {
+		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &role); err != nil {
+			return err
+		}
+		role.Rules[0].Verbs = append(role.Rules[0].Verbs, "get", "create")
+		return testClient.Update(ctxT(), &role)
+	})
+	eventually(t, func() error {
+		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &rb); err != nil {
+			return err
+		}
+		rb.Subjects = append(rb.Subjects, rbacv1.Subject{Kind: "ServiceAccount", Name: "intruder", Namespace: "default"})
+		return testClient.Update(ctxT(), &rb)
+	})
+
+	eventually(t, func() error {
+		var got networkingv1.NetworkPolicy
+		if err := testClient.Get(ctxT(), key("child-revert"), &got); err != nil {
+			return err
+		}
+		if !equality.Semantic.DeepEqual(got.Spec, *wantNP) {
+			return errString("NetworkPolicy edit not reverted yet")
+		}
+		var gotRole rbacv1.Role
+		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRole); err != nil {
+			return err
+		}
+		if !equality.Semantic.DeepEqual(gotRole.Rules, desiredCompletionRole(task).Rules) {
+			return errString("Role edit not reverted yet")
+		}
+		var gotRB rbacv1.RoleBinding
+		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRB); err != nil {
+			return err
+		}
+		if len(gotRB.Subjects) != 1 {
+			return errString("RoleBinding edit not reverted yet")
+		}
+		return nil
+	})
+	if p := getTask(t, "child-revert").Status.Phase; p != kaalmv1beta1.TaskRunning {
+		t.Errorf("phase = %s, want Running", p)
+	}
+	expectTaskReadyReason(t, "child-revert", "PodRunning")
+	if p := taskPod(t, "child-revert"); p == nil || p.UID != pod.UID {
+		t.Errorf("pod = %v, want the running Pod %s kept", p, pod.UID)
+	}
+}
+
+// A running task's NetworkPolicy keeps the CIDRs the class listed when the
+// Pod was created: a class edit does not reach it, an edit is reverted to
+// those CIDRs, and a deleted policy comes back with them.
+func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
+	mkWorkloadClass(t, "wc-np-keep", func(ac *kaalmv1beta1.AgentClass) {
+		ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.1.0.0/16"}
+	})
+	provisionRunningTask(t, "np-keep", "wc-np-keep", nil)
+	if eg := getTask(t, "np-keep").Status.ClassEgress; eg == nil || !slices.Equal(eg.AllowedCIDRs, []string{"10.1.0.0/16"}) {
+		t.Fatalf("status.classEgress = %+v, want allowedCIDRs [10.1.0.0/16]", eg)
+	}
+
+	setClassCIDRs(t, "wc-np-keep", []string{"10.2.0.0/16"})
+	consistently(t, 2*time.Second, expectNPCIDRs("np-keep", "10.1.0.0/16"))
+
+	eventually(t, func() error {
+		var np networkingv1.NetworkPolicy
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &np); err != nil {
+			return err
+		}
+		np.Spec.Egress[len(np.Spec.Egress)-1].To[0].IPBlock.CIDR = "0.0.0.0/0"
+		return testClient.Update(ctxT(), &np)
+	})
+	eventually(t, expectNPCIDRs("np-keep", "10.1.0.0/16"))
+
+	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "np-keep", Namespace: "default"}}
+	if err := testClient.Delete(ctxT(), np); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, expectNPCIDRs("np-keep", "10.1.0.0/16"))
+	consistently(t, time.Second, expectNPCIDRs("np-keep", "10.1.0.0/16"))
 }
 
 // countingWrites is an interceptor that counts Create, Update, Patch, and
@@ -671,5 +850,296 @@ func TestDriveProvisioning_TailRestoresWithoutFQDNRead(t *testing.T) {
 	}
 	if ugets != 0 {
 		t.Errorf("unstructured reads = %d, want 0 on the Provisioning tail", ugets)
+	}
+}
+
+// runningAgentReportedTask is an agentReported Running task whose Pod
+// recorded the empty class's egress, with its Pod and Certificate.
+func runningAgentReportedTask(t *testing.T, name string) (*kaalmv1beta1.AgentTask, *corev1.Pod, *cmapi.Certificate) {
+	t.Helper()
+	task := restoreTask(name, kaalmv1beta1.TaskRunning, true, "PodRunning")
+	task.Spec.Completion.Condition = ""
+	task.Status.ClassEgress = &kaalmv1beta1.AgentClassEgress{}
+	pod := restorePod(t, task, corev1.PodRunning, true)
+	cert := desiredTaskCertificate(task, CertLifetime{})
+	if err := controllerutil.SetControllerReference(task, cert, testScheme(t)); err != nil {
+		t.Fatal(err)
+	}
+	return task, pod, cert
+}
+
+// The still-running pass reverts a drifted NetworkPolicy, Role, or
+// RoleBinding with one write, leaves the ConfigMap's data alone, and a
+// second pass writes nothing.
+func TestDriveRunning_RevertsDriftedChildrenOnly(t *testing.T) {
+	cases := []struct {
+		name   string
+		drift  func(obj client.Object)
+		writes int
+	}{
+		{"all present and equal", func(client.Object) {}, 0},
+		{"NetworkPolicy spec drifted", func(obj client.Object) {
+			if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
+				np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
+					To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}},
+				})
+			}
+		}, 1},
+		{"Role rules drifted", func(obj client.Object) {
+			if role, ok := obj.(*rbacv1.Role); ok {
+				role.Rules[0].Verbs = append(role.Rules[0].Verbs, "get")
+			}
+		}, 1},
+		{"RoleBinding subjects drifted", func(obj client.Object) {
+			if rb, ok := obj.(*rbacv1.RoleBinding); ok {
+				rb.Subjects = append(rb.Subjects, rbacv1.Subject{Kind: "ServiceAccount", Name: "x", Namespace: "default"})
+			}
+		}, 1},
+		{"RoleBinding roleRef differs", func(obj client.Object) {
+			if rb, ok := obj.(*rbacv1.RoleBinding); ok {
+				rb.RoleRef.Name = "cluster-admin"
+			}
+		}, 2},
+		{"ConfigMap data changed", func(obj client.Object) {
+			if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == taskCompletionCMName("run-drift") {
+				cm.Data = map[string]string{"status": "success"}
+			}
+		}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task, pod, cert := runningAgentReportedTask(t, "run-drift")
+			objs := []client.Object{task, pod, cert}
+			for _, obj := range agentReportedChildren(t, task) {
+				tc.drift(obj)
+				objs = append(objs, obj)
+			}
+			var writes, ugets int
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+				WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
+				WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
+			r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(8)}
+			drive := func() {
+				t.Helper()
+				if _, err := r.driveRunning(context.Background(), storedTask(t, c, task),
+					&kaalmv1beta1.AgentClass{}, effectiveTaskSpec{}, pod); err != nil {
+					t.Fatal(err)
+				}
+			}
+			drive()
+			if writes != tc.writes {
+				t.Errorf("writes = %d, want %d", writes, tc.writes)
+			}
+			for _, want := range agentReportedChildren(t, task) {
+				got := want.DeepCopyObject().(client.Object)
+				if err := c.Get(context.Background(), client.ObjectKeyFromObject(want), got); err != nil {
+					t.Fatalf("%T: %v", want, err)
+				}
+				if !metav1.IsControlledBy(got, task) {
+					t.Errorf("%T is not controlled by the task", got)
+				}
+				switch g := got.(type) {
+				case *networkingv1.NetworkPolicy:
+					if !equality.Semantic.DeepEqual(g.Spec, want.(*networkingv1.NetworkPolicy).Spec) {
+						t.Errorf("NetworkPolicy spec = %+v, want the desired spec", g.Spec)
+					}
+				case *rbacv1.Role:
+					if !equality.Semantic.DeepEqual(g.Rules, want.(*rbacv1.Role).Rules) {
+						t.Errorf("Role rules = %+v", g.Rules)
+					}
+				case *rbacv1.RoleBinding:
+					w := want.(*rbacv1.RoleBinding)
+					if g.RoleRef != w.RoleRef || !equality.Semantic.DeepEqual(g.Subjects, w.Subjects) {
+						t.Errorf("RoleBinding = %+v %+v", g.RoleRef, g.Subjects)
+					}
+				case *corev1.ConfigMap:
+					if tc.name == "ConfigMap data changed" && g.Data["status"] != "success" {
+						t.Errorf("ConfigMap data = %v, want the payload kept", g.Data)
+					}
+				}
+			}
+			writes = 0
+			drive()
+			if writes != 0 {
+				t.Errorf("second pass writes = %d, want 0", writes)
+			}
+		})
+	}
+}
+
+// A task whose Pod predates status.classEgress keeps edits to its
+// NetworkPolicy; its Role is still reverted.
+func TestDriveRunning_LegacyTaskKeepsPolicyEdits(t *testing.T) {
+	task, pod, cert := runningAgentReportedTask(t, "run-legacy")
+	task.Status.ClassEgress = nil
+	objs := []client.Object{task, pod, cert}
+	for _, obj := range agentReportedChildren(t, task) {
+		switch o := obj.(type) {
+		case *networkingv1.NetworkPolicy:
+			o.Spec.Egress = o.Spec.Egress[:1]
+		case *rbacv1.Role:
+			o.Rules[0].Verbs = append(o.Rules[0].Verbs, "get")
+		}
+		objs = append(objs, obj)
+	}
+	var writes, ugets int
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
+		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(8)}
+	if _, err := r.driveRunning(context.Background(), storedTask(t, c, task),
+		&kaalmv1beta1.AgentClass{}, effectiveTaskSpec{}, pod); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 {
+		t.Errorf("writes = %d, want 1 (the Role)", writes)
+	}
+	var np networkingv1.NetworkPolicy
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: task.Name}, &np); err != nil {
+		t.Fatal(err)
+	}
+	if len(np.Spec.Egress) != 1 {
+		t.Errorf("legacy NetworkPolicy egress = %+v, want the edit kept", np.Spec.Egress)
+	}
+}
+
+// Before a Pod exists, the NetworkPolicy is brought to the class as it now
+// stands, so the new Pod's record matches the policy it runs under.
+func TestEnsureTaskChildren_ConvergesToCurrentClass(t *testing.T) {
+	task := restoreTask("converge-np", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
+	classA := &kaalmv1beta1.AgentClass{}
+	classA.Spec.Network.Egress.AllowedCIDRs = []string{"10.1.0.0/16"}
+	classB := &kaalmv1beta1.AgentClass{}
+	classB.Spec.Network.Egress.AllowedCIDRs = []string{"10.2.0.0/16"}
+	old := desiredTaskNetworkPolicy(task, classA.Spec.Network.Egress.AllowedCIDRs, "kaalm-system", DNSSelector{})
+	if err := controllerutil.SetControllerReference(task, old, testScheme(t)); err != nil {
+		t.Fatal(err)
+	}
+	var writes, ugets int
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(old).
+		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system"}
+	if err := r.ensureTaskChildren(context.Background(), task, classB, effectiveTaskSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	var np networkingv1.NetworkPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(old), &np); err != nil {
+		t.Fatal(err)
+	}
+	want := desiredTaskNetworkPolicy(task, classB.Spec.Network.Egress.AllowedCIDRs, "kaalm-system", DNSSelector{})
+	if !equality.Semantic.DeepEqual(np.Spec, want.Spec) {
+		t.Errorf("NetworkPolicy spec = %+v, want the current class's", np.Spec)
+	}
+	if writes != 2 { // the ServiceAccount create and the NetworkPolicy update
+		t.Errorf("writes = %d, want 2", writes)
+	}
+}
+
+// readyTaskCert is a task Certificate that cert-manager reports Ready.
+func readyTaskCert(t *testing.T, task *kaalmv1beta1.AgentTask) *cmapi.Certificate {
+	t.Helper()
+	cert := desiredTaskCertificate(task, CertLifetime{})
+	cert.Status.Conditions = []cmapi.CertificateCondition{{
+		Type: cmapi.CertificateConditionReady, Status: cmmeta.ConditionTrue, Reason: "Issued",
+	}}
+	if err := controllerutil.SetControllerReference(task, cert, testScheme(t)); err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// The status write that records a new Pod records the class's egress lists
+// too, as a copy; so does the repair of a lost Pod name.
+func TestDriveProvisioning_RecordsClassEgress(t *testing.T) {
+	ctx := context.Background()
+	t.Run("Pod creation", func(t *testing.T) {
+		task := restoreTask("rec-egress", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
+		task.Status.PodName, task.Status.StartTime = "", nil
+		class := &kaalmv1beta1.AgentClass{}
+		class.Spec.Network.Egress = kaalmv1beta1.AgentClassEgress{
+			AllowedCIDRs: []string{"10.0.0.0/8"}, AllowedHosts: []string{"a.example.com"},
+		}
+		r, c := restoreReconciler(t, task, readyTaskCert(t, task))
+		if _, err := r.driveProvisioning(ctx, storedTask(t, c, task), class, effectiveTaskSpec{Image: "x"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		class.Spec.Network.Egress.AllowedCIDRs[0] = "0.0.0.0/0"
+		got := storedTask(t, c, task).Status.ClassEgress
+		if got == nil || !slices.Equal(got.AllowedCIDRs, []string{"10.0.0.0/8"}) ||
+			!slices.Equal(got.AllowedHosts, []string{"a.example.com"}) {
+			t.Errorf("classEgress = %+v, want a copy of the class's lists", got)
+		}
+	})
+	t.Run("empty class", func(t *testing.T) {
+		task := restoreTask("rec-egress-empty", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
+		task.Status.PodName, task.Status.StartTime = "", nil
+		r, c := restoreReconciler(t, task, readyTaskCert(t, task))
+		if _, err := r.driveProvisioning(ctx, storedTask(t, c, task), &kaalmv1beta1.AgentClass{},
+			effectiveTaskSpec{Image: "x"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := storedTask(t, c, task).Status.ClassEgress; got == nil {
+			t.Error("classEgress = nil, want an empty record")
+		}
+	})
+	t.Run("lost Pod name", func(t *testing.T) {
+		task := restoreTask("rec-egress-lost", kaalmv1beta1.TaskProvisioning, false, "PodProvisioning")
+		task.Status.PodName, task.Status.StartTime = "", nil
+		pod := restorePod(t, task, corev1.PodPending, false)
+		class := &kaalmv1beta1.AgentClass{}
+		class.Spec.Network.Egress.AllowedCIDRs = []string{"10.3.0.0/16"}
+		r, c := restoreReconciler(t, task, pod)
+		if _, err := r.driveProvisioning(ctx, storedTask(t, c, task), class, effectiveTaskSpec{}, pod); err != nil {
+			t.Fatal(err)
+		}
+		got := storedTask(t, c, task).Status.ClassEgress
+		if got == nil || !slices.Equal(got.AllowedCIDRs, []string{"10.3.0.0/16"}) {
+			t.Errorf("classEgress = %+v, want the class's CIDRs", got)
+		}
+	})
+}
+
+// A Running pass reverts a drifted FQDN policy to the hosts recorded when
+// the Pod was created.
+func TestDriveRunning_RevertsFQDNPolicyToRecord(t *testing.T) {
+	task, pod, cert := runningAgentReportedTask(t, "run-fqdn-drift")
+	task.Spec.Completion.Condition = completionExitCode
+	task.Status.ClassEgress = &kaalmv1beta1.AgentClassEgress{AllowedHosts: []string{"a.example.com"}}
+	drifted := desiredFQDNPolicy(task, taskPodLabels(task), []string{"evil.example.com"}, DNSSelector{})
+	if err := controllerutil.SetControllerReference(task, drifted, testScheme(t)); err != nil {
+		t.Fatal(err)
+	}
+	objs := []client.Object{task, pod, cert, drifted}
+	np := desiredTaskNetworkPolicy(task, nil, "kaalm-system", DNSSelector{})
+	sa := desiredTaskServiceAccount(task)
+	for _, obj := range []client.Object{np, sa} {
+		if err := controllerutil.SetControllerReference(task, obj, testScheme(t)); err != nil {
+			t.Fatal(err)
+		}
+		objs = append(objs, obj)
+	}
+	var writes, ugets int
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).
+		WithInterceptorFuncs(countingWrites(&writes, &ugets)).Build()
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: record.NewFakeRecorder(8),
+		FQDNSupport: func() (bool, error) { return true, nil }}
+	// The class now lists other hosts; the record wins.
+	class := &kaalmv1beta1.AgentClass{}
+	class.Spec.Network.Egress.AllowedHosts = []string{"b.example.com"}
+	if _, err := r.driveRunning(context.Background(), storedTask(t, c, task), class, effectiveTaskSpec{}, pod); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 {
+		t.Errorf("writes = %d, want 1", writes)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(ciliumPolicyGVK)
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(drifted), u); err != nil {
+		t.Fatal(err)
+	}
+	want := desiredFQDNPolicy(task, taskPodLabels(task), []string{"a.example.com"}, DNSSelector{})
+	if !equality.Semantic.DeepEqual(u.Object["spec"], want.Object["spec"]) {
+		t.Errorf("FQDN policy spec = %v, want the recorded hosts", u.Object["spec"])
 	}
 }

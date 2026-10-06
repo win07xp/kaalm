@@ -70,7 +70,7 @@ func TestDesiredNetworkPolicies_DNSSelector(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agentDNS := desiredNetworkPolicy(agent, class, effectiveAgentSpec{HealthPort: 8080}, "kaalm-system", tc.sel).Spec.Egress[1].To[0]
-			taskDNS := desiredTaskNetworkPolicy(task, class, "kaalm-system", tc.sel).Spec.Egress[1].To[0]
+			taskDNS := desiredTaskNetworkPolicy(task, class.Spec.Network.Egress.AllowedCIDRs, "kaalm-system", tc.sel).Spec.Egress[1].To[0]
 			for _, peer := range []struct {
 				kind string
 				ns   *metav1.LabelSelector
