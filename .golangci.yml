@@ -1,6 +1,14 @@
 version: "2"
 run:
   allow-parallel-runners: true
+  # test/e2e, test/upgrade and test/perf compile only under these tags, so
+  # without them lint never reads those files. kaalm_debug_logs stays out:
+  # it swaps internal/gateway/bodylog.go for bodylog_debug.go, which would drop
+  # the release file from lint.
+  build-tags:
+    - e2e
+    - upgrade
+    - perftest
 # prealloc is deliberately not enabled: every finding it raised was a composite
 # literal followed by an append, where the suggested make()+append rewrite costs
 # readability for an allocation that is irrelevant at these sizes (a handful of
