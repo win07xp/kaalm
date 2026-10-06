@@ -327,9 +327,10 @@ e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
 dashboards-verify: ## Verify config/grafana against the live e2e cluster (run after make e2e): throwaway Prometheus+Grafana, provisioning, every panel query.
 	hack/dashboards-verify.sh
 
-# The released chart the upgrade e2e starts from. Release readiness
-# bumps this to the newly released version after each release. The upgrade
-# workflow also runs from 0.5.0, the last release before the graduation.
+# The released chart the upgrade e2e starts from, and the one place it is
+# pinned. The release checklist in RELEASING.md bumps this to the newly
+# released version after each release. The upgrade workflow also runs from
+# 0.5.0, the last release before the graduation.
 PREV_CHART_VERSION ?= 1.0.0
 
 .PHONY: upgrade-images

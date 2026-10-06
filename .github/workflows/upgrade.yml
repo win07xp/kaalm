@@ -3,15 +3,15 @@
 # and nothing was lost.
 #
 # Two previous releases, one job each: the Makefile's PREV_CHART_VERSION
-# (the latest release, bumped by release readiness) and 0.5.0, the last
-# release before the v0.6.0 API graduation. Only the second crosses the
-# graduation: the conversion window and the storage migration.
+# (the latest release, bumped by the release checklist in RELEASING.md) and
+# 0.5.0, the last release before the v0.6.0 API graduation. Only the second
+# crosses the graduation: the conversion window and the storage migration.
 #
 # Deliberately not part of ci.yml: most PRs
 # cannot affect the upgrade path, so this runs only when a PR touches the
 # API, the shipped CRDs, the storage migrator, the spec itself, or this
-# file, plus on every release tag. Release readiness also runs
-# make e2e-upgrade locally before tagging.
+# file, plus on every release tag. The release checklist in RELEASING.md
+# also runs make e2e-upgrade locally before tagging.
 name: upgrade
 
 on:
