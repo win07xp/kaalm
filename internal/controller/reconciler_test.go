@@ -798,9 +798,9 @@ func TestReconcileDelete_NoFinalizerIsNoop(t *testing.T) {
 		}
 	}
 
-	err := (&ModelProviderReconciler{Client: testClient}).reconcileDelete(ctx,
+	mpRes, err := (&ModelProviderReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
-	clean("ModelProvider", false, 0, err)
+	clean("ModelProvider", mpRes.Requeue, mpRes.RequeueAfter, err)
 
 	acRes, err := (&AgentClassReconciler{Client: testClient}).reconcileDelete(ctx,
 		&kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
@@ -945,7 +945,7 @@ func TestReferenceCountsPropagateListErrors(t *testing.T) {
 	// referrers (via reconcileDelete on a finalized provider) surfaces it too.
 	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	controllerutil.AddFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
-	if err := (&ModelProviderReconciler{Client: c}).reconcileDelete(ctx, mp); err == nil {
+	if _, err := (&ModelProviderReconciler{Client: c}).reconcileDelete(ctx, mp); err == nil {
 		t.Error("provider reconcileDelete must surface the referrers list error")
 	}
 
