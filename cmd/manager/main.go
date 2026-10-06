@@ -477,7 +477,8 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	// The CRD conversion webhook (design book, API Versioning and Deprecation):
+	// The CRD conversion webhook
+	// (docs/src/operations/api-versioning.md#where-the-conversion-webhook-runs):
 	// v1beta1 is the hub and storage version, v1alpha1 the deprecated spoke,
 	// and every replica serves the conversion on its own listener. It is
 	// enabled by the cert path, the way the activator is enabled by the
@@ -509,8 +510,8 @@ func main() {
 		setupLog.Info("webhook cert path not configured; CRD conversion webhook disabled")
 	}
 
-	// The storage-version migrator (design book, API Versioning and
-	// Deprecation, Storage-Version Migration): on the leader, once per start,
+	// The storage-version migrator
+	// (docs/src/operations/api-versioning.md#storage-version-migration): on the leader, once per start,
 	// rewrite every custom resource at v1beta1 and trim each CRD's
 	// storedVersions, so an upgraded cluster finishes the graduation on its
 	// own. Idempotent, retried with backoff, never fatal to the manager.

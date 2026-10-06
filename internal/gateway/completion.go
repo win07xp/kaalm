@@ -100,23 +100,23 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 		forbidden(w, errAccessDenied, "NotAgentTaskPod: no AgentTask backs this caller")
 		return
 	}
-	// (b) exitCode tasks have no completion mailbox.
+	// Check 5: exitCode tasks have no completion mailbox.
 	if task.Spec.Completion.Condition == "exitCode" {
 		writeError(w, http.StatusForbidden, errorBody{
 			Type: errAccessDenied, Message: "TaskNotAgentReported: this task completes via container exit"}, 0)
 		return
 	}
-	// (d) terminal phases reject further writes.
+	// Check 6: terminal phases reject further writes.
 	switch task.Status.Phase {
 	case kaalmv1beta1.TaskSucceeded, kaalmv1beta1.TaskFailed, kaalmv1beta1.TaskTimedOut:
 		writeError(w, http.StatusForbidden, errorBody{
 			Type: errAccessDenied, Message: "TaskAlreadyCompleted: the task has reached a terminal phase"}, 0)
 		return
 	}
-	// (c) the Pod UID check: the calling Pod's UID must match
-	// status.currentPodUID. Resolved from the source IP, with the live
-	// namespace-narrowed fallback on an informer miss (task-complete.md,
-	// cross-check step 2). A 409 and retryable, because the benign
+	// Check 7, the Pod UID check: the calling Pod's UID must match
+	// status.currentPodUID. The Pod is resolved from the source IP, with the
+	// live namespace-narrowed fallback on an informer miss (check 3 in
+	// docs/src/gateways/api/task-complete.md). A 409 and retryable, because the benign
 	// informer-lag race on currentPodUID itself shares this rejection.
 	if !s.Config.DisableSourceIPCheck {
 		ip := sourceIP(r)

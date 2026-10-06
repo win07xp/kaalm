@@ -842,7 +842,8 @@ func TestAgent_HandlerRepointReplacesPod(t *testing.T) {
 	oldHash := oldPod.Annotations["kaalm.io/pod-spec-hash"]
 
 	// Repointing the reference is ordinary Pod-replacing spec drift: the
-	// versioned-ConfigMap rollout pattern from the design book.
+	// versioned-ConfigMap rollout pattern from
+	// docs/src/runtime/base-images.md#handler-update-semantics.
 	eventually(t, func() error {
 		ag := getWorkloadAgent(t, "repoint-agent")
 		ag.Spec.Handler.ConfigMapRef.Name = "greeter-v2"

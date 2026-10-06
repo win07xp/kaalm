@@ -29,8 +29,8 @@ import (
 
 // v1alpha1 is a spoke: since v0.6.0 it is served, deprecated, and converted
 // to and from the v1beta1 hub by the controller's conversion webhook. The
-// v1beta1 schema is the v1alpha1 schema field for field (design book, API
-// Versioning and Deprecation), so conversion in both directions is a
+// v1beta1 schema is the v1alpha1 schema field for field
+// (docs/src/operations/api-versioning.md#hub-and-spoke), so conversion in both directions is a
 // structural copy. The round-trip fuzz suite is what keeps that honest: the
 // day a field differs between the versions, the identity breaks for that
 // kind and its conversion becomes a hand-written rule.

@@ -192,8 +192,8 @@ spec:
     # targetPort by name: during a rolling upgrade from a release without
     # the conversion listener, the old replicas declare no "conversion" port
     # and so are never endpoints for it; conversions only ever reach a
-    # replica that can answer (design book, API Versioning, Upgrading in
-    # Place).
+    # replica that can answer
+    # (docs/src/operations/api-versioning.md#upgrading-in-place).
     - name: conversion
       port: 9444
       targetPort: conversion

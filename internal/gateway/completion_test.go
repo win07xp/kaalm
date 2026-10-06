@@ -327,7 +327,8 @@ func TestTaskComplete_NoTaskBacksCaller(t *testing.T) {
 
 // TestTaskComplete_ForbiddenReasonPrefix pins the wire form of every 403 on
 // /v1/task/complete: error.message starts with the reason code, so callers
-// tell the three reasons apart by prefix (task-complete.md, 403 Forbidden).
+// tell the three reasons apart by prefix
+// (docs/src/gateways/api/task-complete.md#403-forbidden).
 // The stale-Pod case is a 409 and is pinned in TestTaskComplete_Rejections.
 func TestTaskComplete_ForbiddenReasonPrefix(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})

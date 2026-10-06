@@ -19,9 +19,9 @@ limitations under the License.
 // Command perf is the scale proof: a repeatable harness that stands up
 // a Kaalm fleet on a dedicated k3d cluster, drives load through the shipped
 // chart, and emits a machine-readable summary. `make perf` runs it end to end;
-// the first run's numbers are the baseline the design book's
-// operations/performance-and-scale.md page publishes and later releases compare
-// against.
+// the first run's numbers are the baseline that
+// docs/src/operations/performance-and-scale.md publishes and later releases
+// compare against.
 //
 // One binary, two entrypoints:
 //

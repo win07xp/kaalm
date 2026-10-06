@@ -39,13 +39,13 @@ Checks, per book:
 
 Across the repository, outside the books:
 
-- every book page that a Go file under api/, cmd/, internal/, or test/ cites by
-  path (`docs/src/...md`, also `guide/src` and `learn/src`) exists, and its
+- every book page that a tracked file outside the books cites by path
+  (`docs/src/<page>.md`, also `guide/src` and `learn/src`) exists, and its
   `#anchor` names a heading on that page, under the same slug rules as
   in-book links. API type comments are the CRD field descriptions that
   `kubectl explain` shows, so a comment is held to the book's link rules. Name
   a section with its `#anchor`, because a section named in prose after the
-  path is not checked. Renaming a heading means updating these comments as
+  path is not checked. Renaming a heading means updating these citations as
   well as the in-book links;
 - no code comment, build file, script, or workflow cites an issue or PR
   number (a `#` followed by digits): it states the reason instead, and git history keeps the
@@ -85,12 +85,9 @@ INLINE_CODE = re.compile(r"`[^`]*`")
 LINK_TARGET = re.compile(r"\]\([^)]*\)")
 HTML_TAG = re.compile(r"<[^>]+>")
 CITED_PATH = re.compile(r"\b((?:config/samples|test/e2e/testdata)/[\w./-]+\.ya?ml)\b")
-# Go trees whose comments cite book pages; API type comments become the CRD
-# descriptions that `kubectl explain` shows.
-GO_DOC_DIRS = ("api", "cmd", "internal", "test")
-# A book page cited from Go: group 1 is the repo-relative page, group 2 the
-# optional anchor.
-GO_DOC_REF = re.compile(r"\b((?:docs|guide|learn)/src/[\w./-]+?\.md)\b(?:#([\w-]+))?")
+# A book page cited from a file outside the books: group 1 is the
+# repo-relative page, group 2 the optional anchor.
+BOOK_REF = re.compile(r"\b((?:docs|guide|learn)/src/[\w./-]+?\.md)\b(?:#([\w-]+))?")
 DASHES = re.compile("[–—]")
 # An issue or PR number: a '#' followed by digits, not an HTML entity
 # ('&#' and digits), a URL fragment ('/#' and digits), or part of a word or
@@ -438,36 +435,43 @@ class Checker:
                     if name not in listed:
                         self.problems.append(f"{rel}:{n}: embeds {name}, which is not listed in guide/src/diagrams/SOURCES")
 
-    def check_go_doc_refs(self) -> None:
-        """Every book page a Go file cites by path exists, and its #anchor names
-        a heading there. A renamed heading otherwise breaks these citations
-        silently, since no book link points at them."""
-        for d in GO_DOC_DIRS:
-            for f in sorted((ROOT / d).rglob("*.go")):
-                rel = f.relative_to(ROOT).as_posix()
-                text = f.read_text(encoding="utf-8")
-                for m in GO_DOC_REF.finditer(text):
-                    n = text.count("\n", 0, m.start()) + 1
-                    dest = ROOT / m.group(1)
-                    if not dest.is_file():
-                        self.problems.append(f"{rel}:{n}: link target does not exist: {m.group(0)}")
-                    elif m.group(2) and m.group(2) not in self.anchors(dest):
-                        self.problems.append(f"{rel}:{n}: no heading for anchor: {m.group(0)}")
-
-    def check_issue_refs(self) -> None:
-        """No code comment, build file, script, or workflow cites an issue or
-        PR number: CLAUDE.md asks for the reason instead, and this keeps a
-        citation from coming back."""
+    def tracked_outside_books(self) -> list[str]:
+        """Every tracked file outside the three books, repo-relative. When git
+        cannot list them, records a problem and returns none."""
         try:
             out = subprocess.run(
                 ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
             ).stdout.decode("utf-8")
         except (OSError, subprocess.CalledProcessError) as e:
-            self.problems.append(f"issue-number check: git ls-files failed: {e}")
-            return
-        for rel in sorted(filter(None, out.split("\0"))):
-            if rel.split("/", 1)[0] in BOOKS:
+            self.problems.append(f"git ls-files failed: {e}")
+            return []
+        return [rel for rel in sorted(filter(None, out.split("\0"))) if rel.split("/", 1)[0] not in BOOKS]
+
+    def check_book_refs(self) -> None:
+        """Every book page a file outside the books cites by path exists, and
+        its #anchor names a heading there. A renamed heading otherwise breaks
+        these citations silently, since no book link points at them."""
+        for rel in self.tracked_outside_books():
+            f = ROOT / rel
+            if not f.is_file():
                 continue
+            try:
+                text = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for m in BOOK_REF.finditer(text):
+                n = text.count("\n", 0, m.start()) + 1
+                dest = ROOT / m.group(1)
+                if not dest.is_file():
+                    self.problems.append(f"{rel}:{n}: link target does not exist: {m.group(0)}")
+                elif m.group(2) and m.group(2) not in self.anchors(dest):
+                    self.problems.append(f"{rel}:{n}: no heading for anchor: {m.group(0)}")
+
+    def check_issue_refs(self) -> None:
+        """No code comment, build file, script, or workflow cites an issue or
+        PR number: CLAUDE.md asks for the reason instead, and this keeps a
+        citation from coming back."""
+        for rel in self.tracked_outside_books():
             path = pathlib.PurePosixPath(rel)
             if not (
                 path.suffix in ISSUE_REF_SUFFIXES
@@ -563,7 +567,7 @@ def main(argv: list[str]) -> int:
     for book in BOOKS:
         checker.check_book(book)
     checker.check_guide_figures()
-    checker.check_go_doc_refs()
+    checker.check_book_refs()
     checker.check_issue_refs()
     checker.check_coverage_map()
     checker.check_diagrams()

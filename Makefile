@@ -215,7 +215,7 @@ PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
 DOCS_CHECK_FLAGS ?=
 
 .PHONY: docs-check
-docs-check: ## Check the three books, and code outside them for issue-number citations; the list of checks is the docstring of hack/docs/check.py.
+docs-check: ## Check the three books and the files that cite them; the list of checks is the docstring of hack/docs/check.py.
 	python3 hack/docs/check.py $(DOCS_CHECK_FLAGS)
 
 .PHONY: diagrams

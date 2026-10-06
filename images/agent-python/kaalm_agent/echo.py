@@ -3,7 +3,7 @@
 
 Deterministic, makes no LLM calls (so it works on a provider-less Agent), and
 its output is distinguishable from any real handler, which is what the e2e
-suite keys on. See docs/src/runtime/base-images.md (The default handler).
+suite keys on. See docs/src/runtime/base-images.md#the-default-handler.
 """
 
 from __future__ import annotations

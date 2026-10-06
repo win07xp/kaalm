@@ -1,5 +1,5 @@
 {{/*
-Roles for people (docs/src/security/rbac.md, Roles for people). Off renders
+Roles for people (docs/src/security/rbac.md#roles-for-people). Off renders
 nothing: a default install creates none of these objects. With
 rbac.personas.enabled the chart installs four ClusterRoles, plus a binding for
 each subject list that is not empty. kaalm-developer and kaalm-secrets-admin

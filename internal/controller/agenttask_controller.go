@@ -57,7 +57,8 @@ const provisioningDeadline = 5 * time.Minute
 // Provisioning -> Running -> Completing -> Succeeded/Failed/TimedOut, with
 // backoffLimit retries bracketed by the currentPodUID check (the gateway
 // records a completion only from that Pod) and the completion mailbox. See
-// docs/src/controller/reconcilers/agenttask.md and task-lifecycle.md.
+// docs/src/controller/reconcilers/agenttask.md and
+// docs/src/controller/task-lifecycle.md.
 type AgentTaskReconciler struct {
 	client.Client
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).

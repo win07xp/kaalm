@@ -29,7 +29,8 @@ import (
 // pieces below (usage extraction, URL-path model rewriting, the ?alt=sse
 // fixup) stay for the finished feature. The platform's product name is now
 // the Gemini Enterprise Agent Platform; the wire API and the enum value are
-// unchanged. See request-handling.md, The google-vertex type is reserved.
+// unchanged. See
+// docs/src/gateways/llm/request-handling.md#the-google-vertex-type-is-reserved.
 
 type vertexAdapter struct{}
 
