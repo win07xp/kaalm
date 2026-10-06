@@ -62,6 +62,10 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 	@rm -f cover.out
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -count=1 $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+.PHONY: test-race
+test-race: manifests generate fmt vet setup-envtest ## Run the unit and envtest suites under the race detector (no coverage).
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -race -count=1 $$(go list ./... | grep -v /e2e)
+
 # Minimum acceptable project-wide statement coverage (the union across all
 # non-e2e packages, so cross-package tests get credit). Overridable: make
 # cover-check COVERAGE_THRESHOLD=90

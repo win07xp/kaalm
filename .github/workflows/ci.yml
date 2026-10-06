@@ -109,6 +109,21 @@ jobs:
       - name: Go base image contract smoke (real container, mTLS matrix)
         run: make go-agent-smoke GO_AGENT_IMG=kaalm-agent-go:ci
 
+  # The same suites as cover-check, under the race detector. A job of its own
+  # so the coverage step does not pay for -race.
+  race:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Unit and envtest suites under the race detector
+        run: make test-race
+
   lint:
     needs: changes
     if: needs.changes.outputs.code == 'true'
