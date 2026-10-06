@@ -184,7 +184,7 @@ jobs:
             ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 \
             bash -c 'apt-get -o Acquire::Retries=3 update -qq &&
               DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
-                make openjdk-17-jre-headless graphviz fonts-dejavu-core >/dev/null &&
+                make openjdk-17-jre-headless graphviz fonts-dejavu-core fonts-dejavu-extra >/dev/null &&
               make diagrams PLANTUML_JAR=/opt/plantuml.jar'
           # git status, not git diff, so an untracked new render also fails.
           changed=$(git status --porcelain -- docs/src/diagrams guide/src/diagrams)

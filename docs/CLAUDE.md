@@ -57,8 +57,11 @@ A local render matches CI only with this setup:
 - OpenJDK 17.
 - Graphviz, which lays out many figures.
 - DejaVu Sans as the system sans-serif font (check with
-  `fc-match sans-serif`). PlantUML sizes every box from the measured label
-  text, so another font moves every figure.
+  `fc-match sans-serif`), including its Oblique (italic) faces, which Ubuntu
+  ships in `fonts-dejavu-extra`. PlantUML sizes every box from the measured
+  label text, so another font moves every figure. Without the Oblique faces,
+  Java synthesizes italics, and italic labels such as the «attempted» and
+  «cut» stereotypes in `fallback-tree.puml` measure narrower.
 
 The image and packages are in the books job of `.github/workflows/ci.yml`;
 read them there. Java caches its font lookup under `~/.java/fonts`. After you
