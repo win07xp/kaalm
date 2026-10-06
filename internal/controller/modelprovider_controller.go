@@ -79,7 +79,13 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	var mp kaalmv1beta1.ModelProvider
 	if err := r.Get(ctx, req.NamespacedName, &mp); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			// A provider can disappear without our finalizer pass (the
+			// finalizer stripped by hand); its series must not freeze.
+			dropBudgetCanonical(req.Name)
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
 	}
 
 	// Events held for a status write that never happened (an error before
@@ -194,6 +200,9 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	if err := r.deleteSpendConfigMaps(ctx, mp.Name); err != nil {
 		return ctrl.Result{}, err
 	}
+	// No budget pass runs once the delete has started, so nothing sets the
+	// series again before the finalizer goes.
+	dropBudgetCanonical(mp.Name)
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
 }

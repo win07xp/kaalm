@@ -18,7 +18,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -169,5 +173,56 @@ func TestModelProvider_HeldDeleteKeepsSpendConfigMaps(t *testing.T) {
 		if !configMapExists(t, r.Client, cm) {
 			t.Errorf("ConfigMap %s deleted while the delete is held", cm)
 		}
+	}
+}
+
+// A released delete drops the provider's canonical-spend series; a held
+// delete keeps them; a provider gone before the delete pass loses them on
+// the next request for its name.
+func TestModelProvider_DeleteDropsCanonicalGauge(t *testing.T) {
+	period := gateway.PeriodKey("monthly", time.Now())
+	cases := []struct {
+		name     string
+		objs     func(name string) []client.Object
+		wantKept bool
+	}{{
+		name: "finalizer released",
+		objs: func(name string) []client.Object { return []client.Object{deletingProvider(name)} },
+	}, {
+		name: "held by referrer",
+		objs: func(name string) []client.Object {
+			return []client.Object{deletingProvider(name), &kaalmv1beta1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: "holds", Namespace: "team-a"},
+				Spec: kaalmv1beta1.AgentSpec{
+					Providers: []kaalmv1beta1.AgentProviderReference{{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: name}}},
+				},
+			}}
+		},
+		wantKept: true,
+	}, {
+		name: "object already gone",
+		objs: func(string) []client.Object { return nil },
+	}}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := fmt.Sprintf("del-gauge-%d", i)
+			control := name + "-control"
+			t.Cleanup(func() {
+				providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": name})
+				providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": control})
+			})
+			providerBudgetCanonical.WithLabelValues(name, "team-a", period).Set(95)
+			providerBudgetCanonical.WithLabelValues(control, "team-a", period).Set(1)
+			r := deleteReconciler(t, interceptor.Funcs{}, tc.objs(name)...)
+			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if got := len(budgetCanonicalSeries(name)); (got == 1) != tc.wantKept {
+				t.Errorf("%s series = %d, want kept=%v", name, got, tc.wantKept)
+			}
+			if got := len(budgetCanonicalSeries(control)); got != 1 {
+				t.Errorf("control provider series = %d, want 1", got)
+			}
+		})
 	}
 }

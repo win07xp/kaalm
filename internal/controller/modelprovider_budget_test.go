@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -822,5 +823,56 @@ func TestModelProvider_BudgetReducerDropsOtherIncarnation(t *testing.T) {
 	}}
 	if !equality.Semantic.DeepEqual(mp.Status.BudgetUsage, want) {
 		t.Errorf("budgetUsage = %+v, want %+v", mp.Status.BudgetUsage, want)
+	}
+}
+
+// canonicalSeries maps a provider's gauge series to their values, keyed
+// "namespace/period".
+func canonicalSeries(t *testing.T, provider string) map[string]float64 {
+	t.Helper()
+	out := map[string]float64{}
+	for _, l := range budgetCanonicalSeries(provider) {
+		out[l[labelNamespace]+"/"+l["period"]] = testutil.ToFloat64(providerBudgetCanonical.With(l))
+	}
+	return out
+}
+
+// The canonical gauge carries only the current period's per-namespace
+// totals: a past period's series, or a namespace's that left the current
+// totals, would otherwise keep its last value for the life of the process.
+func TestModelProvider_BudgetGaugeDropsStaleSeries(t *testing.T) {
+	ctx := context.Background()
+	period := gateway.PeriodKey("monthly", time.Now())
+	t.Cleanup(func() {
+		providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": "gauge-roll"})
+		providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": "gauge-roll-other"})
+	})
+	providerBudgetCanonical.WithLabelValues("gauge-roll", "team-a", "1999-01").Set(30)
+	providerBudgetCanonical.WithLabelValues("gauge-roll", "team-z", "1999-01").Set(7)
+	providerBudgetCanonical.WithLabelValues("gauge-roll", "team-gone", period).Set(5)
+	providerBudgetCanonical.WithLabelValues("gauge-roll-other", "team-a", "1999-01").Set(1)
+
+	mp := eventsProvider("gauge-roll", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	gw := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gauge-roll-gw-0", Namespace: testOperatorNamespace, Labels: gatewayPodLabels},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.BudgetConfigMapName("gauge-roll"), Namespace: testOperatorNamespace},
+		Data:       map[string]string{"gauge-roll-gw-0": fmt.Sprintf(`{"period":%q,"team-a":"40.00"}`, period)},
+	}
+	r, _ := eventsProviderReconciler(t, &statusConflicts{}, nil, mp, providerKey("gauge-roll"), gw, cm)
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "gauge-roll"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"team-a/" + period: 40}
+	if got := canonicalSeries(t, "gauge-roll"); !equality.Semantic.DeepEqual(got, want) {
+		t.Errorf("gauge-roll series = %v, want %v", got, want)
+	}
+	if got := canonicalSeries(t, "gauge-roll-other"); len(got) != 1 {
+		t.Errorf("another provider's series = %v, want it untouched", got)
 	}
 }

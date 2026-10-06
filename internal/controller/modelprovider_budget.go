@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -90,6 +91,57 @@ func budgetRequeue(mp *kaalmv1beta1.ModelProvider, res ctrl.Result) ctrl.Result 
 	return ctrl.Result{RequeueAfter: time.Minute}
 }
 
+// budgetCanonicalSeries lists the label sets kaalm_provider_budget_canonical_usd
+// holds for one provider, read from the gauge itself so no second record can
+// drift from it. Collect holds the vec's read lock while it sends, so the
+// channel is drained completely before this returns, and callers delete
+// series only afterwards.
+func budgetCanonicalSeries(provider string) []prometheus.Labels {
+	ch := make(chan prometheus.Metric)
+	go func() {
+		providerBudgetCanonical.Collect(ch)
+		close(ch)
+	}()
+	var out []prometheus.Labels
+	for m := range ch {
+		var pb dto.Metric
+		if err := m.Write(&pb); err != nil {
+			continue
+		}
+		labels := prometheus.Labels{}
+		for _, lp := range pb.GetLabel() {
+			labels[lp.GetName()] = lp.GetValue()
+		}
+		if labels["provider"] == provider {
+			out = append(out, labels)
+		}
+	}
+	return out
+}
+
+// setBudgetCanonical publishes one provider's current-period totals on
+// kaalm_provider_budget_canonical_usd and deletes the provider's other
+// series: any past period's, and any namespace's with no current-period
+// spend. Such a series would otherwise keep its last value for the life of
+// the process, and an instant query would read it as live spend. Set runs
+// before the deletes, so a kept series never disappears from a scrape.
+func setBudgetCanonical(provider, period string, spend map[string]float64) {
+	for ns, v := range spend {
+		providerBudgetCanonical.WithLabelValues(provider, ns, period).Set(v)
+	}
+	for _, labels := range budgetCanonicalSeries(provider) {
+		if _, current := spend[labels[labelNamespace]]; labels["period"] != period || !current {
+			providerBudgetCanonical.Delete(labels)
+		}
+	}
+}
+
+// dropBudgetCanonical deletes every kaalm_provider_budget_canonical_usd
+// series of one provider.
+func dropBudgetCanonical(provider string) {
+	providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": provider})
+}
+
 // clearBudgetStatus empties the budget status of a provider whose budget
 // nothing maintains: budgetUsage, clusterSpentUSD, and the
 // BoundaryMarginRaised condition. Without a period the gateway neither
@@ -104,7 +156,7 @@ func clearBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
 	mp.Status.BudgetUsage = nil
 	mp.Status.ClusterSpentUSD = ""
 	apimeta.RemoveStatusCondition(&mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)
-	providerBudgetCanonical.DeletePartialMatch(prometheus.Labels{"provider": mp.Name})
+	dropBudgetCanonical(mp.Name)
 }
 
 // deleteSpendConfigMaps deletes the provider's budget and agent-spend
@@ -124,8 +176,11 @@ func (r *ModelProviderReconciler) deleteSpendConfigMaps(ctx context.Context, nam
 // kaalm-budget-{provider} ConfigMap: delete keys written for another
 // provider UID (a deleted provider of the same name), prune keys with no live
 // gateway Pod, move stale-period keys into the _previous archive, sum
-// current-period partials, write _canonical, and populate status.budgetUsage. It clears the budget status
-// when the provider tracks no budget or the ConfigMap is absent. See
+// current-period partials, write _canonical, and populate status.budgetUsage.
+// It publishes the current period's per-namespace totals on the canonical
+// gauge and deletes the provider's other series (past periods, and
+// namespaces with no current-period spend). It clears the budget status when
+// the provider tracks no budget or the ConfigMap is absent. See
 // docs/src/gateways/llm/budgets-and-rate-limits.md.
 func (r *ModelProviderReconciler) reconcileBudget(
 	ctx context.Context, mp *kaalmv1beta1.ModelProvider, liveGateways map[string]bool,
@@ -225,9 +280,7 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		clusterTotal += v
 	}
 	mp.Status.ClusterSpentUSD = strconv.FormatFloat(clusterTotal, 'f', 2, 64)
-	for ns, v := range current {
-		providerBudgetCanonical.WithLabelValues(mp.Name, ns, currentPeriod).Set(v)
-	}
+	setBudgetCanonical(mp.Name, currentPeriod, current)
 	return nil
 }
 
