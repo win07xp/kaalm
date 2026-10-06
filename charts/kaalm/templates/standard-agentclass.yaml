@@ -8,7 +8,7 @@ config/samples/kaalm_v1beta1_agentclass_sandboxed.yaml is one to start from.
 See docs/src/operations/deployment.md.
 */}}
 {{/*
-The graduation gate: while the AgentClass CRD still lists v1alpha1 in
+The graduation window: while the AgentClass CRD still lists v1alpha1 in
 status.storedVersions (the window between "kubectl apply -f crds/" and the
 first post-upgrade start of the controller's storage migrator), helm could
 neither read nor write this object: every such request converts through a

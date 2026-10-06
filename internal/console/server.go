@@ -47,18 +47,18 @@ type Config struct {
 }
 
 // Server is the console: one data layer, two faces (JSON API and pages),
-// one gate.
+// and one access checker that both faces ask before they answer.
 type Server struct {
 	Config   Config
 	Data     *Data
 	Reviewer TokenReviewer
-	Gate     *Gate
+	Access   *AccessChecker
 	Sessions *SessionStore
 	Gateway  GatewayClient
 }
 
 // NewServer wires a Server from its parts, applying defaults.
-func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, gw GatewayClient) *Server {
+func NewServer(cfg Config, data *Data, reviewer TokenReviewer, access *AccessChecker, gw GatewayClient) *Server {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8443"
 	}
@@ -72,7 +72,7 @@ func NewServer(cfg Config, data *Data, reviewer TokenReviewer, gate *Gate, gw Ga
 		Config:   cfg,
 		Data:     data,
 		Reviewer: NewCachingReviewer(reviewer),
-		Gate:     gate,
+		Access:   access,
 		Sessions: NewSessionStore(reviewer),
 		Gateway:  gw,
 	}

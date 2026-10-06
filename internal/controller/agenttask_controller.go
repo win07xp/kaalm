@@ -55,9 +55,9 @@ const provisioningDeadline = 5 * time.Minute
 
 // AgentTaskReconciler drives the run-to-completion state machine: Pending ->
 // Provisioning -> Running -> Completing -> Succeeded/Failed/TimedOut, with
-// backoffLimit retries bracketed by the currentPodUID identity gate and the
-// completion mailbox. See docs/src/controller/reconcilers/agenttask.md
-// and task-lifecycle.md.
+// backoffLimit retries bracketed by the currentPodUID check (the gateway
+// records a completion only from that Pod) and the completion mailbox. See
+// docs/src/controller/reconcilers/agenttask.md and task-lifecycle.md.
 type AgentTaskReconciler struct {
 	client.Client
 	// claimsWarned holds the ResourceClaimsIgnored rising edge (rule 53).
@@ -81,10 +81,10 @@ type AgentTaskReconciler struct {
 	// production passes the FQDNProbe shared with the AgentClassReconciler.
 	// nil means unsupported: no CiliumNetworkPolicy is synthesized.
 	FQDNSupport func() (bool, error)
-	// gateInterval overrides gateRequeue for childBlocked's hold. Zero means
-	// gateRequeue; tests set it so they need not change the package
-	// variable the envtest manager reads.
-	gateInterval time.Duration
+	// notReadyRecheckOverride overrides notReadyRecheck for childBlocked's
+	// hold. Zero means notReadyRecheck; tests set it so they need not change
+	// the package variable the envtest manager reads.
+	notReadyRecheckOverride time.Duration
 	// deadlineFor shortens the provisioning deadline for chosen tasks in
 	// tests. nil, or a zero return, means provisioningDeadline. It is set
 	// before the manager starts and only read after.
@@ -101,12 +101,13 @@ func (r *AgentTaskReconciler) deadline(task *kaalmv1beta1.AgentTask) time.Durati
 	return provisioningDeadline
 }
 
-// heldGate is the re-check interval childBlocked holds a task for.
-func (r *AgentTaskReconciler) heldGate() time.Duration {
-	if r.gateInterval > 0 {
-		return r.gateInterval
+// notReadyRecheckInterval is the re-check interval childBlocked holds a task
+// for.
+func (r *AgentTaskReconciler) notReadyRecheckInterval() time.Duration {
+	if r.notReadyRecheckOverride > 0 {
+		return r.notReadyRecheckOverride
 	}
-	return gateRequeue
+	return notReadyRecheck
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=agenttasks,verbs=get;list;watch;update;patch;delete
@@ -164,14 +165,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// System-namespace guard (same SAN-integrity rule as Agents).
 	if task.Namespace == r.OperatorNamespace {
-		return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonSystemNamespaceForbidden,
+		return ctrl.Result{}, r.markTaskNotReady(ctx, &task, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("AgentTasks may not run in the operator namespace %q", r.OperatorNamespace))
 	}
 
 	var class kaalmv1beta1.AgentClass
 	if err := r.Get(ctx, types.NamespacedName{Name: task.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
+			return ctrl.Result{}, r.markTaskNotReady(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q does not exist", task.Spec.AgentClassRef.Name))
 		}
 		return ctrl.Result{}, err
@@ -211,26 +212,26 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
 				types.NamespacedName{Namespace: task.Namespace, Name: ref.Name}, &sec)
 			if apierrors.IsNotFound(err) {
-				if err := r.gateTask(ctx, &task, kaalmv1beta1.ReasonImagePullSecretMissing,
+				if err := r.markTaskNotReady(ctx, &task, kaalmv1beta1.ReasonImagePullSecretMissing,
 					fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, task.Namespace)); err != nil {
 					return ctrl.Result{}, err
 				}
-				return ctrl.Result{RequeueAfter: gateRequeue}, nil
+				return ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 			} else if err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-		if handled, res, err := r.envSecretGate(ctx, &task, &class, eff); handled {
+		if handled, res, err := r.enforceEnvSecretOptIn(ctx, &task, &class, eff); handled {
 			return res, err
 		}
 		if eff.Image == "" {
-			return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
+			return ctrl.Result{}, r.markTaskNotReady(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
 				"no image: AgentTask.spec.image is empty and the AgentClass sets no defaultImage")
 		}
 		// Rule 19: the class is Ready=False, and the NetworkPolicy built from
 		// its entries would fail the apiserver write on every pass.
 		if bad := invalidCIDRs(&class); len(bad) > 0 {
-			return ctrl.Result{}, r.gateTask(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
+			return ctrl.Result{}, r.markTaskNotReady(ctx, &task, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q is not usable: %s", class.Name, strings.Join(bad, "; ")))
 		}
 	}
@@ -262,7 +263,7 @@ func (r *AgentTaskReconciler) drive(
 	return ctrl.Result{}, nil
 }
 
-// driveProvisioning creates the child tree, gates on the Certificate, creates
+// driveProvisioning creates the child tree, waits for the Certificate, creates
 // the Pod, and watches it to Ready or an early failure. A pass still waiting
 // on the Pod re-creates a missing child after the state checks, so it never
 // delays them.
@@ -315,8 +316,9 @@ func (r *AgentTaskReconciler) driveProvisioning(
 	}
 
 	// A retry's old Pod may still be terminating. Hold until it is gone: the
-	// identity gate stays closed to it, its terminal state spends no backoff
-	// unit, and the replacement is created only once no task Pod remains.
+	// Pod UID check rejects its completions, its terminal state spends no
+	// backoff unit, and the replacement is created only once no task Pod
+	// remains.
 	if !pod.DeletionTimestamp.IsZero() {
 		r.setTaskReady(task, false, "PodTerminating", "waiting for the previous task Pod to terminate")
 		if err := r.Status().Update(ctx, task); err != nil {
@@ -326,10 +328,11 @@ func (r *AgentTaskReconciler) driveProvisioning(
 	}
 
 	// Repair the observed Pod's identity when the status write after its
-	// creation was lost (re-opens the gate after a retry). A podName that does
-	// not match shows the loss, so the class bounds and egress lists are
-	// written with it. A Pod created before status.classBounds or
-	// status.classEgress existed has a matching podName and keeps no record.
+	// creation was lost (the Pod UID check accepts the new Pod again after a
+	// retry). A podName that does not match shows the loss, so the class
+	// bounds and egress lists are written with it. A Pod created before
+	// status.classBounds or status.classEgress existed has a matching podName
+	// and keeps no record.
 	lost := task.Status.PodName != pod.Name
 	if lost || (isAgentReported(task) && task.Status.CurrentPodUID != string(pod.UID)) {
 		if lost {
@@ -393,8 +396,8 @@ func (r *AgentTaskReconciler) driveProvisioning(
 
 // awaitPodReady ends a Provisioning pass whose Pod is not Ready yet, after
 // every state check: it re-creates a missing child, keeps Ready at
-// PodProvisioning (clearing a gate the pass no longer finds), and re-checks
-// soon.
+// PodProvisioning (clearing a Ready=False reason the pass no longer finds),
+// and re-checks soon.
 func (r *AgentTaskReconciler) awaitPodReady(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
 	eff effectiveTaskSpec, pod *corev1.Pod,
@@ -408,7 +411,7 @@ func (r *AgentTaskReconciler) awaitPodReady(
 
 // createRejected holds a task whose Pod create, or a write of another
 // child it needs before the Pod, the API server rejected: Provisioning with
-// Ready=False reason, re-checked on gateRequeue because the cause (a
+// Ready=False reason, re-checked on notReadyRecheck because the cause (a
 // RuntimeClass, a quota, a webhook) is not watched. The provisioning
 // deadline counts from the attempt's first rejection, recorded in status so
 // a controller restart keeps it; past the deadline the attempt fails or
@@ -432,10 +435,10 @@ func (r *AgentTaskReconciler) createRejected(
 			fmt.Sprintf("%s for longer than %s: %s", what, r.deadline(task), msg))
 	}
 	r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
-	if err := r.gateTask(ctx, task, reason, msg); err != nil {
+	if err := r.markTaskNotReady(ctx, task, reason, msg); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{RequeueAfter: gateRequeue}, nil
+	return ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 }
 
 // driveRunning watches for completion, timeout, and mid-run Pod loss, in that
@@ -489,7 +492,7 @@ func (r *AgentTaskReconciler) driveRunning(
 
 // continueRunning ends a Running pass whose Pod runs on, after every state
 // check: it re-creates a missing child and restores Ready=True PodRunning
-// when a gate or conflict left it otherwise. A terminating Pod needs
+// when a failed check or a conflict left it otherwise. A terminating Pod needs
 // neither; the next pass handles its loss.
 func (r *AgentTaskReconciler) continueRunning(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass,
@@ -582,17 +585,18 @@ func (r *AgentTaskReconciler) failOrRetry(
 }
 
 // retry runs the documented sequence in order: increment retries, clear the
-// UID (gate closes), delete the old Pod, reset the mailbox, transition back to
-// Provisioning. The next pass creates the new Pod and writes its UID from
-// the Create response. The counting write (steps 1 and 2) comes first, so a
-// lost write never counts a retry twice; finishRetry does the rest, and
-// Reconcile calls it again for a retry that stopped partway.
-// The clear-before-reset ordering is load-bearing: resetting the mailbox first
-// would let an in-flight stale write land on the fresh mailbox.
+// UID (the old Pod's completions are now rejected), delete the old Pod, reset
+// the mailbox, transition back to Provisioning. The next pass creates the new
+// Pod and writes its UID from the Create response. The counting write (steps 1
+// and 2) comes first, so a lost write never counts a retry twice; finishRetry
+// does the rest, and Reconcile calls it again for a retry that stopped
+// partway. The clear-before-reset ordering is load-bearing: resetting the
+// mailbox first would let an in-flight stale write land on the fresh mailbox.
 func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string) error {
 	retrying := fmt.Sprintf("%s; retrying (%d/%d)", msg, task.Status.Retries+1, task.Spec.Completion.BackoffLimit)
 
-	// Steps 1 and 2 in one status write: the counter moves and the gate closes.
+	// Steps 1 and 2 in one status write: the counter moves and the old Pod's
+	// completions are rejected from here on.
 	task.Status.Retries++
 	task.Status.CurrentPodUID = ""
 	task.Status.StartTime = nil
@@ -805,7 +809,7 @@ func (r *AgentTaskReconciler) ensureTaskChildren(
 // not reach the task; for a legacy task (no record, its Pod predates the
 // field) they are only re-created, from the class as it now stands. It runs
 // only after the pass's state checks (completion, timeout, Pod loss, the
-// provisioning deadline), so it never delays them, and it never gates on
+// provisioning deadline), so it never delays them, and it never waits on
 // readiness: the Pod keeps what it already mounted. The PVC comes back only
 // when the Pod mounts it. The FQDN policy is read live, so it is touched
 // only when withFQDN is set (Running passes, which are event-driven and
@@ -997,12 +1001,12 @@ func (r *AgentTaskReconciler) ownedTaskPod(ctx context.Context, task *kaalmv1bet
 	return candidate, nil
 }
 
-// envSecretGate applies rule 48 before a task Pod is made: every Secret the
-// env reads must opt in to workload use, read under the task's own scoped
-// env-Secret Role. The gate is not terminal: labeling the Secret lets
+// enforceEnvSecretOptIn applies rule 48 before a task Pod is made: every
+// Secret the env reads must opt in to workload use, read under the task's own
+// scoped env-Secret Role. A failure is not terminal: labeling the Secret lets
 // provisioning continue on a later pass. handled reports whether the pass
 // ends here, with res and err as its result.
-func (r *AgentTaskReconciler) envSecretGate(
+func (r *AgentTaskReconciler) enforceEnvSecretOptIn(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, eff effectiveTaskSpec,
 ) (handled bool, res ctrl.Result, err error) {
 	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), task, taskEnvSecretRoleName(task.Name),
@@ -1017,10 +1021,10 @@ func (r *AgentTaskReconciler) envSecretGate(
 	if reason == "" {
 		return false, ctrl.Result{}, nil
 	}
-	if err := r.gateTask(ctx, task, reason, msg); err != nil {
+	if err := r.markTaskNotReady(ctx, task, reason, msg); err != nil {
 		return true, ctrl.Result{}, err
 	}
-	return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
+	return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 }
 
 // childBlocked reports a child the pass cannot converge, and passes any
@@ -1038,7 +1042,7 @@ func (r *AgentTaskReconciler) envSecretGate(
 // other missing children are still re-created on the same pass. The cause
 // (a conflicting object this workload does not control: one with no owner
 // reference, or one controlled by a same-named Agent or AgentTask; a quota;
-// a webhook) raises no watch event for this workload, so the gateRequeue
+// a webhook) raises no watch event for this workload, so the notReadyRecheck
 // requeue is what notices it clearing; a running task is requeued sooner
 // when its timeout comes first.
 func (r *AgentTaskReconciler) childBlocked(
@@ -1049,10 +1053,10 @@ func (r *AgentTaskReconciler) childBlocked(
 			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonChildWriteRejected,
 				"child write rejected", cr.Error())
 		}
-		if err := r.gateTask(ctx, task, kaalmv1beta1.ReasonChildWriteRejected, cr.Error()); err != nil {
+		if err := r.markTaskNotReady(ctx, task, kaalmv1beta1.ReasonChildWriteRejected, cr.Error()); err != nil {
 			return ctrl.Result{}, err
 		}
-		return heldRequeue(task, r.heldGate()), nil
+		return heldRequeue(task, r.notReadyRecheckInterval()), nil
 	}
 	cc, ok := asChildConflict(err)
 	if !ok {
@@ -1067,19 +1071,20 @@ func (r *AgentTaskReconciler) childBlocked(
 		}
 		r.Recorder.Event(task, corev1.EventTypeWarning, kaalmv1beta1.ReasonChildConflict, msg)
 	}
-	return heldRequeue(task, r.heldGate()), nil
+	return heldRequeue(task, r.notReadyRecheckInterval()), nil
 }
 
 // heldRequeue is the requeue for a task held by a child it cannot write:
-// gate (childBlocked passes heldGate), or a running task's timeout deadline
-// when that comes first, so the hold never delays the timeout.
-func heldRequeue(task *kaalmv1beta1.AgentTask, gate time.Duration) ctrl.Result {
+// interval (childBlocked passes notReadyRecheckInterval), or a running task's
+// timeout deadline when that comes first, so the hold never delays the
+// timeout.
+func heldRequeue(task *kaalmv1beta1.AgentTask, interval time.Duration) ctrl.Result {
 	if task.Status.Phase == kaalmv1beta1.TaskRunning {
-		if d := runningRequeue(task).RequeueAfter; d > 0 && d < gate {
+		if d := runningRequeue(task).RequeueAfter; d > 0 && d < interval {
 			return ctrl.Result{RequeueAfter: d}
 		}
 	}
-	return ctrl.Result{RequeueAfter: gate}
+	return ctrl.Result{RequeueAfter: interval}
 }
 
 // runningRequeue schedules the next pass at the deadline of the effective
@@ -1172,12 +1177,12 @@ func (r *AgentTaskReconciler) setTaskReady(task *kaalmv1beta1.AgentTask, ok bool
 	})
 }
 
-// gateTask sets Ready=False for a reconcile-time validation failure, writes
-// the status, and emits a Warning event with the same reason when the reason
-// first appears, not on each pass that finds the problem again. The event
-// follows a successful write, so a pass that lost its write to a conflict
-// does not report the reason twice.
-func (r *AgentTaskReconciler) gateTask(
+// markTaskNotReady sets Ready=False for a reconcile-time validation failure,
+// writes the status, and emits a Warning event with the same reason when the
+// reason first appears, not on each pass that finds the problem again. The
+// event follows a successful write, so a pass that lost its write to a
+// conflict does not report the reason twice.
+func (r *AgentTaskReconciler) markTaskNotReady(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string,
 ) error {
 	first := readyFalseIsNew(task.Status.Conditions, reason)

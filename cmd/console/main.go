@@ -115,7 +115,7 @@ func main() {
 	},
 		&console.Data{Reader: cl.GetClient()},
 		&console.KubeTokenReviewer{Client: clientset},
-		console.NewGate(&console.KubeAuthorizer{Client: clientset}),
+		console.NewAccessChecker(&console.KubeAuthorizer{Client: clientset}),
 		chat,
 	)
 

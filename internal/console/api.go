@@ -125,8 +125,8 @@ func (s *Server) identity(r *http.Request) (Identity, bool) {
 	return Identity{}, false
 }
 
-// requireAPI authenticates the caller and gates namespace-scoped routes on
-// CanView, attaching the Identity to the context.
+// requireAPI authenticates the caller, answers 403 on a namespace-scoped
+// route the caller fails CanView for, and attaches the Identity to the context.
 func (s *Server) requireAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := s.identity(r)
@@ -136,7 +136,7 @@ func (s *Server) requireAPI(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if ns := r.PathValue("ns"); ns != "" {
-			allowed, err := s.Gate.CanView(r.Context(), id, ns)
+			allowed, err := s.Access.CanView(r.Context(), id, ns)
 			if err != nil {
 				writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "authorization check failed")
 				return
@@ -159,7 +159,7 @@ func (s *Server) visibleNamespaces(ctx context.Context, id Identity) ([]string, 
 	if err != nil {
 		return nil, err
 	}
-	everywhere, err := s.Gate.CanViewAll(ctx, id)
+	everywhere, err := s.Access.CanViewAll(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func (s *Server) visibleNamespaces(ctx context.Context, id Identity) ([]string, 
 	}
 	visible := make([]string, 0, len(all))
 	for _, ns := range all {
-		allowed, err := s.Gate.CanView(ctx, id, ns)
+		allowed, err := s.Access.CanView(ctx, id, ns)
 		if err != nil {
 			return nil, err
 		}
@@ -276,14 +276,14 @@ func agentSpendRows(all []WorkloadSpend, agentName string) []AgentSpendRow {
 	return out
 }
 
-// apiChat is the console's only write-shaped route. It is gated on CanChat
-// (stricter than viewing) and relays the gateway's response verbatim. The
-// message content is never logged.
+// apiChat is the console's only write-shaped route. It answers 403 unless
+// CanChat allows the caller (stricter than viewing) and relays the gateway's
+// response verbatim. The message content is never logged.
 func (s *Server) apiChat(w http.ResponseWriter, r *http.Request) {
 	id := identityFrom(r.Context())
 	ns, agent := r.PathValue("ns"), r.PathValue("name")
 
-	allowed, err := s.Gate.CanChat(r.Context(), id, ns)
+	allowed, err := s.Access.CanChat(r.Context(), id, ns)
 	if err != nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "internal_unavailable", "authorization check failed")
 		return

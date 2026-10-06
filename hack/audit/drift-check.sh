@@ -4,7 +4,7 @@
 # Reads hack/audit/manifest.txt and diffs each verdict's paths from the
 # audited commit to HEAD. An empty diff means the verdict stands and needs
 # no audit work; a non-empty one names the verdict and the changed files.
-# Exits 1 when any verdict drifted, so a release runs it as a gate; CI runs
+# Exits 1 when any verdict drifted, so a release runs it as a release check; CI runs
 # it non-blocking, because drift between audits is expected and the answer
 # is a targeted re-walk before the next release, not a red build.
 set -euo pipefail

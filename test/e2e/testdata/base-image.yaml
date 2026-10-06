@@ -6,8 +6,8 @@
 # can silently pull a published tag.
 #
 # s16-missing references a ConfigMap that deliberately does not exist here:
-# the spec asserts the rule 31 gate (Ready=False, HandlerConfigMapNotFound,
-# no Pod) and then creates s16-missing-handler imperatively to watch the gate
+# the spec asserts the rule 31 check (Ready=False, HandlerConfigMapNotFound,
+# no Pod) and then creates s16-missing-handler imperatively to watch the Agent
 # recover.
 apiVersion: kaalm.io/v1beta1
 kind: AgentClass

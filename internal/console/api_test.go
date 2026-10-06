@@ -78,7 +78,7 @@ func newAPIHarness(t *testing.T) *apiHarness {
 	}}
 	chat := &fakeChat{status: 200, body: []byte(`{"content":"alive"}`)}
 	s := NewServer(Config{OperatorNamespace: "kaalm-system"},
-		seededData(t), reviewer, NewGate(authz), chat)
+		seededData(t), reviewer, NewAccessChecker(authz), chat)
 	h := &apiHarness{server: s, authz: authz, chat: chat}
 	h.srv = httptest.NewTLSServer(s.Handler())
 	t.Cleanup(h.srv.Close)
@@ -185,11 +185,11 @@ func TestAPI_Chat(t *testing.T) {
 		return resp
 	}
 
-	// Viewing is not enough: chat needs the create gate.
+	// Viewing is not enough: chat needs create on agentchannels.
 	resp := post("dev-token", `{"content":"hi"}`)
 	_ = resp.Body.Close()
 	if resp.StatusCode != 403 {
-		t.Errorf("chat without the create gate = %d, want 403", resp.StatusCode)
+		t.Errorf("chat without create on agentchannels = %d, want 403", resp.StatusCode)
 	}
 
 	// Empty content is rejected before the gateway is called.
@@ -288,7 +288,7 @@ func TestAPI_ChatBodyCap(t *testing.T) {
 }
 
 func TestNewServer_DefaultsChatBodyCap(t *testing.T) {
-	s := NewServer(Config{}, seededData(t), &fakeReviewer{}, NewGate(&fakeAuthorizer{}), &fakeChat{})
+	s := NewServer(Config{}, seededData(t), &fakeReviewer{}, NewAccessChecker(&fakeAuthorizer{}), &fakeChat{})
 	if s.Config.MaxMessageBodyBytes != 1<<20 {
 		t.Errorf("default chat body cap = %d, want 1 MiB", s.Config.MaxMessageBodyBytes)
 	}

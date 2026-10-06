@@ -30,7 +30,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// postTestChat calls the handler directly (the ConsolePaths SAN gate is
+// postTestChat calls the handler directly (the ConsolePaths SAN check is
 // covered by TestAuthMatrix) and returns the recorder.
 func postTestChat(h *userHarness, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/v1/test-chat", strings.NewReader(body))

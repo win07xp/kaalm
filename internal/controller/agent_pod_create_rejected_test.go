@@ -115,7 +115,7 @@ func TestAgent_MissingRuntimeClassLeavesNoPod(t *testing.T) {
 	eventually(t, func() error {
 		return expectReadyRejected(getWorkloadAgent(t, "missing-rc-agent").Status.Conditions, wantMsg)
 	})
-	consistently(t, 4*gateRequeue, func() error {
+	consistently(t, 4*notReadyRecheck, func() error {
 		ag := getWorkloadAgent(t, "missing-rc-agent")
 		if ag.Status.Phase != kaalmv1beta1.AgentProvisioning {
 			return fmt.Errorf("phase = %s, want Provisioning", ag.Status.Phase)
@@ -309,7 +309,7 @@ func TestAgent_PodCreateRejectedByQuota(t *testing.T) {
 		"from Running to Provisioning")
 	expectEvent(t, "Agent", ns, name, kaalmv1beta1.ReasonPodCreateRejected, corev1.EventTypeWarning,
 		"exceeded quota")
-	time.Sleep(4 * gateRequeue)
+	time.Sleep(4 * notReadyRecheck)
 	if n := eventCount(objectEvents(t, "Agent", ns, name, kaalmv1beta1.ReasonPodCreateRejected)); n != 1 {
 		t.Fatalf("PodCreateRejected events = %d, want 1", n)
 	}

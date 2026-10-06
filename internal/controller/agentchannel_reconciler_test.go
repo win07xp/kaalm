@@ -784,21 +784,21 @@ func TestChannel_PruneExpiredAsyncConfigMapsAgentNotFound(t *testing.T) {
 	expectAsyncPruned(t, "kaalm-async-noagent-expired", "kaalm-async-noagent-live")
 }
 
-// gateFakeChannel is a channel with its finalizer set whose Agent does not
-// exist, for driving the AgentNotFound exit on a fake client.
-func gateFakeChannel() *kaalmv1beta1.AgentChannel {
+// agentNotFoundFakeChannel is a channel with its finalizer set whose Agent
+// does not exist, for driving the AgentNotFound exit on a fake client.
+func agentNotFoundFakeChannel() *kaalmv1beta1.AgentChannel {
 	return &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "ch-gate", Namespace: "default",
+			Name: "ch-agent-missing", Namespace: "default",
 			Finalizers: []string{kaalmv1beta1.ChannelFinalizer},
 		},
 		Spec: kaalmv1beta1.AgentChannelSpec{
 			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "missing"},
 			Webhook: &kaalmv1beta1.AgentChannelWebhook{
-				Path: "/channels/default/ch-gate",
+				Path: "/channels/default/ch-agent-missing",
 				Auth: kaalmv1beta1.ChannelAuth{
 					Type:      "bearer",
-					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "ch-gate-secret", Key: "token"},
+					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "ch-agent-missing-secret", Key: "token"},
 				},
 			},
 		},
@@ -809,12 +809,12 @@ func gateFakeChannel() *kaalmv1beta1.AgentChannel {
 // AgentNotFound exit re-checks every minute to prune records that expire
 // later.
 func TestChannel_AgentNotFoundRequeuesEveryMinute(t *testing.T) {
-	ch := gateFakeChannel()
+	ch := agentNotFoundFakeChannel()
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(ch).WithStatusSubresource(ch).Build()
 	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
 	res, err := r.Reconcile(context.Background(),
-		reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "ch-gate"}})
+		reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "ch-agent-missing"}})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -823,10 +823,10 @@ func TestChannel_AgentNotFoundRequeuesEveryMinute(t *testing.T) {
 	}
 }
 
-// A prune error on a failing pass is returned, but the gate's status write
-// has already happened.
-func TestChannel_GatePruneErrorKeepsStatus(t *testing.T) {
-	ch := gateFakeChannel()
+// A prune error on a failing pass is returned, but the Ready=False status
+// write has already happened.
+func TestChannel_NotReadyPruneErrorKeepsStatus(t *testing.T) {
+	ch := agentNotFoundFakeChannel()
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(ch).WithStatusSubresource(ch).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -838,7 +838,7 @@ func TestChannel_GatePruneErrorKeepsStatus(t *testing.T) {
 			},
 		}).Build()
 	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
-	key := types.NamespacedName{Namespace: "default", Name: "ch-gate"}
+	key := types.NamespacedName{Namespace: "default", Name: "ch-agent-missing"}
 	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
 	if err == nil {
 		t.Fatal("want the prune error, got nil")
@@ -2050,17 +2050,17 @@ func TestChannel_LabelRemovedShrinksGatewayRole(t *testing.T) {
 // A channel whose Agent does not exist still keeps its credential Role to
 // the labeled Secrets, and the Role follows a label change.
 func TestChannel_AgentNotFoundCredentialRoleFollowsLabel(t *testing.T) {
-	mkChannelSecret(t, "ch-gated-label-secret")
-	mkChannel(t, "ch-gated-label", "no-such-agent", "/channels/default/ch-gated-label", nil)
-	expectChannelReady(t, "ch-gated-label", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
-	expectCredsRole(t, "ch-gated-label", []string{"ch-gated-label-secret"})
-	assertCheckRole(t, "ch-gated-label", []string{"ch-gated-label-secret"})
+	mkChannelSecret(t, "ch-notready-label-secret")
+	mkChannel(t, "ch-notready-label", "no-such-agent", "/channels/default/ch-notready-label", nil)
+	expectChannelReady(t, "ch-notready-label", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
+	expectCredsRole(t, "ch-notready-label", []string{"ch-notready-label-secret"})
+	assertCheckRole(t, "ch-notready-label", []string{"ch-notready-label-secret"})
 
-	editSecret(t, "ch-gated-label-secret", func(s *corev1.Secret) {
+	editSecret(t, "ch-notready-label-secret", func(s *corev1.Secret) {
 		delete(s.Labels, kaalmv1beta1.LabelChannelCredential)
 	})
-	expectCredsRole(t, "ch-gated-label", nil)
-	expectChannelReady(t, "ch-gated-label", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
+	expectCredsRole(t, "ch-notready-label", nil)
+	expectChannelReady(t, "ch-notready-label", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
 }
 
 // A channel whose Secret does not exist yet turns Ready once the Secret is

@@ -176,7 +176,7 @@ func TestTask_CertificateDeletedWhileRunningIsRecreated(t *testing.T) {
 // With a Pod that is not Ready yet, a missing Certificate is re-created and
 // does not hold the task: Ready stays PodProvisioning and the Pod turning
 // Ready still moves the task to Running.
-func TestDriveProvisioning_RecreatesCertificateWithoutGating(t *testing.T) {
+func TestDriveProvisioning_RecreatesCertificateWithoutHolding(t *testing.T) {
 	ctx := context.Background()
 	task := restoreTask("prov-restore", kaalmv1beta1.TaskProvisioning, false, "CertificateNotReady")
 	task.Status.StartTime = nil
@@ -239,7 +239,7 @@ func TestDriveRunning_CertificateConflictDoesNotBlockCompletion(t *testing.T) {
 }
 
 // A running task held by a child it cannot write is requeued for its
-// timeout when that comes before the gate re-check.
+// timeout when that comes before the not-Ready recheck.
 func TestHeldRequeue(t *testing.T) {
 	started := metav1.NewTime(time.Now().Add(-5 * time.Second))
 	withTimeout := &kaalmv1beta1.AgentTask{
@@ -252,7 +252,7 @@ func TestHeldRequeue(t *testing.T) {
 		t.Errorf("running with a timeout: RequeueAfter = %v, want at most 5s", d)
 	}
 	if d := heldRequeue(withTimeout, time.Second).RequeueAfter; d != time.Second {
-		t.Errorf("gate sooner than the timeout: RequeueAfter = %v, want 1s", d)
+		t.Errorf("recheck sooner than the timeout: RequeueAfter = %v, want 1s", d)
 	}
 	noTimeout := withTimeout.DeepCopy()
 	noTimeout.Spec.Completion.Timeout = metav1.Duration{}
@@ -268,8 +268,8 @@ func TestHeldRequeue(t *testing.T) {
 
 // A child the task cannot write holds a running task on the held requeue,
 // so neither a conflict nor a rejected write pushes the timeout back. The
-// reconciler's gate is 30s here (the package's gateRequeue is shortened for
-// envtest), so a return of the bare gate interval fails the 5s bound.
+// reconciler's recheck interval is 30s here (the package's notReadyRecheck is
+// shortened for envtest), so a return of the bare interval fails the 5s bound.
 func TestChildBlocked_HeldRequeueKeepsTimeout(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -290,7 +290,7 @@ func TestChildBlocked_HeldRequeueKeepsTimeout(t *testing.T) {
 				started := metav1.NewTime(time.Now().Add(-5 * time.Second))
 				task.Status.StartTime = &started
 				r, c := restoreReconciler(t, task)
-				r.gateInterval = 30 * time.Second
+				r.notReadyRecheckOverride = 30 * time.Second
 				res, err := r.childBlocked(context.Background(), storedTask(t, c, task), nil, false, tc.err)
 				if err != nil {
 					t.Fatal(err)
@@ -313,8 +313,8 @@ func TestChildBlocked_HeldRequeueKeepsTimeout(t *testing.T) {
 }
 
 // A running task whose AgentClass was deleted and came back drops the stale
-// Ready=False InvalidReference the class gate left.
-func TestDriveRunning_RestoresReadyAfterClassGate(t *testing.T) {
+// Ready=False InvalidReference the class check left.
+func TestDriveRunning_RestoresReadyAfterClassCheck(t *testing.T) {
 	task := restoreTask("run-class-back", kaalmv1beta1.TaskRunning, false, kaalmv1beta1.ReasonInvalidReference)
 	pod := restorePod(t, task, corev1.PodRunning, true)
 	cert := desiredTaskCertificate(task, CertLifetime{})
@@ -846,8 +846,8 @@ func TestTaskReconcile_ConflictDoesNotStopOtherChildren(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.RequeueAfter != gateRequeue {
-		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, gateRequeue)
+	if res.RequeueAfter != notReadyRecheck {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, notReadyRecheck)
 	}
 	got := storedTask(t, c, task)
 	expectStoredReady(t, got, metav1.ConditionFalse, kaalmv1beta1.ReasonChildConflict)

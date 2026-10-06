@@ -41,9 +41,9 @@ func hardBudgetSpec() kaalmv1beta1.ModelProviderBudget {
 	}
 }
 
-// Rule 33: hard enforcement over an unpriced catalog gates readiness with
+// Rule 33: hard enforcement over an unpriced catalog sets Ready=False with
 // HardBudgetUnpriced, and pricing the catalog recovers it.
-func TestModelProvider_HardBudgetUnpricedGatesAndRecovers(t *testing.T) {
+func TestModelProvider_HardBudgetUnpricedSetsNotReadyAndRecovers(t *testing.T) {
 	mkSecret(t, "mp-hard-key")
 	mkProvider(t, "mp-hard", func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.Budget = hardBudgetSpec()

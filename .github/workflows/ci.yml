@@ -87,7 +87,7 @@ jobs:
       - name: Build binaries
         run: make build
 
-      - name: Unit and envtest suites (with 85% coverage gate)
+      - name: Unit and envtest suites (85% coverage minimum)
         run: make cover-check
 
       - name: Python base image unit suite (docker test stage)

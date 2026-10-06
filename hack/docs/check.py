@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check.py: the docs gate for the three mdBooks (docs/, guide/, learn/).
+"""check.py: the docs check for the three mdBooks (docs/, guide/, learn/).
 
 Checks, per book:
 

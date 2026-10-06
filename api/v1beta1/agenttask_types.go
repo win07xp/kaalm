@@ -136,7 +136,8 @@ type AgentTaskStatus struct {
 	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
 	// +optional
 	PodName string `json:"podName,omitempty"`
-	// CurrentPodUID gates completion writes to the live task Pod (identity gate).
+	// CurrentPodUID is the UID of the task's live Pod. The gateway records a
+	// completion only when the calling Pod has this UID (the Pod UID check).
 	// +optional
 	CurrentPodUID string `json:"currentPodUID,omitempty"`
 	// Retries counts Pod recreations under backoffLimit.

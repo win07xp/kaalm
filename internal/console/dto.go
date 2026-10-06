@@ -15,9 +15,9 @@ limitations under the License.
 */
 
 // Package console implements the operator console: the JSON read API, the
-// server-rendered pages over the same data objects, the TokenReview and
-// SubjectAccessReview gate, and the test-chat client
-// (docs/src/console/overview.md).
+// server-rendered pages over the same data objects, TokenReview
+// authentication, the SubjectAccessReview access checks, and the test-chat
+// client (docs/src/console/overview.md).
 package console
 
 import (

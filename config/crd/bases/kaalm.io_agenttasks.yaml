@@ -506,8 +506,9 @@ spec:
                 format: date-time
                 type: string
               currentPodUID:
-                description: CurrentPodUID gates completion writes to the live task
-                  Pod (identity gate).
+                description: |-
+                  CurrentPodUID is the UID of the task's live Pod. The gateway records a
+                  completion only when the calling Pod has this UID (the Pod UID check).
                 type: string
               observedGeneration:
                 format: int64
@@ -1027,8 +1028,9 @@ spec:
                 format: date-time
                 type: string
               currentPodUID:
-                description: CurrentPodUID gates completion writes to the live task
-                  Pod (identity gate).
+                description: |-
+                  CurrentPodUID is the UID of the task's live Pod. The gateway records a
+                  completion only when the calling Pod has this UID (the Pod UID check).
                 type: string
               observedGeneration:
                 format: int64

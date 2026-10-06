@@ -286,8 +286,9 @@ func runSuite(m *testing.M) int {
 	}
 	mgr.GetWebhookServer().Register("/convert", webhookconversion.NewWebhookHandler(scheme))
 
-	// Recoverable gates poll fast in tests (production default is 30s).
-	gateRequeue = 500 * time.Millisecond
+	// Recoverable Ready=False checks poll fast in tests (production default is
+	// 30s).
+	notReadyRecheck = 500 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

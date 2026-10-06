@@ -914,10 +914,10 @@ func TestUpstreamTransportPoolsConnectionsPerHost(t *testing.T) {
 	}
 }
 
-// TestProxy_ClassNamespaceGate covers rule 47 on the LLM path: a workload
+// TestProxy_ClassNamespaceCheck covers rule 47 on the LLM path: a workload
 // whose AgentClass allowedNamespaces does not admit its namespace gets 403
 // access_denied; a matching pattern or an unset field lets the call through.
-func TestProxy_ClassNamespaceGate(t *testing.T) {
+func TestProxy_ClassNamespaceCheck(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"r","usage":{"prompt_tokens":1,"completion_tokens":1}}`))

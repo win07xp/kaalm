@@ -33,7 +33,7 @@ limitations under the License.
 //	              workload's would and never crosses a port-forward
 //
 // The perftest build tag keeps the package out of `go build ./...`, the lint
-// run, and the coverage gate: it drives a live cluster and is not a unit
+// run, and the coverage check: it drives a live cluster and is not a unit
 // under test. Lint it explicitly with `--build-tags perftest`.
 package main
 

@@ -2,7 +2,7 @@
 # own hibernation-capable class (same shape as the S7 fixture: persistence +
 # hibernationAllowed + positive timers, generous wake budget for the
 # freshly-woken-pod ipset lag), and the viewer identity whose RBAC is exactly
-# what the console's SubjectAccessReview gate checks.
+# what the console's SubjectAccessReview checks ask for.
 apiVersion: v1
 kind: Namespace
 metadata:

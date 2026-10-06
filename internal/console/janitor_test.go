@@ -24,22 +24,22 @@ import (
 )
 
 // TestJanitor_SweepsAllThreeCachesUntilCancelled proves the janitor empties
-// expired entries from the session store, the gate cache, and the review
-// cache without any request touching them, and stops with its context.
+// expired entries from the session store, the access-check cache, and the
+// review cache without any request touching them, and stops with its context.
 func TestJanitor_SweepsAllThreeCachesUntilCancelled(t *testing.T) {
 	reviewer := &fakeReviewer{tokens: map[string]Identity{"tok": {Username: "priya"}}}
-	s := NewServer(Config{}, seededData(t), reviewer, NewGate(&fakeAuthorizer{}), &fakeChat{})
+	s := NewServer(Config{}, seededData(t), reviewer, NewAccessChecker(&fakeAuthorizer{}), &fakeChat{})
 
 	// One shared, advanceable clock for all three caches.
 	var offset atomic.Int64
 	start := time.Now()
 	clock := func() time.Time { return start.Add(time.Duration(offset.Load())) }
 	cr := s.Reviewer.(*CachingReviewer)
-	cr.now, s.Gate.now, s.Sessions.now = clock, clock, clock
+	cr.now, s.Access.now, s.Sessions.now = clock, clock, clock
 
 	ctx := context.Background()
 	_, _ = cr.Review(ctx, "tok")
-	_, _ = s.Gate.CanView(ctx, Identity{Username: "priya"}, "team-a")
+	_, _ = s.Access.CanView(ctx, Identity{Username: "priya"}, "team-a")
 	_, _, _ = s.Sessions.Create(ctx, "tok")
 	offset.Store(int64(sessionMaxAge + time.Minute))
 
@@ -52,17 +52,17 @@ func TestJanitor_SweepsAllThreeCachesUntilCancelled(t *testing.T) {
 		cr.mu.Lock()
 		nReview := len(cr.cache)
 		cr.mu.Unlock()
-		s.Gate.mu.Lock()
-		nGate := len(s.Gate.cache)
-		s.Gate.mu.Unlock()
+		s.Access.mu.Lock()
+		nAccess := len(s.Access.cache)
+		s.Access.mu.Unlock()
 		s.Sessions.mu.Lock()
 		nSess := len(s.Sessions.m)
 		s.Sessions.mu.Unlock()
-		if nReview == 0 && nGate == 0 && nSess == 0 {
+		if nReview == 0 && nAccess == 0 && nSess == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("janitor left review=%d gate=%d sessions=%d", nReview, nGate, nSess)
+			t.Fatalf("janitor left review=%d access=%d sessions=%d", nReview, nAccess, nSess)
 		}
 		time.Sleep(time.Millisecond)
 	}

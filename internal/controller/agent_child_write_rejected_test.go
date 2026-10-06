@@ -109,7 +109,7 @@ func TestAgent_ServiceCreateRejectedByQuota(t *testing.T) {
 		t.Fatalf("pod %s exists, want none", p.Name)
 	}
 	expectEvent(t, "Agent", ns, name, kaalmv1beta1.ReasonChildWriteRejected, corev1.EventTypeWarning, wantName)
-	time.Sleep(4 * gateRequeue)
+	time.Sleep(4 * notReadyRecheck)
 	if n := eventCount(objectEvents(t, "Agent", ns, name, kaalmv1beta1.ReasonChildWriteRejected)); n != 1 {
 		t.Fatalf("ChildWriteRejected events = %d, want 1", n)
 	}

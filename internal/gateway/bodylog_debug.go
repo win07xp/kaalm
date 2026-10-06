@@ -20,11 +20,11 @@ package gateway
 
 import "log/slog"
 
-// This is the DEBUG build, gated by the `kaalm_debug_logs` build tag. It logs
-// prompt and response bodies for contract bring-up and integration debugging.
-// The official Helm chart only ships default builds; debug images carry a
-// `-debug` tag suffix and emit a startup banner (see init). Never ship this to
-// production. See docs/src/operations/observability.md.
+// This is the DEBUG build, built only with the `kaalm_debug_logs` build tag.
+// It logs prompt and response bodies for contract bring-up and integration
+// debugging. The official Helm chart only ships default builds; debug images
+// carry a `-debug` tag suffix and emit a startup banner (see init). Never ship
+// this to production. See docs/src/operations/observability.md.
 const DebugBodyLogging = true
 
 func init() {

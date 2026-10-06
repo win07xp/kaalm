@@ -43,13 +43,13 @@ type routeDenial struct {
 
 // authorizeRoute walks the tenancy chain for the authenticated caller and
 // returns the target provider, or a denial. The order is load-bearing:
-// workload-level gates first (mTLS tier only), then the provider's namespace
+// workload-level checks first (mTLS tier only), then the provider's namespace
 // allowlist, and the model-existence check strictly last, so a namespace not
 // authorized for a provider never learns which models it hosts.
 func (s *Server) authorizeRoute(
 	ctx context.Context, c *caller, providerName, modelID string,
 ) (*kaalmv1beta1.ModelProvider, *routeDenial) {
-	// Workload gates (mTLS tier). Gateway-only callers have no Agent,
+	// Workload checks (mTLS tier). Gateway-only callers have no Agent,
 	// AgentTask, or AgentClass: their chain is allowedNamespaces plus the
 	// model list alone.
 	if c.Workload != nil {

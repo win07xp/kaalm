@@ -99,7 +99,7 @@ func TestServer_RunServesTLSAndShutsDown(t *testing.T) {
 	s := NewServer(Config{
 		ListenAddr: freePort(t), HealthAddr: freePort(t),
 		CertFile: certFile, KeyFile: keyFile, CAFile: caFile,
-	}, seededData(t), reviewer, NewGate(&fakeAuthorizer{}), &fakeChat{})
+	}, seededData(t), reviewer, NewAccessChecker(&fakeAuthorizer{}), &fakeChat{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -151,7 +151,7 @@ func waitForOK(t *testing.T, client *http.Client, url string, want int) {
 func TestServer_RunBadCertErrors(t *testing.T) {
 	s := NewServer(Config{
 		CertFile: "/nonexistent/tls.crt", KeyFile: "/nonexistent/tls.key", CAFile: "/nonexistent/ca.crt",
-	}, seededData(t), &fakeReviewer{}, NewGate(&fakeAuthorizer{}), &fakeChat{})
+	}, seededData(t), &fakeReviewer{}, NewAccessChecker(&fakeAuthorizer{}), &fakeChat{})
 	if err := s.Run(context.Background()); err == nil {
 		t.Error("Run must return the cert-loading error")
 	}

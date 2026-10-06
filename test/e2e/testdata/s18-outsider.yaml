@@ -1,6 +1,6 @@
 # S18: a bearer-tier caller in a namespace OUTSIDE the ToolProvider's
 # allowedNamespaces (default is not in ["e2e"]). The gateway authenticates the
-# token, then the broker's namespace gate refuses: 403 access_denied. -k
+# token, then the broker's namespace check refuses: 403 access_denied. -k
 # because namespace default carries no kaalm-ca bundle; the assertion is the
 # status and error type, not the trust chain (proven by the e2e-side callers).
 apiVersion: v1

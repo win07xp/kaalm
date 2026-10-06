@@ -301,7 +301,7 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 	})
 
 	// The label comes before "kept every workload": that It's hash-rewrite
-	// assertion needs the keeper past its Ready gates to reach convergePod.
+	// assertion needs the keeper past its Ready=False checks to reach convergePod.
 	It("holds a workload whose env Secret lacks the opt-in label, keeping its Pod, until it is labeled", func() {
 		keeperReady := func(field string) func() string {
 			return func() string {
@@ -316,7 +316,7 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 		By("the running Pod is left in place")
 		Expect(phase("agent", "up-keeper")).To(Equal("Running"))
 		Expect(podUID(keeperPodName)).To(Equal(keeperPodUID),
-			"the env-Secret gate must not replace a running Pod")
+			"the env-Secret check must not replace a running Pod")
 
 		By("the upgrade notes' step: label the reviewed workload Secret")
 		_, err := utils.Kubectl("label", "secret", "up-env", "-n", ns, "kaalm.io/workload-secret=true")
@@ -442,9 +442,9 @@ var _ = Describe("Upgrade in place (S21)", Ordered, func() {
 
 	// This It comes last, for three reasons. "kept every workload" asserts
 	// the keeper keeps its Pod UID and the up-keeper-tls name, so it must
-	// run first. The Ready gates run before the Certificate step, so a
+	// run first. The Ready=False checks run before the Certificate step, so a
 	// keeper still held by rule 48 would never re-create its Certificate;
-	// the env-Secret It clears that gate. And keeperPodName and keeperPodUID
+	// the env-Secret It clears that check. And keeperPodName and keeperPodUID
 	// are stale after this It, so nothing may follow it. The behavior is
 	// docs/src/controller/change-propagation.md#a-pod-that-mounts-another-tls-secret-is-replaced.
 	It("replaces the keeper Pod when its Certificate is re-created with a UID-suffixed Secret", func() {

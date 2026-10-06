@@ -86,8 +86,8 @@ type taskCompleteRequest struct {
 
 // handleTaskComplete implements POST /v1/task/complete. The middleware has
 // already enforced mTLS and the AgentTask kind; this handler rejects any
-// method but POST with 405, runs the mode, terminal-phase, and identity
-// gates in order, then validates and patches.
+// method but POST with 405, runs the mode, terminal-phase, and Pod UID
+// checks in order, then validates and patches.
 // See docs/src/gateways/api/task-complete.md.
 func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -113,7 +113,7 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 			Type: errAccessDenied, Message: "TaskAlreadyCompleted: the task has reached a terminal phase"}, 0)
 		return
 	}
-	// (c) the identity gate: the calling Pod's UID must match
+	// (c) the Pod UID check: the calling Pod's UID must match
 	// status.currentPodUID. Resolved from the source IP, with the live
 	// namespace-narrowed fallback on an informer miss (task-complete.md,
 	// cross-check step 2). A 409 and retryable, because the benign

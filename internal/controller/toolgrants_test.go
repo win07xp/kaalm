@@ -67,7 +67,7 @@ func expectAgentNotDegraded(t *testing.T, name string) {
 
 // ---- rules 35 to 38 on the Agent (recoverable Degraded) ----
 
-func TestAgentToolGrant_ClassAllowlistGateAndRecovery(t *testing.T) {
+func TestAgentToolGrant_ClassAllowlistDenialAndRecovery(t *testing.T) {
 	mkOpenTP(t, "tg-r37", nil)
 	mkWorkloadClass(t, "wc-r37", nil) // no allowedToolProviders: rule 37 denies
 	mkWorkloadAgent(t, "r37-agent", "wc-r37", func(ag *kaalmv1beta1.Agent) {
@@ -88,7 +88,7 @@ func TestAgentToolGrant_ClassAllowlistGateAndRecovery(t *testing.T) {
 	expectAgentNotDegraded(t, "r37-agent")
 }
 
-func TestAgentToolGrant_MissingProviderGateAndRecovery(t *testing.T) {
+func TestAgentToolGrant_MissingProviderAndRecovery(t *testing.T) {
 	mkWorkloadClass(t, "wc-r35", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "tg-r35"}}
 	})
@@ -104,7 +104,7 @@ func TestAgentToolGrant_MissingProviderGateAndRecovery(t *testing.T) {
 	expectAgentNotDegraded(t, "r35-agent")
 }
 
-func TestAgentToolGrant_NamespaceDeniedGateAndRecovery(t *testing.T) {
+func TestAgentToolGrant_NamespaceDeniedAndRecovery(t *testing.T) {
 	mkToolProvider(t, "tg-r36", func(tp *kaalmv1beta1.ToolProvider) {
 		tp.Spec.CredentialsRef = nil
 		tp.Spec.AllowedNamespaces = []string{"team-*"} // agent lives in default
@@ -152,7 +152,7 @@ func TestAgentToolGrant_EmptyAllowedNamespacesDeniesAll(t *testing.T) {
 	}
 }
 
-func TestAgentToolGrant_CatalogGateAndRecovery(t *testing.T) {
+func TestAgentToolGrant_CatalogDenialAndRecovery(t *testing.T) {
 	mkOpenTP(t, "tg-r38", func(tp *kaalmv1beta1.ToolProvider) {
 		tp.Spec.Tools = []kaalmv1beta1.ToolProviderTool{{ID: "web_search"}}
 	})
