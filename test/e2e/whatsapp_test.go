@@ -52,8 +52,10 @@ func s23Event(number string, messages []string, statuses []string) json.RawMessa
 		}
 		return out + "]"
 	}
-	return json.RawMessage(`{"object":"whatsapp_business_account","entry":[{"id":"102290129340398","changes":[{"field":"messages","value":{` +
-		`"messaging_product":"whatsapp","metadata":{"display_phone_number":"15550001234","phone_number_id":"` + number + `"},` +
+	return json.RawMessage(`{"object":"whatsapp_business_account",` +
+		`"entry":[{"id":"102290129340398","changes":[{"field":"messages","value":{` +
+		`"messaging_product":"whatsapp",` +
+		`"metadata":{"display_phone_number":"15550001234","phone_number_id":"` + number + `"},` +
 		`"contacts":[{"profile":{"name":"Dev"},"wa_id":"15551234567"}],"messages":` + joinRaw(messages) +
 		`,"statuses":` + joinRaw(statuses) + `}}]}]}`)
 }
@@ -116,27 +118,10 @@ var _ = Describe("WhatsApp channel (S23)", Ordered, func() {
 	}
 
 	BeforeAll(func() {
-		_, _ = utils.Kubectl("apply", "-f", "test/e2e/testdata/agentclass.yaml")
-		_, err := utils.Kubectl("apply", "-f", "test/e2e/testdata/whatsapp.yaml")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(utils.WaitRollout("e2e", "mock-whatsapp", "120s")).To(Succeed())
-		Eventually(func() (string, error) {
-			return utils.ResourceField("agent", "e2e", "s23-agent", "{.status.phase}")
-		}, "180s", "5s").Should(Equal("Running"))
-
-		By("the WhatsApp channel reconciles to Ready with its credential Role scoped to the Secret")
-		Eventually(func() (string, error) {
-			return utils.ResourceField("agentchannel", "e2e", "s23-channel",
-				`{.status.conditions[?(@.type=="Ready")].status}`)
-		}, "90s", "3s").Should(Equal("True"))
-		names, err := utils.ResourceField("role", "e2e", "kaalm-channel-s23-channel-creds", "{.rules[0].resourceNames}")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(names).To(ContainSubstring("s23-whatsapp-creds"))
-
-		port, stopFn, err := utils.PortForward("e2e", "mock-whatsapp", "8080")
-		Expect(err).NotTo(HaveOccurred())
-		stop = stopFn
-		mockURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+		stop, mockURL = applyPlatformChannel(platformChannel{
+			Manifest: "test/e2e/testdata/whatsapp.yaml", Mock: "mock-whatsapp",
+			Agent: "s23-agent", Channel: "s23-channel", Secret: "s23-whatsapp-creds", Platform: "WhatsApp",
+		})
 	})
 
 	AfterAll(func() {

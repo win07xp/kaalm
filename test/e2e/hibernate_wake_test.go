@@ -12,11 +12,11 @@ import (
 	"github.com/win07xp/kaalm/test/utils"
 )
 
-// pvcUID reads the memory PVC's UID; it is empty (with an error) while the PVC
-// is absent. A stable non-empty UID across the hibernate/wake cycle proves the
-// same volume persisted and was remounted.
-func pvcUID(agent string) (string, error) {
-	return utils.ResourceField("pvc", "e2e", agent+"-memory", "{.metadata.uid}")
+// s7MemoryPVCUID reads s7-agent's memory PVC UID; it is empty (with an error)
+// while the PVC is absent. A stable non-empty UID across the hibernate/wake
+// cycle proves the same volume persisted and was remounted.
+func s7MemoryPVCUID() (string, error) {
+	return utils.ResourceField("pvc", "e2e", "s7-agent-memory", "{.metadata.uid}")
 }
 
 // asyncAccept POSTs an async webhook and returns the 202 requestId.
@@ -66,9 +66,9 @@ var _ = Describe("Hibernate and wake", Ordered, func() {
 
 		By("its memory PVC exists")
 		Eventually(func() (string, error) {
-			return pvcUID("s7-agent")
+			return s7MemoryPVCUID()
 		}, "60s", "3s").ShouldNot(BeEmpty())
-		s7PVCUID, _ = pvcUID("s7-agent")
+		s7PVCUID, _ = s7MemoryPVCUID()
 	})
 
 	It("hibernates the idle agent, deleting the Pod but keeping the PVC", func() {
@@ -90,7 +90,7 @@ var _ = Describe("Hibernate and wake", Ordered, func() {
 		))
 
 		By("the PVC survives with the same identity")
-		uid, err := pvcUID("s7-agent")
+		uid, err := s7MemoryPVCUID()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uid).To(Equal(s7PVCUID), "the memory PVC must persist across hibernation")
 
@@ -140,7 +140,7 @@ var _ = Describe("Hibernate and wake", Ordered, func() {
 		Expect(record.Response.Content).To(ContainSubstring("wake-up"))
 
 		By("the memory PVC was remounted, not replaced")
-		uid, err := pvcUID("s7-agent")
+		uid, err := s7MemoryPVCUID()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uid).To(Equal(s7PVCUID))
 	})
