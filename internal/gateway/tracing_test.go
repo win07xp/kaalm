@@ -189,6 +189,9 @@ func TestTracing_ToolCallRelayFailureMarksSpan(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"content":[]}}`)
 		}, mcpCall("web_search"), codes.Unset, ""},
+		{"upstream 4xx relayed", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}, mcpCall("web_search"), codes.Unset, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -216,6 +219,45 @@ func TestTracing_ToolCallRelayFailureMarksSpan(t *testing.T) {
 					call.Status.Code, call.Status.Description, c.code, c.desc)
 			}
 		})
+	}
+}
+
+// spanNamed returns the exported span called name.
+func spanNamed(t *testing.T, exp *tracetest.InMemoryExporter, name string) tracetest.SpanStub {
+	t.Helper()
+	for _, s := range exp.GetSpans() {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("span %s missing; got %v", name, spanNames(exp))
+	return tracetest.SpanStub{}
+}
+
+// An upstream 4xx the gateway relays unchanged leaves the llm.request
+// server span unset, as tool.call does; the llm.forward client span carries
+// the failure.
+func TestTracing_LLMRelayedUpstream4xxLeavesRequestUnset(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad request"}}`))
+	})
+	h.seedRoute()
+	h.server.Tracing = newTestTracing(exp)
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/chat/completions"), map[string]any{"model": "prov/m1"}, nil)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want the upstream 400 relayed", resp.StatusCode)
+	}
+	if req := spanNamed(t, exp, "llm.request"); req.Status.Code != codes.Unset {
+		t.Errorf("llm.request status = (%v, %q), want Unset", req.Status.Code, req.Status.Description)
+	}
+	if fwd := spanNamed(t, exp, "llm.forward"); fwd.Status.Code != codes.Error {
+		t.Errorf("llm.forward status = (%v, %q), want Error", fwd.Status.Code, fwd.Status.Description)
 	}
 }
 

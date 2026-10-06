@@ -306,7 +306,10 @@ func (s *Server) writeWalkResult(
 			res.settle(0)
 		}
 		s.Metrics.LLMRequest(res.provider, *modelID, namespace, "error")
-		spanError(ctx, "upstream_error")
+		// The llm.request server span stays unset, as tool.call does for a
+		// relayed upstream 4xx: the gateway handled the request correctly
+		// (the OpenTelemetry HTTP server-span convention), and the failed
+		// candidate's llm.forward span carries the error.
 		bodyLog("llm response", res.body)
 		copyDownstreamHeaders(w.Header(), res.resp.Header)
 		respBody := res.body
