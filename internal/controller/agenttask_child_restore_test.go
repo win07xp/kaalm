@@ -564,9 +564,10 @@ func npCIDRs(name string) ([]string, error) {
 	return out, nil
 }
 
-func expectNPCIDRs(name string, want ...string) func() error {
+// expectKeptCIDRs checks the np-keep task's NetworkPolicy CIDRs.
+func expectKeptCIDRs(want ...string) func() error {
 	return func() error {
-		got, err := npCIDRs(name)
+		got, err := npCIDRs("np-keep")
 		if err != nil {
 			return err
 		}
@@ -664,7 +665,7 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	}
 
 	setClassCIDRs(t, "wc-np-keep", []string{"10.2.0.0/16"})
-	consistently(t, 2*time.Second, expectNPCIDRs("np-keep", "10.1.0.0/16"))
+	consistently(t, 2*time.Second, expectKeptCIDRs("10.1.0.0/16"))
 
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
@@ -674,14 +675,14 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 		np.Spec.Egress[len(np.Spec.Egress)-1].To[0].IPBlock.CIDR = "0.0.0.0/0"
 		return testClient.Update(ctxT(), &np)
 	})
-	eventually(t, expectNPCIDRs("np-keep", "10.1.0.0/16"))
+	eventually(t, expectKeptCIDRs("10.1.0.0/16"))
 
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "np-keep", Namespace: "default"}}
 	if err := testClient.Delete(ctxT(), np); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, expectNPCIDRs("np-keep", "10.1.0.0/16"))
-	consistently(t, time.Second, expectNPCIDRs("np-keep", "10.1.0.0/16"))
+	eventually(t, expectKeptCIDRs("10.1.0.0/16"))
+	consistently(t, time.Second, expectKeptCIDRs("10.1.0.0/16"))
 }
 
 // countingWrites is an interceptor that counts Create, Update, Patch, and
