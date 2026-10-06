@@ -45,7 +45,7 @@ Any single failure returns `503 Service Unavailable` with a body listing which c
 
 The gateway exposes Prometheus metrics on `:9090/metrics`:
 
-- `kaalm_llm_requests_total{provider,model,namespace,status}` (status = ok|error|rate_limited|client_closed, one increment per request; the values are listed after this list)
+- `kaalm_llm_requests_total{provider,model,namespace,status}` (status = ok|error|rate_limited|client_closed; at most one increment per request; malformed or unauthorized requests and budget denials are refused before the rate-limit check and are not counted; the values are listed after this list)
 - `kaalm_llm_request_duration_seconds{provider,model}` (forwarded requests only, stream relay included, labeled with the provider that answered; local denials such as rate limiting and budget blocks are not observed)
 - `kaalm_llm_tokens_total{provider,model,namespace,direction}` (direction = input|output)
 - `kaalm_llm_spend_usd_total{provider,namespace}`

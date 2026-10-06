@@ -120,13 +120,21 @@ synced periodically from the gateway ledgers, so it can lag live spend by a
 sync interval. It is the display surface, not the enforcement counter.
 
 After a period rollover, the list also holds the previous period's entries,
-with `state` `Normal`, until the next rollover. Filter on `period` to read
-current spend. The current period is the latest key:
+with `state` `Normal`, until the next rollover. A namespace has a
+current-period entry only after it spends in that period. Until then, the
+previous period's entry is the only one it has, and on a daily budget with no
+traffic that day that lasts all day. So the latest key is not always the
+current period. Filter on the current period's key instead. This example reads
+a monthly budget, whose key is `YYYY-MM`:
 
 ```bash
 kubectl get modelprovider anthropic-shared -o json \
-  | jq '.status.budgetUsage | (map(.period) | max) as $p | map(select(.period == $p))'
+  | jq --arg p "$(date -u +%Y-%m)" '.status.budgetUsage | map(select(.period == $p))'
 ```
+
+For a daily budget the key is `YYYY-MM-DD` (`date -u +%F`). For a weekly budget
+it is the ISO week, such as `2026-W41` (`date -u +%G-W%V`). An empty result
+means no namespace has spent in the current period.
 
 The design book's
 [ModelProvider](https://github.com/win07xp/kaalm/blob/main/docs/src/resources/modelprovider.md#status)
