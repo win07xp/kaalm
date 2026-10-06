@@ -553,19 +553,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Mcp-Session-Id", wrapSessionID(s.Config.SessionKey, sid, identity))
 	}
 
-	var respBytes int64
-	var relayStatus int
-	var relayErrType string
-	var relayDetail string
-	switch {
-	case msg.Method == "tools/list" && resp.StatusCode < 300:
-		respBytes, relayStatus, relayErrType, relayDetail = s.relayFilteredToolsList(r.Context(), w, resp, msg, filter, providerName)
-	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
-		respBytes, relayErrType, relayDetail = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID, providerName)
-		relayStatus = resp.StatusCode
-	default:
-		respBytes, relayStatus, relayErrType, relayDetail = relayMCPBuffered(r.Context(), w, resp, s.mcpMaxBodyBytes(), providerName)
-	}
+	respBytes, relayStatus, relayErrType, relayDetail := s.relayMCP(w, r, resp, msg, filter, providerName)
 	if relayErrType != "" {
 		spanError(tctx, relayErrType)
 	}
@@ -597,6 +585,24 @@ func forwardSpanErr(resp *http.Response, err error) error {
 		return errors.New("upstream_error")
 	}
 	return nil
+}
+
+// relayMCP relays the tool server's answer by its shape: a 2xx tools/list
+// filtered to the caller's grant, an event stream line by line, anything
+// else buffered. It returns the outcome the caller funnels into mcpResult.
+func (s *Server) relayMCP(
+	w http.ResponseWriter, r *http.Request, resp *http.Response, msg mcpRequest, filter *toolFilter,
+	providerName string,
+) (respBytes int64, status int, errType, detail string) {
+	switch {
+	case msg.Method == "tools/list" && resp.StatusCode < 300:
+		return s.relayFilteredToolsList(r.Context(), w, resp, msg, filter, providerName)
+	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"):
+		respBytes, errType, detail = relayMCPStream(w, r, resp, s.mcpMaxBodyBytes(), msg.ID, providerName)
+		return respBytes, resp.StatusCode, errType, detail
+	default:
+		return relayMCPBuffered(r.Context(), w, resp, s.mcpMaxBodyBytes(), providerName)
+	}
 }
 
 // logToolCredentialRefusal writes the credential-refusal warning, paced per
