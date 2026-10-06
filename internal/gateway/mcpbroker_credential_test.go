@@ -95,7 +95,7 @@ func TestMCPBroker_CancelledContextNotLogged(t *testing.T) {
 	buf := captureSlog(t)
 	h, _ := refusedToolHarness(t)
 
-	call := func(ctx context.Context) {
+	call := func(ctx context.Context, want int) {
 		t.Helper()
 		body, _ := json.Marshal(mcpCall("web_search"))
 		req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", bytes.NewReader(body))
@@ -103,18 +103,20 @@ func TestMCPBroker_CancelledContextNotLogged(t *testing.T) {
 		ctx = context.WithValue(ctx, callerKey{}, &caller{Namespace: "team-a"})
 		rec := httptest.NewRecorder()
 		h.server.handleMCPBroker(rec, req.WithContext(ctx))
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("status = %d, want 503 (%s)", rec.Code, rec.Body)
+		if rec.Code != want {
+			t.Fatalf("status = %d, want %d (%s)", rec.Code, want, rec.Body)
 		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	call(ctx)
+	// Nothing is written to a caller that left, so the recorder keeps its
+	// default 200.
+	call(ctx, http.StatusOK)
 	if got := len(logRecords(t, buf, mcpCredentialMsg)); got != 0 {
 		t.Fatalf("cancelled request should not log, got %d records", got)
 	}
-	call(context.Background())
+	call(context.Background(), http.StatusServiceUnavailable)
 	if got := len(logRecords(t, buf, mcpCredentialMsg)); got != 1 {
 		t.Errorf("live request after a cancelled one should log once, got %d records", got)
 	}
@@ -158,5 +160,27 @@ func TestMCPBroker_CredentialRejectionLoggedOncePerMinute(t *testing.T) {
 	call()
 	if got := len(logRecords(t, buf, toolRejectedMsg)); got != 2 {
 		t.Errorf("want a second record after a minute, got %d", got)
+	}
+}
+
+// A caller that leaves while the broker reads the credential left; the
+// tool server is not at fault.
+func TestMCPBroker_CredentialReadCallerGone(t *testing.T) {
+	h, _ := refusedToolHarness(t)
+	body, _ := json.Marshal(mcpCall("web_search"))
+	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), callerKey{}, &caller{Namespace: "team-a"}))
+	cancel()
+	rec := httptest.NewRecorder()
+	h.server.handleMCPBroker(rec, req.WithContext(ctx))
+	if got := mcpCalls(h, "web_search", toolStatusClientClosed); got != 1 {
+		t.Errorf("client_closed counter = %v, want 1", got)
+	}
+	if got := mcpCalls(h, "web_search", errToolUnavailable); got != 0 {
+		t.Errorf("tool_unavailable counter = %v, want 0", got)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("wrote %q to a caller that left", rec.Body)
 	}
 }

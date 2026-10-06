@@ -482,6 +482,12 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 	credential, err := s.Store.ToolCredential(r.Context(), tp)
 	if err != nil {
+		if r.Context().Err() != nil {
+			// The Secret read runs with the caller's context: a caller
+			// that left fails it, and the tool provider is not at fault.
+			closed(msg.Method, toolName)
+			return
+		}
 		// Retryable: the proxy treats a credential read failure as a
 		// connect-class failure, and the Secret read can be transient.
 		s.logToolCredentialRefusal(r.Context(), tp.Name, err)
