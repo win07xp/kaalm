@@ -488,7 +488,7 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 
 	forwarded = true
 	resp, err := s.mcpHTTPClient().Do(upReq)
-	endForward(err)
+	endForward(forwardSpanErr(resp, err))
 	if err != nil {
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
@@ -552,6 +552,20 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mcpResult(c, tp, providerName, msg.Method, toolName, relayStatus, relayErrType, relayDetail,
 		start, reqBytes, respBytes, forwarded)
+}
+
+// forwardSpanErr is the error the tool.forward client span ends with: the
+// transport error, or upstream_error for any upstream answer of 400 or
+// above, as llm.forward does. The tool.call server span leaves a relayed
+// upstream 4xx unset.
+func forwardSpanErr(resp *http.Response, err error) error {
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return errors.New("upstream_error")
+	}
+	return nil
 }
 
 // logToolCredentialRefusal writes the credential-refusal warning, paced per

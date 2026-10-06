@@ -261,6 +261,42 @@ func TestTracing_LLMRelayedUpstream4xxLeavesRequestUnset(t *testing.T) {
 	}
 }
 
+// The tool.forward client span fails on any upstream answer of 400 or
+// above, as llm.forward does.
+func TestTracing_ToolForwardMarksUpstreamErrorStatus(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		code   codes.Code
+		desc   string
+	}{
+		{"404", http.StatusNotFound, codes.Error, "upstream_error"},
+		{"502", http.StatusBadGateway, codes.Error, "upstream_error"},
+		{"200", http.StatusOK, codes.Unset, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			exp := tracetest.NewInMemoryExporter()
+			h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(c.status)
+				_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":7,"result":{"content":[]}}`)
+			})
+			h.seedToolRoute()
+			h.server.Tracing = newTestTracing(exp)
+			cert := agentCert(t, h.ca)
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			fwd := spanNamed(t, exp, "tool.forward")
+			if fwd.Status.Code != c.code || fwd.Status.Description != c.desc {
+				t.Errorf("tool.forward status = (%v, %q), want (%v, %q)",
+					fwd.Status.Code, fwd.Status.Description, c.code, c.desc)
+			}
+		})
+	}
+}
+
 // A call whose caller disconnected mid-stream marks the tool.call span
 // with client_closed.
 func TestTracing_ToolCallCallerGoneMarksSpan(t *testing.T) {
