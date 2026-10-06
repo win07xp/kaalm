@@ -145,11 +145,11 @@ const (
 )
 
 // LLMRequest counts one proxied request by outcome (ok | error |
-// rate_limited | client_closed): ok is a 2xx relayed in full; error is an
-// error the gateway answered with, a provider's non-2xx relayed, or a
-// stream the provider broke or let go idle; rate_limited is a request the
-// gateway's rate limit refused; client_closed is a caller that left before
-// a stream finished.
+// rate_limited | client_closed): ok is a 2xx relayed in full; error is a
+// request whose fallback walk was exhausted, a provider's non-2xx relayed,
+// an untranslatable answer, or a stream the provider broke or let go idle;
+// rate_limited is a request the gateway's rate limit refused;
+// client_closed is a caller that left before a stream finished.
 func (m *Metrics) LLMRequest(provider, model, namespace, status string) {
 	if m == nil {
 		return

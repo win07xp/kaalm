@@ -300,8 +300,8 @@ func TestProxy_CountsResponsesWithoutUsage(t *testing.T) {
 
 // llmStreamHarness serves one streamed chat completion that ends as mode
 // says: "clean" (usage and [DONE]), "break" (the connection drops after one
-// chunk), "stall" (no data past the idle bound), or "abandon" (the tool
-// server keeps the stream open; the caller leaves).
+// chunk), "stall" (no data past the idle bound), or "abandon" (the
+// provider keeps the stream open; the caller leaves).
 func llmStreamHarness(t *testing.T, mode string) *harness {
 	t.Helper()
 	blocked := make(chan struct{})
