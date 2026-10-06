@@ -189,14 +189,18 @@ func TestModelProvider_DeleteDropsCanonicalGauge(t *testing.T) {
 		name: "finalizer released",
 		objs: func(name string) []client.Object { return []client.Object{deletingProvider(name)} },
 	}, {
+		// A held delete keeps reducing the budget, so the series stays while
+		// the provider tracks one and its partials show current spend.
 		name: "held by referrer",
 		objs: func(name string) []client.Object {
-			return []client.Object{deletingProvider(name), &kaalmv1beta1.Agent{
+			mp := deletingProvider(name)
+			mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+			return append([]client.Object{mp, &kaalmv1beta1.Agent{
 				ObjectMeta: metav1.ObjectMeta{Name: "holds", Namespace: "team-a"},
 				Spec: kaalmv1beta1.AgentSpec{
 					Providers: []kaalmv1beta1.AgentProviderReference{{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: name}}},
 				},
-			}}
+			}}, misconfiguredBudgetObjects(name, period)...)
 		},
 		wantKept: true,
 	}, {
