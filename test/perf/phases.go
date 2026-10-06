@@ -1,4 +1,4 @@
-//go:build loadtest
+//go:build perftest
 
 /*
 Copyright 2026 The Kaalm Authors.
@@ -35,7 +35,7 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// The phases, in the order `load run` executes them. Each records its own
+// The phases, in the order `perf run` executes them. Each records its own
 // block on the summary and cleans up its own objects, so a failed phase
 // leaves the earlier numbers intact and the cluster reusable.
 

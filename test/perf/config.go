@@ -1,4 +1,4 @@
-//go:build loadtest
+//go:build perftest
 
 /*
 Copyright 2026 The Kaalm Authors.
@@ -26,8 +26,8 @@ import (
 )
 
 // config holds the run's knobs. Every default is the baseline shape the
-// design book's numbers were taken with; override through the load-* Makefile
-// variables (LOAD_FLAGS) rather than editing the defaults, so a re-run of the
+// design book's numbers were taken with; override through the PERF_FLAGS Makefile
+// variable rather than editing the defaults, so a re-run of the
 // baseline stays one command.
 type config struct {
 	Context      string
@@ -105,10 +105,10 @@ const (
 // mock's endpoint prefix: immediate, 50 ms, immediate under hard budget, and
 // immediate with rate limits on.
 const (
-	providerFast    = "load-fast"
-	providerSlow    = "load-slow"
-	providerHard    = "load-hard"
-	providerLimited = "load-limited"
+	providerFast    = "perf-fast"
+	providerSlow    = "perf-slow"
+	providerHard    = "perf-hard"
+	providerLimited = "perf-limited"
 )
 
 var allPhases = []string{phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks}
@@ -117,13 +117,13 @@ func parseRunFlags(args []string) (config, error) {
 	var c config
 	var phases string
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.StringVar(&c.Context, "context", "k3d-kaalm-load", "kubeconfig context of the load cluster")
-	fs.StringVar(&c.Namespace, "namespace", "load", "namespace the fleet lives in (must match testdata/infra.yaml)")
+	fs.StringVar(&c.Context, "context", "k3d-kaalm-perf", "kubeconfig context of the perf cluster")
+	fs.StringVar(&c.Namespace, "namespace", "perf", "namespace the fleet lives in (must match testdata/infra.yaml)")
 	fs.StringVar(&c.AgentImage, "agent-image", "registry.test/agents/starter-go:e2e", "agent image for every workload")
-	fs.StringVar(&c.LoadgenImage, "loadgen-image", "registry.test/load/loadgen:load", "in-cluster load generator image")
-	fs.StringVar(&c.Infra, "infra", "test/load/testdata/infra.yaml",
+	fs.StringVar(&c.LoadgenImage, "loadgen-image", "registry.test/perf/loadgen:perf", "in-cluster load generator image")
+	fs.StringVar(&c.Infra, "infra", "test/perf/testdata/infra.yaml",
 		"in-cluster infrastructure manifest applied before any phase")
-	fs.StringVar(&c.Out, "out", "", "summary JSON path (default test/load/results/<timestamp>.json)")
+	fs.StringVar(&c.Out, "out", "", "summary JSON path (default test/perf/results/<timestamp>.json)")
 	fs.StringVar(&phases, "phases", strings.Join(allPhases, ","),
 		"comma-separated phases to run, in this order: "+strings.Join(allPhases, ","))
 	fs.BoolVar(&c.HostPreflight, "host-preflight", true,

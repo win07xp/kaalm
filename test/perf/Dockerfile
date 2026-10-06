@@ -1,7 +1,7 @@
-# The load harness binary as an in-cluster image: the orchestrator runs it as
+# The perf harness binary as an in-cluster image: the orchestrator runs it as
 # a Job in `loadgen` mode so request traffic reaches the gateway from inside
-# the cluster. Never shipped; built by `make load-images` and imported into the
-# load cluster. Its own Dockerfile keeps the production one production-only.
+# the cluster. Never shipped; built by `make perf-images` and imported into the
+# perf cluster. Its own Dockerfile keeps the production one production-only.
 FROM docker.io/golang:1.24 AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -12,10 +12,10 @@ COPY go.sum go.sum
 RUN go mod download
 
 COPY api/ api/
-COPY test/load/ test/load/
+COPY test/perf/ test/perf/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -tags loadtest -a -o /out/app ./test/load
+    go build -tags perftest -a -o /out/app ./test/perf
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /

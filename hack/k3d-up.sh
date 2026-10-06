@@ -17,7 +17,7 @@ CLUSTER="${CLUSTER:-kaalm-dev}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.2}"
 TRUST_MANAGER_VERSION="${TRUST_MANAGER_VERSION:-v0.13.0}"
 TRUST_NAMESPACE="${TRUST_NAMESPACE:-cert-manager}"
-# The load harness (make load) asks for a wider cluster: extra agent nodes and
+# The perf harness (make perf) asks for a wider cluster: extra agent nodes and
 # a raised kubelet max-pods (the default 110 per node caps a fleet long before
 # memory does). Both default to the plain single-node e2e shape.
 K3D_AGENTS="${K3D_AGENTS:-0}"

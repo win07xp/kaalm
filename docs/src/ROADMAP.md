@@ -55,11 +55,11 @@ new surface:
   `CiliumNetworkPolicy` with `toFQDNs` rules for each workload when the CNI
   is Cilium ([FQDN egress policy](runtime/child-resources.md#fqdn-egress-policy)),
   proven in CI on a Cilium cluster.
-- **A scale proof and a performance pass.** A repeatable load harness
+- **A scale proof and a performance pass.** A repeatable performance harness
   ([#140](https://github.com/win07xp/kaalm/issues/140)) and a profiling pass
   under its baseline ([#174](https://github.com/win07xp/kaalm/issues/174)):
   400 agents on one machine, hibernation churn, and concurrent tasks, with
-  the numbers in [Load and scale](operations/load-and-scale.md).
+  the numbers in [Performance and scale](operations/performance-and-scale.md).
 - **The Agent Sandbox decision**
   ([#141](https://github.com/win07xp/kaalm/issues/141)): v1 runs agents as
   plain Pods and documents the RuntimeClass alternative for code-executing
@@ -88,7 +88,7 @@ docs audit filed between the books and the code; until each is fixed, its
 page describes the shipped behavior and cites the issue. It also verifies
 and documents the microVM path, Kata first
 ([#168](https://github.com/win07xp/kaalm/issues/168)), adds the tool-plane
-and streaming phases of the load harness
+and streaming phases of the performance harness
 ([#175](https://github.com/win07xp/kaalm/issues/175)), and carries the
 tooling and test issues. The full list is on the
 [milestone](https://github.com/win07xp/kaalm/milestone/8).

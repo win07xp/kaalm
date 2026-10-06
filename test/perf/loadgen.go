@@ -1,4 +1,4 @@
-//go:build loadtest
+//go:build perftest
 
 /*
 Copyright 2026 The Kaalm Authors.
@@ -88,7 +88,7 @@ func runLoadgen(args []string) error {
 	fs.StringVar(&c.caFile, "ca-file", "/var/run/ca/ca.crt", "the kaalm-ca bundle the gateway's certificates chain to")
 	fs.StringVar(&c.bearerFile, "bearer-file", "/var/run/hook/token", "channels mode: the webhook bearer secret")
 	fs.StringVar(&c.base, "base", "https://kaalm-gateway.kaalm-system.svc:8080", "channels mode: user listener base URL")
-	fs.StringVar(&c.pathPrefix, "path-prefix", "/channels/load/ramp-",
+	fs.StringVar(&c.pathPrefix, "path-prefix", "/channels/perf/ramp-",
 		"channels mode: channel path prefix; the index is appended")
 	fs.IntVar(&c.count, "count", 1, "channels mode: number of channels under the prefix")
 	fs.IntVar(&c.pad, "pad", 4, "channels mode: zero-padding width of the index")

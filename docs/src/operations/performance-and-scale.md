@@ -1,16 +1,16 @@
-# Load and scale
+# Performance and scale
 
-This page states the load harness, the environment it runs on, and the baseline it produced. The numbers are a baseline, not a pass mark: a release runs the same harness on the same environment and compares against it, and the page states what a real cluster changes.
+This page states the performance harness, the environment it runs on, and the baseline it produced. The numbers are a baseline, not a pass mark: a release runs the same harness on the same environment and compares against it, and the page states what a real cluster changes.
 
 ## What the harness measures
 
-`make load` creates a dedicated k3d cluster and installs the chart with the mock provider trusted for upstream and callbacks and the pprof listeners open; the console and tracing stay off. The harness (`test/load`) then applies `test/load/testdata/infra.yaml`, which holds the load namespace, the mock provider, and the four ModelProviders the legs select (`load-fast`, `load-slow`, `load-hard`, `load-limited`), and runs seven phases in order. Each phase writes its own block of the summary JSON. The ramp leaves its fleet up for the hold, restart, and teardown phases; every other phase cleans up its own objects.
+`make perf` creates a dedicated k3d cluster and installs the chart with the mock provider trusted for upstream and callbacks and the pprof listeners open; the console and tracing stay off. The harness (`test/perf`) then applies `test/perf/testdata/infra.yaml`, which holds the `perf` namespace, the mock provider, and the four ModelProviders the legs select (`perf-fast`, `perf-slow`, `perf-hard`, `perf-limited`), and runs seven phases in order. Each phase writes its own block of the summary JSON. The ramp leaves its fleet up for the hold, restart, and teardown phases; every other phase cleans up its own objects.
 
-![The load harness topology: the harness on the host creates objects and reads metrics; inside the k3d cluster a load generator Job drives the gateway on the LLM leg to the mock provider and on the channel leg through the agent fleet, whose callbacks return to the mock's receiver; the controller reconciles and wakes the fleet.](../diagrams/load-harness-topology.svg)
+![The performance harness topology: the harness on the host creates objects and reads metrics; inside the k3d cluster a load generator Job drives the gateway on the LLM leg to the mock provider and on the channel leg through the agent fleet, whose callbacks return to the mock's receiver; the controller reconciles and wakes the fleet.](../diagrams/perf-harness-topology.svg)
 
-![The seven phases in order: gateway, ramp, hold, restart, teardown, churn, tasks. Hold, restart, and teardown run on the ramp fleet.](../diagrams/load-phase-order.svg)
+![The seven phases in order: gateway, ramp, hold, restart, teardown, churn, tasks. Hold, restart, and teardown run on the ramp fleet.](../diagrams/perf-phase-order.svg)
 
-The harness drives one load profile: non-streaming chat completions, no tool calls, one AgentClass, four ModelProviders, and one namespace. `load-limited` is `load-fast` with `rateLimits.requestsPerMinute` and `tokensPerMinute` both set to 2000000000, far above any rate a leg reaches, so every request on it runs the gateway's rate limiter and none is refused. Streaming and the tool plane are not measured.
+The harness drives one load profile: non-streaming chat completions, no tool calls, one AgentClass, four ModelProviders, and one namespace. `perf-limited` is `perf-fast` with `rateLimits.requestsPerMinute` and `tokensPerMinute` both set to 2000000000, far above any rate a leg reaches, so every request on it runs the gateway's rate limiter and none is refused. Streaming and the tool plane are not measured.
 
 1. **Gateway steady state.** An in-cluster load generator calls the LLM proxy at fixed concurrency in five legs: the ServiceAccount-token tier against a mock provider that answers immediately, then the mTLS path (the load generator presents the certificate of a real Agent) against an immediate provider, a 50 ms provider, an immediate provider under hard budget enforcement, and an immediate provider with rate limits on. Each leg records client-observed latency, the gateway's own request histogram, and the gateway's peak CPU and memory. The immediate legs isolate the gateway's per-request cost; the hard leg isolates what synchronous ledger admission adds, and the rate-limits leg isolates what the request and token limiter adds.
 2. **Max-active ramp.** Agents are created in waves of 50, with persistence and hibernation off, and none are retired. The ramp stops at the target or at the environment's first limit: agent Pods crash-looping on probe timeouts, host memory below a floor, a node reporting memory pressure, the scheduler refusing a Pod, or a wave that misses Ready within `-wave-timeout` (default six minutes). The wave that hits the limit is trimmed, so the later phases run on the largest fleet that came up clean. Each wave records time-to-Ready (creation to the Ready condition) and its breakdown (certificate issuance, Pod start, start to Ready), the controller's reconcile histogram and queue depth, the operator components' memory, and the host's available memory, which yields the memory cost per running agent.
@@ -25,15 +25,15 @@ Timings that come from API objects (time-to-Ready, task completion) have one-sec
 ## Run the harness
 
 ```bash
-make load                       # fresh cluster, images, chart, the full run
-make load-run LOAD_FLAGS='-phases gateway -gateway-duration 30s'   # inner loop on the existing cluster
-make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'   # the soak
-make load-down                  # delete the cluster
+make perf                       # fresh cluster, images, chart, the full run
+make perf-run PERF_FLAGS='-phases gateway -gateway-duration 30s'   # inner loop on the existing cluster
+make perf-run PERF_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'   # the soak
+make perf-down                  # delete the cluster
 ```
 
-`make load` takes about 45 minutes on the baseline machine. Results land in `test/load/results/` as JSON, which is not committed; the published baseline lives in `test/load/baseline/`. The flags in `test/load/config.go` change the fleet size, the wave size, the phase list, and every duration. The defaults are the baseline settings. The load deploy also opens the [Profiling](observability.md#profiling) listeners on both components (`LOAD_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the gateway's request paths with no cluster at all: the pure functions on those paths, and the whole in-process proxy path (`BenchmarkLLMProxyMTLS`, plus `BenchmarkLLMProxyMTLSRateLimited` and `BenchmarkLLMProxyMTLSRateLimitedParallel` with both limits on, sequential and with many callers on one key). Save two runs and compare them with `benchstat` before and after a change to one of those paths.
+`make perf` takes about 45 minutes on the baseline machine. Results land in `test/perf/results/` as JSON, which is not committed; the published baseline lives in `test/perf/baseline/`. The flags in `test/perf/config.go` change the fleet size, the wave size, the phase list, and every duration. The defaults are the baseline settings. `make perf-deploy` also opens the [Profiling](observability.md#profiling) listeners on both components (`PERF_PPROF_PORT`, default `6060`), so a profile can be taken during any phase. `make bench` runs the Go benchmarks for the gateway's request paths with no cluster at all: the pure functions on those paths, and the whole in-process proxy path (`BenchmarkLLMProxyMTLS`, plus `BenchmarkLLMProxyMTLSRateLimited` and `BenchmarkLLMProxyMTLSRateLimitedParallel` with both limits on, sequential and with many callers on one key). Save two runs and compare them with `benchstat` before and after a change to one of those paths.
 
-The harness checks one host prerequisite before it starts: `fs.inotify.max_user_instances` of at least 512 and `fs.inotify.max_user_watches` of at least 524288. The k3d nodes share the host kernel, and a few hundred Pods exhaust the defaults with confusing symptoms. It also records the node count, allocatable Pods, and kubelet version without enforcing them; `make load-up` creates one server and two agents at 250 Pods each, because the kubelet default of 110 caps a fleet long before memory does.
+The harness checks one host prerequisite before it starts: `fs.inotify.max_user_instances` of at least 512 and `fs.inotify.max_user_watches` of at least 524288. The k3d nodes share the host kernel, and a few hundred Pods exhaust the defaults with confusing symptoms. It also records the node count, allocatable Pods, and kubelet version without enforcing them; `make perf-up` creates one server and two agents at 250 Pods each, because the kubelet default of 110 caps a fleet long before memory does.
 
 The harness is a release-time local gate, listed in the release checklist, not a CI job: its numbers mean something only against the baseline on the same environment, which shared CI runners cannot reproduce.
 
@@ -46,12 +46,14 @@ The harness is a release-time local gate, listed in the release checklist, not a
 | Chart | 2 gateway replicas, 2 controller replicas, no resource limits, the mock provider trusted for upstream and callbacks, pprof on, console and tracing off |
 | Agent image | the e2e starter-go agent (the Go base image plus the starter handler), BestEffort |
 | Product code | `74e4c93` |
-| Run | September 12, 2026, `make load` with every default |
-| Baseline file | `test/load/baseline/2026-09-12.json`, one run |
+| Run | September 12, 2026, `make perf` with every default |
+| Baseline file | `test/perf/baseline/2026-09-12.json`, one run |
+
+The committed baseline files record the names in use when they ran: the `k3d-kaalm-load` context and node names, the `load` namespace, and `load-*` providers. A new run uses the `k3d-kaalm-perf` context, the `perf` namespace, and `perf-*` providers, so compare a new summary with them by leg name.
 
 ## Baseline numbers
 
-Every table except the soak, the restart table, and the rate-limits leg is from the single `make load` run of September 12, 2026, reproduced from the baseline file as printed. The restart table is from a separate run of September 29, 2026, described under it. The rate-limits leg is from a gateway-phase run of October 1, 2026, described under the gateway table.
+Every table except the soak, the restart table, and the rate-limits leg is from the single `make perf` run of September 12, 2026, reproduced from the baseline file as printed. The restart table is from a separate run of September 29, 2026, described under it. The rate-limits leg is from a gateway-phase run of October 1, 2026, described under the gateway table.
 
 ### Gateway
 
@@ -64,9 +66,9 @@ Five legs of 60 s at 32 concurrent callers in an in-cluster load generator. The 
 | mTLS, soft budget, 50 ms upstream | 615 | 51.9 / 53.2 / 54.0 | 75.0 / 97.5 / 99.5 | 6.0 cores, 56 MiB |
 | mTLS, hard budget, immediate upstream | 15176 | 1.7 / 4.6 / 6.4 | 2.5 / 4.8 / 5.1 | 5.8 cores, 55 MiB |
 
-The gateway's per-request cost is about 0.4 ms of CPU. The 50 ms leg is bound by the 32 callers times the upstream delay. The immediate legs vary between runs on this machine, from about 13,500 to 17,500 requests per second across the three `make load` runs of September 12.
+The gateway's per-request cost is about 0.4 ms of CPU. The 50 ms leg is bound by the 32 callers times the upstream delay. The immediate legs vary between runs on this machine, from about 13,500 to 17,500 requests per second across the three `make perf` runs of September 12.
 
-The fifth leg, `mtls: rate limits on, 0 ms upstream` against `load-limited`, is not in the September 12 baseline. It was measured on October 1, 2026, in one gateway-phase run on the same load cluster and environment (60 s legs at 32 callers, product code `463ba5b` with the rate-limiter change applied):
+The fifth leg, `mtls: rate limits on, 0 ms upstream` against `perf-limited`, is not in the September 12 baseline. It was measured on October 1, 2026, in one gateway-phase run on the same perf cluster and environment (60 s legs at 32 callers, product code `463ba5b` with the rate-limiter change applied):
 
 | Leg | rps | Client p50 / p99 (ms) | Gateway-side p99 (ms) | Gateway peak CPU | Non-200 responses |
 |---|---|---|---|---|---|
@@ -122,7 +124,7 @@ The per-agent rates divide every write the component made by the fleet size, inc
 
 ### Restart under load
 
-A rolling restart of each component with the ramp fleet up. The figures come from a separate run on the same machine, September 29, 2026 (`make load-run LOAD_FLAGS='-ramp-target 400 -phases ramp,restart'`, product code `1866257`), whose result file is `test/load/baseline/2026-09-29-restart.json`:
+A rolling restart of each component with the ramp fleet up. The figures come from a separate run on the same machine, September 29, 2026 (`make perf-run PERF_FLAGS='-ramp-target 400 -phases ramp,restart'`, product code `1866257`), whose result file is `test/perf/baseline/2026-09-29-restart.json`:
 
 | Measure | Value |
 |---|---|
@@ -172,7 +174,7 @@ Task throughput on this environment is certificate issuance throughput: the run 
 
 ### Soak
 
-A 60-minute hold at the peak fleet with the same settings as the three-minute hold (`make load-run LOAD_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'`, September 12, 2026, product code `a828022`), sampled once a minute. The soak's result file is not committed, so these figures have no source in the repository.
+A 60-minute hold at the peak fleet with the same settings as the three-minute hold (`make perf-run PERF_FLAGS='-phases ramp,hold,teardown -hold-duration 60m'`, September 12, 2026, product code `a828022`), sampled once a minute. The soak's result file is not committed, so these figures have no source in the repository.
 
 | Measure | Value |
 |---|---|
