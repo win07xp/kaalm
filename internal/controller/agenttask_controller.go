@@ -264,7 +264,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			if task.Status.Phase == kaalmv1beta1.TaskPending {
 				r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 			}
-			r.setTaskReady(task, false, "CertificateNotReady", "waiting for cert-manager to issue the task certificate")
+			r.setTaskReady(task, false, kaalmv1beta1.ReasonCertificateNotReady, "waiting for cert-manager to issue the task certificate")
 			if err := r.Status().Update(ctx, task); err != nil {
 				return ctrl.Result{}, err
 			}
