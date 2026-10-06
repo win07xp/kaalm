@@ -135,21 +135,17 @@ func writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, mess
 }
 
 // jsonrpcError renders a JSON-RPC error response for the request id (null
-// when the request had none). data is omitted when nil.
+// when the request had none), in the mcp.Response shape a relayed upstream
+// error has. data is omitted when nil.
 func jsonrpcError(id json.RawMessage, code int, message string, data any) []byte {
 	if len(id) == 0 {
 		id = json.RawMessage("null")
 	}
-	type rpcError struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    any    `json:"data,omitempty"`
+	rpcErr := &mcp.RPCError{Code: code, Message: message}
+	if data != nil {
+		rpcErr.Data, _ = json.Marshal(data)
 	}
-	out, _ := json.Marshal(struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Error   rpcError        `json:"error"`
-	}{JSONRPC: "2.0", ID: id, Error: rpcError{Code: code, Message: message, Data: data}})
+	out, _ := json.Marshal(mcp.Response{JSONRPC: "2.0", ID: id, Error: rpcErr})
 	return out
 }
 
