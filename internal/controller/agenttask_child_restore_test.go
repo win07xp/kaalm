@@ -677,11 +677,25 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	})
 	eventually(t, expectKeptCIDRs("10.1.0.0/16"))
 
-	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "np-keep", Namespace: "default"}}
-	if err := testClient.Delete(ctxT(), np); err != nil {
+	// testClient reads from the manager's cache, which can still hold the
+	// deleted policy for a moment; wait for the restored one by its UID.
+	var old networkingv1.NetworkPolicy
+	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &old); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, expectKeptCIDRs("10.1.0.0/16"))
+	if err := testClient.Delete(ctxT(), &old); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		var np networkingv1.NetworkPolicy
+		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &np); err != nil {
+			return err
+		}
+		if np.UID == old.UID {
+			return fmt.Errorf("NetworkPolicy np-keep not re-created yet")
+		}
+		return expectKeptCIDRs("10.1.0.0/16")()
+	})
 	consistently(t, time.Second, expectKeptCIDRs("10.1.0.0/16"))
 }
 
