@@ -43,3 +43,34 @@ by `make docs-check`) fails the build on them. Read it before adding a diagram.
 Diagrams are single-sourced like the prose: one figure per concept on its
 canonical page. `theme/custom.css` lets figures overhang the 750px prose
 column; keep them under ~1090px wide so they render at full size.
+
+### Render figures the way CI does
+
+The books job in CI re-renders every figure from its source. It fails when a
+committed SVG in `src/diagrams/`, or its copy in `guide/src/diagrams/`,
+differs from the render. Commit the output of `make diagrams` together with
+the matching source, never a stale or hand-edited SVG.
+
+A local render matches CI only with this setup:
+
+- PlantUML 1.2026.6.
+- OpenJDK 17.
+- Graphviz, which lays out many figures.
+- DejaVu Sans as the system sans-serif font (check with
+  `fc-match sans-serif`), including its Oblique (italic) faces, which Ubuntu
+  ships in `fonts-dejavu-extra`. PlantUML sizes every box from the measured
+  label text, so another font moves every figure. Without the Oblique faces,
+  Java synthesizes italics, and italic labels such as the «attempted» and
+  «cut» stereotypes in `fallback-tree.puml` measure narrower.
+
+The image and packages are in the books job of `.github/workflows/ci.yml`;
+read them there. Java caches its font lookup under `~/.java/fonts`. After you
+change the installed fonts, delete that cache before rendering, or a local
+render can keep the old font and disagree with CI.
+
+If the check fails, download the job's `rendered-diagrams` artifact. It holds
+the figures CI rendered, so you can see the difference without the setup.
+
+To change the PlantUML version or the render image, update `PLANTUML_JAR` in
+the `Makefile` and the jar URL and checksum in the workflow. Re-render every
+figure in the same change, or every figure fails the check.
