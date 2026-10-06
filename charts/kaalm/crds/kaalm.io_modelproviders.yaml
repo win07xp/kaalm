@@ -305,7 +305,12 @@ spec:
             description: ModelProviderStatus is the observed state of a ModelProvider.
             properties:
               budgetUsage:
-                description: BudgetUsage is per-namespace spend for the current period.
+                description: |-
+                  BudgetUsage is per-namespace spend for the current period and, from the
+                  first pass after a rollover until the next rollover, for the previous
+                  period; each entry's period tells them apart. A previous-period entry's
+                  state is always Normal, because the gateway enforces only the current
+                  period. See docs/src/resources/modelprovider.md#status.
                 items:
                   description: ModelProviderBudgetUsage is per-namespace spend.
                   properties:
@@ -339,7 +344,7 @@ spec:
                 type: array
               clusterSpentUSD:
                 description: ClusterSpentUSD is total spend across namespaces for
-                  the period.
+                  the current period.
                 type: string
               conditions:
                 description: |-
@@ -694,7 +699,12 @@ spec:
             description: ModelProviderStatus is the observed state of a ModelProvider.
             properties:
               budgetUsage:
-                description: BudgetUsage is per-namespace spend for the current period.
+                description: |-
+                  BudgetUsage is per-namespace spend for the current period and, from the
+                  first pass after a rollover until the next rollover, for the previous
+                  period; each entry's period tells them apart. A previous-period entry's
+                  state is always Normal, because the gateway enforces only the current
+                  period. See docs/src/resources/modelprovider.md#status.
                 items:
                   description: ModelProviderBudgetUsage is per-namespace spend.
                   properties:
@@ -728,7 +738,7 @@ spec:
                 type: array
               clusterSpentUSD:
                 description: ClusterSpentUSD is total spend across namespaces for
-                  the period.
+                  the current period.
                 type: string
               conditions:
                 description: |-

@@ -59,6 +59,12 @@ const CanonicalKey = "_canonical"
 // voids a hard ceiling once per rollout. Replicas fold it like a peer partial.
 const RetiredKey = "_retired"
 
+// PreviousKey is the reconciler-owned archive of the previous period's spend
+// per source (each replica key, and _retired), kept from one period rollover
+// to the next for ModelProvider status. The gateway enforces only the
+// current period, so replicas never fold it.
+const PreviousKey = "_previous"
+
 // budgetPartial is the JSON value under each per-replica key. The period tag
 // lets the reducer drop stale entries during rollover.
 type budgetPartial struct {
@@ -746,13 +752,13 @@ func (p *BudgetPublisher) foldWorkloads(ctx context.Context, provider *kaalmv1be
 
 // FoldPartials sums every current-period partial in a budget ConfigMap except
 // the caller's own key: peers plus the reconciler's _retired accumulator.
-// _canonical is never on the enforcement path. A value tagged with another
+// _canonical and _previous are never on the enforcement path. A value tagged with another
 // provider UID was written for a deleted provider of the same name and is
 // skipped; an untagged value counts as the current provider's.
 func FoldPartials(data map[string]string, ownPodName, currentPeriod, providerUID string) map[string]float64 {
 	peers := map[string]float64{}
 	for key, raw := range data {
-		if key == ownPodName || key == CanonicalKey {
+		if key == ownPodName || key == CanonicalKey || key == PreviousKey {
 			continue
 		}
 		period, spend, _, uid, err := ParseBudgetPartial(raw)

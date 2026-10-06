@@ -206,10 +206,14 @@ type ModelProviderStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// BudgetUsage is per-namespace spend for the current period.
+	// BudgetUsage is per-namespace spend for the current period and, from the
+	// first pass after a rollover until the next rollover, for the previous
+	// period; each entry's period tells them apart. A previous-period entry's
+	// state is always Normal, because the gateway enforces only the current
+	// period. See docs/src/resources/modelprovider.md#status.
 	// +optional
 	BudgetUsage []ModelProviderBudgetUsage `json:"budgetUsage,omitempty"`
-	// ClusterSpentUSD is total spend across namespaces for the period.
+	// ClusterSpentUSD is total spend across namespaces for the current period.
 	// +optional
 	ClusterSpentUSD string `json:"clusterSpentUSD,omitempty"`
 }

@@ -23,7 +23,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -136,5 +138,154 @@ func TestReconcileBudget_KeepsNewestStalePeriodOnly(t *testing.T) {
 		if _, ok := cm.Data[k]; ok {
 			t.Errorf("stale key %s not deleted", k)
 		}
+	}
+}
+
+// The previous period's rows stay in status after the rollover pass, until
+// the next rollover, and the archive lives in the ConfigMap so a later pass
+// renders it again.
+func TestReconcileBudget_PreviousPeriodOutlivesRolloverPass(t *testing.T) {
+	current := gateway.PeriodKey("monthly", time.Now())
+	h := newArchiveHarness(t, map[string]string{"gw-0": partialJSON("1999-01", "team-a", "10.00")}, nil)
+	h.pass("gw-0")
+	h.setKey("gw-0", partialJSON(current, "team-a", "1.00"))
+	h.pass("gw-0")
+	rows := h.rowsFor("1999-01")
+	if len(rows) != 1 || rows[0].SpentUSD != "10.00" {
+		t.Errorf("1999-01 rows after the second pass = %+v, want team-a 10.00", rows)
+	}
+	if _, ok := h.cm().Data[gateway.PreviousKey]; !ok {
+		t.Error("_previous missing from the ConfigMap")
+	}
+}
+
+// A replica's final old-period publish, arriving after the archive was made,
+// is a newer snapshot of the same counter: it replaces that source's figure
+// instead of adding to it.
+func TestReconcileBudget_LatePartialJoinsArchive(t *testing.T) {
+	h := newArchiveHarness(t, map[string]string{
+		"gw-0": partialJSON("1999-01", "team-a", "10.00"),
+		"gw-1": partialJSON("1999-01", "team-a", "5.00"),
+	}, nil)
+	h.pass("gw-0", "gw-1")
+	if rows := h.rowsFor("1999-01"); len(rows) != 1 || rows[0].SpentUSD != "15.00" {
+		t.Fatalf("first archive = %+v, want 15.00", rows)
+	}
+	h.setKey("gw-1", partialJSON("1999-01", "team-a", "7.00"))
+	h.pass("gw-0", "gw-1")
+	if rows := h.rowsFor("1999-01"); len(rows) != 1 || rows[0].SpentUSD != "17.00" {
+		t.Fatalf("after gw-1's late publish = %+v, want 17.00", rows)
+	}
+	h.setKey("gw-0", partialJSON("1999-01", "team-a", "12.00"))
+	h.pass("gw-0", "gw-1")
+	if rows := h.rowsFor("1999-01"); len(rows) != 1 || rows[0].SpentUSD != "19.00" {
+		t.Fatalf("after gw-0's late publish = %+v, want 19.00", rows)
+	}
+}
+
+// A previous-period row is never Blocked: the gateway enforces only the
+// current period, and Agents read Blocked as blocked now.
+func TestReconcileBudget_PreviousPeriodNeverBlocks(t *testing.T) {
+	current := gateway.PeriodKey("monthly", time.Now())
+	h := newArchiveHarness(t, map[string]string{
+		"gw-dead": partialJSON("1999-01", "team-a", "95.00"),
+		"gw-0":    partialJSON(current, "team-a", "90.00"),
+	}, func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget.Policies = []kaalmv1beta1.ModelProviderBudgetPolicy{{AtPercent: 80, Action: "block"}}
+	})
+	h.pass("gw-0")
+	if rows := h.rowsFor(current); len(rows) != 1 || rows[0].State != kaalmv1beta1.BudgetStateBlocked {
+		t.Errorf("current rows = %+v, want team-a Blocked", rows)
+	}
+	prev := h.rowsFor("1999-01")
+	if len(prev) != 1 || prev[0].State != kaalmv1beta1.BudgetStateNormal || prev[0].PercentUsed != 95 {
+		t.Errorf("previous rows = %+v, want team-a Normal at 95%%", prev)
+	}
+}
+
+// The archive lasts from the rollover that made it until the next one.
+func TestReconcileBudget_ArchiveReplacedAtNextRollover(t *testing.T) {
+	current := gateway.PeriodKey("monthly", time.Now())
+	archive := func(period, archivedIn, uid string) string {
+		return fmt.Sprintf(`{"period":%q,"archivedIn":%q,"providerUID":%q,"sources":{"gw-old":{"team-a":"4.00"}}}`,
+			period, archivedIn, uid)
+	}
+	cases := []struct {
+		name       string
+		data       map[string]string
+		uid        string
+		wantPeriod string // "" means no archive
+		wantSpent  string
+	}{{
+		name: "next rollover with no stale keys drops it",
+		data: map[string]string{gateway.PreviousKey: archive("1999-02", "1999-03", "")},
+	}, {
+		name: "next rollover replaces it",
+		data: map[string]string{
+			gateway.PreviousKey: archive("1999-02", "1999-03", ""),
+			"gw-0":              partialJSON("1999-03", "team-a", "9.00"),
+		},
+		wantPeriod: "1999-03", wantSpent: "9.00",
+	}, {
+		name: "an older stale key is dropped, not archived",
+		data: map[string]string{
+			gateway.PreviousKey: archive("1999-02", current, ""),
+			"gw-0":              partialJSON("1999-01", "team-a", "9.00"),
+		},
+		wantPeriod: "1999-02", wantSpent: "4.00",
+	}, {
+		name: "a newer stale key replaces it",
+		data: map[string]string{
+			gateway.PreviousKey: archive("1999-01", current, ""),
+			"gw-0":              partialJSON("1999-02", "team-a", "9.00"),
+		},
+		wantPeriod: "1999-02", wantSpent: "9.00",
+	}, {
+		name: "an archive for another provider UID is dropped",
+		data: map[string]string{gateway.PreviousKey: archive("1999-02", current, "old-uid")},
+		uid:  "new-uid",
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newArchiveHarness(t, tc.data, func(mp *kaalmv1beta1.ModelProvider) { mp.UID = types.UID(tc.uid) })
+			h.pass("gw-0")
+			cm := h.cm()
+			raw, ok := cm.Data[gateway.PreviousKey]
+			prev := h.previousRows()
+			if tc.wantPeriod == "" {
+				if ok || len(prev) != 0 {
+					t.Errorf("_previous = %q, previous rows = %+v; want neither", raw, prev)
+				}
+				return
+			}
+			if !ok {
+				t.Fatal("_previous missing")
+			}
+			if len(prev) != 1 || prev[0].Period != tc.wantPeriod || prev[0].SpentUSD != tc.wantSpent {
+				t.Errorf("previous rows = %+v, want %s at %s", prev, tc.wantPeriod, tc.wantSpent)
+			}
+			if _, stale := cm.Data["gw-0"]; stale {
+				t.Error("stale key gw-0 not deleted")
+			}
+		})
+	}
+}
+
+// A pass with nothing new to archive writes nothing.
+func TestReconcileBudget_ArchiveSteadyPassWritesNothing(t *testing.T) {
+	current := gateway.PeriodKey("monthly", time.Now())
+	h := newArchiveHarness(t, map[string]string{
+		"gw-0":    partialJSON(current, "team-a", "1.00"),
+		"gw-dead": partialJSON("1999-01", "team-a", "10.00"),
+	}, nil)
+	h.pass("gw-0")
+	before := h.cm().ResourceVersion
+	usage := append([]kaalmv1beta1.ModelProviderBudgetUsage(nil), h.mp.Status.BudgetUsage...)
+	h.pass("gw-0")
+	if after := h.cm().ResourceVersion; after != before {
+		t.Errorf("steady pass wrote the ConfigMap: resourceVersion %s -> %s", before, after)
+	}
+	if !equality.Semantic.DeepEqual(usage, h.mp.Status.BudgetUsage) {
+		t.Errorf("steady pass changed budgetUsage: %+v -> %+v", usage, h.mp.Status.BudgetUsage)
 	}
 }

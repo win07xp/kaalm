@@ -123,8 +123,8 @@ func (r *ModelProviderReconciler) deleteSpendConfigMaps(ctx context.Context, nam
 // reconcileBudget is the reducer over the per-replica partials in the
 // kaalm-budget-{provider} ConfigMap: delete keys written for another
 // provider UID (a deleted provider of the same name), prune keys with no live
-// gateway Pod, archive and drop stale-period entries, sum current-period
-// partials, write _canonical, and populate status.budgetUsage. It clears the budget status
+// gateway Pod, move stale-period keys into the _previous archive, sum
+// current-period partials, write _canonical, and populate status.budgetUsage. It clears the budget status
 // when the provider tracks no budget or the ConfigMap is absent. See
 // docs/src/gateways/llm/budgets-and-rate-limits.md.
 func (r *ModelProviderReconciler) reconcileBudget(
@@ -150,7 +150,7 @@ func (r *ModelProviderReconciler) reconcileBudget(
 	}
 
 	fold := foldBudgetKeys(&cm, liveGateways, currentPeriod, string(mp.UID))
-	current, previous, previousPeriod := fold.current, fold.previous, fold.previousPeriod
+	current := fold.current
 	changed := fold.changed
 
 	// current-period spend everyone must see = live partials + retired.
@@ -186,17 +186,38 @@ func (r *ModelProviderReconciler) reconcileBudget(
 		cm.Data[gateway.CanonicalKey] = string(rawCanonical)
 		changed = true
 	}
+
+	// The stale keys move into _previous in the same write that deletes
+	// them, so a failed status write loses nothing.
+	rawArchive, hadArchive := cm.Data[gateway.PreviousKey]
+	stored := parseBudgetArchive(rawArchive)
+	archive, archiveChanged := mergeBudgetArchive(stored, fold.stale, currentPeriod, string(mp.UID))
+	if archiveChanged || (hadArchive && stored == nil) {
+		if archive == nil {
+			delete(cm.Data, gateway.PreviousKey)
+		} else {
+			raw, err := json.Marshal(archive)
+			if err != nil {
+				return err
+			}
+			if cm.Data == nil {
+				cm.Data = map[string]string{}
+			}
+			cm.Data[gateway.PreviousKey] = string(raw)
+		}
+		changed = true
+	}
 	if changed {
 		if err := r.Update(ctx, &cm); err != nil {
 			return err
 		}
 	}
 
-	// Status: current-period usage per namespace, plus archived prior-period
-	// totals kept alongside (distinguished by their period tag).
+	// Status: current-period usage per namespace, then the archived previous
+	// period's (told apart by their period tag).
 	usage := budgetUsageEntries(mp, current, currentPeriod)
-	if previousPeriod != "" {
-		usage = append(usage, budgetUsageEntries(mp, previous, previousPeriod)...)
+	if archive != nil {
+		usage = append(usage, previousUsageEntries(mp, archive.totals(), archive.Period)...)
 	}
 	mp.Status.BudgetUsage = usage
 	var clusterTotal float64
@@ -213,13 +234,20 @@ func (r *ModelProviderReconciler) reconcileBudget(
 // budgetFold is foldBudgetKeys' result: the reducer's view of one budget
 // ConfigMap pass.
 type budgetFold struct {
-	current        map[string]float64 // ns -> USD, current period, live replicas
-	retired        map[string]float64 // ns -> USD, current period, pruned replicas
-	previous       map[string]float64 // ns -> USD, prior-period entries pending archive
-	previousPeriod string
+	current map[string]float64 // ns -> USD, current period, live replicas
+	retired map[string]float64 // ns -> USD, current period, pruned replicas
+	// stale is the old-period spend deleted this pass, by source (the
+	// replica key, or _retired), for the _previous archive.
+	stale          map[string]stalePartial
 	changed        bool
 	retiredChanged bool
 	marginRaised   bool
+}
+
+// stalePartial is one source's old-period spend.
+type stalePartial struct {
+	period string
+	spend  map[string]float64 // ns -> USD
 }
 
 // foldBudgetKeys walks every key in the budget ConfigMap once: summing live
@@ -227,32 +255,26 @@ type budgetFold struct {
 // current-period totals into the retired view (deleting a key must not
 // delete the spend it recorded; load-bearing under hard enforcement, where a
 // rollout would otherwise erase every replaced replica's published spend),
-// and archiving prior-period entries. A key tagged with another provider UID
+// and deleting prior-period keys, whose spend it returns by source for the
+// _previous archive. A key tagged with another provider UID
 // was written for a deleted provider of the same name; it is deleted before
 // anything else reads it.
 func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentPeriod, providerUID string) budgetFold {
 	f := budgetFold{
-		current:  map[string]float64{},
-		retired:  map[string]float64{},
-		previous: map[string]float64{},
+		current: map[string]float64{},
+		retired: map[string]float64{},
+		stale:   map[string]stalePartial{},
 	}
 	sum := func(dst map[string]float64, src map[string]float64) {
 		for ns, v := range src {
 			dst[ns] += v
 		}
 	}
-	// Stale spend per old period: when keys of more than one old period
-	// remain (a controller down across two boundaries), only the newest is
-	// archived. Within one scheme, period keys sort by time.
-	stale := map[string]map[string]float64{}
-	archive := func(period string, spend map[string]float64) {
-		if stale[period] == nil {
-			stale[period] = map[string]float64{}
-		}
-		sum(stale[period], spend)
+	archive := func(source, period string, spend map[string]float64) {
+		f.stale[source] = stalePartial{period: period, spend: spend}
 	}
 	for k, raw := range cm.Data {
-		if k == gateway.CanonicalKey {
+		if k == gateway.CanonicalKey || k == gateway.PreviousKey {
 			continue
 		}
 		period, spend, margin, uid, err := gateway.ParseBudgetPartial(raw)
@@ -272,7 +294,7 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 			if period == currentPeriod {
 				sum(f.retired, spend)
 			} else {
-				archive(period, spend)
+				archive(k, period, spend)
 				delete(cm.Data, k)
 				f.changed = true
 			}
@@ -281,7 +303,7 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 				sum(f.retired, spend)
 				f.retiredChanged = true
 			} else if err == nil && period != currentPeriod {
-				archive(period, spend)
+				archive(k, period, spend)
 			}
 			delete(cm.Data, k)
 			f.changed = true
@@ -292,20 +314,118 @@ func foldBudgetKeys(cm *corev1.ConfigMap, liveGateways map[string]bool, currentP
 				f.marginRaised = true
 			}
 		default:
-			// Rollover: archive the old-period totals and delete the stale
-			// key; the live replica rewrites a new-period partial on its
-			// next publish.
-			archive(period, spend)
+			// Rollover: hand the old-period totals to the archive and
+			// delete the stale key; the live replica rewrites a new-period
+			// partial on its next publish.
+			archive(k, period, spend)
 			delete(cm.Data, k)
 			f.changed = true
 		}
 	}
-	for period, spend := range stale {
-		if period > f.previousPeriod {
-			f.previousPeriod, f.previous = period, spend
+	return f
+}
+
+// budgetArchive is the _previous value: the previous period's spend per
+// source, kept from the rollover that made it (archivedIn, the period then
+// current) until the next one. Sources is a nested object, so the value
+// never parses as a budget partial and an older gateway skips it.
+type budgetArchive struct {
+	Period      string                       `json:"period"`
+	ArchivedIn  string                       `json:"archivedIn"`
+	ProviderUID string                       `json:"providerUID,omitempty"`
+	Sources     map[string]map[string]string `json:"sources"` // source -> ns -> USD
+}
+
+// parseBudgetArchive decodes a _previous value; a missing or malformed one is
+// nil.
+func parseBudgetArchive(raw string) *budgetArchive {
+	if raw == "" {
+		return nil
+	}
+	var a budgetArchive
+	if err := json.Unmarshal([]byte(raw), &a); err != nil || a.Period == "" || a.Sources == nil {
+		return nil
+	}
+	return &a
+}
+
+// totals sums the archive per namespace over its sources.
+func (a *budgetArchive) totals() map[string]float64 {
+	out := map[string]float64{}
+	for _, spend := range a.Sources {
+		for ns, v := range spend {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				out[ns] += f
+			}
 		}
 	}
-	return f
+	return out
+}
+
+// mergeBudgetArchive folds this pass's stale keys into the stored archive and
+// reports whether it changed. Only the newest old period is kept: within one
+// scheme, period keys sort by time. A stored archive made before the current
+// period began, or for another provider UID, is dropped. When a source
+// appears again, the larger figure per namespace is kept: a replica's final
+// old-period publish is a newer snapshot of the same cumulative counter, so
+// adding it would count that replica twice. Stale keys of other periods are
+// already deleted and are not archived.
+func mergeBudgetArchive(
+	stored *budgetArchive, stale map[string]stalePartial, currentPeriod, providerUID string,
+) (*budgetArchive, bool) {
+	archive, changed := stored, false
+	if archive != nil && (archive.ArchivedIn != currentPeriod ||
+		(archive.ProviderUID != "" && archive.ProviderUID != providerUID)) {
+		archive, changed = nil, true
+	}
+	newest := ""
+	for _, sp := range stale {
+		if sp.period > newest {
+			newest = sp.period
+		}
+	}
+	if newest != "" && (archive == nil || newest > archive.Period) {
+		archive = &budgetArchive{
+			Period: newest, ArchivedIn: currentPeriod, ProviderUID: providerUID,
+			Sources: map[string]map[string]string{},
+		}
+		changed = true
+	}
+	if archive == nil {
+		return nil, changed
+	}
+	for source, sp := range stale {
+		if sp.period != archive.Period {
+			continue
+		}
+		dst := archive.Sources[source]
+		if dst == nil {
+			dst = map[string]string{}
+			archive.Sources[source] = dst
+		}
+		for ns, v := range sp.spend {
+			old, err := strconv.ParseFloat(dst[ns], 64)
+			if _, ok := dst[ns]; ok && err == nil && old >= v {
+				continue
+			}
+			dst[ns] = strconv.FormatFloat(v, 'f', 2, 64)
+			changed = true
+		}
+	}
+	return archive, changed
+}
+
+// previousUsageEntries renders the archived period's spend like the current
+// period's, but always in state Normal: the gateway enforces only the
+// current period, and readers take Blocked to mean blocked now.
+func previousUsageEntries(
+	mp *kaalmv1beta1.ModelProvider, spend map[string]float64, period string,
+) []kaalmv1beta1.ModelProviderBudgetUsage {
+	out := budgetUsageEntries(mp, spend, period)
+	for i := range out {
+		out[i].State = kaalmv1beta1.BudgetStateNormal
+	}
+	return out
 }
 
 // budgetUsageEntries renders per-namespace spend into status entries with the

@@ -570,11 +570,14 @@ func TestModelProvider_BudgetFoldRunsWhileMisconfigured(t *testing.T) {
 }
 
 // staleBudgetStatus is the status a provider kept from when it tracked a
-// budget: team-a Blocked, 95.00 spent, and BoundaryMarginRaised.
+// budget: team-a Blocked, 95.00 spent, a previous-period row, and
+// BoundaryMarginRaised.
 func staleBudgetStatus(mp *kaalmv1beta1.ModelProvider) {
 	period := gateway.PeriodKey("monthly", time.Now())
 	mp.Status.BudgetUsage = []kaalmv1beta1.ModelProviderBudgetUsage{{
 		Namespace: "team-a", Period: period, SpentUSD: "95.00", PercentUsed: 95, State: "Blocked",
+	}, {
+		Namespace: "team-a", Period: "1999-01", SpentUSD: "40.00", PercentUsed: 40, State: "Normal",
 	}}
 	mp.Status.ClusterSpentUSD = "95.00"
 	mp.Status.Conditions = append(mp.Status.Conditions, metav1.Condition{
@@ -622,6 +625,8 @@ func TestModelProvider_BudgetOffClearsBudgetStatus(t *testing.T) {
 				extra := misconfiguredBudgetObjects(name, period)
 				objs = append(objs, extra[0], extra[1])
 				cmData = extra[1].(*corev1.ConfigMap).Data
+				cmData[gateway.PreviousKey] = fmt.Sprintf(
+					`{"period":"1999-01","archivedIn":%q,"sources":{"gw-old":{"team-a":"40.00"}}}`, period)
 			}
 			r, rec := eventsProviderReconciler(t, &statusConflicts{}, nil, objs...)
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
