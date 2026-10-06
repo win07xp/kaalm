@@ -130,13 +130,10 @@ func TestTask_PVCCreateRejectedByQuota(t *testing.T) {
 // with ProvisioningDeadlineExceeded: retried while backoffLimit allows, then
 // settled Failed with the class bounds recorded.
 func TestTask_ChildWriteRejectedDeadline(t *testing.T) {
-	old := provisioningDeadline
-	provisioningDeadline = 1 * time.Second
-	defer func() { provisioningDeadline = old }()
-
 	const ns, name = "pvc-reject-deadline-task", "pvc-deadline-task"
 	mkPVCQuota(t, ns)
 	mkPersistentTaskIn(t, ns, name, "wc-pvc-reject-deadline", func(task *kaalmv1beta1.AgentTask) {
+		withShortDeadline(task)
 		task.Spec.Completion.BackoffLimit = 1
 	})
 	eventually(t, func() error { return markCertReadyIn(ns, name) })

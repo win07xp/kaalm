@@ -49,9 +49,8 @@ import (
 // before it fails: an image-pull or scheduling failure, counted from Pod
 // creation, and a rejected Pod create or child write, counted from the
 // attempt's first rejection (status.createRejectedTime). A documented
-// constant, not a spec field (docs/src/controller/task-lifecycle.md). A
-// variable so tests can shorten it.
-var provisioningDeadline = 5 * time.Minute
+// constant, not a spec field (docs/src/controller/task-lifecycle.md).
+const provisioningDeadline = 5 * time.Minute
 
 // AgentTaskReconciler drives the run-to-completion state machine: Pending ->
 // Provisioning -> Running -> Completing -> Succeeded/Failed/TimedOut, with
@@ -85,6 +84,20 @@ type AgentTaskReconciler struct {
 	// gateRequeue; tests set it so they need not change the package
 	// variable the envtest manager reads.
 	gateInterval time.Duration
+	// deadlineFor shortens the provisioning deadline for chosen tasks in
+	// tests. nil, or a zero return, means provisioningDeadline. It is set
+	// before the manager starts and only read after.
+	deadlineFor func(*kaalmv1beta1.AgentTask) time.Duration
+}
+
+// deadline is the provisioning deadline for task.
+func (r *AgentTaskReconciler) deadline(task *kaalmv1beta1.AgentTask) time.Duration {
+	if r.deadlineFor != nil {
+		if d := r.deadlineFor(task); d > 0 {
+			return d
+		}
+	}
+	return provisioningDeadline
 }
 
 // heldGate is the re-check interval childBlocked holds a task for.
@@ -366,9 +379,9 @@ func (r *AgentTaskReconciler) driveProvisioning(
 			return ctrl.Result{}, r.failOrRetry(ctx, task, cs.State.Waiting.Reason, cs.State.Waiting.Message)
 		}
 	}
-	if time.Since(pod.CreationTimestamp.Time) > provisioningDeadline {
+	if time.Since(pod.CreationTimestamp.Time) > r.deadline(task) {
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "ProvisioningDeadlineExceeded",
-			fmt.Sprintf("Pod %s not Ready within %s", pod.Name, provisioningDeadline))
+			fmt.Sprintf("Pod %s not Ready within %s", pod.Name, r.deadline(task)))
 	}
 	return r.awaitPodReady(ctx, task, class, eff, pod)
 }
@@ -404,14 +417,14 @@ func (r *AgentTaskReconciler) createRejected(
 		task.Status.CreateRejectedTime = &now
 	}
 	task.Status.PodName = ""
-	if now.Sub(task.Status.CreateRejectedTime.Time) > provisioningDeadline {
+	if now.Sub(task.Status.CreateRejectedTime.Time) > r.deadline(task) {
 		// A task that settles without ever having a Pod has no class bounds
 		// yet; record them so the class default TTL still reaches it.
 		if task.Status.Retries >= task.Spec.Completion.BackoffLimit && task.Status.ClassBounds == nil {
 			task.Status.ClassBounds = classTaskBounds(class)
 		}
 		return ctrl.Result{}, r.failOrRetry(ctx, task, "ProvisioningDeadlineExceeded",
-			fmt.Sprintf("%s for longer than %s: %s", what, provisioningDeadline, msg))
+			fmt.Sprintf("%s for longer than %s: %s", what, r.deadline(task), msg))
 	}
 	r.setTaskPhase(task, kaalmv1beta1.TaskProvisioning)
 	if err := r.gateTask(ctx, task, reason, msg); err != nil {

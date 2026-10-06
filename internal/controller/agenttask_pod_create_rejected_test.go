@@ -141,15 +141,12 @@ func TestTask_PodCreateRejectedByQuota(t *testing.T) {
 // with ProvisioningDeadlineExceeded: retried while backoffLimit allows, then
 // settled Failed with the class bounds recorded.
 func TestTask_PodCreateRejectedDeadline(t *testing.T) {
-	old := provisioningDeadline
-	provisioningDeadline = 1 * time.Second
-	defer func() { provisioningDeadline = old }()
-
 	missing := "absent-sandbox-deadline"
 	mkWorkloadClass(t, "wc-reject-deadline", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Runtime.RuntimeClassName = &missing
 	})
 	mkTask(t, "reject-deadline", "wc-reject-deadline", func(task *kaalmv1beta1.AgentTask) {
+		withShortDeadline(task)
 		task.Spec.Completion.BackoffLimit = 1
 	})
 	eventually(t, func() error { return markCertReadyErr("reject-deadline") })
