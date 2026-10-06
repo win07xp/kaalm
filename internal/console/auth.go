@@ -120,7 +120,7 @@ type AccessChecker struct {
 	cache map[accessKey]accessEntry
 }
 
-// NewAccessChecker builds a AccessChecker over an Authorizer.
+// NewAccessChecker builds an AccessChecker over an Authorizer.
 func NewAccessChecker(authz Authorizer) *AccessChecker {
 	return &AccessChecker{Authz: authz, now: time.Now, cache: map[accessKey]accessEntry{}}
 }
