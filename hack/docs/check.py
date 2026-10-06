@@ -51,7 +51,13 @@ Across the repository, outside the books:
   number (a `#` followed by digits): it states the reason instead, and git history keeps the
   link. Tracked files under docs/, guide/, and learn/ are exempt, and so are
   HTML, CSS, JSON, SVG, and Markdown files, where `#` starts colors and
-  anchors (see ISSUE_REF_SUFFIXES and ISSUE_REF_NAMES).
+  anchors (see ISSUE_REF_SUFFIXES and ISSUE_REF_NAMES);
+- no tracked file, in the books or outside them, uses the metaphor in
+  BANNED_FORMS in prose, a comment, an identifier, a test name, an object
+  name, or a figure source: it says what is checked and what happens when the
+  check fails. Identifiers are split into their parts, so a word that only
+  contains the letters ("Gateway") passes, and Kubernetes's own "feature"
+  term stays. Generated CRDs and rendered SVGs are skipped.
 
 Also runs diagram_check.py over docs/src/diagrams.
 
@@ -97,6 +103,19 @@ ISSUE_REF = re.compile(r"(?<![\w&#/])#\d+\b")
 # scripts, build files, and workflows.
 ISSUE_REF_SUFFIXES = (".go", ".py", ".sh", ".yml", ".yaml", ".mk", ".tpl", ".toml")
 ISSUE_REF_NAMES = ("Makefile", "go.mod", "go.work")
+# The banned metaphor, in any tracked text: prose, comments, identifiers, test
+# names, object names, and figure sources. Each candidate token is split into
+# its parts (camelCase, snake_case, kebab-case), so the word matches inside an
+# identifier or object name, while "Gateway" and "aggregate" do not. The
+# Kubernetes term (the word after "feature") stays. Spelled in pieces so this
+# file does not match itself.
+BANNED_WORD = "ga" + "te"
+BANNED_FORMS = {BANNED_WORD + s for s in ("", "s", "d")} | {"gat" + "ing"}
+BANNED_TOKEN = re.compile(r"(?<!feature )\b[A-Za-z0-9_-]*gat(?:e|es|ed|ing)[A-Za-z0-9_-]*", re.IGNORECASE)
+TOKEN_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+# Generated or rendered files: their sources are scanned instead.
+BANNED_WORD_SKIP = ("config/crd/bases/", "charts/kaalm/crds/")
+BANNED_WORD_SKIP_SUFFIXES = (".svg", ".sum")
 # Ginkgo node labels, checked against the scenario coverage map and against
 # spec labels quoted on other pages.
 SPEC_DIRS = ("test/e2e", "test/upgrade")
@@ -167,8 +186,6 @@ WORDING_PATTERNS = [
     r"\bmachinery\b",
     r"\bplumbing\b",
     r"\bload-bearing\b",
-    # "feature gate" is the Kubernetes term and stays.
-    r"(?<!feature )\bgat(?:e|es|ed|ing)\b",
 ]
 WORDING_RE = re.compile("|".join(WORDING_PATTERNS), re.IGNORECASE)
 
@@ -449,6 +466,36 @@ class Checker:
             return []
         return [rel for rel in sorted(filter(None, out.split("\0"))) if rel.split("/", 1)[0] not in BOOKS]
 
+    def check_banned_word(self) -> None:
+        """No tracked text file uses the banned metaphor (BANNED_FORMS) in
+        prose, a comment, an identifier, or a name: say what is checked and
+        what happens when the check fails. Generated CRDs and rendered SVGs
+        are skipped; their sources are read."""
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
+            ).stdout.decode("utf-8")
+        except (OSError, subprocess.CalledProcessError) as e:
+            self.problems.append(f"git ls-files failed: {e}")
+            return
+        for rel in sorted(filter(None, out.split("\0"))):
+            if rel.startswith(BANNED_WORD_SKIP) or rel.endswith(BANNED_WORD_SKIP_SUFFIXES):
+                continue
+            f = ROOT / rel
+            if not f.is_file():
+                continue
+            try:
+                text = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
+                for m in BANNED_TOKEN.finditer(line):
+                    parts = {p.lower() for p in TOKEN_PART.findall(m.group(0))}
+                    if parts & BANNED_FORMS:
+                        self.problems.append(
+                            f"{rel}:{n}: uses '{m.group(0)}'; name what is checked instead"
+                        )
+
     def check_book_refs(self) -> None:
         """Every book page a file outside the books cites by path exists, and
         its #anchor names a heading there. A renamed heading otherwise breaks
@@ -571,6 +618,7 @@ def main(argv: list[str]) -> int:
     checker.check_guide_figures()
     checker.check_book_refs()
     checker.check_issue_refs()
+    checker.check_banned_word()
     checker.check_coverage_map()
     checker.check_diagrams()
     for p in checker.problems:
