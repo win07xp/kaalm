@@ -908,10 +908,12 @@ func (r *AgentTaskReconciler) envSecretGate(
 // a rejected Pod create does (prePod; class must be set then). With a Pod,
 // either only sets Ready: completion, timeout, and Pod loss are still acted
 // on each pass, since those checks run before any child write, and the
-// other missing children are still re-created on the same pass. The cause (a conflicting object with no owner reference, a
-// quota, a webhook) raises no watch event, so the gateRequeue requeue is
-// what notices it clearing; a running task is requeued sooner when its
-// timeout comes first.
+// other missing children are still re-created on the same pass. The cause
+// (a conflicting object this workload does not control: one with no owner
+// reference, or one controlled by a same-named Agent or AgentTask; a quota;
+// a webhook) raises no watch event for this workload, so the gateRequeue
+// requeue is what notices it clearing; a running task is requeued sooner
+// when its timeout comes first.
 func (r *AgentTaskReconciler) childBlocked(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, prePod bool, err error,
 ) (ctrl.Result, error) {

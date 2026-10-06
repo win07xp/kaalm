@@ -356,9 +356,10 @@ func (r *AgentReconciler) waitForCertificateWithoutPod(agent *kaalmv1beta1.Agent
 // gateRequeue. Neither is a reconcile error: nothing the controller retries
 // can clear it, so backoff retries would only fill the log. The pass ends
 // before the Pod is converged, so no Pod is created, and a running Pod is
-// left alone. The cause (a conflicting object with no owner reference, a
-// quota, a webhook) raises no watch event, so the requeue is what notices it
-// clearing.
+// left alone. The cause (a conflicting object this workload does not
+// control: one with no owner reference, or one controlled by a same-named
+// Agent or AgentTask; a quota; a webhook) raises no watch event for this
+// workload, so the requeue is what notices it clearing.
 func (r *AgentReconciler) childBlocked(
 	ctx context.Context, agent *kaalmv1beta1.Agent, before *kaalmv1beta1.AgentStatus, err error,
 ) (ctrl.Result, error) {
