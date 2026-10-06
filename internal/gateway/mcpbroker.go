@@ -644,7 +644,7 @@ func (s *Server) relayFilteredToolsList(
 	if err != nil && ctx.Err() != nil {
 		return 0, statusClientClosedRequest, outcomeClientClosed, ""
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if err != nil && upstreamTimedOut(resp, err) {
 		// The upstream timeout covers the response, not only its headers.
 		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
 		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
@@ -723,6 +723,17 @@ func (rr *readErrRecorder) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// upstreamTimedOut reports whether a response read ended because the upstream
+// timeout passed. At the deadline the transport can end the body with a clean
+// io.EOF instead of the context error, so the upstream request's own context
+// is checked as well as the read error.
+func upstreamTimedOut(resp *http.Response, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return resp.Request != nil && errors.Is(resp.Request.Context().Err(), context.DeadlineExceeded)
+}
+
 // relayMCPBuffered copies a JSON response through, capped. It returns the
 // outcome the caller funnels into mcpResult, the audit detail included. ctx
 // is the caller's request context: a read that fails because the caller
@@ -734,7 +745,10 @@ func relayMCPBuffered(
 	if err != nil && ctx.Err() != nil {
 		return 0, statusClientClosedRequest, outcomeClientClosed, ""
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	// A body cut by the upstream timeout can end in a clean io.EOF, so a
+	// read with no error is checked too: relaying it would pass a truncated
+	// answer on as the upstream's status.
+	if upstreamTimedOut(resp, err) {
 		// The upstream timeout covers the response, not only its headers.
 		msg := fmt.Sprintf("tool provider %q did not answer within the upstream timeout", providerName)
 		writeError(w, http.StatusGatewayTimeout, errorBody{Type: errToolTimeout,
@@ -847,6 +861,13 @@ func relayMCPStream(
 		msg := fmt.Sprintf("tool provider response exceeds %d bytes; the stream is truncated", maxBytes)
 		endWithError(msg, errResponseTooLarge)
 		return written, errResponseTooLarge, msg
+	case r.Context().Err() == nil && upstreamTimedOut(resp, err):
+		// Checked before a clean end: at the deadline the read can end in a
+		// clean io.EOF instead of the context error.
+		msg := fmt.Sprintf("tool provider %q did not finish the stream within the upstream timeout; "+
+			"the stream is truncated", providerName)
+		endWithError(msg, errToolTimeout)
+		return written, errToolTimeout, msg
 	case err == nil:
 		if tail != nil {
 			bodyLog("mcp stream", tail)
@@ -859,11 +880,6 @@ func relayMCPStream(
 		// The upstream request derives from the caller's context, so a
 		// caller that left cancels the read: not a tool failure.
 		return written, outcomeClientClosed, ""
-	case errors.Is(err, context.DeadlineExceeded):
-		msg := fmt.Sprintf("tool provider %q did not finish the stream within the upstream timeout; "+
-			"the stream is truncated", providerName)
-		endWithError(msg, errToolTimeout)
-		return written, errToolTimeout, msg
 	default:
 		msg := fmt.Sprintf("reading the stream from tool provider %q failed; the stream is truncated", providerName)
 		endWithError(msg, errToolUnavailable)
