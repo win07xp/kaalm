@@ -163,6 +163,46 @@ jobs:
       - name: Check and build the three books
         run: make books
 
+      # PlantUML sizes each box from the text widths of the font Java
+      # resolves for sans-serif, and many figures use Graphviz for layout.
+      # So the render runs in pinned Ubuntu 22.04 with only the DejaVu
+      # fonts, Ubuntu's OpenJDK 17, and Graphviz: the setup the committed
+      # figures come from. The jar version and checksum move together with
+      # PLANTUML_JAR in the Makefile, and every figure is re-rendered in the
+      # same change.
+      - name: Install the pinned PlantUML jar
+        run: |
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "$RUNNER_TEMP/plantuml.jar" \
+            https://github.com/plantuml/plantuml/releases/download/v1.2026.6/plantuml-1.2026.6.jar
+          echo "89948f14c93756c7a3fb7b69078ff37e8489fd79dd430c582b931e2f65358690  $RUNNER_TEMP/plantuml.jar" | sha256sum -c -
+
+      - id: render
+        name: Re-render the figures and fail if a committed SVG differs
+        run: |
+          docker run --rm -v "$PWD:/src" -v "$RUNNER_TEMP/plantuml.jar:/opt/plantuml.jar:ro" -w /src \
+            ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 \
+            bash -c 'apt-get -o Acquire::Retries=3 update -qq &&
+              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+                make openjdk-17-jre-headless graphviz fonts-dejavu-core >/dev/null &&
+              make diagrams PLANTUML_JAR=/opt/plantuml.jar'
+          # git status, not git diff, so an untracked new render also fails.
+          changed=$(git status --porcelain -- docs/src/diagrams guide/src/diagrams)
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::these figures differ from what their sources render to; run make diagrams with the setup in this job and commit the result (the rendered-diagrams artifact has the CI renders)"
+            exit 1
+          fi
+
+      - name: Upload the CI renders
+        if: failure() && steps.render.outcome == 'failure'
+        uses: actions/upload-artifact@v6
+        with:
+          name: rendered-diagrams
+          path: |
+            docs/src/diagrams/*.svg
+            guide/src/diagrams/*.svg
+
   e2e:
     needs: changes
     if: needs.changes.outputs.code == 'true'
