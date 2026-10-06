@@ -377,3 +377,28 @@ func TestProxy_CountsStreamOutcomes(t *testing.T) {
 		})
 	}
 }
+
+// A buffered fallback answer that cannot be translated reaches the caller
+// as a 502, so it counts as an error.
+func TestProxy_UntranslatableResponseCountsError(t *testing.T) {
+	h, cert := crossingHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not json`))
+	})
+	m := NewMetrics(prometheus.NewRegistry())
+	h.server.Metrics = m
+	resp := postJSON(t, h.client(cert), h.url("/v1/messages"), map[string]any{
+		"model": "prov/m1", "max_tokens": 64,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	}, nil)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	count := func(status string) float64 {
+		return testutil.ToFloat64(m.llmRequests.WithLabelValues("backup", "gpt-5-mini", "team-a", status))
+	}
+	if count("error") != 1 || count("ok") != 0 {
+		t.Errorf("error = %v, ok = %v; want 1 and 0", count("error"), count("ok"))
+	}
+}

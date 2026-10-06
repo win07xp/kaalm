@@ -334,7 +334,6 @@ func (s *Server) writeWalkResult(
 		s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcome)
 		return
 	}
-	s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcomeOK)
 	if usage, ok := servingAdapter.extractUsage(res.body); ok {
 		s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle, debitTokens)
 	} else {
@@ -349,6 +348,7 @@ func (s *Server) writeWalkResult(
 	if crossing {
 		translated, err := llmtranslate.Response(res.format, inboundFormat, res.body)
 		if err != nil {
+			s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcomeError)
 			spanError(ctx, errProviderError)
 			writeError(w, http.StatusBadGateway, errorBody{
 				Type: errProviderError, Provider: res.provider,
@@ -358,6 +358,7 @@ func (s *Server) writeWalkResult(
 		respBody = translated
 		w.Header().Del("Content-Length")
 	}
+	s.Metrics.LLMRequest(res.provider, *modelID, namespace, outcomeOK)
 	w.WriteHeader(res.resp.StatusCode)
 	_, _ = w.Write(respBody)
 }
