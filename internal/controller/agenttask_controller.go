@@ -141,13 +141,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		task.Status.Phase = kaalmv1beta1.TaskPending
 	}
 
-	// A Failed phase with no completionTime is a crash-interrupted retry (the
-	// retry sequence writes Failed, then Provisioning): resume it. A Failed
-	// phase with completionTime set is terminal.
+	// A Failed phase with no completionTime is a counted retry whose old-Pod
+	// delete, mailbox reset, or Provisioning write has not finished: after a
+	// controller restart, an error, or a write the API server rejected.
+	// Finish it; nothing is counted again. A Failed phase with
+	// completionTime set is terminal.
 	if task.Status.Phase == kaalmv1beta1.TaskFailed && task.Status.CompletionTime == nil {
-		r.setTaskPhase(&task, kaalmv1beta1.TaskProvisioning)
-		if err := r.Status().Update(ctx, &task); err != nil {
-			return ctrl.Result{}, err
+		if err := r.finishRetry(ctx, &task); err != nil {
+			return r.childBlocked(ctx, &task, nil, false, err)
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -583,7 +584,9 @@ func (r *AgentTaskReconciler) failOrRetry(
 // retry runs the documented sequence in order: increment retries, clear the
 // UID (gate closes), delete the old Pod, reset the mailbox, transition back to
 // Provisioning. The next pass creates the new Pod and writes its UID from
-// the Create response.
+// the Create response. The counting write (steps 1 and 2) comes first, so a
+// lost write never counts a retry twice; finishRetry does the rest, and
+// Reconcile calls it again for a retry that stopped partway.
 // The clear-before-reset ordering is load-bearing: resetting the mailbox first
 // would let an in-flight stale write land on the fresh mailbox.
 func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string) error {
@@ -605,14 +608,25 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 	// After the write that counts the retry, so a pass that lost its write
 	// to a conflict does not report the same retry twice.
 	r.Recorder.Event(task, corev1.EventTypeWarning, reason, retrying)
+	return r.finishRetry(ctx, task)
+}
 
+// finishRetry finishes a counted retry: it deletes the old Pod, resets the
+// mailbox, and writes Provisioning. Every step is safe to repeat: a Pod
+// already deleting is skipped, and an empty mailbox is not written. It runs
+// right after the counting write and also from Reconcile for a Failed task
+// with no completionTime, so a delete or reset that fails is finished on a
+// later pass without counting the retry again. A delete or reset the API
+// server rejects comes back as a ChildWriteRejectedError, and the task stays
+// in Failed until it goes through.
+func (r *AgentTaskReconciler) finishRetry(ctx context.Context, task *kaalmv1beta1.AgentTask) error {
 	// Step 3: delete the old Pod if any remains.
 	pod, err := r.ownedTaskPod(ctx, task)
 	if err != nil {
 		return err
 	}
 	if pod != nil && pod.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		if err := rejectedWrite("deleting", r.Scheme(), pod, client.IgnoreNotFound(r.Delete(ctx, pod))); err != nil {
 			return err
 		}
 	}
@@ -628,7 +642,7 @@ func (r *AgentTaskReconciler) retry(ctx context.Context, task *kaalmv1beta1.Agen
 			}
 			if len(cm.Data) > 0 {
 				cm.Data = map[string]string{}
-				if err := r.Update(ctx, &cm); err != nil {
+				if err := rejectedWrite("updating", r.Scheme(), &cm, r.Update(ctx, &cm)); err != nil {
 					return err
 				}
 			}
@@ -1016,7 +1030,9 @@ func (r *AgentTaskReconciler) envSecretGate(
 // delete of the child) gives Ready=False ChildWriteRejected. Either way a
 // Warning event reports it and the phase is kept. Before a Pod exists the
 // task waits, and a rejected write starts the provisioning deadline the way
-// a rejected Pod create does (prePod; class must be set then). With a Pod,
+// a rejected Pod create does (prePod; class must be set then). A task in
+// Failed is mid-retry and keeps that phase, which marks the steps still to
+// finish, so a rejected write there only sets Ready, as with a Pod. With a Pod,
 // either only sets Ready: completion, timeout, and Pod loss are still acted
 // on each pass, since those checks run before any child write, and the
 // other missing children are still re-created on the same pass. The cause
@@ -1029,7 +1045,7 @@ func (r *AgentTaskReconciler) childBlocked(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, class *kaalmv1beta1.AgentClass, prePod bool, err error,
 ) (ctrl.Result, error) {
 	if cr, ok := asChildWriteRejected(err); ok {
-		if prePod {
+		if prePod && task.Status.Phase != kaalmv1beta1.TaskFailed {
 			return r.createRejected(ctx, task, class, kaalmv1beta1.ReasonChildWriteRejected,
 				"child write rejected", cr.Error())
 		}
@@ -1109,8 +1125,8 @@ func podExitMessage(pod *corev1.Pod) string {
 }
 
 // isTerminalTaskPhase covers the phases that only wait for TTL. Failed is
-// terminal too once settle() has set completionTime; the crash-interrupted
-// retry case is filtered before this check in Reconcile.
+// terminal too once settle() has set completionTime; an unfinished retry
+// (Failed with no completionTime) is filtered before this check in Reconcile.
 func isTerminalTaskPhase(p kaalmv1beta1.AgentTaskPhase) bool {
 	switch p {
 	case kaalmv1beta1.TaskSucceeded, kaalmv1beta1.TaskFailed,

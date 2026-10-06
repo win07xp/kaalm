@@ -39,7 +39,8 @@ func isWriteRejection(err error) bool {
 }
 
 // ChildWriteRejectedError reports that the API server rejected a create,
-// update, or delete of a workload's child object other than the Pod. The
+// update, or delete of a workload's child object other than the Pod, or the
+// delete of a retrying AgentTask's old Pod. The
 // reconcilers report it as Ready=False ChildWriteRejected; Unwrap keeps the
 // API error reachable for apierrors checks.
 type ChildWriteRejectedError struct {
