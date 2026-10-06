@@ -88,9 +88,10 @@ func (a *Authenticator) crossCheck(r *http.Request, namespace string) bool {
 // Pod completing inside the new-Pod informer-lag window is not rejected with
 // a terminal 401
 // (docs/src/gateways/llm/workload-identity.md#source-ip-cross-check-both-modes,
-// the informer-lag fallback). The spec scopes the fallback to /v1/task/complete alone: heartbeats are
-// periodic and recover on the next tick, and giving them the fallback would
-// turn an informer resync into a fleet-wide live-List stampede.
+// the informer-lag fallback). The spec scopes the fallback to
+// /v1/task/complete alone: heartbeats are periodic and recover on the next
+// tick, and giving them the fallback would turn an informer resync into a
+// fleet-wide live-List stampede.
 func (a *Authenticator) crossCheckLive(r *http.Request, namespace string) bool {
 	if a.DisableSourceIPCheck {
 		return true

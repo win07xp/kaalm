@@ -511,10 +511,11 @@ func main() {
 	}
 
 	// The storage-version migrator
-	// (docs/src/operations/api-versioning.md#storage-version-migration): on the leader, once per start,
-	// rewrite every custom resource at v1beta1 and trim each CRD's
-	// storedVersions, so an upgraded cluster finishes the graduation on its
-	// own. Idempotent, retried with backoff, never fatal to the manager.
+	// (docs/src/operations/api-versioning.md#storage-version-migration):
+	// on the leader, once per start, rewrite every custom resource at
+	// v1beta1 and trim each CRD's storedVersions, so an upgraded cluster
+	// finishes the graduation on its own. Idempotent, retried with backoff,
+	// never fatal to the manager.
 	if err := mgr.Add(&storagemigration.Migrator{Reader: mgr.GetAPIReader(), Client: mgr.GetClient()}); err != nil {
 		setupLog.Error(err, "unable to add the storage-version migrator to manager")
 		os.Exit(1)
