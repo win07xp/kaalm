@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Create a local k3d cluster for Kaalm development and e2e, and install the two
 # hard prerequisites the chart does not: cert-manager and trust-manager. The
-# third prerequisite, a NetworkPolicy-enforcing CNI, is provided by k3d's default
-# flannel for basic policies. CNI=cilium replaces flannel with Cilium, which
-# also enforces the FQDN egress policies synthesized from allowedHosts; the
-# e2e-cilium target uses it for that proof.
+# third prerequisite, NetworkPolicy enforcement, comes from k3s's embedded
+# kube-router policy controller for basic policies; flannel is only the pod
+# network. CNI=cilium replaces both with Cilium, which also enforces the FQDN
+# egress policies synthesized from allowedHosts; the e2e-cilium target uses it
+# for that proof.
 #
 # Idempotent: re-running reuses an existing cluster and upgrades the charts.
 # Reuse is for the inner loop. Beware that a long-lived cluster eventually stops
