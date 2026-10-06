@@ -1031,6 +1031,11 @@ func (in *AgentTaskStatus) DeepCopyInto(out *AgentTaskStatus) {
 		*out = new(AgentTaskClassBounds)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ClassEgress != nil {
+		in, out := &in.ClassEgress, &out.ClassEgress
+		*out = new(AgentClassEgress)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.CreateRejectedTime != nil {
 		in, out := &in.CreateRejectedTime, &out.CreateRejectedTime
 		*out = (*in).DeepCopy()
