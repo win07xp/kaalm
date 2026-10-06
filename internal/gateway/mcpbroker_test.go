@@ -1964,3 +1964,23 @@ func TestMCPBroker_CallerGoneBeforeAnswer(t *testing.T) {
 		})
 	}
 }
+
+// A caller that disconnects mid-upload left; the request was not malformed.
+func TestMCPBroker_RequestBodyCallerGone(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h.seedToolRoute()
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), callerKey{}, &caller{Namespace: "team-a"}))
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)))
+	rec := httptest.NewRecorder()
+	h.server.handleMCPBroker(rec, req.WithContext(ctx))
+	if got := mcpCalls(h, "", toolStatusClientClosed); got != 1 {
+		t.Errorf("client_closed counter = %v, want 1", got)
+	}
+	if got := mcpCalls(h, "", errInvalidRequest); got != 0 {
+		t.Errorf("invalid_request counter = %v, want 0", got)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("wrote %q to a caller that left", rec.Body)
+	}
+}

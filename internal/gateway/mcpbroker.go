@@ -407,6 +407,12 @@ func (s *Server) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("request body exceeds %d bytes", s.mcpMaxBodyBytes()), false, 0, "", "")
 			return
 		}
+		if r.Context().Err() != nil {
+			// net/http cancels the request context when the connection
+			// read fails: the caller left mid-upload.
+			closed("", "")
+			return
+		}
 		deny(http.StatusBadRequest, errInvalidRequest, "reading request body: "+err.Error(), false, 0, "", "")
 		return
 	}
