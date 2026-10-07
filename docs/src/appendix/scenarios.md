@@ -1,6 +1,6 @@
 # Acceptance scenarios
 
-These scenarios are concrete enough to double as acceptance criteria: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. Priya, the platform engineer who provisions the capability, is the actor in S1 through S5, S17, S19 through S21, and S24. Dev, the application developer who deploys agents, is the actor in S6 through S11. S12 through S15, S22, and S23 cover channel integration, where external systems talk to agents through the User Gateway. S16, the zero-build on-ramp, and S18, the governed tool, involve both. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused; [Provenance](#provenance) records the release that added each one.
+These scenarios are concrete enough to double as acceptance criteria: if the system can execute every one of these flows cleanly, the design is working. They fall into three groups. Priya, the platform engineer who provisions the capability, is the actor in S1 through S5, S17, S19 through S21, and S24. Dev, the application developer who deploys agents, is the actor in S6 through S11 and S25. S12 through S15, S22, and S23 cover channel integration, where external systems talk to agents through the User Gateway. S16, the zero-build on-ramp, and S18, the governed tool, involve both. Scenario numbers are stable identifiers, cited across the book and the coverage map, so numbering is additive and never reused; [Provenance](#provenance) records the release that added each one.
 
 ## S1: Install Kaalm and offer a standard agent class
 
@@ -134,6 +134,14 @@ Priya's teams write their agents against Anthropic's API, and one vendor is stil
 
 The day Anthropic returns `529` for an hour, Dev's support agent keeps answering. Its Anthropic-format request, tools and all, is rewritten into a chat completion for `gpt-5-mini` and the answer comes back in Anthropic form, streaming included ([Crossing formats](../gateways/llm/fallback.md#crossing-formats)). The agent's client library notices nothing except that `model` now says `gpt-5-mini`. Spend for the hour lands on the OpenAI provider at its prices, the `FallbackIneligible` Warning on the primary names the feature that could not cross (extended thinking), and the gateway's fallback metric climbs and then stops when Anthropic recovers.
 
+## S25: Bring an existing framework agent to Kaalm
+
+Dev's team already runs a conversational agent built with LangGraph: a `ChatOpenAI` model, a SQLite checkpointer, and a graph that turns each user message into a reply. He moves it to Kaalm with the graph unchanged. His Dockerfile starts `FROM` the Python base image and adds only the framework's requirements and his handler ([Reference base images](../runtime/base-images.md)). In the handler he changes two things around the graph. The model client points at the gateway and uses a qualified model name on an OpenAI-format provider (`openai-shared/gpt-5.2`), and it takes `kaalm.http_client()` and `kaalm.http_async_client()` as its HTTP clients, so every model call carries the Pod's identity and follows certificate rotation.
+
+To keep the conversations, he sets `spec.persistence.enabled: true` and `spec.lifecycle.hibernationEnabled: true` on the Agent. The checkpointer's SQLite file lives on the Agent's volume. He then creates an `AgentChannel` with `spec.session.enabled: true` and a `userId` extractor, in `responseMode: async` for the reason [S7](#s7-hibernate-an-idle-agent-and-wake-it-automatically-on-the-first-incoming-message) gives. Each user's messages now arrive with one `sessionId`, and the handler uses it as the LangGraph thread ID. Two users talking to the agent get two separate threads.
+
+Idle overnight, the agent hibernates: the Pod is gone and the volume is kept ([Hibernation mechanics](../controller/hibernation-and-wake.md#hibernation-mechanics)). The next morning a user sends a message, the agent wakes, and the graph resumes that user's thread from the checkpoint. The reply reflects the earlier turn, and the other user's messages are not in it. The checkpointer keeps a thread only if its file outlives the Pod and the same user maps to the same thread. The volume keeps the file across the Pod's deletion, and the channel's session maps each user to the same thread.
+
 ## Design implications
 
 The scenarios that define the resource model, S1 to S18, drive these requirements. The later scenarios prove mechanisms their chapters specify and are linked from those chapters.
@@ -168,3 +176,4 @@ Each scenario was added with the design it exercises. The release column names t
 | S21 | API versioning and the in-place upgrade | v0.6.0 |
 | S22, S23 | The Discord and WhatsApp platform adapters | v0.7.0 |
 | S24 | Cross-format provider fallback | v0.7.0 |
+| S25 | The framework on-ramp: a framework agent built `FROM` the Python base image | v0.4.0 |

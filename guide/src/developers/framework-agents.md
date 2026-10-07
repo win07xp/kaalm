@@ -85,6 +85,8 @@ different combination:
   Graph state survives hibernation, which the framework alone cannot
   offer. Needs `spec.persistence.enabled: true`; the example reads the
   volume path from `$KAALM_MEMORY_DIR`, so a custom `mountPath` works too.
+  The channel needs `spec.session.enabled: true` and a `userId` extractor
+  for a conversation to continue ([Connecting a channel](connecting-a-channel.md)).
 - **`examples/langgraph-tools/`**: a tool-calling agent whose MCP tools
   arrive through the gateway's broker, and whose MCP connection reuses
   `kaalm.http_async_client` through the adapter's client factory. The

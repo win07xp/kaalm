@@ -28,6 +28,10 @@ limitations under the License.
 //	/bigusage            -> 200 with large usage (drives budget-exhaustion tests)
 //	/slow<ms>            -> 200 after <ms> milliseconds (the perf harness's
 //	                        realistic-latency provider)
+//	/echo                -> 200 chat completion whose content is the JSON
+//	                        {"messages": N, "user": [texts]} built from the
+//	                        request, so a spec can see the history a framework
+//	                        agent sent; /v1/messages answers as /ok does
 //
 // GET .../v1/models returns 200 for probe compatibility. POST /callback records
 // async-webhook deliveries; GET /introspect/callbacks returns them for
@@ -75,6 +79,51 @@ func chatPrefix(path string) string {
 
 const mockReplyText = "ok from mock"
 
+// echoReply is the /echo answer: what the chat request carried.
+type echoReply struct {
+	Messages int      `json:"messages"`
+	User     []string `json:"user"`
+}
+
+// replyContent picks the chat-completions answer text for a path: the echo
+// JSON under the /echo prefix, the fixed reply otherwise.
+func replyContent(path string, parsed map[string]any) string {
+	if strings.HasPrefix(path, "/echo") && strings.HasSuffix(path, "/v1/chat/completions") {
+		return echoContent(parsed)
+	}
+	return mockReplyText
+}
+
+// echoContent reports the request's message count and its user messages'
+// texts in order. An array content (the multi-part form) contributes its
+// joined text parts.
+func echoContent(parsed map[string]any) string {
+	msgs, _ := parsed["messages"].([]any)
+	reply := echoReply{Messages: len(msgs), User: []string{}}
+	for _, raw := range msgs {
+		msg, _ := raw.(map[string]any)
+		if role, _ := msg["role"].(string); role != "user" {
+			continue
+		}
+		switch c := msg["content"].(type) {
+		case string:
+			reply.User = append(reply.User, c)
+		case []any:
+			var text strings.Builder
+			for _, part := range c {
+				p, _ := part.(map[string]any)
+				if t, _ := p["type"].(string); t == "text" {
+					s, _ := p["text"].(string)
+					text.WriteString(s)
+				}
+			}
+			reply.User = append(reply.User, text.String())
+		}
+	}
+	out, _ := json.Marshal(reply)
+	return string(out)
+}
+
 // anthropicMessage is the /v1/messages answer: the Anthropic shape with the
 // same usage the chat completion carries (S24 proves the crossing both
 // ways against one mock).
@@ -88,9 +137,10 @@ func anthropicMessage(model string, in, out int64) []byte {
 	return body
 }
 
-// streamChat writes a chat-completions SSE stream: two content chunks, the
-// finish chunk, a usage chunk when stream_options asked for one, [DONE].
-func streamChat(w http.ResponseWriter, model string, in, out int64, includeUsage bool) {
+// streamChat writes a chat-completions SSE stream: the content split at its
+// last space into two chunks (one chunk when it has no space), the finish
+// chunk, a usage chunk when stream_options asked for one, [DONE].
+func streamChat(w http.ResponseWriter, model, content string, in, out int64, includeUsage bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	f, _ := w.(http.Flusher)
@@ -101,16 +151,22 @@ func streamChat(w http.ResponseWriter, model string, in, out int64, includeUsage
 			f.Flush()
 		}
 	}
+	created := time.Now().Unix()
 	base := func(delta map[string]any, finish any) map[string]any {
-		return map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "model": model,
+		return map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "created": created, "model": model,
 			"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
 	}
-	chunk(base(map[string]any{"role": "assistant", "content": "ok from"}, nil))
-	chunk(base(map[string]any{"content": " mock"}, nil))
+	if i := strings.LastIndexByte(content, ' '); i > 0 {
+		chunk(base(map[string]any{"role": "assistant", "content": content[:i]}, nil))
+		chunk(base(map[string]any{"content": content[i:]}, nil))
+	} else {
+		chunk(base(map[string]any{"role": "assistant", "content": content}, nil))
+	}
 	chunk(base(map[string]any{}, "stop"))
 	if includeUsage {
-		chunk(map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "model": model, "choices": []any{},
-			"usage": map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out}})
+		chunk(map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "created": created, "model": model,
+			"choices": []any{},
+			"usage":   map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out}})
 	}
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	if f != nil {
@@ -147,15 +203,16 @@ func streamMessages(w http.ResponseWriter, model string, in, out int64) {
 // chatCompletion is the minimal OpenAI-shaped success body. The gateway reads
 // only usage.prompt_tokens / usage.completion_tokens; the rest is relayed to the
 // caller verbatim.
-func chatCompletion(model string, in, out int64) []byte {
+func chatCompletion(model, content string, in, out int64) []byte {
 	choice := map[string]any{
 		"index":         0,
 		"finish_reason": "stop",
-		"message":       map[string]any{"role": "assistant", "content": "ok from mock"},
+		"message":       map[string]any{"role": "assistant", "content": content},
 	}
 	body, _ := json.Marshal(map[string]any{
 		"id":      "chatcmpl-mock",
 		"object":  "chat.completion",
+		"created": time.Now().Unix(),
 		"model":   model,
 		"choices": []any{choice},
 		"usage":   map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out},
@@ -172,7 +229,7 @@ func behaviorFor(path string) (status int, in, out int64) {
 		return http.StatusServiceUnavailable, 0, 0
 	case strings.HasPrefix(path, "/bigusage"):
 		return http.StatusOK, 5_000_000, 5_000_000
-	default: // "/ok", "/slow<ms>", and anything else
+	default: // "/ok", "/slow<ms>", "/echo", and anything else
 		return http.StatusOK, 11, 22
 	}
 }
@@ -238,11 +295,11 @@ func (m *mock) chat(w http.ResponseWriter, r *http.Request) {
 	case stream:
 		so, _ := parsed["stream_options"].(map[string]any)
 		include, _ := so["include_usage"].(bool)
-		streamChat(w, model, in, out, include)
+		streamChat(w, model, replyContent(r.URL.Path, parsed), in, out, include)
 	default:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(chatCompletion(model, in, out))
+		_, _ = w.Write(chatCompletion(model, replyContent(r.URL.Path, parsed), in, out))
 	}
 }
 
