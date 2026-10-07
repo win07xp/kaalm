@@ -44,8 +44,11 @@ kubectl apply -f agent.yaml
 Requirements: an OpenAI-format ModelProvider (`spec.type` `openai` or
 `openai-compatible`) that allows your namespace, and
 `spec.persistence.enabled: true` for the checkpointer. Send it messages
-through an AgentChannel; the same webhook session id continues the same
-conversation thread.
+through an AgentChannel with `spec.session.enabled: true` and a `userId`
+extractor ([Connecting a channel](../../guide/src/developers/connecting-a-channel.md)).
+The handler keys each thread by the envelope's `sessionId`, which the channel
+derives from the user ID. Without sessions, every message starts a new thread.
+With an empty `userId`, all senders share one.
 
 The guide walks through this example in Running framework agents
 (`guide/src/developers/framework-agents.md`).
