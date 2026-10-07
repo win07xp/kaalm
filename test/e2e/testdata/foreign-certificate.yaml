@@ -1,0 +1,39 @@
+# Fixtures for the foreign-Certificate e2e: a namespaced self-signed Issuer and
+# two cert-manager Certificates that Kaalm does not own. They take the names
+# the workloads in foreign-certificate-workloads.yaml would give their own
+# Certificates ({name}-tls), and are created before those workloads exist.
+# Each writes its own Secret, and none carries an owner reference or a
+# kaalm.io label.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: fc-selfsigned
+  namespace: e2e
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fc-agent-tls
+  namespace: e2e
+spec:
+  secretName: fc-agent-foreign
+  dnsNames:
+    - fc-agent.foreign.example
+  issuerRef:
+    name: fc-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fc-task-tls
+  namespace: e2e
+spec:
+  secretName: fc-task-foreign
+  dnsNames:
+    - fc-task.foreign.example
+  issuerRef:
+    name: fc-selfsigned
+    kind: Issuer
