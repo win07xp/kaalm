@@ -64,8 +64,11 @@ var (
 	// testClient writes. Its reads come from the manager's cache, which can
 	// still miss the test's own last write, so tests read with testAPIReader,
 	// which reads the API server. The forbidigo lint rule keeps it that way.
+	// testCache reads the same cache: a test that calls code built over
+	// testClient waits on it until that code can see what the test wrote.
 	testClient     client.Client
 	testAPIReader  client.Reader
+	testCache      client.Reader
 	testEnv        *envtest.Environment
 	fakeHealth     *fakeHealthChecker
 	fakeToolHealth *fakeToolHealthChecker
@@ -387,6 +390,7 @@ func runSuite(m *testing.M) int {
 	}
 	testClient = mgr.GetClient()
 	testAPIReader = mgr.GetAPIReader()
+	testCache = mgr.GetCache()
 
 	// The system namespace must exist for the SystemNamespaceForbidden test.
 	sysNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testSystemNamespace}}
