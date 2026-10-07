@@ -46,4 +46,4 @@ A single production agent would need none of this: one team, one namespace, hand
 - **Hibernation.** Personal agents are idle most of the day. The cluster stays moderately sized only if an idle agent costs nothing ([hibernation lifecycle](../controller/hibernation-and-wake.md#hibernation-mechanics)).
 - **Channels.** A personal assistant is useful only if its owner can reach it from wherever they already are, without each user building their own ingress.
 
-The acceptance scenarios that make these flows concrete (S1 to S24) are in [Acceptance scenarios](../appendix/scenarios.md).
+The acceptance scenarios that make these flows concrete (S1 to S25) are in [Acceptance scenarios](../appendix/scenarios.md).

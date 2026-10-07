@@ -82,7 +82,7 @@ ENV KAALM_HANDLER_PATH=/opt/kaalm/handler
 
 Replace `VERSION` with the installed chart version. The `ENV` line is required: the controller injects `$KAALM_HANDLER_PATH` only for ConfigMap-mounted handlers, so a `FROM` build declares it itself. If an Agent sets `spec.handler` on a `FROM`-built image anyway, the mount shadows the baked directory and the mounted handler wins.
 
-A `FROM` build keeps central patching (rebuild against the bumped tag) and sheds the ConfigMap size cap; it costs a build pipeline. A baked handler needs no `allowHandlerMounts` grant: rules 30 and 31 govern ConfigMap-mounted code, while a `FROM` image passes through ordinary image review and the class's `allowedImages` check. The LangGraph examples under `examples/langgraph-chat/` and `examples/langgraph-tools/` are the worked form of this rung.
+A `FROM` build keeps central patching (rebuild against the bumped tag) and sheds the ConfigMap size cap; it costs a build pipeline. A baked handler needs no `allowHandlerMounts` grant: rules 30 and 31 govern ConfigMap-mounted code, while a `FROM` image passes through ordinary image review and the class's `allowedImages` check. The LangGraph examples under `examples/langgraph-chat/` and `examples/langgraph-tools/` are the worked form of this rung. [S25](../appendix/scenarios.md#s25-bring-an-existing-framework-agent-to-kaalm) runs `langgraph-chat` on a cluster, hibernation and wake included.
 
 ## The Go image
 
