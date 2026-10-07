@@ -1,0 +1,115 @@
+# Fixtures for the framework on-ramp (S25): the examples/langgraph-chat image,
+# built unchanged FROM the local Python base by `make e2e-images`, runs as an
+# Agent against the mock provider's /echo prefix. The mock answers each chat
+# completion with the history the request carried, so the spec reads the
+# LangGraph thread back from the model's side of the call.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: s25-echo
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.e2e.svc:8443/echo
+  credentialsRef:
+    name: e2e-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - e2e
+  models:
+    - id: mock-model
+---
+# No max* timers: zero means uncapped, so the Agent's short timers below flow
+# through unclamped.
+apiVersion: kaalm.io/v1beta1
+kind: AgentClass
+metadata:
+  name: s25-framework
+spec:
+  runtime:
+    backend: pod
+  image:
+    allowedImages:
+      - registry.test/agents/langgraph-chat:e2e
+    pullPolicy: IfNotPresent
+  allowedProviders:
+    - name: s25-echo
+  persistence:
+    enabled: true
+    defaultSizeGi: 1
+  lifecycle:
+    hibernationAllowed: true
+---
+# The example's own agent.yaml with cluster-local names. Persistence holds the
+# SQLite checkpointer (the handler writes it under KAALM_MEMORY_DIR).
+#
+# Timers: the controller reads gateway activity through a 15s cache and
+# re-evaluates every 15s, and a fresh Pod's first gateway calls can fail for
+# about 20s (the kube-router ipset lag). 60s idle plus a 5s delay lets the
+# warm-up, the first user's turn, and the second user's turn land before
+# hibernation, while keeping the wait for Hibernated under about 100s.
+# wakeTimeout is unset, so the 120s default absorbs the woken Pod's start.
+apiVersion: kaalm.io/v1beta1
+kind: Agent
+metadata:
+  name: s25-langgraph
+  namespace: e2e
+spec:
+  agentClassRef:
+    name: s25-framework
+  image: registry.test/agents/langgraph-chat:e2e
+  providers:
+    - providerRef:
+        name: s25-echo
+  env:
+    - name: KAALM_MODEL
+      value: s25-echo/mock-model
+  persistence:
+    enabled: true
+  lifecycle:
+    hibernationEnabled: true
+    activitySource: gatewayTraffic
+    idleTimeout: 60s
+    hibernationDelay: 5s
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s25-hook
+  namespace: e2e
+  labels:
+    kaalm.io/channel-credential: "true"
+type: Opaque
+stringData:
+  token: s25-webhook-bearer-token
+---
+# Async because gateway.syncDeliveryDeadline (30s) is shorter than a wake.
+# The sessionId is derived from the channel path and the userId, so every
+# turn of one user goes through this one channel. Sessions must be on, or the
+# handler keys each message by its messageId and starts a new thread.
+apiVersion: kaalm.io/v1beta1
+kind: AgentChannel
+metadata:
+  name: s25-channel
+  namespace: e2e
+spec:
+  agentRef:
+    name: s25-langgraph
+  type: webhook
+  session:
+    enabled: true
+  webhook:
+    path: /channels/e2e/s25-channel
+    responseMode: async
+    userId:
+      fromHeader: X-User-Id
+    # The plain turn text, so the handler (and the echo) see it rather than
+    # the JSON body the raw-body fallback would wrap.
+    content:
+      fromBody: content.text
+    auth:
+      type: bearer
+      secretRef:
+        name: s25-hook
+        key: token
