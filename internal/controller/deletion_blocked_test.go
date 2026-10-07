@@ -93,7 +93,7 @@ func deleteObject(t *testing.T, obj client.Object) {
 func expectGone(t *testing.T, key types.NamespacedName, obj client.Object) {
 	t.Helper()
 	eventually(t, func() error {
-		if err := testClient.Get(ctxT(), key, obj); apierrors.IsNotFound(err) {
+		if err := testAPIReader.Get(ctxT(), key, obj); apierrors.IsNotFound(err) {
 			return nil
 		}
 		return errString(key.Name + " still exists")
@@ -108,7 +108,7 @@ func TestModelProvider_DeleteBlockedIsVisible(t *testing.T) {
 	mkClass(t, "db-mp-class", "db-mp")
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp); err != nil {
 			return err
 		}
 		if len(mp.Finalizers) == 0 {
@@ -120,12 +120,12 @@ func TestModelProvider_DeleteBlockedIsVisible(t *testing.T) {
 	deleteObject(t, &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "db-mp"}})
 	expectDeletionBlocked(t, "ModelProvider", "db-mp", func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp)
 		return mp.Status.Conditions
 	}, "AgentClass db-mp-class")
 	expectHealthyNotProbed(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "db-mp"}, &mp)
 		return mp.Status.Conditions
 	}, "deletion is held")
 
@@ -140,7 +140,7 @@ func TestToolProvider_DeleteBlockedIsVisible(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var tp kaalmv1beta1.ToolProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "db-tp"}, &tp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "db-tp"}, &tp); err != nil {
 			return err
 		}
 		if len(tp.Finalizers) == 0 {
@@ -163,7 +163,7 @@ func TestAgentClass_DeleteBlockedIsVisible(t *testing.T) {
 	mkAgent(t, "db-ac-b", "db-ac")
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "db-ac"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "db-ac"}, &ac); err != nil {
 			return err
 		}
 		if ac.Status.AgentsInUse != 2 {
@@ -175,7 +175,7 @@ func TestAgentClass_DeleteBlockedIsVisible(t *testing.T) {
 	deleteObject(t, &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{Name: "db-ac"}})
 	classConds := func() []metav1.Condition {
 		var ac kaalmv1beta1.AgentClass
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "db-ac"}, &ac)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "db-ac"}, &ac)
 		return ac.Status.Conditions
 	}
 	expectDeletionBlocked(t, "AgentClass", "db-ac", classConds, "Agent default/db-ac-a")

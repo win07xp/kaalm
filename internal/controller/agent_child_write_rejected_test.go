@@ -172,7 +172,7 @@ func TestAgent_ChildWriteRejectedKeepsRunningPod(t *testing.T) {
 	setQuota(t, ns, corev1.ResourceServices, 1)
 	eventually(t, func() error {
 		var got corev1.Service
-		return testClient.Get(ctxT(), types.NamespacedName{Namespace: ns, Name: name}, &got)
+		return testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: ns, Name: name}, &got)
 	})
 	eventually(t, func() error {
 		c := condition(getAgentIn(t, ns, name).Status.Conditions, kaalmv1beta1.ConditionReady)

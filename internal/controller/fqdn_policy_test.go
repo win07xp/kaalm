@@ -128,7 +128,7 @@ func TestEnsureFQDNPolicy_UnsupportedTouchesNothing(t *testing.T) {
 func getFQDNPolicy(name string) (*unstructured.Unstructured, error) {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(ciliumPolicyGVK)
-	err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: fqdnPolicyName(name)}, u)
+	err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: fqdnPolicyName(name)}, u)
 	return u, err
 }
 
@@ -162,7 +162,7 @@ func setClassHosts(t *testing.T, class string, hosts []string) {
 	t.Helper()
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: class}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: class}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.Network.Egress.AllowedHosts = hosts

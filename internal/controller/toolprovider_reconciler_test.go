@@ -57,7 +57,7 @@ func mkToolProvider(t *testing.T, name string, mutate func(*kaalmv1beta1.ToolPro
 func toolProviderConditions(name string) func() []metav1.Condition {
 	return func() []metav1.Condition {
 		var tp kaalmv1beta1.ToolProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: name}, &tp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &tp)
 		return tp.Status.Conditions
 	}
 }
@@ -82,7 +82,7 @@ func TestToolProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 	// (the fake answers as a 2026-07-28 server by default).
 	eventually(t, func() error {
 		var tp kaalmv1beta1.ToolProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-ok"}, &tp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-ok"}, &tp); err != nil {
 			return err
 		}
 		if tp.Status.MCPRevision != mcp.ModernRevision {
@@ -229,7 +229,7 @@ func TestToolProvider_DeleteIsUnblocked(t *testing.T) {
 		metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
 	var tp kaalmv1beta1.ToolProvider
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-del"}, &tp); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-del"}, &tp); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if err := testClient.Delete(ctxT(), &tp); err != nil {
@@ -237,7 +237,7 @@ func TestToolProvider_DeleteIsUnblocked(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.ToolProvider
-		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-del"}, &got)) {
+		if apierrors.IsNotFound(testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-del"}, &got)) {
 			return nil
 		}
 		return errString("toolprovider still present")
@@ -250,7 +250,7 @@ func awaitToolProviderFinalizer(t *testing.T, name string) {
 	t.Helper()
 	eventually(t, func() error {
 		var tp kaalmv1beta1.ToolProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &tp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &tp); err != nil {
 			return err
 		}
 		for _, f := range tp.Finalizers {
@@ -275,7 +275,7 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 	awaitToolProviderFinalizer(t, "tp-held")
 
 	var tp kaalmv1beta1.ToolProvider
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &tp); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &tp); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if err := testClient.Delete(ctxT(), &tp); err != nil {
@@ -286,7 +286,7 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 	// cache, which lags the delete by a beat.
 	eventually(t, func() error {
 		var got kaalmv1beta1.ToolProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got); err != nil {
 			return errString("toolprovider was removed while still referenced: " + err.Error())
 		}
 		if got.DeletionTimestamp.IsZero() {
@@ -297,7 +297,7 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 
 	// Removing the referrer releases the hold.
 	var ag kaalmv1beta1.Agent
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "held-agent", Namespace: "default"}, &ag); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "held-agent", Namespace: "default"}, &ag); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
 	if err := testClient.Delete(ctxT(), &ag); err != nil {
@@ -305,7 +305,7 @@ func TestToolProvider_HeldWhileAgentReferences(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.ToolProvider
-		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got)) {
+		if apierrors.IsNotFound(testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-held"}, &got)) {
 			return nil
 		}
 		return errString("toolprovider still held after the referrer went away")
@@ -320,7 +320,7 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 	awaitToolProviderFinalizer(t, "tp-clsheld")
 
 	var tp kaalmv1beta1.ToolProvider
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &tp); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &tp); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if err := testClient.Delete(ctxT(), &tp); err != nil {
@@ -328,7 +328,7 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.ToolProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got); err != nil {
 			return errString("toolprovider was removed while a class still allowlists it: " + err.Error())
 		}
 		if got.DeletionTimestamp.IsZero() {
@@ -341,7 +341,7 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 	// event maps through the OLD object's references too).
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-clsheld"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-clsheld"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.AllowedToolProviders = nil
@@ -349,7 +349,7 @@ func TestToolProvider_HeldWhileClassReferences(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var got kaalmv1beta1.ToolProvider
-		if apierrors.IsNotFound(testClient.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got)) {
+		if apierrors.IsNotFound(testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tp-clsheld"}, &got)) {
 			return nil
 		}
 		return errString("toolprovider still held after the class dropped it")

@@ -222,7 +222,7 @@ func setQuota(t *testing.T, ns string, res corev1.ResourceName, n int) {
 	hard := corev1.ResourceList{res: *resource.NewQuantity(int64(n), resource.DecimalSI)}
 	eventually(t, func() error {
 		var q corev1.ResourceQuota
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: ns, Name: string(res)}, &q); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: ns, Name: string(res)}, &q); err != nil {
 			return err
 		}
 		q.Spec.Hard = hard
@@ -239,7 +239,7 @@ func setQuota(t *testing.T, ns string, res corev1.ResourceName, n int) {
 func podIn(t *testing.T, ns, key, name string) *corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
-	if err := testClient.List(ctxT(), &pods, client.InNamespace(ns),
+	if err := testAPIReader.List(ctxT(), &pods, client.InNamespace(ns),
 		client.MatchingLabels(map[string]string{key: name})); err != nil {
 		t.Fatalf("list pods: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestAgent_DriftOntoMissingRuntimeClass(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}

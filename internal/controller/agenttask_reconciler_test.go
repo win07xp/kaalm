@@ -70,7 +70,7 @@ func getTask(t *testing.T, name string) *kaalmv1beta1.AgentTask {
 func taskPod(t *testing.T, name string) *corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
-	if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
+	if err := testAPIReader.List(ctxT(), &pods, client.InNamespace("default"),
 		client.MatchingLabels(map[string]string{"kaalm.io/task": name})); err != nil {
 		t.Fatalf("list task pods: %v", err)
 	}
@@ -86,7 +86,7 @@ func expectTaskPhase(t *testing.T, name string, phase kaalmv1beta1.AgentTaskPhas
 	t.Helper()
 	eventually(t, func() error {
 		var task kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
 			return err
 		}
 		if task.Status.Phase != phase {
@@ -102,7 +102,7 @@ func writeMailbox(t *testing.T, taskName string, data map[string]string) {
 	eventually(t, func() error {
 		var cm corev1.ConfigMap
 		key := types.NamespacedName{Namespace: "default", Name: taskName + "-completion"}
-		if err := testClient.Get(ctxT(), key, &cm); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &cm); err != nil {
 			return err
 		}
 		cm.Data = data
@@ -129,7 +129,7 @@ func provisionRunningTask(t *testing.T, name, className string, mutate func(*kaa
 	// poll samples the Running phase on a loaded machine.
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
 			return err
 		}
 		if got.Status.Phase == kaalmv1beta1.TaskRunning || got.Status.StartTime != nil {
@@ -159,17 +159,17 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 
 	// Mailbox, Role, and RoleBinding pre-created; Pod shaped per contract.
 	var cm corev1.ConfigMap
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "t-run-completion"}, &cm); err != nil {
 		t.Fatalf("completion mailbox missing: %v", err)
 	}
 	var role rbacv1.Role
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-task-t-run-completion"}, &role); err != nil {
 		t.Fatalf("completion Role missing: %v", err)
 	}
 	var rb rbacv1.RoleBinding
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-task-t-run-completion"}, &rb); err != nil {
 		t.Fatalf("completion RoleBinding missing: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 		t.Error("task pod must carry no probes")
 	}
 	var cert cmapi.Certificate
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-run-tls"}, &cert); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-run-tls"}, &cert); err != nil {
 		t.Fatalf("get certificate: %v", err)
 	}
 	wantSecret := "t-run-tls-" + string(getTask(t, "t-run").UID)[:8]
@@ -222,7 +222,7 @@ func TestTask_SystemNamespaceForbidden(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: testSystemNamespace, Name: "t-sys"}, &got); err != nil {
 			return err
 		}
@@ -310,7 +310,7 @@ func TestTask_AgentReportedFailureRetriesThenFails(t *testing.T) {
 	// Finish the old Pod's graceful termination (kubelet-less envtest).
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -325,7 +325,7 @@ func TestTask_AgentReportedFailureRetriesThenFails(t *testing.T) {
 	// Mailbox reset and a new Pod with its UID recorded.
 	eventually(t, func() error {
 		var cm corev1.ConfigMap
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: "default", Name: "t-retry-completion"}, &cm); err != nil {
 			return err
 		}
@@ -382,12 +382,12 @@ func TestTask_ExitCodeSuccessAndNoMailbox(t *testing.T) {
 
 	// exitCode tasks get no mailbox and no per-task RBAC.
 	var cm corev1.ConfigMap
-	err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-exit-completion"}, &cm)
+	err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-exit-completion"}, &cm)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("exitCode task must not get a completion mailbox: %v", err)
 	}
 	var role rbacv1.Role
-	err = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "kaalm-task-t-exit-completion"}, &role)
+	err = testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "kaalm-task-t-exit-completion"}, &role)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("exitCode task must not get a completion Role: %v", err)
 	}
@@ -497,7 +497,7 @@ func expectTaskTTLDeleted(t *testing.T, name string) {
 	t.Helper()
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -505,7 +505,7 @@ func expectTaskTTLDeleted(t *testing.T, name string) {
 			return err
 		}
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
+		if err := testAPIReader.List(ctxT(), &pods, client.InNamespace("default"),
 			client.MatchingLabels(map[string]string{"kaalm.io/task": name})); err != nil {
 			return err
 		}
@@ -541,7 +541,7 @@ func editClass(t *testing.T, name string, mutate func(*kaalmv1beta1.AgentClass))
 	t.Helper()
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &ac); err != nil {
 			return err
 		}
 		mutate(&ac)
@@ -555,7 +555,7 @@ func holdTaskPhase(t *testing.T, name string, phase kaalmv1beta1.AgentTaskPhase,
 	t.Helper()
 	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
 		var got kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
 			t.Fatalf("task %s: %v", name, err)
 		}
 		if got.Status.Phase != phase {
@@ -642,7 +642,7 @@ func TestTask_RetryRecordsBoundsFromEditedClass(t *testing.T) {
 	writeMailbox(t, "t-rebounds", map[string]string{"status": "failure", "message": "boom"})
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -678,7 +678,7 @@ func TestTask_PrePodFailureRecordsBoundsAndExpires(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-prepod"}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-prepod"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil // already expired; the recorded bounds are checked by the deletion
 		}
@@ -703,7 +703,7 @@ func TestTask_PreUpgradeSettledTaskIsKept(t *testing.T) {
 	mkTask(t, "t-preupg", "tc-preupg", nil) // class absent: InvalidReference, no Pod
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-preupg"}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-preupg"}, &got); err != nil {
 			return err
 		}
 		done := metav1.NewTime(time.Now().Add(-time.Hour))
@@ -951,7 +951,7 @@ func TestTask_ImagePullSecretMissingBlocks(t *testing.T) {
 	mkTask(t, "t-pull", "tc-pull", nil)
 	readyReason := func() (string, error) {
 		var task kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-pull"}, &task); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-pull"}, &task); err != nil {
 			return "", err
 		}
 		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
@@ -1053,7 +1053,7 @@ func TestTask_PersistenceProvisionsPVC(t *testing.T) {
 	eventually(t, func() error { return markCertReadyErr("t-pvc") })
 	eventually(t, func() error {
 		var pvc corev1.PersistentVolumeClaim
-		return testClient.Get(ctxT(),
+		return testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: "default", Name: "t-pvc-workspace"}, &pvc)
 	})
 }
@@ -1071,7 +1071,7 @@ func TestTask_DeleteTerminatesPod(t *testing.T) {
 	// The finalizer deletes the Pod; finish its termination (kubelet-less).
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -1086,7 +1086,7 @@ func TestTask_DeleteTerminatesPod(t *testing.T) {
 	// The task then finalizes away.
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentTask
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-del"}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-del"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -1100,7 +1100,7 @@ func TestTask_MissingClassIsNotReady(t *testing.T) {
 	mkTask(t, "t-noclass", "ghost-class", nil)
 	eventually(t, func() error {
 		var task kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noclass"}, &task); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noclass"}, &task); err != nil {
 			return err
 		}
 		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
@@ -1120,7 +1120,7 @@ func TestTask_InvalidClassCIDRBlocksAndRecovers(t *testing.T) {
 	mkTask(t, "t-cidr", "tc-cidr", nil)
 	readyReason := func() (string, kaalmv1beta1.AgentTaskPhase, error) {
 		var task kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-cidr"}, &task); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-cidr"}, &task); err != nil {
 			return "", "", err
 		}
 		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
@@ -1141,7 +1141,7 @@ func TestTask_InvalidClassCIDRBlocksAndRecovers(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tc-cidr"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tc-cidr"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/8"}
@@ -1163,7 +1163,7 @@ func TestTask_EmptyImageIsNotReady(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var task kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noimg"}, &task); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-noimg"}, &task); err != nil {
 			return err
 		}
 		c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
@@ -1266,7 +1266,7 @@ func TestTask_CrashInterruptedRetryResumes(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var got corev1.Pod
-		if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(oldPod), &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(oldPod), &got); err != nil {
 			return err
 		}
 		if got.DeletionTimestamp.IsZero() {
@@ -1285,7 +1285,7 @@ func TestTask_CrashInterruptedRetryResumes(t *testing.T) {
 	})
 
 	var got corev1.Pod
-	if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(oldPod), &got); err != nil {
+	if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(oldPod), &got); err != nil {
 		t.Fatal(err)
 	}
 	got.Finalizers = nil
@@ -1365,7 +1365,7 @@ func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
 	// no replacement.
 	time.Sleep(2 * time.Second)
 	var got corev1.Pod
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got); err != nil ||
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got); err != nil ||
 		got.DeletionTimestamp.IsZero() {
 		t.Fatalf("old pod should still be terminating: %v", err)
 	}
@@ -1526,7 +1526,7 @@ func TestEnsureTaskCertificate_KeepsExistingSecretName(t *testing.T) {
 
 func taskReadyReason(name string) (string, error) {
 	var task kaalmv1beta1.AgentTask
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &task); err != nil {
 		return "", err
 	}
 	c := condition(task.Status.Conditions, kaalmv1beta1.ConditionReady)
@@ -1575,7 +1575,7 @@ func TestTask_EnvSecretNotOptedInBlocks(t *testing.T) {
 	key := types.NamespacedName{Namespace: "default", Name: taskEnvSecretRoleName("t-envsec")}
 	eventually(t, func() error {
 		var role rbacv1.Role
-		if err := testClient.Get(ctxT(), key, &role); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &role); err != nil {
 			return err
 		}
 		if len(role.Rules) != 1 ||

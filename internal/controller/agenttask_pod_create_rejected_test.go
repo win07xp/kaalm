@@ -252,7 +252,7 @@ func TestTask_CreateRejectedTimeClearedOnRetry(t *testing.T) {
 	// RuntimeClass the cluster lacks.
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-reject-retry"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-reject-retry"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.Runtime.RuntimeClassName = &missing
@@ -302,7 +302,7 @@ func TestTask_CreateRejectedTimeClearedOnSettle(t *testing.T) {
 
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-reject-settle"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-reject-settle"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.AllowedNamespaces = []string{"team-*"}

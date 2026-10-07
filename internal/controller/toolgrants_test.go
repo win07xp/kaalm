@@ -52,7 +52,7 @@ func expectAgentNotDegraded(t *testing.T, name string) {
 	// so a just-created agent can be NotFound for the first few polls.
 	eventually(t, func() error {
 		var ag kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 			return err
 		}
 		if ag.Status.Phase == "" {
@@ -79,7 +79,7 @@ func TestAgentToolGrant_ClassAllowlistDenialAndRecovery(t *testing.T) {
 	// The platform team allowlists the provider on the class: recovery.
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-r37"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-r37"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: "tg-r37"}}
@@ -122,7 +122,7 @@ func TestAgentToolGrant_NamespaceDeniedAndRecovery(t *testing.T) {
 	// ToolProvider spec changes propagate.
 	eventually(t, func() error {
 		var tp kaalmv1beta1.ToolProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tg-r36"}, &tp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tg-r36"}, &tp); err != nil {
 			return err
 		}
 		tp.Spec.AllowedNamespaces = []string{"*"}
@@ -173,7 +173,7 @@ func TestAgentToolGrant_CatalogDenialAndRecovery(t *testing.T) {
 	// Declaring the tool in the catalog recovers the agent.
 	eventually(t, func() error {
 		var tp kaalmv1beta1.ToolProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "tg-r38"}, &tp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "tg-r38"}, &tp); err != nil {
 			return err
 		}
 		tp.Spec.Tools = append(tp.Spec.Tools, kaalmv1beta1.ToolProviderTool{ID: "fetch_page"})
@@ -223,7 +223,7 @@ func TestTaskToolGrant_ValidGrantProvisions(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var task kaalmv1beta1.AgentTask
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-tool-ok"}, &task); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "t-tool-ok"}, &task); err != nil {
 			return err
 		}
 		switch task.Status.Phase {
@@ -250,7 +250,7 @@ func TestAgentClass_MissingToolProviderIsNotReadyAndRecovers(t *testing.T) {
 	}
 	get := func() []metav1.Condition {
 		var got kaalmv1beta1.AgentClass
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-tools"}, &got)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-tools"}, &got)
 		return got.Status.Conditions
 	}
 	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidReference)

@@ -146,7 +146,7 @@ func (e errString) Error() string { return string(e) }
 func objectEvents(t *testing.T, kind, namespace, name, reason string) []corev1.Event {
 	t.Helper()
 	var events corev1.EventList
-	if err := testClient.List(ctxT(), &events); err != nil {
+	if err := testAPIReader.List(ctxT(), &events); err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 	var out []corev1.Event
@@ -199,7 +199,7 @@ func TestAgentClass_ValidBecomesReady(t *testing.T) {
 	mkClass(t, "ac-valid", "ac-valid-prov")
 	expectReady(t, func() []metav1.Condition {
 		var ac kaalmv1beta1.AgentClass
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-valid"}, &ac)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-valid"}, &ac)
 		return ac.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonAllReferencesResolved)
 }
@@ -208,7 +208,7 @@ func TestAgentClass_MissingProviderIsNotReady(t *testing.T) {
 	mkClass(t, "ac-missing", "does-not-exist")
 	expectReady(t, func() []metav1.Condition {
 		var ac kaalmv1beta1.AgentClass
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-missing"}, &ac)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-missing"}, &ac)
 		return ac.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidReference)
 }
@@ -221,7 +221,7 @@ func TestAgentClass_InvalidCIDRIsNotReady(t *testing.T) {
 	}
 	expectReady(t, func() []metav1.Condition {
 		var got kaalmv1beta1.AgentClass
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-badcidr"}, &got)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-badcidr"}, &got)
 		return got.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidCIDR)
 }
@@ -237,7 +237,7 @@ func TestAgentClass_InvalidCIDRWinsOverMissingProvider(t *testing.T) {
 	}
 	var got kaalmv1beta1.AgentClass
 	expectReady(t, func() []metav1.Condition {
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-badcidr-missing"}, &got)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-badcidr-missing"}, &got)
 		return got.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidCIDR)
 	msg := condition(got.Status.Conditions, kaalmv1beta1.ConditionReady).Message
@@ -252,7 +252,7 @@ func TestAgentClass_CountsUsers(t *testing.T) {
 	mkAgent(t, "count-b", "ac-count")
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-count"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-count"}, &ac); err != nil {
 			return err
 		}
 		if ac.Status.AgentsInUse != 2 {
@@ -269,7 +269,7 @@ func TestAgentClass_FinalizerHoldsWhileReferenced(t *testing.T) {
 	// Wait for the finalizer to be added.
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac); err != nil {
 			return err
 		}
 		if !controllerutil.ContainsFinalizer(&ac, kaalmv1beta1.ClassFinalizer) {
@@ -280,25 +280,25 @@ func TestAgentClass_FinalizerHoldsWhileReferenced(t *testing.T) {
 
 	// Delete the class: it should be held (deletionTimestamp set, object remains).
 	var ac kaalmv1beta1.AgentClass
-	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac)
+	_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac)
 	if err := testClient.Delete(ctxT(), &ac); err != nil {
 		t.Fatalf("delete class: %v", err)
 	}
 	// Give the reconciler a moment; the class must still exist while referenced.
 	time.Sleep(500 * time.Millisecond)
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &ac); err != nil {
 		t.Fatalf("class was removed while still referenced: %v", err)
 	}
 
 	// Remove the referrer; the class should now finalize away.
 	var agent kaalmv1beta1.Agent
-	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "hold-agent", Namespace: "default"}, &agent)
+	_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "hold-agent", Namespace: "default"}, &agent)
 	if err := testClient.Delete(ctxT(), &agent); err != nil {
 		t.Fatalf("delete agent: %v", err)
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentClass
-		err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-hold"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -314,7 +314,7 @@ func TestModelProvider_CredentialsMissingIsNotReady(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nocred"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-nocred"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 }
@@ -326,7 +326,7 @@ func TestModelProvider_ValidBecomesReadyAndHealthy(t *testing.T) {
 	})
 	get := func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-ok"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-ok"}, &mp)
 		return mp.Status.Conditions
 	}
 	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
@@ -347,7 +347,7 @@ func TestModelProvider_AuthFailedIsNotReady(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-auth"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-auth"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsInvalid)
 }
@@ -362,7 +362,7 @@ func TestModelProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nohc"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-nohc"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 	if n := fakeHealth.count("mp-nohc"); n != 0 {
@@ -370,7 +370,7 @@ func TestModelProvider_HealthCheckDisabledSkipsProbe(t *testing.T) {
 	}
 	expectHealthyNotProbed(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nohc"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-nohc"}, &mp)
 		return mp.Status.Conditions
 	}, "healthCheck.enabled is false")
 }
@@ -381,7 +381,7 @@ func TestModelProvider_NilHealthCheckRunsProbe(t *testing.T) {
 	mkProvider(t, "mp-nilhc", nil)
 	get := func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nilhc"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-nilhc"}, &mp)
 		return mp.Status.Conditions
 	}
 	expectReady(t, get, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
@@ -404,7 +404,7 @@ func TestModelProvider_FallbackCycleIsNotReady(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-cyc-a"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-cyc-a"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonFallbackIneligible)
 }
@@ -438,7 +438,7 @@ func TestModelProvider_InvalidDegradeTargetIsNotReady(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-deg"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-deg"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidDegradeTarget)
 }
@@ -510,7 +510,7 @@ func TestModelProvider_CredentialKeyMissing(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-wrongkey"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-wrongkey"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsMissing)
 }
@@ -524,7 +524,7 @@ func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
@@ -533,26 +533,26 @@ func TestModelProvider_DeleteHeldWhileReferenced(t *testing.T) {
 
 	// Delete the provider: the finalizer holds it in Terminating while referenced.
 	var mp kaalmv1beta1.ModelProvider
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp); err != nil {
 		t.Fatal(err)
 	}
 	if err := testClient.Delete(ctxT(), &mp); err != nil {
 		t.Fatalf("delete provider: %v", err)
 	}
 	time.Sleep(500 * time.Millisecond)
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &mp); err != nil {
 		t.Fatalf("provider removed while still referenced: %v", err)
 	}
 
 	// Remove the referrer; the provider finalizes away.
 	var ac kaalmv1beta1.AgentClass
-	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "acref"}, &ac)
+	_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "acref"}, &ac)
 	if err := testClient.Delete(ctxT(), &ac); err != nil {
 		t.Fatalf("delete class: %v", err)
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.ModelProvider
-		err := testClient.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mpref"}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -574,7 +574,7 @@ func TestModelProvider_AuthFailedDetailInMessage(t *testing.T) {
 	})
 	get := func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-authdetail"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-authdetail"}, &mp)
 		return mp.Status.Conditions
 	}
 	expectReady(t, get, metav1.ConditionFalse, kaalmv1beta1.ReasonCredentialsInvalid)
@@ -599,7 +599,7 @@ func TestModelProvider_ProbeErrStaysReady(t *testing.T) {
 	})
 	get := func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-unhealthy"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-unhealthy"}, &mp)
 		return mp.Status.Conditions
 	}
 	// A transient probe error does not flip Ready.
@@ -623,7 +623,7 @@ func TestModelProvider_FallbackMissingIsNotReady(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-fbmiss"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-fbmiss"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonFallbackIneligible)
 }
@@ -643,7 +643,7 @@ func TestModelProvider_FallbackTypeMismatchIsNotReady(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-fbtype-a"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-fbtype-a"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonFallbackIneligible)
 }
@@ -666,7 +666,7 @@ func TestModelProvider_CrossFormatFallbackIsReady(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-xf-a"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-xf-a"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, "")
 }
@@ -688,15 +688,15 @@ func TestModelProvider_CrossingWithoutMaxOutputTokensWarns(t *testing.T) {
 	// Still Ready: same-format traffic through the edge is fine.
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-nomax-a"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-nomax-a"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, "")
 	// But the operator hears about it before traffic does.
 	eventually(t, func() error {
 		var events corev1.EventList
-		if err := testClient.List(ctxT(), &events, client.MatchingFields{"reason": kaalmv1beta1.ReasonMaxOutputTokensUnset}); err != nil {
+		if err := testAPIReader.List(ctxT(), &events, client.MatchingFields{"reason": kaalmv1beta1.ReasonMaxOutputTokensUnset}); err != nil {
 			// Field selectors on events may be unsupported in the cache; fall back to a scan.
-			if err := testClient.List(ctxT(), &events); err != nil {
+			if err := testAPIReader.List(ctxT(), &events); err != nil {
 				return err
 			}
 		}
@@ -727,7 +727,7 @@ func TestModelProvider_ModelMapMustNameRealModels(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-map-a"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-map-a"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidModelMap)
 	// A key this provider does not offer.
@@ -740,7 +740,7 @@ func TestModelProvider_ModelMapMustNameRealModels(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-map-c"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-map-c"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidModelMap)
 }
@@ -758,12 +758,12 @@ func TestAgentClass_AllowedHostsUnsupportedByCNI(t *testing.T) {
 	// FQDNPolicySupported condition is False.
 	expectReady(t, func() []metav1.Condition {
 		var got kaalmv1beta1.AgentClass
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hosts"}, &got)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-hosts"}, &got)
 		return got.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonAllReferencesResolved)
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "ac-hosts"}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-hosts"}, &got); err != nil {
 			return err
 		}
 		c := condition(got.Status.Conditions, kaalmv1beta1.ConditionFQDNPolicySupported)
@@ -783,7 +783,7 @@ func TestAgentClass_InvalidHostIsNotReady(t *testing.T) {
 	}
 	expectReady(t, func() []metav1.Condition {
 		var got kaalmv1beta1.AgentClass
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-badhost"}, &got)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-badhost"}, &got)
 		return got.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidReference)
 }
@@ -1339,7 +1339,7 @@ func TestAgentClass_SecurityBaselineCondition(t *testing.T) {
 	expectCondition(t, "ac-baseline-relaxed", kaalmv1beta1.ConditionSecurityBaseline,
 		metav1.ConditionFalse, kaalmv1beta1.ReasonBelowRestrictedBaseline)
 	var got kaalmv1beta1.AgentClass
-	_ = testClient.Get(ctxT(), types.NamespacedName{Name: "ac-baseline-relaxed"}, &got)
+	_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "ac-baseline-relaxed"}, &got)
 	c := condition(got.Status.Conditions, kaalmv1beta1.ConditionSecurityBaseline)
 	if c == nil || !strings.Contains(c.Message, "readOnlyRootFilesystem is false") {
 		t.Errorf("message does not name the relaxed field: %+v", c)
@@ -1350,7 +1350,7 @@ func expectCondition(t *testing.T, className, condType string, want metav1.Condi
 	t.Helper()
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
 			return err
 		}
 		c := condition(ac.Status.Conditions, condType)

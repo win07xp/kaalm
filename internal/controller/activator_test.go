@@ -199,7 +199,7 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 	// proves the activator's write landed.
 	eventually(t, func() error {
 		var ag kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "act-agent"}, &ag); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "act-agent"}, &ag); err != nil {
 			return err
 		}
 		// The activator writes the wake and its trigger in one patch.
@@ -211,7 +211,7 @@ func TestActivator_WritesWakeAnnotation(t *testing.T) {
 			return nil
 		}
 		var events corev1.EventList
-		if err := testClient.List(ctxT(), &events, client.InNamespace("default")); err != nil {
+		if err := testAPIReader.List(ctxT(), &events, client.InNamespace("default")); err != nil {
 			return err
 		}
 		for _, e := range events.Items {

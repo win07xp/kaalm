@@ -61,10 +61,10 @@ const (
 )
 
 var (
-	testClient client.Client
-	// testAPIReader reads straight from the apiserver. The test read helpers
-	// use it: testClient reads from the manager's cache, which can miss an
-	// object the test created a moment ago.
+	// testClient writes. Its reads come from the manager's cache, which can
+	// still miss the test's own last write, so tests read with testAPIReader,
+	// which reads the API server. The forbidigo lint rule keeps it that way.
+	testClient     client.Client
 	testAPIReader  client.Reader
 	testEnv        *envtest.Environment
 	fakeHealth     *fakeHealthChecker

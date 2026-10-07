@@ -68,7 +68,7 @@ func patchSecretMeta(t *testing.T, name string, labels, annotations map[string]a
 func modelProviderConditions(name string) func() []metav1.Condition {
 	return func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: name}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &mp)
 		return mp.Status.Conditions
 	}
 }
@@ -125,7 +125,7 @@ func TestModelProvider_EndpointHostMustBeApproved(t *testing.T) {
 	before := fakeHealth.count(name)
 
 	var mp kaalmv1beta1.ModelProvider
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &mp); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &mp); err != nil {
 		t.Fatal(err)
 	}
 	mp.Spec.Endpoint = "https://other.example.com"

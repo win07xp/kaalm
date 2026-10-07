@@ -183,7 +183,7 @@ func TestAgent_ChildConflictKeepsRunningPod(t *testing.T) {
 	// reference and change the port, as a tenant-created object would look.
 	eventually(t, func() error {
 		var svc corev1.Service
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &svc); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &svc); err != nil {
 			return err
 		}
 		svc.OwnerReferences = nil
@@ -193,7 +193,7 @@ func TestAgent_ChildConflictKeepsRunningPod(t *testing.T) {
 
 	expectAgentReadyReason(t, name, kaalmv1beta1.ReasonChildConflict)
 	var got corev1.Service
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &got); err != nil {
 		t.Fatal(err)
 	}
 	if len(got.Spec.Ports) != 1 || got.Spec.Ports[0].Port != 9999 || metav1.GetControllerOf(&got) != nil {

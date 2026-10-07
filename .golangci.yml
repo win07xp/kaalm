@@ -19,6 +19,7 @@ linters:
     - copyloopvar
     - dupl
     - errcheck
+    - forbidigo
     - ginkgolinter
     - goconst
     - gocyclo
@@ -33,6 +34,13 @@ linters:
     - unparam
     - unused
   settings:
+    forbidigo:
+      forbid:
+        # The controller tests' testClient reads from the manager's cache,
+        # which can still miss the test's own write; reads go to
+        # testAPIReader, which reads the API server.
+        - pattern: ^testClient\.(Get|List)$
+          msg: read with testAPIReader; testClient reads the manager's cache
     goconst:
       # Repeated literals in tests are usually clearer inline than hoisted into
       # constants; this is what golangci-lint's own default exclusions did in v1.
@@ -54,6 +62,11 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # testClient is the cached manager client only in the controller tests;
+      # storagemigration's testClient is an uncached client.
+      - linters:
+          - forbidigo
+        path-except: internal/controller/
       # The translator and the mock provider are wire keys and values by
       # nature ("type", "content", "text", ...); hoisting each into a constant
       # would hide the shapes they exist to spell out.

@@ -89,7 +89,7 @@ func expectClassDriftCounts(t *testing.T, className string, replacing, pending i
 	t.Helper()
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
 			return err
 		}
 		if ac.Status.AgentsReplacing != replacing || ac.Status.AgentsPendingReplacement != pending {
@@ -262,7 +262,7 @@ func TestAgentClass_MaxUnavailableOnDriftValidation(t *testing.T) {
 	mkWorkloadClass(t, "wc-mu-default", nil)
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-mu-default"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-mu-default"}, &ac); err != nil {
 			return err
 		}
 		if got := ac.Spec.Lifecycle.MaxUnavailableOnDrift; got == nil || got.String() != "25%" {

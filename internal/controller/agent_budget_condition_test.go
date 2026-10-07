@@ -56,7 +56,7 @@ func setProviderSpend(t *testing.T, providerName, replicaKey, spendUSD string) {
 	entry := fmt.Sprintf(`{"period":%q,"default":%q}`, period, spendUSD)
 	eventually(t, func() error {
 		var cm corev1.ConfigMap
-		err := testClient.Get(ctxT(), types.NamespacedName{Name: cmName, Namespace: testOperatorNamespace}, &cm)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: cmName, Namespace: testOperatorNamespace}, &cm)
 		if apierrors.IsNotFound(err) {
 			return testClient.Create(ctxT(), &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: testOperatorNamespace},
@@ -77,14 +77,14 @@ func setProviderSpend(t *testing.T, providerName, replicaKey, spendUSD string) {
 func agentDegraded(t *testing.T, name string) *metav1.Condition {
 	t.Helper()
 	var ag kaalmv1beta1.Agent
-	_ = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag)
+	_ = testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag)
 	return condition(ag.Status.Conditions, kaalmv1beta1.ConditionDegraded)
 }
 
 func agentPhase(t *testing.T, name string) kaalmv1beta1.AgentPhase {
 	t.Helper()
 	var ag kaalmv1beta1.Agent
-	_ = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag)
+	_ = testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag)
 	return ag.Status.Phase
 }
 
@@ -156,7 +156,7 @@ func TestAgent_BudgetConditionNotSetWhenWithinBudget(t *testing.T) {
 	// namespace must leave no Degraded condition behind.
 	expectReady(t, func() []metav1.Condition {
 		var ag kaalmv1beta1.Agent
-		_ = testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "s10-ok-agent"}, &ag)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "s10-ok-agent"}, &ag)
 		return ag.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonInvalidReference)
 
@@ -249,7 +249,7 @@ func TestAgent_BudgetConditionClearsWhenBudgetTurnedOff(t *testing.T) {
 
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "s10-off"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "s10-off"}, &mp); err != nil {
 			return err
 		}
 		mp.Spec.Budget.Period = "none"
@@ -260,7 +260,7 @@ func TestAgent_BudgetConditionClearsWhenBudgetTurnedOff(t *testing.T) {
 			return errString("Degraded still present: " + string(c.Status))
 		}
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "s10-off"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "s10-off"}, &mp); err != nil {
 			return err
 		}
 		if len(mp.Status.BudgetUsage) != 0 || mp.Status.ClusterSpentUSD != "" {
