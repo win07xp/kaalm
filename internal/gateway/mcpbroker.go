@@ -868,6 +868,11 @@ func relayMCPStream(
 			"the stream is truncated", providerName)
 		endWithError(msg, errToolTimeout)
 		return written, errToolTimeout, msg
+	case r.Context().Err() != nil:
+		// The upstream request derives from the caller's context, so a
+		// caller that left cancels the read: not a tool failure. Checked
+		// before a clean end, which the transport can report for the cancel.
+		return written, outcomeClientClosed, ""
 	case err == nil:
 		if tail != nil {
 			bodyLog("mcp stream", tail)
@@ -876,10 +881,6 @@ func relayMCPStream(
 			flush()
 		}
 		return written, "", ""
-	case r.Context().Err() != nil:
-		// The upstream request derives from the caller's context, so a
-		// caller that left cancels the read: not a tool failure.
-		return written, outcomeClientClosed, ""
 	default:
 		msg := fmt.Sprintf("reading the stream from tool provider %q failed; the stream is truncated", providerName)
 		endWithError(msg, errToolUnavailable)

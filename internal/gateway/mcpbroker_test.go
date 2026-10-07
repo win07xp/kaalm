@@ -1213,6 +1213,25 @@ func TestRelayMCPStream_CallerGoneIsNotAToolFailure(t *testing.T) {
 	}
 }
 
+// When the caller leaves, the upstream read can end in a clean io.EOF
+// instead of the context error. That is still the caller leaving, not a
+// stream the tool server finished.
+func TestRelayMCPStream_CleanEndAfterCallerLeftIsClientClosed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil).WithContext(ctx)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+	_, errType, _ := relayMCPStream(rec, req, resp, 1<<20, json.RawMessage("7"), "search")
+	if errType != outcomeClientClosed {
+		t.Errorf("errType = %q, want %q", errType, outcomeClientClosed)
+	}
+}
+
 // failingWriter is a ResponseWriter whose writes fail, as a write to a
 // connection the caller closed does.
 type failingWriter struct{ header http.Header }
