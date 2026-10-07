@@ -134,6 +134,9 @@ NON_SCENARIO_SPECS = {
         "runs only under `make e2e-cilium`, which selects it with -ginkgo.focus=\"FQDN\"; "
         "the map's prose describes it. A rename must keep \"FQDN\" or update the Makefile focus"
     ),
+    "Workload Certificate name held by a foreign Certificate": (
+        "the child-ownership check against real cert-manager, not an acceptance scenario"
+    ),
 }
 SPEC_NODE = re.compile(
     r'\b[FPX]?(Describe|Context|When|It|Specify|DescribeTable)\(\s*(?:"((?:[^"\\]|\\.)*)"|`([^`]*)`)'
