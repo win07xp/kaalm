@@ -80,7 +80,7 @@ func TestGatewayActivityClient_NonOKResponse(t *testing.T) {
 
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testAPIReader.List(ctxT(), &pods,
+		if err := testCache.List(ctxT(), &pods,
 			client.InNamespace(ns), client.MatchingLabels(gatewayPodLabels)); err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func TestGatewayActivityClient_DefaultPortUnreachable(t *testing.T) {
 	// (the client caches its result for 15s).
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testAPIReader.List(ctxT(), &pods,
+		if err := testCache.List(ctxT(), &pods,
 			client.InNamespace(ns), client.MatchingLabels(gatewayPodLabels)); err != nil {
 			return err
 		}
@@ -224,7 +224,7 @@ func TestGatewayActivityClient_FansOutAndCaches(t *testing.T) {
 	// that saw no target would pin an empty result past this test's window.
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testAPIReader.List(ctxT(), &pods,
+		if err := testCache.List(ctxT(), &pods,
 			client.InNamespace(ns), client.MatchingLabels(gatewayPodLabels)); err != nil {
 			return err
 		}
@@ -388,7 +388,7 @@ func TestGatewayChannelHealthClient_FanOutAndCache(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testAPIReader.List(ctxT(), &pods,
+		if err := testCache.List(ctxT(), &pods,
 			client.InNamespace(ns), client.MatchingLabels(gatewayPodLabels)); err != nil {
 			return err
 		}

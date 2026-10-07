@@ -67,13 +67,13 @@ func TestAgentSpendReducer(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = testClient.Delete(ctx, cm) })
 
-	// testClient reads through the manager cache; wait for the Create to
+	// The reducer reads through the manager cache; wait for the Create to
 	// land there before reducing, or the reducer's Get sees NotFound (in
 	// production that race is benign: the next one-minute requeue reduces).
 	key := types.NamespacedName{Namespace: testSystemNamespace, Name: gateway.AgentSpendConfigMapName("spend-prov")}
 	eventually(t, func() error {
 		var check corev1.ConfigMap
-		if err := testAPIReader.Get(ctx, key, &check); err != nil {
+		if err := testCache.Get(ctx, key, &check); err != nil {
 			return err
 		}
 		if len(check.Data) != 4 {
@@ -102,7 +102,7 @@ func TestAgentSpendReducer(t *testing.T) {
 	// Wait for the reducer's Update to land back in the cache.
 	var got corev1.ConfigMap
 	eventually(t, func() error {
-		if err := testAPIReader.Get(ctx, key, &got); err != nil {
+		if err := testCache.Get(ctx, key, &got); err != nil {
 			return err
 		}
 		if _, dead := got.Data["gw-dead"]; dead {
