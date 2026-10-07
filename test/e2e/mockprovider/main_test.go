@@ -220,3 +220,162 @@ func TestStreamingBothShapes(t *testing.T) {
 		}
 	}
 }
+
+// postChat sends one chat request to the mock and returns the response.
+func postChat(t *testing.T, srv *httptest.Server, path, body string) (*http.Response, string) {
+	t.Helper()
+	resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return resp, string(raw)
+}
+
+// completionContent decodes a non-streaming chat completion's answer text.
+func completionContent(t *testing.T, raw string) string {
+	t.Helper()
+	var body struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil || len(body.Choices) == 0 {
+		t.Fatalf("not a chat completion (%v): %s", err, raw)
+	}
+	return body.Choices[0].Message.Content
+}
+
+const echoHistory = `{"model":"m","messages":[` +
+	`{"role":"user","content":"a"},` +
+	`{"role":"assistant","content":"x"},` +
+	`{"role":"user","content":[{"type":"text","text":"b"}]}]`
+
+func TestEchoReportsHistory(t *testing.T) {
+	srv := httptest.NewServer((&mock{}).handler())
+	defer srv.Close()
+
+	resp, raw := postChat(t, srv, "/echo/v1/chat/completions", echoHistory+`}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200: %s", resp.StatusCode, raw)
+	}
+	var got echoReply
+	if err := json.Unmarshal([]byte(completionContent(t, raw)), &got); err != nil {
+		t.Fatalf("content is not the echo JSON: %v", err)
+	}
+	if got.Messages != 3 || len(got.User) != 2 || got.User[0] != "a" || got.User[1] != "b" {
+		t.Errorf("echo = %+v, want {3 [a b]}", got)
+	}
+	if !strings.Contains(raw, `"prompt_tokens":11`) || !strings.Contains(raw, `"completion_tokens":22`) {
+		t.Errorf("echo answer lacks usage: %s", raw)
+	}
+}
+
+func TestEchoStreams(t *testing.T) {
+	srv := httptest.NewServer((&mock{}).handler())
+	defer srv.Close()
+
+	_, raw := postChat(t, srv, "/echo/v1/chat/completions",
+		echoHistory+`,"stream":true,"stream_options":{"include_usage":true}}`)
+	if !strings.HasSuffix(strings.TrimSpace(raw), "data: [DONE]") {
+		t.Fatalf("stream does not end with [DONE]:\n%s", raw)
+	}
+	var content strings.Builder
+	usage := false
+	for _, line := range strings.Split(raw, "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var c struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Usage map[string]any `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &c); err != nil {
+			t.Fatalf("bad chunk %q: %v", data, err)
+		}
+		for _, ch := range c.Choices {
+			content.WriteString(ch.Delta.Content)
+		}
+		if c.Usage != nil {
+			usage = true
+		}
+	}
+	var got echoReply
+	if err := json.Unmarshal([]byte(content.String()), &got); err != nil {
+		t.Fatalf("streamed content %q is not the echo JSON: %v", content.String(), err)
+	}
+	if got.Messages != 3 || len(got.User) != 2 || got.User[0] != "a" || got.User[1] != "b" {
+		t.Errorf("streamed echo = %+v, want {3 [a b]}", got)
+	}
+	if !usage {
+		t.Errorf("stream lacks a usage chunk:\n%s", raw)
+	}
+}
+
+func TestEchoEmptyHistory(t *testing.T) {
+	srv := httptest.NewServer((&mock{}).handler())
+	defer srv.Close()
+
+	_, raw := postChat(t, srv, "/echo/v1/chat/completions", `{"model":"m","messages":[]}`)
+	if got := completionContent(t, raw); got != `{"messages":0,"user":[]}` {
+		t.Errorf("empty echo = %s, want {\"messages\":0,\"user\":[]}", got)
+	}
+}
+
+func TestDefaultReplyUnchanged(t *testing.T) {
+	srv := httptest.NewServer((&mock{}).handler())
+	defer srv.Close()
+
+	for _, path := range []string{"/ok/v1/chat/completions", "/v1/chat/completions"} {
+		_, raw := postChat(t, srv, path, echoHistory+`}`)
+		if got := completionContent(t, raw); got != mockReplyText {
+			t.Errorf("%s content = %q, want %q", path, got, mockReplyText)
+		}
+	}
+	// /echo on the Anthropic path answers as /ok does.
+	_, raw := postChat(t, srv, "/echo/v1/messages", `{"model":"c","max_tokens":5,"messages":[]}`)
+	if !strings.Contains(raw, `"text":"ok from mock"`) || !strings.Contains(raw, `"type":"message"`) {
+		t.Errorf("/echo/v1/messages = %s, want the /ok Anthropic message", raw)
+	}
+}
+
+func TestChatCarriesCreated(t *testing.T) {
+	srv := httptest.NewServer((&mock{}).handler())
+	defer srv.Close()
+
+	_, raw := postChat(t, srv, "/ok/v1/chat/completions", `{"model":"m","messages":[]}`)
+	var body struct {
+		Created int64 `json:"created"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil || body.Created <= 0 {
+		t.Errorf("chat.completion created = %d (%v), want a positive integer", body.Created, err)
+	}
+
+	_, raw = postChat(t, srv, "/ok/v1/chat/completions",
+		`{"model":"m","stream":true,"stream_options":{"include_usage":true},"messages":[]}`)
+	chunks := 0
+	for _, line := range strings.Split(raw, "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		chunks++
+		var c struct {
+			Created int64 `json:"created"`
+		}
+		if err := json.Unmarshal([]byte(data), &c); err != nil || c.Created <= 0 {
+			t.Errorf("chunk %s: created = %d (%v), want a positive integer", data, c.Created, err)
+		}
+	}
+	if chunks != 4 {
+		t.Errorf("stream had %d chunks, want 4 (two content, finish, usage)", chunks)
+	}
+}
