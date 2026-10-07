@@ -655,12 +655,14 @@ func (s *Server) relayStream(
 			}
 		}
 	}
+	// The upstream read derives from the caller's context: a caller that
+	// left cancels it. The read then ends in the context error or, as the
+	// transport can report the cancel, a clean io.EOF; either way the stream
+	// did not finish and no one is there to read an event.
+	if ctx.Err() != nil {
+		return callerLeft()
+	}
 	if err := scanner.Err(); err != nil {
-		if ctx.Err() != nil {
-			// The upstream read derives from the caller's context: a caller
-			// that left cancels it. No one is there to read an event.
-			return callerLeft()
-		}
 		// The status is already sent, so the truncation is signaled in the
 		// body. No fallback after the first byte, and no translator Finish:
 		// its closing events would make the stream look complete.
