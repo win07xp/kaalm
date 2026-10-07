@@ -255,6 +255,9 @@ MOCKWHATSAPP_IMG ?= registry.test/mock/whatsapp:e2e
 # together.
 E2E_GO_BASE_IMG ?= registry.test/agents/kaalm-agent-go:e2e
 E2E_PYTHON_BASE_IMG ?= registry.test/agents/kaalm-agent-python:e2e
+# The langgraph-chat example built FROM the local Python base, for the
+# framework on-ramp spec (S25). The testdata YAML hardcodes it too.
+E2E_LANGGRAPH_CHAT_IMG ?= registry.test/agents/langgraph-chat:e2e
 # Preloaded so the NetworkPolicy-deny probe pod runs hermetically (no Docker Hub
 # pull at test time, which would otherwise let that spec pass vacuously).
 CURL_IMG ?= curlimages/curl:8.10.1
@@ -295,7 +298,7 @@ go-agent-smoke: go-agent-image ## Contract smoke against the built image: TLS, m
 	hack/go-image-smoke.sh $(GO_AGENT_IMG)
 
 .PHONY: e2e-images
-e2e-images: ## Build the controller, gateway, console, agent, base, and mock-provider images and import them into k3d.
+e2e-images: ## Build the controller, gateway, console, agent, base, langgraph-chat example, and mock-provider images and import them into k3d.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
 	docker build -t $(CONSOLE_IMG) --build-arg BINARY=console .
@@ -306,11 +309,12 @@ e2e-images: ## Build the controller, gateway, console, agent, base, and mock-pro
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
 	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
 	docker build -t $(PYTHON_AGENT_IMG) images/agent-python
+	docker build --build-arg BASE=$(PYTHON_AGENT_IMG) -t $(E2E_LANGGRAPH_CHAT_IMG) examples/langgraph-chat
 	docker tag $(GO_AGENT_IMG) $(E2E_GO_BASE_IMG)
 	docker tag $(PYTHON_AGENT_IMG) $(E2E_PYTHON_BASE_IMG)
 	docker pull $(CURL_IMG)
 	docker pull $(JAEGER_IMG) || docker image inspect $(JAEGER_IMG) >/dev/null
-	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(CONSOLE_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(MOCKDISCORD_IMG) $(MOCKWHATSAPP_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(CURL_IMG) $(JAEGER_IMG)
+	CLUSTER=$(CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(CONSOLE_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(MOCKDISCORD_IMG) $(MOCKWHATSAPP_IMG) $(AGENT_IMG) $(E2E_GO_BASE_IMG) $(E2E_PYTHON_BASE_IMG) $(E2E_LANGGRAPH_CHAT_IMG) $(CURL_IMG) $(JAEGER_IMG)
 
 .PHONY: e2e-deploy
 e2e-deploy: chart-sync ## Install/upgrade the chart onto the current context.
