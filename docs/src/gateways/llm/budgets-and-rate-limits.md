@@ -111,7 +111,7 @@ Three deliberate boundaries:
 
 ## Hard enforcement
 
-Setting `spec.budget.enforcement: hard` on a ModelProvider (default `soft`) turns that provider's `action: block` thresholds into a cap with a stated guarantee. Nothing else changes: `warn` and `degrade` policies remain advisory in both modes, both ceilings (`perNamespaceUSD` and `clusterUSD`) participate through the same worse-of-two utilization, and outside the boundary region described below enforcement is the soft behavior. Three validation rules gate the mode: hard requires at least one `block` policy (rule 32), every catalog model priced (rule 33, because an unpriced call settles at zero and a cap cannot count spend it never prices), and a coherent boundary margin (rule 34). See [Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation).
+Setting `spec.budget.enforcement: hard` on a ModelProvider (default `soft`) turns that provider's `action: block` thresholds into a cap with a stated guarantee. Nothing else changes: `warn` and `degrade` policies remain advisory in both modes, both ceilings (`perNamespaceUSD` and `clusterUSD`) participate through the same worse-of-two utilization, and outside the boundary region described below enforcement is the soft behavior. Three validation rules constrain the mode: hard requires at least one `block` policy (rule 32), every catalog model priced (rule 33, because an unpriced call settles at zero and a cap cannot count spend it never prices), and a coherent boundary margin (rule 34). See [Cross-resource validation](../../resources/validation-and-defaulting.md#cross-resource-validation).
 
 ### The boundary region
 

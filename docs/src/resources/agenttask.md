@@ -114,7 +114,7 @@ status:
 | Field | Meaning |
 |---|---|
 | `phase` | One of `Pending`, `Provisioning`, `Running`, `Completing`, `Succeeded`, `Failed`, `TimedOut`, `Terminating`. The transitions are on [Task lifecycle](../controller/task-lifecycle.md). |
-| `Ready` | `True` with `PodRunning` once the Pod is Ready. Otherwise `False`: `PodProvisioning` or `PodTerminating` while the attempt waits on its Pod, the failure or settle reason (such as `TaskSucceeded`) after an attempt fails or the task settles, or the reason of a gate that holds the task without failing it: `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `SystemNamespaceForbidden`, `ChildConflict`, `CertificateNotReady`, `PodCreateRejected` (the API server refused the Pod create, and the message is its error), or `ChildWriteRejected` (the API server refused a write of another child, or a retry's delete of its old Pod or reset of its completion ConfigMap, and the message names the object and the error). The provisioning deadline fails the attempt if either rejection lasts, except a retry's hold, which has no deadline and leaves the task in `Failed` until the cause is fixed ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). For `SecretNotOptedIn`, see [Env Secrets must opt in](#env-secrets-must-opt-in). The reconciler page lists the reasons in [What it reports](../controller/reconcilers/agenttask.md#what-it-reports). |
+| `Ready` | `True` with `PodRunning` once the Pod is Ready. Otherwise `False`: `PodProvisioning` or `PodTerminating` while the attempt waits on its Pod, the failure or settle reason (such as `TaskSucceeded`) after an attempt fails or the task settles, or the reason of a check that holds the task without failing it: `InvalidReference`, `ImagePullSecretMissing`, `SecretNotOptedIn`, `SystemNamespaceForbidden`, `ChildConflict`, `CertificateNotReady`, `PodCreateRejected` (the API server refused the Pod create, and the message is its error), or `ChildWriteRejected` (the API server refused a write of another child, or a retry's delete of its old Pod or reset of its completion ConfigMap, and the message names the object and the error). The provisioning deadline fails the attempt if either rejection lasts, except a retry's hold, which has no deadline and leaves the task in `Failed` until the cause is fixed ([Retry mechanics](../controller/task-lifecycle.md#retry-mechanics)). For `SecretNotOptedIn`, see [Env Secrets must opt in](#env-secrets-must-opt-in). The reconciler page lists the reasons in [What it reports](../controller/reconcilers/agenttask.md#what-it-reports). |
 | `Completed` | Set when the task settles: `True` for `Succeeded`, `False` for any other terminal phase. The reason names why it settled: `TaskSucceeded` and `TaskFailed` in the common cases, otherwise `TimeoutSucceeded`, `TimeoutExceeded`, `PodDisrupted`, `PodStartFailed`, `ProvisioningDeadlineExceeded`, a container's waiting reason such as `InvalidImageName` or `ErrImageNeverPull` once `backoffLimit` is spent, or a class-violation reason. The message explains why it settled, for example the agent's reported message, the container's exit summary, or the validation failure. |
 | `startTime` | Set when the task moves to `Running` (Pod Ready). The effective timeout measures from it, so scheduling and image-pull time never count; `Provisioning` is bounded separately. |
 | `completionTime` | Set when the task settles. |
@@ -137,7 +137,7 @@ A task cannot share its name with an Agent in the same namespace ([An Agent and 
 
 ### Env Secrets must opt in
 
-Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`. The check runs only while the task has no Pod, so it covers the first attempt and every `backoffLimit` retry. A task that fails it is not `Failed`: it keeps its phase with `Ready=False, reason=SecretNotOptedIn`, makes no Pod, and re-checks every 30 seconds. The exact check and the gate's timing are under [rule 48](validation/references-and-access.md).
+Every Secret that `spec.env` reads through `valueFrom.secretKeyRef` must exist in the task's namespace and carry the label `kaalm.io/workload-secret: "true"`. The check runs only while the task has no Pod, so it covers the first attempt and every `backoffLimit` retry. A task that fails it is not `Failed`: it keeps its phase with `Ready=False, reason=SecretNotOptedIn`, makes no Pod, and re-checks every 30 seconds. The exact check and its timing are under [rule 48](validation/references-and-access.md).
 
 ### Completion modes
 
@@ -171,12 +171,12 @@ Artifacts are declared by name; the container reports values keyed by name. The 
 
 This payload-based design has no race and needs no `pods/exec` RBAC.
 
-### The completion protocol: data channel and identity gate
+### The completion protocol: data channel and Pod UID check
 
 The gateway and the reconciler coordinate completion through two mechanisms:
 
 - The per-task `{taskName}-completion` ConfigMap is the data channel. The gateway writes the completion payload; the reconciler watches it ([The completion mailbox](../runtime/child-resources.md#the-completion-mailbox)).
-- `status.currentPodUID` is the identity gate, set as the Status table describes. The gateway rejects a report from any other Pod with `409 stale_pod` and a `StalePodCompletion` message, and a report against a settled task with `403 access_denied` and `TaskAlreadyCompleted`.
+- `status.currentPodUID` backs the [Pod UID check](../gateways/api/task-complete.md#checks-before-the-write), set as the Status table describes. The gateway rejects a report from any other Pod with `409 stale_pod` and a `StalePodCompletion` message, and a report against a settled task with `403 access_denied` and `TaskAlreadyCompleted`.
 
 The wire-level contract is on [Task completion](../gateways/api/task-complete.md), and the retry reset on [Retry mechanics](../controller/task-lifecycle.md#retry-mechanics).
 

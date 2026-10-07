@@ -2,7 +2,7 @@
 # own hibernation-capable class (same shape as the S7 fixture: persistence +
 # hibernationAllowed + positive timers, generous wake budget for the
 # freshly-woken-pod ipset lag), and the viewer identity whose RBAC is exactly
-# what the console's SubjectAccessReview gate checks.
+# what the console's SubjectAccessReview checks ask for.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -44,7 +44,7 @@ spec:
 ---
 # The authorized operator: may view the namespace (list agents) and test-chat
 # (create agentchannels), which is exactly the console's authorization
-# mapping (docs/src/console/overview.md, Authentication).
+# mapping (docs/src/console/overview.md#authentication).
 apiVersion: v1
 kind: ServiceAccount
 metadata:

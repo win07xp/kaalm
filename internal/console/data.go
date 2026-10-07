@@ -36,7 +36,7 @@ type Data struct {
 }
 
 // Namespaces lists all namespace names, sorted. Authorization filtering is
-// the caller's job (the Gate); this is the candidate list.
+// the caller's job (the AccessChecker); this is the candidate list.
 func (d *Data) Namespaces(ctx context.Context) ([]string, error) {
 	var list corev1.NamespaceList
 	if err := d.Reader.List(ctx, &list); err != nil {

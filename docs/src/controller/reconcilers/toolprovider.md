@@ -18,7 +18,7 @@ The first failing check sets `Ready=False` with its reason code and ends the pas
 | It carries the label `kaalm.io/provider-credential: "true"` | `SecretNotOptedIn` | [49](../../resources/validation/providers.md#provider-credentials) |
 | Its `kaalm.io/provider-hosts` annotation lists the `spec.endpoint` host | `EndpointHostNotApproved` | [50](../../resources/validation/providers.md#provider-credentials) |
 | It holds the key, non-empty | `CredentialsMissing` | |
-| Every `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-gates-on-providers-and-tools) |
+| Every `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-checks-on-providers-and-tools) |
 | The probe gets no `401` or `403` | `CredentialsInvalid` | |
 
 The probe runs unless `healthCheck.enabled` is `false`. It sends `Authorization: Bearer <credential>` to `spec.endpoint`, never follows a redirect, and speaks MCP in whichever revision the server does ([Protocol revisions](../../gateways/tool-plane.md#protocol-revisions)). Its outcomes and timeout are the [ModelProvider probe](modelprovider.md#liveness-probe)'s, and it uses the same [trust pool](modelprovider.md#probe-tls-trust). It reads at most `gateway.mcpMaxBodyBytes` (default 4 MiB) of each answer, the cap the broker applies to `tools/list`, so a catalog the broker serves also passes the probe. A larger answer fails the probe as `ProviderUnhealthy`, with a message saying it exceeds the limit. Raise `gateway.mcpMaxBodyBytes` or trim the server's catalog.

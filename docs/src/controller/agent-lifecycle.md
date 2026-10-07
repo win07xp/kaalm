@@ -22,7 +22,7 @@ The table lists every transition in the order the reconciler evaluates them. Row
 
 | From | To | Trigger |
 |---|---|---|
-| `Pending` | `Pending` (holds) | A Ready gate blocks: the operator namespace, a missing AgentClass, no image, a missing `existingClaim`, a missing `imagePullSecret`, an env Secret that is missing or lacks the workload label, or a missing handler ConfigMap. `Ready=False` names the gate. |
+| `Pending` | `Pending` (holds) | A check before the Pod fails: the operator namespace, a missing AgentClass, no image, a missing `existingClaim`, a missing `imagePullSecret`, an env Secret that is missing or lacks the workload label, or a missing handler ConfigMap. `Ready=False` names the check. |
 | `Pending` | `Provisioning` | The per-Agent `Certificate` exists and the controller is waiting for it, or the Pod has been created. See [Waiting on the Certificate](#waiting-on-the-certificate). |
 | `Provisioning` | `Running` | The Pod reports Ready. |
 | `Running` | `Idle` | No activity for `idleTimeout`, measured from the later of the gateway's activity record and `status.lastActivityTime`. See [Activity detection](hibernation-and-wake.md#activity-detection). |
@@ -56,7 +56,7 @@ If the API server rejects the replacement Pod, the Agent stays `Provisioning` wi
 
 ### Degraded
 
-`Degraded` is the phase for a mismatch between the Agent and the AgentClass and providers that admit it. The developer, not the controller, can fix it. The reconciler evaluates every mismatch together at the top of each pass, before the hibernation branch, the Ready gates, and the Pod, so a Degraded Agent's Pod is neither created nor deleted while it is Degraded: a Running Agent keeps running, and a Hibernated one stays asleep.
+`Degraded` is the phase for a mismatch between the Agent and the AgentClass and providers that admit it. The developer, not the controller, can fix it. The reconciler evaluates every mismatch together at the top of each pass, before the hibernation branch, the Pod creation checks, and the Pod, so a Degraded Agent's Pod is neither created nor deleted while it is Degraded: a Running Agent keeps running, and a Hibernated one stays asleep.
 
 | `reason` | Rule | Mismatch |
 |---|---|---|
@@ -82,7 +82,7 @@ The idle clock is not reset. Idleness is evaluated against the gateway's activit
 
 ### Failed
 
-`Failed` is the phase for a Pod that cannot run. The reconciler sets it when a container status shows `CrashLoopBackOff` with a `restartCount` of five or more, or `ImagePullBackOff` at any count, and `Ready=False` carries the kubelet's reason and message. A missing image pull Secret never reaches `Failed`: it is caught as a Ready gate before the Pod is created.
+`Failed` is the phase for a Pod that cannot run. The reconciler sets it when a container status shows `CrashLoopBackOff` with a `restartCount` of five or more, or `ImagePullBackOff` at any count, and `Ready=False` carries the kubelet's reason and message. A missing image pull Secret never reaches `Failed`: it is caught by a Pod creation check before the Pod is created.
 
 `Failed` is derived from the Pod on every pass, so it clears itself: a container that stops crashing, or an image that becomes pullable, returns the Agent to `Running` when the Pod reports Ready. A spec change that alters the Pod spec replaces the Pod through `Provisioning` in the usual way; the drift check runs before the crash-loop check, so a spec change replaces a crash-looping Pod in every case.
 

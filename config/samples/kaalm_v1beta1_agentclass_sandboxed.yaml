@@ -1,8 +1,9 @@
-# A sandboxed AgentClass for agents that execute untrusted code (scenario S2
-# in the design book). Its Pods run under the RuntimeClass named gvisor
-# (handler runsc). The cluster must provide that RuntimeClass before any
-# Agent or AgentTask selects this class, because the apiserver rejects a Pod
-# that names a RuntimeClass that does not exist. Check with:
+# A sandboxed AgentClass for agents that execute untrusted code (scenario S2,
+# docs/src/appendix/scenarios.md#s2-offer-a-sandboxed-class-for-code-execution-agents).
+# Its Pods run under the RuntimeClass named gvisor (handler runsc). The
+# cluster must provide that RuntimeClass before any Agent or AgentTask
+# selects this class, because the apiserver rejects a Pod that names a
+# RuntimeClass that does not exist. Check with:
 #
 #   kubectl get runtimeclass gvisor
 #

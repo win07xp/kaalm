@@ -184,7 +184,7 @@ func newToolFilter(grantTools []string, catalog []kaalmv1beta1.ToolProviderTool)
 
 // authorizeToolRoute enforces the tenancy chain for one brokered call and
 // returns the caller's effective tool filter. It mirrors authorizeRoute:
-// namespace gate first, then the workload grant and class allowlist for
+// namespace check first, then the workload grant and class allowlist for
 // callers that carry a workload identity. Gateway-only callers reduce to
 // allowedNamespaces with the full server set, per the tool plane chapter.
 func (s *Server) authorizeToolRoute(
@@ -267,11 +267,11 @@ type mcpRequest struct {
 // stream keeps the status it already sent.
 const statusClientClosedRequest = 499
 
-// mcpResult is the single funnel every terminal broker outcome passes
-// through. It emits the per-call audit record (one info-level structured log
-// line, never bodies) and the broker metrics. tp is nil when the call died
-// before the ToolProvider resolved; forwarded marks calls that reached the
-// upstream and gates the duration histogram, which observes real upstream
+// mcpResult is the single funnel every terminal broker outcome passes through.
+// It emits the per-call audit record (one info-level structured log line,
+// never bodies) and the broker metrics. tp is nil when the call died before
+// the ToolProvider resolved; forwarded marks calls that reached the upstream;
+// only those calls feed the duration histogram, which observes real upstream
 // latency rather than microsecond-scale local denials. See
 // docs/src/gateways/tool-plane.md#audit-and-metering.
 func (s *Server) mcpResult(
@@ -285,7 +285,7 @@ func (s *Server) mcpResult(
 	if c.Workload != nil {
 		attrs = append(attrs, "workload", c.Workload.Name, "workload_kind", string(c.Workload.Kind))
 	}
-	// The denial reason (for example which gate refused, or that a session id
+	// The denial reason (for example which check refused, or that a session id
 	// belongs to another caller) so same-typed denials stay distinguishable.
 	if detail != "" {
 		attrs = append(attrs, "detail", detail)

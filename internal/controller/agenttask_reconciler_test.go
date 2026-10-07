@@ -148,7 +148,7 @@ func TestTask_ProvisionToRunning_AgentReported(t *testing.T) {
 		task.Spec.Artifacts = []kaalmv1beta1.AgentTaskArtifact{{Name: "out"}}
 	})
 
-	// Certificate gates the Pod.
+	// The Certificate holds the Pod until it is Ready.
 	eventually(t, func() error { return markCertReadyErr("t-run") })
 	eventually(t, func() error {
 		if taskPod(t, "t-run") == nil {
@@ -944,7 +944,7 @@ func TestTask_ClassNamespaceAllowedProvisions(t *testing.T) {
 	}
 }
 
-func TestTask_ImagePullSecretMissingGates(t *testing.T) {
+func TestTask_ImagePullSecretMissingBlocks(t *testing.T) {
 	mkWorkloadClass(t, "tc-pull", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "tc-pull-creds"}}
 	})
@@ -970,7 +970,7 @@ func TestTask_ImagePullSecretMissingGates(t *testing.T) {
 		}
 		return nil
 	})
-	// Creating the Secret recovers the gate and provisioning proceeds.
+	// Creating the Secret clears Ready=False and provisioning proceeds.
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tc-pull-creds", Namespace: "default"}}
 	if err := testClient.Create(ctxT(), sec); err != nil {
 		t.Fatalf("create secret: %v", err)
@@ -982,7 +982,7 @@ func TestTask_ImagePullSecretMissingGates(t *testing.T) {
 			return err
 		}
 		if r == kaalmv1beta1.ReasonImagePullSecretMissing {
-			return errString("still gated on pull secret")
+			return errString("still waiting on the pull secret")
 		}
 		return nil
 	})
@@ -1094,7 +1094,7 @@ func TestTask_DeleteTerminatesPod(t *testing.T) {
 	})
 }
 
-// ---- AgentTask: missing class and empty image are terminal/gated ----
+// ---- AgentTask: missing class and empty image are terminal or not Ready ----
 
 func TestTask_MissingClassIsNotReady(t *testing.T) {
 	mkTask(t, "t-noclass", "ghost-class", nil)
@@ -1113,7 +1113,7 @@ func TestTask_MissingClassIsNotReady(t *testing.T) {
 
 // A malformed allowedCIDRs entry (rule 19) holds a new task with a
 // non-terminal condition, and fixing the class lets it provision.
-func TestTask_InvalidClassCIDRGatesAndRecovers(t *testing.T) {
+func TestTask_InvalidClassCIDRBlocksAndRecovers(t *testing.T) {
 	mkWorkloadClass(t, "tc-cidr", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Network.Egress.AllowedCIDRs = []string{"not-a-cidr"}
 	})
@@ -1255,7 +1255,7 @@ func TestTask_CrashInterruptedRetryResumes(t *testing.T) {
 	}
 
 	// The state a retry leaves after its counting write: Failed, not settled,
-	// the retry counted, and the gate closed.
+	// the retry counted, and currentPodUID cleared.
 	eventually(t, func() error {
 		task := getTask(t, "t-resume")
 		task.Status.Phase = kaalmv1beta1.TaskFailed
@@ -1332,8 +1332,8 @@ func TestPodExitMessage(t *testing.T) {
 	}
 }
 
-// A retry holds while the old Pod is still terminating: the identity gate
-// stays closed, no backoff unit is spent on the old Pod's terminal state, and
+// A retry holds while the old Pod is still terminating: currentPodUID stays
+// empty, no backoff unit is spent on the old Pod's terminal state, and
 // the replacement is created once it is gone.
 func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
 	mkWorkloadClass(t, "tc-hold", nil)
@@ -1371,7 +1371,7 @@ func TestTask_RetryHoldsWhileOldPodTerminates(t *testing.T) {
 	}
 	task := getTask(t, "t-hold")
 	if task.Status.CurrentPodUID != "" {
-		t.Errorf("identity gate re-opened for the old Pod: currentPodUID=%q", task.Status.CurrentPodUID)
+		t.Errorf("currentPodUID set again for the old Pod: currentPodUID=%q", task.Status.CurrentPodUID)
 	}
 	if task.Status.Retries != 1 || task.Status.CompletionTime != nil {
 		t.Errorf("old Pod's terminal state spent a backoff unit: retries=%d completionTime=%v",
@@ -1550,7 +1550,7 @@ func expectTaskReadyReason(t *testing.T, name, reason string) {
 	})
 }
 
-func TestTask_EnvSecretNotOptedInGates(t *testing.T) {
+func TestTask_EnvSecretNotOptedInBlocks(t *testing.T) {
 	mkWorkloadClass(t, "tc-envsec", nil)
 	mkEnvSecret(t, "t-envsec-creds", false)
 	mkTask(t, "t-envsec", "tc-envsec", func(task *kaalmv1beta1.AgentTask) {
@@ -1564,10 +1564,10 @@ func TestTask_EnvSecretNotOptedInGates(t *testing.T) {
 		corev1.EventTypeWarning, `Secret "t-envsec-creds"`)
 	consistently(t, 2*time.Second, func() error {
 		if taskPod(t, "t-envsec") != nil {
-			return errString("a Pod was created under the gate")
+			return errString("a Pod was created while Ready=False held it")
 		}
 		if p := getTask(t, "t-envsec").Status.Phase; p == kaalmv1beta1.TaskFailed {
-			return errString("the gate is not terminal, phase=" + string(p))
+			return errString("a missing opt-in is not terminal, phase=" + string(p))
 		}
 		return nil
 	})
@@ -1597,7 +1597,7 @@ func TestTask_EnvSecretNotOptedInGates(t *testing.T) {
 	})
 }
 
-func TestTask_EnvSecretMissingGates(t *testing.T) {
+func TestTask_EnvSecretMissingBlocks(t *testing.T) {
 	mkWorkloadClass(t, "tc-envmiss", nil)
 	mkTask(t, "t-envmiss", "tc-envmiss", func(task *kaalmv1beta1.AgentTask) {
 		task.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "t-envmiss-creds", false)}

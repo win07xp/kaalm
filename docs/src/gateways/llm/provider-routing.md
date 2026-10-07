@@ -2,7 +2,7 @@
 
 After [Workload identity](workload-identity.md) has produced an authenticated namespace, the gateway answers two questions before it forwards anything: *is this caller allowed to use this provider?* and *how do I speak to that provider?* Provider routing answers the first. Provider adapters answer the second.
 
-Routing differs between the two authentication tiers, because the gateway-only tier has no Agent resource to consult. The gateway-only variant is the same gate chain with the class-level and workload-level gates removed; [Provider access gating](../../concepts/tenancy-and-tiers.md#provider-access-gating) draws both tiers as a single figure, with the denial code on every arm.
+Routing differs between the two authentication tiers, because the gateway-only tier has no Agent resource to consult. The gateway-only variant is the same chain of checks with the class check and the workload's `providers` check removed; [Provider access checks](../../concepts/tenancy-and-tiers.md#provider-access-checks) draws both tiers as a single figure, with the denial code on every arm.
 
 ## mTLS tier (Kaalm-managed Pods)
 

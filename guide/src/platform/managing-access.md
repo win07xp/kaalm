@@ -1,33 +1,33 @@
 # Managing team access
 
-Who may use which provider is decided by three stacked gates. Granting access
-means opening all three; revoking means closing any one of them. This page is
-the checklist for both, plus what your tenants observe when a gate closes.
+Who may use which provider is decided by three stacked access checks. Granting access
+means passing all three; revoking means failing any one of them. This page is
+the checklist for both, plus what your tenants observe when a check fails.
 
-## The three gates
+## The three access checks
 
 For a Kaalm-managed workload (an Agent or AgentTask calling the gateway
 with its client certificate), every LLM request passes:
 
 1. **The workload's own list**: the provider must appear in the workload's
    `spec.providers`.
-2. **The class gate**: the workload's AgentClass must admit the calling
+2. **The class check**: the workload's AgentClass must admit the calling
    namespace in `allowedNamespaces` (when the class sets the field), and the
    provider must appear in its `allowedProviders`.
 3. **The provider's namespace allowlist**: the calling namespace must match
    `allowedNamespaces` (globs supported).
 
-Every failure returns `403` with error type `access_denied`. The provider's namespace gate is checked before model
+Every failure returns `403` with error type `access_denied`. The provider's namespace allowlist is checked before model
 existence, so a namespace without access never learns which models a provider
 hosts.
 
 Existing (non-Kaalm) workloads calling the gateway with a ServiceAccount
-token face only gate 3 plus the model catalog; they have no workload spec or
+token face only check 3 plus the model catalog; they have no workload spec or
 class.
 
 ## Granting a team access
 
-Three edits, one per gate; you make the first two and the team makes the
+Three edits, one per check; you make the first two and the team makes the
 third.
 
 1. Add the namespace to the provider's allowlist:
@@ -120,8 +120,8 @@ is not an eviction, and the team can still drain state off the agents before
 you delete the namespace.
 
 An AgentTask denied at provisioning time (rather than mid-run) fails
-terminally instead of degrading; there is no point retrying a gate that will
-not open.
+terminally instead of degrading; there is no point retrying a check that will
+not pass.
 
 Removing a team's namespace from a class's `allowedNamespaces` has the same
 effect, with reason `NamespaceNotAllowed`: the gateway denies the next LLM and
@@ -371,7 +371,7 @@ kubectl get agents -A | grep Degraded
 
 ---
 
-*How this works: design book pages Concepts, Multi-tenancy and adoption tiers (the gate
+*How this works: design book pages Concepts, Multi-tenancy and adoption tiers (the check
 order and which error each returns), Resources, AgentClass (the
 `allowedNamespaces` design note) and ModelProvider (glob
 semantics), Controller, Change propagation (how a provider edit reaches

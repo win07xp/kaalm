@@ -52,12 +52,12 @@ func (f *fakeAuthorizer) Allowed(_ context.Context, id Identity, verb, group, re
 	return f.allowed[key], nil
 }
 
-func TestGate_VerbsAndCaching(t *testing.T) {
+func TestAccessChecker_VerbsAndCaching(t *testing.T) {
 	az := &fakeAuthorizer{allowed: map[string]bool{
 		"priya/list/agents.kaalm.io/team-a":          true,
 		"priya/create/agentchannels.kaalm.io/team-a": false,
 	}}
-	g := NewGate(az)
+	g := NewAccessChecker(az)
 	now := time.Now()
 	g.now = func() time.Time { return now }
 	priya := Identity{Username: "priya"}
@@ -191,11 +191,11 @@ func TestSessionStore_Delete(t *testing.T) {
 	}
 }
 
-func TestGate_CanViewAllAsksClusterWideAndCaches(t *testing.T) {
+func TestAccessChecker_CanViewAllAsksClusterWideAndCaches(t *testing.T) {
 	az := &fakeAuthorizer{allowed: map[string]bool{
 		"priya/list/agents.kaalm.io/": true,
 	}}
-	g := NewGate(az)
+	g := NewAccessChecker(az)
 	now := time.Now()
 	g.now = func() time.Time { return now }
 
@@ -215,9 +215,9 @@ func TestGate_CanViewAllAsksClusterWideAndCaches(t *testing.T) {
 	}
 }
 
-func TestGate_SweepDropsExpiredEntries(t *testing.T) {
+func TestAccessChecker_SweepDropsExpiredEntries(t *testing.T) {
 	az := &fakeAuthorizer{allowed: map[string]bool{}}
-	g := NewGate(az)
+	g := NewAccessChecker(az)
 	now := time.Now()
 	g.now = func() time.Time { return now }
 	priya := Identity{Username: "priya"}
@@ -231,7 +231,7 @@ func TestGate_SweepDropsExpiredEntries(t *testing.T) {
 	if len(g.cache) != 1 {
 		t.Fatalf("after sweep the cache holds %d entries, want only team-b's", len(g.cache))
 	}
-	if _, ok := g.cache[gateKey{user: "priya", namespace: "team-b", verb: "list:agents"}]; !ok {
+	if _, ok := g.cache[accessKey{user: "priya", namespace: "team-b", verb: "list:agents"}]; !ok {
 		t.Error("the unexpired entry must survive the sweep")
 	}
 }

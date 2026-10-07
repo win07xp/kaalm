@@ -24,6 +24,6 @@ Each reconciler's pass is specified on its own page:
 - [AgentClassReconciler](reconcilers/agentclass.md): validating a class, counting its users, and the CNI probe for FQDN egress support.
 - [ModelProviderReconciler](reconcilers/modelprovider.md): credential checks, configuration validation, the liveness probe, budget reconciliation, and fallback validation.
 - [ToolProviderReconciler](reconcilers/toolprovider.md): credential checks and the MCP liveness probe.
-- [AgentReconciler](reconcilers/agent.md): the full pass for a persistent agent, from the degrade gate through the Certificate, child resources, and Pod to activity detection.
+- [AgentReconciler](reconcilers/agent.md): the full pass for a persistent agent, from the degrade check through the Certificate, child resources, and Pod to activity detection.
 - [AgentTaskReconciler](reconcilers/agenttask.md): the pass for one-shot work, including the pre-Pod checks, the Certificate, and the completion mailbox.
 - [AgentChannelReconciler](reconcilers/agentchannel.md): validation, the per-channel credential Roles, the health poll, phase reduction, and pruning of async records.

@@ -73,7 +73,7 @@ new surface:
   code never applied, status the design specified and no reconciler wrote,
   and gateway answers that differed from the wire contract.
 
-Quality bar at release: an 85% CI coverage gate, envtest suites against a
+Quality bar at release: an 85% CI coverage minimum, envtest suites against a
 real apiserver, a k3d end-to-end suite (76 specs) green locally and in GitHub
 Actions, a Cilium job for hostname egress, and an upgrade suite run from both
 the previous release and the last pre-graduation release.

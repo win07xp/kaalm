@@ -60,13 +60,12 @@ const (
 	crashLoopThreshold = 5
 )
 
-// gateRequeue is the retry interval for Ready=False gates that depend on
+// notReadyRecheck is the retry interval for Ready=False checks that depend on
 // unwatched resources (imagePullSecrets, existingClaim PVCs, a child name
 // taken by an object the workload does not own, and a Pod create the API
-// server rejected): without it a Secret created after the gate fired would
-// never be observed. A variable so tests can
-// shorten it.
-var gateRequeue = 30 * time.Second
+// server rejected): without it a Secret created after the check failed would
+// never be observed. A variable so tests can shorten it.
+var notReadyRecheck = 30 * time.Second
 
 // AgentReconciler owns the full child-resource tree for a persistent agent:
 // Certificate, ServiceAccount, Service, PVC, NetworkPolicy, and the Pod. Pod
@@ -177,7 +176,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// Step 2: the system namespace is forbidden (SAN-integrity guard).
 	if agent.Namespace == r.OperatorNamespace {
-		r.setReadyGate(&agent, kaalmv1beta1.ReasonSystemNamespaceForbidden,
+		r.markAgentNotReady(&agent, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("Agents may not run in the operator namespace %q", r.OperatorNamespace))
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
@@ -186,7 +185,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	var class kaalmv1beta1.AgentClass
 	if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.AgentClassRef.Name}, &class); err != nil {
 		if apierrors.IsNotFound(err) {
-			r.setReadyGate(&agent, kaalmv1beta1.ReasonInvalidReference,
+			r.markAgentNotReady(&agent, kaalmv1beta1.ReasonInvalidReference,
 				fmt.Sprintf("AgentClass %q does not exist", agent.Spec.AgentClassRef.Name))
 			return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 		}
@@ -236,17 +235,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.updateStatusIfChanged(ctx, &agent, statusBefore)
 	}
 
-	// Step 6: Ready=False gates that block Pod creation without degrading,
-	// the rule 48 env-Secret gate among them.
-	gated, gateResult, err := r.readyGates(ctx, &agent, &class, eff)
+	// Step 6: Ready=False checks that hold Pod creation without degrading,
+	// the rule 48 env-Secret check among them.
+	blocked, blockedResult, err := r.podCreationBlocked(ctx, &agent, &class, eff)
 	if err != nil {
 		return r.childBlocked(ctx, &agent, statusBefore, err)
 	}
-	if gated {
+	if blocked {
 		if err := r.updateStatusIfChanged(ctx, &agent, statusBefore); err != nil {
 			return ctrl.Result{}, err
 		}
-		return gateResult, nil
+		return blockedResult, nil
 	}
 
 	// Step 7: ensure the Certificate and hold Pod work on its readiness. With
@@ -290,9 +289,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		res = withDriftRetry(res)
 	}
 	// A rejected Pod create depends on objects the controller does not
-	// watch (RuntimeClasses, quotas, webhooks): re-check on gateRequeue.
-	if createRejected && !res.Requeue && (res.RequeueAfter == 0 || res.RequeueAfter > gateRequeue) {
-		res.RequeueAfter = gateRequeue
+	// watch (RuntimeClasses, quotas, webhooks): re-check on notReadyRecheck.
+	if createRejected && !res.Requeue && (res.RequeueAfter == 0 || res.RequeueAfter > notReadyRecheck) {
+		res.RequeueAfter = notReadyRecheck
 	}
 	if certHeld {
 		res = withCertWaitRetry(res)
@@ -353,7 +352,7 @@ func (r *AgentReconciler) waitForCertificateWithoutPod(agent *kaalmv1beta1.Agent
 // ChildWriteRejectedError (the API server refused a create, update, or
 // delete of the child) gives Ready=False ChildWriteRejected. Either way a
 // Warning event reports it, the phase is kept, and the pass requeues after
-// gateRequeue. Neither is a reconcile error: nothing the controller retries
+// notReadyRecheck. Neither is a reconcile error: nothing the controller retries
 // can clear it, so backoff retries would only fill the log. The pass ends
 // before the Pod is converged, so no Pod is created, and a running Pod is
 // left alone. The cause (a conflicting object this workload does not
@@ -366,11 +365,11 @@ func (r *AgentReconciler) childBlocked(
 	if cr, ok := asChildWriteRejected(err); ok {
 		// The event fires only when the reason first appears: the message
 		// carries quota counts that change between passes.
-		r.setReadyGate(agent, kaalmv1beta1.ReasonChildWriteRejected, cr.Error())
+		r.markAgentNotReady(agent, kaalmv1beta1.ReasonChildWriteRejected, cr.Error())
 		if err := r.updateStatusIfChanged(ctx, agent, before); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: gateRequeue}, nil
+		return ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 	}
 	cc, ok := asChildConflict(err)
 	if !ok {
@@ -385,7 +384,7 @@ func (r *AgentReconciler) childBlocked(
 	if err := r.updateStatusIfChanged(ctx, agent, before); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{RequeueAfter: gateRequeue}, nil
+	return ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 }
 
 // reconcileWakeAnnotations runs step 1: a wake request on an Agent that is
@@ -599,26 +598,26 @@ func (r *AgentReconciler) evaluateActivity(
 	return ctrl.Result{RequeueAfter: activityCacheWindow}
 }
 
-// readyGates evaluates the Ready=False conditions that block Pod creation
+// podCreationBlocked evaluates the Ready=False checks that hold Pod creation
 // without degrading: a malformed class allowedCIDRs entry (rule 19), a missing
 // image, a missing existingClaim, missing imagePullSecrets, an env Secret
 // that is missing or lacks the workload label (rule 48), and a missing
 // handler ConfigMap (rule 31). It sets the condition on the Agent and reports
-// whether the pass is gated; Secrets, PVCs, and handler ConfigMaps are
-// unwatched, so gated results carry a requeue interval. Class spec changes are
-// watched, so the class gates carry none.
-func (r *AgentReconciler) readyGates(
+// whether the pass is blocked; Secrets, PVCs, and handler ConfigMaps are
+// unwatched, so blocked results carry a requeue interval. Class spec changes
+// are watched, so the class checks carry none.
+func (r *AgentReconciler) podCreationBlocked(
 	ctx context.Context, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, eff effectiveAgentSpec,
 ) (bool, ctrl.Result, error) {
 	// Rule 19: the class is Ready=False, and the NetworkPolicy built from its
 	// entries would fail the apiserver write on every pass.
 	if bad := invalidCIDRs(class); len(bad) > 0 {
-		r.setReadyGate(agent, kaalmv1beta1.ReasonInvalidReference,
+		r.markAgentNotReady(agent, kaalmv1beta1.ReasonInvalidReference,
 			fmt.Sprintf("AgentClass %q is not usable: %s", class.Name, strings.Join(bad, "; ")))
 		return true, ctrl.Result{}, nil
 	}
 	if eff.Image == "" {
-		r.setReadyGate(agent, kaalmv1beta1.ReasonInvalidReference,
+		r.markAgentNotReady(agent, kaalmv1beta1.ReasonInvalidReference,
 			"no image: Agent.spec.image is empty and the AgentClass sets no defaultImage")
 		return true, ctrl.Result{}, nil
 	}
@@ -626,9 +625,9 @@ func (r *AgentReconciler) readyGates(
 		var pvc corev1.PersistentVolumeClaim
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.ExistingClaim}, &pvc)
 		if apierrors.IsNotFound(err) {
-			r.setReadyGate(agent, kaalmv1beta1.ReasonExistingClaimNotFound,
+			r.markAgentNotReady(agent, kaalmv1beta1.ReasonExistingClaimNotFound,
 				fmt.Sprintf("existingClaim %q not found in namespace %q", eff.ExistingClaim, agent.Namespace))
-			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
+			return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
 		}
@@ -644,17 +643,17 @@ func (r *AgentReconciler) readyGates(
 		err := getSecretLive(ctx, liveSecretReader(r.SecretReader, r.Client),
 			types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}, &sec)
 		if apierrors.IsNotFound(err) {
-			r.setReadyGate(agent, kaalmv1beta1.ReasonImagePullSecretMissing,
+			r.markAgentNotReady(agent, kaalmv1beta1.ReasonImagePullSecretMissing,
 				fmt.Sprintf("imagePullSecret %q missing in namespace %q", ref.Name, agent.Namespace))
-			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
+			return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
 		}
 	}
 	// Rule 48: every Secret the env reads must opt in to workload use. The
 	// read runs under its own scoped Role, kept on every pass so a removed
-	// reference drops its grant. A running Pod is left in place; the gate
-	// blocks any replacement.
+	// reference drops its grant. A running Pod is left in place; the failed
+	// check blocks any replacement.
 	if err := ensureControllerSecretAccess(ctx, r.Client, r.Scheme(), agent, agentEnvSecretRoleName(agent.Name),
 		r.OperatorNamespace, envSecretRefs(eff.Env)); err != nil {
 		return false, ctrl.Result{}, err
@@ -664,8 +663,8 @@ func (r *AgentReconciler) readyGates(
 		return false, ctrl.Result{}, err
 	}
 	if reason != "" {
-		r.setReadyGate(agent, reason, msg)
-		return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
+		r.markAgentNotReady(agent, reason, msg)
+		return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 	}
 	// Rule 31: the handler ConfigMap must exist where the Agent runs. Checked
 	// pre-Pod so a bad reference surfaces as a condition, not a Pod wedged in
@@ -675,9 +674,9 @@ func (r *AgentReconciler) readyGates(
 		var cm corev1.ConfigMap
 		err := r.Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: eff.HandlerConfigMap}, &cm)
 		if apierrors.IsNotFound(err) {
-			r.setReadyGate(agent, kaalmv1beta1.ReasonHandlerConfigMapNotFound,
+			r.markAgentNotReady(agent, kaalmv1beta1.ReasonHandlerConfigMapNotFound,
 				fmt.Sprintf("handler ConfigMap %q not found in namespace %q", eff.HandlerConfigMap, agent.Namespace))
-			return true, ctrl.Result{RequeueAfter: gateRequeue}, nil
+			return true, ctrl.Result{RequeueAfter: notReadyRecheck}, nil
 		} else if err != nil {
 			return false, ctrl.Result{}, err
 		}
@@ -1121,11 +1120,11 @@ func (r *AgentReconciler) convergePod(
 			if !isWriteRejection(err) {
 				return false, false, err
 			}
-			// A rejection holds like a gate: the cause is fixed outside the
-			// Agent, and the caller's timed requeue notices the fix. The
-			// drift slot (PodUpToDate=Replacing) is kept.
+			// A rejection holds like a failed Ready check: the cause is fixed
+			// outside the Agent, and the caller's timed requeue notices the
+			// fix. The drift slot (PodUpToDate=Replacing) is kept.
 			r.setPhase(agent, podPendingPhase(agent), "Pod create rejected")
-			r.setReadyGate(agent, kaalmv1beta1.ReasonPodCreateRejected, err.Error())
+			r.markAgentNotReady(agent, kaalmv1beta1.ReasonPodCreateRejected, err.Error())
 			agent.Status.PodName = ""
 			return false, true, nil
 		}
@@ -1467,12 +1466,12 @@ func (r *AgentReconciler) setPhase(agent *kaalmv1beta1.Agent, phase kaalmv1beta1
 	r.events.add(agent, corev1.EventTypeNormal, kaalmv1beta1.ReasonPhaseChanged, msg)
 }
 
-// setReadyGate sets Ready=False for a reconcile-time validation failure and
-// emits a Warning event with the same reason and message when the reason
-// first appears, once the status write succeeds. Gates on unwatched objects
-// requeue every gateRequeue, so an event per pass would repeat for as long as
-// the problem lasts.
-func (r *AgentReconciler) setReadyGate(agent *kaalmv1beta1.Agent, reason, msg string) {
+// markAgentNotReady sets Ready=False for a reconcile-time validation failure
+// and emits a Warning event with the same reason and message when the reason
+// first appears, once the status write succeeds. Checks on unwatched objects
+// requeue every notReadyRecheck, so an event per pass would repeat for as long
+// as the problem lasts.
+func (r *AgentReconciler) markAgentNotReady(agent *kaalmv1beta1.Agent, reason, msg string) {
 	if readyFalseIsNew(agent.Status.Conditions, reason) {
 		r.events.add(agent, corev1.EventTypeWarning, reason, msg)
 	}
@@ -1686,8 +1685,8 @@ func (r *AgentReconciler) updateStatusIfChanged(
 }
 
 // writeStatus writes the Agent's status and, when the write succeeds, emits
-// the events the pass held for it (phase transitions, gate warnings, entry to
-// Degraded, ChildConflict, Hibernated, SpecDriftPending, and budget
+// the events the pass held for it (phase transitions, Ready=False warnings,
+// entry to Degraded, ChildConflict, Hibernated, SpecDriftPending, and budget
 // exhaustion). A failed write drops them.
 func (r *AgentReconciler) writeStatus(ctx context.Context, agent *kaalmv1beta1.Agent) error {
 	err := r.Status().Update(ctx, agent)

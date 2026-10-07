@@ -96,19 +96,19 @@ var _ = Describe("Zero-build on-ramp (S16)", Ordered, func() {
 		}, "180s", "5s").Should(Equal("greeter v2: ping"))
 	})
 
-	It("gates a missing handler ConfigMap and recovers when it appears", func() {
+	It("holds a missing handler ConfigMap at Ready=False and recovers when it appears", func() {
 		Eventually(func() (string, error) {
 			return utils.ResourceField("agent", "e2e", "s16-missing",
 				`{.status.conditions[?(@.type=="Ready")].reason}`)
 		}, "120s", "3s").Should(Equal("HandlerConfigMapNotFound"))
 
-		By("rule 31 gates at reconcile time: no Pod exists, as opposed to one wedged on a missing volume source")
+		By("rule 31 holds the Agent at reconcile time: no Pod exists, as opposed to one wedged on a missing volume source")
 		out, err := utils.Kubectl("get", "pods", "-n", "e2e",
 			"-l", "kaalm.io/agent=s16-missing", "-o", "name")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(strings.TrimSpace(out)).To(BeEmpty())
 
-		By("creating the ConfigMap recovers the gate without touching the Agent")
+		By("creating the ConfigMap clears Ready=False without touching the Agent")
 		_, err = utils.Kubectl("create", "configmap", "s16-missing-handler", "-n", "e2e",
 			"--from-literal=handler.py="+
 				"def handle_message(envelope):\n"+

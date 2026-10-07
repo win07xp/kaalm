@@ -19,9 +19,9 @@ limitations under the License.
 // Command perf is the scale proof: a repeatable harness that stands up
 // a Kaalm fleet on a dedicated k3d cluster, drives load through the shipped
 // chart, and emits a machine-readable summary. `make perf` runs it end to end;
-// the first run's numbers are the baseline the design book's
-// operations/performance-and-scale.md page publishes and later releases compare
-// against.
+// the first run's numbers are the baseline that
+// docs/src/operations/performance-and-scale.md publishes and later releases
+// compare against.
 //
 // One binary, two entrypoints:
 //
@@ -33,7 +33,7 @@ limitations under the License.
 //	              workload's would and never crosses a port-forward
 //
 // The perftest build tag keeps the package out of `go build ./...`, the lint
-// run, and the coverage gate: it drives a live cluster and is not a unit
+// run, and the coverage check: it drives a live cluster and is not a unit
 // under test. Lint it explicitly with `--build-tags perftest`.
 package main
 

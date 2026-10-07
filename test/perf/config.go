@@ -26,9 +26,10 @@ import (
 )
 
 // config holds the run's knobs. Every default is the baseline shape the
-// design book's numbers were taken with; override through the PERF_FLAGS Makefile
-// variable rather than editing the defaults, so a re-run of the
-// baseline stays one command.
+// numbers in
+// docs/src/operations/performance-and-scale.md#the-baseline-environment were
+// taken with; override through the PERF_FLAGS Makefile variable rather than
+// editing the defaults, so a re-run of the baseline stays one command.
 type config struct {
 	Context      string
 	Namespace    string

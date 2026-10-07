@@ -16,7 +16,8 @@ import (
 // handshake: once a channel is observed Terminating, confirm disconnection
 // with the annotation the reconciler waits on. It handles Add as well as
 // Update, so a replica that starts or re-lists after the phase flip still
-// confirms. The webhook write gate itself lives in the intake handler.
+// confirms. The intake handler itself refuses webhook writes to a
+// Terminating channel.
 func channelDisconnectHandler(
 	ctx context.Context, c client.Client, logger *slog.Logger,
 ) toolscache.ResourceEventHandlerFuncs {

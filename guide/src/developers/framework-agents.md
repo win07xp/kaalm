@@ -111,8 +111,8 @@ declared in `spec.artifacts`, retrying `409 stale_pod` and
 
 ## Errors your graph will see
 
-Your graph's model calls are governed calls, and mid-graph a gate can
-close. What the framework sees, from softest to hardest:
+Your graph's model calls are governed calls, and the gateway can slow or
+stop one mid-graph. What the framework sees, from softest to hardest:
 
 - **Fallback and degrade are invisible to your code.** A failing provider
   is retried down its fallback chain server-side, and a budget `degrade`

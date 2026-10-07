@@ -25,7 +25,7 @@ The checks don't stop at the first failure, and the `Ready` message lists every 
 | Each `allowedProviders` and `allowedToolProviders` entry names an existing provider; health is not checked | `InvalidReference` | none; see [AgentClass status](../../resources/agentclass.md#status) |
 | Each `allowedCIDRs` entry parses as a CIDR | `InvalidCIDR` | [19](../../resources/validation/class-policy.md) |
 | Each `allowedHosts` entry is a valid DNS name | `InvalidReference` | [20](../../resources/validation/class-policy.md) |
-| Each `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-gates-on-providers-and-tools) |
+| Each `allowedNamespaces` entry is a valid glob pattern | `InvalidNamespacePattern` | [51](../../resources/validation/references-and-access.md#access-checks-on-providers-and-tools) |
 | Each `image.allowedImages` entry is a valid glob pattern | `InvalidImagePattern` | [52](../../resources/validation/class-policy.md) |
 
 ## What it reports

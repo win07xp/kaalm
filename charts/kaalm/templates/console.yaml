@@ -16,7 +16,7 @@ metadata:
   labels:
     {{- include "kaalm.labels" . | nindent 4 }}
 ---
-# The console's whole reach (docs/src/console/overview.md, Placement): read
+# The console's whole reach (docs/src/console/overview.md#placement): read
 # the four CRDs and namespaces, validate tokens, ask authorization questions.
 # No Secrets, no ConfigMaps, no Pods, no writes.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -56,7 +56,7 @@ subjects:
 ---
 # The console serving/client certificate: serves the UI and the read API,
 # and dials the gateway's POST /v1/test-chat presenting the console SAN
-# (docs/src/security/rbac.md, Internal Endpoint Authentication).
+# (docs/src/security/rbac.md#internal-endpoint-authentication).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

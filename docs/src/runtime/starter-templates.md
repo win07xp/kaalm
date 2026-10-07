@@ -46,7 +46,7 @@ With `activitySource: agentHeartbeat` or `both`, the unconditional heartbeat kee
 | Value | Behavior |
 |---|---|
 | `auto` (default) | Emit every 30s in Agent mode. Emit nothing in AgentTask mode. |
-| `off` | Never emit, in either mode. Use this when the image gates emission itself, which is the prerequisite for a non-default `activitySource`. |
+| `off` | Never emit, in either mode. Use this when the image decides for itself when to emit, which is the prerequisite for a non-default `activitySource`. |
 
 No value forces heartbeats on in task mode, because the endpoint rejects task callers.
 

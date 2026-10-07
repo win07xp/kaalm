@@ -63,7 +63,7 @@ runtime toggle:
 so use it only with the default `activitySource: gatewayTraffic`. Setting
 `agentHeartbeat` or `both` while this loop runs keeps the agent permanently
 non-idle, and it never hibernates. Either leave `activitySource` at the
-default, or set `KAALM_TEMPLATE_HEARTBEAT=off` and gate emission on real work
+default, or set `KAALM_TEMPLATE_HEARTBEAT=off` and emit only on real work
 yourself.
 
 ## Deploy a test Agent

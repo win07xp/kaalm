@@ -115,7 +115,7 @@ func TestTask_PVCCreateRejectedByQuota(t *testing.T) {
 		t.Fatalf("pod %s exists, want none", p.Name)
 	}
 	expectEvent(t, "AgentTask", ns, name, kaalmv1beta1.ReasonChildWriteRejected, corev1.EventTypeWarning, wantName)
-	time.Sleep(3 * gateRequeue)
+	time.Sleep(3 * notReadyRecheck)
 	if n := eventCount(objectEvents(t, "AgentTask", ns, name, kaalmv1beta1.ReasonChildWriteRejected)); n != 1 {
 		t.Fatalf("ChildWriteRejected events = %d, want 1", n)
 	}
@@ -316,7 +316,7 @@ func TestChildBlocked_FailedTaskKeepsPhase(t *testing.T) {
 	task := restoreTask("failed-held", kaalmv1beta1.TaskFailed, false, "PodStartFailed")
 	task.Status.StartTime = nil
 	r, c := restoreReconciler(t, task)
-	r.gateInterval = 30 * time.Second
+	r.notReadyRecheckOverride = 30 * time.Second
 	rejected := &ChildWriteRejectedError{Op: "updating", Kind: "ConfigMap", Name: "failed-held-completion",
 		Err: apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "failed-held-completion", errors.New("denied"))}
 	res, err := r.childBlocked(context.Background(), storedTask(t, c, task), &kaalmv1beta1.AgentClass{}, true, rejected)

@@ -191,7 +191,7 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 		ag.Spec.Persistence.Enabled = true
 	})
 
-	// Certificate is created and gates the Pod.
+	// Certificate is created and holds the Pod until it is Ready.
 	eventually(t, func() error {
 		var cert cmapi.Certificate
 		return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-tls"}, &cert)
@@ -261,7 +261,7 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 	}
 }
 
-// ---- Gates and guards ----
+// ---- Ready=False checks and guards ----
 
 func TestAgent_SystemNamespaceForbidden(t *testing.T) {
 	mkWorkloadClass(t, "wc-sys", nil)
@@ -300,17 +300,18 @@ func TestAgent_MissingClass(t *testing.T) {
 	expectAgentReadyReason(t, "noclass-agent", kaalmv1beta1.ReasonInvalidReference)
 }
 
-// An AgentClass with a malformed allowedCIDRs entry (rule 19) gates its
-// Agents with a condition instead of failing the NetworkPolicy write on every
+// An AgentClass with a malformed allowedCIDRs entry (rule 19) holds its
+// Agents at Ready=False instead of failing the NetworkPolicy write on every
 // pass, and fixing the class recovers them.
-func TestAgent_InvalidClassCIDRGatesAndRecovers(t *testing.T) {
+func TestAgent_InvalidClassCIDRBlocksAndRecovers(t *testing.T) {
 	mkWorkloadClass(t, "wc-cidr", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Network.Egress.AllowedCIDRs = []string{"not-a-cidr"}
 	})
 	mkWorkloadAgent(t, "cidr-agent", "wc-cidr", nil)
 	expectAgentReadyReason(t, "cidr-agent", kaalmv1beta1.ReasonInvalidReference)
 
-	// A direct pass returns no error: the gate ends it before any child write.
+	// A direct pass returns no error: the failed check ends it before any child
+	// write.
 	r := &AgentReconciler{
 		Client: testClient, Recorder: record.NewFakeRecorder(10),
 		OperatorNamespace: testSystemNamespace, SecretReader: testClient,
@@ -320,7 +321,7 @@ func TestAgent_InvalidClassCIDRGatesAndRecovers(t *testing.T) {
 		t.Fatalf("reconcile returned an error under an invalid class: %v", err)
 	}
 	if res.RequeueAfter != 0 {
-		t.Errorf("gate requeues on a timer (%s); the class watch re-enqueues on a fix", res.RequeueAfter)
+		t.Errorf("the class check requeues on a timer (%s); the class watch re-enqueues on a fix", res.RequeueAfter)
 	}
 	var np networkingv1.NetworkPolicy
 	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "cidr-agent"}, &np); !apierrors.IsNotFound(err) {
@@ -375,7 +376,7 @@ func TestAgent_ImagePullSecretMissing(t *testing.T) {
 	mkWorkloadAgent(t, "pull-agent", "wc-pull", nil)
 	expectAgentReadyReason(t, "pull-agent", kaalmv1beta1.ReasonImagePullSecretMissing)
 
-	// Creating the Secret recovers the gate.
+	// Creating the Secret clears Ready=False.
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "wc-pull-registry-creds", Namespace: "default"}}
 	if err := testClient.Create(ctxT(), sec); err != nil {
 		t.Fatalf("create secret: %v", err)
@@ -452,7 +453,7 @@ func TestAgent_ExistingClaimNotFound(t *testing.T) {
 	expectAgentReadyReason(t, "claim-agent", kaalmv1beta1.ReasonExistingClaimNotFound)
 }
 
-func TestAgent_HandlerConfigMapNotFoundGatesAndRecovers(t *testing.T) {
+func TestAgent_HandlerConfigMapNotFoundBlocksAndRecovers(t *testing.T) {
 	mkWorkloadClass(t, "wc-hcm", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Image.AllowHandlerMounts = true
 	})
@@ -464,7 +465,7 @@ func TestAgent_HandlerConfigMapNotFoundGatesAndRecovers(t *testing.T) {
 	// Rule 31: a clear condition, not a Pod wedged on a missing volume source.
 	expectAgentReadyReason(t, "hcm-agent", kaalmv1beta1.ReasonHandlerConfigMapNotFound)
 
-	// Creating the ConfigMap recovers the gate.
+	// Creating the ConfigMap clears Ready=False.
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "hcm-handler", Namespace: "default"},
 		Data:       map[string]string{"handler.py": "def handle_message(envelope): ..."},
@@ -723,7 +724,7 @@ func TestAgent_HandlerMountNotAllowedDegradesAndRecovers(t *testing.T) {
 	expectAgentReadyReason(t, "hm-agent", kaalmv1beta1.ReasonHandlerMountNotAllowed)
 
 	// The platform team grants the capability: the Agent recovers, the same
-	// class-drift path that degrades when the gate is flipped off.
+	// class-drift path that degrades when the capability is withdrawn.
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
 		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-hm"}, &ac); err != nil {
@@ -841,7 +842,8 @@ func TestAgent_HandlerRepointReplacesPod(t *testing.T) {
 	oldHash := oldPod.Annotations["kaalm.io/pod-spec-hash"]
 
 	// Repointing the reference is ordinary Pod-replacing spec drift: the
-	// versioned-ConfigMap rollout pattern from the design book.
+	// versioned-ConfigMap rollout pattern from
+	// docs/src/runtime/base-images.md#handler-update-semantics.
 	eventually(t, func() error {
 		ag := getWorkloadAgent(t, "repoint-agent")
 		ag.Spec.Handler.ConfigMapRef.Name = "greeter-v2"
@@ -1011,8 +1013,8 @@ func TestAgent_V1HashMatchRewritesInPlace(t *testing.T) {
 
 func TestAgent_V1HashWithClaimsRewritesInPlace(t *testing.T) {
 	// A release that kept container claims hashed them when the class set no
-	// maxLimits. The API server (DRA gate off) stripped them from the Pod, so
-	// it ran; the upgrade must rewrite its hash, not replace it.
+	// maxLimits. The API server (DRA feature gate off) stripped them from the
+	// Pod, so it ran; the upgrade must rewrite its hash, not replace it.
 	mkWorkloadClass(t, "wc-rehash-claims", nil)
 	claims := []corev1.ResourceClaim{{Name: "gpu"}}
 	mkWorkloadAgent(t, "rehash-claims-agent", "wc-rehash-claims", func(ag *kaalmv1beta1.Agent) {
@@ -1606,13 +1608,13 @@ func expectNoAgentPod(t *testing.T, name string) {
 	t.Helper()
 	consistently(t, 2*time.Second, func() error {
 		if agentPod(t, name) != nil {
-			return errString("a Pod was created under the gate")
+			return errString("a Pod was created while Ready=False held it")
 		}
 		return nil
 	})
 }
 
-func TestAgent_EnvSecretNotOptedInGatesAndRecovers(t *testing.T) {
+func TestAgent_EnvSecretNotOptedInBlocksAndRecovers(t *testing.T) {
 	mkWorkloadClass(t, "wc-envsec", nil)
 	mkEnvSecret(t, "envsec-creds", false)
 	mkWorkloadAgent(t, "envsec-agent", "wc-envsec", func(ag *kaalmv1beta1.Agent) {
@@ -1623,14 +1625,14 @@ func TestAgent_EnvSecretNotOptedInGatesAndRecovers(t *testing.T) {
 		corev1.EventTypeWarning, `Secret "envsec-creds"`)
 	expectNoAgentPod(t, "envsec-agent")
 
-	// Labeling the Secret clears the gate and provisioning continues.
+	// Labeling the Secret clears Ready=False and provisioning continues.
 	setEnvSecretLabel(t, "envsec-creds", true)
 	expectAgentReadyReason(t, "envsec-agent", "CertificateNotReady")
 }
 
-// A missing Secret gates the same way, optional or not: a later unlabeled
+// A missing Secret blocks the same way, optional or not: a later unlabeled
 // Secret of that name must not reach a container start unchecked.
-func TestAgent_EnvSecretMissingGates(t *testing.T) {
+func TestAgent_EnvSecretMissingBlocks(t *testing.T) {
 	mkWorkloadClass(t, "wc-envmiss", nil)
 	mkWorkloadAgent(t, "envmiss-agent", "wc-envmiss", func(ag *kaalmv1beta1.Agent) {
 		ag.Spec.Env = []corev1.EnvVar{envFromSecret("TOKEN", "envmiss-creds", true)}
@@ -1642,7 +1644,7 @@ func TestAgent_EnvSecretMissingGates(t *testing.T) {
 	consistently(t, 2*time.Second, func() error {
 		c := condition(getWorkloadAgent(t, "envmiss-agent").Status.Conditions, kaalmv1beta1.ConditionReady)
 		if c == nil || c.Reason != kaalmv1beta1.ReasonSecretNotOptedIn {
-			return fmt.Errorf("an unlabeled Secret cleared the gate: %+v", c)
+			return fmt.Errorf("an unlabeled Secret cleared Ready=False: %+v", c)
 		}
 		return nil
 	})
@@ -1712,8 +1714,8 @@ func TestAgent_EnvSecretRoleScopedAndRemoved(t *testing.T) {
 }
 
 // A running Pod is left in place when its Secret loses the label: the Agent
-// reports the gate and no replacement is made until the label is back.
-func TestAgent_EnvSecretGateLeavesRunningPod(t *testing.T) {
+// reports Ready=False and no replacement is made until the label is back.
+func TestAgent_EnvSecretCheckLeavesRunningPod(t *testing.T) {
 	mkWorkloadClass(t, "wc-envrun", nil)
 	mkEnvSecret(t, "envrun-creds", true)
 	mkWorkloadAgent(t, "envrun-agent", "wc-envrun", func(ag *kaalmv1beta1.Agent) {

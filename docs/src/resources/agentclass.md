@@ -239,9 +239,9 @@ The controller applies the `restricted` Pod Security Standard to every workload 
 
 An invalid `allowedCIDRs` entry makes the class `Ready=False` (rule 19). Every Agent and new AgentTask under the class then reports `Ready=False, reason=InvalidReference`, and the reconciler writes no Certificate, NetworkPolicy, or Pod for it. A running Pod keeps running. Fixing the entry lets the workloads converge on their next pass.
 
-### Provider access gates
+### Provider access checks
 
-`allowedProviders` is one gate in a chain. For a full-lifecycle Agent or AgentTask, the workload's own `spec.providers`, this class's `allowedProviders`, and the target `ModelProvider.allowedNamespaces` must all admit the request, and the model must exist in the provider's catalog. In the gateway-only tier the class layer does not exist: those callers reference no AgentClass, and `ModelProvider.allowedNamespaces` is the only tenancy check they face. The enforced chain, with the error each gate produces, is on [Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating). The tool chain is the same, gate for gate, with `allowedToolProviders` (rule 37) in this class's place ([Grants](../gateways/tool-plane.md#grants)).
+`allowedProviders` is one check in a chain. For a full-lifecycle Agent or AgentTask, the workload's own `spec.providers`, this class's `allowedProviders`, and the target `ModelProvider.allowedNamespaces` must all admit the request, and the model must exist in the provider's catalog. In the gateway-only tier the class layer does not exist: those callers reference no AgentClass, and `ModelProvider.allowedNamespaces` is the only tenancy check they face. The enforced chain, with the error each check produces, is on [Provider access checks](../concepts/tenancy-and-tiers.md#provider-access-checks). The tool chain is the same, check for check, with `allowedToolProviders` (rule 37) in this class's place ([Grants](../gateways/tool-plane.md#grants)).
 
 ### `allowedNamespaces` keeps a class to some teams
 
@@ -251,13 +251,13 @@ The field reads differently from the provider fields of the same name:
 
 - **Unset admits every namespace.** `["*"]` admits every namespace explicitly.
 - **An empty list is rejected at apply**, by the CRD CEL rule `size(self) > 0`. On a ModelProvider or ToolProvider, an empty `allowedNamespaces` admits none. A JSON patch that removes the last entry leaves `[]` and is rejected, so remove the field instead.
-- **A malformed pattern matches nothing**, such as `[`, as it does on a provider. The class shows `Ready=False, reason: InvalidNamespacePattern` naming the entry ([rule 51](validation/references-and-access.md#access-gates-on-providers-and-tools)), and its valid entries keep admitting their namespaces.
+- **A malformed pattern matches nothing**, such as `[`, as it does on a provider. The class shows `Ready=False, reason: InvalidNamespacePattern` naming the entry ([rule 51](validation/references-and-access.md#access-checks-on-providers-and-tools)), and its valid entries keep admitting their namespaces.
 
 When the class does not admit a workload's namespace:
 
 - **An Agent goes `Degraded`** (`Ready=False` and a `Warning` event) with `reason: NamespaceNotAllowed`. This is the first Degraded check, so it is the reported reason when several mismatches exist. No Certificate, child, or Pod is created for a new Agent, and a running Agent keeps its Pod. Adding the namespace back, or removing the field, restores the prior phase. Rules 28 and 1 run earlier and keep priority ([Degraded](../controller/agent-lifecycle.md#degraded)).
 - **An AgentTask with no Pod**, in `Pending` or `Provisioning` or retrying, settles terminal `Failed` (`Completed=False` and `Ready=False`, `reason: NamespaceNotAllowed`, and a `Warning` event), whatever `backoffLimit` remains. This is the first pre-Pod check. A task that already has a Pod keeps running, and a terminal task is unaffected ([AgentTask lifecycle](../controller/task-lifecycle.md#transition-triggers)).
-- **The gateway answers `403 access_denied`** with a message naming the namespace and the class on LLM and MCP tool calls from a Kaalm-managed workload, before it checks the class's `allowedProviders` or `allowedToolProviders`. Gateway-only callers have no class and are not affected ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
+- **The gateway answers `403 access_denied`** with a message naming the namespace and the class on LLM and MCP tool calls from a Kaalm-managed workload, before it checks the class's `allowedProviders` or `allowedToolProviders`. Gateway-only callers have no class and are not affected ([Provider access checks](../concepts/tenancy-and-tiers.md#provider-access-checks)).
 
 The list check is CEL because it reads one field. The namespace match is reconcile time because CEL cannot read `metadata.namespace`.
 

@@ -61,7 +61,7 @@ Deleting a channel is a handshake with the gateway, because the channel's async 
 5. It deletes every `kaalm-async-*` ConfigMap in `kaalm-system` carrying the channel's `kaalm.io/channel-namespace` and `kaalm.io/channel-name` labels, expired or not.
 6. It removes the finalizer and the apiserver deletes the channel.
 
-The confirmation is one annotation written by whichever replica saw the phase first, not one per replica, so a replica that has not seen `Terminating` can still create a `kaalm-async-*` record after the sweep; the same holds on the timeout branch. Records are created only at intake, behind the write gate described under [Response persistence](../gateways/api/async-responses.md#response-persistence), and after that are only patched: a `Patch` on a deleted record fails and does not recreate it. The [async orphan pruner](#async-orphan-pruning) reaps such a record once it expires.
+The confirmation is one annotation written by whichever replica saw the phase first, not one per replica, so a replica that has not seen `Terminating` can still create a `kaalm-async-*` record after the sweep; the same holds on the timeout branch. Records are created only at intake, and a replica that has seen `Terminating` creates none ([Response persistence](../gateways/api/async-responses.md#response-persistence)). After that they are only patched: a `Patch` on a deleted record fails and does not recreate it. The [async orphan pruner](#async-orphan-pruning) reaps such a record once it expires.
 
 The Roles and RoleBindings the reconciler created for the channel are owner-referenced and cascade-delete with it; see [Operator ServiceAccount](../security/rbac.md#operator-serviceaccount) (Per-channel Roles).
 

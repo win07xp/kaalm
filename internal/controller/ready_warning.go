@@ -27,8 +27,8 @@ import (
 // change from conds: there is no Ready condition, it is not False, or it
 // carries another reason. The reconcilers emit a reconcile-time validation
 // failure as a Warning event only then, so a resource that fails the same
-// check on every pass (or every gateRequeue) produces one event, not one per
-// pass.
+// check on every pass (or every notReadyRecheck) produces one event, not one
+// per pass.
 func readyFalseIsNew(conds []metav1.Condition, reason string) bool {
 	prev := apimeta.FindStatusCondition(conds, kaalmv1beta1.ConditionReady)
 	return prev == nil || prev.Status != metav1.ConditionFalse || prev.Reason != reason

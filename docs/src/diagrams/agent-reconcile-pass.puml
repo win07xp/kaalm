@@ -8,7 +8,7 @@
 start
 :Agent reconcile;
 
-partition "1 to 4: wake, guards, budget, degrade gate" {
+partition "1 to 4: wake, guards, budget, degrade check" {
   if (wake=true,\nnot Hibernating?) then (yes)
     :Hibernated: Resuming;\nelse remove, WakeIgnored;
     kill
@@ -34,7 +34,7 @@ partition "1 to 4: wake, guards, budget, degrade gate" {
   endif
 }
 
-partition "5 to 7: hibernation, gates, Certificate" {
+partition "5 to 7: hibernation, Pod creation checks, Certificate" {
   if (Hibernating or\nHibernated?) then (yes)
     :drive or hold,\npass ends;
     kill

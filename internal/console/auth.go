@@ -98,35 +98,35 @@ func (a *KubeAuthorizer) Allowed(ctx context.Context, id Identity, verb, group, 
 	return sar.Status.Allowed, nil
 }
 
-type gateKey struct {
+type accessKey struct {
 	user, namespace, verb string
 }
 
-type gateEntry struct {
+type accessEntry struct {
 	allowed bool
 	expires time.Time
 }
 
-// Gate is the console's authorization gate: viewing a namespace requires
-// list on agents.kaalm.io in it; test-chat requires create on
-// agentchannels.kaalm.io (a channel is the standing form of what test-chat
-// does once). Results are cached per (identity, namespace, verb) for
-// sarCacheTTL.
-type Gate struct {
+// AccessChecker answers the console's two authorization questions with
+// SubjectAccessReviews: viewing a namespace requires list on agents.kaalm.io
+// in it; test-chat requires create on agentchannels.kaalm.io (a channel is
+// the standing form of what test-chat does once). Results are cached per
+// (identity, namespace, verb) for sarCacheTTL.
+type AccessChecker struct {
 	Authz Authorizer
 
 	now   func() time.Time
 	mu    sync.Mutex
-	cache map[gateKey]gateEntry
+	cache map[accessKey]accessEntry
 }
 
-// NewGate builds a Gate over an Authorizer.
-func NewGate(authz Authorizer) *Gate {
-	return &Gate{Authz: authz, now: time.Now, cache: map[gateKey]gateEntry{}}
+// NewAccessChecker builds an AccessChecker over an Authorizer.
+func NewAccessChecker(authz Authorizer) *AccessChecker {
+	return &AccessChecker{Authz: authz, now: time.Now, cache: map[accessKey]accessEntry{}}
 }
 
 // CanView reports whether the identity may view the namespace's panels.
-func (g *Gate) CanView(ctx context.Context, id Identity, namespace string) (bool, error) {
+func (g *AccessChecker) CanView(ctx context.Context, id Identity, namespace string) (bool, error) {
 	return g.allowed(ctx, id, namespace, "list", "agents")
 }
 
@@ -135,17 +135,17 @@ func (g *Gate) CanView(ctx context.Context, id Identity, namespace string) (bool
 // holds that grant passes CanView everywhere, so the namespace list needs no
 // per-namespace review for them. It is cached like the other answers, under
 // the empty namespace.
-func (g *Gate) CanViewAll(ctx context.Context, id Identity) (bool, error) {
+func (g *AccessChecker) CanViewAll(ctx context.Context, id Identity) (bool, error) {
 	return g.allowed(ctx, id, "", "list", "agents")
 }
 
 // CanChat reports whether the identity may test-chat agents in the namespace.
-func (g *Gate) CanChat(ctx context.Context, id Identity, namespace string) (bool, error) {
+func (g *AccessChecker) CanChat(ctx context.Context, id Identity, namespace string) (bool, error) {
 	return g.allowed(ctx, id, namespace, "create", "agentchannels")
 }
 
-func (g *Gate) allowed(ctx context.Context, id Identity, namespace, verb, resource string) (bool, error) {
-	key := gateKey{user: id.Username, namespace: namespace, verb: verb + ":" + resource}
+func (g *AccessChecker) allowed(ctx context.Context, id Identity, namespace, verb, resource string) (bool, error) {
+	key := accessKey{user: id.Username, namespace: namespace, verb: verb + ":" + resource}
 	g.mu.Lock()
 	if e, ok := g.cache[key]; ok && g.now().Before(e.expires) {
 		g.mu.Unlock()
@@ -158,14 +158,14 @@ func (g *Gate) allowed(ctx context.Context, id Identity, namespace, verb, resour
 		return false, err
 	}
 	g.mu.Lock()
-	g.cache[key] = gateEntry{allowed: allowed, expires: g.now().Add(sarCacheTTL)}
+	g.cache[key] = accessEntry{allowed: allowed, expires: g.now().Add(sarCacheTTL)}
 	g.mu.Unlock()
 	return allowed, nil
 }
 
 // Sweep drops every expired answer. Lookups already ignore expired entries;
 // the sweep bounds memory for identities and namespaces never asked again.
-func (g *Gate) Sweep() {
+func (g *AccessChecker) Sweep() {
 	now := g.now()
 	g.mu.Lock()
 	defer g.mu.Unlock()

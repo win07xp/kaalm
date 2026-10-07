@@ -146,7 +146,7 @@ func TestAgent_UnownedNetworkPolicyIsChildConflict(t *testing.T) {
 	expectAgentReadyReason(t, name, kaalmv1beta1.ReasonChildConflict)
 	expectReadyMessageHas(t, getWorkloadAgent(t, name).Status.Conditions, `NetworkPolicy "`+name+`"`)
 	// Several requeues pass while the conflict holds: nothing changes.
-	time.Sleep(4 * gateRequeue)
+	time.Sleep(4 * notReadyRecheck)
 	expectUntouchedPolicy(t, name, want)
 	if pod := agentPod(t, name); pod != nil {
 		t.Fatalf("an Agent with a child conflict must not get a Pod, found %s", pod.Name)
@@ -240,7 +240,7 @@ func TestAgent_UnownedFQDNPolicyIsNeitherUpdatedNorDeleted(t *testing.T) {
 
 	// With no hosts the Agent would delete its own policy; a foreign one stays.
 	setClassHosts(t, "wc-own-fqdn", nil)
-	time.Sleep(4 * gateRequeue)
+	time.Sleep(4 * notReadyRecheck)
 	if _, err := getFQDNPolicy(name); err != nil {
 		t.Errorf("foreign CiliumNetworkPolicy must not be deleted: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestTask_UnownedNetworkPolicyIsChildConflict(t *testing.T) {
 		return nil
 	})
 	expectReadyMessageHas(t, getTask(t, name).Status.Conditions, `NetworkPolicy "`+name+`"`)
-	time.Sleep(4 * gateRequeue)
+	time.Sleep(4 * notReadyRecheck)
 	expectUntouchedPolicy(t, name, want)
 	if pod := taskPod(t, name); pod != nil {
 		t.Fatalf("a task with a child conflict must not get a Pod, found %s", pod.Name)

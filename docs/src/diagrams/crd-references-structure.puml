@@ -1,7 +1,7 @@
 @startuml crd-references-structure
 ' Figure 1 of 4: the structural references between the six Kaalm CRDs, the
 ' ones that say what a workload is (its class) and what a channel fronts (its
-' agent). The gate references and the provider internals are drawn on the
+' agent). The access references and the provider internals are drawn on the
 ' two sibling figures. Source of truth: docs/src/concepts/core-concepts.md
 !include _style.puml
 

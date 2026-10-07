@@ -1,8 +1,8 @@
 # ModelProvider
 
-ModelProvider is a cluster-scoped resource that defines a managed LLM provider. It holds a reference to a Secret with credentials, a model catalog, budgets, request and token rate limits, a fallback list, and the namespace tenancy gate. The gateway enforces the catalog, the budgets, the rate limits, and the fallback walk on every request it routes; the controller validates the spec, probes the upstream, and folds spend into status.
+ModelProvider is a cluster-scoped resource that defines a managed LLM provider. It holds a reference to a Secret with credentials, a model catalog, budgets, request and token rate limits, a fallback list, and the namespace tenancy check. The gateway enforces the catalog, the budgets, the rate limits, and the fallback walk on every request it routes; the controller validates the spec, probes the upstream, and folds spend into status.
 
-Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, and only the namespaces listed in `spec.allowedNamespaces` may do so. `allowedNamespaces` is the tenancy check that applies to every caller, in both adoption tiers ([Provider access gating](../concepts/tenancy-and-tiers.md#provider-access-gating)).
+Because it is cluster-scoped, a ModelProvider is a platform-team resource: application teams reference it from their namespaces, and only the namespaces listed in `spec.allowedNamespaces` may do so. `allowedNamespaces` is the tenancy check that applies to every caller, in both adoption tiers ([Provider access checks](../concepts/tenancy-and-tiers.md#provider-access-checks)).
 
 ## Spec
 
@@ -191,7 +191,7 @@ Each gateway replica enforces its share of a ceiling, so the split is approximat
 
 Patterns use Go's [`path.Match`](https://pkg.go.dev/path#Match) rules: `*` matches any run of non-`/` characters. Namespace names contain no `/`, so `sandbox-*` matches `sandbox-foo` and `sandbox-foo-bar` alike.
 
-A malformed pattern, such as `[`, matches nothing, and the provider shows `Ready=False, reason: InvalidNamespacePattern` naming the entry ([rule 51](validation/references-and-access.md#access-gates-on-providers-and-tools)). The valid entries keep admitting their namespaces.
+A malformed pattern, such as `[`, matches nothing, and the provider shows `Ready=False, reason: InvalidNamespacePattern` naming the entry ([rule 51](validation/references-and-access.md#access-checks-on-providers-and-tools)). The valid entries keep admitting their namespaces.
 
 ### Fallback trees
 

@@ -157,7 +157,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// The system-namespace guard runs first, as on the workload reconcilers.
 	if channel.Namespace == r.OperatorNamespace {
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
-		if err := r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonSystemNamespaceForbidden,
+		if err := r.markChannelNotReady(ctx, &channel, statusBefore, kaalmv1beta1.ReasonSystemNamespaceForbidden,
 			fmt.Sprintf("AgentChannels may not live in the operator namespace %q", r.OperatorNamespace)); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -179,7 +179,7 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, agentErr
 		}
 		channel.Status.Phase = kaalmv1beta1.ChannelFailed
-		if err := r.gateChannel(ctx, &channel, statusBefore, kaalmv1beta1.ReasonAgentNotFound,
+		if err := r.markChannelNotReady(ctx, &channel, statusBefore, kaalmv1beta1.ReasonAgentNotFound,
 			fmt.Sprintf("Agent %q not found in namespace %q", channel.Spec.AgentRef.Name, channel.Namespace)); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -209,9 +209,9 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// an expired record of a failing channel goes within one interval.
 		requeue := time.Minute
 		if reason == kaalmv1beta1.ReasonChildConflict || reason == kaalmv1beta1.ReasonChildWriteRejected {
-			requeue = gateRequeue
+			requeue = notReadyRecheck
 		}
-		if err := r.gateChannel(ctx, &channel, statusBefore, reason, msg); err != nil {
+		if err := r.markChannelNotReady(ctx, &channel, statusBefore, reason, msg); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: requeue}, nil
@@ -226,9 +226,9 @@ func (r *AgentChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Step 5: phase reduction from the Agent's phase.
 	r.reducePhase(&channel, &agent)
 
-	// Step 6: write the status, then prune expired async response
-	// ConfigMaps for this channel. The status goes first, as in gateChannel,
-	// so a prune error never hides this pass's status.
+	// Step 6: write the status, then prune expired async response ConfigMaps
+	// for this channel. The status goes first, as in markChannelNotReady, so a
+	// prune error never hides this pass's status.
 	if err := r.updateStatusIfChanged(ctx, &channel, statusBefore); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -941,7 +941,7 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 	}
 
 	// Step 1: announce. Gateway replicas observe this through their watch
-	// and stop creating async records (the write gate).
+	// and stop creating async records (the Terminating check).
 	if channel.Status.Phase != kaalmv1beta1.ChannelTerminating {
 		channel.Status.Phase = kaalmv1beta1.ChannelTerminating
 		if err := r.Status().Update(ctx, channel); err != nil {
@@ -956,7 +956,7 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
-	// Step 5: the one-shot sweep. The write gate plus the confirmed (or
+	// Step 5: the one-shot sweep. The Terminating check plus the confirmed (or
 	// timed-out) disconnect is what makes a single sweep final.
 	if err := r.pruneAsyncConfigMaps(ctx, channel, true); err != nil {
 		return ctrl.Result{}, err
@@ -968,16 +968,16 @@ func (r *AgentChannelReconciler) reconcileDelete(ctx context.Context, channel *k
 	return ctrl.Result{}, r.Update(ctx, channel)
 }
 
-// gateChannel sets Ready=False for a validation failure, writes the status if
-// the pass changed it, emits a Warning event with the same reason when the
-// reason first appears (not on each pass that finds the problem again), then
-// prunes the channel's expired async records. The event follows a successful
-// write, so a pass that lost its write to a conflict does not report the
-// reason twice. A channel that went invalid can still hold records it wrote
-// while Ready, and the gateway writes none while it is not Ready, so this
-// prune is what removes them. The status is written before the prune, so a
-// prune error never hides the gate's status.
-func (r *AgentChannelReconciler) gateChannel(
+// markChannelNotReady sets Ready=False for a validation failure, writes the
+// status if the pass changed it, emits a Warning event with the same reason
+// when the reason first appears (not on each pass that finds the problem
+// again), then prunes the channel's expired async records. The event follows a
+// successful write, so a pass that lost its write to a conflict does not
+// report the reason twice. A channel that went invalid can still hold records
+// it wrote while Ready, and the gateway writes none while it is not Ready, so
+// this prune is what removes them. The status is written before the prune, so
+// a prune error never hides the Ready=False status.
+func (r *AgentChannelReconciler) markChannelNotReady(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, before *kaalmv1beta1.AgentChannelStatus,
 	reason, msg string,
 ) error {

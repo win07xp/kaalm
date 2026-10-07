@@ -8,18 +8,18 @@
 
 ## How completion is recorded
 
-The gateway writes the pre-existing `{taskName}-completion` ConfigMap in the task's namespace, which acts as a mailbox. The ConfigMap is the data channel; admission to write it is a separate check, described under [The identity gate](#the-identity-gate).
+The gateway writes the pre-existing `{taskName}-completion` ConfigMap in the task's namespace, which acts as a mailbox. The ConfigMap is the data channel; admission to write it is a separate check, described under [Checks before the write](#checks-before-the-write).
 
 - The AgentTaskReconciler creates the ConfigMap at task provisioning with `data: {}` and an ownerRef to the AgentTask, so it is deleted with the task. A per-task Role and RoleBinding let the gateway `update` and `patch` that one ConfigMap and nothing else. The names, and why the Role carries no `create` verb, are under [The completion mailbox](../../runtime/child-resources.md#the-completion-mailbox); see also [Gateway ServiceAccount permissions](../../security/rbac.md#gateway-serviceaccount-permissions).
 - The reconciler watches the ConfigMap and remains the final authority on AgentTask state; see [AgentTask lifecycle](../../controller/task-lifecycle.md).
 
-![Sequence diagram of the record path: the Task Pod POSTs to the gateway over mTLS, the gateway runs its gates and validation, patches the completion ConfigMap through the scoped Role, and returns 200; the reconciler's ConfigMap watch fires, it re-checks the artifacts, and it sets status.phase to Completing.](../../diagrams/task-completion-record.svg)
+![Sequence diagram of the record path: the Task Pod POSTs to the gateway over mTLS, the gateway runs its checks and validation, patches the completion ConfigMap through the scoped Role, and returns 200; the reconciler's ConfigMap watch fires, it re-checks the artifacts, and it sets status.phase to Completing.](../../diagrams/task-completion-record.svg)
 
-## The identity gate
+## Checks before the write
 
-Every call passes the gates below in order, and every rejection fires before the ConfigMap `Patch` is attempted, so only a `503` means the write itself failed. Gates 1 to 3 are the mTLS profile shared by the agent-report paths, specified under [Per-path client auth enforcement](../listener-tls.md#per-path-client-auth-enforcement) and [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes). Gates 4 to 7 read `spec.completion`, `status.phase`, and `status.currentPodUID` from the gateway's cluster-wide AgentTask watch, so a status change reaches them after an informer lag (see [Race windows](#race-windows)).
+Every call passes the checks below in order, and every rejection fires before the ConfigMap `Patch` is attempted, so only a `503` means the write itself failed. Checks 1 to 3 are the mTLS profile shared by the agent-report paths, specified under [Per-path client auth enforcement](../listener-tls.md#per-path-client-auth-enforcement) and [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes). Checks 4 to 7 read `spec.completion`, `status.phase`, and `status.currentPodUID` from the gateway's cluster-wide AgentTask watch, so a status change reaches them after an informer lag (see [Race windows](#race-windows)).
 
-![Flowchart of the gates on POST /v1/task/complete in order: client certificate, SAN kind, source IP resolves to a Pod, an AgentTask backs the caller, the condition is agentReported, the phase is not terminal, the Pod UID matches status.currentPodUID, the body and artifact names are valid, the size caps hold, and the Patch succeeds. Each failed check ends in its status code and reason; the Pod UID and Patch checks are marked retryable.](../../diagrams/task-completion-gates.svg)
+![Flowchart of the checks on POST /v1/task/complete in order: client certificate, SAN kind, source IP resolves to a Pod, an AgentTask backs the caller, the condition is agentReported, the phase is not terminal, the Pod UID matches status.currentPodUID, the body and artifact names are valid, the size caps hold, and the Patch succeeds. Each failed check ends in its status code and reason; the Pod UID and Patch checks are marked retryable.](../../diagrams/task-completion-checks.svg)
 
 | Order | Check | Rejection | `retryable` |
 |---|---|---|---|
@@ -34,9 +34,9 @@ Every call passes the gates below in order, and every rejection fires before the
 | 9 | Every artifact value is within 4 KiB and the combined payload within 32 KiB | `413 request_too_large` | `false` |
 | 10 | The ConfigMap `Patch` succeeds | `503 internal_unavailable`, `Retry-After: 1` | `true` |
 
-The live `List Pods` in gate 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches gate 7 and at worst receives the retryable `409 stale_pod`. The fallback applies to this path alone: other paths recover without it (see [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes)), and a fallback on every path would turn an informer resync into a burst of live `List` calls against the apiserver.
+The live `List Pods` in check 3 exists for the new-Pod startup window, where the gateway's Pod informer has not observed the calling Pod. Without it that window would end in a terminal `401`; with it, the call reaches check 7 and at worst receives the retryable `409 stale_pod`. The fallback applies to this path alone: other paths recover without it (see [Source-IP cross-check](../llm/workload-identity.md#source-ip-cross-check-both-modes)), and a fallback on every path would turn an informer resync into a burst of live `List` calls against the apiserver.
 
-Gate 7 is the identity gate proper. It closes the stale-write race after a `backoffLimit` retry, where an old Pod's delayed completion would otherwise overwrite the new Pod's data, and it is the same rejection a new Pod can receive before the gateway sees its UID, as described under [Race windows](#race-windows), which is why it is retryable. Gate 6 exists because the reconciler does not re-process the mailbox once the phase is terminal; without the gate the agent's write would be silently dropped.
+Check 7 is the Pod UID check: the calling Pod's UID must equal `status.currentPodUID`, and otherwise the call gets `409 stale_pod`. It closes the stale-write race after a `backoffLimit` retry, where an old Pod's delayed completion would otherwise overwrite the new Pod's data. A new Pod can receive the same rejection before the gateway sees its UID, as described under [Race windows](#race-windows), which is why it is retryable. Check 6 exists because the reconciler does not re-process the mailbox once the phase is terminal; without it the agent's write would be silently dropped.
 
 ## Request body
 
@@ -105,7 +105,7 @@ Every `error.message` starts with its reason code followed by `: `, so a caller 
 
 ### 409 Conflict
 
-Returned when the calling Pod's UID does not match `status.currentPodUID`, or the field is empty: gate 7 under [The identity gate](#the-identity-gate). `error.type` is `stale_pod`, `retryable` is `true`, and `error.message` starts with `StalePodCompletion: `. The call conflicts with the task's current state rather than being refused for good: once the gateway sees the new UID, the same Pod's retry can succeed, which is why the code is `409` and not `403`. See [Race windows](#race-windows).
+Returned when the calling Pod's UID does not match `status.currentPodUID`, or the field is empty: the Pod UID check, check 7 under [Checks before the write](#checks-before-the-write). `error.type` is `stale_pod`, `retryable` is `true`, and `error.message` starts with `StalePodCompletion: `. The call conflicts with the task's current state rather than being refused for good: once the gateway sees the new UID, the same Pod's retry can succeed, which is why the code is `409` and not `403`. See [Race windows](#race-windows).
 
 ### 413 Payload Too Large
 
@@ -113,11 +113,11 @@ Returned when any single artifact value exceeds 4 KiB or when the sum of `messag
 
 ### 503 Service Unavailable
 
-Returned when the `Patch` against the completion ConfigMap fails after every gate has passed: apiserver transiently unavailable, etcd unreachable, a `Patch` conflict, or RBAC drift on the per-task Role. `error.type: internal_unavailable`, `retryable: true`, with `Retry-After: 1` (integer delta-seconds, RFC 7231 § 7.1.3) as a cadence floor. Agents must wait at least 1 second before retrying; see [Retry guidance](#retry-guidance).
+Returned when the `Patch` against the completion ConfigMap fails after every check has passed: apiserver transiently unavailable, etcd unreachable, a `Patch` conflict, or RBAC drift on the per-task Role. `error.type: internal_unavailable`, `retryable: true`, with `Retry-After: 1` (integer delta-seconds, RFC 7231 § 7.1.3) as a cadence floor. Agents must wait at least 1 second before retrying; see [Retry guidance](#retry-guidance).
 
 ## Race windows
 
-Re-completion across a `backoffLimit` retry is the supported multi-call path. The reconciler clears `status.currentPodUID`, resets the mailbox to `data: {}`, and sets `status.currentPodUID` to the replacement Pod's UID once that Pod exists; the order and the figure are under [Retry mechanics](../../controller/task-lifecycle.md#retry-mechanics). Any in-flight call from the old Pod fails gate 7, and the new Pod's call lands on a fresh mailbox under the new UID.
+Re-completion across a `backoffLimit` retry is the supported multi-call path. The reconciler clears `status.currentPodUID`, resets the mailbox to `data: {}`, and sets `status.currentPodUID` to the replacement Pod's UID once that Pod exists; the order and the figure are under [Retry mechanics](../../controller/task-lifecycle.md#retry-mechanics). Any in-flight call from the old Pod fails the Pod UID check, and the new Pod's call lands on a fresh mailbox under the new UID.
 
 The gateway sees the new UID after an informer lag, typically under 100ms, while agent startup takes seconds. A first call from the new Pod inside that lag receives `409 stale_pod`. This is the transient, retryable form of that code.
 

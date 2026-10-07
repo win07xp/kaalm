@@ -393,7 +393,7 @@ func (blockedCacheRunnable) Start(ctx context.Context) error { <-ctx.Done(); ret
 func (blockedCacheRunnable) GetCache() cache.Cache           { return neverSyncedCache{} }
 
 // The activator serves, and its readiness check passes, while the manager's
-// caches have not synced. Controller readiness gates the conversion webhook,
+// caches have not synced. Controller readiness covers the conversion webhook,
 // which the caches may need in order to sync, so a check that waited on the
 // caches would deadlock an upgrade from before the v1beta1 graduation.
 func TestActivator_ServesBeforeCachesSync(t *testing.T) {

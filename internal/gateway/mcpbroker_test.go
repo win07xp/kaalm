@@ -168,7 +168,7 @@ func TestMCPBroker_BearerTierHappyPath(t *testing.T) {
 	}
 
 	// team-b matches team-*; gateway-only callers reduce to the namespace
-	// gate and may call any cataloged tool, including uncataloged narrowings
+	// check and may call any cataloged tool, including uncataloged narrowings
 	// no workload grant exists for.
 	resp := postJSON(t, h.client(nil), h.url("/v1/mcp/search"), mcpCall("fetch_page"),
 		map[string]string{"Authorization": "Bearer projected-token"})
@@ -1428,7 +1428,7 @@ func TestMCPBroker_MetricsNamespaceDenied(t *testing.T) {
 
 	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
 	expectMCPError(t, resp, http.StatusForbidden, errAccessDenied)
-	// The namespace gate fires before the body is parsed: no method, no tool.
+	// The namespace check refuses before the body is parsed: no method, no tool.
 	if got := mcpCalls(h, "", errAccessDenied); got != 1 {
 		t.Errorf("access_denied counter = %v, want 1", got)
 	}

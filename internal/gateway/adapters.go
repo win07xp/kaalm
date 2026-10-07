@@ -74,7 +74,8 @@ func adapterForPath(urlPath string) (providerAdapter, bool) {
 		return openaiAdapter{}, true
 	}
 	// No Vertex-format path is routed: google-vertex is a reserved type in
-	// this release (request-handling.md, The google-vertex type is reserved).
+	// this release
+	// (docs/src/gateways/llm/request-handling.md#the-google-vertex-type-is-reserved).
 	// The mux never routes anything else here either; this guard is
 	// for handler-level callers.
 	return nil, false

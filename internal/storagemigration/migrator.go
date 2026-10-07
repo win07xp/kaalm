@@ -17,8 +17,8 @@ limitations under the License.
 // Package storagemigration holds the controller's storage-version migrator:
 // the pass at controller start, repeated while the controller leads, that rewrites every Kaalm custom
 // resource at the v1beta1 storage version and trims each CRD's
-// status.storedVersions to ["v1beta1"], as the API Versioning and
-// Deprecation chapter of the design book specifies.
+// status.storedVersions to ["v1beta1"], as
+// docs/src/operations/api-versioning.md#storage-version-migration specifies.
 package storagemigration
 
 import (

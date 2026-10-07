@@ -86,10 +86,12 @@ func (a *Authenticator) crossCheck(r *http.Request, namespace string) bool {
 // crossCheckLive is crossCheck with the task-complete fallback: an informer
 // miss falls back to a live List narrowed to the SAN-derived namespace, so a
 // Pod completing inside the new-Pod informer-lag window is not rejected with
-// a terminal 401 (workload-identity.md, Informer-lag fallback). The
-// spec scopes the fallback to /v1/task/complete alone: heartbeats are
-// periodic and recover on the next tick, and giving them the fallback would
-// turn an informer resync into a fleet-wide live-List stampede.
+// a terminal 401
+// (docs/src/gateways/llm/workload-identity.md#source-ip-cross-check-both-modes,
+// the informer-lag fallback). The spec scopes the fallback to
+// /v1/task/complete alone: heartbeats are periodic and recover on the next
+// tick, and giving them the fallback would turn an informer resync into a
+// fleet-wide live-List stampede.
 func (a *Authenticator) crossCheckLive(r *http.Request, namespace string) bool {
 	if a.DisableSourceIPCheck {
 		return true
@@ -186,7 +188,8 @@ func (a *Authenticator) AgentReportPaths(requiredKind WorkloadKind, next http.Ha
 		if id.Kind != requiredKind {
 			msg := string(id.Kind) + " callers are not accepted on this path"
 			if requiredKind == KindAgentTask {
-				// task-complete.md: every 403 on this path leads with its reason.
+				// Every 403 on this path leads with its reason
+				// (docs/src/gateways/api/task-complete.md#403-forbidden).
 				msg = "NotAgentTaskPod: " + msg
 			}
 			forbidden(w, errAccessDenied, msg)

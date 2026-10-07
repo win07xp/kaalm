@@ -92,7 +92,7 @@ Three reconcile-time outcomes carry no number. A per-channel Role or RoleBinding
 
 Each rule states what must hold, where it is enforced, and why. The rule pages group them by what they protect, and the [rules index](#where-each-rule-is-enforced) links each rule number to its page.
 
-- [Reference and access rules](validation/references-and-access.md): references that must resolve, and the access gates on providers and tools.
+- [Reference and access rules](validation/references-and-access.md): references that must resolve, and the access checks on providers and tools.
 - [Class policy rules](validation/class-policy.md): what the class allows, the caps it sets, and its egress entries.
 - [Name, namespace, and task rules](validation/names-and-tasks.md): workload names, the system namespace, and task artifacts.
 - [Channel rules](validation/channels.md): the target Agent, the channel path, callbacks, and channel credentials.

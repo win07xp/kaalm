@@ -217,7 +217,7 @@ The two are independent axes. `phase` follows the Agent; `PlatformConnected` fol
 
 ### Scope and ownership
 
-- **Three types, shared rules.** What a type adds is knowledge of the platform's signature scheme, payload, and reply API; the path rules, the routing gate, the envelope, the session rule, and the health condition are the same.
+- **Three types, shared rules.** What a type adds is knowledge of the platform's signature scheme, payload, and reply API; the path rules, the rule that only `Ready=True` channels receive traffic, the envelope, the session rule, and the health condition are the same.
 - **AgentChannel has no child Pods.** The gateway watches AgentChannels and resolves each inbound request against them; the reconciler validates, scopes the credential Roles, and reports status.
 - **One AgentChannel per (Agent, channel) pair.** An Agent may have several channels; each is a separate resource.
 - **The target is an Agent with a Service.** Tasks have no stable endpoint, and the gateway delivers through the ClusterIP Service (rules 13 and 14).
@@ -229,7 +229,7 @@ The two are independent axes. `phase` follows the Agent; `PlatformConnected` fol
 
 ### Path scoping and routing
 
-The path must begin with `/channels/{namespace}/` for the channel's own namespace and be unique within it (rule 15). CEL cannot express the prefix rule because `metadata.namespace` is not reachable from CRD validation, so the reconciler enforces it, and the gateway checks the prefix again on every request it resolves. Together with the `Ready=True` gate, a violating channel never receives traffic, and cross-tenant path conflicts are impossible at the routing layer ([Request flow](../gateways/user/overview.md#request-flow)).
+The path must begin with `/channels/{namespace}/` for the channel's own namespace and be unique within it (rule 15). CEL cannot express the prefix rule because `metadata.namespace` is not reachable from CRD validation, so the reconciler enforces it, and the gateway checks the prefix again on every request it resolves. Together with the rule that only `Ready=True` channels receive traffic, a violating channel never receives traffic, and cross-tenant path conflicts are impossible at the routing layer ([Request flow](../gateways/user/overview.md#request-flow)).
 
 ### Sessions
 

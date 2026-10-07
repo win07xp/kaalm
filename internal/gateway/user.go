@@ -138,7 +138,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		unauthorizedUser(w)
 		return
 	}
-	// Write gate: a Terminating channel accepts no new work, which is what
+	// Terminating check: a Terminating channel accepts no new work, which is what
 	// makes the delete-time finalizer sweep race-free.
 	if channel.Status.Phase == kaalmv1beta1.ChannelTerminating {
 		unauthorizedUser(w)

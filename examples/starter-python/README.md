@@ -70,7 +70,7 @@ and pass `--build-arg BASE=kaalm-agent-python:dev`.
 
 A baked handler needs no `spec.handler` and no `allowHandlerMounts`
 grant: those govern ConfigMap-mounted code. A `FROM` image goes through
-ordinary image review and the `allowedImages` gate, like any custom image.
+ordinary image review and the class's `allowedImages` check, like any custom image.
 
 ## As an AgentTask
 

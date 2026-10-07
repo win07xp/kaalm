@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check.py: the docs gate for the three mdBooks (docs/, guide/, learn/).
+"""check.py: the docs check for the three mdBooks (docs/, guide/, learn/).
 
 Checks, per book:
 
@@ -39,19 +39,25 @@ Checks, per book:
 
 Across the repository, outside the books:
 
-- every book page that a Go file under api/, cmd/, internal/, or test/ cites by
-  path (`docs/src/...md`, also `guide/src` and `learn/src`) exists, and its
+- every book page that a tracked file outside the books cites by path
+  (`docs/src/<page>.md`, also `guide/src` and `learn/src`) exists, and its
   `#anchor` names a heading on that page, under the same slug rules as
   in-book links. API type comments are the CRD field descriptions that
   `kubectl explain` shows, so a comment is held to the book's link rules. Name
   a section with its `#anchor`, because a section named in prose after the
-  path is not checked. Renaming a heading means updating these comments as
+  path is not checked. Renaming a heading means updating these citations as
   well as the in-book links;
 - no code comment, build file, script, or workflow cites an issue or PR
   number (a `#` followed by digits): it states the reason instead, and git history keeps the
   link. Tracked files under docs/, guide/, and learn/ are exempt, and so are
   HTML, CSS, JSON, SVG, and Markdown files, where `#` starts colors and
-  anchors (see ISSUE_REF_SUFFIXES and ISSUE_REF_NAMES).
+  anchors (see ISSUE_REF_SUFFIXES and ISSUE_REF_NAMES);
+- no tracked file, in the books or outside them, uses the metaphor in
+  BANNED_FORMS in prose, a comment, an identifier, a test name, an object
+  name, or a figure source: it says what is checked and what happens when the
+  check fails. Identifiers are split into their parts, so a word that only
+  contains the letters ("Gateway") passes, and Kubernetes's own "feature"
+  term stays. Generated CRDs and rendered SVGs are skipped.
 
 Also runs diagram_check.py over docs/src/diagrams.
 
@@ -85,12 +91,9 @@ INLINE_CODE = re.compile(r"`[^`]*`")
 LINK_TARGET = re.compile(r"\]\([^)]*\)")
 HTML_TAG = re.compile(r"<[^>]+>")
 CITED_PATH = re.compile(r"\b((?:config/samples|test/e2e/testdata)/[\w./-]+\.ya?ml)\b")
-# Go trees whose comments cite book pages; API type comments become the CRD
-# descriptions that `kubectl explain` shows.
-GO_DOC_DIRS = ("api", "cmd", "internal", "test")
-# A book page cited from Go: group 1 is the repo-relative page, group 2 the
-# optional anchor.
-GO_DOC_REF = re.compile(r"\b((?:docs|guide|learn)/src/[\w./-]+?\.md)\b(?:#([\w-]+))?")
+# A book page cited from a file outside the books: group 1 is the
+# repo-relative page, group 2 the optional anchor.
+BOOK_REF = re.compile(r"\b((?:docs|guide|learn)/src/[\w./-]+?\.md)\b(?:#([\w-]+))?")
 DASHES = re.compile("[–—]")
 # An issue or PR number: a '#' followed by digits, not an HTML entity
 # ('&#' and digits), a URL fragment ('/#' and digits), or part of a word or
@@ -100,6 +103,19 @@ ISSUE_REF = re.compile(r"(?<![\w&#/])#\d+\b")
 # scripts, build files, and workflows.
 ISSUE_REF_SUFFIXES = (".go", ".py", ".sh", ".yml", ".yaml", ".mk", ".tpl", ".toml")
 ISSUE_REF_NAMES = ("Makefile", "go.mod", "go.work")
+# The banned metaphor, in any tracked text: prose, comments, identifiers, test
+# names, object names, and figure sources. Each candidate token is split into
+# its parts (camelCase, snake_case, kebab-case), so the word matches inside an
+# identifier or object name, while "Gateway" and "aggregate" do not. The
+# Kubernetes term (the word after "feature") stays. Spelled in pieces so this
+# file does not match itself.
+BANNED_WORD = "ga" + "te"
+BANNED_FORMS = {BANNED_WORD + s for s in ("", "s", "d")} | {"gat" + "ing"}
+BANNED_TOKEN = re.compile(r"(?<!feature )\b[A-Za-z0-9_-]*gat(?:e|es|ed|ing)[A-Za-z0-9_-]*", re.IGNORECASE)
+TOKEN_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+# Generated or rendered files: their sources are scanned instead.
+BANNED_WORD_SKIP = ("config/crd/bases/", "charts/kaalm/crds/")
+BANNED_WORD_SKIP_SUFFIXES = (".svg", ".sum")
 # Ginkgo node labels, checked against the scenario coverage map and against
 # spec labels quoted on other pages.
 SPEC_DIRS = ("test/e2e", "test/upgrade")
@@ -438,36 +454,73 @@ class Checker:
                     if name not in listed:
                         self.problems.append(f"{rel}:{n}: embeds {name}, which is not listed in guide/src/diagrams/SOURCES")
 
-    def check_go_doc_refs(self) -> None:
-        """Every book page a Go file cites by path exists, and its #anchor names
-        a heading there. A renamed heading otherwise breaks these citations
-        silently, since no book link points at them."""
-        for d in GO_DOC_DIRS:
-            for f in sorted((ROOT / d).rglob("*.go")):
-                rel = f.relative_to(ROOT).as_posix()
-                text = f.read_text(encoding="utf-8")
-                for m in GO_DOC_REF.finditer(text):
-                    n = text.count("\n", 0, m.start()) + 1
-                    dest = ROOT / m.group(1)
-                    if not dest.is_file():
-                        self.problems.append(f"{rel}:{n}: link target does not exist: {m.group(0)}")
-                    elif m.group(2) and m.group(2) not in self.anchors(dest):
-                        self.problems.append(f"{rel}:{n}: no heading for anchor: {m.group(0)}")
-
-    def check_issue_refs(self) -> None:
-        """No code comment, build file, script, or workflow cites an issue or
-        PR number: CLAUDE.md asks for the reason instead, and this keeps a
-        citation from coming back."""
+    def tracked_outside_books(self) -> list[str]:
+        """Every tracked file outside the three books, repo-relative. When git
+        cannot list them, records a problem and returns none."""
         try:
             out = subprocess.run(
                 ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
             ).stdout.decode("utf-8")
         except (OSError, subprocess.CalledProcessError) as e:
-            self.problems.append(f"issue-number check: git ls-files failed: {e}")
+            self.problems.append(f"git ls-files failed: {e}")
+            return []
+        return [rel for rel in sorted(filter(None, out.split("\0"))) if rel.split("/", 1)[0] not in BOOKS]
+
+    def check_banned_word(self) -> None:
+        """No tracked text file uses the banned metaphor (BANNED_FORMS) in
+        prose, a comment, an identifier, or a name: say what is checked and
+        what happens when the check fails. Generated CRDs and rendered SVGs
+        are skipped; their sources are read."""
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
+            ).stdout.decode("utf-8")
+        except (OSError, subprocess.CalledProcessError) as e:
+            self.problems.append(f"git ls-files failed: {e}")
             return
         for rel in sorted(filter(None, out.split("\0"))):
-            if rel.split("/", 1)[0] in BOOKS:
+            if rel.startswith(BANNED_WORD_SKIP) or rel.endswith(BANNED_WORD_SKIP_SUFFIXES):
                 continue
+            f = ROOT / rel
+            if not f.is_file():
+                continue
+            try:
+                text = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
+                for m in BANNED_TOKEN.finditer(line):
+                    parts = {p.lower() for p in TOKEN_PART.findall(m.group(0))}
+                    if parts & BANNED_FORMS:
+                        self.problems.append(
+                            f"{rel}:{n}: uses '{m.group(0)}'; name what is checked instead"
+                        )
+
+    def check_book_refs(self) -> None:
+        """Every book page a file outside the books cites by path exists, and
+        its #anchor names a heading there. A renamed heading otherwise breaks
+        these citations silently, since no book link points at them."""
+        for rel in self.tracked_outside_books():
+            f = ROOT / rel
+            if not f.is_file():
+                continue
+            try:
+                text = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for m in BOOK_REF.finditer(text):
+                n = text.count("\n", 0, m.start()) + 1
+                dest = ROOT / m.group(1)
+                if not dest.is_file():
+                    self.problems.append(f"{rel}:{n}: link target does not exist: {m.group(0)}")
+                elif m.group(2) and m.group(2) not in self.anchors(dest):
+                    self.problems.append(f"{rel}:{n}: no heading for anchor: {m.group(0)}")
+
+    def check_issue_refs(self) -> None:
+        """No code comment, build file, script, or workflow cites an issue or
+        PR number: CLAUDE.md asks for the reason instead, and this keeps a
+        citation from coming back."""
+        for rel in self.tracked_outside_books():
             path = pathlib.PurePosixPath(rel)
             if not (
                 path.suffix in ISSUE_REF_SUFFIXES
@@ -563,8 +616,9 @@ def main(argv: list[str]) -> int:
     for book in BOOKS:
         checker.check_book(book)
     checker.check_guide_figures()
-    checker.check_go_doc_refs()
+    checker.check_book_refs()
     checker.check_issue_refs()
+    checker.check_banned_word()
     checker.check_coverage_map()
     checker.check_diagrams()
     for p in checker.problems:

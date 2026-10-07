@@ -55,9 +55,9 @@ func TestAgent_InvalidReferenceEmitsWarning(t *testing.T) {
 		corev1.EventTypeWarning, `AgentClass "ev-no-such-class" does not exist`)
 }
 
-// A gate that requeues every gateRequeue emits its Warning when the reason
-// first appears, not on each requeue.
-func TestAgent_GateWarningOncePerReason(t *testing.T) {
+// A Ready=False check that requeues every notReadyRecheck emits its Warning
+// when the reason first appears, not on each requeue.
+func TestAgent_NotReadyWarningOncePerReason(t *testing.T) {
 	mkWorkloadClass(t, "wc-ev-pull", func(ac *kaalmv1beta1.AgentClass) {
 		ac.Spec.Image.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "wc-ev-pull-creds"}}
 	})
@@ -65,7 +65,7 @@ func TestAgent_GateWarningOncePerReason(t *testing.T) {
 	expectEvent(t, "Agent", "default", "ev-pull-agent", kaalmv1beta1.ReasonImagePullSecretMissing,
 		corev1.EventTypeWarning, `imagePullSecret "wc-ev-pull-creds" missing`)
 
-	// gateRequeue is 500ms in tests: several passes run in this window.
+	// notReadyRecheck is 500ms in tests: several passes run in this window.
 	time.Sleep(2 * time.Second)
 	evs := objectEvents(t, "Agent", "default", "ev-pull-agent", kaalmv1beta1.ReasonImagePullSecretMissing)
 	if n := eventCount(evs); n != 1 {

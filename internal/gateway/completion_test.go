@@ -108,7 +108,7 @@ func TestTaskComplete_HappyPath(t *testing.T) {
 // TestTaskComplete_InformerLagLiveFallback covers the new-Pod window:
 // the calling Pod is not in the informer cache yet, but the live
 // namespace-narrowed lookup finds it, so the middleware cross-check and the
-// UID gate both pass and the completion lands.
+// Pod UID check both pass and the completion lands.
 func TestTaskComplete_InformerLagLiveFallback(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	completions := newFakeCompletions()
@@ -147,7 +147,7 @@ func TestTaskComplete_InformerLagLiveFallback(t *testing.T) {
 	}
 }
 
-func TestTaskComplete_Gates(t *testing.T) {
+func TestTaskComplete_Rejections(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	completions := newFakeCompletions()
 	h.server.Completions = completions
@@ -327,8 +327,9 @@ func TestTaskComplete_NoTaskBacksCaller(t *testing.T) {
 
 // TestTaskComplete_ForbiddenReasonPrefix pins the wire form of every 403 on
 // /v1/task/complete: error.message starts with the reason code, so callers
-// tell the three reasons apart by prefix (task-complete.md, 403 Forbidden).
-// The stale-Pod case is a 409 and is pinned in TestTaskComplete_Gates.
+// tell the three reasons apart by prefix
+// (docs/src/gateways/api/task-complete.md#403-forbidden).
+// The stale-Pod case is a 409 and is pinned in TestTaskComplete_Rejections.
 func TestTaskComplete_ForbiddenReasonPrefix(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})
 	h.server.Completions = newFakeCompletions()

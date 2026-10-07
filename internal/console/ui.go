@@ -152,10 +152,10 @@ type namespacePage struct {
 	ChannelsTotal int
 }
 
-// gateView authorizes one namespace view for a page, writing the denial.
-func (s *Server) gateView(w http.ResponseWriter, r *http.Request, ns string) bool {
+// authorizeView authorizes one namespace view for a page, writing the denial.
+func (s *Server) authorizeView(w http.ResponseWriter, r *http.Request, ns string) bool {
 	id := identityFrom(r.Context())
-	allowed, err := s.Gate.CanView(r.Context(), id, ns)
+	allowed, err := s.Access.CanView(r.Context(), id, ns)
 	if err != nil {
 		http.Error(w, "authorization check failed", http.StatusServiceUnavailable)
 		return false
@@ -169,7 +169,7 @@ func (s *Server) gateView(w http.ResponseWriter, r *http.Request, ns string) boo
 
 func (s *Server) uiNamespace(w http.ResponseWriter, r *http.Request) {
 	ns := r.PathValue("ns")
-	if !s.gateView(w, r, ns) {
+	if !s.authorizeView(w, r, ns) {
 		return
 	}
 	limit, err := listLimit(r)
@@ -203,7 +203,7 @@ func (s *Server) uiAgent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, reply, chatError string) {
 	ns, name := r.PathValue("ns"), r.PathValue("name")
-	if !s.gateView(w, r, ns) {
+	if !s.authorizeView(w, r, ns) {
 		return
 	}
 	detail, found, err := s.Data.Agent(r.Context(), ns, name)
@@ -228,7 +228,7 @@ func (s *Server) uiChat(w http.ResponseWriter, r *http.Request) {
 	id := identityFrom(r.Context())
 	ns, name := r.PathValue("ns"), r.PathValue("name")
 
-	allowed, err := s.Gate.CanChat(r.Context(), id, ns)
+	allowed, err := s.Access.CanChat(r.Context(), id, ns)
 	if err != nil {
 		http.Error(w, "authorization check failed", http.StatusServiceUnavailable)
 		return

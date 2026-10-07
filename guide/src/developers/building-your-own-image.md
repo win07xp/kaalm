@@ -116,4 +116,4 @@ can unit test without any of the above.
 version of this checklist, including the dedup rationale), Runtime,
 Reference base images (the bottom rungs of the ladder), Runtime, Starter
 templates (what each template implements), and Gateways, API, Task completion
-(the identity gate you are retrying against).*
+(the Pod UID check you are retrying against).*

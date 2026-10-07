@@ -1,7 +1,7 @@
-@startuml crd-references-model-gates
+@startuml crd-references-model-access
 ' Figure 2 of 4: the two references that together admit a workload to a
 ' ModelProvider. The class allows the provider and the workload names it;
-' both edges are gates, not one list. Source of truth:
+' both edges grant access, not one list. Source of truth:
 ' docs/src/concepts/core-concepts.md
 !include _style.puml
 

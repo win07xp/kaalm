@@ -122,7 +122,7 @@ A larger `wakeTimeout` raises the bound by the same amount.
 
 Each async request is backed by a ConfigMap named `kaalm-async-{requestId}` in `kaalm-system`. The receiving replica creates it as an empty placeholder at 202-acceptance time, so the polling endpoint can answer `202` for in-flight requests. The same replica later `Patch`es the payload into it, but only when the payload will not be delivered by callback: no `callbackUrl` is configured, or the callback outcome was `rejected`, `exhausted`, or `invalid`.
 
-A replica creates the placeholder only while the originating AgentChannel is live. Once a replica observes the channel move to `status.phase: Terminating` in its watch, it stops creating `kaalm-async-*` records for that channel and rejects the inbound webhook. This write gate lets the channel-delete finalizer sweep run once without racing an in-flight write.
+A replica creates the placeholder only while the originating AgentChannel is live. Once a replica observes the channel move to `status.phase: Terminating` in its watch, it stops creating `kaalm-async-*` records for that channel and rejects the inbound webhook. Refusing the write lets the channel-delete finalizer sweep run once without racing an in-flight write.
 
 **Labels and expiry.** Each ConfigMap is labeled with `kaalm.io/channel-namespace` and `kaalm.io/channel-name` to identify the originating AgentChannel, and carries its expiry in the `kaalm.io/expires-at` annotation. The expiry is set at placeholder creation, 1 hour from 202-acceptance; see [TTL and retention](#ttl-and-retention).
 
@@ -235,7 +235,7 @@ A poll reads the `kaalm-async-{requestId}` ConfigMap in `kaalm-system`. With the
 | Patched | `200` with the payload | The payload `Patch` | 1 hour from `Create` |
 | Expired | `404` | 1 hour from `Create`, computed on every poll from `creationTimestamp` | The reconciler's expiry prune, the async orphan pruner, or the finalizer sweep |
 
-The red edge is both silent-loss failures under [Failure modes](#failure-modes). The finalizer sweep is not expiry-gated: on channel deletion it removes a Placeholder or Patched record still inside its TTL. Expired is a state the poller computes, not one the reconciler sets: the ConfigMap can still sit in etcd, and pruning is storage cleanup only.
+The red edge is both silent-loss failures under [Failure modes](#failure-modes). The finalizer sweep ignores expiry: on channel deletion it removes a Placeholder or Patched record still inside its TTL. Expired is a state the poller computes, not one the reconciler sets: the ConfigMap can still sit in etcd, and pruning is storage cleanup only.
 
 ### Polling cadence
 

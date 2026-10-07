@@ -151,7 +151,7 @@ func TestAgent_BudgetConditionNotSetWhenWithinBudget(t *testing.T) {
 	mkAgent(t, "s10-ok-agent", "s10-ok-class", "s10-ok")
 
 	// The image-less agent settles at Ready=False/InvalidReference (the no-image
-	// gate), which is set in the same reconcile pass just after the budget
+	// check), which is set in the same reconcile pass just after the budget
 	// check. Observing it proves reconcileBudgetCondition ran; a within-budget
 	// namespace must leave no Degraded condition behind.
 	expectReady(t, func() []metav1.Condition {

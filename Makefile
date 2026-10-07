@@ -62,13 +62,17 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 	@rm -f cover.out
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -count=1 $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+.PHONY: test-race
+test-race: manifests generate fmt vet setup-envtest ## Run the unit and envtest suites under the race detector (no coverage).
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -race -count=1 $$(go list ./... | grep -v /e2e)
+
 # Minimum acceptable project-wide statement coverage (the union across all
 # non-e2e packages, so cross-package tests get credit). Overridable: make
 # cover-check COVERAGE_THRESHOLD=90
 COVERAGE_THRESHOLD ?= 85
 
 .PHONY: cover-check
-# GOWORK=off: the gate measures the operator module exactly as its release
+# GOWORK=off: the check measures the operator module exactly as its release
 # builds compile it (module mode, its own go.sum). Workspace mode changes how
 # -coverpkg attributes cross-package coverage (the union drops from ~87% to a
 # false ~75% with identical tests). The agentruntime module has its own suite
@@ -86,9 +90,9 @@ cover-check: manifests generate fmt vet setup-envtest ## Run tests with union co
 		-coverpkg=$$(GOWORK=off go list ./... | grep -v /e2e | paste -sd,) -coverprofile cover.out
 	@total=$$(go tool cover -func=cover.out | awk '/^total:/{print $$3}' | tr -d '%'); \
 	awk -v t="$$total" -v thr="$(COVERAGE_THRESHOLD)" 'BEGIN{ \
-		printf "total project coverage: %s%% (gate: %s%%)\n", t, thr; \
-		if (t+0 < thr+0) { printf "::error::total coverage %s%% is below the %s%% gate\n", t, thr; exit 1 } \
-		printf "coverage gate passed\n" }'
+		printf "total project coverage: %s%% (minimum: %s%%)\n", t, thr; \
+		if (t+0 < thr+0) { printf "::error::total coverage %s%% is below the %s%% minimum\n", t, thr; exit 1 } \
+		printf "coverage check passed\n" }'
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint on every workspace module.
@@ -211,7 +215,7 @@ PLANTUML_JAR ?= $(HOME)/java/plantuml-1.2026.6.jar
 DOCS_CHECK_FLAGS ?=
 
 .PHONY: docs-check
-docs-check: ## Check the three books, and code outside them for issue-number citations; the list of checks is the docstring of hack/docs/check.py.
+docs-check: ## Check the three books and the files that cite them; the list of checks is the docstring of hack/docs/check.py.
 	python3 hack/docs/check.py $(DOCS_CHECK_FLAGS)
 
 .PHONY: diagrams
@@ -283,7 +287,7 @@ runtime-test: ## Unit tests for the agentruntime module and the Go starter (nati
 	go test -race ./agentruntime/... ./examples/starter-go/...
 
 .PHONY: go-agent-image
-go-agent-image: ## Build the kaalm-agent-go base image (its test stage gates every build, so this also runs the suite).
+go-agent-image: ## Build the kaalm-agent-go base image (its test stage runs before every build, so this also runs the suite).
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
 
 .PHONY: go-agent-smoke
@@ -366,7 +370,7 @@ e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the
 	$(MAKE) e2e-images
 	$(MAKE) e2e-deploy
 	# -count=1 defeats go's test cache: the suite drives a live cluster the
-	# cache knows nothing about, and a replayed transcript is not a gate.
+	# cache knows nothing about, and a replayed transcript proves nothing.
 	go test ./test/e2e/... -tags e2e -v -timeout 20m -count=1
 
 ##@ Performance
@@ -375,7 +379,7 @@ e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the
 # more nodes and a raised kubelet max-pods, and a ramp to several hundred
 # agents is not something to do next to a functional suite. The numbers it
 # produces publish in docs/src/operations/performance-and-scale.md; the run is a
-# per-release local gate, not CI (see that page for why).
+# per-release local check, not CI (see that page for why).
 PERF_CLUSTER ?= kaalm-perf
 # The perf deploy opens the pprof listeners so a profile can be taken during
 # any phase; 0 turns them off.

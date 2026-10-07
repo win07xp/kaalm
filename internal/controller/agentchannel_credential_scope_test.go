@@ -38,24 +38,24 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// scopeFakeChannel is channel "gate-ch" with its finalizer, bearer auth on
-// the labeled Secret gate-labeled and HMAC on the unlabeled gate-unlabeled.
+// scopeFakeChannel is channel "scope-ch" with its finalizer, bearer auth on
+// the labeled Secret scope-labeled and HMAC on the unlabeled scope-unlabeled.
 func scopeFakeChannel(path string) *kaalmv1beta1.AgentChannel {
 	return &kaalmv1beta1.AgentChannel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "gate-ch", Namespace: "default", UID: "gate-ch-uid",
+			Name: "scope-ch", Namespace: "default", UID: "scope-ch-uid",
 			Finalizers: []string{kaalmv1beta1.ChannelFinalizer},
 		},
 		Spec: kaalmv1beta1.AgentChannelSpec{
-			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "gate-agent"},
+			AgentRef: kaalmv1beta1.LocalObjectReference{Name: "scope-agent"},
 			Webhook: &kaalmv1beta1.AgentChannelWebhook{
 				Path: path,
 				Auth: kaalmv1beta1.ChannelAuth{
 					Type:      "bearer",
-					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "gate-labeled", Key: "token"},
+					SecretRef: &kaalmv1beta1.SecretKeyReference{Name: "scope-labeled", Key: "token"},
 					HMAC: &kaalmv1beta1.ChannelHMAC{
 						Header:    "X-Signature",
-						SecretRef: kaalmv1beta1.SecretKeyReference{Name: "gate-unlabeled", Key: "token"},
+						SecretRef: kaalmv1beta1.SecretKeyReference{Name: "scope-unlabeled", Key: "token"},
 					},
 				},
 			},
@@ -69,18 +69,18 @@ func scopeFakeChannel(path string) *kaalmv1beta1.AgentChannel {
 func preScopeObjects(t *testing.T, ch *kaalmv1beta1.AgentChannel) []client.Object {
 	t.Helper()
 	labeled := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "gate-labeled", Namespace: "default", Labels: channelCredentialLabels()},
+		ObjectMeta: metav1.ObjectMeta{Name: "scope-labeled", Namespace: "default", Labels: channelCredentialLabels()},
 		Data:       map[string][]byte{"token": []byte("t")},
 	}
 	unlabeled := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "gate-unlabeled", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "scope-unlabeled", Namespace: "default"},
 		Data:       map[string][]byte{"token": []byte("t")},
 	}
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: channelRoleName(ch.Name), Namespace: "default"},
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""}, Resources: []string{"secrets"},
-			ResourceNames: []string{"gate-labeled", "gate-unlabeled"}, Verbs: []string{"get", "watch"},
+			ResourceNames: []string{"scope-labeled", "scope-unlabeled"}, Verbs: []string{"get", "watch"},
 		}},
 	}
 	rb := &rbacv1.RoleBinding{
@@ -143,15 +143,15 @@ func fakeCredsRoleNames(t *testing.T, c client.Client, ch *kaalmv1beta1.AgentCha
 
 // A channel stopped by the Agent, service, or path check keeps no credential
 // Role wider than its labeled Secrets, and loses the old controller binding.
-func TestChannel_GateScopesCredentialRole(t *testing.T) {
+func TestChannel_NotReadyScopesCredentialRole(t *testing.T) {
 	agent := func(mutate func(*kaalmv1beta1.Agent)) *kaalmv1beta1.Agent {
-		ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}}
+		ag := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "scope-agent", Namespace: "default"}}
 		if mutate != nil {
 			mutate(ag)
 		}
 		return ag
 	}
-	winner := scopeFakeChannel("/channels/default/gate-ch")
+	winner := scopeFakeChannel("/channels/default/scope-ch")
 	winner.Name, winner.UID = "a-winner", "a-winner-uid"
 	cases := []struct {
 		name   string
@@ -159,12 +159,12 @@ func TestChannel_GateScopesCredentialRole(t *testing.T) {
 		extra  []client.Object
 		reason string
 	}{
-		{"AgentNotFound", "/channels/default/gate-ch", nil, kaalmv1beta1.ReasonAgentNotFound},
-		{"AgentServiceDisabled", "/channels/default/gate-ch", []client.Object{agent(func(ag *kaalmv1beta1.Agent) {
+		{"AgentNotFound", "/channels/default/scope-ch", nil, kaalmv1beta1.ReasonAgentNotFound},
+		{"AgentServiceDisabled", "/channels/default/scope-ch", []client.Object{agent(func(ag *kaalmv1beta1.Agent) {
 			ag.Spec.Service = &kaalmv1beta1.AgentService{Enabled: false}
 		})}, kaalmv1beta1.ReasonAgentServiceDisabled},
 		{"InvalidPath", "/channels/other/x", []client.Object{agent(nil)}, kaalmv1beta1.ReasonInvalidPath},
-		{"PathConflict", "/channels/default/gate-ch", []client.Object{agent(nil), winner},
+		{"PathConflict", "/channels/default/scope-ch", []client.Object{agent(nil), winner},
 			kaalmv1beta1.ReasonPathConflict},
 	}
 	for _, tc := range cases {
@@ -172,8 +172,8 @@ func TestChannel_GateScopesCredentialRole(t *testing.T) {
 			ch := scopeFakeChannel(tc.path)
 			c := scopeReconcile(t, ch, append(preScopeObjects(t, ch), tc.extra...)...)
 			expectFakeReady(t, c, ch, tc.reason)
-			if got := fakeCredsRoleNames(t, c, ch); strings.Join(got, ",") != "gate-labeled" {
-				t.Errorf("credential Role grants %v, want [gate-labeled]", got)
+			if got := fakeCredsRoleNames(t, c, ch); strings.Join(got, ",") != "scope-labeled" {
+				t.Errorf("credential Role grants %v, want [scope-labeled]", got)
 			}
 			err := c.Get(context.Background(), types.NamespacedName{
 				Namespace: "default", Name: channelControllerCredsBindingName(ch.Name)}, &rbacv1.RoleBinding{})
@@ -188,13 +188,13 @@ func TestChannel_GateScopesCredentialRole(t *testing.T) {
 	}
 }
 
-// Once a gated channel's Roles have converged, a later gated pass makes no
-// API write.
-func TestChannel_GatedPassWritesNothing(t *testing.T) {
-	ch := gateFakeChannel()
-	ch.UID = "ch-gate-uid"
+// Once a not-Ready channel's Roles have converged, a later not-Ready pass
+// makes no API write.
+func TestChannel_NotReadyPassWritesNothing(t *testing.T) {
+	ch := agentNotFoundFakeChannel()
+	ch.UID = "ch-agent-missing-uid"
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "ch-gate-secret", Namespace: "default", Labels: channelCredentialLabels()},
+		ObjectMeta: metav1.ObjectMeta{Name: "ch-agent-missing-secret", Namespace: "default", Labels: channelCredentialLabels()},
 		Data:       map[string][]byte{"token": []byte("t")},
 	}
 	var writes int
@@ -241,7 +241,7 @@ func TestChannel_GatedPassWritesNothing(t *testing.T) {
 		t.Fatalf("second reconcile: %v", err)
 	}
 	if writes != 0 {
-		t.Errorf("a converged gated pass made %d writes, want 0", writes)
+		t.Errorf("a converged not-Ready pass made %d writes, want 0", writes)
 	}
 	if res.RequeueAfter != time.Minute {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, time.Minute)
@@ -258,13 +258,13 @@ func TestChannel_CheckRoleConflictEmptiesCredentialRole(t *testing.T) {
 		reason string
 	}{
 		{"valid Agent", []client.Object{
-			&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}},
+			&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "scope-agent", Namespace: "default"}},
 		}, kaalmv1beta1.ReasonChildConflict},
 		{"no Agent", nil, kaalmv1beta1.ReasonAgentNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ch := scopeFakeChannel("/channels/default/gate-ch")
+			ch := scopeFakeChannel("/channels/default/scope-ch")
 			foreign := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: channelCheckRoleName(ch.Name), Namespace: "default"}}
 			objs := append(preScopeObjects(t, ch), foreign)
 			c := scopeReconcile(t, ch, append(objs, tc.extra...)...)
@@ -300,19 +300,19 @@ func roleWriteFailure(verb, name string, err error) interceptor.Funcs {
 // event, and the conflict cadence, since a policy change raises no event.
 func TestChannel_RoleWriteRejectedIsChildWriteRejected(t *testing.T) {
 	forbidden := apierrors.NewForbidden(rbacv1.Resource("roles"), "x", nil)
-	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}}
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "scope-agent", Namespace: "default"}}
 	cases := []struct {
 		name, verb, object string
 		preScope           bool
 	}{
-		{"check Role create", "create", "kaalm-channel-gate-ch-check", true},
-		{"credential Role create", "create", "kaalm-channel-gate-ch-creds", false},
-		{"gateway RoleBinding create", "create", "kaalm-channel-gate-ch-creds-gateway", false},
-		{"credential Role update", "update", "kaalm-channel-gate-ch-creds", true},
+		{"check Role create", "create", "kaalm-channel-scope-ch-check", true},
+		{"credential Role create", "create", "kaalm-channel-scope-ch-creds", false},
+		{"gateway RoleBinding create", "create", "kaalm-channel-scope-ch-creds-gateway", false},
+		{"credential Role update", "update", "kaalm-channel-scope-ch-creds", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ch := scopeFakeChannel("/channels/default/gate-ch")
+			ch := scopeFakeChannel("/channels/default/scope-ch")
 			objs := preScopeObjects(t, ch)
 			if !tc.preScope {
 				objs = objs[:2] // the Secrets only
@@ -328,8 +328,8 @@ func TestChannel_RoleWriteRejectedIsChildWriteRejected(t *testing.T) {
 				t.Fatalf("reconcile: %v", err)
 			}
 			expectFakeReady(t, c, ch, kaalmv1beta1.ReasonChildWriteRejected)
-			if res.RequeueAfter != gateRequeue {
-				t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, gateRequeue)
+			if res.RequeueAfter != notReadyRecheck {
+				t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, notReadyRecheck)
 			}
 			close(rec.Events)
 			var events []string
@@ -351,8 +351,8 @@ func TestChannel_RoleWriteRejectedIsChildWriteRejected(t *testing.T) {
 // A transient Role write failure is a reconcile error retried with backoff,
 // not a status reason.
 func TestChannel_RoleWriteTransientErrorRetries(t *testing.T) {
-	ch := scopeFakeChannel("/channels/default/gate-ch")
-	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "gate-agent", Namespace: "default"}}
+	ch := scopeFakeChannel("/channels/default/scope-ch")
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "scope-agent", Namespace: "default"}}
 	unavailable := apierrors.NewServiceUnavailable("etcd is down")
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(append(preScopeObjects(t, ch)[:2], agent, ch)...).WithStatusSubresource(ch).

@@ -26,9 +26,9 @@ import (
 // than one interval.
 const sweepInterval = sarCacheTTL
 
-// janitor sweeps the session store, the gate cache, and the review cache
-// every interval until ctx is cancelled. Without it an entry leaves memory
-// only when the same key is looked up again after it expires.
+// janitor sweeps the session store, the access-check cache, and the review
+// cache every interval until ctx is cancelled. Without it an entry leaves
+// memory only when the same key is looked up again after it expires.
 func (s *Server) janitor(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -46,8 +46,8 @@ func (s *Server) sweep() {
 	if cr, ok := s.Reviewer.(*CachingReviewer); ok {
 		cr.Sweep()
 	}
-	if s.Gate != nil {
-		s.Gate.Sweep()
+	if s.Access != nil {
+		s.Access.Sweep()
 	}
 	if s.Sessions != nil {
 		s.Sessions.Sweep()
