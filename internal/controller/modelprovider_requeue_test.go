@@ -28,7 +28,7 @@ import (
 func providerConditions(name string) func() []metav1.Condition {
 	return func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: name}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &mp)
 		return mp.Status.Conditions
 	}
 }

@@ -163,7 +163,7 @@ func TestAgentClass_CertificateCleanupFollowsControllerSecret(t *testing.T) {
 		t.Helper()
 		eventually(t, func() error {
 			var got kaalmv1beta1.AgentClass
-			if err := testClient.Get(ctxT(), types.NamespacedName{Name: ac.Name}, &got); err != nil {
+			if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: ac.Name}, &got); err != nil {
 				return err
 			}
 			c := condition(got.Status.Conditions, kaalmv1beta1.ConditionCertificateCleanup)

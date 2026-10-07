@@ -139,7 +139,7 @@ func TestTask_CertificateDeletedWhileRunningIsRecreated(t *testing.T) {
 	pod := provisionRunningTask(t, "cert-restore", "wc-cert-restore", nil)
 	key := types.NamespacedName{Namespace: "default", Name: "cert-restore-tls"}
 	var old cmapi.Certificate
-	if err := testClient.Get(ctxT(), key, &old); err != nil {
+	if err := testAPIReader.Get(ctxT(), key, &old); err != nil {
 		t.Fatal(err)
 	}
 	if tlsSecretOf(pod) != old.Spec.SecretName {
@@ -150,7 +150,7 @@ func TestTask_CertificateDeletedWhileRunningIsRecreated(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var cert cmapi.Certificate
-		if err := testClient.Get(ctxT(), key, &cert); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &cert); err != nil {
 			return err
 		}
 		if cert.UID == old.UID {
@@ -381,7 +381,7 @@ func TestTask_DeletedChildrenRecreatedWhileRunning(t *testing.T) {
 	old := map[string]types.UID{}
 	for _, obj := range children {
 		obj.SetNamespace("default")
-		if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(obj), obj); err != nil {
+		if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(obj), obj); err != nil {
 			t.Fatalf("%T %s: %v", obj, obj.GetName(), err)
 		}
 		old[fmt.Sprintf("%T", obj)] = obj.GetUID()
@@ -395,7 +395,7 @@ func TestTask_DeletedChildrenRecreatedWhileRunning(t *testing.T) {
 	for _, obj := range children {
 		eventually(t, func() error {
 			got := obj.DeepCopyObject().(client.Object)
-			if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(obj), got); err != nil {
+			if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(obj), got); err != nil {
 				return err
 			}
 			if got.GetUID() == old[fmt.Sprintf("%T", obj)] {
@@ -408,7 +408,7 @@ func TestTask_DeletedChildrenRecreatedWhileRunning(t *testing.T) {
 		})
 	}
 	var role rbacv1.Role
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default",
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default",
 		Name: taskCompletionRoleName("child-restore")}, &role); err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestTask_NetworkPolicyDeletedWhileProvisioningIsRecreated(t *testing.T) {
 	})
 	pod := taskPod(t, "np-restore-prov")
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "np-restore-prov", Namespace: "default"}}
-	if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(np), np); err != nil {
+	if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(np), np); err != nil {
 		t.Fatal(err)
 	}
 	oldUID := np.UID
@@ -449,7 +449,7 @@ func TestTask_NetworkPolicyDeletedWhileProvisioningIsRecreated(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var got networkingv1.NetworkPolicy
-		if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(np), &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(np), &got); err != nil {
 			return err
 		}
 		if got.UID == oldUID {
@@ -539,7 +539,7 @@ func setClassCIDRs(t *testing.T, class string, cidrs []string) {
 	t.Helper()
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: class}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: class}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.Network.Egress.AllowedCIDRs = cidrs
@@ -550,7 +550,7 @@ func setClassCIDRs(t *testing.T, class string, cidrs []string) {
 // npCIDRs lists the ipBlock CIDRs of a task's NetworkPolicy.
 func npCIDRs(name string) ([]string, error) {
 	var np networkingv1.NetworkPolicy
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &np); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &np); err != nil {
 		return nil, err
 	}
 	var out []string
@@ -595,7 +595,7 @@ func writtenSince(obj client.Object, rvs ...string) error {
 func editObject(t *testing.T, key types.NamespacedName, obj client.Object, edit func()) (before, after string) {
 	t.Helper()
 	eventually(t, func() error {
-		if err := testClient.Get(ctxT(), key, obj); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, obj); err != nil {
 			return err
 		}
 		before = obj.GetResourceVersion()
@@ -622,7 +622,7 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 	var np networkingv1.NetworkPolicy
 	var role rbacv1.Role
 	var rb rbacv1.RoleBinding
-	if err := testClient.Get(ctxT(), key("child-revert"), &np); err != nil {
+	if err := testAPIReader.Get(ctxT(), key("child-revert"), &np); err != nil {
 		t.Fatal(err)
 	}
 	wantNP := np.Spec.DeepCopy()
@@ -640,7 +640,7 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 
 	eventually(t, func() error {
 		var got networkingv1.NetworkPolicy
-		if err := testClient.Get(ctxT(), key("child-revert"), &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), key("child-revert"), &got); err != nil {
 			return err
 		}
 		if err := writtenSince(&got, npBefore, npEdit); err != nil {
@@ -650,7 +650,7 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 			return errString("NetworkPolicy edit not reverted yet")
 		}
 		var gotRole rbacv1.Role
-		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRole); err != nil {
+		if err := testAPIReader.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRole); err != nil {
 			return err
 		}
 		if err := writtenSince(&gotRole, roleBefore, roleEdit); err != nil {
@@ -660,7 +660,7 @@ func TestTask_EditedChildrenRevertedWhileRunning(t *testing.T) {
 			return errString("Role edit not reverted yet")
 		}
 		var gotRB rbacv1.RoleBinding
-		if err := testClient.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRB); err != nil {
+		if err := testAPIReader.Get(ctxT(), key(taskCompletionRoleName("child-revert")), &gotRB); err != nil {
 			return err
 		}
 		if err := writtenSince(&gotRB, rbBefore, rbEdit); err != nil {
@@ -702,7 +702,7 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
-		if err := testClient.Get(ctxT(), npKey, &np); err != nil {
+		if err := testAPIReader.Get(ctxT(), npKey, &np); err != nil {
 			return err
 		}
 		if err := writtenSince(&np, before, edit); err != nil {
@@ -714,7 +714,7 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	// testClient reads from the manager's cache, which can still hold the
 	// deleted policy for a moment; wait for the restored one by its UID.
 	var old networkingv1.NetworkPolicy
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &old); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &old); err != nil {
 		t.Fatal(err)
 	}
 	if err := testClient.Delete(ctxT(), &old); err != nil {
@@ -722,7 +722,7 @@ func TestTask_NetworkPolicyKeptToClassAtPodCreation(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &np); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "np-keep"}, &np); err != nil {
 			return err
 		}
 		if np.UID == old.UID {

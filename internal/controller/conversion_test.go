@@ -46,7 +46,7 @@ func TestConversion_ServedThroughTheAPIServer(t *testing.T) {
 	crd.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition",
 	})
-	if err := testClient.Get(ctx, types.NamespacedName{Name: "agents.kaalm.io"}, crd); err != nil {
+	if err := testAPIReader.Get(ctx, types.NamespacedName{Name: "agents.kaalm.io"}, crd); err != nil {
 		t.Fatalf("get CRD: %v", err)
 	}
 	strategy, _, _ := unstructured.NestedString(crd.Object, "spec", "conversion", "strategy")
@@ -77,7 +77,7 @@ func TestConversion_ServedThroughTheAPIServer(t *testing.T) {
 
 	beta := &kaalmv1beta1.Agent{}
 	key := types.NamespacedName{Name: "conv-agent", Namespace: "default"}
-	eventually(t, func() error { return testClient.Get(ctx, key, beta) })
+	eventually(t, func() error { return testAPIReader.Get(ctx, key, beta) })
 	alphaSpec, _ := json.Marshal(alpha.Spec)
 	betaSpec, _ := json.Marshal(beta.Spec)
 	if string(alphaSpec) != string(betaSpec) {
@@ -88,7 +88,7 @@ func TestConversion_ServedThroughTheAPIServer(t *testing.T) {
 	// reconciler works on the same object (finalizer, status), so the update
 	// re-reads on conflict instead of racing it.
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		if err := testClient.Get(ctx, key, beta); err != nil {
+		if err := testAPIReader.Get(ctx, key, beta); err != nil {
 			return err
 		}
 		beta.Spec.Image = "example/agent:two"
@@ -99,7 +99,7 @@ func TestConversion_ServedThroughTheAPIServer(t *testing.T) {
 	}
 	eventually(t, func() error {
 		got := &kaalmv1alpha1.Agent{}
-		if err := testClient.Get(ctx, key, got); err != nil {
+		if err := testAPIReader.Get(ctx, key, got); err != nil {
 			return err
 		}
 		if got.Spec.Image != "example/agent:two" {

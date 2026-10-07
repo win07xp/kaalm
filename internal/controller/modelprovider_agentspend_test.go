@@ -73,7 +73,7 @@ func TestAgentSpendReducer(t *testing.T) {
 	key := types.NamespacedName{Namespace: testSystemNamespace, Name: gateway.AgentSpendConfigMapName("spend-prov")}
 	eventually(t, func() error {
 		var check corev1.ConfigMap
-		if err := testClient.Get(ctx, key, &check); err != nil {
+		if err := testAPIReader.Get(ctx, key, &check); err != nil {
 			return err
 		}
 		if len(check.Data) != 4 {
@@ -102,7 +102,7 @@ func TestAgentSpendReducer(t *testing.T) {
 	// Wait for the reducer's Update to land back in the cache.
 	var got corev1.ConfigMap
 	eventually(t, func() error {
-		if err := testClient.Get(ctx, key, &got); err != nil {
+		if err := testAPIReader.Get(ctx, key, &got); err != nil {
 			return err
 		}
 		if _, dead := got.Data["gw-dead"]; dead {
@@ -149,7 +149,7 @@ func TestAgentSpendReducer(t *testing.T) {
 	if err := r.reconcileAgentSpend(ctx, mp, live); err != nil {
 		t.Fatal(err)
 	}
-	if err := testClient.Get(ctx, key, &got); err != nil {
+	if err := testAPIReader.Get(ctx, key, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.ResourceVersion != before {

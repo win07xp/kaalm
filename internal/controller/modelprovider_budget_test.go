@@ -79,14 +79,14 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
 	// GatewayReachable=True: one gateway Pod is Ready.
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp); err != nil {
 			return err
 		}
 		c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionGatewayReachable)
@@ -117,7 +117,7 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 
 	eventually(t, func() error {
 		var got corev1.ConfigMap
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Name: gateway.BudgetConfigMapName("mp-budget"), Namespace: testOperatorNamespace},
 			&got); err != nil {
 			return err
@@ -156,7 +156,7 @@ func TestModelProvider_BudgetReducerAndGatewayReachable(t *testing.T) {
 	// Normal. The retired spend counts: 50 + 40 + 999 = 1089 of 100.
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-budget"}, &mp); err != nil {
 			return err
 		}
 		states := map[string]string{}
@@ -201,7 +201,7 @@ func TestModelProvider_BudgetRolloverAndThrottle(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-roll"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-roll"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
@@ -226,7 +226,7 @@ func TestModelProvider_BudgetRolloverAndThrottle(t *testing.T) {
 	// The degrade policy throttles team-y at 60% of its ceiling.
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-roll"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-roll"}, &mp); err != nil {
 			return err
 		}
 		for _, u := range mp.Status.BudgetUsage {
@@ -241,7 +241,7 @@ func TestModelProvider_BudgetRolloverAndThrottle(t *testing.T) {
 	// the rollover branch (the deletion is the observable proof it ran).
 	eventually(t, func() error {
 		var got corev1.ConfigMap
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Name: gateway.BudgetConfigMapName("mp-roll"), Namespace: testOperatorNamespace},
 			&got); err != nil {
 			return err
@@ -264,7 +264,7 @@ func TestModelProvider_BudgetRequeueWithoutProbe(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-budreq"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-budreq"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 }
@@ -545,7 +545,7 @@ func TestModelProvider_BudgetFoldRunsWhileMisconfigured(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-misconf"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-misconf"}, &mp); err != nil {
 			return err
 		}
 		blocked := false
@@ -560,7 +560,7 @@ func TestModelProvider_BudgetFoldRunsWhileMisconfigured(t *testing.T) {
 			return fmt.Errorf("GatewayReachable = %+v, want True", c)
 		}
 		var got corev1.ConfigMap
-		if err := testClient.Get(ctxT(), client.ObjectKeyFromObject(cm), &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(cm), &got); err != nil {
 			return err
 		}
 		if _, ok := got.Data[gateway.CanonicalKey]; !ok {

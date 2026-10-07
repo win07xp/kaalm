@@ -102,7 +102,7 @@ func markCertReadyErr(workloadName string) error {
 func markCertReadyIn(ns, workloadName string) error {
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: ns, Name: workloadName + "-tls"}
-	if err := testClient.Get(ctxT(), key, &cert); err != nil {
+	if err := testAPIReader.Get(ctxT(), key, &cert); err != nil {
 		return err
 	}
 	cert.Status.Conditions = []cmapi.CertificateCondition{{
@@ -115,7 +115,7 @@ func markCertReadyIn(ns, workloadName string) error {
 func agentPod(t *testing.T, name string) *corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
-	if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
+	if err := testAPIReader.List(ctxT(), &pods, client.InNamespace("default"),
 		client.MatchingLabels(map[string]string{"kaalm.io/agent": name})); err != nil {
 		t.Fatalf("list pods: %v", err)
 	}
@@ -152,7 +152,7 @@ func expectAgentPhase(t *testing.T, name string, phase kaalmv1beta1.AgentPhase) 
 	t.Helper()
 	eventually(t, func() error {
 		var ag kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 			return err
 		}
 		if ag.Status.Phase != phase {
@@ -166,7 +166,7 @@ func expectAgentReadyReason(t *testing.T, name, reason string) {
 	t.Helper()
 	eventually(t, func() error {
 		var ag kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 			return err
 		}
 		c := condition(ag.Status.Conditions, kaalmv1beta1.ConditionReady)
@@ -194,7 +194,7 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 	// Certificate is created and holds the Pod until it is Ready.
 	eventually(t, func() error {
 		var cert cmapi.Certificate
-		return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-tls"}, &cert)
+		return testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-tls"}, &cert)
 	})
 	if pod := agentPod(t, "run-agent"); pod != nil {
 		t.Fatal("Pod created before the Certificate was Ready")
@@ -216,15 +216,15 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 	}{
 		{"ServiceAccount", func() error {
 			var sa corev1.ServiceAccount
-			return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "agent-run-agent"}, &sa)
+			return testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "agent-run-agent"}, &sa)
 		}},
 		{"Service", func() error {
 			var svc corev1.Service
-			return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent"}, &svc)
+			return testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent"}, &svc)
 		}},
 		{"PVC", func() error {
 			var pvc corev1.PersistentVolumeClaim
-			return testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-memory"}, &pvc)
+			return testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-memory"}, &pvc)
 		}},
 	} {
 		if err := probe.get(); err != nil {
@@ -236,7 +236,7 @@ func TestAgent_ProvisionToRunning(t *testing.T) {
 	// The Certificate writes a Secret named for the Agent's UID, and the Pod
 	// mounts the name the Certificate holds.
 	var cert cmapi.Certificate
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-tls"}, &cert); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "run-agent-tls"}, &cert); err != nil {
 		t.Fatalf("get certificate: %v", err)
 	}
 	wantSecret := "run-agent-tls-" + string(getWorkloadAgent(t, "run-agent").UID)[:8]
@@ -277,7 +277,7 @@ func TestAgent_SystemNamespaceForbidden(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: testSystemNamespace, Name: "sys-agent"}, &got); err != nil {
 			return err
 		}
@@ -289,7 +289,7 @@ func TestAgent_SystemNamespaceForbidden(t *testing.T) {
 	})
 	// No child resources may exist.
 	var cert cmapi.Certificate
-	err := testClient.Get(ctxT(), types.NamespacedName{Namespace: testSystemNamespace, Name: "sys-agent-tls"}, &cert)
+	err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: testSystemNamespace, Name: "sys-agent-tls"}, &cert)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("Certificate was created in the system namespace: %v", err)
 	}
@@ -324,14 +324,14 @@ func TestAgent_InvalidClassCIDRBlocksAndRecovers(t *testing.T) {
 		t.Errorf("the class check requeues on a timer (%s); the class watch re-enqueues on a fix", res.RequeueAfter)
 	}
 	var np networkingv1.NetworkPolicy
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "cidr-agent"}, &np); !apierrors.IsNotFound(err) {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "cidr-agent"}, &np); !apierrors.IsNotFound(err) {
 		t.Errorf("NetworkPolicy written under an invalid class: err=%v", err)
 	}
 
 	// Fixing the class recovers the Agent and the policy carries the entry.
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-cidr"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-cidr"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.Network.Egress.AllowedCIDRs = []string{"10.0.0.0/8"}
@@ -341,7 +341,7 @@ func TestAgent_InvalidClassCIDRBlocksAndRecovers(t *testing.T) {
 	markCertReady(t, "cidr-agent")
 	eventually(t, func() error {
 		var np networkingv1.NetworkPolicy
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "cidr-agent"}, &np); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "cidr-agent"}, &np); err != nil {
 			return err
 		}
 		for _, rule := range np.Spec.Egress {
@@ -396,7 +396,7 @@ func TestAgent_PullSecretRoleScopedAndRemoved(t *testing.T) {
 
 	eventually(t, func() error {
 		var role rbacv1.Role
-		if err := testClient.Get(ctxT(), key, &role); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &role); err != nil {
 			return err
 		}
 		want := []rbacv1.PolicyRule{{
@@ -410,7 +410,7 @@ func TestAgent_PullSecretRoleScopedAndRemoved(t *testing.T) {
 			return fmt.Errorf("role owner = %+v", role.OwnerReferences)
 		}
 		var rb rbacv1.RoleBinding
-		if err := testClient.Get(ctxT(), key, &rb); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &rb); err != nil {
 			return err
 		}
 		if len(rb.Subjects) != 1 || rb.Subjects[0].Name != controllerServiceAccount ||
@@ -421,7 +421,7 @@ func TestAgent_PullSecretRoleScopedAndRemoved(t *testing.T) {
 	})
 
 	var class kaalmv1beta1.AgentClass
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-pullrole"}, &class); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-pullrole"}, &class); err != nil {
 		t.Fatalf("get class: %v", err)
 	}
 	class.Spec.Image.ImagePullSecrets = nil
@@ -430,11 +430,11 @@ func TestAgent_PullSecretRoleScopedAndRemoved(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var role rbacv1.Role
-		if err := testClient.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
+		if err := testAPIReader.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
 			return fmt.Errorf("role still present: %v", err)
 		}
 		var rb rbacv1.RoleBinding
-		if err := testClient.Get(ctxT(), key, &rb); !apierrors.IsNotFound(err) {
+		if err := testAPIReader.Get(ctxT(), key, &rb); !apierrors.IsNotFound(err) {
 			return fmt.Errorf("binding still present: %v", err)
 		}
 		return nil
@@ -478,7 +478,7 @@ func TestAgent_HandlerConfigMapNotFoundBlocksAndRecovers(t *testing.T) {
 	// The reconciler never takes ownership of the developer's ConfigMap.
 	eventually(t, func() error {
 		var got corev1.ConfigMap
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hcm-handler"}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hcm-handler"}, &got); err != nil {
 			return err
 		}
 		if len(got.OwnerReferences) != 0 {
@@ -523,7 +523,7 @@ func TestAgent_EffectiveWakeTimeout(t *testing.T) {
 			// Read through the cache with a retry: right after Create the
 			// cache may not hold the Agent yet.
 			var ag kaalmv1beta1.Agent
-			if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+			if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 				return err
 			}
 			got := ag.Status.EffectiveWakeTimeout
@@ -569,7 +569,7 @@ func TestAgent_ClassNamespaceDeniedDegrades(t *testing.T) {
 	expectAgentPhase(t, "ns-deny-agent", kaalmv1beta1.AgentDegraded)
 	expectAgentReadyReason(t, "ns-deny-agent", kaalmv1beta1.ReasonNamespaceNotAllowed)
 	var cert cmapi.Certificate
-	err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ns-deny-agent-tls"}, &cert)
+	err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ns-deny-agent-tls"}, &cert)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("Certificate get err = %v, want NotFound", err)
 	}
@@ -623,7 +623,7 @@ func TestAgent_ClassDropsNamespaceKeepsPodAndRecovers(t *testing.T) {
 	setClassNamespaces := func(patterns []string) {
 		eventually(t, func() error {
 			var ac kaalmv1beta1.AgentClass
-			if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-ns-drop"}, &ac); err != nil {
+			if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-ns-drop"}, &ac); err != nil {
 				return err
 			}
 			ac.Spec.AllowedNamespaces = patterns
@@ -663,7 +663,7 @@ func TestAgent_PersistenceNotAllowedDegradesAndRecovers(t *testing.T) {
 	// its pre-degradation phase and provisioning proceeds.
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-per"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-per"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.Persistence.Enabled = true
@@ -727,7 +727,7 @@ func TestAgent_HandlerMountNotAllowedDegradesAndRecovers(t *testing.T) {
 	// class-drift path that degrades when the capability is withdrawn.
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "wc-hm"}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "wc-hm"}, &ac); err != nil {
 			return err
 		}
 		ac.Spec.Image.AllowHandlerMounts = true
@@ -780,7 +780,7 @@ func TestAgent_SpecDriftReplacesPod(t *testing.T) {
 	// so finish the termination for it.
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -851,7 +851,7 @@ func TestAgent_HandlerRepointReplacesPod(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -888,7 +888,7 @@ func expectPodReplaced(t *testing.T, agentName string, oldPod *corev1.Pod) *core
 	oldHash := oldPod.Annotations[annotationPodSpecHash]
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -919,7 +919,7 @@ func updateWorkloadClass(t *testing.T, name string, mutate func(*kaalmv1beta1.Ag
 	t.Helper()
 	eventually(t, func() error {
 		var ac kaalmv1beta1.AgentClass
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: name}, &ac); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: name}, &ac); err != nil {
 			return err
 		}
 		mutate(&ac)
@@ -974,7 +974,7 @@ func writeAsV1(t *testing.T, pod *corev1.Pod, hash string) {
 func effectiveSpecFor(t *testing.T, agentName, className string) effectiveAgentSpec {
 	t.Helper()
 	var ac kaalmv1beta1.AgentClass
-	if err := testClient.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: className}, &ac); err != nil {
 		t.Fatalf("get class: %v", err)
 	}
 	return deriveEffectiveSpec(getWorkloadAgent(t, agentName), &ac)
@@ -990,7 +990,7 @@ func TestAgent_V1HashMatchRewritesInPlace(t *testing.T) {
 	// rewrites its hash rather than replacing it.
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
 		if apierrors.IsNotFound(err) || err == nil && !got.DeletionTimestamp.IsZero() {
 			t.Fatal("a v1 Pod with a matching v1 hash was deleted")
 		}
@@ -1042,7 +1042,7 @@ func TestAgent_V1HashWithClaimsRewritesInPlace(t *testing.T) {
 
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
 		if apierrors.IsNotFound(err) || err == nil && !got.DeletionTimestamp.IsZero() {
 			t.Fatal("a v1 Pod whose hash covered claims was deleted")
 		}
@@ -1131,7 +1131,7 @@ func TestAgent_FinalizerRetainStripsPVCOwnerRef(t *testing.T) {
 	// Finish the Pod's graceful termination for the kubelet-less envtest.
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
+		if err := testAPIReader.List(ctxT(), &pods, client.InNamespace("default"),
 			client.MatchingLabels(map[string]string{"kaalm.io/agent": "retain-agent"})); err != nil {
 			return err
 		}
@@ -1144,14 +1144,14 @@ func TestAgent_FinalizerRetainStripsPVCOwnerRef(t *testing.T) {
 	// The Agent finalizes away and the PVC survives with no Agent ownerRef.
 	eventually(t, func() error {
 		var got kaalmv1beta1.Agent
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "retain-agent"}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "retain-agent"}, &got)
 		if !apierrors.IsNotFound(err) {
 			return errString("agent not yet finalized")
 		}
 		return nil
 	})
 	var pvc corev1.PersistentVolumeClaim
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "retain-agent-memory"}, &pvc); err != nil {
 		t.Fatalf("PVC should survive under Retain: %v", err)
 	}
@@ -1185,7 +1185,7 @@ func TestAgent_FinalizerDeleteKeepsPVCOwnerRef(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, client.InNamespace("default"),
+		if err := testAPIReader.List(ctxT(), &pods, client.InNamespace("default"),
 			client.MatchingLabels(map[string]string{"kaalm.io/agent": "delete-agent"})); err != nil {
 			return err
 		}
@@ -1196,7 +1196,7 @@ func TestAgent_FinalizerDeleteKeepsPVCOwnerRef(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var got kaalmv1beta1.Agent
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "delete-agent"}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "delete-agent"}, &got)
 		if !apierrors.IsNotFound(err) {
 			return errString("agent not yet finalized")
 		}
@@ -1206,7 +1206,7 @@ func TestAgent_FinalizerDeleteKeepsPVCOwnerRef(t *testing.T) {
 	// contract under Delete is that its Agent ownerRef stays intact so
 	// cascade GC would remove it in a real cluster.
 	var pvc corev1.PersistentVolumeClaim
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "delete-agent-memory"}, &pvc); err != nil {
 		t.Fatalf("get PVC: %v", err)
 	}
@@ -1252,7 +1252,7 @@ func TestAgent_TerminalPodReprovisions(t *testing.T) {
 	// The reconciler deletes the terminal Pod; finish its termination.
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -1322,7 +1322,7 @@ func expectAgentCondition(t *testing.T, name, condType string, want metav1.Condi
 	t.Helper()
 	eventually(t, func() error {
 		var ag kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ag); err != nil {
 			return err
 		}
 		c := condition(ag.Status.Conditions, condType)
@@ -1361,7 +1361,7 @@ func TestAgent_TerminatingPodHoldsProvisioning(t *testing.T) {
 	const fin = "test.kaalm.io/hold"
 	eventually(t, func() error {
 		var got corev1.Pod
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got); err != nil {
 			return err
 		}
 		got.Finalizers = append(got.Finalizers, fin)
@@ -1377,7 +1377,7 @@ func TestAgent_TerminatingPodHoldsProvisioning(t *testing.T) {
 	// Release the finalizer so the Pod can be reaped.
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: pod.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -1397,7 +1397,7 @@ func TestAgent_ServicePortDriftReconciled(t *testing.T) {
 
 	var svc corev1.Service
 	key := types.NamespacedName{Namespace: "default", Name: "svcdrift-agent"}
-	eventually(t, func() error { return testClient.Get(ctxT(), key, &svc) })
+	eventually(t, func() error { return testAPIReader.Get(ctxT(), key, &svc) })
 	wantPort := svc.Spec.Ports[0].Port
 
 	// Drift the Service port out of band.
@@ -1409,7 +1409,7 @@ func TestAgent_ServicePortDriftReconciled(t *testing.T) {
 
 	eventually(t, func() error {
 		var got corev1.Service
-		if err := testClient.Get(ctxT(), key, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &got); err != nil {
 			return err
 		}
 		if got.Spec.Ports[0].Port != wantPort {
@@ -1453,7 +1453,7 @@ func TestCertLifetime_ReachesCertificateSpec(t *testing.T) {
 
 	for _, name := range []string{"lifetime-agent-tls", "lifetime-task-tls"} {
 		var cert cmapi.Certificate
-		if err := testClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: name}, &cert); err != nil {
+		if err := testAPIReader.Get(ctx, types.NamespacedName{Namespace: "default", Name: name}, &cert); err != nil {
 			t.Fatalf("get %s: %v", name, err)
 		}
 		if cert.Spec.Duration == nil || cert.Spec.Duration.Duration != 24*time.Hour {
@@ -1591,7 +1591,7 @@ func setEnvSecretLabel(t *testing.T, name string, labeled bool) {
 	t.Helper()
 	eventually(t, func() error {
 		var sec corev1.Secret
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &sec); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &sec); err != nil {
 			return err
 		}
 		if labeled {
@@ -1668,7 +1668,7 @@ func TestAgent_EnvSecretRoleScopedAndRemoved(t *testing.T) {
 
 	eventually(t, func() error {
 		var role rbacv1.Role
-		if err := testClient.Get(ctxT(), key, &role); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &role); err != nil {
 			return err
 		}
 		want := []rbacv1.PolicyRule{{
@@ -1682,7 +1682,7 @@ func TestAgent_EnvSecretRoleScopedAndRemoved(t *testing.T) {
 			return fmt.Errorf("role owner = %+v", role.OwnerReferences)
 		}
 		var rb rbacv1.RoleBinding
-		if err := testClient.Get(ctxT(), key, &rb); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &rb); err != nil {
 			return err
 		}
 		if len(rb.Subjects) != 1 || rb.Subjects[0].Name != controllerServiceAccount ||
@@ -1694,7 +1694,7 @@ func TestAgent_EnvSecretRoleScopedAndRemoved(t *testing.T) {
 
 	eventually(t, func() error {
 		var ag kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "envrole-agent"}, &ag); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "envrole-agent"}, &ag); err != nil {
 			return err
 		}
 		ag.Spec.Env = []corev1.EnvVar{{Name: "PLAIN", Value: "v"}}
@@ -1702,11 +1702,11 @@ func TestAgent_EnvSecretRoleScopedAndRemoved(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var role rbacv1.Role
-		if err := testClient.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
+		if err := testAPIReader.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
 			return fmt.Errorf("role still present: %v", err)
 		}
 		var rb rbacv1.RoleBinding
-		if err := testClient.Get(ctxT(), key, &rb); !apierrors.IsNotFound(err) {
+		if err := testAPIReader.Get(ctxT(), key, &rb); !apierrors.IsNotFound(err) {
 			return fmt.Errorf("binding still present: %v", err)
 		}
 		return nil
@@ -1761,7 +1761,7 @@ func TestAgent_EnvSecretEmptyNameInvalidReference(t *testing.T) {
 	expectNoAgentPod(t, "envempty-agent")
 	var role rbacv1.Role
 	key := types.NamespacedName{Namespace: "default", Name: agentEnvSecretRoleName("envempty-agent")}
-	if err := testClient.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
+	if err := testAPIReader.Get(ctxT(), key, &role); !apierrors.IsNotFound(err) {
 		t.Errorf("an empty name minted an env-Secret Role: err=%v", err)
 	}
 }

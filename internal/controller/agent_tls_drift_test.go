@@ -227,7 +227,7 @@ func TestAgent_CertificateSecretNameChangeReplacesPod(t *testing.T) {
 
 	eventually(t, func() error {
 		var cert cmapi.Certificate
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "tls-drift-tls"}, &cert); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "tls-drift-tls"}, &cert); err != nil {
 			return err
 		}
 		cert.Spec.SecretName = "tls-drift-tls"
@@ -236,7 +236,7 @@ func TestAgent_CertificateSecretNameChangeReplacesPod(t *testing.T) {
 
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: old.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: old.Name}, &got)
 		if apierrors.IsNotFound(err) {
 			return nil
 		}

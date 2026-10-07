@@ -109,7 +109,7 @@ func editSecret(t *testing.T, name string, mutate func(*corev1.Secret)) {
 	t.Helper()
 	eventually(t, func() error {
 		var sec corev1.Secret
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &sec); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &sec); err != nil {
 			return err
 		}
 		mutate(&sec)
@@ -120,7 +120,7 @@ func editSecret(t *testing.T, name string, mutate func(*corev1.Secret)) {
 // getRole reads a Role in default.
 func getRole(name string) (*rbacv1.Role, error) {
 	var role rbacv1.Role
-	err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &role)
+	err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &role)
 	return &role, err
 }
 
@@ -146,7 +146,7 @@ func expectChannelReady(t *testing.T, name string, want metav1.ConditionStatus, 
 	t.Helper()
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
 			return err
 		}
 		c := condition(ch.Status.Conditions, kaalmv1beta1.ConditionReady)
@@ -173,7 +173,7 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 
 	// The scoped Role exists with exactly the auth Secret, get+watch only.
 	var role rbacv1.Role
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-ok-creds"}, &role); err != nil {
 		t.Fatalf("credential Role missing: %v", err)
 	}
@@ -187,13 +187,13 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 		}
 	}
 	var rb rbacv1.RoleBinding
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-ok-creds-gateway"}, &rb); err != nil {
 		t.Errorf("gateway RoleBinding missing: %v", err)
 	}
 	// The controller is not bound to the credential Role: the check Role
 	// already grants it every name the credential Role lists.
-	if err := testClient.Get(ctxT(), types.NamespacedName{
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{
 		Namespace: "default", Name: channelControllerCredsBindingName("ch-ok"),
 	}, &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
 		t.Errorf("controller RoleBinding to the credential Role: got err=%v, want NotFound", err)
@@ -204,7 +204,7 @@ func TestChannel_ValidBecomesReady(t *testing.T) {
 	// Phase reduces from the Agent (Pending and transients are Active).
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-ok"}, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-ok"}, &ch); err != nil {
 			return err
 		}
 		if ch.Status.Phase != kaalmv1beta1.ChannelActive {
@@ -220,7 +220,7 @@ func TestChannel_AgentNotFound(t *testing.T) {
 	expectChannelReady(t, "ch-noagent", metav1.ConditionFalse, kaalmv1beta1.ReasonAgentNotFound)
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-noagent"}, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-noagent"}, &ch); err != nil {
 			return err
 		}
 		if ch.Status.Phase != kaalmv1beta1.ChannelFailed {
@@ -310,7 +310,7 @@ func setChannelPath(t *testing.T, name, path string) {
 	t.Helper()
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
 			return err
 		}
 		ch.Spec.Webhook.Path = path
@@ -360,7 +360,7 @@ func TestChannel_PathConflictLoserWinsWhenWinnerLeaves(t *testing.T) {
 	mkChannel(t, "ch-pcl-c", "ch-agent-pcl", "/channels/default/pcl-shared", nil)
 	newLoser, newWinner := expectPathConflict(t, loser, "ch-pcl-c")
 	var ch kaalmv1beta1.AgentChannel
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: newWinner}, &ch); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: newWinner}, &ch); err != nil {
 		t.Fatal(err)
 	}
 	// Mark it disconnected so the finalizer releases without waiting for a
@@ -634,7 +634,7 @@ func TestChannel_UnresolvableCallbackHostWarns(t *testing.T) {
 
 	unresolvedEvents := func() ([]corev1.Event, error) {
 		var events corev1.EventList
-		if err := testClient.List(ctxT(), &events, client.InNamespace("default")); err != nil {
+		if err := testAPIReader.List(ctxT(), &events, client.InNamespace("default")); err != nil {
 			return nil, err
 		}
 		var out []corev1.Event
@@ -661,7 +661,7 @@ func TestChannel_UnresolvableCallbackHostWarns(t *testing.T) {
 
 	// More passes through the Agent watch must not repeat the Warning.
 	var agent kaalmv1beta1.Agent
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -673,7 +673,7 @@ func TestChannel_UnresolvableCallbackHostWarns(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Second)
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-nxcb"}, &agent); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -703,7 +703,7 @@ func TestChannel_DegradedWhenAgentDegraded(t *testing.T) {
 	mkChannel(t, "ch-deg", "ch-agent-deg", "/channels/default/ch-deg", nil)
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-deg"}, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-deg"}, &ch); err != nil {
 			return err
 		}
 		if ch.Status.Phase != kaalmv1beta1.ChannelDegraded {
@@ -745,7 +745,7 @@ func expectAsyncPruned(t *testing.T, expired, live string) {
 	t.Helper()
 	eventually(t, func() error {
 		var cm corev1.ConfigMap
-		err := testClient.Get(ctxT(),
+		err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: testSystemNamespace, Name: expired}, &cm)
 		if !apierrors.IsNotFound(err) {
 			return errString("expired record not pruned")
@@ -753,7 +753,7 @@ func expectAsyncPruned(t *testing.T, expired, live string) {
 		return nil
 	})
 	var cm corev1.ConfigMap
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: testSystemNamespace, Name: live}, &cm); err != nil {
 		t.Errorf("live record must survive the prune: %v", err)
 	}
@@ -984,7 +984,7 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 	}
 
 	var ch kaalmv1beta1.AgentChannel
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &ch); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &ch); err != nil {
 		t.Fatal(err)
 	}
 	if err := testClient.Delete(ctxT(), &ch); err != nil {
@@ -994,7 +994,7 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 	// Step 1: the reconciler announces Terminating and holds.
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got); err != nil {
 			return err
 		}
 		if got.Status.Phase != kaalmv1beta1.ChannelTerminating {
@@ -1006,7 +1006,7 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 	// Steps 2-3: play the gateway and confirm disconnection.
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got); err != nil {
 			return err
 		}
 		if got.Annotations == nil {
@@ -1019,14 +1019,14 @@ func TestChannel_DeleteHandshake(t *testing.T) {
 	// Steps 5-6: sweep and release.
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentChannel
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-del"}, &got)
 		if !apierrors.IsNotFound(err) {
 			return errString("channel not yet finalized")
 		}
 		return nil
 	})
 	var sweptCM corev1.ConfigMap
-	err := testClient.Get(ctxT(),
+	err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: testSystemNamespace, Name: "kaalm-async-del-1"}, &sweptCM)
 	if !apierrors.IsNotFound(err) {
 		t.Error("finalizer sweep must remove the channel's async records")
@@ -1045,7 +1045,7 @@ func TestChannel_CredentialRoleGrowsWithSecretRefs(t *testing.T) {
 	roleName := "kaalm-channel-ch-role-creds"
 	eventually(t, func() error {
 		var role rbacv1.Role
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: "default", Name: roleName}, &role); err != nil {
 			return err
 		}
@@ -1059,7 +1059,7 @@ func TestChannel_CredentialRoleGrowsWithSecretRefs(t *testing.T) {
 	mkChannelSecret(t, "ch-role-hmac")
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-role"}, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-role"}, &ch); err != nil {
 			return err
 		}
 		ch.Spec.Webhook.Auth.HMAC = &kaalmv1beta1.ChannelHMAC{
@@ -1070,7 +1070,7 @@ func TestChannel_CredentialRoleGrowsWithSecretRefs(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var role rbacv1.Role
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: "default", Name: roleName}, &role); err != nil {
 			return err
 		}
@@ -1120,7 +1120,7 @@ func TestChannel_SystemNamespaceForbidden(t *testing.T) {
 	}
 	eventually(t, func() error {
 		var got kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Namespace: testSystemNamespace, Name: "ch-sys"}, &got); err != nil {
 			return err
 		}
@@ -1135,7 +1135,7 @@ func TestChannel_SystemNamespaceForbidden(t *testing.T) {
 	})
 	// No Role is ever written in the operator namespace.
 	for _, name := range []string{"kaalm-channel-ch-sys-check", "kaalm-channel-ch-sys-creds"} {
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: testSystemNamespace, Name: name}, &rbacv1.Role{})
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: testSystemNamespace, Name: name}, &rbacv1.Role{})
 		if !apierrors.IsNotFound(err) {
 			t.Errorf("Role %s in the operator namespace: err = %v, want NotFound", name, err)
 		}
@@ -1253,7 +1253,7 @@ func TestChannel_PruneSkipsNonAsyncConfigMap(t *testing.T) {
 	// Give the reconciler time to run a prune pass, then confirm survival.
 	time.Sleep(500 * time.Millisecond)
 	var got corev1.ConfigMap
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: testSystemNamespace, Name: "unrelated-config"}, &got); err != nil {
 		t.Errorf("a non-async ConfigMap must not be pruned: %v", err)
 	}
@@ -1582,7 +1582,7 @@ func TestChannel_DiscordValidBecomesReady(t *testing.T) {
 
 	// The credential Role is scoped to the one credentialsRef Secret.
 	var role rbacv1.Role
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-dc-creds"}, &role); err != nil {
 		t.Fatalf("credential Role missing: %v", err)
 	}
@@ -1591,7 +1591,7 @@ func TestChannel_DiscordValidBecomesReady(t *testing.T) {
 	}
 	// The default contentOption lands from the CRD.
 	var ch kaalmv1beta1.AgentChannel
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-dc"}, &ch); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-dc"}, &ch); err != nil {
 		t.Fatal(err)
 	}
 	if ch.Spec.Discord.ContentOption != "message" {
@@ -1734,7 +1734,7 @@ func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
 	key := types.NamespacedName{Namespace: "default", Name: "ch-quiet"}
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), key, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &ch); err != nil {
 			return err
 		}
 		if ch.Status.Phase != kaalmv1beta1.ChannelActive {
@@ -1743,14 +1743,14 @@ func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
 		return nil
 	})
 	var settled kaalmv1beta1.AgentChannel
-	if err := testClient.Get(ctxT(), key, &settled); err != nil {
+	if err := testAPIReader.Get(ctxT(), key, &settled); err != nil {
 		t.Fatal(err)
 	}
 
 	// Touching the Agent re-enqueues the channel through the Agent watch;
 	// the pass finds nothing to change.
 	var agent kaalmv1beta1.Agent
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-quiet"}, &agent); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-agent-quiet"}, &agent); err != nil {
 		t.Fatal(err)
 	}
 	if agent.Labels == nil {
@@ -1762,7 +1762,7 @@ func TestChannel_UnchangedPassWritesNoStatus(t *testing.T) {
 	}
 	time.Sleep(3 * time.Second)
 	var after kaalmv1beta1.AgentChannel
-	if err := testClient.Get(ctxT(), key, &after); err != nil {
+	if err := testAPIReader.Get(ctxT(), key, &after); err != nil {
 		t.Fatal(err)
 	}
 	if after.ResourceVersion != settled.ResourceVersion {
@@ -1793,7 +1793,7 @@ func TestChannel_UnownedCredentialRoleIsChildConflict(t *testing.T) {
 	expectChannelReady(t, "ch-own-role", metav1.ConditionFalse, kaalmv1beta1.ReasonChildConflict)
 
 	var role rbacv1.Role
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: roleName}, &role); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: roleName}, &role); err != nil {
 		t.Fatal(err)
 	}
 	if len(role.Rules) != 1 || role.Rules[0].Resources[0] != "configmaps" || metav1.GetControllerOf(&role) != nil {
@@ -1816,7 +1816,7 @@ func TestChannel_ControllerCredsBindingRemoved(t *testing.T) {
 	expectChannelReady(t, "ch-ccb-legacy", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
 
 	var ch kaalmv1beta1.AgentChannel
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-ccb-legacy"}, &ch); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-ccb-legacy"}, &ch); err != nil {
 		t.Fatal(err)
 	}
 	name := channelControllerCredsBindingName("ch-ccb-legacy")
@@ -1835,7 +1835,7 @@ func TestChannel_ControllerCredsBindingRemoved(t *testing.T) {
 	}
 
 	eventually(t, func() error {
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rbacv1.RoleBinding{})
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rbacv1.RoleBinding{})
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -1844,7 +1844,7 @@ func TestChannel_ControllerCredsBindingRemoved(t *testing.T) {
 		}
 		return errString("the controller RoleBinding to the credential Role still exists")
 	})
-	if err := testClient.Get(ctxT(), types.NamespacedName{
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{
 		Namespace: "default", Name: "kaalm-channel-ch-ccb-legacy-creds-gateway",
 	}, &rbacv1.RoleBinding{}); err != nil {
 		t.Errorf("gateway RoleBinding missing: %v", err)
@@ -1873,7 +1873,7 @@ func TestChannel_UnownedCredsControllerBindingLeftAlone(t *testing.T) {
 	expectChannelReady(t, "ch-ccb-foreign", metav1.ConditionTrue, kaalmv1beta1.ReasonAgentReachable)
 
 	var rb rbacv1.RoleBinding
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rb); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rb); err != nil {
 		t.Fatalf("the foreign RoleBinding was removed: %v", err)
 	}
 	if rb.RoleRef != foreign.RoleRef || len(rb.Subjects) != 1 || rb.Subjects[0] != foreign.Subjects[0] ||
@@ -1903,7 +1903,7 @@ func assertCheckRole(t *testing.T, channel string, names []string) {
 			return errString(fmt.Sprintf("check Role lists %v, want %v", got, names))
 		}
 		var rb rbacv1.RoleBinding
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rb); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &rb); err != nil {
 			return err
 		}
 		if len(rb.Subjects) != 1 || rb.Subjects[0].Name != controllerServiceAccount {
@@ -1933,7 +1933,7 @@ func expectCredsRole(t *testing.T, channel string, names []string) {
 func readyMessage(t *testing.T, name string) string {
 	t.Helper()
 	var ch kaalmv1beta1.AgentChannel
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: name}, &ch); err != nil {
 		t.Fatal(err)
 	}
 	if c := condition(ch.Status.Conditions, kaalmv1beta1.ConditionReady); c != nil {
@@ -2041,7 +2041,7 @@ func TestChannel_LabelRemovedShrinksGatewayRole(t *testing.T) {
 	expectCredsRole(t, "ch-unlabel", nil)
 	// The bindings stay; they grant nothing while the Role has no rules.
 	var rb rbacv1.RoleBinding
-	if err := testClient.Get(ctxT(),
+	if err := testAPIReader.Get(ctxT(),
 		types.NamespacedName{Namespace: "default", Name: "kaalm-channel-ch-unlabel-creds-gateway"}, &rb); err != nil {
 		t.Errorf("gateway RoleBinding removed: %v", err)
 	}
@@ -2123,7 +2123,7 @@ func TestChannel_CallbackHostNotApproved(t *testing.T) {
 	// Editing the callbackUrl to an unlisted host is caught too.
 	eventually(t, func() error {
 		var ch kaalmv1beta1.AgentChannel
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-cbhost"}, &ch); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "ch-cbhost"}, &ch); err != nil {
 			return err
 		}
 		moved := "https://kaalm-elsewhere.invalid/hook"

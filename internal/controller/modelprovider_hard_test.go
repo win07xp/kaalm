@@ -51,13 +51,13 @@ func TestModelProvider_HardBudgetUnpricedSetsNotReadyAndRecovers(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionFalse, kaalmv1beta1.ReasonHardBudgetUnpriced)
 
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp); err != nil {
 			return err
 		}
 		mp.Spec.Models = []kaalmv1beta1.ModelProviderModel{
@@ -67,7 +67,7 @@ func TestModelProvider_HardBudgetUnpricedSetsNotReadyAndRecovers(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-hard"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 }
@@ -125,7 +125,7 @@ func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 	})
 	expectReady(t, func() []metav1.Condition {
 		var mp kaalmv1beta1.ModelProvider
-		_ = testClient.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp)
+		_ = testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp)
 		return mp.Status.Conditions
 	}, metav1.ConditionTrue, kaalmv1beta1.ReasonCredentialsValid)
 
@@ -144,7 +144,7 @@ func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp); err != nil {
 			return err
 		}
 		c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)
@@ -160,7 +160,7 @@ func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 	// Flag drops: the condition clears on a later reconcile.
 	eventually(t, func() error {
 		var got corev1.ConfigMap
-		if err := testClient.Get(ctxT(),
+		if err := testAPIReader.Get(ctxT(),
 			types.NamespacedName{Name: gateway.BudgetConfigMapName("mp-margin"), Namespace: testOperatorNamespace},
 			&got); err != nil {
 			return err
@@ -170,7 +170,7 @@ func TestModelProvider_BoundaryMarginRaisedCondition(t *testing.T) {
 	})
 	eventually(t, func() error {
 		var mp kaalmv1beta1.ModelProvider
-		if err := testClient.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Name: "mp-margin"}, &mp); err != nil {
 			return err
 		}
 		c := condition(mp.Status.Conditions, kaalmv1beta1.ConditionBoundaryMarginRaised)

@@ -115,7 +115,7 @@ func TestAgent_HibernatesWithoutRecordedTraffic(t *testing.T) {
 	// termination (no kubelet in envtest) and assert it settles, not oscillates.
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, listAgentPods("notraffic")...); err != nil {
+		if err := testAPIReader.List(ctxT(), &pods, listAgentPods("notraffic")...); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -159,7 +159,7 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 	// The reconciler deletes the Pod; finish its termination (no kubelet).
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, listAgentPods("hib-wake")...); err != nil {
+		if err := testAPIReader.List(ctxT(), &pods, listAgentPods("hib-wake")...); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -168,7 +168,7 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 			}
 		}
 		var ag kaalmv1beta1.Agent
-		if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hib-wake"}, &ag); err != nil {
+		if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hib-wake"}, &ag); err != nil {
 			return err
 		}
 		if ag.Status.Phase != kaalmv1beta1.AgentHibernated {
@@ -185,11 +185,11 @@ func TestAgent_HibernateAndWake(t *testing.T) {
 		t.Error("Hibernated must have no Pod")
 	}
 	var pvc corev1.PersistentVolumeClaim
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hib-wake-memory"}, &pvc); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hib-wake-memory"}, &pvc); err != nil {
 		t.Errorf("PVC must survive hibernation: %v", err)
 	}
 	var svc corev1.Service
-	if err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hib-wake"}, &svc); err != nil {
+	if err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: "hib-wake"}, &svc); err != nil {
 		t.Errorf("Service must survive hibernation: %v", err)
 	}
 	ag := getWorkloadAgent(t, "hib-wake")
@@ -350,7 +350,7 @@ func TestAgent_WakeIsActivity(t *testing.T) {
 	touchAgent(t, "wake-act")
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, listAgentPods("wake-act")...); err != nil {
+		if err := testAPIReader.List(ctxT(), &pods, listAgentPods("wake-act")...); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -608,7 +608,7 @@ const holdFinalizer = "test.kaalm.io/hold"
 func terminatingPods(t *testing.T, name string) []corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
-	if err := testClient.List(ctxT(), &pods, listAgentPods(name)...); err != nil {
+	if err := testAPIReader.List(ctxT(), &pods, listAgentPods(name)...); err != nil {
 		t.Fatalf("list pods: %v", err)
 	}
 	var out []corev1.Pod
@@ -731,7 +731,7 @@ func TestAgent_WakesOnChannelAnnotation(t *testing.T) {
 	touchAgent(t, "ch-wake")
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, listAgentPods("ch-wake")...); err != nil {
+		if err := testAPIReader.List(ctxT(), &pods, listAgentPods("ch-wake")...); err != nil {
 			return err
 		}
 		for i := range pods.Items {

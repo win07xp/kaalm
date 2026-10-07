@@ -50,7 +50,7 @@ func reissueCertificate(t *testing.T, agentName string) {
 	t.Helper()
 	key := types.NamespacedName{Namespace: "default", Name: agentCertificateName(agentName)}
 	var cert cmapi.Certificate
-	if err := testClient.Get(ctxT(), key, &cert); err != nil {
+	if err := testAPIReader.Get(ctxT(), key, &cert); err != nil {
 		t.Fatalf("get certificate: %v", err)
 	}
 	if err := testClient.Delete(ctxT(), &cert); err != nil && !apierrors.IsNotFound(err) {
@@ -59,7 +59,7 @@ func reissueCertificate(t *testing.T, agentName string) {
 	old := cert.UID
 	eventually(t, func() error {
 		var got cmapi.Certificate
-		if err := testClient.Get(ctxT(), key, &got); err != nil {
+		if err := testAPIReader.Get(ctxT(), key, &got); err != nil {
 			return err
 		}
 		if got.UID == old {
@@ -115,7 +115,7 @@ func TestAgent_CertificateReissueKeepsServingPod(t *testing.T) {
 	// The non-Pod children still converge during the hold.
 	svcKey := types.NamespacedName{Namespace: "default", Name: "cert-reissue"}
 	var svc corev1.Service
-	if err := testClient.Get(ctxT(), svcKey, &svc); err != nil {
+	if err := testAPIReader.Get(ctxT(), svcKey, &svc); err != nil {
 		t.Fatalf("get service: %v", err)
 	}
 	if err := testClient.Delete(ctxT(), &svc); err != nil {
@@ -166,7 +166,7 @@ func TestAgent_CertificateHoldDefersDriftReplacement(t *testing.T) {
 	markCertReady(t, "cert-drift")
 	eventually(t, func() error {
 		var got corev1.Pod
-		err := testClient.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
+		err := testAPIReader.Get(ctxT(), types.NamespacedName{Namespace: "default", Name: oldPod.Name}, &got)
 		if apierrors.IsNotFound(err) || err == nil && got.UID != oldPod.UID {
 			return nil
 		}
@@ -235,7 +235,7 @@ func TestAgent_CertificateHoldKeepsIdlePod(t *testing.T) {
 	markCertReady(t, "cert-idle")
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, listAgentPods("cert-idle")...); err != nil {
+		if err := testAPIReader.List(ctxT(), &pods, listAgentPods("cert-idle")...); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -301,7 +301,7 @@ func TestAgent_WakeWaitsForCertificate(t *testing.T) {
 	touchAgent(t, "cert-wake")
 	eventually(t, func() error {
 		var pods corev1.PodList
-		if err := testClient.List(ctxT(), &pods, listAgentPods("cert-wake")...); err != nil {
+		if err := testAPIReader.List(ctxT(), &pods, listAgentPods("cert-wake")...); err != nil {
 			return err
 		}
 		for i := range pods.Items {
@@ -319,7 +319,7 @@ func TestAgent_WakeWaitsForCertificate(t *testing.T) {
 	// Certificate is re-created by the wake's pass.
 	var cert cmapi.Certificate
 	key := types.NamespacedName{Namespace: "default", Name: agentCertificateName("cert-wake")}
-	if err := testClient.Get(ctxT(), key, &cert); err != nil {
+	if err := testAPIReader.Get(ctxT(), key, &cert); err != nil {
 		t.Fatalf("get certificate: %v", err)
 	}
 	if err := testClient.Delete(ctxT(), &cert); err != nil {
