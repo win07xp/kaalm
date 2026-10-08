@@ -1,8 +1,9 @@
 # In-cluster infrastructure for the perf harness (test/perf), applied once per
 # run before any phase. Everything the fleet needs that is not itself under
 # measurement: the namespace, the mock LLM provider it forwards to, the four
-# ModelProviders the gateway legs target, the channel secrets, and the load
-# generator's ServiceAccount.
+# ModelProviders the gateway legs target, the channel secrets, the load
+# generator's ServiceAccount, and for the tools phase the mock MCP server
+# with its credential and the perf-mcp ToolProvider.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -229,3 +230,110 @@ spec:
     - id: mock-model
       costPer1MInputTokens: "1.00"
       costPer1MOutputTokens: "2.00"
+---
+# The tools phase's tool server: the e2e suite's mock MCP server, speaking
+# only the 2026-07-28 revision. It answers 401 to any request without the
+# perf-tool-key credential, so a 200 through the broker proves the gateway
+# injected it.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mock-mcp-tls
+  namespace: perf
+spec:
+  secretName: mock-mcp-tls
+  issuerRef:
+    name: kaalm-ca-issuer
+    kind: ClusterIssuer
+  usages:
+    - server auth
+  dnsNames:
+    - mock-mcp.perf.svc
+    - mock-mcp.perf.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-mcp
+  namespace: perf
+  labels:
+    app: mock-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-mcp
+  template:
+    metadata:
+      labels:
+        app: mock-mcp
+    spec:
+      containers:
+        - name: mock-mcp
+          image: registry.test/mock/mcp-server:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr=:8443
+            - --tls-cert=/var/run/tls/tls.crt
+            - --tls-key=/var/run/tls/tls.key
+            - --modern
+            # Must match the perf-tool-key Secret below: brokered calls
+            # succeed only because the gateway injected that value.
+            - --require-bearer=perf-tool-credential
+          ports:
+            - containerPort: 8443
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: mock-mcp-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-mcp
+  namespace: perf
+spec:
+  selector:
+    app: mock-mcp
+  ports:
+    - port: 8443
+      targetPort: 8443
+---
+# The tool server's credential, resolved in the operator namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: perf-tool-key
+  namespace: kaalm-system
+  labels:
+    kaalm.io/provider-credential: "true"
+  annotations:
+    kaalm.io/provider-hosts: mock-mcp.perf.svc
+type: Opaque
+stringData:
+  token: perf-tool-credential
+---
+# perf-mcp: the tools phase's ToolProvider. The declared catalog matches the
+# mock's, so the broker's tool label stays bounded. Health probes are off, as
+# on the ModelProviders.
+apiVersion: kaalm.io/v1beta1
+kind: ToolProvider
+metadata:
+  name: perf-mcp
+spec:
+  type: mcp
+  endpoint: https://mock-mcp.perf.svc:8443
+  credentialsRef:
+    name: perf-tool-key
+    key: token
+  allowedNamespaces:
+    - perf
+  tools:
+    - id: web_search
+    - id: fetch_page
+  healthCheck:
+    enabled: false

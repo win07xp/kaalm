@@ -71,17 +71,20 @@ type loadgenConfig struct {
 	noKeepalive bool
 	certFile    string
 	keyFile     string
+	toolURL     string
+	tool        string
 }
 
 func runLoadgen(args []string) error {
 	var c loadgenConfig
 	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
 	fs.StringVar(&c.mode, "mode", modeGateway,
-		"gateway (LLM proxy at fixed concurrency) or channels (webhook messages at a fixed rate)")
+		"gateway (LLM proxy at fixed concurrency), tools (MCP tools/call through the broker at fixed concurrency), "+
+			"or channels (webhook messages at a fixed rate)")
 	fs.StringVar(&c.url, "url", gatewayBase+"/v1/chat/completions",
 		"gateway mode: LLM endpoint")
 	fs.StringVar(&c.model, "model", providerFast+"/mock-model", "gateway mode: qualified provider/model")
-	fs.IntVar(&c.concurrency, "concurrency", 32, "gateway mode: concurrent callers")
+	fs.IntVar(&c.concurrency, "concurrency", 32, "gateway and tools modes: concurrent callers")
 	fs.DurationVar(&c.duration, "duration", time.Minute, "measured run length after warmup")
 	fs.StringVar(&c.tokenFile, "token-file", "/var/run/token/token",
 		"projected ServiceAccount token (audience kaalm-gateway)")
@@ -97,8 +100,12 @@ func runLoadgen(args []string) error {
 	fs.BoolVar(&c.noKeepalive, "no-keepalive", false,
 		"open a fresh connection per request (measures the cost of an in-cluster dial: DNS, TCP, TLS)")
 	fs.StringVar(&c.certFile, "cert-file", "",
-		"gateway mode: present this client certificate (a Kaalm agent identity) instead of the ServiceAccount token")
-	fs.StringVar(&c.keyFile, "key-file", "", "gateway mode: the client certificate's key")
+		"gateway and tools modes: present this client certificate (a Kaalm agent identity) "+
+			"instead of the ServiceAccount token")
+	fs.StringVar(&c.keyFile, "key-file", "", "gateway and tools modes: the client certificate's key")
+	fs.StringVar(&c.toolURL, "tool-url", gatewayBase+"/v1/mcp/"+toolProviderName,
+		"tools mode: the broker endpoint of the ToolProvider")
+	fs.StringVar(&c.tool, "tool", toolName, "tools mode: the tool every tools/call names")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -132,6 +139,8 @@ func runLoadgen(args []string) error {
 	switch c.mode {
 	case modeGateway:
 		res, err = gatewayLoad(cli, c)
+	case modeTools:
+		res, err = toolsLoad(cli, c)
 	case modeChannels:
 		res, err = channelLoad(cli, c)
 	default:
@@ -156,6 +165,12 @@ type recorder struct {
 func newRecorder() *recorder { return &recorder{statuses: map[string]int{}} }
 
 func (r *recorder) record(status int, latency time.Duration, err error) {
+	r.recordLabel(strconv.Itoa(status), latency, err)
+}
+
+// recordLabel counts one outcome under a status label: the HTTP status, or a
+// finer label such as "rpc_error" for a JSON-RPC error inside a 200.
+func (r *recorder) recordLabel(label string, latency time.Duration, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err != nil {
@@ -165,9 +180,13 @@ func (r *recorder) record(status int, latency time.Duration, err error) {
 		}
 		return
 	}
-	r.statuses[strconv.Itoa(status)]++
-	r.latencies = append(r.latencies, float64(latency.Microseconds())/1000)
+	r.statuses[label]++
+	r.latencies = append(r.latencies, ms(latency))
 }
+
+func (r *recorder) recordOutcome(o outcome) { r.recordLabel(o.label, o.latency, o.err) }
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
 func (r *recorder) result(mode string, elapsed, warmup time.Duration) *loadResult {
 	r.mu.Lock()
@@ -199,40 +218,45 @@ func doRequest(cli *http.Client, req *http.Request) (int, time.Duration, error) 
 	return resp.StatusCode, time.Since(start), nil
 }
 
-// gatewayLoad drives chat completions at fixed concurrency: every worker
-// issues the next request as soon as the previous one returns.
-func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
-	// An mTLS caller is identified by its certificate; only the token tier
-	// sends a bearer.
-	bearer := ""
-	if c.certFile == "" {
-		token, err := os.ReadFile(c.tokenFile)
-		if err != nil {
-			return nil, err
-		}
-		bearer = strings.TrimSpace(string(token))
-	}
-	body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"load"}]}`, c.model))
-	newReq := func() *http.Request {
-		req, _ := http.NewRequest(http.MethodPost, c.url, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		if bearer != "" {
-			req.Header.Set("Authorization", "Bearer "+bearer)
-		}
-		return req
-	}
+// outcome is one request's result under its status label.
+type outcome struct {
+	label   string
+	latency time.Duration
+	err     error
+}
 
-	// Warmup: the gateway's source-IP cross-check answers 401 until its Pod
-	// informer has seen this freshly created caller; a real client retries
-	// the same way. Nothing is measured until the first 200.
+// statusOutcome labels a plain HTTP exchange by its status code.
+func statusOutcome(status int, latency time.Duration, err error) outcome {
+	return outcome{label: strconv.Itoa(status), latency: latency, err: err}
+}
+
+// gatewayBearer is the token-tier credential: the projected ServiceAccount
+// token, or "" for an mTLS caller, which its certificate identifies.
+func gatewayBearer(c loadgenConfig) (string, error) {
+	if c.certFile != "" {
+		return "", nil
+	}
+	token, err := os.ReadFile(c.tokenFile)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(token)), nil
+}
+
+// fixedConcurrency warms up until one clean 200, then runs c.concurrency
+// workers for c.duration, each issuing the next request as soon as the
+// previous one returns. The gateway's source-IP cross-check answers 401
+// until its Pod informer has seen a freshly created caller; a real client
+// retries the same way, and nothing is measured until the first 200.
+func fixedConcurrency(c loadgenConfig, mode string, once func() outcome) (*loadResult, error) {
 	warmStart := time.Now()
 	for {
-		status, _, err := doRequest(cli, newReq())
-		if err == nil && status == http.StatusOK {
+		o := once()
+		if o.err == nil && o.label == "200" {
 			break
 		}
 		if time.Since(warmStart) > c.warmup {
-			return nil, fmt.Errorf("warmup: no 200 within %s (last status %d, err %v)", c.warmup, status, err)
+			return nil, fmt.Errorf("warmup: no 200 within %s (last status %s, err %v)", c.warmup, o.label, o.err)
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -248,13 +272,92 @@ func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
-				status, lat, err := doRequest(cli, newReq())
-				rec.record(status, lat, err)
+				rec.recordOutcome(once())
 			}
 		}()
 	}
 	wg.Wait()
-	return rec.result(modeGateway, time.Since(start), warmup), nil
+	return rec.result(mode, time.Since(start), warmup), nil
+}
+
+// gatewayLoad drives chat completions at fixed concurrency.
+func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
+	bearer, err := gatewayBearer(c)
+	if err != nil {
+		return nil, err
+	}
+	body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"load"}]}`, c.model))
+	newReq := func() *http.Request {
+		req, _ := http.NewRequest(http.MethodPost, c.url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		return req
+	}
+	once := func() outcome { return statusOutcome(doRequest(cli, newReq())) }
+	return fixedConcurrency(c, modeGateway, once)
+}
+
+// mcpRevision is the MCP protocol revision the tools mode speaks: the
+// stateless one, with no initialize and no session.
+const mcpRevision = "2026-07-28"
+
+// toolCallBody is a self-describing tools/call request on mcpRevision.
+func toolCallBody(tool string) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name": tool, "arguments": map[string]any{},
+			"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": mcpRevision},
+		},
+	})
+	return body
+}
+
+// toolCallStatus labels a broker answer: "rpc_error" when an HTTP 200
+// carries a JSON-RPC error (the tool server refused the call), the HTTP
+// status otherwise.
+func toolCallStatus(httpStatus int, body []byte) string {
+	if httpStatus == http.StatusOK {
+		var env struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(body, &env) == nil && len(env.Error) > 0 && string(env.Error) != "null" {
+			return "rpc_error"
+		}
+	}
+	return strconv.Itoa(httpStatus)
+}
+
+// toolsLoad drives tools/call through the gateway's MCP broker at fixed
+// concurrency, with the same auth choice as gatewayLoad.
+func toolsLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
+	bearer, err := gatewayBearer(c)
+	if err != nil {
+		return nil, err
+	}
+	body := toolCallBody(c.tool)
+	once := func() outcome {
+		req, _ := http.NewRequest(http.MethodPost, c.toolURL, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("MCP-Protocol-Version", mcpRevision)
+		req.Header.Set("Mcp-Method", "tools/call")
+		req.Header.Set("Mcp-Name", c.tool)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		start := time.Now()
+		resp, err := cli.Do(req)
+		if err != nil {
+			return outcome{latency: time.Since(start), err: err}
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		_ = resp.Body.Close()
+		return outcome{label: toolCallStatus(resp.StatusCode, raw), latency: time.Since(start)}
+	}
+	return fixedConcurrency(c, modeTools, once)
 }
 
 // channelLoad posts webhook messages round-robin across the channels at a

@@ -542,6 +542,112 @@ func (h *harness) runGateway(ctx context.Context) error {
 	return nil
 }
 
+// ---- tools ----
+
+const (
+	toolsClassName = "perf-tools"
+	// toolsAgentName is the Agent whose identity the mTLS tool leg
+	// borrows; its grant names perf-mcp narrowed to the called tool.
+	toolsAgentName = "loadgen-tools"
+)
+
+// toolsResult is the tool plane under load: brokered tools/call through
+// POST /v1/mcp/perf-mcp, by auth mode.
+type toolsResult struct {
+	Legs []toolLeg `json:"legs"`
+}
+
+type toolLeg struct {
+	Name        string      `json:"name"`
+	Provider    string      `json:"provider"`
+	MTLS        bool        `json:"mtls"`
+	Concurrency int         `json:"concurrency"`
+	Client      *loadResult `json:"client"`
+	// GatewaySideMs is the broker's histogram, which counts forwarded
+	// calls only.
+	GatewaySideMs          stats              `json:"gatewaySideMs"`
+	CallsByStatus          map[string]float64 `json:"callsByStatus"`
+	GatewayCalls           float64            `json:"gatewayCalls"`
+	GatewayCPUPerRequestMs float64            `json:"gatewayCpuPerRequestMs"`
+	GatewayUsageMax        usage              `json:"gatewayUsageMax"`
+}
+
+// toolsClass is the active class with perf-mcp allowed, under its own name
+// so the ramp's class never changes.
+func toolsClass() *kaalmv1beta1.AgentClass {
+	c := activeClass()
+	c.Name = toolsClassName
+	c.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: toolProviderName}}
+	return c
+}
+
+func toolsAgentObj(ns, image string) *kaalmv1beta1.Agent {
+	a := agentObj(ns, toolsAgentName, toolsClassName, image, phaseTools, false)
+	a.Spec.Tools = []kaalmv1beta1.AgentToolGrant{{
+		ProviderRef: kaalmv1beta1.LocalObjectReference{Name: toolProviderName},
+		Tools:       []string{toolName},
+	}}
+	return a
+}
+
+// toolLegSpecs are the tools phase's legs. The token-tier caller has no
+// workload, so the broker admits it on the provider's allowedNamespaces and
+// declared catalog; the mTLS caller goes through the agent's grant and the
+// class allowlist.
+var toolLegSpecs = []legSpec{
+	toolLegSpec("tools token tier: 2026-07-28, immediate tool server", "loadgen-tools-token", false),
+	toolLegSpec("tools mtls: 2026-07-28, immediate tool server", "loadgen-tools-mtls", true),
+}
+
+func toolLegSpec(name, job string, mtls bool) legSpec {
+	return legSpec{
+		name: name, provider: toolProviderName, job: job, mtls: mtls, mode: modeTools,
+		histogram: metricToolDuration, counter: metricToolCalls,
+		labels: map[string]string{"provider": toolProviderName},
+	}
+}
+
+func (h *harness) runTools(ctx context.Context) error {
+	cfg := h.cfg
+	// Checked here rather than with the rest of the infrastructure, so a
+	// cluster without the image fails only this phase.
+	if err := h.k.kubectl("rollout", "status", "deploy/mock-mcp", "-n", cfg.Namespace, "--timeout=180s"); err != nil {
+		return fmt.Errorf("mock MCP server not ready (make perf-images builds and imports it): %w", err)
+	}
+	if err := h.k.ensureClass(ctx, toolsClass()); err != nil {
+		return err
+	}
+	mtlsSecret, cleanup, err := h.loadgenIdentity(ctx, toolsAgentObj(cfg.Namespace, cfg.AgentImage))
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	res := &toolsResult{}
+	for i, spec := range toolLegSpecs {
+		h.logf("tools leg %d/%d: %s (%d callers, %s)",
+			i+1, len(toolLegSpecs), spec.name, cfg.GatewayConcurrency, cfg.GatewayDuration)
+		leg, scrapes, err := h.runLeg(ctx, spec, mtlsSecret)
+		if err != nil {
+			return fmt.Errorf("tools %w", err)
+		}
+		res.Legs = append(res.Legs, toolLeg{
+			Name:                   leg.Name,
+			Provider:               leg.Provider,
+			MTLS:                   leg.MTLS,
+			Concurrency:            leg.Concurrency,
+			Client:                 leg.Client,
+			GatewaySideMs:          leg.GatewaySideMs,
+			CallsByStatus:          counterByLabel(scrapes.before, scrapes.after, metricToolCalls, "status", spec.labels),
+			GatewayCalls:           leg.GatewayRequests,
+			GatewayCPUPerRequestMs: leg.GatewayCPUPerRequestMs,
+			GatewayUsageMax:        leg.GatewayUsageMax,
+		})
+	}
+	h.sum.Tools = res
+	return nil
+}
+
 // ---- ramp ----
 
 // rampFleet is the standard max-active fleet: ramp-NNNN in the run's

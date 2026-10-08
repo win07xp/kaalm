@@ -33,7 +33,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 type harness struct {
@@ -55,6 +58,7 @@ type summary struct {
 	Churn       *churnResult    `json:"churn,omitempty"`
 	Tasks       *tasksResult    `json:"tasks,omitempty"`
 	Restart     *restartResult  `json:"restart,omitempty"`
+	Tools       *toolsResult    `json:"tools,omitempty"`
 	Notes       []string        `json:"notes,omitempty"`
 }
 
@@ -155,6 +159,8 @@ func (h *harness) runPhases(ctx context.Context) error {
 			err = h.runTasks(ctx)
 		case phaseRestart:
 			err = h.runRestart(ctx)
+		case phaseTools:
+			err = h.runTools(ctx)
 		}
 		if err != nil {
 			h.note("phase %s failed after %s: %v", p, time.Since(start).Round(time.Second), err)
@@ -267,6 +273,11 @@ func (h *harness) cleanLeftovers(ctx context.Context) {
 			h.note("cleaning leftover %s objects: %v", p.phase, err)
 		}
 	}
+	// A tools phase that died before its cleanup leaves its caller agent.
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: h.cfg.Namespace, Name: toolsAgentName}}
+	if err := h.k.c.Delete(ctx, agent); err != nil && !apierrors.IsNotFound(err) {
+		h.note("cleaning leftover %s agent: %v", toolsAgentName, err)
+	}
 }
 
 func (h *harness) write() error {
@@ -334,6 +345,17 @@ func (h *harness) printTable() {
 			t.Submitted, t.SubmitSec, t.Phases, t.MakespanSec, t.ThroughputPerMin)
 		fmt.Printf("; provision p50 %.0fs; run p50 %.0fs; total p50/p95 %.0f/%.0fs; retries %d\n",
 			t.ProvisionSec.P50, t.RunSec.P50, t.TotalSec.P50, t.TotalSec.P95, t.Retries)
+	}
+	if t := s.Tools; t != nil {
+		fmt.Println("\ntools (client-observed ms | broker ms, forwarded calls):")
+		for _, l := range t.Legs {
+			fmt.Printf("  %-52s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f",
+				l.Name, l.Client.RPS, l.Client.LatencyMs.P50, l.GatewaySideMs.P50,
+				l.Client.LatencyMs.P99, l.GatewaySideMs.P99)
+			fmt.Printf("  statuses %v  broker %v  gw %.3f ms CPU/req, peak %.0f mCPU %.0f MiB\n",
+				l.Client.Statuses, l.CallsByStatus, l.GatewayCPUPerRequestMs,
+				l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
+		}
 	}
 	for _, n := range s.Notes {
 		fmt.Println("note:", n)

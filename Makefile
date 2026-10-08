@@ -406,14 +406,15 @@ perf-down: ## Delete the perf cluster.
 	k3d cluster delete $(PERF_CLUSTER)
 
 .PHONY: perf-images
-perf-images: ## Build and import what the perf run needs: controller, gateway, mock provider, the Go agent, and the load generator.
+perf-images: ## Build and import what the perf run needs: controller, gateway, mock provider, mock MCP server, the Go agent, and the load generator.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
+	docker build -t $(MOCKMCP_IMG) -f test/e2e/mockmcp/Dockerfile .
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
 	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
 	docker build -t $(PERF_LOADGEN_IMG) -f test/perf/Dockerfile .
-	CLUSTER=$(PERF_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(PERF_LOADGEN_IMG)
+	CLUSTER=$(PERF_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(AGENT_IMG) $(PERF_LOADGEN_IMG)
 
 .PHONY: bench
 bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into benchstat to compare.

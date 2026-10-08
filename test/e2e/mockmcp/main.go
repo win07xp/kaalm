@@ -36,6 +36,10 @@ limitations under the License.
 // gateway injected the Secret from kaalm-system. GET /introspect/requests
 // returns per-method and per-tool counters for assertions (the S17
 // request-counter pattern).
+//
+// The perf harness (test/perf) also deploys it, with --modern and
+// --require-bearer, as the tool server its tools phase drives through the
+// gateway's broker.
 package main
 
 import (
