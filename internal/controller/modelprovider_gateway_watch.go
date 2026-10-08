@@ -44,7 +44,7 @@ func isGatewayPod(obj client.Object, operatorNamespace string) bool {
 }
 
 // countsAsReadyGateway reports whether GatewayReachable counts the Pod:
-// Ready and not terminating, the same test gatewayPods applies.
+// Ready and not terminating, the test gatewayPods applies to its Ready count.
 func countsAsReadyGateway(obj client.Object) bool {
 	pod, ok := obj.(*corev1.Pod)
 	return ok && pod.DeletionTimestamp.IsZero() && podReady(pod)

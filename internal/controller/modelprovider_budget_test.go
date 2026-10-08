@@ -876,3 +876,96 @@ func TestModelProvider_BudgetGaugeDropsStaleSeries(t *testing.T) {
 		t.Errorf("another provider's series = %v, want it untouched", got)
 	}
 }
+
+// gatewayPodObject builds a gateway Pod for a fake client. A deleting Pod
+// carries a finalizer, because the fake client keeps a deleting object only
+// while one holds it, the way a draining gateway stays until its process
+// exits.
+func gatewayPodObject(name string, deleting bool) *corev1.Pod {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: testOperatorNamespace,
+		Labels: map[string]string{"app.kubernetes.io/component": "gateway"},
+	}}
+	if deleting {
+		now := metav1.Now()
+		pod.DeletionTimestamp = &now
+		pod.Finalizers = []string{"test/drain"}
+	}
+	return pod
+}
+
+// drainGateway runs a draining gateway Pod's life against a fold: a pass
+// while it drains, a final publish that rewrites its partial with more
+// spend, a second pass, then the Pod's removal and a last pass. publish
+// writes the replica's partial into the ConfigMap; fold runs one reducer
+// pass with the live gateway set gatewayPods reports.
+func drainGateway(
+	t *testing.T, c client.Client, cmKey types.NamespacedName, pod *corev1.Pod,
+	publish func(cm *corev1.ConfigMap), fold func(live map[string]bool) error,
+) {
+	t.Helper()
+	ctx := context.Background()
+	r := &ModelProviderReconciler{Client: c, OperatorNamespace: testOperatorNamespace}
+	pass := func() {
+		t.Helper()
+		live, _, err := r.gatewayPods(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fold(live); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pass()
+	var cm corev1.ConfigMap
+	if err := c.Get(ctx, cmKey, &cm); err != nil {
+		t.Fatal(err)
+	}
+	publish(&cm)
+	if err := c.Update(ctx, &cm); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+	var gone corev1.Pod
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pod), &gone); err != nil {
+		t.Fatal(err)
+	}
+	gone.Finalizers = nil
+	if err := c.Update(ctx, &gone); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+}
+
+// A deleting gateway keeps publishing through its drain and publishes once
+// more on exit, rewriting its whole period partial. Its spend must reach
+// _retired once, when the Pod is gone, not once per fold that saw the key.
+func TestModelProvider_BudgetFoldCountsDrainingReplicaOnce(t *testing.T) {
+	period := gateway.PeriodKey("monthly", time.Now())
+	partial := func(usd string) string { return fmt.Sprintf(`{"period":%q,"team-a":%q}`, period, usd) }
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.BudgetConfigMapName("drain"), Namespace: testOperatorNamespace},
+		Data:       map[string]string{"gw-new": partial("5.00"), "gw-old": partial("10.00")},
+	}
+	old := gatewayPodObject("gw-old", true)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cm, gatewayPodObject("gw-new", false), old).Build()
+	r := &ModelProviderReconciler{Client: c, OperatorNamespace: testOperatorNamespace}
+	mp := eventsProvider("drain", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	drainGateway(t, c, client.ObjectKeyFromObject(cm), old,
+		func(cm *corev1.ConfigMap) { cm.Data["gw-old"] = partial("12.00") },
+		func(live map[string]bool) error { return r.reconcileBudget(context.Background(), mp, live) })
+
+	var got corev1.ConfigMap
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(cm), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Data["gw-old"]; ok {
+		t.Error("the removed replica's key survived the last fold")
+	}
+	if got.Data[gateway.CanonicalKey] != `{"team-a":"17.00"}` {
+		t.Errorf("_canonical = %s, want 17.00 (5 live + 12 retired once)", got.Data[gateway.CanonicalKey])
+	}
+}
