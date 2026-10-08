@@ -53,9 +53,15 @@ type Config struct {
 	// MaxFallbackDepth bounds the total providers attempted per request,
 	// including the primary (default 3).
 	MaxFallbackDepth int
-	// Replicas returns the live gateway replica count for rate-limit
-	// division; nil means a single replica.
-	Replicas func() int
+	// RateLimitReplicas returns the gateway replica count the rate limiter
+	// divides each limit by: the Pods that take new traffic, so draining
+	// Pods are left out. nil means a single replica.
+	RateLimitReplicas func() int
+	// BudgetReplicas returns the gateway replica count the hard budget's
+	// boundary margin scales by: every gateway Pod that exists, draining
+	// ones included, because they still hold in-flight requests and spend
+	// their peers have not seen. nil means a single replica.
+	BudgetReplicas func() int
 	// UpstreamTimeout bounds each upstream provider attempt by inactivity:
 	// the wait from sending the request to the first response byte, then
 	// each gap between response body reads. A response that keeps sending
@@ -297,11 +303,11 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 		Activity:      NewActivityStore(),
 		Budget:        NewBudgetLedger(),
 		ChannelHealth: NewChannelHealthStore(cfg.ChannelHealthWindow),
-		RateLimiter:   NewRateLimiter(cfg.Replicas),
+		RateLimiter:   NewRateLimiter(cfg.RateLimitReplicas),
 	}
 	// The effective boundary margin extrapolates observed traffic across the
-	// live replica count (hard budget enforcement).
-	s.Budget.SetReplicas(cfg.Replicas)
+	// replica count (hard budget enforcement).
+	s.Budget.SetReplicas(cfg.BudgetReplicas)
 	return s
 }
 

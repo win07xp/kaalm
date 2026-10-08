@@ -21,16 +21,17 @@ import (
 	"time"
 )
 
-// CachedCount wraps a counter so it is re-evaluated at most once per ttl.
+// CachedCount wraps a counter, or a function that returns several counts, so
+// it is re-evaluated at most once per ttl.
 // Concurrent callers inside a window share one evaluation; the wrapped
 // function is never called concurrently with itself.
-func CachedCount(ttl time.Duration, f func() int) func() int {
+func CachedCount[T any](ttl time.Duration, f func() T) func() T {
 	var (
 		mu    sync.Mutex
-		value int
+		value T
 		until time.Time
 	)
-	return func() int {
+	return func() T {
 		mu.Lock()
 		defer mu.Unlock()
 		if now := time.Now(); now.After(until) {

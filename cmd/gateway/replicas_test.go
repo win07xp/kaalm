@@ -27,9 +27,10 @@ func gatewayPod(name string, terminating bool) *corev1.Pod {
 	return pod
 }
 
-// A Pod being deleted is draining and takes no new traffic, so it must not
-// shrink each serving replica's rate-limit share during a rollout.
-func TestGatewayReplicaCount_ExcludesTerminatingPods(t *testing.T) {
+// The rate limiter's share leaves out Pods being deleted, which take no new
+// traffic; the hard budget's margin counts them, because a draining Pod still
+// holds in-flight requests and settled spend its peers have not seen.
+func TestCountGatewayReplicas(t *testing.T) {
 	s := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		t.Fatal(err)
@@ -39,20 +40,21 @@ func TestGatewayReplicaCount_ExcludesTerminatingPods(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		objs []client.Object
-		want int
+		want gatewayReplicas
 	}{
-		{"two serving", []client.Object{gatewayPod("gw-a", false), gatewayPod("gw-b", false), other}, 2},
+		{"two serving", []client.Object{gatewayPod("gw-a", false), gatewayPod("gw-b", false), other},
+			gatewayReplicas{serving: 2, all: 2}},
 		{"rollout with two draining", []client.Object{
 			gatewayPod("gw-a", false), gatewayPod("gw-b", false),
 			gatewayPod("gw-old-a", true), gatewayPod("gw-old-b", true),
-		}, 2},
-		{"only draining", []client.Object{gatewayPod("gw-old-a", true)}, 1},
-		{"none", nil, 1},
+		}, gatewayReplicas{serving: 2, all: 4}},
+		{"only draining", []client.Object{gatewayPod("gw-old-a", true)}, gatewayReplicas{serving: 1, all: 1}},
+		{"none", nil, gatewayReplicas{serving: 1, all: 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(s).WithObjects(tc.objs...).Build()
-			if got := gatewayReplicaCount(context.Background(), c, "kaalm-system"); got != tc.want {
-				t.Errorf("gatewayReplicaCount = %d, want %d", got, tc.want)
+			if got := countGatewayReplicas(context.Background(), c, "kaalm-system"); got != tc.want {
+				t.Errorf("countGatewayReplicas = %+v, want %+v", got, tc.want)
 			}
 		})
 	}

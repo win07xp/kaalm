@@ -207,8 +207,8 @@ func costOf(provider *kaalmv1beta1.ModelProvider, modelID string, usage Usage) f
 // stale. See docs/src/gateways/llm/budgets-and-rate-limits.md.
 type BudgetLedger struct {
 	now func() time.Time
-	// replicas returns the live gateway replica count for the effective
-	// margin; nil means one replica.
+	// replicas returns the gateway replica count for the effective margin,
+	// draining replicas included; nil means one replica.
 	replicas func() int
 	// kick carries provider names whose settles want an immediate partial
 	// publish; the publisher selects on it. Sends never block.

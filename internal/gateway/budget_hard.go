@@ -241,5 +241,6 @@ func (b *BudgetLedger) settle(providerName string, uid types.UID, scheme, captur
 	}
 }
 
-// SetReplicas injects the live replica counter (nil-safe default of one).
+// SetReplicas injects the replica counter for the effective margin, which
+// counts draining replicas too (nil-safe default of one).
 func (b *BudgetLedger) SetReplicas(f func() int) { b.replicas = f }

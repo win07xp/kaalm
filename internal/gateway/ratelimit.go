@@ -38,8 +38,8 @@ import (
 // (DebitTokens), so a large call blocks the next request rather than itself.
 // See docs/src/gateways/llm/budgets-and-rate-limits.md.
 type RateLimiter struct {
-	// Replicas returns the live gateway replica count (>= 1). Injected so
-	// tests need no informer.
+	// Replicas returns the count of gateway replicas that take new traffic
+	// (>= 1), the divisor of each limit. Injected so tests need no informer.
 	Replicas func() int
 	now      func() time.Time
 

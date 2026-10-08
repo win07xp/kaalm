@@ -255,6 +255,12 @@ func main() {
 	}
 	tokens := gateway.NewTokenAuthenticator(&gateway.KubeTokenReviewer{Client: clientset})
 	async := &gateway.KubeAsyncRecords{Client: clientset, OperatorNamespace: operatorNamespace, Reader: cl.GetClient()}
+	// Both counts are read on every request; a listing per request was
+	// measurable under load, and counts a few seconds stale are within the
+	// margin the rate limiter and the hard budget already carry.
+	replicas := gateway.CachedCount(5*time.Second, func() gatewayReplicas {
+		return countGatewayReplicas(context.Background(), cl.GetClient(), operatorNamespace)
+	})
 	server := gateway.NewServer(gateway.Config{
 		OperatorNamespace:        operatorNamespace,
 		ListenAddr:               listenAddr,
@@ -288,13 +294,11 @@ func main() {
 		WhatsAppAPIBaseURL:       whatsAppAPIBaseURL,
 		DrainDelay:               drainDelay,
 		ShutdownTimeout:          shutdownTimeout,
-		// The count feeds the rate limiter's per-replica share and the
-		// hard budget's boundary margin on every request; a listing per
-		// request was measurable under load, and a count a few
-		// seconds stale is within the margin those two already carry.
-		Replicas: gateway.CachedCount(5*time.Second, func() int {
-			return gatewayReplicaCount(context.Background(), cl.GetClient(), operatorNamespace)
-		}),
+		// The rate limiter's share counts serving Pods and the hard
+		// budget's margin counts every gateway Pod (gatewayReplicas says
+		// why).
+		RateLimitReplicas: func() int { return replicas().serving },
+		BudgetReplicas:    func() int { return replicas().all },
 	}, store, tokens, gateway.NewMemorySpend())
 	server.Async = async
 	server.Completions = &gateway.KubeCompletionWriter{Client: clientset}
