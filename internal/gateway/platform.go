@@ -139,7 +139,13 @@ func (s *Server) handlePlatform(
 		if agent != nil {
 			agentCopy = agent.DeepCopy()
 		}
-		go s.runPlatformPipeline(s.Tracing.Detach(ctx), channel.DeepCopy(), agentCopy, adapter, m)
+		// The shutdown sequence waits for it within the shutdown timeout.
+		traceCtx, channelCopy := s.Tracing.Detach(ctx), channel.DeepCopy()
+		s.pipelines.Add(1)
+		go func() {
+			defer s.pipelines.Done()
+			s.runPlatformPipeline(traceCtx, channelCopy, agentCopy, adapter, m)
+		}()
 		endSpan(nil)
 	}
 }

@@ -219,7 +219,13 @@ func (s *Server) handleAsyncAccept(
 
 	// The caller is now gone; the pipeline continues in the background.
 	// v1 limitation: this state is replica-local (no work claim/takeover).
-	go s.runAsyncPipeline(s.Tracing.Detach(r.Context()), requestID, channel.DeepCopy(), agent.DeepCopy(), env)
+	// The shutdown sequence waits for it within the shutdown timeout.
+	traceCtx, channelCopy, agentCopy := s.Tracing.Detach(r.Context()), channel.DeepCopy(), agent.DeepCopy()
+	s.pipelines.Add(1)
+	go func() {
+		defer s.pipelines.Done()
+		s.runAsyncPipeline(traceCtx, requestID, channelCopy, agentCopy, env)
+	}()
 }
 
 // Callback delivery outcomes, the status vocabulary of

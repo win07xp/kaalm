@@ -217,3 +217,40 @@ func TestPlatformClient_UsesCallbackReadTimeout(t *testing.T) {
 		t.Errorf("platform request bound = %s, want gateway.callbackReadTimeout (7s)", client.Timeout)
 	}
 }
+
+// The shutdown sequence waits on Server.pipelines, so a platform message
+// must count as pending work until its reply is sent.
+func TestPlatformPipeline_IsPendingUntilReplied(t *testing.T) {
+	release := make(chan struct{})
+	h := newDiscordHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":"done"}`))
+	})
+	// Unblock the agent on a failed assertion too, so its server can close.
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	resp := h.send(t, discordCommand("123456789012345678", "987654321098765432", "555555555555555555", "hi"), nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("command status %d", resp.StatusCode)
+	}
+	<-h.agentHits
+
+	done := make(chan struct{})
+	go func() {
+		h.server.pipelines.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("the pipeline is not tracked as pending while the agent runs")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unblock()
+	h.fake.next(t)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pending count never dropped after the reply")
+	}
+}

@@ -36,6 +36,7 @@ import (
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
+	"github.com/win07xp/kaalm/internal/drain"
 	"github.com/win07xp/kaalm/internal/gateway"
 	"github.com/win07xp/kaalm/internal/profiling"
 	"github.com/win07xp/kaalm/internal/secretwatch"
@@ -78,6 +79,8 @@ func main() {
 		logLevel             slog.Level
 		clientQPS            float64
 		clientBurst          int
+		drainDelay           time.Duration
+		shutdownTimeout      time.Duration
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "cluster listener (:8443) address")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health listener address")
@@ -126,6 +129,10 @@ func main() {
 	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
 	flag.Float64Var(&clientQPS, "client-qps", 100, "Kubernetes API client sustained requests per second")
 	flag.IntVar(&clientBurst, "client-burst", 200, "Kubernetes API client burst above --client-qps")
+	flag.DurationVar(&drainDelay, "drain-delay", 5*time.Second,
+		"after SIGTERM, how long to keep serving while Service endpoints stop sending new connections; 0 shuts down at once")
+	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 30*time.Second,
+		"after the drain delay, how long to wait for in-flight requests and background deliveries before exiting")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
@@ -134,6 +141,11 @@ func main() {
 	// without this they would fall back to Go's plain text logger, breaking
 	// the JSON log convention (docs/src/operations/observability.md).
 	slog.SetDefault(logger)
+
+	if err := drain.Validate(drainDelay, shutdownTimeout); err != nil {
+		logger.Error("invalid shutdown flags", "error", err)
+		os.Exit(1)
+	}
 
 	operatorNamespace := os.Getenv("POD_NAMESPACE")
 	if operatorNamespace == "" {
@@ -274,6 +286,8 @@ func main() {
 		CallbackBackoff:          mustParseBackoff(callbackBackoff, "callback-backoff", logger),
 		DiscordAPIBaseURL:        discordAPIBaseURL,
 		WhatsAppAPIBaseURL:       whatsAppAPIBaseURL,
+		DrainDelay:               drainDelay,
+		ShutdownTimeout:          shutdownTimeout,
 		// The count feeds the rate limiter's per-replica share and the
 		// hard budget's boundary margin on every request; a listing per
 		// request was measurable under load, and a count a few
@@ -314,17 +328,29 @@ func main() {
 		logger.Info("activator client disabled", "reason", err.Error())
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// Two contexts: the signal only starts the drain (sigCtx), while
+	// everything the request path depends on (the cache, Secret watches, the
+	// budget exchange, tracing) runs on runCtx until the drain has finished.
+	// Stopping them at the signal would break the requests the drain serves.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	sigCtx, stop := signal.NotifyContext(runCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	store.Secrets = secretwatch.New(ctx, clientset)
+	// After the first signal, restore default handling: a second one exits
+	// at once instead of waiting for the drain.
+	go func() {
+		<-sigCtx.Done()
+		stop()
+	}()
+	store.Secrets = secretwatch.New(runCtx, clientset)
 
 	go func() {
-		if err := cl.Start(ctx); err != nil {
+		if err := cl.Start(runCtx); err != nil {
 			logger.Error("cluster cache failed", "error", err)
 			stop()
 		}
 	}()
-	if !cl.GetCache().WaitForCacheSync(ctx) {
+	if !cl.GetCache().WaitForCacheSync(sigCtx) {
 		logger.Error("cache sync failed")
 		os.Exit(1)
 	}
@@ -335,7 +361,7 @@ func main() {
 	if podName == "" {
 		podName, _ = os.Hostname()
 	}
-	defer setupTracing(ctx, server, otlpEndpoint, otlpSampleRatio, upstreamCAFile, podName, logger)()
+	defer setupTracing(runCtx, server, otlpEndpoint, otlpSampleRatio, upstreamCAFile, podName, logger)()
 	publisher := &gateway.BudgetPublisher{
 		Client: clientset, Ledger: server.Budget,
 		OperatorNamespace: operatorNamespace, PodName: podName,
@@ -351,8 +377,8 @@ func main() {
 			return out
 		},
 	}
-	publisher.SeedFromCanonical(ctx)
-	go publisher.Run(ctx)
+	publisher.SeedFromCanonical(runCtx)
+	go publisher.Run(runCtx)
 	if err := metrics.Registry.Register(&gateway.BudgetUtilizationCollector{
 		Ledger: server.Budget, Providers: publisher.Providers,
 	}); err != nil {
@@ -364,13 +390,13 @@ func main() {
 	// enforcement view one watch propagation after they are published, which
 	// hard enforcement's boundary region depends on (the tick remains the
 	// backstop). The cache scopes ConfigMaps to the operator namespace above.
-	if informer, err := cl.GetCache().GetInformer(ctx, &corev1.ConfigMap{}); err == nil {
+	if informer, err := cl.GetCache().GetInformer(runCtx, &corev1.ConfigMap{}); err == nil {
 		_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj any) {
-				gateway.FoldBudgetConfigMapEvent(ctx, obj, podName, store, server.Budget)
+				gateway.FoldBudgetConfigMapEvent(runCtx, obj, podName, store, server.Budget)
 			},
 			UpdateFunc: func(_, newObj any) {
-				gateway.FoldBudgetConfigMapEvent(ctx, newObj, podName, store, server.Budget)
+				gateway.FoldBudgetConfigMapEvent(runCtx, newObj, podName, store, server.Budget)
 			},
 		})
 	} else {
@@ -378,17 +404,18 @@ func main() {
 	}
 
 	// The gateway's half of the channel-delete handshake (Add and Update).
-	if informer, err := cl.GetCache().GetInformer(ctx, &kaalmv1beta1.AgentChannel{}); err == nil {
-		_, _ = informer.AddEventHandler(channelDisconnectHandler(ctx, cl.GetClient(), logger))
+	if informer, err := cl.GetCache().GetInformer(runCtx, &kaalmv1beta1.AgentChannel{}); err == nil {
+		_, _ = informer.AddEventHandler(channelDisconnectHandler(runCtx, cl.GetClient(), logger))
 	}
 
 	logger.Info("kaalm gateway starting",
 		"listen", listenAddr, "health", healthAddr, "operator_namespace", operatorNamespace,
 		"source_ip_check_disabled", disableSourceIPCheck)
-	if err := server.Run(ctx); err != nil {
+	if err := server.Run(sigCtx); err != nil {
 		logger.Error("gateway listener failed", "error", err)
 		os.Exit(1)
 	}
+	cancelRun()
 	logger.Info("kaalm gateway shut down")
 }
 
