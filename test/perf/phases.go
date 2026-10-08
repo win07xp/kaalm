@@ -625,7 +625,11 @@ var toolLegSpecs = []legSpec{
 
 // toolLegSpec reads the broker's figures for tools/call of toolName only,
 // so a legacy caller's initialize and notification, which name no tool,
-// stay out of the latency and the call counts.
+// stay out of the latency and the call counts. Denials the broker makes
+// before it reads the body (namespace, grant, class, rate limit) carry no
+// tool label either, so on every tool leg they show only in the client's
+// statuses. The gateway figures also include the warmup's successful call,
+// which the client's recorder starts after.
 func toolLegSpec(name, job, provider string, mtls bool, args ...string) legSpec {
 	return legSpec{
 		name: name, provider: provider, job: job, mtls: mtls, mode: modeTools, args: args,
