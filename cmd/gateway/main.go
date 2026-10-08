@@ -372,7 +372,14 @@ func main() {
 		},
 	}
 	publisher.SeedFromCanonical(runCtx)
-	go publisher.Run(runCtx)
+	// The publisher stops after the drain, before the cache: its last
+	// publish lists the providers through the cache.
+	publishCtx, stopPublisher := context.WithCancel(runCtx)
+	publisherDone := make(chan struct{})
+	go func() {
+		defer close(publisherDone)
+		publisher.Run(publishCtx)
+	}()
 	if err := metrics.Registry.Register(&gateway.BudgetUtilizationCollector{
 		Ledger: server.Budget, Providers: publisher.Providers,
 	}); err != nil {
@@ -409,6 +416,8 @@ func main() {
 		logger.Error("gateway listener failed", "error", err)
 		os.Exit(1)
 	}
+	stopPublisher()
+	<-publisherDone
 	cancelRun()
 	logger.Info("kaalm gateway shut down")
 }
