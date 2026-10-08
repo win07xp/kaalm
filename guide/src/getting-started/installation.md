@@ -66,6 +66,10 @@ make k3d-up              # k3d cluster + cert-manager + trust-manager
 CNI=cilium make k3d-up   # the same with Cilium, for allowedHosts
 ```
 
+With agents in many namespaces, that controller also drops some same-node
+traffic, which fails deliveries; use `CNI=cilium` for a cluster like that
+([Performance and scale](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/performance-and-scale.md#many-namespaces) has the measurements).
+
 The cluster is named `kaalm-dev`; set `CLUSTER=CLUSTER_NAME` to pick
 another. The
 script switches your kubectl context to it. Then run the same `helm install`
