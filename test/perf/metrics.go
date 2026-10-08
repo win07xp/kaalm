@@ -450,3 +450,12 @@ func topEntries(m map[string]float64, n int) []string {
 	}
 	return out
 }
+
+// cpuPerRequestMs divides a CPU-seconds delta by a request count, in
+// milliseconds per request; 0 when nothing was counted.
+func cpuPerRequestMs(cpuSeconds, requests float64) float64 {
+	if requests <= 0 {
+		return 0
+	}
+	return round3(cpuSeconds * 1000 / requests)
+}

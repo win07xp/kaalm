@@ -100,6 +100,8 @@ const (
 	channelTypeWebhook  = "webhook"
 	workloadAgent       = "agent" // the kaalm.io/workload label value on agent Pods
 	agentControllerName = "agent" // the controller label on controller-runtime metrics
+	// gatewayBase is the gateway's LLM and tool listener inside the cluster.
+	gatewayBase = "https://kaalm-gateway.kaalm-system.svc:8443"
 )
 
 // The four ModelProviders testdata/infra.yaml defines, told apart by the

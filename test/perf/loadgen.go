@@ -78,7 +78,7 @@ func runLoadgen(args []string) error {
 	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
 	fs.StringVar(&c.mode, "mode", modeGateway,
 		"gateway (LLM proxy at fixed concurrency) or channels (webhook messages at a fixed rate)")
-	fs.StringVar(&c.url, "url", "https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions",
+	fs.StringVar(&c.url, "url", gatewayBase+"/v1/chat/completions",
 		"gateway mode: LLM endpoint")
 	fs.StringVar(&c.model, "model", providerFast+"/mock-model", "gateway mode: qualified provider/model")
 	fs.IntVar(&c.concurrency, "concurrency", 32, "gateway mode: concurrent callers")

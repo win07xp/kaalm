@@ -263,7 +263,7 @@ func (h *harness) applyInfra(ctx context.Context) error {
 func (h *harness) cleanLeftovers(ctx context.Context) {
 	phases := []struct{ phase, prefix string }{{phaseRamp, "ramp-"}, {phaseChurn, "churn-"}, {phaseTasks, "task-"}}
 	for _, p := range phases {
-		if _, err := h.k.deletePhase(ctx, h.cfg.Namespace, p.phase, p.prefix, 10*time.Minute); err != nil {
+		if _, err := h.k.deletePhase(ctx, []string{h.cfg.Namespace}, p.phase, p.prefix, 10*time.Minute); err != nil {
 			h.note("cleaning leftover %s objects: %v", p.phase, err)
 		}
 	}
@@ -300,47 +300,12 @@ func (h *harness) printTable() {
 			fmt.Printf("  %-36s %6.1f rps  p50 %6.1f | %6.1f  p95 %6.1f | %6.1f  p99 %6.1f | %6.1f",
 				l.Name, l.Client.RPS, l.Client.LatencyMs.P50, l.GatewaySideMs.P50,
 				l.Client.LatencyMs.P95, l.GatewaySideMs.P95, l.Client.LatencyMs.P99, l.GatewaySideMs.P99)
-			fmt.Printf("  statuses %v  gw peak %.0f mCPU %.0f MiB\n",
-				l.Client.Statuses, l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
+			fmt.Printf("  statuses %v  gw %.3f ms CPU/req, peak %.0f mCPU %.0f MiB\n",
+				l.Client.Statuses, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
 		}
 	}
-	if r := s.Ramp; r != nil {
-		fmt.Printf("\nramp: %d agents Ready (target %d)", r.Achieved, r.Target)
-		if r.Saturation != "" {
-			fmt.Printf("; stopped: %s", r.Saturation)
-		}
-		fmt.Printf("; %.1f MiB host memory per agent\n", r.MemPerAgentMiB)
-		fmt.Println("  wave  fleet  wall(s)  ready p50/p95/max(s)  cert p50(s)  podstart p50(s)" +
-			"  reconcile p50/p99(ms)  ctl MiB  gw MiB  host avail MiB")
-		for _, w := range r.Waves {
-			fmt.Printf("  %4d  %5d  %7.0f  %5.0f/%5.0f/%5.0f  %11.0f  %15.0f",
-				w.Index, w.FleetReady, w.WallSec, w.TimeToReadySec.P50, w.TimeToReadySec.P95, w.TimeToReadySec.Max,
-				w.CertIssueSec.P50, w.PodStartSec.P50)
-			fmt.Printf("  %10.1f/%6.1f  %7.0f  %6.0f  %14.0f\n",
-				w.ReconcileMs.P50, w.ReconcileMs.P99, w.Controller.MemMiB, w.Gateway.MemMiB, w.HostMemAvailMiB)
-		}
-	}
-	if hd := s.Hold; hd != nil {
-		fmt.Printf("\nhold: %d agents, %d messages at %.1f msg/s; gateway statuses %v; callbacks %.0f",
-			hd.Agents, hd.Client.Requests, hd.Client.RPS, hd.MessagesByStatus, hd.Callbacks)
-		fmt.Printf("; message p50 %.0f ms p95 %.0f ms; Ready %d->%d; restarts %d->%d; flaps %d\n",
-			hd.MessageDurationMs.P50, hd.MessageDurationMs.P95,
-			hd.ReadyBefore, hd.ReadyAfter, hd.RestartsBefore, hd.RestartsAfter, hd.Flaps)
-	}
-	if hd := s.Hold; hd != nil && hd.Audit != nil {
-		a := hd.Audit
-		fmt.Printf("hold audit (%.0fs): controller %.1f req/s, %.2f writes/agent/min; "+
-			"gateway %.1f req/s, %.2f writes/agent/min; apiserver %v\n",
-			a.Seconds, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
-			a.GatewayRequestsPerSec, a.GatewayWritesPerAgentMinute, topEntries(a.APIServer, 6))
-	}
-	if hd := s.Hold; hd != nil && len(hd.Series) > 1 {
-		first, last := hd.Series[0], hd.Series[len(hd.Series)-1]
-		fmt.Printf("hold runtime series: %d samples over %.0fs; "+
-			"first %s %.0f goroutines %.1f MiB heap, last %s %.0f goroutines %.1f MiB heap\n",
-			len(hd.Series), last.AtSec, first.Component, first.Goroutines, first.HeapMiB,
-			last.Component, last.Goroutines, last.HeapMiB)
-	}
+	printRamp("ramp", s.Ramp)
+	printHold("hold", s.Hold)
 	if t := s.Teardown; t != nil {
 		fmt.Printf("\nteardown: %d agents gone in %.0fs\n", t.Agents, t.Seconds)
 	}
@@ -372,5 +337,52 @@ func (h *harness) printTable() {
 	}
 	for _, n := range s.Notes {
 		fmt.Println("note:", n)
+	}
+}
+
+// printRamp prints a ramp block under a label (the standard ramp, or the
+// namespaces phase's spread fleet).
+func printRamp(label string, r *rampResult) {
+	if r == nil {
+		return
+	}
+	fmt.Printf("\n%s: %d agents Ready (target %d)", label, r.Achieved, r.Target)
+	if r.Saturation != "" {
+		fmt.Printf("; stopped: %s", r.Saturation)
+	}
+	fmt.Printf("; %.1f MiB host memory per agent\n", r.MemPerAgentMiB)
+	fmt.Println("  wave  fleet  wall(s)  ready p50/p95/max(s)  cert p50(s)  podstart p50(s)" +
+		"  reconcile p50/p99(ms)  ctl MiB  gw MiB  host avail MiB")
+	for _, w := range r.Waves {
+		fmt.Printf("  %4d  %5d  %7.0f  %5.0f/%5.0f/%5.0f  %11.0f  %15.0f",
+			w.Index, w.FleetReady, w.WallSec, w.TimeToReadySec.P50, w.TimeToReadySec.P95, w.TimeToReadySec.Max,
+			w.CertIssueSec.P50, w.PodStartSec.P50)
+		fmt.Printf("  %10.1f/%6.1f  %7.0f  %6.0f  %14.0f\n",
+			w.ReconcileMs.P50, w.ReconcileMs.P99, w.Controller.MemMiB, w.Gateway.MemMiB, w.HostMemAvailMiB)
+	}
+}
+
+// printHold prints a hold block under a label.
+func printHold(label string, hd *holdResult) {
+	if hd == nil {
+		return
+	}
+	fmt.Printf("\n%s: %d agents, %d messages at %.1f msg/s; gateway statuses %v; callbacks %.0f",
+		label, hd.Agents, hd.Client.Requests, hd.Client.RPS, hd.MessagesByStatus, hd.Callbacks)
+	fmt.Printf("; message p50 %.0f ms p95 %.0f ms; Ready %d->%d; restarts %d->%d; flaps %d\n",
+		hd.MessageDurationMs.P50, hd.MessageDurationMs.P95,
+		hd.ReadyBefore, hd.ReadyAfter, hd.RestartsBefore, hd.RestartsAfter, hd.Flaps)
+	if a := hd.Audit; a != nil {
+		fmt.Printf("%s audit (%.0fs): controller %.1f req/s, %.2f writes/agent/min; "+
+			"gateway %.1f req/s, %.2f writes/agent/min; apiserver %v\n",
+			label, a.Seconds, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
+			a.GatewayRequestsPerSec, a.GatewayWritesPerAgentMinute, topEntries(a.APIServer, 6))
+	}
+	if len(hd.Series) > 1 {
+		first, last := hd.Series[0], hd.Series[len(hd.Series)-1]
+		fmt.Printf("%s runtime series: %d samples over %.0fs; "+
+			"first %s %.0f goroutines %.1f MiB heap, last %s %.0f goroutines %.1f MiB heap\n",
+			label, len(hd.Series), last.AtSec, first.Component, first.Goroutines, first.HeapMiB,
+			last.Component, last.Goroutines, last.HeapMiB)
 	}
 }
