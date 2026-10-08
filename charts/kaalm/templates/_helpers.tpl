@@ -91,8 +91,9 @@ derived from it is a whole number of seconds.
 {{/*
 kaalm.terminationGracePeriod takes (dict "name" "gateway.shutdown" "shutdown"
 .Values.gateway.shutdown) and returns drainDelay + timeout + 5 seconds. The
-extra 5 seconds cover the process exit after the shutdown sequence ends, so
-Kubernetes never kills a Pod mid-drain.
+extra 5 seconds cover the work after the timeout (the health listener's
+shutdown and, on the gateway, the final budget publish), so Kubernetes never
+kills a Pod mid-sequence.
 */}}
 {{- define "kaalm.terminationGracePeriod" -}}
 {{- $delay := include "kaalm.seconds" (list (printf "%s.drainDelay" .name) .shutdown.drainDelay) | int -}}

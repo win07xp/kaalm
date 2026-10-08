@@ -143,9 +143,22 @@ A gateway rollout defers idle and hibernation transitions for one
 multi-hour idle timeouts. See
 [Deployment](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#helm-chart-upgrades).
 
+A gateway rollout lets in-flight requests finish for up to
+`gateway.shutdown.timeout` (`30s` by default). Longer LLM streams and tool
+calls are cut. If your agents run long streams, raise the value:
+
+```bash
+--set gateway.shutdown.timeout=2m
+```
+
+The Pod's grace period grows with it (`2m` gives 130 seconds), and each old Pod
+and any node drain waiting on it stays around that much longer. Set durations
+in whole hours, minutes, or seconds, or the render fails. See
+[Deployment](https://github.com/win07xp/kaalm/blob/main/docs/src/operations/deployment.md#shutdown-and-rolling-restarts).
+
 ---
 
 *How this works: design book pages Operations, Deployment (the values
-table and the replica floors), Operations, Observability (the Logs and
+table, the replica floors, and shutdown and rolling restarts), Operations, Observability (the Logs and
 Profiling sections), and Operations, Performance and scale (what the harness measured at
 each setting).*

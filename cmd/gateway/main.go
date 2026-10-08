@@ -130,9 +130,11 @@ func main() {
 	flag.Float64Var(&clientQPS, "client-qps", 100, "Kubernetes API client sustained requests per second")
 	flag.IntVar(&clientBurst, "client-burst", 200, "Kubernetes API client burst above --client-qps")
 	flag.DurationVar(&drainDelay, "drain-delay", 5*time.Second,
-		"after SIGTERM, how long to keep serving while Service endpoints stop sending new connections; 0 shuts down at once")
+		"after SIGTERM, how long to keep serving while Services and ingress controllers "+
+			"stop routing new connections to this Pod; 0 skips the wait")
 	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 30*time.Second,
-		"after the drain delay, how long to wait for in-flight requests and background deliveries before exiting")
+		"after the drain delay, how long to wait for in-flight requests and background deliveries "+
+			"before exiting; 0 waits for none of them")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))

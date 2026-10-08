@@ -173,6 +173,15 @@ gateway:
   client:
     qps: 100
     burst: 200
+  # How a terminating gateway Pod shuts down
+  # (docs/src/operations/deployment.md#shutdown-and-rolling-restarts).
+  # drainDelay: how long it keeps serving while Services and ingress
+  # controllers stop routing new connections to it. 0s shuts down at once.
+  # timeout: how long it then waits for in-flight requests and background
+  # webhook deliveries. Longer streams are cut. 0s waits for none.
+  # Both take whole hours, minutes, or seconds (5s, 1m, 1m30s); anything else
+  # fails the render. The Pod's terminationGracePeriodSeconds is
+  # drainDelay + timeout + 5s.
   shutdown:
     drainDelay: 5s
     timeout: 30s
@@ -270,6 +279,8 @@ console:
   healthPort: 8081
   # Log level for the JSON logs: debug, info, warn, or error.
   logLevel: info
+  # How a terminating console Pod shuts down, with the same keys and rules as
+  # gateway.shutdown. timeout waits for in-flight requests only.
   shutdown:
     drainDelay: 5s
     timeout: 30s

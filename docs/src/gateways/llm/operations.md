@@ -19,6 +19,8 @@ The probe is `GET /readyz` on the internal health port (`:8081` by default, Helm
 3. **`informers`**: every informer cache the request path depends on has completed its initial sync. At startup, the gateway waits for every one of them before it opens the cluster, user, and health listeners.
 4. **`serving_cert`**: the gateway serving certificate (`kaalm-gateway-tls`) loads from disk. The chart mounts the Secret as a required volume, so the Pod doesn't start until cert-manager has issued it, and the gateway exits if the certificate can't be loaded at startup. If the file later becomes unreadable, this check fails; the health listener keeps serving TLS with the last certificate it loaded, so the probe still gets an answer that names the failure.
 
+While the gateway shuts down, `/readyz` answers `503` with the single line `draining: shutting down` and skips the four checks, so the Pod leaves the Service endpoints while it still serves. `/healthz` keeps answering `200` until the end, so the kubelet does not restart the Pod. A `503` from a terminating Pod is expected, not a failure. See [Shutdown and rolling restarts](../../operations/deployment.md#shutdown-and-rolling-restarts).
+
 ### The informers the request path depends on
 
 Each cache in check 3 backs a specific step of request handling:

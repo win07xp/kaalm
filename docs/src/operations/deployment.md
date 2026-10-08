@@ -22,13 +22,14 @@ The six CRDs (AgentClass, ModelProvider, ToolProvider, Agent, AgentTask, AgentCh
 
 ### The two Deployments
 
-The chart installs the operator Deployment (with RBAC, ServiceAccount, and leader election) and the Kaalm Gateway Deployment (with its own RBAC and ServiceAccount). Both share the same availability settings, except that pod anti-affinity is set for the operator only:
+The chart installs the operator Deployment (with RBAC, ServiceAccount, and leader election) and the Kaalm Gateway Deployment (with its own RBAC and ServiceAccount). Both share the same availability settings, except that pod anti-affinity is set for the operator only and the termination grace period for the gateway only:
 
 | Setting | Value |
 |---|---|
 | Default replicas | `2` (`controller.replicas`, `gateway.replicas`) |
 | PodDisruptionBudget | `minAvailable: 1` |
 | Rolling update | `maxUnavailable: 1` |
+| Termination grace period (gateway only) | `drainDelay + timeout + 5s`, 40s by default ([Shutdown and rolling restarts](#shutdown-and-rolling-restarts)) |
 | Anti-affinity (controller only) | Preferred, `topologyKey: kubernetes.io/hostname`: the scheduler spreads the replicas across nodes when it can, and both can share a node on a single-node cluster |
 | Container resources | Requests `cpu: 100m`, `memory: 128Mi`; limit `memory: 512Mi`; no CPU limit, so both run as `Burstable` (`controller.resources`, `gateway.resources`) |
 
@@ -39,7 +40,20 @@ The floor is operational, not correctness-driven, on both components:
 - **Controller.** Leader election picks one active replica and the second is a warm standby. A leader that stops gracefully (a drain or a rollout) releases the Lease, so the standby takes over within seconds; a leader that crashes is replaced when the Lease expires ([Deployment and leader election](../controller/overview.md#deployment-and-leader-election)). The activator handler runs on every replica ([Control plane](../concepts/system-architecture.md#control-plane)), so the second replica keeps wake-on-demand reachable while the first drains, and the gateway retries a failed activator call once on a fresh connection, so a call that lands on the draining replica reaches the other one. The PDB guards the same thing: without it a multi-node drain or an autoscaler downscale could evict both replicas at once, which surfaces as `controller_unavailable` 504s for every in-flight webhook to a hibernated Agent ([The activator](../gateways/user/activation-and-activity.md#the-activator)).
 - **Gateway.** At one replica, `minAvailable: 1` blocks every voluntary eviction and a `maxUnavailable: 1` rolling update has no headroom, so a chart upgrade would take the gateway offline for LLM and webhook traffic. The multi-replica state model ([Multi-replica state](../gateways/overview.md#multi-replica-state)) degrades to one replica without loss, so correctness is not the reason for the floor.
 
-With `console.enabled`, the chart adds a third, optional Deployment, `kaalm-console`, outside these settings: one replica, no PodDisruptionBudget, no floor. See the `console.enabled` note under [Configuration reference](#configuration-reference).
+With `console.enabled`, the chart adds a third, optional Deployment, `kaalm-console`, outside these settings: one replica, no PodDisruptionBudget, no floor. See the `console.enabled` note under [Configuration reference](#configuration-reference). It shuts down the same way as the gateway, with `console.shutdown.*` ([Shutdown and rolling restarts](#shutdown-and-rolling-restarts)).
+
+### Shutdown and rolling restarts
+
+Kubernetes removes a terminating Pod from the Service endpoints at once, but kube-proxy and ingress controllers take a few seconds to apply the change. A gateway that closed its listeners at SIGTERM would refuse the new connections still routed to it in that window, so a rollout or node drain would fail requests. The gateway shuts down in two stages instead:
+
+1. **Drain.** `/readyz` starts answering `503` ([Gateway readiness](../gateways/llm/operations.md#gateway-readiness)), and the Pod keeps serving new and existing connections for `gateway.shutdown.drainDelay`. It closes each persistent connection after its current response, so clients reconnect and the Service routes them to another replica.
+2. **Stop.** The Pod stops accepting connections and waits up to `gateway.shutdown.timeout` for in-flight requests and for background deliveries (async webhooks and platform replies) to finish. It then publishes its budget spend once more ([Budget state on crash](../gateways/llm/budgets-and-rate-limits.md#budget-state-on-crash)) and exits.
+
+Whatever is still running when the timeout ends is cut: LLM streams, brokered MCP calls (up to `gateway.mcpUpstreamTimeout`), and async and platform deliveries, which are dropped like any other [replica failure](../gateways/api/async-responses.md#replica-failure). The default timeout equals `gateway.syncDeliveryDeadline`, so a sync webhook accepted before the stop stage begins can run to its own deadline. The timeout is the only setting that decides how many long streams survive a rollout. A longer value lets more of them finish, and keeps each old Pod, and any node drain waiting on it, around that much longer.
+
+The chart sets the Pod's `terminationGracePeriodSeconds` to `drainDelay + timeout + 5s`, 40s by default, so Kubernetes never kills a Pod mid-sequence. The extra 5s cover the work after the timeout: the health listener's shutdown (up to 2s) and the gateway's final budget publish (bounded at 3s). Both values must be whole hours, minutes, or seconds (`5s`, `1m`, `1m30s`), because the grace period is a whole number of seconds. Any other value fails the render. A `drainDelay` of `0s` skips the drain wait, and a `timeout` of `0s` waits for nothing in flight.
+
+A draining Pod is not Ready, so the Deployment and the PodDisruptionBudget treat it as unavailable. The rollout paces itself as before and `kubectl rollout status` can finish while old Pods are still draining. The `minAvailable: 1` budget still blocks a node drain from evicting the second gateway Pod until a replacement is Ready.
 
 ### The operator's own NetworkPolicy
 
@@ -111,6 +125,8 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `gateway.tracing.sampleRatio` | `1.0` | Parent-based head sampling ratio for traces the gateway starts; propagated sampling decisions are honored either way. |
 | `gateway.logLevel` | `info` | Gateway log level: `debug`, `info`, `warn`, or `error`. See [Logging](observability.md#logs). |
 | `gateway.client.qps` / `.burst` | `100`, `200` | The gateway's Kubernetes API client rate limit per replica. Higher than the controller's because live reads on the request path (task-completion cross-checks, first-use Secret loads) must not queue behind the limiter. |
+| `gateway.shutdown.drainDelay` | `5s` | How long a terminating gateway Pod keeps serving while Services and ingress controllers stop routing new connections to it. `0s` skips the wait. See [Shutdown and rolling restarts](#shutdown-and-rolling-restarts). |
+| `gateway.shutdown.timeout` | `30s` | How long the Pod then waits for in-flight requests and background deliveries before it exits. `0s` waits for none. Also sets the Pod's termination grace period. See [Shutdown and rolling restarts](#shutdown-and-rolling-restarts). |
 | `gateway.resources` | requests `cpu: 100m`, `memory: 128Mi`; limits `memory: 512Mi` | Resource requests and limits for the gateway container, passed verbatim. The default sets no CPU limit. |
 | `gateway.pprofPort` | `0` | Port for a `net/http/pprof` listener on the gateway, for profiling under load. `0` keeps it off. Unauthenticated and never behind a Service; reach it with a port-forward. See [Profiling](observability.md#profiling). |
 | `standardAgentClass.enabled` | `true` | Templates the sample `standard` AgentClass described under [Sample resources](#sample-resources). Set `false` to ship your own classes only. |
@@ -120,6 +136,8 @@ This table is the canonical list of Kaalm's Helm values. Every tunable named els
 | `console.image.repository` / `.tag` / `.pullPolicy` | `ghcr.io/win07xp/kaalm-console`, appVersion, `IfNotPresent` | The console image. |
 | `console.healthPort` | `8081` | Port for the console's kubelet-probe listener (`/healthz`, `/readyz`; TLS, no client auth). |
 | `console.logLevel` | `info` | Console log level: `debug`, `info`, `warn`, or `error`. |
+| `console.shutdown.drainDelay` | `5s` | The same as `gateway.shutdown.drainDelay`, for the console Pod. `0s` skips the wait. See [Shutdown and rolling restarts](#shutdown-and-rolling-restarts). |
+| `console.shutdown.timeout` | `30s` | How long the console Pod waits for in-flight requests before it exits. `0s` waits for none. Also sets its termination grace period. |
 | `console.resources` | `{}` | Resource requests and limits for the console container, passed verbatim. |
 | `rbac.personas.enabled` | `false` | Installs the four persona ClusterRoles: `kaalm-platform-admin`, `kaalm-catalog-reader`, `kaalm-developer`, and `kaalm-secrets-admin`. Off renders none of them. See [Roles for people](../security/rbac.md#roles-for-people). |
 | `rbac.personas.platformAdmins` | `[]` | Subjects for ClusterRoleBinding `kaalm-platform-admin`, as `rbac.authorization.k8s.io/v1` Subject objects. Empty renders no binding. See [Roles for people](../security/rbac.md#roles-for-people). |
