@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -37,6 +38,7 @@ import (
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 	"github.com/win07xp/kaalm/internal/console"
+	"github.com/win07xp/kaalm/internal/drain"
 )
 
 func main() {
@@ -49,6 +51,8 @@ func main() {
 		insecureSkipGateway bool
 		logLevel            slog.Level
 		maxMessageBodyBytes int64
+		drainDelay          time.Duration
+		shutdownTimeout     time.Duration
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":8443", "console listener (pages and read API, TLS)")
 	flag.StringVar(&healthAddr, "health-addr", ":8081", "health probe listener")
@@ -61,12 +65,21 @@ func main() {
 	flag.Int64Var(&maxMessageBodyBytes, "max-message-body-bytes", 1<<20,
 		"test-chat request body cap in bytes; larger bodies get 413 (the chart passes gateway.maxMessageBodyBytes)")
 	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level: debug, info, warn, or error")
+	flag.DurationVar(&drainDelay, "drain-delay", 5*time.Second,
+		"after SIGTERM, how long to keep serving while Service endpoints stop sending new connections; 0 shuts down at once")
+	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 30*time.Second,
+		"after the drain delay, how long to wait for in-flight requests before exiting")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	// The console logs through package-level slog like the gateway; the JSON
 	// convention is docs/src/operations/observability.md's.
 	slog.SetDefault(logger)
+
+	if err := drain.Validate(drainDelay, shutdownTimeout); err != nil {
+		logger.Error("invalid shutdown flags", "error", err)
+		os.Exit(1)
+	}
 
 	operatorNamespace := os.Getenv("POD_NAMESPACE")
 	if operatorNamespace == "" {
@@ -112,6 +125,8 @@ func main() {
 		KeyFile:             keyFile,
 		CAFile:              caFile,
 		MaxMessageBodyBytes: maxMessageBodyBytes,
+		DrainDelay:          drainDelay,
+		ShutdownTimeout:     shutdownTimeout,
 	},
 		&console.Data{Reader: cl.GetClient()},
 		&console.KubeTokenReviewer{Client: clientset},
@@ -119,24 +134,35 @@ func main() {
 		chat,
 	)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// Two contexts: the signal only starts the drain (sigCtx), while the
+	// cache the pages read runs on runCtx until the drain has finished.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	sigCtx, stop := signal.NotifyContext(runCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// After the first signal, restore default handling: a second one exits
+	// at once instead of waiting for the drain.
+	go func() {
+		<-sigCtx.Done()
+		stop()
+	}()
 
 	go func() {
-		if err := cl.Start(ctx); err != nil {
+		if err := cl.Start(runCtx); err != nil {
 			logger.Error("cluster cache failed", "error", err)
 			stop()
 		}
 	}()
-	if !cl.GetCache().WaitForCacheSync(ctx) {
+	if !cl.GetCache().WaitForCacheSync(sigCtx) {
 		logger.Error("cache sync failed")
 		os.Exit(1)
 	}
 
 	logger.Info("kaalm-console starting",
 		"listenAddr", listenAddr, "healthAddr", healthAddr, "gatewayURL", chat.BaseURL)
-	if err := server.Run(ctx); err != nil {
+	if err := server.Run(sigCtx); err != nil {
 		logger.Error("console server failed", "error", err)
 		os.Exit(1)
 	}
+	cancelRun()
 }

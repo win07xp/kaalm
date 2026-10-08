@@ -127,6 +127,74 @@ func TestServer_RunServesTLSAndShutsDown(t *testing.T) {
 	}
 }
 
+// After the signal, the console fails readiness but keeps serving its main
+// listener for the drain delay, then shuts down.
+func TestServer_RunDrainsBeforeShutdown(t *testing.T) {
+	certFile, keyFile, caFile := selfSignedCert(t)
+	s := NewServer(Config{
+		ListenAddr: freePort(t), HealthAddr: freePort(t),
+		CertFile: certFile, KeyFile: keyFile, CAFile: caFile,
+		DrainDelay: time.Second, ShutdownTimeout: 5 * time.Second,
+	}, seededData(t), &fakeReviewer{tokens: map[string]Identity{}}, NewAccessChecker(&fakeAuthorizer{}), &fakeChat{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	// A fresh transport per request, so each one uses a new connection the
+	// way a client the Service just routed here would.
+	get := func(url string) (*http.Response, string) {
+		t.Helper()
+		client := &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		resp, err := client.Get(url)
+		if err != nil {
+			t.Fatalf("GET %s: %v", url, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return resp, string(body)
+	}
+	readyz := fmt.Sprintf("https://%s/readyz", s.Config.HealthAddr)
+	waitForOK(t, &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}, readyz, 200)
+
+	started := time.Now()
+	cancel()
+	time.Sleep(200 * time.Millisecond)
+
+	if resp, body := get(readyz); resp.StatusCode != http.StatusServiceUnavailable || body != "draining: shutting down\n" {
+		t.Errorf("readyz during the drain = %d %q, want 503 draining", resp.StatusCode, body)
+	}
+	if resp, _ := get(fmt.Sprintf("https://%s/healthz", s.Config.HealthAddr)); resp.StatusCode != http.StatusOK {
+		t.Errorf("healthz during the drain = %d, want 200", resp.StatusCode)
+	}
+	resp, _ := get(fmt.Sprintf("https://%s/", s.Config.ListenAddr))
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("main listener during the drain = %d, want 303", resp.StatusCode)
+	}
+	if !resp.Close {
+		t.Error("a response during the drain must carry Connection: close")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned %v", err)
+		}
+		if took := time.Since(started); took < time.Second {
+			t.Errorf("Run returned after %v, before the 1s drain delay", took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not shut down")
+	}
+}
+
 func waitForOK(t *testing.T, client *http.Client, url string, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
