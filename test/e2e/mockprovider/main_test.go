@@ -379,3 +379,59 @@ func TestChatCarriesCreated(t *testing.T) {
 		t.Errorf("stream had %d chunks, want 4 (two content, finish, usage)", chunks)
 	}
 }
+
+func TestPaceForPrefix(t *testing.T) {
+	cases := []struct {
+		path string
+		want time.Duration
+	}{
+		{"/pace10/x", 10 * time.Millisecond},
+		{"/pace10/paced/v1/chat/completions", 10 * time.Millisecond},
+		{"/ok/v1/chat/completions", 0},
+		{"/slow50/v1/chat/completions", 0},
+		{"/paceX/v1/chat/completions", 0},
+		{"/pace/v1/chat/completions", 0},
+	}
+	for _, c := range cases {
+		if got := paceFor(c.path); got != c.want {
+			t.Errorf("paceFor(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+	// Pacing spaces a stream's events; it never delays the first answer.
+	if got := delayFor("/pace10/x"); got != 0 {
+		t.Errorf("delayFor(/pace10/x) = %v, want 0", got)
+	}
+	if status, in, out := behaviorFor("/pace10/v1/chat/completions"); status != http.StatusOK || in == 0 || out == 0 {
+		t.Errorf("pace prefix behavior = (%d, %d, %d), want 200 with usage", status, in, out)
+	}
+}
+
+// TestPacedStreamsSpaceEvents checks that a /pace<ms> stream still carries
+// every event through its terminator and takes at least the pacing between
+// them. Only the lower bound is asserted, so a slow machine cannot flake it.
+func TestPacedStreamsSpaceEvents(t *testing.T) {
+	srv := httptest.NewServer((&mock{}).handler())
+	defer srv.Close()
+	const pace = 30 * time.Millisecond
+
+	start := time.Now()
+	_, text := postChat(t, srv, "/pace30/v1/chat/completions",
+		`{"model":"g","stream":true,"stream_options":{"include_usage":true},"messages":[]}`)
+	took := time.Since(start)
+	if !strings.Contains(text, `"prompt_tokens":11`) || !strings.HasSuffix(strings.TrimSpace(text), "data: [DONE]") {
+		t.Errorf("paced chat stream incomplete:\n%s", text)
+	}
+	if took < 3*pace {
+		t.Errorf("paced chat stream took %v, want at least %v", took, 3*pace)
+	}
+
+	start = time.Now()
+	_, text = postChat(t, srv, "/pace30/v1/messages", `{"model":"c","stream":true,"max_tokens":5,"messages":[]}`)
+	took = time.Since(start)
+	if !strings.Contains(text, `"output_tokens":22`) || !strings.Contains(text, "event: message_stop") {
+		t.Errorf("paced messages stream incomplete:\n%s", text)
+	}
+	if took < 3*pace {
+		t.Errorf("paced messages stream took %v, want at least %v", took, 3*pace)
+	}
+}

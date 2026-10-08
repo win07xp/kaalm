@@ -28,6 +28,11 @@ limitations under the License.
 //	/bigusage            -> 200 with large usage (drives budget-exhaustion tests)
 //	/slow<ms>            -> 200 after <ms> milliseconds (the perf harness's
 //	                        realistic-latency provider)
+//	/pace<ms>            -> 200; a streamed answer waits <ms> milliseconds
+//	                        before each event after the first, so time to
+//	                        first byte and time to last byte differ (the perf
+//	                        harness's streaming relay check); a non-streamed
+//	                        answer is immediate
 //	/echo                -> 200 chat completion whose content is the JSON
 //	                        {"messages": N, "user": [texts]} built from the
 //	                        request, so a spec can see the history a framework
@@ -137,14 +142,31 @@ func anthropicMessage(model string, in, out int64) []byte {
 	return body
 }
 
+// pacer sleeps the pacing before every event after the first, so the first
+// event goes out at once and the rest are spaced.
+type pacer struct {
+	pace    time.Duration
+	started bool
+}
+
+func (p *pacer) wait() {
+	if p.started && p.pace > 0 {
+		time.Sleep(p.pace)
+	}
+	p.started = true
+}
+
 // streamChat writes a chat-completions SSE stream: the content split at its
 // last space into two chunks (one chunk when it has no space), the finish
-// chunk, a usage chunk when stream_options asked for one, [DONE].
-func streamChat(w http.ResponseWriter, model, content string, in, out int64, includeUsage bool) {
+// chunk, a usage chunk when stream_options asked for one, [DONE]. A nonzero
+// pace spaces the events.
+func streamChat(w http.ResponseWriter, model, content string, in, out int64, includeUsage bool, pace time.Duration) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	f, _ := w.(http.Flusher)
+	p := &pacer{pace: pace}
 	chunk := func(v map[string]any) {
+		p.wait()
 		raw, _ := json.Marshal(v)
 		_, _ = w.Write(append(append([]byte("data: "), raw...), '\n', '\n'))
 		if f != nil {
@@ -168,18 +190,22 @@ func streamChat(w http.ResponseWriter, model, content string, in, out int64, inc
 			"choices": []any{},
 			"usage":   map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out}})
 	}
+	p.wait()
 	_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	if f != nil {
 		f.Flush()
 	}
 }
 
-// streamMessages writes an Anthropic messages SSE stream.
-func streamMessages(w http.ResponseWriter, model string, in, out int64) {
+// streamMessages writes an Anthropic messages SSE stream. A nonzero pace
+// spaces the events.
+func streamMessages(w http.ResponseWriter, model string, in, out int64, pace time.Duration) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	f, _ := w.(http.Flusher)
+	p := &pacer{pace: pace}
 	event := func(name string, v map[string]any) {
+		p.wait()
 		raw, _ := json.Marshal(v)
 		_, _ = w.Write([]byte("event: " + name + "\ndata: " + string(raw) + "\n\n"))
 		if f != nil {
@@ -229,7 +255,7 @@ func behaviorFor(path string) (status int, in, out int64) {
 		return http.StatusServiceUnavailable, 0, 0
 	case strings.HasPrefix(path, "/bigusage"):
 		return http.StatusOK, 5_000_000, 5_000_000
-	default: // "/ok", "/slow<ms>", "/echo", and anything else
+	default: // "/ok", "/slow<ms>", "/pace<ms>", "/echo", and anything else
 		return http.StatusOK, 11, 22
 	}
 }
@@ -237,8 +263,15 @@ func behaviorFor(path string) (status int, in, out int64) {
 // delayFor reads a simulated upstream latency off a "/slow<ms>" prefix, so the
 // perf harness can measure the gateway against a provider that takes realistic
 // time to answer. Any other prefix answers immediately.
-func delayFor(path string) time.Duration {
-	const prefix = "/slow"
+func delayFor(path string) time.Duration { return prefixMillis(path, "/slow") }
+
+// paceFor reads the spacing between streamed events off a "/pace<ms>"
+// prefix. Any other prefix streams every event at once.
+func paceFor(path string) time.Duration { return prefixMillis(path, "/pace") }
+
+// prefixMillis reads the positive millisecond count that directly follows
+// prefix at the start of path, up to the next slash; 0 when there is none.
+func prefixMillis(path, prefix string) time.Duration {
 	if !strings.HasPrefix(path, prefix) {
 		return 0
 	}
@@ -287,7 +320,7 @@ func (m *mock) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case anthropic && stream:
-		streamMessages(w, model, in, out)
+		streamMessages(w, model, in, out, paceFor(r.URL.Path))
 	case anthropic:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -295,7 +328,7 @@ func (m *mock) chat(w http.ResponseWriter, r *http.Request) {
 	case stream:
 		so, _ := parsed["stream_options"].(map[string]any)
 		include, _ := so["include_usage"].(bool)
-		streamChat(w, model, replyContent(r.URL.Path, parsed), in, out, include)
+		streamChat(w, model, replyContent(r.URL.Path, parsed), in, out, include, paceFor(r.URL.Path))
 	default:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
