@@ -52,7 +52,11 @@ func countsAsReadyGateway(obj client.Object) bool {
 
 // gatewayReadinessChanged admits the gateway Pod events that can move
 // GatewayReachable: a gateway Pod appearing or going away, and an update
-// that flips its Ready condition or starts its deletion. The controller's
+// that flips its Ready condition or starts its deletion. It also admits
+// every gateway Pod delete, even of a Pod that already stopped counting as
+// Ready: gatewayPods keeps a deleting Pod live until its object is gone, so
+// that final delete is what runs the budget and agent-spend folds right
+// after the stopped replica's last publish. The controller's
 // Pod informer is cluster-wide (the Agent and AgentTask reconcilers own
 // their Pods), so this watch adds no informer; the predicate keeps every
 // other Pod event out of the ModelProvider queue.
