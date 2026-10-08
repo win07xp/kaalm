@@ -19,10 +19,23 @@ limitations under the License.
 package main
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 func TestManyProvidersAndClasses(t *testing.T) {
@@ -124,6 +137,47 @@ func TestSpreadHoldMatchesPlacement(t *testing.T) {
 		want := "/channels/" + f.namespaceOf(i) + "/" + f.name(i)
 		if got := channelURL("", prefix, nss, 4, i); got != want {
 			t.Errorf("agent %d: loadgen posts to %s, fleet placed it at %s", i, got, want)
+		}
+	}
+}
+
+// A namespaces phase that fails while preparing its namespaces, after it has
+// created them, still deletes them on the way out.
+func TestNamespacesPhaseDeletesNamespacesWhenPrepareFails(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := kaalmv1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmapi.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	var seed []client.Object
+	for _, name := range spreadSecrets {
+		seed = append(seed, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "perf", Name: name}})
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(seed...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*corev1.Secret); ok {
+					return errors.New("secret copy refused")
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).Build()
+
+	cfg := config{Namespace: "perf", NamespacesCount: 3, NamespacesAgents: 6}
+	h := &harness{cfg: cfg, k: &cluster{c: c}, sum: &summary{}}
+	if err := h.runNamespaces(context.Background()); err == nil {
+		t.Fatal("runNamespaces succeeded; want the Secret copy failure")
+	}
+	for _, name := range spreadNamespaces("perf", 3) {
+		var ns corev1.Namespace
+		err := c.Get(context.Background(), client.ObjectKey{Name: name}, &ns)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("namespace %s left behind after a failed prepare (get err %v)", name, err)
 		}
 	}
 }

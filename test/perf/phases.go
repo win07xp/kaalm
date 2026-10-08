@@ -1129,10 +1129,12 @@ func (h *harness) runNamespaces(ctx context.Context) error {
 		return errors.New("namespaces needs the ramp fleet gone: run teardown before it, or run it alone")
 	}
 	nss := spreadNamespaces(cfg.Namespace, cfg.NamespacesCount)
+	// Deferred before preparing: a failure partway through preparing leaves
+	// namespaces behind, and deleting an absent or Terminating one is harmless.
+	defer h.deleteNamespaces(nss)
 	if err := h.prepareNamespaces(ctx, nss); err != nil {
 		return err
 	}
-	defer h.deleteNamespaces(nss)
 
 	res := &namespacesResult{Namespaces: len(nss)}
 	h.sum.Namespaces = res
