@@ -33,7 +33,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
 type harness struct {
@@ -43,19 +47,23 @@ type harness struct {
 }
 
 type summary struct {
-	Commit      string          `json:"commit"`
-	StartedAt   time.Time       `json:"startedAt"`
-	FinishedAt  time.Time       `json:"finishedAt"`
-	Config      config          `json:"config"`
-	Environment environment     `json:"environment"`
-	Gateway     *gatewayResult  `json:"gateway,omitempty"`
-	Ramp        *rampResult     `json:"ramp,omitempty"`
-	Hold        *holdResult     `json:"hold,omitempty"`
-	Teardown    *teardownResult `json:"teardown,omitempty"`
-	Churn       *churnResult    `json:"churn,omitempty"`
-	Tasks       *tasksResult    `json:"tasks,omitempty"`
-	Restart     *restartResult  `json:"restart,omitempty"`
-	Notes       []string        `json:"notes,omitempty"`
+	Commit      string            `json:"commit"`
+	StartedAt   time.Time         `json:"startedAt"`
+	FinishedAt  time.Time         `json:"finishedAt"`
+	Config      config            `json:"config"`
+	Environment environment       `json:"environment"`
+	Gateway     *gatewayResult    `json:"gateway,omitempty"`
+	Ramp        *rampResult       `json:"ramp,omitempty"`
+	Hold        *holdResult       `json:"hold,omitempty"`
+	Teardown    *teardownResult   `json:"teardown,omitempty"`
+	Churn       *churnResult      `json:"churn,omitempty"`
+	Tasks       *tasksResult      `json:"tasks,omitempty"`
+	Restart     *restartResult    `json:"restart,omitempty"`
+	Tools       *toolsResult      `json:"tools,omitempty"`
+	Stream      *streamResult     `json:"stream,omitempty"`
+	Namespaces  *namespacesResult `json:"namespaces,omitempty"`
+	Providers   *providersResult  `json:"providers,omitempty"`
+	Notes       []string          `json:"notes,omitempty"`
 }
 
 type environment struct {
@@ -155,6 +163,14 @@ func (h *harness) runPhases(ctx context.Context) error {
 			err = h.runTasks(ctx)
 		case phaseRestart:
 			err = h.runRestart(ctx)
+		case phaseTools:
+			err = h.runTools(ctx)
+		case phaseStream:
+			err = h.runStream(ctx)
+		case phaseNamespaces:
+			err = h.runNamespaces(ctx)
+		case phaseProviders:
+			err = h.runProviders(ctx)
 		}
 		if err != nil {
 			h.note("phase %s failed after %s: %v", p, time.Since(start).Round(time.Second), err)
@@ -263,9 +279,32 @@ func (h *harness) applyInfra(ctx context.Context) error {
 func (h *harness) cleanLeftovers(ctx context.Context) {
 	phases := []struct{ phase, prefix string }{{phaseRamp, "ramp-"}, {phaseChurn, "churn-"}, {phaseTasks, "task-"}}
 	for _, p := range phases {
-		if _, err := h.k.deletePhase(ctx, h.cfg.Namespace, p.phase, p.prefix, 10*time.Minute); err != nil {
+		if _, err := h.k.deletePhase(ctx, []string{h.cfg.Namespace}, p.phase, p.prefix, 10*time.Minute); err != nil {
 			h.note("cleaning leftover %s objects: %v", p.phase, err)
 		}
+	}
+	// A namespaces phase that died leaves its spread namespaces: clear the
+	// fleet in them, then the namespaces themselves.
+	var spread corev1.NamespaceList
+	if err := h.k.c.List(ctx, &spread, client.MatchingLabels{phaseLabel: phaseNamespaces}); err != nil {
+		h.note("listing leftover %s namespaces: %v", phaseNamespaces, err)
+	} else if len(spread.Items) > 0 {
+		names := make([]string, 0, len(spread.Items))
+		for i := range spread.Items {
+			names = append(names, spread.Items[i].Name)
+		}
+		if _, err := h.k.deletePhase(ctx, names, phaseNamespaces, "spread-", 10*time.Minute); err != nil {
+			h.note("cleaning leftover %s objects: %v", phaseNamespaces, err)
+		}
+		h.deleteNamespaces(names)
+	}
+	if _, err := h.deleteProvidersObjects(ctx, 5*time.Minute); err != nil {
+		h.note("cleaning leftover %s objects: %v", phaseProviders, err)
+	}
+	// A tools phase that died before its cleanup leaves its caller agent.
+	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: h.cfg.Namespace, Name: toolsAgentName}}
+	if err := h.k.c.Delete(ctx, agent); err != nil && !apierrors.IsNotFound(err) {
+		h.note("cleaning leftover %s agent: %v", toolsAgentName, err)
 	}
 }
 
@@ -300,47 +339,12 @@ func (h *harness) printTable() {
 			fmt.Printf("  %-36s %6.1f rps  p50 %6.1f | %6.1f  p95 %6.1f | %6.1f  p99 %6.1f | %6.1f",
 				l.Name, l.Client.RPS, l.Client.LatencyMs.P50, l.GatewaySideMs.P50,
 				l.Client.LatencyMs.P95, l.GatewaySideMs.P95, l.Client.LatencyMs.P99, l.GatewaySideMs.P99)
-			fmt.Printf("  statuses %v  gw peak %.0f mCPU %.0f MiB\n",
-				l.Client.Statuses, l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
+			fmt.Printf("  statuses %v  gw %.3f ms CPU/req, peak %.0f mCPU %.0f MiB\n",
+				l.Client.Statuses, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
 		}
 	}
-	if r := s.Ramp; r != nil {
-		fmt.Printf("\nramp: %d agents Ready (target %d)", r.Achieved, r.Target)
-		if r.Saturation != "" {
-			fmt.Printf("; stopped: %s", r.Saturation)
-		}
-		fmt.Printf("; %.1f MiB host memory per agent\n", r.MemPerAgentMiB)
-		fmt.Println("  wave  fleet  wall(s)  ready p50/p95/max(s)  cert p50(s)  podstart p50(s)" +
-			"  reconcile p50/p99(ms)  ctl MiB  gw MiB  host avail MiB")
-		for _, w := range r.Waves {
-			fmt.Printf("  %4d  %5d  %7.0f  %5.0f/%5.0f/%5.0f  %11.0f  %15.0f",
-				w.Index, w.FleetReady, w.WallSec, w.TimeToReadySec.P50, w.TimeToReadySec.P95, w.TimeToReadySec.Max,
-				w.CertIssueSec.P50, w.PodStartSec.P50)
-			fmt.Printf("  %10.1f/%6.1f  %7.0f  %6.0f  %14.0f\n",
-				w.ReconcileMs.P50, w.ReconcileMs.P99, w.Controller.MemMiB, w.Gateway.MemMiB, w.HostMemAvailMiB)
-		}
-	}
-	if hd := s.Hold; hd != nil {
-		fmt.Printf("\nhold: %d agents, %d messages at %.1f msg/s; gateway statuses %v; callbacks %.0f",
-			hd.Agents, hd.Client.Requests, hd.Client.RPS, hd.MessagesByStatus, hd.Callbacks)
-		fmt.Printf("; message p50 %.0f ms p95 %.0f ms; Ready %d->%d; restarts %d->%d; flaps %d\n",
-			hd.MessageDurationMs.P50, hd.MessageDurationMs.P95,
-			hd.ReadyBefore, hd.ReadyAfter, hd.RestartsBefore, hd.RestartsAfter, hd.Flaps)
-	}
-	if hd := s.Hold; hd != nil && hd.Audit != nil {
-		a := hd.Audit
-		fmt.Printf("hold audit (%.0fs): controller %.1f req/s, %.2f writes/agent/min; "+
-			"gateway %.1f req/s, %.2f writes/agent/min; apiserver %v\n",
-			a.Seconds, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
-			a.GatewayRequestsPerSec, a.GatewayWritesPerAgentMinute, topEntries(a.APIServer, 6))
-	}
-	if hd := s.Hold; hd != nil && len(hd.Series) > 1 {
-		first, last := hd.Series[0], hd.Series[len(hd.Series)-1]
-		fmt.Printf("hold runtime series: %d samples over %.0fs; "+
-			"first %s %.0f goroutines %.1f MiB heap, last %s %.0f goroutines %.1f MiB heap\n",
-			len(hd.Series), last.AtSec, first.Component, first.Goroutines, first.HeapMiB,
-			last.Component, last.Goroutines, last.HeapMiB)
-	}
+	printRamp("ramp", s.Ramp)
+	printHold("hold", s.Hold)
 	if t := s.Teardown; t != nil {
 		fmt.Printf("\nteardown: %d agents gone in %.0fs\n", t.Agents, t.Seconds)
 	}
@@ -370,7 +374,105 @@ func (h *harness) printTable() {
 		fmt.Printf("; provision p50 %.0fs; run p50 %.0fs; total p50/p95 %.0f/%.0fs; retries %d\n",
 			t.ProvisionSec.P50, t.RunSec.P50, t.TotalSec.P50, t.TotalSec.P95, t.Retries)
 	}
+	if n := s.Namespaces; n != nil {
+		fmt.Printf("\nnamespaces: the fleet spread over %d namespaces\n", n.Namespaces)
+		printRamp("namespaces ramp", n.Ramp)
+		printHold("namespaces hold", n.Hold)
+		if t := n.Teardown; t != nil {
+			fmt.Printf("\nnamespaces teardown: %d agents gone in %.0fs\n", t.Agents, t.Seconds)
+		}
+	}
+	if t := s.Tools; t != nil {
+		fmt.Println("\ntools (client-observed ms | broker ms, forwarded calls):")
+		for _, l := range t.Legs {
+			fmt.Printf("  %-52s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f",
+				l.Name, l.Client.RPS, l.Client.LatencyMs.P50, l.GatewaySideMs.P50,
+				l.Client.LatencyMs.P99, l.GatewaySideMs.P99)
+			fmt.Printf("  statuses %v  broker %v  gw %.3f ms CPU/req, peak %.0f mCPU %.0f MiB\n",
+				l.Client.Statuses, l.CallsByStatus, l.GatewayCPUPerRequestMs,
+				l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
+		}
+	}
+	if st := s.Stream; st != nil {
+		fmt.Println("\nstream (client ms: time to first byte | time to last byte):")
+		for _, l := range st.Legs {
+			var ttfb stats
+			if l.Client.TTFBMs != nil {
+				ttfb = *l.Client.TTFBMs
+			}
+			fmt.Printf("  %-50s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f",
+				l.Name, l.Client.RPS, ttfb.P50, l.Client.LatencyMs.P50, ttfb.P99, l.Client.LatencyMs.P99)
+			fmt.Printf("  statuses %v  spend %.3f USD  usage missing %.0f  gw %.3f ms CPU/req, peak %.0f MiB\n",
+				l.Client.Statuses, l.SpendUSD, l.UsageMissing, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.MemMiB)
+		}
+	}
+	if p := s.Providers; p != nil {
+		fmt.Printf("\nproviders: %d ModelProviders Ready in %.0fs, %d AgentClasses Ready in %.0fs; gone in %.0fs\n",
+			p.Providers, p.ProvidersReadySec, p.Classes, p.ClassesReadySec, p.TeardownSec)
+		for _, name := range providersControllers {
+			r := p.Reconcile[name]
+			fmt.Printf("  %-14s %6.0f reconciles  p50 %6.1f ms  p99 %6.1f ms\n", name, r.Count, r.Ms.P50, r.Ms.P99)
+		}
+		fmt.Printf("  peak: controller %.0f mCPU %.0f MiB, gateway %.0f mCPU %.0f MiB\n",
+			p.ControllerUsageMax.CPUMilli, p.ControllerUsageMax.MemMiB, p.GatewayUsageMax.CPUMilli, p.GatewayUsageMax.MemMiB)
+		if a := p.Steady; a != nil {
+			fmt.Printf("  steady audit (%.0fs): controller %.1f req/s; gateway %.1f req/s; apiserver %v\n",
+				a.Seconds, a.ControllerRequestsPerSec, a.GatewayRequestsPerSec, topEntries(a.APIServer, 6))
+		}
+		for _, l := range p.Legs {
+			fmt.Printf("  %-36s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f  statuses %v  gw %.3f ms CPU/req\n",
+				l.Name, l.Client.RPS, l.Client.LatencyMs.P50, l.GatewaySideMs.P50,
+				l.Client.LatencyMs.P99, l.GatewaySideMs.P99, l.Client.Statuses, l.GatewayCPUPerRequestMs)
+		}
+	}
 	for _, n := range s.Notes {
 		fmt.Println("note:", n)
+	}
+}
+
+// printRamp prints a ramp block under a label (the standard ramp, or the
+// namespaces phase's spread fleet).
+func printRamp(label string, r *rampResult) {
+	if r == nil {
+		return
+	}
+	fmt.Printf("\n%s: %d agents Ready (target %d)", label, r.Achieved, r.Target)
+	if r.Saturation != "" {
+		fmt.Printf("; stopped: %s", r.Saturation)
+	}
+	fmt.Printf("; %.1f MiB host memory per agent\n", r.MemPerAgentMiB)
+	fmt.Println("  wave  fleet  wall(s)  ready p50/p95/max(s)  cert p50(s)  podstart p50(s)" +
+		"  reconcile p50/p99(ms)  ctl MiB  gw MiB  host avail MiB")
+	for _, w := range r.Waves {
+		fmt.Printf("  %4d  %5d  %7.0f  %5.0f/%5.0f/%5.0f  %11.0f  %15.0f",
+			w.Index, w.FleetReady, w.WallSec, w.TimeToReadySec.P50, w.TimeToReadySec.P95, w.TimeToReadySec.Max,
+			w.CertIssueSec.P50, w.PodStartSec.P50)
+		fmt.Printf("  %10.1f/%6.1f  %7.0f  %6.0f  %14.0f\n",
+			w.ReconcileMs.P50, w.ReconcileMs.P99, w.Controller.MemMiB, w.Gateway.MemMiB, w.HostMemAvailMiB)
+	}
+}
+
+// printHold prints a hold block under a label.
+func printHold(label string, hd *holdResult) {
+	if hd == nil {
+		return
+	}
+	fmt.Printf("\n%s: %d agents, %d messages at %.1f msg/s; gateway statuses %v; callbacks %.0f",
+		label, hd.Agents, hd.Client.Requests, hd.Client.RPS, hd.MessagesByStatus, hd.Callbacks)
+	fmt.Printf("; message p50 %.0f ms p95 %.0f ms; Ready %d->%d; restarts %d->%d; flaps %d\n",
+		hd.MessageDurationMs.P50, hd.MessageDurationMs.P95,
+		hd.ReadyBefore, hd.ReadyAfter, hd.RestartsBefore, hd.RestartsAfter, hd.Flaps)
+	if a := hd.Audit; a != nil {
+		fmt.Printf("%s audit (%.0fs): controller %.1f req/s, %.2f writes/agent/min; "+
+			"gateway %.1f req/s, %.2f writes/agent/min; apiserver %v\n",
+			label, a.Seconds, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
+			a.GatewayRequestsPerSec, a.GatewayWritesPerAgentMinute, topEntries(a.APIServer, 6))
+	}
+	if len(hd.Series) > 1 {
+		first, last := hd.Series[0], hd.Series[len(hd.Series)-1]
+		fmt.Printf("%s runtime series: %d samples over %.0fs; "+
+			"first %s %.0f goroutines %.1f MiB heap, last %s %.0f goroutines %.1f MiB heap\n",
+			label, len(hd.Series), last.AtSec, first.Component, first.Goroutines, first.HeapMiB,
+			last.Component, last.Goroutines, last.HeapMiB)
 	}
 }

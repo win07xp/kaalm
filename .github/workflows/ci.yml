@@ -90,6 +90,9 @@ jobs:
       - name: Unit and envtest suites (85% coverage minimum)
         run: make cover-check
 
+      - name: Perf harness unit tests (no cluster)
+        run: make perf-unit
+
       - name: Python base image unit suite (docker test stage)
         run: make python-test
 

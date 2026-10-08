@@ -54,6 +54,46 @@ const (
 	loadgenAgentName = "loadgen-agent"
 )
 
+// fleet describes a set of numbered agents one phase creates: their names
+// (prefix plus a four-digit index), the phase label they carry, how many the
+// phase aims for, and the namespaces they spread over round-robin. The
+// standard ramp fleet lives in one namespace; the namespaces phase spreads
+// the same shape over many.
+type fleet struct {
+	phase      string
+	prefix     string
+	target     int
+	namespaces []string
+	// holdJob names the hold's loadgen Job.
+	holdJob string
+}
+
+func (f fleet) name(i int) string { return fmt.Sprintf("%s%04d", f.prefix, i) }
+
+// namespaceOf places agent i: index modulo the namespace count.
+func (f fleet) namespaceOf(i int) string { return f.namespaces[i%len(f.namespaces)] }
+
+// scope is the namespace a list of the fleet's objects runs in: the one
+// namespace, or "" (every namespace, narrowed by the phase label) when the
+// fleet spans several.
+func (f fleet) scope() string { return listScope(f.namespaces) }
+
+func listScope(namespaces []string) string {
+	if len(namespaces) == 1 {
+		return namespaces[0]
+	}
+	return ""
+}
+
+// spreadNamespaces names n namespaces after base: base-00 to base-(n-1).
+func spreadNamespaces(base string, n int) []string {
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, fmt.Sprintf("%s-%02d", base, i))
+	}
+	return out
+}
+
 func loadgenAgentObj(ns, class, image string, providers []string) *kaalmv1beta1.Agent {
 	a := agentObj(ns, loadgenAgentName, class, image, phaseGateway, false)
 	for _, p := range providers {
@@ -210,6 +250,7 @@ func (k *cluster) createAll(ctx context.Context, objs []client.Object) error {
 // and the reconciler's Ready on the Agent. All at one-second granularity.
 type agentTiming struct {
 	Name       string
+	Namespace  string
 	Created    time.Time
 	CertReady  *time.Time
 	PodStarted *time.Time
@@ -220,6 +261,8 @@ type agentTiming struct {
 	Restarts   int32
 }
 
+// agentTimings reads a phase's agents in ns, or in every namespace when ns
+// is "".
 func (k *cluster) agentTimings(ctx context.Context, ns, phase string) ([]agentTiming, error) {
 	var agents kaalmv1beta1.AgentList
 	if err := k.c.List(ctx, &agents, client.InNamespace(ns), client.MatchingLabels{phaseLabel: phase}); err != nil {
@@ -234,7 +277,7 @@ func (k *cluster) agentTimings(ctx context.Context, ns, phase string) ([]agentTi
 		for _, cond := range certs.Items[i].Status.Conditions {
 			ready := cond.Type == cmapi.CertificateConditionReady && cond.Status == cmmeta.ConditionTrue
 			if ready && cond.LastTransitionTime != nil {
-				certReady[certs.Items[i].Name] = cond.LastTransitionTime.Time
+				certReady[certs.Items[i].Namespace+"/"+certs.Items[i].Name] = cond.LastTransitionTime.Time
 			}
 		}
 	}
@@ -247,7 +290,7 @@ func (k *cluster) agentTimings(ctx context.Context, ns, phase string) ([]agentTi
 	restarts := map[string]int32{}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		agent := p.Labels["kaalm.io/agent"]
+		agent := p.Namespace + "/" + p.Labels["kaalm.io/agent"]
 		if p.Status.StartTime != nil {
 			if prev, ok := podStart[agent]; !ok || p.Status.StartTime.After(prev) {
 				podStart[agent] = p.Status.StartTime.Time
@@ -263,8 +306,10 @@ func (k *cluster) agentTimings(ctx context.Context, ns, phase string) ([]agentTi
 		if !a.DeletionTimestamp.IsZero() {
 			continue // a trimmed agent on its way out is not part of the fleet
 		}
+		key := a.Namespace + "/" + a.Name
 		t := agentTiming{
-			Name: a.Name, Created: a.CreationTimestamp.Time, Phase: string(a.Status.Phase), Restarts: restarts[a.Name],
+			Name: a.Name, Namespace: a.Namespace, Created: a.CreationTimestamp.Time,
+			Phase: string(a.Status.Phase), Restarts: restarts[key],
 		}
 		if c := meta.FindStatusCondition(a.Status.Conditions, kaalmv1beta1.ConditionReady); c != nil {
 			t.ReadyNow = c.Status == metav1.ConditionTrue
@@ -273,10 +318,10 @@ func (k *cluster) agentTimings(ctx context.Context, ns, phase string) ([]agentTi
 				t.Ready = &ts
 			}
 		}
-		if ts, ok := certReady[a.Name+"-tls"]; ok {
+		if ts, ok := certReady[key+"-tls"]; ok {
 			t.CertReady = &ts
 		}
-		if ts, ok := podStart[a.Name]; ok {
+		if ts, ok := podStart[key]; ok {
 			t.PodStarted = &ts
 		}
 		if a.Status.HibernatedAt != nil {
@@ -343,7 +388,8 @@ func certReadyAt(t agentTiming) *time.Time {
 func podStartedAt(t agentTiming) *time.Time { return t.PodStarted }
 func readyAt(t agentTiming) *time.Time      { return t.Ready }
 
-// channelsActive counts a phase's channels the reconciler has marked Ready.
+// channelsActive counts a phase's channels the reconciler has marked Ready,
+// in ns or, when ns is "", in every namespace.
 func (k *cluster) channelsActive(ctx context.Context, ns, phase string) (int, int, error) {
 	var list kaalmv1beta1.AgentChannelList
 	if err := k.c.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{phaseLabel: phase}); err != nil {
@@ -360,11 +406,14 @@ func (k *cluster) channelsActive(ctx context.Context, ns, phase string) (int, in
 	return active, len(list.Items), nil
 }
 
-// deleteAgents removes the named agents and their channels and waits until
-// their pods are gone. The ramp uses it to trim a wave that hit the
-// environment's ceiling, so the fleet that stays is the clean maximal set.
-func (k *cluster) deleteAgents(ctx context.Context, ns string, names map[string]bool, timeout time.Duration) error {
-	for name := range names {
+// deleteAgents removes the named agents (name to namespace) and their
+// channels and waits until their pods are gone. The ramp uses it to trim a
+// wave that hit the environment's ceiling, so the fleet that stays is the
+// clean maximal set.
+func (k *cluster) deleteAgents(ctx context.Context, names map[string]string, timeout time.Duration) error {
+	nss := map[string]bool{}
+	for name, ns := range names {
+		nss[ns] = true
 		for _, obj := range []client.Object{
 			&kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}},
 			&kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}},
@@ -375,23 +424,33 @@ func (k *cluster) deleteAgents(ctx context.Context, ns string, names map[string]
 			}
 		}
 	}
+	scope := ""
+	if len(nss) == 1 {
+		for ns := range nss {
+			scope = ns
+		}
+	}
+	listed := func(name, ns string) bool {
+		want, ok := names[name]
+		return ok && want == ns
+	}
 	agentPods := client.MatchingLabels{"kaalm.io/workload": workloadAgent}
 	return pollUntil(ctx, timeout, 3*time.Second, func() (bool, error) {
 		var agents kaalmv1beta1.AgentList
-		if err := k.c.List(ctx, &agents, client.InNamespace(ns)); err != nil {
+		if err := k.c.List(ctx, &agents, client.InNamespace(scope)); err != nil {
 			return false, err
 		}
 		for i := range agents.Items {
-			if names[agents.Items[i].Name] {
+			if listed(agents.Items[i].Name, agents.Items[i].Namespace) {
 				return false, nil
 			}
 		}
 		var pods corev1.PodList
-		if err := k.c.List(ctx, &pods, client.InNamespace(ns), agentPods); err != nil {
+		if err := k.c.List(ctx, &pods, client.InNamespace(scope), agentPods); err != nil {
 			return false, err
 		}
 		for i := range pods.Items {
-			if names[pods.Items[i].Labels["kaalm.io/agent"]] {
+			if listed(pods.Items[i].Labels["kaalm.io/agent"], pods.Items[i].Namespace) {
 				return false, nil
 			}
 		}
@@ -399,22 +458,26 @@ func (k *cluster) deleteAgents(ctx context.Context, ns string, names map[string]
 	})
 }
 
-// deletePhase removes everything a phase created, channels before agents so
-// nothing dangles, and returns how long until the workload pods were gone.
+// deletePhase removes everything a phase created in the given namespaces,
+// channels before agents so nothing dangles, and returns how long until the
+// workload pods were gone.
 func (k *cluster) deletePhase(
-	ctx context.Context, ns, phase, podPrefix string, timeout time.Duration,
+	ctx context.Context, namespaces []string, phase, podPrefix string, timeout time.Duration,
 ) (time.Duration, error) {
 	start := time.Now()
-	sel := []client.DeleteAllOfOption{
-		client.InNamespace(ns),
-		client.MatchingLabels{phaseLabel: phase},
-		client.PropagationPolicy(metav1.DeletePropagationBackground),
-	}
-	for _, obj := range []client.Object{&kaalmv1beta1.AgentChannel{}, &kaalmv1beta1.AgentTask{}, &kaalmv1beta1.Agent{}} {
-		if err := k.c.DeleteAllOf(ctx, obj, sel...); err != nil && !apierrors.IsNotFound(err) {
-			return 0, err
+	for _, ns := range namespaces {
+		sel := []client.DeleteAllOfOption{
+			client.InNamespace(ns),
+			client.MatchingLabels{phaseLabel: phase},
+			client.PropagationPolicy(metav1.DeletePropagationBackground),
+		}
+		for _, obj := range []client.Object{&kaalmv1beta1.AgentChannel{}, &kaalmv1beta1.AgentTask{}, &kaalmv1beta1.Agent{}} {
+			if err := k.c.DeleteAllOf(ctx, obj, sel...); err != nil && !apierrors.IsNotFound(err) {
+				return 0, err
+			}
 		}
 	}
+	ns := listScope(namespaces)
 	err := pollUntil(ctx, timeout, 3*time.Second, func() (bool, error) {
 		var agents kaalmv1beta1.AgentList
 		if err := k.c.List(ctx, &agents, client.InNamespace(ns), client.MatchingLabels{phaseLabel: phase}); err != nil {
@@ -443,6 +506,19 @@ func (k *cluster) deletePhase(
 }
 
 var errTimeout = errors.New("timed out")
+
+// sleepCtx waits d, or until ctx is done, so an interrupted run still
+// writes its summary.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 // pollUntil calls fn every interval until it reports done or the timeout
 // passes (errTimeout, so callers can treat a timeout as a result). A few

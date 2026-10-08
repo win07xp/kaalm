@@ -19,6 +19,7 @@ limitations under the License.
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -48,10 +49,23 @@ type loadResult struct {
 	Statuses    map[string]int `json:"statuses"`
 	DurationSec float64        `json:"durationSec"`
 	RPS         float64        `json:"rps"`
-	LatencyMs   stats          `json:"latencyMs"`
-	Errors      []string       `json:"errors,omitempty"`
-	WarmupSec   float64        `json:"warmupSec"`
+	// LatencyMs is per request; in stream mode it is time to last byte, over
+	// the answers that ended (a non-200, or a stream read to its terminator).
+	LatencyMs stats `json:"latencyMs"`
+	// TTFBMs is time to first byte of each streamed 200, stream mode only.
+	TTFBMs    *stats   `json:"ttfbMs,omitempty"`
+	Errors    []string `json:"errors,omitempty"`
+	WarmupSec float64  `json:"warmupSec"`
 }
+
+// Request body formats the gateway mode speaks.
+const (
+	formatOpenAI    = "openai"
+	formatAnthropic = "anthropic"
+)
+
+// labelIncomplete counts a streamed 200 that ended before its terminator.
+const labelIncomplete = "incomplete"
 
 type loadgenConfig struct {
 	mode        string
@@ -71,17 +85,30 @@ type loadgenConfig struct {
 	noKeepalive bool
 	certFile    string
 	keyFile     string
+	toolURL     string
+	tool        string
+	format      string
+	stream      bool
+	namespaces  []string
+	// legacySession makes tools mode speak the legacy session era.
+	legacySession bool
 }
 
 func runLoadgen(args []string) error {
 	var c loadgenConfig
 	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
 	fs.StringVar(&c.mode, "mode", modeGateway,
-		"gateway (LLM proxy at fixed concurrency) or channels (webhook messages at a fixed rate)")
-	fs.StringVar(&c.url, "url", "https://kaalm-gateway.kaalm-system.svc:8443/v1/chat/completions",
+		"gateway (LLM proxy at fixed concurrency), tools (MCP tools/call through the broker at fixed concurrency), "+
+			"or channels (webhook messages at a fixed rate)")
+	fs.StringVar(&c.url, "url", gatewayBase+"/v1/chat/completions",
 		"gateway mode: LLM endpoint")
 	fs.StringVar(&c.model, "model", providerFast+"/mock-model", "gateway mode: qualified provider/model")
-	fs.IntVar(&c.concurrency, "concurrency", 32, "gateway mode: concurrent callers")
+	fs.StringVar(&c.format, "format", formatOpenAI,
+		"gateway mode: request body shape, openai (chat completions) or anthropic (messages; pair it with -url)")
+	fs.BoolVar(&c.stream, "stream", false,
+		"gateway mode: ask for a streamed answer and read it to [DONE] or message_stop, "+
+			"recording time to first and last byte")
+	fs.IntVar(&c.concurrency, "concurrency", 32, "gateway and tools modes: concurrent callers")
 	fs.DurationVar(&c.duration, "duration", time.Minute, "measured run length after warmup")
 	fs.StringVar(&c.tokenFile, "token-file", "/var/run/token/token",
 		"projected ServiceAccount token (audience kaalm-gateway)")
@@ -89,7 +116,10 @@ func runLoadgen(args []string) error {
 	fs.StringVar(&c.bearerFile, "bearer-file", "/var/run/hook/token", "channels mode: the webhook bearer secret")
 	fs.StringVar(&c.base, "base", "https://kaalm-gateway.kaalm-system.svc:8080", "channels mode: user listener base URL")
 	fs.StringVar(&c.pathPrefix, "path-prefix", "/channels/perf/ramp-",
-		"channels mode: channel path prefix; the index is appended")
+		"channels mode: channel path prefix; the index is appended, and {ns} is replaced as -namespaces says")
+	var namespaces string
+	fs.StringVar(&namespaces, "namespaces", "",
+		"channels mode: comma-separated namespaces; channel i's {ns} is namespace i modulo the list length")
 	fs.IntVar(&c.count, "count", 1, "channels mode: number of channels under the prefix")
 	fs.IntVar(&c.pad, "pad", 4, "channels mode: zero-padding width of the index")
 	fs.Float64Var(&c.rate, "rate", 1, "channels mode: messages per second across all channels, round-robin")
@@ -97,10 +127,23 @@ func runLoadgen(args []string) error {
 	fs.BoolVar(&c.noKeepalive, "no-keepalive", false,
 		"open a fresh connection per request (measures the cost of an in-cluster dial: DNS, TCP, TLS)")
 	fs.StringVar(&c.certFile, "cert-file", "",
-		"gateway mode: present this client certificate (a Kaalm agent identity) instead of the ServiceAccount token")
-	fs.StringVar(&c.keyFile, "key-file", "", "gateway mode: the client certificate's key")
+		"gateway and tools modes: present this client certificate (a Kaalm agent identity) "+
+			"instead of the ServiceAccount token")
+	fs.StringVar(&c.keyFile, "key-file", "", "gateway and tools modes: the client certificate's key")
+	fs.StringVar(&c.toolURL, "tool-url", gatewayBase+"/v1/mcp/"+toolProviderName,
+		"tools mode: the broker endpoint of the ToolProvider")
+	fs.StringVar(&c.tool, "tool", toolName, "tools mode: the tool every tools/call names")
+	fs.BoolVar(&c.legacySession, "legacy-session", false,
+		"tools mode: speak the legacy session era: each caller sends initialize and notifications/initialized once, "+
+			"before measuring, then every tools/call carries the session id the broker returned")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if namespaces != "" {
+		c.namespaces = strings.Split(namespaces, ",")
+	}
+	if c.format != formatOpenAI && c.format != formatAnthropic {
+		return fmt.Errorf("unknown -format %q (openai or anthropic)", c.format)
 	}
 
 	ca, err := os.ReadFile(c.caFile)
@@ -132,6 +175,8 @@ func runLoadgen(args []string) error {
 	switch c.mode {
 	case modeGateway:
 		res, err = gatewayLoad(cli, c)
+	case modeTools:
+		res, err = toolsLoad(cli, c)
 	case modeChannels:
 		res, err = channelLoad(cli, c)
 	default:
@@ -149,6 +194,8 @@ func runLoadgen(args []string) error {
 type recorder struct {
 	mu        sync.Mutex
 	latencies []float64
+	ttfbs     []float64
+	stream    bool
 	statuses  map[string]int
 	errors    []string
 }
@@ -156,18 +203,43 @@ type recorder struct {
 func newRecorder() *recorder { return &recorder{statuses: map[string]int{}} }
 
 func (r *recorder) record(status int, latency time.Duration, err error) {
+	r.recordLabel(strconv.Itoa(status), latency, err)
+}
+
+// recordLabel counts one outcome under a status label: the HTTP status, or a
+// finer label such as "rpc_error" for a JSON-RPC error inside a 200.
+func (r *recorder) recordLabel(label string, latency time.Duration, err error) {
+	r.recordOutcome(outcome{label: label, latency: latency, err: err})
+}
+
+// recordStream counts one streamed request; see streamOutcome.
+func (r *recorder) recordStream(status int, ttfb, ttlb time.Duration, complete bool, err error) {
+	r.recordOutcome(streamOutcome(status, ttfb, ttlb, complete, err))
+}
+
+func (r *recorder) recordOutcome(o outcome) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err != nil {
+	if o.stream {
+		r.stream = true
+	}
+	if o.err != nil {
 		r.statuses["error"]++
 		if len(r.errors) < 5 {
-			r.errors = append(r.errors, err.Error())
+			r.errors = append(r.errors, o.err.Error())
 		}
 		return
 	}
-	r.statuses[strconv.Itoa(status)]++
-	r.latencies = append(r.latencies, float64(latency.Microseconds())/1000)
+	r.statuses[o.label]++
+	if o.label != labelIncomplete {
+		r.latencies = append(r.latencies, ms(o.latency))
+	}
+	if o.ttfb > 0 {
+		r.ttfbs = append(r.ttfbs, ms(o.ttfb))
+	}
 }
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
 func (r *recorder) result(mode string, elapsed, warmup time.Duration) *loadResult {
 	r.mu.Lock()
@@ -176,7 +248,7 @@ func (r *recorder) result(mode string, elapsed, warmup time.Duration) *loadResul
 	for _, n := range r.statuses {
 		total += n
 	}
-	return &loadResult{
+	res := &loadResult{
 		Mode:        mode,
 		Requests:    total,
 		Statuses:    r.statuses,
@@ -186,6 +258,11 @@ func (r *recorder) result(mode string, elapsed, warmup time.Duration) *loadResul
 		Errors:      r.errors,
 		WarmupSec:   round3(warmup.Seconds()),
 	}
+	if r.stream {
+		ttfb := summarize(r.ttfbs)
+		res.TTFBMs = &ttfb
+	}
+	return res
 }
 
 func doRequest(cli *http.Client, req *http.Request) (int, time.Duration, error) {
@@ -199,20 +276,191 @@ func doRequest(cli *http.Client, req *http.Request) (int, time.Duration, error) 
 	return resp.StatusCode, time.Since(start), nil
 }
 
-// gatewayLoad drives chat completions at fixed concurrency: every worker
-// issues the next request as soon as the previous one returns.
-func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
-	// An mTLS caller is identified by its certificate; only the token tier
-	// sends a bearer.
-	bearer := ""
-	if c.certFile == "" {
-		token, err := os.ReadFile(c.tokenFile)
-		if err != nil {
-			return nil, err
-		}
-		bearer = strings.TrimSpace(string(token))
+// outcome is one request's result under its status label. A streamed
+// request also carries its time to first byte; its latency is time to last
+// byte.
+type outcome struct {
+	label   string
+	latency time.Duration
+	ttfb    time.Duration
+	stream  bool
+	err     error
+}
+
+// streamOutcome labels a streamed request: a 200 whose stream ended before
+// its terminator is "incomplete", never a success.
+func streamOutcome(status int, ttfb, ttlb time.Duration, complete bool, err error) outcome {
+	o := outcome{label: strconv.Itoa(status), latency: ttlb, ttfb: ttfb, stream: true, err: err}
+	if err == nil && status == http.StatusOK && !complete {
+		o.label = labelIncomplete
 	}
-	body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"load"}]}`, c.model))
+	return o
+}
+
+// statusOutcome labels a plain HTTP exchange by its status code.
+func statusOutcome(status int, latency time.Duration, err error) outcome {
+	return outcome{label: strconv.Itoa(status), latency: latency, err: err}
+}
+
+// gatewayBearer is the token-tier credential: the projected ServiceAccount
+// token, or "" for an mTLS caller, which its certificate identifies.
+func gatewayBearer(c loadgenConfig) (string, error) {
+	if c.certFile != "" {
+		return "", nil
+	}
+	token, err := os.ReadFile(c.tokenFile)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(token)), nil
+}
+
+// fixedConcurrency warms up until one clean 200, then runs c.concurrency
+// workers for c.duration, each issuing the next request as soon as the
+// previous one returns. The gateway's source-IP cross-check answers 401
+// until its Pod informer has seen a freshly created caller; a real client
+// retries the same way, and nothing is measured until the first 200.
+func fixedConcurrency(c loadgenConfig, mode string, once func() outcome) (*loadResult, error) {
+	return fixedConcurrencyCallers(c, mode, func() (func() outcome, error) { return once, nil })
+}
+
+// fixedConcurrencyCallers is fixedConcurrency for callers that hold state,
+// such as a protocol session: newCaller opens one caller per warmup attempt
+// and one per worker, all before the clock starts, so opening them is never
+// measured.
+func fixedConcurrencyCallers(
+	c loadgenConfig, mode string, newCaller func() (func() outcome, error),
+) (*loadResult, error) {
+	warmStart := time.Now()
+	for {
+		call, err := newCaller()
+		o := outcome{err: err}
+		if err == nil {
+			o = call()
+		}
+		if o.err == nil && o.label == "200" {
+			break
+		}
+		if time.Since(warmStart) > c.warmup {
+			return nil, fmt.Errorf("warmup: no 200 within %s (last status %s, err %v)", c.warmup, o.label, o.err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	warmup := time.Since(warmStart)
+
+	callers := make([]func() outcome, c.concurrency)
+	for i := range callers {
+		call, err := newCaller()
+		if err != nil {
+			return nil, fmt.Errorf("opening caller %d: %w", i, err)
+		}
+		callers[i] = call
+	}
+
+	rec := newRecorder()
+	ctx, cancel := context.WithTimeout(context.Background(), c.duration)
+	defer cancel()
+	start := time.Now()
+	var wg sync.WaitGroup
+	for _, call := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				rec.recordOutcome(call())
+			}
+		}()
+	}
+	wg.Wait()
+	return rec.result(mode, time.Since(start), warmup), nil
+}
+
+// llmRequestBody is one short user message to model, in the OpenAI chat or
+// the Anthropic messages shape (which requires max_tokens), streamed when
+// asked.
+func llmRequestBody(format, model string, stream bool) []byte {
+	body := map[string]any{
+		"model":    model,
+		"messages": []any{map[string]any{"role": "user", "content": "load"}},
+	}
+	if format == formatAnthropic {
+		body["max_tokens"] = 64
+	}
+	if stream {
+		body["stream"] = true
+	}
+	raw, _ := json.Marshal(body)
+	return raw
+}
+
+// readStream reads an SSE body line by line until the format's terminator:
+// data: [DONE] for OpenAI, the message_stop event for Anthropic. ttfb is
+// taken at the first non-empty line and ttlb at the terminator, both from
+// start. A body that ends first is incomplete.
+func readStream(r io.Reader, format string, start time.Time) (ttfb, ttlb time.Duration, complete bool, err error) {
+	br := bufio.NewReader(r)
+	for {
+		line, readErr := br.ReadString('\n')
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && ttfb == 0 {
+			ttfb = time.Since(start)
+		}
+		if streamTerminator(format, trimmed) {
+			return ttfb, time.Since(start), true, nil
+		}
+		if readErr == io.EOF {
+			return ttfb, time.Since(start), false, nil
+		}
+		if readErr != nil {
+			return ttfb, time.Since(start), false, readErr
+		}
+	}
+}
+
+// streamTerminator reports whether an SSE line ends the stream.
+func streamTerminator(format, line string) bool {
+	if format != formatAnthropic {
+		return line == "data: [DONE]"
+	}
+	if line == "event: message_stop" {
+		return true
+	}
+	data, ok := strings.CutPrefix(line, "data:")
+	if !ok {
+		return false
+	}
+	var ev struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal([]byte(strings.TrimSpace(data)), &ev) == nil && ev.Type == "message_stop"
+}
+
+// doStream sends a streaming request and reads a 200 to its terminator. A
+// non-200 body is drained like doRequest's, and its latency is the whole
+// exchange.
+func doStream(cli *http.Client, req *http.Request, format string) outcome {
+	start := time.Now()
+	resp, err := cli.Do(req)
+	if err != nil {
+		return streamOutcome(0, 0, time.Since(start), false, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return streamOutcome(resp.StatusCode, 0, time.Since(start), false, nil)
+	}
+	ttfb, ttlb, complete, err := readStream(resp.Body, format, start)
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	return streamOutcome(resp.StatusCode, ttfb, ttlb, complete, err)
+}
+
+// gatewayLoad drives LLM requests at fixed concurrency, streamed or not.
+func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
+	bearer, err := gatewayBearer(c)
+	if err != nil {
+		return nil, err
+	}
+	body := llmRequestBody(c.format, c.model, c.stream)
 	newReq := func() *http.Request {
 		req, _ := http.NewRequest(http.MethodPost, c.url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -221,40 +469,161 @@ func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 		}
 		return req
 	}
-
-	// Warmup: the gateway's source-IP cross-check answers 401 until its Pod
-	// informer has seen this freshly created caller; a real client retries
-	// the same way. Nothing is measured until the first 200.
-	warmStart := time.Now()
-	for {
-		status, _, err := doRequest(cli, newReq())
-		if err == nil && status == http.StatusOK {
-			break
+	once := func() outcome {
+		if c.stream {
+			return doStream(cli, newReq(), c.format)
 		}
-		if time.Since(warmStart) > c.warmup {
-			return nil, fmt.Errorf("warmup: no 200 within %s (last status %d, err %v)", c.warmup, status, err)
-		}
-		time.Sleep(2 * time.Second)
+		return statusOutcome(doRequest(cli, newReq()))
 	}
-	warmup := time.Since(warmStart)
+	return fixedConcurrency(c, modeGateway, once)
+}
 
-	rec := newRecorder()
-	ctx, cancel := context.WithTimeout(context.Background(), c.duration)
-	defer cancel()
+// mcpRevision is the MCP protocol revision the tools mode speaks: the
+// stateless one, with no initialize and no session.
+const mcpRevision = "2026-07-28"
+
+// rpcRequestBody is a JSON-RPC request with id 1.
+func rpcRequestBody(method string, params map[string]any) []byte {
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	return body
+}
+
+// toolCallParams names tool with no arguments.
+func toolCallParams(tool string) map[string]any {
+	return map[string]any{"name": tool, "arguments": map[string]any{}}
+}
+
+// toolCallBody is a self-describing tools/call request on mcpRevision.
+func toolCallBody(tool string) []byte {
+	params := toolCallParams(tool)
+	params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": mcpRevision}
+	return rpcRequestBody("tools/call", params)
+}
+
+// legacyMCPRevision is the revision the legacy session leg speaks: the one
+// the mock MCP server's initialize answers with.
+const legacyMCPRevision = "2025-03-26"
+
+// legacyToolCallBody is toolCallBody without _meta: a legacy-era call names
+// its revision in the header the session negotiated, not in the body.
+func legacyToolCallBody(tool string) []byte {
+	return rpcRequestBody("tools/call", toolCallParams(tool))
+}
+
+// toolCallStatus labels a broker answer: "rpc_error" when an HTTP 200
+// carries a JSON-RPC error (the tool server refused the call), the HTTP
+// status otherwise.
+func toolCallStatus(httpStatus int, body []byte) string {
+	if httpStatus == http.StatusOK {
+		var env struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(body, &env) == nil && len(env.Error) > 0 && string(env.Error) != "null" {
+			return "rpc_error"
+		}
+	}
+	return strconv.Itoa(httpStatus)
+}
+
+// toolsLoad drives tools/call through the gateway's MCP broker at fixed
+// concurrency, with the same auth choice as gatewayLoad.
+func toolsLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
+	bearer, err := gatewayBearer(c)
+	if err != nil {
+		return nil, err
+	}
+	if c.legacySession {
+		return fixedConcurrencyCallers(c, modeTools, func() (func() outcome, error) {
+			return newLegacyToolCaller(cli, c, bearer)
+		})
+	}
+	body := toolCallBody(c.tool)
+	once := func() outcome {
+		req := newMCPRequest(c.toolURL, body, bearer)
+		req.Header.Set("MCP-Protocol-Version", mcpRevision)
+		req.Header.Set("Mcp-Method", "tools/call")
+		req.Header.Set("Mcp-Name", c.tool)
+		return doToolCall(cli, req)
+	}
+	return fixedConcurrency(c, modeTools, once)
+}
+
+// newMCPRequest is a POST of one JSON-RPC message to the broker, with the
+// headers both protocol eras send.
+func newMCPRequest(url string, body []byte, bearer string) *http.Request {
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	return req
+}
+
+// doToolCall sends one tools/call and labels the answer.
+func doToolCall(cli *http.Client, req *http.Request) outcome {
 	start := time.Now()
-	var wg sync.WaitGroup
-	for i := 0; i < c.concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ctx.Err() == nil {
-				status, lat, err := doRequest(cli, newReq())
-				rec.record(status, lat, err)
-			}
-		}()
+	resp, err := cli.Do(req)
+	if err != nil {
+		return outcome{latency: time.Since(start), err: err}
 	}
-	wg.Wait()
-	return rec.result(modeGateway, time.Since(start), warmup), nil
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+	return outcome{label: toolCallStatus(resp.StatusCode, raw), latency: time.Since(start)}
+}
+
+// newLegacyToolCaller opens one legacy-era session through the broker
+// (initialize, then notifications/initialized) and returns a caller whose
+// every tools/call carries the session id the broker returned. The broker
+// checks that id against the caller's identity on every call.
+func newLegacyToolCaller(cli *http.Client, c loadgenConfig, bearer string) (func() outcome, error) {
+	initBody := rpcRequestBody("initialize", map[string]any{
+		"protocolVersion": legacyMCPRevision,
+		"capabilities":    map[string]any{},
+		"clientInfo":      json.RawMessage(`{"name":"perf-loadgen","version":"1"}`),
+	})
+	resp, err := cli.Do(newMCPRequest(c.toolURL, initBody, bearer))
+	if err != nil {
+		return nil, fmt.Errorf("initialize: %w", err)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("initialize: HTTP %d", resp.StatusCode)
+	}
+	session := resp.Header.Get("Mcp-Session-Id")
+	if session == "" {
+		return nil, fmt.Errorf("initialize: the answer carries no Mcp-Session-Id")
+	}
+
+	notify := newMCPRequest(c.toolURL, []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`), bearer)
+	notify.Header.Set("Mcp-Session-Id", session)
+	notify.Header.Set("MCP-Protocol-Version", legacyMCPRevision)
+	status, _, err := doRequest(cli, notify)
+	if err != nil {
+		return nil, fmt.Errorf("notifications/initialized: %w", err)
+	}
+	if status < 200 || status > 299 {
+		return nil, fmt.Errorf("notifications/initialized: HTTP %d", status)
+	}
+
+	body := legacyToolCallBody(c.tool)
+	return func() outcome {
+		req := newMCPRequest(c.toolURL, body, bearer)
+		req.Header.Set("Mcp-Session-Id", session)
+		req.Header.Set("MCP-Protocol-Version", legacyMCPRevision)
+		return doToolCall(cli, req)
+	}, nil
+}
+
+// channelURL is channel i's webhook URL: the prefix with {ns} replaced by
+// namespace i modulo the list (when there is a list), then the index
+// zero-padded to pad digits. The fleet places agent i the same way.
+func channelURL(base, pathPrefix string, namespaces []string, pad, i int) string {
+	if len(namespaces) > 0 {
+		pathPrefix = strings.ReplaceAll(pathPrefix, "{ns}", namespaces[i%len(namespaces)])
+	}
+	return fmt.Sprintf("%s%s%0*d", base, pathPrefix, pad, i)
 }
 
 // channelLoad posts webhook messages round-robin across the channels at a
@@ -271,12 +640,10 @@ func channelLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 	if c.count <= 0 || c.rate <= 0 {
 		return nil, fmt.Errorf("channels mode needs count > 0 and rate > 0")
 	}
-	url := func(i int) string {
-		return fmt.Sprintf("%s%s%0*d", c.base, c.pathPrefix, c.pad, i)
-	}
 	newReq := func(i int) *http.Request {
 		body := fmt.Sprintf(`{"userId":"load","content":{"text":"ping %d"}}`, i)
-		req, _ := http.NewRequest(http.MethodPost, url(i), strings.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, channelURL(c.base, c.pathPrefix, c.namespaces, c.pad, i),
+			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+bearer)
 		return req

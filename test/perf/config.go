@@ -75,9 +75,18 @@ type config struct {
 	// Gateway steady state.
 	GatewayConcurrency int
 	GatewayDuration    time.Duration
+
+	// The namespaces phase: the ramp, hold, and teardown on a fleet of
+	// NamespacesAgents spread round-robin over NamespacesCount namespaces.
+	NamespacesCount  int
+	NamespacesAgents int
+
+	// The providers phase: this many extra ModelProviders and as many
+	// AgentClasses, each class allowing every one of them.
+	ProvidersCount int
 }
 
-// Phase names, in run order.
+// Phase names.
 const (
 	phaseGateway  = "gateway"
 	phaseRamp     = "ramp"
@@ -86,12 +95,18 @@ const (
 	phaseChurn    = "churn"
 	phaseTasks    = "tasks"
 	phaseRestart  = "restart"
+	phaseTools    = "tools"
+	phaseStream   = "stream"
+	// Opt-in phases.
+	phaseNamespaces = "namespaces"
+	phaseProviders  = "providers"
 )
 
 // Strings shared between the orchestrator and the in-cluster load generator.
 const (
 	modeGateway         = "gateway"
 	modeChannels        = "channels"
+	modeTools           = "tools"
 	flagMode            = "-mode"
 	flagDuration        = "-duration"
 	loadgenName         = "loadgen" // the subcommand, the ServiceAccount, and the Job label
@@ -100,6 +115,8 @@ const (
 	channelTypeWebhook  = "webhook"
 	workloadAgent       = "agent" // the kaalm.io/workload label value on agent Pods
 	agentControllerName = "agent" // the controller label on controller-runtime metrics
+	// gatewayBase is the gateway's LLM and tool listener inside the cluster.
+	gatewayBase = "https://kaalm-gateway.kaalm-system.svc:8443"
 )
 
 // The four ModelProviders testdata/infra.yaml defines, told apart by the
@@ -112,7 +129,54 @@ const (
 	providerLimited = "perf-limited"
 )
 
-var allPhases = []string{phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks}
+// The two ModelProviders the stream phase adds: the Anthropic type, so an
+// Anthropic stream is relayed natively and not translated, and an
+// openai-compatible provider whose mock spaces streamed events 10 ms apart.
+const (
+	providerAnthropic = "perf-anthropic"
+	providerPaced     = "perf-paced"
+)
+
+// testdata/infra.yaml defines two ToolProviders, one per MCP protocol era:
+// toolProviderName in front of the 2026-07-28 mock MCP server and
+// toolLegacyProviderName in front of the legacy session one. toolName is
+// the tool the tools phase calls on both.
+const (
+	toolProviderName       = "perf-mcp"
+	toolLegacyProviderName = "perf-mcp-legacy"
+	toolName               = "web_search"
+)
+
+// defaultPhases is what a run with no -phases flag executes, in this order.
+var defaultPhases = []string{
+	phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks, phaseTools, phaseStream,
+}
+
+// optionalPhases run only when -phases names them: each takes long enough
+// that the default run should not grow by it unasked.
+var optionalPhases = []string{phaseNamespaces, phaseProviders}
+
+// knownPhase reports whether p is a default or an optional phase.
+func knownPhase(p string) bool {
+	for _, set := range [][]string{defaultPhases, optionalPhases} {
+		for _, k := range set {
+			if k == p {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// phaseList names the default phases, then the opt-in ones, for help and
+// error text.
+func phaseList() string {
+	out := "default " + strings.Join(defaultPhases, ",")
+	if len(optionalPhases) > 0 {
+		out += "; opt-in " + strings.Join(optionalPhases, ",")
+	}
+	return out
+}
 
 func parseRunFlags(args []string) (config, error) {
 	var c config
@@ -125,8 +189,8 @@ func parseRunFlags(args []string) (config, error) {
 	fs.StringVar(&c.Infra, "infra", "test/perf/testdata/infra.yaml",
 		"in-cluster infrastructure manifest applied before any phase")
 	fs.StringVar(&c.Out, "out", "", "summary JSON path (default test/perf/results/<timestamp>.json)")
-	fs.StringVar(&phases, "phases", strings.Join(allPhases, ","),
-		"comma-separated phases to run, in this order: "+strings.Join(allPhases, ","))
+	fs.StringVar(&phases, "phases", strings.Join(defaultPhases, ","),
+		"comma-separated phases to run, in the order given ("+phaseList()+")")
 	fs.BoolVar(&c.HostPreflight, "host-preflight", true,
 		"fail fast when the host's inotify sysctls are too low for a few hundred pods")
 
@@ -157,6 +221,12 @@ func parseRunFlags(args []string) (config, error) {
 	fs.IntVar(&c.GatewayConcurrency, "gateway-concurrency", 32, "concurrent LLM callers per gateway leg")
 	fs.DurationVar(&c.GatewayDuration, "gateway-duration", time.Minute, "duration of each gateway leg")
 
+	fs.IntVar(&c.NamespacesCount, "namespaces-count", 20, "namespaces phase: namespaces the fleet spreads over")
+	fs.IntVar(&c.NamespacesAgents, "namespaces-agents", 400,
+		"namespaces phase: agents to reach (the baseline ramp's achieved fleet, under the machine's pod ceiling)")
+	fs.IntVar(&c.ProvidersCount, "providers-count", 50,
+		"providers phase: ModelProviders to add, and as many AgentClasses that each allow all of them")
+
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
@@ -165,19 +235,19 @@ func parseRunFlags(args []string) (config, error) {
 		if p == "" {
 			continue
 		}
-		known := false
-		for _, k := range allPhases {
-			if k == p {
-				known = true
-			}
-		}
-		if !known {
-			return c, fmt.Errorf("unknown phase %q (known: %s)", p, strings.Join(allPhases, ","))
+		if !knownPhase(p) {
+			return c, fmt.Errorf("unknown phase %q (%s)", p, phaseList())
 		}
 		c.Phases = append(c.Phases, p)
 	}
 	if c.WaveSize <= 0 || c.RampTarget <= 0 {
 		return c, fmt.Errorf("ramp-target and wave-size must be positive")
+	}
+	if c.NamespacesCount <= 0 || c.NamespacesAgents <= 0 {
+		return c, fmt.Errorf("namespaces-count and namespaces-agents must be positive")
+	}
+	if c.ProvidersCount <= 0 {
+		return c, fmt.Errorf("providers-count must be positive")
 	}
 	return c, nil
 }

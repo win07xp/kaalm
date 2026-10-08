@@ -375,7 +375,10 @@ e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the
 	$(MAKE) e2e-deploy
 	# -count=1 defeats go's test cache: the suite drives a live cluster the
 	# cache knows nothing about, and a replayed transcript proves nothing.
-	go test ./test/e2e/... -tags e2e -v -timeout 20m -count=1
+	# The suite takes about 16 minutes on a CI runner, and the timeout kills
+	# the whole suite at once, which reads as a flake. 30 minutes leaves room
+	# for a runner nearly twice as slow.
+	go test ./test/e2e/... -tags e2e -v -timeout 30m -count=1
 
 ##@ Performance
 
@@ -406,14 +409,15 @@ perf-down: ## Delete the perf cluster.
 	k3d cluster delete $(PERF_CLUSTER)
 
 .PHONY: perf-images
-perf-images: ## Build and import what the perf run needs: controller, gateway, mock provider, the Go agent, and the load generator.
+perf-images: ## Build and import what the perf run needs: controller, gateway, mock provider, mock MCP server, the Go agent, and the load generator.
 	docker build -t $(CONTROLLER_IMG) --build-arg BINARY=manager .
 	docker build -t $(GATEWAY_IMG) --build-arg BINARY=gateway .
 	docker build -t $(MOCKPROVIDER_IMG) -f test/e2e/mockprovider/Dockerfile .
+	docker build -t $(MOCKMCP_IMG) -f test/e2e/mockmcp/Dockerfile .
 	docker build -t $(GO_AGENT_IMG) -f images/agent-go/Dockerfile .
 	docker build -t $(AGENT_IMG) -f test/e2e/starter-go/Dockerfile --build-arg BASE=$(GO_AGENT_IMG) .
 	docker build -t $(PERF_LOADGEN_IMG) -f test/perf/Dockerfile .
-	CLUSTER=$(PERF_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(AGENT_IMG) $(PERF_LOADGEN_IMG)
+	CLUSTER=$(PERF_CLUSTER) hack/k3d-import.sh $(CONTROLLER_IMG) $(GATEWAY_IMG) $(MOCKPROVIDER_IMG) $(MOCKMCP_IMG) $(AGENT_IMG) $(PERF_LOADGEN_IMG)
 
 .PHONY: bench
 bench: ## Run the gateway hot-path benchmarks (no cluster); pipe two runs into benchstat to compare.
@@ -435,6 +439,10 @@ perf-deploy: chart-sync ## Install the chart onto the perf cluster with the mock
 	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout restart deploy/kaalm-controller deploy/kaalm-gateway
 	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout status deploy/kaalm-controller --timeout=3m
 	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout status deploy/kaalm-gateway --timeout=3m
+
+.PHONY: perf-unit
+perf-unit: ## Unit tests of the perf harness's pure helpers (no cluster; the perftest tag keeps them out of make test).
+	go test -tags perftest -count=1 ./test/perf/
 
 .PHONY: perf-run
 perf-run: ## Run the harness against an existing perf cluster (the inner loop); results land in test/perf/results/.

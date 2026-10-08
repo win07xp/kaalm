@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -285,6 +287,163 @@ func TestTask_UnownedNetworkPolicyIsChildConflict(t *testing.T) {
 	if ref := metav1.GetControllerOf(getPolicy(t, name)); ref == nil || ref.Kind != "AgentTask" {
 		t.Errorf("the recreated policy must be controlled by the AgentTask, got %+v", ref)
 	}
+}
+
+// createForeignCertificate creates a Ready Certificate named after the
+// workload's {name}-tls with no owner, as a tenant could. It is Ready on
+// purpose: only the ownership check keeps the workload from mounting the
+// foreign Secret.
+func createForeignCertificate(t *testing.T, workload string) cmapi.Certificate {
+	t.Helper()
+	cert := &cmapi.Certificate{
+		ObjectMeta: metav1.ObjectMeta{Name: workload + "-tls", Namespace: "default"},
+		Spec: cmapi.CertificateSpec{
+			SecretName: workload + "-foreign",
+			IssuerRef:  cmmeta.ObjectReference{Name: "foreign-issuer", Kind: "Issuer"},
+			DNSNames:   []string{"foreign.example.com"},
+		},
+	}
+	if err := testClient.Create(ctxT(), cert); err != nil {
+		t.Fatalf("create foreign certificate: %v", err)
+	}
+	eventually(t, func() error { return markCertReadyErr(workload) })
+	return getCertificate(t, workload)
+}
+
+func getCertificate(t *testing.T, workload string) cmapi.Certificate {
+	t.Helper()
+	var cert cmapi.Certificate
+	key := types.NamespacedName{Namespace: "default", Name: workload + "-tls"}
+	if err := testAPIReader.Get(ctxT(), key, &cert); err != nil {
+		t.Fatalf("get certificate %s: %v", key.Name, err)
+	}
+	return cert
+}
+
+// expectForeignCertificateUntouched checks the foreign Certificate keeps its
+// spec, is never written, and gains no controller.
+func expectForeignCertificateUntouched(t *testing.T, workload string, want cmapi.Certificate) {
+	t.Helper()
+	got := getCertificate(t, workload)
+	if !equality.Semantic.DeepEqual(got.Spec, want.Spec) {
+		t.Errorf("foreign certificate spec changed: %+v", got.Spec)
+	}
+	if got.ResourceVersion != want.ResourceVersion {
+		t.Errorf("foreign certificate was written: resourceVersion %s, want %s", got.ResourceVersion, want.ResourceVersion)
+	}
+	if ref := metav1.GetControllerOf(&got); ref != nil {
+		t.Errorf("foreign certificate was adopted by %s %s", ref.Kind, ref.Name)
+	}
+}
+
+// replaceForeignCertificate deletes the foreign Certificate, waits for the
+// workload to create its own, and marks that one Ready. It returns the
+// Secret name the workload's Pod must mount.
+func replaceForeignCertificate(t *testing.T, workload string, owner client.Object) string {
+	t.Helper()
+	foreign := &cmapi.Certificate{ObjectMeta: metav1.ObjectMeta{Name: workload + "-tls", Namespace: "default"}}
+	if err := testClient.Delete(ctxT(), foreign); err != nil {
+		t.Fatalf("delete foreign certificate: %v", err)
+	}
+	var secret string
+	eventually(t, func() error {
+		var cert cmapi.Certificate
+		key := types.NamespacedName{Namespace: "default", Name: workload + "-tls"}
+		if err := testAPIReader.Get(ctxT(), key, &cert); err != nil {
+			return err
+		}
+		if !metav1.IsControlledBy(&cert, owner) {
+			return errString("certificate is not the workload's own yet")
+		}
+		secret = cert.Spec.SecretName
+		return nil
+	})
+	markCertReady(t, workload)
+	return secret
+}
+
+func TestAgent_ForeignCertificateIsChildConflict(t *testing.T) {
+	const name = "own-cert-agent"
+	want := createForeignCertificate(t, name)
+	mkWorkloadClass(t, "wc-own-cert", nil)
+	mkWorkloadAgent(t, name, "wc-own-cert", nil)
+
+	expectAgentReadyReason(t, name, kaalmv1beta1.ReasonChildConflict)
+	expectReadyMessageHas(t, getWorkloadAgent(t, name).Status.Conditions, `Certificate "`+name+`-tls"`)
+	expectEvent(t, "Agent", "default", name, kaalmv1beta1.ReasonChildConflict, corev1.EventTypeWarning,
+		`Certificate "`+name+`-tls"`)
+	// Several requeues pass while the conflict holds: nothing changes.
+	time.Sleep(4 * notReadyRecheck)
+	if pod := agentPod(t, name); pod != nil {
+		t.Fatalf("an Agent with a foreign Certificate must not get a Pod, found %s", pod.Name)
+	}
+	expectForeignCertificateUntouched(t, name, want)
+	expectAgentReadyReason(t, name, kaalmv1beta1.ReasonChildConflict)
+
+	// Removing the foreign Certificate lets the Agent recover with its own.
+	secret := replaceForeignCertificate(t, name, getWorkloadAgent(t, name))
+	var pod *corev1.Pod
+	eventually(t, func() error {
+		if pod = agentPod(t, name); pod == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	if got := tlsSecretOf(pod); got != secret || got == name+"-foreign" {
+		t.Errorf("pod mounts TLS Secret %q, want the Agent's own %q", got, secret)
+	}
+	eventually(t, func() error {
+		c := condition(getWorkloadAgent(t, name).Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Reason == kaalmv1beta1.ReasonChildConflict {
+			return errString("Agent has not left ChildConflict")
+		}
+		return nil
+	})
+}
+
+func TestTask_ForeignCertificateIsChildConflict(t *testing.T) {
+	const name = "own-cert-task"
+	want := createForeignCertificate(t, name)
+	mkWorkloadClass(t, "tc-own-cert", nil)
+	mkTask(t, name, "tc-own-cert", nil)
+
+	eventually(t, func() error {
+		c := condition(getTask(t, name).Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Reason != kaalmv1beta1.ReasonChildConflict {
+			return errString("no ChildConflict yet")
+		}
+		return nil
+	})
+	expectReadyMessageHas(t, getTask(t, name).Status.Conditions, `Certificate "`+name+`-tls"`)
+	expectEvent(t, "AgentTask", "default", name, kaalmv1beta1.ReasonChildConflict, corev1.EventTypeWarning,
+		`Certificate "`+name+`-tls"`)
+	time.Sleep(4 * notReadyRecheck)
+	if pod := taskPod(t, name); pod != nil {
+		t.Fatalf("a task with a foreign Certificate must not get a Pod, found %s", pod.Name)
+	}
+	expectForeignCertificateUntouched(t, name, want)
+	if phase := getTask(t, name).Status.Phase; phase != kaalmv1beta1.TaskPending {
+		t.Errorf("phase = %q, want %q kept while the conflict holds", phase, kaalmv1beta1.TaskPending)
+	}
+
+	secret := replaceForeignCertificate(t, name, getTask(t, name))
+	var pod *corev1.Pod
+	eventually(t, func() error {
+		if pod = taskPod(t, name); pod == nil {
+			return errString("no pod yet")
+		}
+		return nil
+	})
+	if got := tlsSecretOf(pod); got != secret || got == name+"-foreign" {
+		t.Errorf("pod mounts TLS Secret %q, want the task's own %q", got, secret)
+	}
+	eventually(t, func() error {
+		c := condition(getTask(t, name).Status.Conditions, kaalmv1beta1.ConditionReady)
+		if c == nil || c.Reason == kaalmv1beta1.ReasonChildConflict {
+			return errString("task has not left ChildConflict")
+		}
+		return nil
+	})
 }
 
 // A PVC with no controller, as pvcRetention: Retain leaves it, is reused by

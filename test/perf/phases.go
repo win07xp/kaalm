@@ -24,36 +24,49 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// The phases, in the order `perf run` executes them. Each records its own
-// block on the summary and cleans up its own objects, so a failed phase
-// leaves the earlier numbers intact and the cluster reusable.
+// The phases, which `perf run` executes in the order -phases gives. Each
+// records its own block on the summary and cleans up its own objects, so a
+// failed phase leaves the earlier numbers intact and the cluster reusable.
 
 type gatewayResult struct {
 	Legs []gatewayLeg `json:"legs"`
 }
 
 type gatewayLeg struct {
-	Name              string      `json:"name"`
-	Provider          string      `json:"provider"`
-	MTLS              bool        `json:"mtls"`
-	Concurrency       int         `json:"concurrency"`
+	Name        string `json:"name"`
+	Provider    string `json:"provider"`
+	MTLS        bool   `json:"mtls"`
+	Stream      bool   `json:"stream,omitempty"`
+	Format      string `json:"format,omitempty"`
+	Concurrency int    `json:"concurrency"`
+	// Client is what the loadgen saw. On a stream leg its latencyMs is time
+	// to last byte and its ttfbMs time to first byte.
 	Client            *loadResult `json:"client"`
 	GatewaySideMs     stats       `json:"gatewaySideMs"`
 	GatewayRequests   float64     `json:"gatewayRequests"`
 	SpendUSD          float64     `json:"spendUsd"`
 	BudgetUtilization float64     `json:"budgetUtilization"`
-	GatewayUsageMax   usage       `json:"gatewayUsageMax"`
+	// UsageMissing counts successful answers that carried no usage and so
+	// settled at zero spend.
+	UsageMissing float64 `json:"usageMissing,omitempty"`
+	// GatewayCPUPerRequestMs is the gateway's process CPU over the leg,
+	// summed across replicas, divided by the requests the gateway counted.
+	GatewayCPUPerRequestMs float64 `json:"gatewayCpuPerRequestMs"`
+	GatewayUsageMax        usage   `json:"gatewayUsageMax"`
 }
 
 type rampResult struct {
@@ -351,101 +364,383 @@ func (s *usageSampler) finish() map[string]usage {
 
 var gatewayProviders = []string{providerFast, providerSlow, providerHard, providerLimited}
 
-func (h *harness) runGateway(ctx context.Context) error {
-	// The token tier is the gateway-only adoption path (a ServiceAccount
-	// token validated once and cached); the mTLS legs are the primary path
-	// every Kaalm-managed agent takes, presented here through a borrowed
-	// agent identity. Upstream latency and budget mode vary on that path.
-	legs := []struct {
-		name, provider string
-		mtls           bool
-	}{
-		{"token tier: soft budget, 0 ms upstream", providerFast, false},
-		{"mtls: soft budget, 0 ms upstream", providerFast, true},
-		{"mtls: soft budget, 50 ms upstream", providerSlow, true},
-		{"mtls: hard budget, 0 ms upstream", providerHard, true},
-		{"mtls: rate limits on, 0 ms upstream", providerLimited, true},
+// Gateway-side metric names the legs read.
+const (
+	metricLLMDuration  = "kaalm_llm_request_duration_seconds"
+	metricLLMRequests  = "kaalm_llm_requests_total"
+	metricToolDuration = "kaalm_tool_call_duration_seconds"
+	metricToolCalls    = "kaalm_tool_calls_total"
+	metricProcessCPU   = "process_cpu_seconds_total"
+	// metricReconcileTime is controller-runtime's per-controller reconcile
+	// histogram, labeled by labelController.
+	metricReconcileTime = "controller_runtime_reconcile_time_seconds"
+	labelController     = "controller"
+)
+
+// gatewayLegDef is one leg of the gateway table: a provider reached over one
+// auth mode.
+type gatewayLegDef struct {
+	name, provider string
+	mtls           bool
+}
+
+// gatewayLegs is the gateway phase's table. The token tier is the
+// gateway-only adoption path (a ServiceAccount token validated once and
+// cached); the mTLS legs are the primary path every Kaalm-managed agent
+// takes, presented here through a borrowed agent identity. Upstream latency
+// and budget mode vary on that path. The providers phase reruns the first
+// two so its rows compare with these.
+var gatewayLegs = []gatewayLegDef{
+	{"token tier: soft budget, 0 ms upstream", providerFast, false},
+	{"mtls: soft budget, 0 ms upstream", providerFast, true},
+	{"mtls: soft budget, 50 ms upstream", providerSlow, true},
+	{"mtls: hard budget, 0 ms upstream", providerHard, true},
+	{"mtls: rate limits on, 0 ms upstream", providerLimited, true},
+}
+
+// legSpec is one fixed-concurrency loadgen run against the gateway and the
+// gateway-side series that describe it.
+type legSpec struct {
+	name     string
+	provider string
+	job      string
+	mtls     bool
+	mode     string
+	// args are the loadgen flags beyond the mode, concurrency, duration,
+	// and client certificate, which runLeg adds.
+	args []string
+	// histogram and counter are the gateway-side duration histogram and
+	// request counter for this leg's traffic, both filtered by labels.
+	histogram, counter string
+	labels             map[string]string
+	// stream and format only label the result; the loadgen flags in args
+	// select them.
+	stream bool
+	format string
+}
+
+// llmLegSpec is a chat leg against one provider: the gateway table's shape.
+func llmLegSpec(name, provider, job string, mtls bool, args ...string) legSpec {
+	return legSpec{
+		name: name, provider: provider, job: job, mtls: mtls, mode: modeGateway,
+		args:      append([]string{"-model", provider + "/mock-model"}, args...),
+		histogram: metricLLMDuration, counter: metricLLMRequests,
+		labels: map[string]string{"provider": provider},
 	}
-	if err := h.k.ensureClass(ctx, activeClass()); err != nil {
-		return err
+}
+
+// gatewayLegSpec turns a table row into its leg, with the job names the
+// gateway phase has always used.
+func gatewayLegSpec(d gatewayLegDef) legSpec {
+	job := "loadgen-gateway-token-" + d.provider
+	if d.mtls {
+		job = "loadgen-gateway-mtls-" + d.provider
 	}
-	agent := loadgenAgentObj(h.cfg.Namespace, activeClassName, h.cfg.AgentImage, gatewayProviders)
+	return llmLegSpec(d.name, d.provider, job, d.mtls)
+}
+
+// legScrapes are the gateway snapshots a leg starts and ends with, for
+// figures beyond the common ones.
+type legScrapes struct {
+	before, after *snapshot
+}
+
+// runLeg runs one leg: a gateway scrape, the loadgen Job with the usage
+// sampler running, and a second scrape. The common figures land on the
+// returned gatewayLeg; LLM legs also get spend, budget, and missing usage.
+func (h *harness) runLeg(ctx context.Context, spec legSpec, mtlsSecret string) (gatewayLeg, legScrapes, error) {
+	before, err := h.scrapeGateway(ctx)
+	if err != nil {
+		return gatewayLeg{}, legScrapes{}, err
+	}
+	args := append([]string{flagMode, spec.mode}, spec.args...)
+	args = append(args,
+		"-concurrency", strconv.Itoa(h.cfg.GatewayConcurrency),
+		flagDuration, h.cfg.GatewayDuration.String(),
+	)
+	secret := ""
+	if spec.mtls {
+		args = append(args, "-cert-file", "/var/run/mtls/tls.crt", "-key-file", "/var/run/mtls/tls.key")
+		secret = mtlsSecret
+	}
+	sampler := h.sampleUsage(ctx)
+	client, err := h.k.runLoadgen(ctx, h.cfg.Namespace, spec.job, h.cfg.LoadgenImage, args, secret,
+		h.cfg.GatewayDuration+3*time.Minute)
+	peak := sampler.finish()
+	if err != nil {
+		return gatewayLeg{}, legScrapes{}, fmt.Errorf("leg %s: %w", spec.name, err)
+	}
+	after, err := h.scrapeGateway(ctx)
+	if err != nil {
+		return gatewayLeg{}, legScrapes{}, err
+	}
+	leg := gatewayLeg{
+		Name:            spec.name,
+		Provider:        spec.provider,
+		MTLS:            spec.mtls,
+		Stream:          spec.stream,
+		Format:          spec.format,
+		Concurrency:     h.cfg.GatewayConcurrency,
+		Client:          client,
+		GatewaySideMs:   histStats(histogramDelta(before, after, spec.histogram, spec.labels)),
+		GatewayRequests: counterDelta(before, after, spec.counter, spec.labels),
+		GatewayUsageMax: peak["kaalm-gateway"],
+	}
+	leg.GatewayCPUPerRequestMs = cpuPerRequestMs(counterDelta(before, after, metricProcessCPU, nil), leg.GatewayRequests)
+	if spec.counter == metricLLMRequests {
+		leg.SpendUSD = round3(counterDelta(before, after, "kaalm_llm_spend_usd_total", spec.labels))
+		leg.BudgetUtilization = after.gauge("kaalm_llm_budget_utilization", spec.labels)
+		leg.UsageMissing = counterDelta(before, after, "kaalm_llm_usage_missing_total", spec.labels)
+	}
+	h.logf("  client: %d requests, %.1f rps, p50 %.1f ms, p99 %.1f ms, statuses %v; gateway %.3f ms CPU per request",
+		client.Requests, client.RPS, client.LatencyMs.P50, client.LatencyMs.P99, client.Statuses,
+		leg.GatewayCPUPerRequestMs)
+	return leg, legScrapes{before: before, after: after}, nil
+}
+
+// loadgenIdentity creates an agent whose identity the mTLS legs borrow and
+// waits for its TLS Secret: the controller issues the certificate (SAN
+// {name}.{ns}.svc.cluster.local) and the loadgen Job presents it, so the
+// gateway sees a Kaalm-managed agent calling from its own namespace. The
+// cleanup deletes the agent.
+func (h *harness) loadgenIdentity(ctx context.Context, agent *kaalmv1beta1.Agent) (string, func(), error) {
 	if err := h.k.createAll(ctx, []client.Object{agent}); err != nil {
-		return err
+		return "", nil, err
 	}
-	defer func() { _ = h.k.c.Delete(context.Background(), agent) }()
+	cleanup := func() { _ = h.k.c.Delete(context.Background(), agent) }
 	// The agent's TLS Secret is the one its Certificate names in spec.secretName.
 	var mtlsSecret string
 	if err := pollUntil(ctx, 3*time.Minute, 2*time.Second, func() (bool, error) {
 		var cert cmapi.Certificate
-		key := client.ObjectKey{Namespace: h.cfg.Namespace, Name: loadgenAgentName + "-tls"}
+		key := client.ObjectKey{Namespace: agent.Namespace, Name: agent.Name + "-tls"}
 		if err := h.k.c.Get(ctx, key, &cert); err != nil || cert.Spec.SecretName == "" {
 			return false, nil //nolint:nilerr // absent until the controller creates it
 		}
 		mtlsSecret = cert.Spec.SecretName
-		sec, err := h.k.cs.CoreV1().Secrets(h.cfg.Namespace).Get(ctx, mtlsSecret, metav1.GetOptions{})
+		sec, err := h.k.cs.CoreV1().Secrets(agent.Namespace).Get(ctx, mtlsSecret, metav1.GetOptions{})
 		if err != nil {
 			return false, nil //nolint:nilerr // absent until cert-manager issues it
 		}
 		return len(sec.Data["tls.crt"]) > 0 && len(sec.Data["tls.key"]) > 0, nil
 	}); err != nil {
-		return fmt.Errorf("waiting for the loadgen agent certificate: %w", err)
+		cleanup()
+		return "", nil, fmt.Errorf("waiting for the %s agent certificate: %w", agent.Name, err)
 	}
+	return mtlsSecret, cleanup, nil
+}
+
+func (h *harness) runGateway(ctx context.Context) error {
+	if err := h.k.ensureClass(ctx, activeClass()); err != nil {
+		return err
+	}
+	agent := loadgenAgentObj(h.cfg.Namespace, activeClassName, h.cfg.AgentImage, gatewayProviders)
+	mtlsSecret, cleanup, err := h.loadgenIdentity(ctx, agent)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	res := &gatewayResult{}
-	for i, leg := range legs {
+	for i, d := range gatewayLegs {
 		h.logf("gateway leg %d/%d: %s (%d callers, %s)",
-			i+1, len(legs), leg.name, h.cfg.GatewayConcurrency, h.cfg.GatewayDuration)
-		before, err := h.scrapeGateway(ctx)
+			i+1, len(gatewayLegs), d.name, h.cfg.GatewayConcurrency, h.cfg.GatewayDuration)
+		leg, _, err := h.runLeg(ctx, gatewayLegSpec(d), mtlsSecret)
 		if err != nil {
-			return err
+			return fmt.Errorf("gateway %w", err)
 		}
-		args := []string{
-			flagMode, modeGateway,
-			"-model", leg.provider + "/mock-model",
-			"-concurrency", strconv.Itoa(h.cfg.GatewayConcurrency),
-			flagDuration, h.cfg.GatewayDuration.String(),
-		}
-		jobName, secret := "loadgen-gateway-token-"+leg.provider, ""
-		if leg.mtls {
-			args = append(args, "-cert-file", "/var/run/mtls/tls.crt", "-key-file", "/var/run/mtls/tls.key")
-			jobName, secret = "loadgen-gateway-mtls-"+leg.provider, mtlsSecret
-		}
-		sampler := h.sampleUsage(ctx)
-		client, err := h.k.runLoadgen(ctx, h.cfg.Namespace, jobName, h.cfg.LoadgenImage, args, secret,
-			h.cfg.GatewayDuration+3*time.Minute)
-		peak := sampler.finish()
-		if err != nil {
-			return fmt.Errorf("gateway leg %s: %w", leg.name, err)
-		}
-		after, err := h.scrapeGateway(ctx)
-		if err != nil {
-			return err
-		}
-		want := map[string]string{"provider": leg.provider}
-		res.Legs = append(res.Legs, gatewayLeg{
-			Name:              leg.name,
-			Provider:          leg.provider,
-			MTLS:              leg.mtls,
-			Concurrency:       h.cfg.GatewayConcurrency,
-			Client:            client,
-			GatewaySideMs:     histStats(histogramDelta(before, after, "kaalm_llm_request_duration_seconds", want)),
-			GatewayRequests:   counterDelta(before, after, "kaalm_llm_requests_total", want),
-			SpendUSD:          round3(counterDelta(before, after, "kaalm_llm_spend_usd_total", want)),
-			BudgetUtilization: after.gauge("kaalm_llm_budget_utilization", want),
-			GatewayUsageMax:   peak["kaalm-gateway"],
-		})
-		h.logf("  client: %d requests, %.1f rps, p50 %.1f ms, p99 %.1f ms, statuses %v",
-			client.Requests, client.RPS, client.LatencyMs.P50, client.LatencyMs.P99, client.Statuses)
+		res.Legs = append(res.Legs, leg)
 	}
 	h.sum.Gateway = res
 	return nil
 }
 
+// ---- tools ----
+
+const (
+	toolsClassName = "perf-tools"
+	// toolsAgentName is the Agent whose identity the mTLS tool legs
+	// borrow; it holds a grant on each ToolProvider, narrowed to the called
+	// tool.
+	toolsAgentName = "loadgen-tools"
+)
+
+// toolsResult is the tool plane under load: brokered tools/call through
+// POST /v1/mcp/perf-mcp by auth mode, and through /v1/mcp/perf-mcp-legacy
+// in the legacy session era.
+type toolsResult struct {
+	Legs []toolLeg `json:"legs"`
+}
+
+type toolLeg struct {
+	Name        string      `json:"name"`
+	Provider    string      `json:"provider"`
+	MTLS        bool        `json:"mtls"`
+	Concurrency int         `json:"concurrency"`
+	Client      *loadResult `json:"client"`
+	// GatewaySideMs is the broker's histogram, which counts forwarded
+	// calls only.
+	GatewaySideMs          stats              `json:"gatewaySideMs"`
+	CallsByStatus          map[string]float64 `json:"callsByStatus"`
+	GatewayCalls           float64            `json:"gatewayCalls"`
+	GatewayCPUPerRequestMs float64            `json:"gatewayCpuPerRequestMs"`
+	GatewayUsageMax        usage              `json:"gatewayUsageMax"`
+}
+
+// toolsClass is the active class with both perf ToolProviders allowed,
+// under its own name so the ramp's class never changes.
+func toolsClass() *kaalmv1beta1.AgentClass {
+	c := activeClass()
+	c.Name = toolsClassName
+	c.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{
+		{Name: toolProviderName}, {Name: toolLegacyProviderName},
+	}
+	return c
+}
+
+func toolsAgentObj(ns, image string) *kaalmv1beta1.Agent {
+	a := agentObj(ns, toolsAgentName, toolsClassName, image, phaseTools, false)
+	a.Spec.Tools = []kaalmv1beta1.AgentToolGrant{
+		{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: toolProviderName}, Tools: []string{toolName}},
+		{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: toolLegacyProviderName}, Tools: []string{toolName}},
+	}
+	return a
+}
+
+// toolLegSpecs are the tools phase's legs. The token-tier caller has no
+// workload, so the broker admits it on the provider's allowedNamespaces and
+// declared catalog; the mTLS callers go through the agent's grants and the
+// class allowlist. The legacy session leg is mTLS only: legacy-era clients
+// are agent frameworks in Kaalm-managed agents, the broker binds the
+// session to the workload identity, and the token-versus-mTLS cost is
+// already in the first two legs.
+var toolLegSpecs = []legSpec{
+	toolLegSpec("tools token tier: 2026-07-28, immediate tool server", "loadgen-tools-token",
+		toolProviderName, false),
+	toolLegSpec("tools mtls: 2026-07-28, immediate tool server", "loadgen-tools-mtls",
+		toolProviderName, true),
+	toolLegSpec("tools mtls: legacy session, immediate tool server", "loadgen-tools-legacy-mtls",
+		toolLegacyProviderName, true,
+		"-tool-url", gatewayBase+"/v1/mcp/"+toolLegacyProviderName, "-legacy-session"),
+}
+
+// toolLegSpec reads the broker's figures for tools/call of toolName only,
+// so a legacy caller's initialize and notification, which name no tool,
+// stay out of the latency and the call counts. Denials the broker makes
+// before it reads the body (namespace, grant, class, rate limit) carry no
+// tool label either, so on every tool leg they show only in the client's
+// statuses. The gateway figures also include the warmup's successful call,
+// which the client's recorder starts after.
+func toolLegSpec(name, job, provider string, mtls bool, args ...string) legSpec {
+	return legSpec{
+		name: name, provider: provider, job: job, mtls: mtls, mode: modeTools, args: args,
+		histogram: metricToolDuration, counter: metricToolCalls,
+		labels: map[string]string{"provider": provider, "tool": toolName},
+	}
+}
+
+func (h *harness) runTools(ctx context.Context) error {
+	cfg := h.cfg
+	// Checked here rather than with the rest of the infrastructure, so a
+	// cluster without the image fails only this phase.
+	for _, deploy := range []string{"mock-mcp", "mock-mcp-legacy"} {
+		if err := h.k.kubectl("rollout", "status", "deploy/"+deploy, "-n", cfg.Namespace, "--timeout=180s"); err != nil {
+			return fmt.Errorf("mock MCP server %s not ready (make perf-images builds and imports it): %w", deploy, err)
+		}
+	}
+	if err := h.k.ensureClass(ctx, toolsClass()); err != nil {
+		return err
+	}
+	mtlsSecret, cleanup, err := h.loadgenIdentity(ctx, toolsAgentObj(cfg.Namespace, cfg.AgentImage))
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	res := &toolsResult{}
+	for i, spec := range toolLegSpecs {
+		h.logf("tools leg %d/%d: %s (%d callers, %s)",
+			i+1, len(toolLegSpecs), spec.name, cfg.GatewayConcurrency, cfg.GatewayDuration)
+		leg, scrapes, err := h.runLeg(ctx, spec, mtlsSecret)
+		if err != nil {
+			return fmt.Errorf("tools %w", err)
+		}
+		res.Legs = append(res.Legs, toolLeg{
+			Name:                   leg.Name,
+			Provider:               leg.Provider,
+			MTLS:                   leg.MTLS,
+			Concurrency:            leg.Concurrency,
+			Client:                 leg.Client,
+			GatewaySideMs:          leg.GatewaySideMs,
+			CallsByStatus:          counterByLabel(scrapes.before, scrapes.after, metricToolCalls, "status", spec.labels),
+			GatewayCalls:           leg.GatewayRequests,
+			GatewayCPUPerRequestMs: leg.GatewayCPUPerRequestMs,
+			GatewayUsageMax:        leg.GatewayUsageMax,
+		})
+	}
+	h.sum.Tools = res
+	return nil
+}
+
+// ---- stream ----
+
+// streamResult is the SSE relay under load, token tier only: auth costs the
+// same per request on either tier (the gateway table shows it), and
+// streaming changes only the relay.
+type streamResult struct {
+	Legs []gatewayLeg `json:"legs"`
+}
+
+var streamLegSpecs = []legSpec{
+	streamLegSpec(llmLegSpec("stream openai: token tier, immediate upstream", providerFast,
+		"loadgen-stream-fast", false, "-stream"), formatOpenAI),
+	streamLegSpec(llmLegSpec("stream anthropic: token tier, immediate upstream", providerAnthropic,
+		"loadgen-stream-anthropic", false, "-stream", "-format", formatAnthropic, "-url", gatewayBase+"/v1/messages"),
+		formatAnthropic),
+	streamLegSpec(llmLegSpec("stream openai: token tier, 10 ms between events", providerPaced,
+		"loadgen-stream-paced", false, "-stream"), formatOpenAI),
+}
+
+// streamLegSpec marks a leg as streamed in the given format; runLeg copies
+// both onto the result.
+func streamLegSpec(spec legSpec, format string) legSpec {
+	spec.stream, spec.format = true, format
+	return spec
+}
+
+func (h *harness) runStream(ctx context.Context) error {
+	res := &streamResult{}
+	for i, spec := range streamLegSpecs {
+		h.logf("stream leg %d/%d: %s (%d callers, %s)",
+			i+1, len(streamLegSpecs), spec.name, h.cfg.GatewayConcurrency, h.cfg.GatewayDuration)
+		leg, _, err := h.runLeg(ctx, spec, "")
+		if err != nil {
+			return fmt.Errorf("stream %w", err)
+		}
+		if ttfb := leg.Client.TTFBMs; ttfb != nil {
+			h.logf("  time to first byte p50 %.1f ms p99 %.1f ms; spend %.3f USD, %.0f answers without usage",
+				ttfb.P50, ttfb.P99, leg.SpendUSD, leg.UsageMissing)
+		}
+		res.Legs = append(res.Legs, leg)
+	}
+	h.sum.Stream = res
+	return nil
+}
+
 // ---- ramp ----
 
+// rampFleet is the standard max-active fleet: ramp-NNNN in the run's
+// namespace, which the hold, restart, and teardown phases reuse.
+func (h *harness) rampFleet() fleet {
+	return fleet{
+		phase: phaseRamp, prefix: "ramp-", target: h.cfg.RampTarget,
+		namespaces: []string{h.cfg.Namespace}, holdJob: "loadgen-hold",
+	}
+}
+
 // saturation names the first environmental limit the ramp has hit, or "".
-func (h *harness) saturation(ctx context.Context) (string, error) {
+// Pending and crash-looping pods are counted in scope (one namespace, or
+// every namespace when scope is "").
+func (h *harness) saturation(ctx context.Context, scope string) (string, error) {
 	mem, err := hostMemAvailableMiB()
 	if err != nil {
 		return "", err
@@ -465,7 +760,7 @@ func (h *harness) saturation(ctx context.Context) (string, error) {
 		}
 	}
 	var pods corev1.PodList
-	if err := h.k.c.List(ctx, &pods, client.InNamespace(h.cfg.Namespace)); err != nil {
+	if err := h.k.c.List(ctx, &pods, client.InNamespace(scope)); err != nil {
 		return "", err
 	}
 	// Agent pods that crash-loop are the environment giving out from the
@@ -498,45 +793,57 @@ func (h *harness) saturation(ctx context.Context) (string, error) {
 }
 
 func (h *harness) runRamp(ctx context.Context) error {
+	res, err := h.ramp(ctx, h.rampFleet())
+	if err != nil {
+		return err
+	}
+	h.sum.Ramp = res
+	return nil
+}
+
+// ramp creates a fleet in waves of agents that are never retired, until it
+// reaches its target or the environment saturates; the wave that saturates
+// is trimmed.
+func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 	cfg := h.cfg
 	if err := h.k.ensureClass(ctx, activeClass()); err != nil {
-		return err
+		return nil, err
 	}
 	memBefore, err := hostMemAvailableMiB()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	res := &rampResult{Target: cfg.RampTarget, WaveSize: cfg.WaveSize, HostMemBeforeMiB: round3(memBefore)}
+	res := &rampResult{Target: f.target, WaveSize: cfg.WaveSize, HostMemBeforeMiB: round3(memBefore)}
 	prevCtl, err := h.scrapeController(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for wave := 0; wave*cfg.WaveSize < cfg.RampTarget; wave++ {
+	for wave := 0; wave*cfg.WaveSize < f.target; wave++ {
 		lo, hi := wave*cfg.WaveSize, (wave+1)*cfg.WaveSize
-		if hi > cfg.RampTarget {
-			hi = cfg.RampTarget
+		if hi > f.target {
+			hi = f.target
 		}
-		names := map[string]bool{}
+		names := map[string]string{} // agent name to namespace
 		objs := make([]client.Object, 0, 2*(hi-lo))
 		for i := lo; i < hi; i++ {
-			name := fmt.Sprintf("ramp-%04d", i)
-			names[name] = true
+			name, ns := f.name(i), f.namespaceOf(i)
+			names[name] = ns
 			// The channel is created with its agent so the channel
 			// reconciler's work overlaps the waves instead of stacking up
 			// in front of the hold phase.
 			objs = append(objs,
-				agentObj(cfg.Namespace, name, activeClassName, cfg.AgentImage, phaseRamp, false),
-				channelObj(cfg.Namespace, name, phaseRamp, h.callbackURL()))
+				agentObj(ns, name, activeClassName, cfg.AgentImage, f.phase, false),
+				channelObj(ns, name, f.phase, h.callbackURL()))
 		}
-		h.logf("ramp wave %d: creating agents %d..%d with their channels", wave, lo, hi-1)
+		h.logf("%s wave %d: creating agents %d..%d with their channels", f.phase, wave, lo, hi-1)
 		waveStart := time.Now()
 		if err := h.k.createAll(ctx, objs); err != nil {
-			return err
+			return nil, err
 		}
 		var sat string
 		var timings []agentTiming
 		err := pollUntil(ctx, cfg.WaveTimeout, 3*time.Second, func() (bool, error) {
-			ts, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp)
+			ts, err := h.k.agentTimings(ctx, f.scope(), f.phase)
 			if err != nil {
 				return false, err
 			}
@@ -544,7 +851,7 @@ func (h *harness) runRamp(ctx context.Context) error {
 			if readyAmong(ts, names) == len(names) {
 				return true, nil
 			}
-			s, err := h.saturation(ctx)
+			s, err := h.saturation(ctx, f.scope())
 			if err != nil {
 				return false, err
 			}
@@ -558,7 +865,7 @@ func (h *harness) runRamp(ctx context.Context) error {
 			sat = fmt.Sprintf("wave %d: %d of %d agents Ready within %s",
 				wave, readyAmong(timings, names), len(names), cfg.WaveTimeout)
 		} else if err != nil {
-			return err
+			return nil, err
 		}
 		wall := time.Since(waveStart)
 
@@ -587,8 +894,8 @@ func (h *harness) runRamp(ctx context.Context) error {
 			}
 		}
 		if ctl, err := h.scrapeController(ctx); err == nil {
-			agentReconciles := map[string]string{"controller": agentControllerName}
-			w.ReconcileMs = histStats(histogramDelta(prevCtl, ctl, "controller_runtime_reconcile_time_seconds", agentReconciles))
+			agentReconciles := map[string]string{labelController: agentControllerName}
+			w.ReconcileMs = histStats(histogramDelta(prevCtl, ctl, metricReconcileTime, agentReconciles))
 			w.WorkqueueDepth = ctl.gauge("workqueue_depth", map[string]string{"name": "agent"})
 			prevCtl = ctl
 		}
@@ -600,14 +907,14 @@ func (h *harness) runRamp(ctx context.Context) error {
 		if sat != "" {
 			res.Saturation = sat
 			res.SaturationWave = wave
-			h.logf("  ramp stops: %s", sat)
+			h.logf("  %s stops: %s", f.phase, sat)
 			// The wave that hit the ceiling is trimmed, so the fleet the
 			// later phases run on is the largest one that came up clean.
 			h.logf("  trimming wave %d (%d agents)", wave, len(names))
-			if err := h.k.deleteAgents(ctx, cfg.Namespace, names, 5*time.Minute); err != nil {
+			if err := h.k.deleteAgents(ctx, names, 5*time.Minute); err != nil {
 				h.note("trimming wave %d: %v", wave, err)
 			}
-			if ts, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp); err == nil {
+			if ts, err := h.k.agentTimings(ctx, f.scope(), f.phase); err == nil {
 				res.Achieved = countReady(ts)
 			}
 			break
@@ -618,24 +925,23 @@ func (h *harness) runRamp(ctx context.Context) error {
 			res.MemPerAgentMiB = round3((memBefore - memNow) / float64(res.Achieved))
 		}
 	}
-	h.sum.Ramp = res
-	return nil
+	return res, nil
 }
 
-func readyAmong(ts []agentTiming, names map[string]bool) int {
+func readyAmong(ts []agentTiming, names map[string]string) int {
 	n := 0
 	for _, t := range ts {
-		if names[t.Name] && t.ReadyNow {
+		if ns, ok := names[t.Name]; ok && ns == t.Namespace && t.ReadyNow {
 			n++
 		}
 	}
 	return n
 }
 
-func filterTimings(ts []agentTiming, names map[string]bool) []agentTiming {
+func filterTimings(ts []agentTiming, names map[string]string) []agentTiming {
 	var out []agentTiming
 	for _, t := range ts {
-		if names[t.Name] {
+		if ns, ok := names[t.Name]; ok && ns == t.Namespace {
 			out = append(out, t)
 		}
 	}
@@ -645,13 +951,46 @@ func filterTimings(ts []agentTiming, names map[string]bool) []agentTiming {
 // ---- hold ----
 
 func (h *harness) runHold(ctx context.Context) error {
-	cfg := h.cfg
-	timings, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp)
+	res, err := h.hold(ctx, h.rampFleet())
 	if err != nil {
 		return err
 	}
+	h.sum.Hold = res
+	return nil
+}
+
+// holdLoadgenArgs is the hold's channel traffic: one message per agent per
+// interval, round-robin over the first count agents. A fleet spread over
+// several namespaces puts {ns} in the path prefix and passes the namespace
+// list, so the loadgen places agent i where the fleet did.
+func holdLoadgenArgs(f fleet, count int, rate float64, duration time.Duration) []string {
+	prefix := "/channels/" + f.namespaces[0] + "/" + f.prefix
+	var spread []string
+	if len(f.namespaces) > 1 {
+		prefix = "/channels/{ns}/" + f.prefix
+		spread = []string{"-namespaces", strings.Join(f.namespaces, ",")}
+	}
+	args := []string{
+		flagMode, modeChannels,
+		"-path-prefix", prefix,
+		"-count", strconv.Itoa(count),
+		"-pad", "4",
+		"-rate", strconv.FormatFloat(rate, 'f', 4, 64),
+		flagDuration, duration.String(),
+	}
+	return append(args, spread...)
+}
+
+// hold drives messages across a fleet's Ready agents for the hold duration
+// and reads what the gateway, the agents, and the control plane did.
+func (h *harness) hold(ctx context.Context, f fleet) (*holdResult, error) {
+	cfg := h.cfg
+	timings, err := h.k.agentTimings(ctx, f.scope(), f.phase)
+	if err != nil {
+		return nil, err
+	}
 	if len(timings) == 0 {
-		return errors.New("hold needs the ramp fleet; run the ramp phase first")
+		return nil, fmt.Errorf("hold needs the %[1]s fleet; run the %[1]s phase first", f.phase)
 	}
 	// Messages go to the longest run of Ready agents from index 0, so a
 	// partially failed final wave never turns delivery errors into noise.
@@ -662,29 +1001,29 @@ func (h *harness) runHold(ctx context.Context) error {
 		}
 	}
 	count := 0
-	for readySet[fmt.Sprintf("ramp-%04d", count)] {
+	for readySet[f.name(count)] {
 		count++
 	}
 	if count == 0 {
-		return errors.New("hold: no Ready ramp agents")
+		return nil, fmt.Errorf("hold: no Ready %s agents", f.phase)
 	}
 
 	objs := make([]client.Object, 0, len(timings))
 	for _, t := range timings {
-		objs = append(objs, channelObj(cfg.Namespace, t.Name, phaseRamp, h.callbackURL()))
+		objs = append(objs, channelObj(t.Namespace, t.Name, f.phase, h.callbackURL()))
 	}
 	h.logf("hold: creating %d channels", len(objs))
 	chStart := time.Now()
 	if err := h.k.createAll(ctx, objs); err != nil {
-		return err
+		return nil, err
 	}
 	var active, total int
 	if err := pollUntil(ctx, 10*time.Minute, 3*time.Second, func() (bool, error) {
 		var err error
-		active, total, err = h.k.channelsActive(ctx, cfg.Namespace, phaseRamp)
+		active, total, err = h.k.channelsActive(ctx, f.scope(), f.phase)
 		return active == total, err
 	}); err != nil && !errors.Is(err, errTimeout) {
-		return err
+		return nil, err
 	}
 	res := &holdResult{Agents: len(timings), Channels: total, ChannelsActiveSec: round3(time.Since(chStart).Seconds())}
 	h.logf("  %d/%d channels active after %.0fs", active, total, res.ChannelsActiveSec)
@@ -693,7 +1032,7 @@ func (h *harness) runHold(ctx context.Context) error {
 	res.RestartsBefore = sumRestarts(timings)
 	auditBefore, err := h.auditSnapshot(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	before := auditBefore.gw
 	rate := float64(count) / cfg.HoldPerAgentInterval.Seconds()
@@ -702,25 +1041,21 @@ func (h *harness) runHold(ctx context.Context) error {
 	holdStart := time.Now()
 	sampler := h.sampleUsage(ctx)
 	runtimeSamples := h.sampleRuntime(ctx, cfg.HoldSampleInterval)
-	client, err := h.k.runLoadgen(ctx, cfg.Namespace, "loadgen-hold", cfg.LoadgenImage, []string{
-		flagMode, modeChannels,
-		"-path-prefix", "/channels/" + cfg.Namespace + "/ramp-",
-		"-count", strconv.Itoa(count),
-		"-pad", "4",
-		"-rate", strconv.FormatFloat(rate, 'f', 4, 64),
-		flagDuration, cfg.HoldDuration.String(),
-	}, "", cfg.HoldDuration+3*time.Minute)
+	client, err := h.k.runLoadgen(ctx, cfg.Namespace, f.holdJob, cfg.LoadgenImage,
+		holdLoadgenArgs(f, count, rate, cfg.HoldDuration), "", cfg.HoldDuration+3*time.Minute)
 	peak := sampler.finish()
 	res.Series = runtimeSamples.finish()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	res.Client = client
 	// Let detached deliveries and callbacks settle before reading the counters.
-	time.Sleep(30 * time.Second)
+	if err := sleepCtx(ctx, 30*time.Second); err != nil {
+		return nil, err
+	}
 	auditAfter, err := h.auditSnapshot(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	after := auditAfter.gw
 	res.Audit = audit(auditBefore, auditAfter, count)
@@ -733,9 +1068,9 @@ func (h *harness) runHold(ctx context.Context) error {
 	res.GatewayUsageMax = peak["kaalm-gateway"]
 	res.ControllerUsage = peak["kaalm-controller"]
 
-	afterTimings, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp)
+	afterTimings, err := h.k.agentTimings(ctx, f.scope(), f.phase)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	res.ReadyAfter = countReady(afterTimings)
 	res.RestartsAfter = sumRestarts(afterTimings)
@@ -748,8 +1083,7 @@ func (h *harness) runHold(ctx context.Context) error {
 	h.logf("  %d messages accepted, statuses %v, callbacks %.0f, Ready %d -> %d, restarts %d -> %d, flaps %d",
 		client.Requests, res.MessagesByStatus, res.Callbacks, res.ReadyBefore, res.ReadyAfter,
 		res.RestartsBefore, res.RestartsAfter, res.Flaps)
-	h.sum.Hold = res
-	return nil
+	return res, nil
 }
 
 func sumRestarts(ts []agentTiming) int32 {
@@ -767,18 +1101,429 @@ func (h *harness) callbackURL() string {
 // ---- teardown ----
 
 func (h *harness) runTeardown(ctx context.Context) error {
-	timings, err := h.k.agentTimings(ctx, h.cfg.Namespace, phaseRamp)
+	res, err := h.teardown(ctx, h.rampFleet())
 	if err != nil {
 		return err
 	}
-	h.logf("teardown: deleting %d ramp agents and their channels", len(timings))
-	took, err := h.k.deletePhase(ctx, h.cfg.Namespace, phaseRamp, "ramp-", 15*time.Minute)
-	if err != nil {
-		return err
-	}
-	h.sum.Teardown = &teardownResult{Agents: len(timings), Seconds: round3(took.Seconds())}
-	h.logf("  gone after %.0fs", took.Seconds())
+	h.sum.Teardown = res
 	return nil
+}
+
+// teardown deletes a fleet and its channels and times until the pods are gone.
+func (h *harness) teardown(ctx context.Context, f fleet) (*teardownResult, error) {
+	timings, err := h.k.agentTimings(ctx, f.scope(), f.phase)
+	if err != nil {
+		return nil, err
+	}
+	h.logf("teardown: deleting %d %s agents and their channels", len(timings), f.phase)
+	took, err := h.k.deletePhase(ctx, f.namespaces, f.phase, f.prefix, 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	h.logf("  gone after %.0fs", took.Seconds())
+	return &teardownResult{Agents: len(timings), Seconds: round3(took.Seconds())}, nil
+}
+
+// ---- namespaces ----
+
+// namespacesResult is the ramp, hold, and teardown on the same kind of fleet
+// spread over many namespaces, so the per-namespace list and RBAC paths that
+// one namespace never exercises carry the load. Its blocks compare with the
+// standard ramp, hold, and teardown.
+type namespacesResult struct {
+	Namespaces int             `json:"namespaces"`
+	Ramp       *rampResult     `json:"ramp,omitempty"`
+	Hold       *holdResult     `json:"hold,omitempty"`
+	Teardown   *teardownResult `json:"teardown,omitempty"`
+}
+
+// spreadSecrets are copied from the run's namespace into each spread
+// namespace, so testdata/infra.yaml stays the one source of their values.
+var spreadSecrets = []string{hookSecretName, callbackSecretName}
+
+func (h *harness) runNamespaces(ctx context.Context) error {
+	cfg := h.cfg
+	ramp, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp)
+	if err != nil {
+		return err
+	}
+	if len(ramp) > 0 {
+		// Both fleets together would pass the machine's pod ceiling.
+		return errors.New("namespaces needs the ramp fleet gone: run teardown before it, or run it alone")
+	}
+	nss := spreadNamespaces(cfg.Namespace, cfg.NamespacesCount)
+	// Deferred before preparing: a failure partway through preparing leaves
+	// namespaces behind, and deleting an absent or Terminating one is harmless.
+	defer h.deleteNamespaces(nss)
+	if err := h.prepareNamespaces(ctx, nss); err != nil {
+		return err
+	}
+
+	res := &namespacesResult{Namespaces: len(nss)}
+	h.sum.Namespaces = res
+	f := fleet{
+		phase: phaseNamespaces, prefix: "spread-", target: cfg.NamespacesAgents,
+		namespaces: nss, holdJob: "loadgen-namespaces-hold",
+	}
+	h.logf("namespaces: %d agents over %d namespaces", f.target, len(nss))
+	if res.Ramp, err = h.ramp(ctx, f); err != nil {
+		return err
+	}
+	if res.Hold, err = h.hold(ctx, f); err != nil {
+		return err
+	}
+	res.Teardown, err = h.teardown(ctx, f)
+	return err
+}
+
+// prepareNamespaces waits out any namespace a previous run left Terminating,
+// creates each one with the phase label, copies the channel Secrets in, and
+// waits for trust-manager to distribute the CA bundle there.
+func (h *harness) prepareNamespaces(ctx context.Context, nss []string) error {
+	var terminating []string
+	if err := pollUntil(ctx, 10*time.Minute, 5*time.Second, func() (bool, error) {
+		terminating = terminating[:0]
+		for _, name := range nss {
+			var ns corev1.Namespace
+			err := h.k.c.Get(ctx, client.ObjectKey{Name: name}, &ns)
+			if err == nil && !ns.DeletionTimestamp.IsZero() {
+				terminating = append(terminating, name)
+			} else if err != nil && !apierrors.IsNotFound(err) {
+				return false, err
+			}
+		}
+		return len(terminating) == 0, nil
+	}); err != nil {
+		return fmt.Errorf("namespaces still Terminating from a previous run %v: %w", terminating, err)
+	}
+
+	secrets := make([]*corev1.Secret, 0, len(spreadSecrets))
+	for _, name := range spreadSecrets {
+		var sec corev1.Secret
+		if err := h.k.c.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, &sec); err != nil {
+			return fmt.Errorf("reading %s/%s to copy: %w", h.cfg.Namespace, name, err)
+		}
+		secrets = append(secrets, &sec)
+	}
+	objs := make([]client.Object, 0, len(nss)*(1+len(secrets)))
+	for _, name := range nss {
+		objs = append(objs, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Labels: map[string]string{phaseLabel: phaseNamespaces},
+		}})
+	}
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	objs = objs[:0]
+	for _, name := range nss {
+		for _, sec := range secrets {
+			objs = append(objs, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: sec.Name, Namespace: name, Labels: sec.Labels},
+				Type:       sec.Type,
+				Data:       sec.Data,
+			})
+		}
+	}
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	for _, name := range nss {
+		if err := pollUntil(ctx, 2*time.Minute, 2*time.Second, func() (bool, error) {
+			_, err := h.k.cs.CoreV1().ConfigMaps(name).Get(ctx, "kaalm-ca", metav1.GetOptions{})
+			return err == nil, nil
+		}); err != nil {
+			return fmt.Errorf("trust bundle never reached namespace %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// deleteNamespaces starts deleting the spread namespaces and does not wait:
+// the next run of the phase waits for any still Terminating.
+func (h *harness) deleteNamespaces(nss []string) {
+	for _, name := range nss {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		if err := h.k.c.Delete(context.Background(), ns); err != nil && !apierrors.IsNotFound(err) {
+			h.note("deleting namespace %s: %v", name, err)
+		}
+	}
+}
+
+// ---- providers ----
+
+// providersResult is the control plane and the gateway with many more
+// ModelProviders and AgentClasses than the standard run's handful, which
+// grows the caches and indexes keyed by them. Its legs compare with the
+// gateway table's first two rows.
+type providersResult struct {
+	Providers         int     `json:"providers"`
+	Classes           int     `json:"classes"`
+	ProvidersReadySec float64 `json:"providersReadySec"`
+	ClassesReadySec   float64 `json:"classesReadySec"`
+	// Reconcile is per controller (modelprovider, agentclass) over the
+	// setup, from creating the first provider to the last class Ready.
+	Reconcile map[string]reconcileFigures `json:"reconcile"`
+	// Steady is the control-plane traffic over -idle-duration once all are
+	// Ready, with no agents.
+	Steady             *apiAudit    `json:"steady,omitempty"`
+	ControllerUsageMax usage        `json:"controllerUsageMax"`
+	GatewayUsageMax    usage        `json:"gatewayUsageMax"`
+	Legs               []gatewayLeg `json:"legs"`
+	TeardownSec        float64      `json:"teardownSec"`
+}
+
+type reconcileFigures struct {
+	Count float64 `json:"count"`
+	Ms    stats   `json:"ms"`
+}
+
+// The controllers whose reconciles the providers phase reports, by their
+// controller-runtime name.
+var providersControllers = []string{"modelprovider", "agentclass"}
+
+// manyProviders is the providers phase's ModelProviders: perf-fast's shape,
+// each on its own mock prefix, labeled for teardown.
+func manyProviders(ns string, n int) []*kaalmv1beta1.ModelProvider {
+	out := make([]*kaalmv1beta1.ModelProvider, 0, n)
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("perf-many-%02d", i)
+		out = append(out, &kaalmv1beta1.ModelProvider{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{phaseLabel: phaseProviders}},
+			Spec: kaalmv1beta1.ModelProviderSpec{
+				Type:           "openai-compatible",
+				Endpoint:       fmt.Sprintf("https://mock-provider.%s.svc:8443/ok/many%02d", ns, i),
+				CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "perf-mock-key", Key: "token"},
+				HealthCheck:    &kaalmv1beta1.ModelProviderHealthCheck{Enabled: false},
+				// The fleet namespace, as on every infra.yaml provider.
+				AllowedNamespaces: []string{ns},
+				Budget:            kaalmv1beta1.ModelProviderBudget{Period: "daily", PerNamespaceUSD: "1000000"},
+				Models: []kaalmv1beta1.ModelProviderModel{{
+					ID: "mock-model", CostPer1MInputTokens: "1.00", CostPer1MOutputTokens: "2.00",
+				}},
+			},
+		})
+	}
+	return out
+}
+
+// manyClasses is one AgentClass per provider, each allowing every provider:
+// the widest fan-out for the provider-to-class and class-to-provider watches.
+func manyClasses(providers []*kaalmv1beta1.ModelProvider) []*kaalmv1beta1.AgentClass {
+	refs := make([]kaalmv1beta1.LocalObjectReference, 0, len(providers))
+	for _, p := range providers {
+		refs = append(refs, kaalmv1beta1.LocalObjectReference{Name: p.Name})
+	}
+	out := make([]*kaalmv1beta1.AgentClass, 0, len(providers))
+	for _, p := range providers {
+		c := activeClass()
+		c.Name = p.Name
+		c.Labels = map[string]string{phaseLabel: phaseProviders}
+		c.Spec.AllowedProviders = append([]kaalmv1beta1.LocalObjectReference(nil), refs...)
+		out = append(out, c)
+	}
+	return out
+}
+
+// providersLegs are the gateway table's first two rows under their own job
+// names.
+func providersLegs() []legSpec {
+	out := make([]legSpec, 0, 2)
+	for _, d := range gatewayLegs[:2] {
+		job := "loadgen-providers-token"
+		if d.mtls {
+			job = "loadgen-providers-mtls"
+		}
+		out = append(out, llmLegSpec(d.name, d.provider, job, d.mtls))
+	}
+	return out
+}
+
+// allReady polls until every listed object reports Ready and returns how
+// long that took from start.
+func (h *harness) allReady(ctx context.Context, what string, start time.Time, list client.ObjectList,
+	conditions func() [][]metav1.Condition, want int) (float64, error) {
+	ready := 0
+	err := pollUntil(ctx, 10*time.Minute, 3*time.Second, func() (bool, error) {
+		if err := h.k.c.List(ctx, list, client.MatchingLabels{phaseLabel: phaseProviders}); err != nil {
+			return false, err
+		}
+		ready = 0
+		for _, conds := range conditions() {
+			if meta.IsStatusConditionTrue(conds, kaalmv1beta1.ConditionReady) {
+				ready++
+			}
+		}
+		return ready == want, nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("%d of %d %s Ready: %w", ready, want, what, err)
+	}
+	return round3(time.Since(start).Seconds()), nil
+}
+
+func (h *harness) runProviders(ctx context.Context) error {
+	cfg := h.cfg
+	n := cfg.ProvidersCount
+	res := &providersResult{Providers: n, Classes: n, Reconcile: map[string]reconcileFigures{}}
+	h.sum.Providers = res
+	deleted := false
+	defer func() {
+		if !deleted {
+			_, _ = h.deleteProvidersObjects(context.Background(), time.Minute)
+		}
+	}()
+
+	sampler := h.sampleUsage(ctx)
+	err := h.providersSetup(ctx, res)
+	peak := sampler.finish()
+	res.ControllerUsageMax, res.GatewayUsageMax = peak["kaalm-controller"], peak["kaalm-gateway"]
+	if err != nil {
+		return err
+	}
+
+	if err := h.k.ensureClass(ctx, activeClass()); err != nil {
+		return err
+	}
+	agent := loadgenAgentObj(cfg.Namespace, activeClassName, cfg.AgentImage, gatewayProviders)
+	mtlsSecret, cleanup, err := h.loadgenIdentity(ctx, agent)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	legs := providersLegs()
+	for i, spec := range legs {
+		h.logf("providers leg %d/%d: %s (%d callers, %s)",
+			i+1, len(legs), spec.name, cfg.GatewayConcurrency, cfg.GatewayDuration)
+		leg, _, err := h.runLeg(ctx, spec, mtlsSecret)
+		if err != nil {
+			return fmt.Errorf("providers %w", err)
+		}
+		res.Legs = append(res.Legs, leg)
+	}
+
+	took, err := h.deleteProvidersObjects(ctx, 10*time.Minute)
+	deleted = true
+	if err != nil {
+		return err
+	}
+	res.TeardownSec = round3(took.Seconds())
+	h.logf("  providers and classes gone after %.0fs", res.TeardownSec)
+	return nil
+}
+
+// providersSetup creates the providers, then the classes, records how long
+// each set took to turn Ready and what the controllers reconciled meanwhile,
+// and counts the control-plane traffic once all of them are Ready.
+func (h *harness) providersSetup(ctx context.Context, res *providersResult) error {
+	cfg := h.cfg
+	n := cfg.ProvidersCount
+	ctlBefore, err := h.scrapeController(ctx)
+	if err != nil {
+		return err
+	}
+
+	providers := manyProviders(cfg.Namespace, n)
+	objs := make([]client.Object, 0, n)
+	for _, p := range providers {
+		objs = append(objs, p)
+	}
+	h.logf("providers: creating %d ModelProviders", n)
+	start := time.Now()
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	var mps kaalmv1beta1.ModelProviderList
+	res.ProvidersReadySec, err = h.allReady(ctx, "ModelProviders", start, &mps, func() [][]metav1.Condition {
+		out := make([][]metav1.Condition, 0, len(mps.Items))
+		for i := range mps.Items {
+			out = append(out, mps.Items[i].Status.Conditions)
+		}
+		return out
+	}, n)
+	if err != nil {
+		return err
+	}
+	h.logf("  all Ready after %.0fs; creating %d AgentClasses that each allow all of them", res.ProvidersReadySec, n)
+
+	objs = objs[:0]
+	for _, c := range manyClasses(providers) {
+		objs = append(objs, c)
+	}
+	classStart := time.Now()
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	var classes kaalmv1beta1.AgentClassList
+	res.ClassesReadySec, err = h.allReady(ctx, "AgentClasses", classStart, &classes, func() [][]metav1.Condition {
+		out := make([][]metav1.Condition, 0, len(classes.Items))
+		for i := range classes.Items {
+			out = append(out, classes.Items[i].Status.Conditions)
+		}
+		return out
+	}, n)
+	if err != nil {
+		return err
+	}
+	h.logf("  all Ready after %.0fs", res.ClassesReadySec)
+
+	ctlAfter, err := h.scrapeController(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range providersControllers {
+		hist := histogramDelta(ctlBefore, ctlAfter, metricReconcileTime, map[string]string{labelController: name})
+		fig := reconcileFigures{Ms: histStats(hist)}
+		if hist != nil {
+			fig.Count = hist.count
+		}
+		res.Reconcile[name] = fig
+		h.logf("  %s: %.0f reconciles over the setup, p50 %.1f ms p99 %.1f ms", name, fig.Count, fig.Ms.P50, fig.Ms.P99)
+	}
+
+	if cfg.IdleDuration <= 0 {
+		return nil
+	}
+	h.logf("providers: counting control-plane traffic for %s with all of them Ready", cfg.IdleDuration)
+	steadyBefore, err := h.auditSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(cfg.IdleDuration):
+	}
+	steadyAfter, err := h.auditSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	res.Steady = audit(steadyBefore, steadyAfter, 0)
+	h.logAudit("providers steady audit", res.Steady)
+	return nil
+}
+
+// deleteProvidersObjects deletes the providers phase's AgentClasses and
+// ModelProviders and waits until both are gone.
+func (h *harness) deleteProvidersObjects(ctx context.Context, timeout time.Duration) (time.Duration, error) {
+	start := time.Now()
+	sel := client.MatchingLabels{phaseLabel: phaseProviders}
+	for _, obj := range []client.Object{&kaalmv1beta1.AgentClass{}, &kaalmv1beta1.ModelProvider{}} {
+		if err := h.k.c.DeleteAllOf(ctx, obj, sel); err != nil && !apierrors.IsNotFound(err) {
+			return 0, err
+		}
+	}
+	err := pollUntil(ctx, timeout, 3*time.Second, func() (bool, error) {
+		var classes kaalmv1beta1.AgentClassList
+		if err := h.k.c.List(ctx, &classes, sel); err != nil {
+			return false, err
+		}
+		var mps kaalmv1beta1.ModelProviderList
+		if err := h.k.c.List(ctx, &mps, sel); err != nil {
+			return false, err
+		}
+		return len(classes.Items)+len(mps.Items) == 0, nil
+	})
+	return time.Since(start), err
 }
 
 // ---- churn ----
@@ -905,7 +1650,9 @@ func (h *harness) runChurn(ctx context.Context) error {
 	}
 	res.Client = client
 	// The last messages' wakes may take the full wake budget to resolve.
-	time.Sleep(90 * time.Second)
+	if err := sleepCtx(ctx, 90*time.Second); err != nil {
+		return err
+	}
 	gwAfter, err := h.scrapeGateway(ctx)
 	if err != nil {
 		return err
@@ -926,7 +1673,7 @@ func (h *harness) runChurn(ctx context.Context) error {
 		client.Requests, res.WakesTotal, res.WakesByResult, res.HibernationsTotal,
 		res.WakeDurationMs.P50, res.WakeDurationMs.P95, res.Callbacks)
 
-	took, err := h.k.deletePhase(ctx, cfg.Namespace, phaseChurn, "churn-", 15*time.Minute)
+	took, err := h.k.deletePhase(ctx, []string{cfg.Namespace}, phaseChurn, "churn-", 15*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -1031,7 +1778,7 @@ func (h *harness) runTasks(ctx context.Context) error {
 	}
 	h.logf("  phases %v, makespan %.0fs, %.1f tasks/min, created-to-completion p50 %.0fs p95 %.0fs, retries %d",
 		res.Phases, res.MakespanSec, res.ThroughputPerMin, res.TotalSec.P50, res.TotalSec.P95, res.Retries)
-	took, err := h.k.deletePhase(ctx, cfg.Namespace, phaseTasks, "task-", 10*time.Minute)
+	took, err := h.k.deletePhase(ctx, []string{cfg.Namespace}, phaseTasks, "task-", 10*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -1096,7 +1843,9 @@ func (h *harness) runRestart(ctx context.Context) error {
 		}, "", 4*time.Minute)
 		done <- outcome{r, err}
 	}()
-	time.Sleep(15 * time.Second)
+	if err := sleepCtx(ctx, 15*time.Second); err != nil {
+		return err
+	}
 	t1 := time.Now()
 	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "restart", "deploy/kaalm-gateway"); err != nil {
 		return err

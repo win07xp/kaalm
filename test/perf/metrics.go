@@ -75,7 +75,9 @@ func (k *cluster) scrapeComponent(ctx context.Context, namespace, component, por
 		}
 		lastErr = err
 		fmt.Printf("%s  scrape %s attempt %d failed: %v\n", time.Now().Format("15:04:05"), component, attempt+1, err)
-		time.Sleep(time.Duration(attempt+1) * 5 * time.Second)
+		if err := sleepCtx(ctx, time.Duration(attempt+1)*5*time.Second); err != nil {
+			return nil, lastErr
+		}
 	}
 	return nil, lastErr
 }
@@ -449,4 +451,13 @@ func topEntries(m map[string]float64, n int) []string {
 		out = append(out, fmt.Sprintf("%s=%.0f", all[i].k, all[i].v))
 	}
 	return out
+}
+
+// cpuPerRequestMs divides a CPU-seconds delta by a request count, in
+// milliseconds per request; 0 when nothing was counted.
+func cpuPerRequestMs(cpuSeconds, requests float64) float64 {
+	if requests <= 0 {
+		return 0
+	}
+	return round3(cpuSeconds * 1000 / requests)
 }

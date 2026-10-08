@@ -32,9 +32,11 @@ limitations under the License.
 //	              Job, so request traffic reaches the gateway the way a
 //	              workload's would and never crosses a port-forward
 //
-// The perftest build tag keeps the package out of `go build ./...`, the lint
-// run, and the coverage check: it drives a live cluster and is not a unit
-// under test. Lint it explicitly with `--build-tags perftest`.
+// The perftest build tag keeps the package out of `go build ./...`,
+// `go vet ./...`, and the test and coverage runs: it drives a live cluster
+// and is not a unit under test. `make lint` still reads it, because
+// .golangci.yml lists perftest under run.build-tags. Its unit tests of pure
+// helpers run with `make perf-unit`, which CI runs on every change.
 package main
 
 import (
