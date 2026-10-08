@@ -20,7 +20,10 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestToolCallBody(t *testing.T) {
@@ -74,5 +77,123 @@ func TestRecorderLabels(t *testing.T) {
 	res := rec.result(modeTools, 1e9, 0)
 	if res.Statuses["rpc_error"] != 1 || res.Statuses["200"] != 1 || res.Requests != 2 {
 		t.Errorf("statuses = %v, requests %d", res.Statuses, res.Requests)
+	}
+}
+
+func TestLLMRequestBody(t *testing.T) {
+	cases := []struct {
+		format    string
+		stream    bool
+		maxTokens bool
+	}{
+		{formatOpenAI, false, false},
+		{formatOpenAI, true, false},
+		{formatAnthropic, false, true},
+		{formatAnthropic, true, true},
+	}
+	for _, c := range cases {
+		var body map[string]any
+		if err := json.Unmarshal(llmRequestBody(c.format, "perf-fast/mock-model", c.stream), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "perf-fast/mock-model" {
+			t.Errorf("%s: model = %v", c.format, body["model"])
+		}
+		msgs, _ := body["messages"].([]any)
+		if len(msgs) != 1 {
+			t.Errorf("%s: messages = %v", c.format, body["messages"])
+		}
+		if got, _ := body["stream"].(bool); got != c.stream {
+			t.Errorf("%s stream=%v: body stream = %v", c.format, c.stream, body["stream"])
+		}
+		if _, ok := body["max_tokens"]; ok != c.maxTokens {
+			t.Errorf("%s: max_tokens present = %v, want %v", c.format, ok, c.maxTokens)
+		}
+	}
+}
+
+const openAIStream = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+	"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11}}\n\n" +
+	"data: [DONE]\n\n"
+
+const anthropicStream = "event: message_start\ndata: {\"type\":\"message_start\"}\n\n" +
+	"event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n" +
+	"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+func TestReadStreamToTerminator(t *testing.T) {
+	anthropicCut := anthropicStream[:strings.Index(anthropicStream, "event: message_stop")]
+	cases := []struct {
+		name, format, body string
+		complete           bool
+	}{
+		{"openai to [DONE]", formatOpenAI, openAIStream, true},
+		{"anthropic to message_stop", formatAnthropic, anthropicStream, true},
+		{"anthropic data line only", formatAnthropic, "data: {\"type\":\"message_stop\"}\n\n", true},
+		{"openai cut before [DONE]", formatOpenAI, strings.TrimSuffix(openAIStream, "data: [DONE]\n\n"), false},
+		{"anthropic cut before message_stop", formatAnthropic, anthropicCut, false},
+		{"openai terminator on an anthropic read", formatAnthropic, openAIStream, false},
+	}
+	for _, c := range cases {
+		start := time.Now()
+		ttfb, ttlb, complete, err := readStream(strings.NewReader(c.body), c.format, start)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if complete != c.complete {
+			t.Errorf("%s: complete = %v, want %v", c.name, complete, c.complete)
+		}
+		if ttfb <= 0 || (c.complete && ttlb < ttfb) {
+			t.Errorf("%s: ttfb %v ttlb %v", c.name, ttfb, ttlb)
+		}
+	}
+}
+
+// TestReadStreamSeparatesFirstAndLastByte feeds events with a pause between
+// them; only the lower bound is asserted, so a slow machine cannot flake it.
+func TestReadStreamSeparatesFirstAndLastByte(t *testing.T) {
+	const pause = 30 * time.Millisecond
+	pr, pw := io.Pipe()
+	go func() {
+		for i, ev := range strings.SplitAfter(openAIStream, "\n\n") {
+			if ev == "" {
+				continue
+			}
+			if i > 0 {
+				time.Sleep(pause)
+			}
+			_, _ = pw.Write([]byte(ev))
+		}
+		_ = pw.Close()
+	}()
+	ttfb, ttlb, complete, err := readStream(pr, formatOpenAI, time.Now())
+	if err != nil || !complete {
+		t.Fatalf("complete %v err %v", complete, err)
+	}
+	if ttlb-ttfb < 2*pause {
+		t.Errorf("ttlb %v - ttfb %v < %v", ttlb, ttfb, 2*pause)
+	}
+}
+
+func TestRecordStream(t *testing.T) {
+	rec := newRecorder()
+	rec.recordStream(200, 2*time.Millisecond, 5*time.Millisecond, true, nil)
+	rec.recordStream(200, 3*time.Millisecond, 9*time.Millisecond, false, nil)
+	rec.recordStream(503, 0, 4*time.Millisecond, false, nil)
+	res := rec.result(modeGateway, time.Second, 0)
+	if res.Statuses["200"] != 1 || res.Statuses["incomplete"] != 1 || res.Statuses["503"] != 1 {
+		t.Errorf("statuses = %v", res.Statuses)
+	}
+	if res.TTFBMs == nil || res.TTFBMs.Count != 2 {
+		t.Errorf("ttfbMs = %+v, want the two 200s", res.TTFBMs)
+	}
+	// Latency is time to last byte, for answers that ended.
+	if res.LatencyMs.Count != 2 || res.LatencyMs.Max != 5 {
+		t.Errorf("latencyMs = %+v", res.LatencyMs)
+	}
+
+	plain := newRecorder()
+	plain.record(200, time.Millisecond, nil)
+	if plain.result(modeGateway, time.Second, 0).TTFBMs != nil {
+		t.Error("a non-streaming run reports no ttfbMs")
 	}
 }

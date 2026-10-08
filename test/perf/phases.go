@@ -407,6 +407,10 @@ type legSpec struct {
 	// request counter for this leg's traffic, both filtered by labels.
 	histogram, counter string
 	labels             map[string]string
+	// stream and format only label the result; the loadgen flags in args
+	// select them.
+	stream bool
+	format string
 }
 
 // llmLegSpec is a chat leg against one provider: the gateway table's shape.
@@ -468,6 +472,8 @@ func (h *harness) runLeg(ctx context.Context, spec legSpec, mtlsSecret string) (
 		Name:            spec.name,
 		Provider:        spec.provider,
 		MTLS:            spec.mtls,
+		Stream:          spec.stream,
+		Format:          spec.format,
 		Concurrency:     h.cfg.GatewayConcurrency,
 		Client:          client,
 		GatewaySideMs:   histStats(histogramDelta(before, after, spec.histogram, spec.labels)),
@@ -645,6 +651,51 @@ func (h *harness) runTools(ctx context.Context) error {
 		})
 	}
 	h.sum.Tools = res
+	return nil
+}
+
+// ---- stream ----
+
+// streamResult is the SSE relay under load, token tier only: auth costs the
+// same per request on either tier (the gateway table shows it), and
+// streaming changes only the relay.
+type streamResult struct {
+	Legs []gatewayLeg `json:"legs"`
+}
+
+var streamLegSpecs = []legSpec{
+	streamLegSpec(llmLegSpec("stream openai: token tier, immediate upstream", providerFast,
+		"loadgen-stream-fast", false, "-stream"), formatOpenAI),
+	streamLegSpec(llmLegSpec("stream anthropic: token tier, immediate upstream", providerAnthropic,
+		"loadgen-stream-anthropic", false, "-stream", "-format", formatAnthropic, "-url", gatewayBase+"/v1/messages"),
+		formatAnthropic),
+	streamLegSpec(llmLegSpec("stream openai: token tier, 10 ms between events", providerPaced,
+		"loadgen-stream-paced", false, "-stream"), formatOpenAI),
+}
+
+// streamLegSpec marks a leg as streamed in the given format; runLeg copies
+// both onto the result.
+func streamLegSpec(spec legSpec, format string) legSpec {
+	spec.stream, spec.format = true, format
+	return spec
+}
+
+func (h *harness) runStream(ctx context.Context) error {
+	res := &streamResult{}
+	for i, spec := range streamLegSpecs {
+		h.logf("stream leg %d/%d: %s (%d callers, %s)",
+			i+1, len(streamLegSpecs), spec.name, h.cfg.GatewayConcurrency, h.cfg.GatewayDuration)
+		leg, _, err := h.runLeg(ctx, spec, "")
+		if err != nil {
+			return fmt.Errorf("stream %w", err)
+		}
+		if ttfb := leg.Client.TTFBMs; ttfb != nil {
+			h.logf("  time to first byte p50 %.1f ms p99 %.1f ms; spend %.3f USD, %.0f answers without usage",
+				ttfb.P50, ttfb.P99, leg.SpendUSD, leg.UsageMissing)
+		}
+		res.Legs = append(res.Legs, leg)
+	}
+	h.sum.Stream = res
 	return nil
 }
 

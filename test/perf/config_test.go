@@ -29,7 +29,7 @@ func TestDefaultPhases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"gateway", "ramp", "hold", "restart", "teardown", "churn", "tasks", "tools"}
+	want := []string{"gateway", "ramp", "hold", "restart", "teardown", "churn", "tasks", "tools", "stream"}
 	if !reflect.DeepEqual(c.Phases, want) {
 		t.Errorf("default phases = %v, want %v", c.Phases, want)
 	}

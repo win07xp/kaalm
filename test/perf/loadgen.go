@@ -19,6 +19,7 @@ limitations under the License.
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -48,10 +49,23 @@ type loadResult struct {
 	Statuses    map[string]int `json:"statuses"`
 	DurationSec float64        `json:"durationSec"`
 	RPS         float64        `json:"rps"`
-	LatencyMs   stats          `json:"latencyMs"`
-	Errors      []string       `json:"errors,omitempty"`
-	WarmupSec   float64        `json:"warmupSec"`
+	// LatencyMs is per request; in stream mode it is time to last byte, over
+	// the answers that ended (a non-200, or a stream read to its terminator).
+	LatencyMs stats `json:"latencyMs"`
+	// TTFBMs is time to first byte of each streamed 200, stream mode only.
+	TTFBMs    *stats   `json:"ttfbMs,omitempty"`
+	Errors    []string `json:"errors,omitempty"`
+	WarmupSec float64  `json:"warmupSec"`
 }
+
+// Request body formats the gateway mode speaks.
+const (
+	formatOpenAI    = "openai"
+	formatAnthropic = "anthropic"
+)
+
+// labelIncomplete counts a streamed 200 that ended before its terminator.
+const labelIncomplete = "incomplete"
 
 type loadgenConfig struct {
 	mode        string
@@ -73,6 +87,8 @@ type loadgenConfig struct {
 	keyFile     string
 	toolURL     string
 	tool        string
+	format      string
+	stream      bool
 }
 
 func runLoadgen(args []string) error {
@@ -84,6 +100,11 @@ func runLoadgen(args []string) error {
 	fs.StringVar(&c.url, "url", gatewayBase+"/v1/chat/completions",
 		"gateway mode: LLM endpoint")
 	fs.StringVar(&c.model, "model", providerFast+"/mock-model", "gateway mode: qualified provider/model")
+	fs.StringVar(&c.format, "format", formatOpenAI,
+		"gateway mode: request body shape, openai (chat completions) or anthropic (messages; pair it with -url)")
+	fs.BoolVar(&c.stream, "stream", false,
+		"gateway mode: ask for a streamed answer and read it to [DONE] or message_stop, "+
+			"recording time to first and last byte")
 	fs.IntVar(&c.concurrency, "concurrency", 32, "gateway and tools modes: concurrent callers")
 	fs.DurationVar(&c.duration, "duration", time.Minute, "measured run length after warmup")
 	fs.StringVar(&c.tokenFile, "token-file", "/var/run/token/token",
@@ -108,6 +129,9 @@ func runLoadgen(args []string) error {
 	fs.StringVar(&c.tool, "tool", toolName, "tools mode: the tool every tools/call names")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if c.format != formatOpenAI && c.format != formatAnthropic {
+		return fmt.Errorf("unknown -format %q (openai or anthropic)", c.format)
 	}
 
 	ca, err := os.ReadFile(c.caFile)
@@ -158,6 +182,8 @@ func runLoadgen(args []string) error {
 type recorder struct {
 	mu        sync.Mutex
 	latencies []float64
+	ttfbs     []float64
+	stream    bool
 	statuses  map[string]int
 	errors    []string
 }
@@ -171,20 +197,35 @@ func (r *recorder) record(status int, latency time.Duration, err error) {
 // recordLabel counts one outcome under a status label: the HTTP status, or a
 // finer label such as "rpc_error" for a JSON-RPC error inside a 200.
 func (r *recorder) recordLabel(label string, latency time.Duration, err error) {
+	r.recordOutcome(outcome{label: label, latency: latency, err: err})
+}
+
+// recordStream counts one streamed request; see streamOutcome.
+func (r *recorder) recordStream(status int, ttfb, ttlb time.Duration, complete bool, err error) {
+	r.recordOutcome(streamOutcome(status, ttfb, ttlb, complete, err))
+}
+
+func (r *recorder) recordOutcome(o outcome) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err != nil {
+	if o.stream {
+		r.stream = true
+	}
+	if o.err != nil {
 		r.statuses["error"]++
 		if len(r.errors) < 5 {
-			r.errors = append(r.errors, err.Error())
+			r.errors = append(r.errors, o.err.Error())
 		}
 		return
 	}
-	r.statuses[label]++
-	r.latencies = append(r.latencies, ms(latency))
+	r.statuses[o.label]++
+	if o.label != labelIncomplete {
+		r.latencies = append(r.latencies, ms(o.latency))
+	}
+	if o.ttfb > 0 {
+		r.ttfbs = append(r.ttfbs, ms(o.ttfb))
+	}
 }
-
-func (r *recorder) recordOutcome(o outcome) { r.recordLabel(o.label, o.latency, o.err) }
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
@@ -195,7 +236,7 @@ func (r *recorder) result(mode string, elapsed, warmup time.Duration) *loadResul
 	for _, n := range r.statuses {
 		total += n
 	}
-	return &loadResult{
+	res := &loadResult{
 		Mode:        mode,
 		Requests:    total,
 		Statuses:    r.statuses,
@@ -205,6 +246,11 @@ func (r *recorder) result(mode string, elapsed, warmup time.Duration) *loadResul
 		Errors:      r.errors,
 		WarmupSec:   round3(warmup.Seconds()),
 	}
+	if r.stream {
+		ttfb := summarize(r.ttfbs)
+		res.TTFBMs = &ttfb
+	}
+	return res
 }
 
 func doRequest(cli *http.Client, req *http.Request) (int, time.Duration, error) {
@@ -218,11 +264,25 @@ func doRequest(cli *http.Client, req *http.Request) (int, time.Duration, error) 
 	return resp.StatusCode, time.Since(start), nil
 }
 
-// outcome is one request's result under its status label.
+// outcome is one request's result under its status label. A streamed
+// request also carries its time to first byte; its latency is time to last
+// byte.
 type outcome struct {
 	label   string
 	latency time.Duration
+	ttfb    time.Duration
+	stream  bool
 	err     error
+}
+
+// streamOutcome labels a streamed request: a 200 whose stream ended before
+// its terminator is "incomplete", never a success.
+func streamOutcome(status int, ttfb, ttlb time.Duration, complete bool, err error) outcome {
+	o := outcome{label: strconv.Itoa(status), latency: ttlb, ttfb: ttfb, stream: true, err: err}
+	if err == nil && status == http.StatusOK && !complete {
+		o.label = labelIncomplete
+	}
+	return o
 }
 
 // statusOutcome labels a plain HTTP exchange by its status code.
@@ -280,13 +340,92 @@ func fixedConcurrency(c loadgenConfig, mode string, once func() outcome) (*loadR
 	return rec.result(mode, time.Since(start), warmup), nil
 }
 
-// gatewayLoad drives chat completions at fixed concurrency.
+// llmRequestBody is one short user message to model, in the OpenAI chat or
+// the Anthropic messages shape (which requires max_tokens), streamed when
+// asked.
+func llmRequestBody(format, model string, stream bool) []byte {
+	body := map[string]any{
+		"model":    model,
+		"messages": []any{map[string]any{"role": "user", "content": "load"}},
+	}
+	if format == formatAnthropic {
+		body["max_tokens"] = 64
+	}
+	if stream {
+		body["stream"] = true
+	}
+	raw, _ := json.Marshal(body)
+	return raw
+}
+
+// readStream reads an SSE body line by line until the format's terminator:
+// data: [DONE] for OpenAI, the message_stop event for Anthropic. ttfb is
+// taken at the first non-empty line and ttlb at the terminator, both from
+// start. A body that ends first is incomplete.
+func readStream(r io.Reader, format string, start time.Time) (ttfb, ttlb time.Duration, complete bool, err error) {
+	br := bufio.NewReader(r)
+	for {
+		line, readErr := br.ReadString('\n')
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && ttfb == 0 {
+			ttfb = time.Since(start)
+		}
+		if streamTerminator(format, trimmed) {
+			return ttfb, time.Since(start), true, nil
+		}
+		if readErr == io.EOF {
+			return ttfb, time.Since(start), false, nil
+		}
+		if readErr != nil {
+			return ttfb, time.Since(start), false, readErr
+		}
+	}
+}
+
+// streamTerminator reports whether an SSE line ends the stream.
+func streamTerminator(format, line string) bool {
+	if format != formatAnthropic {
+		return line == "data: [DONE]"
+	}
+	if line == "event: message_stop" {
+		return true
+	}
+	data, ok := strings.CutPrefix(line, "data:")
+	if !ok {
+		return false
+	}
+	var ev struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal([]byte(strings.TrimSpace(data)), &ev) == nil && ev.Type == "message_stop"
+}
+
+// doStream sends a streaming request and reads a 200 to its terminator. A
+// non-200 body is drained like doRequest's, and its latency is the whole
+// exchange.
+func doStream(cli *http.Client, req *http.Request, format string) outcome {
+	start := time.Now()
+	resp, err := cli.Do(req)
+	if err != nil {
+		return streamOutcome(0, 0, time.Since(start), false, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return streamOutcome(resp.StatusCode, 0, time.Since(start), false, nil)
+	}
+	ttfb, ttlb, complete, err := readStream(resp.Body, format, start)
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	return streamOutcome(resp.StatusCode, ttfb, ttlb, complete, err)
+}
+
+// gatewayLoad drives LLM requests at fixed concurrency, streamed or not.
 func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 	bearer, err := gatewayBearer(c)
 	if err != nil {
 		return nil, err
 	}
-	body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"load"}]}`, c.model))
+	body := llmRequestBody(c.format, c.model, c.stream)
 	newReq := func() *http.Request {
 		req, _ := http.NewRequest(http.MethodPost, c.url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -295,7 +434,12 @@ func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 		}
 		return req
 	}
-	once := func() outcome { return statusOutcome(doRequest(cli, newReq())) }
+	once := func() outcome {
+		if c.stream {
+			return doStream(cli, newReq(), c.format)
+		}
+		return statusOutcome(doRequest(cli, newReq()))
+	}
 	return fixedConcurrency(c, modeGateway, once)
 }
 

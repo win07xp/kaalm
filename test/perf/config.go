@@ -87,6 +87,7 @@ const (
 	phaseTasks    = "tasks"
 	phaseRestart  = "restart"
 	phaseTools    = "tools"
+	phaseStream   = "stream"
 )
 
 // Strings shared between the orchestrator and the in-cluster load generator.
@@ -116,6 +117,14 @@ const (
 	providerLimited = "perf-limited"
 )
 
+// The two ModelProviders the stream phase adds: the Anthropic type, so an
+// Anthropic stream is relayed natively and not translated, and an
+// openai-compatible provider whose mock spaces streamed events 10 ms apart.
+const (
+	providerAnthropic = "perf-anthropic"
+	providerPaced     = "perf-paced"
+)
+
 // toolProviderName is the ToolProvider testdata/infra.yaml defines in front
 // of the mock MCP server, and toolName the tool the tools phase calls.
 const (
@@ -125,7 +134,7 @@ const (
 
 // defaultPhases is what a run with no -phases flag executes, in this order.
 var defaultPhases = []string{
-	phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks, phaseTools,
+	phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks, phaseTools, phaseStream,
 }
 
 // optionalPhases run only when -phases names them.

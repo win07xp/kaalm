@@ -2,8 +2,9 @@
 # run before any phase. Everything the fleet needs that is not itself under
 # measurement: the namespace, the mock LLM provider it forwards to, the four
 # ModelProviders the gateway legs target, the channel secrets, the load
-# generator's ServiceAccount, and for the tools phase the mock MCP server
-# with its credential and the perf-mcp ToolProvider.
+# generator's ServiceAccount, for the tools phase the mock MCP server with its
+# credential and the perf-mcp ToolProvider, and for the stream phase two more
+# ModelProviders (perf-anthropic and perf-paced).
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -226,6 +227,57 @@ spec:
   rateLimits:
     requestsPerMinute: 2000000000
     tokensPerMinute: 2000000000
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+# perf-anthropic: perf-fast as the Anthropic type, so the stream phase's
+# Anthropic leg is relayed natively by the messages adapter and measures the
+# relay, not a format translation.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: perf-anthropic
+spec:
+  type: anthropic
+  endpoint: https://mock-provider.perf.svc:8443/ok/anthropic
+  credentialsRef:
+    name: perf-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - perf
+  budget:
+    period: daily
+    perNamespaceUSD: "1000000"
+  models:
+    - id: mock-model
+      costPer1MInputTokens: "1.00"
+      costPer1MOutputTokens: "2.00"
+---
+# perf-paced: perf-fast with the mock waiting 10 ms before each streamed
+# event after the first, so the stream phase's paced leg shows time to first
+# byte and time to last byte apart: the gateway passes each event on as it
+# arrives instead of buffering the answer.
+apiVersion: kaalm.io/v1beta1
+kind: ModelProvider
+metadata:
+  name: perf-paced
+spec:
+  type: openai-compatible
+  endpoint: https://mock-provider.perf.svc:8443/pace10/paced
+  credentialsRef:
+    name: perf-mock-key
+    key: token
+  healthCheck:
+    enabled: false
+  allowedNamespaces:
+    - perf
+  budget:
+    period: daily
+    perNamespaceUSD: "1000000"
   models:
     - id: mock-model
       costPer1MInputTokens: "1.00"

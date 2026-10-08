@@ -59,6 +59,7 @@ type summary struct {
 	Tasks       *tasksResult    `json:"tasks,omitempty"`
 	Restart     *restartResult  `json:"restart,omitempty"`
 	Tools       *toolsResult    `json:"tools,omitempty"`
+	Stream      *streamResult   `json:"stream,omitempty"`
 	Notes       []string        `json:"notes,omitempty"`
 }
 
@@ -161,6 +162,8 @@ func (h *harness) runPhases(ctx context.Context) error {
 			err = h.runRestart(ctx)
 		case phaseTools:
 			err = h.runTools(ctx)
+		case phaseStream:
+			err = h.runStream(ctx)
 		}
 		if err != nil {
 			h.note("phase %s failed after %s: %v", p, time.Since(start).Round(time.Second), err)
@@ -355,6 +358,19 @@ func (h *harness) printTable() {
 			fmt.Printf("  statuses %v  broker %v  gw %.3f ms CPU/req, peak %.0f mCPU %.0f MiB\n",
 				l.Client.Statuses, l.CallsByStatus, l.GatewayCPUPerRequestMs,
 				l.GatewayUsageMax.CPUMilli, l.GatewayUsageMax.MemMiB)
+		}
+	}
+	if st := s.Stream; st != nil {
+		fmt.Println("\nstream (client ms: time to first byte | time to last byte):")
+		for _, l := range st.Legs {
+			var ttfb stats
+			if l.Client.TTFBMs != nil {
+				ttfb = *l.Client.TTFBMs
+			}
+			fmt.Printf("  %-50s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f",
+				l.Name, l.Client.RPS, ttfb.P50, l.Client.LatencyMs.P50, ttfb.P99, l.Client.LatencyMs.P99)
+			fmt.Printf("  statuses %v  spend %.3f USD  usage missing %.0f  gw %.3f ms CPU/req, peak %.0f MiB\n",
+				l.Client.Statuses, l.SpendUSD, l.UsageMissing, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.MemMiB)
 		}
 	}
 	for _, n := range s.Notes {
