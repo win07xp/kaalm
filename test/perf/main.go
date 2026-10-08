@@ -36,7 +36,7 @@ limitations under the License.
 // `go vet ./...`, and the test and coverage runs: it drives a live cluster
 // and is not a unit under test. `make lint` still reads it, because
 // .golangci.yml lists perftest under run.build-tags. Its unit tests of pure
-// helpers run with `go test -tags perftest ./test/perf/`.
+// helpers run with `make perf-unit`, which CI runs on every change.
 package main
 
 import (

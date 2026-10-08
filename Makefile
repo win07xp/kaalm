@@ -440,6 +440,10 @@ perf-deploy: chart-sync ## Install the chart onto the perf cluster with the mock
 	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout status deploy/kaalm-controller --timeout=3m
 	kubectl --context k3d-$(PERF_CLUSTER) -n kaalm-system rollout status deploy/kaalm-gateway --timeout=3m
 
+.PHONY: perf-unit
+perf-unit: ## Unit tests of the perf harness's pure helpers (no cluster; the perftest tag keeps them out of make test).
+	go test -tags perftest -count=1 ./test/perf/
+
 .PHONY: perf-run
 perf-run: ## Run the harness against an existing perf cluster (the inner loop); results land in test/perf/results/.
 	go run -tags perftest ./test/perf run -context k3d-$(PERF_CLUSTER) -loadgen-image $(PERF_LOADGEN_IMG) $(PERF_FLAGS)

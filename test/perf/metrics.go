@@ -75,7 +75,9 @@ func (k *cluster) scrapeComponent(ctx context.Context, namespace, component, por
 		}
 		lastErr = err
 		fmt.Printf("%s  scrape %s attempt %d failed: %v\n", time.Now().Format("15:04:05"), component, attempt+1, err)
-		time.Sleep(time.Duration(attempt+1) * 5 * time.Second)
+		if err := sleepCtx(ctx, time.Duration(attempt+1)*5*time.Second); err != nil {
+			return nil, lastErr
+		}
 	}
 	return nil, lastErr
 }

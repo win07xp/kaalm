@@ -1843,7 +1843,9 @@ func (h *harness) runRestart(ctx context.Context) error {
 		}, "", 4*time.Minute)
 		done <- outcome{r, err}
 	}()
-	time.Sleep(15 * time.Second)
+	if err := sleepCtx(ctx, 15*time.Second); err != nil {
+		return err
+	}
 	t1 := time.Now()
 	if err := h.k.kubectl("-n", "kaalm-system", "rollout", "restart", "deploy/kaalm-gateway"); err != nil {
 		return err
