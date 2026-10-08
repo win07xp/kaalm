@@ -20,8 +20,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -208,5 +213,173 @@ func TestChannelURL(t *testing.T) {
 		if got := channelURL(base, "/channels/{ns}/s-", nss, 4, i); got != base+want {
 			t.Errorf("channel %d: %s, want %s", i, got, base+want)
 		}
+	}
+}
+
+func TestLegacyToolCallBody(t *testing.T) {
+	var msg struct {
+		JSONRPC string `json:"jsonrpc"`
+		Method  string `json:"method"`
+		Params  struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+			Meta      map[string]any `json:"_meta"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(legacyToolCallBody("web_search"), &msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.JSONRPC != "2.0" || msg.Method != "tools/call" || msg.Params.Name != "web_search" {
+		t.Errorf("envelope = %+v", msg)
+	}
+	if msg.Params.Arguments == nil {
+		t.Error("arguments must be an object")
+	}
+	if msg.Params.Meta != nil {
+		t.Errorf("a legacy-era call carries no _meta, got %v", msg.Params.Meta)
+	}
+}
+
+// legacyMCP plays the broker in front of a legacy-session tool server:
+// initialize mints a session id, and every later request must carry one.
+type legacyMCP struct {
+	mu            sync.Mutex
+	sessions      map[string]bool
+	initializes   int
+	notifications int
+	noSession     bool // answer initialize without an Mcp-Session-Id
+	initStatus    int  // answer initialize with this status when set
+	failures      []string
+}
+
+func newLegacyMCP(t *testing.T) (*legacyMCP, *httptest.Server) {
+	t.Helper()
+	m := &legacyMCP{sessions: map[string]bool{}}
+	srv := httptest.NewServer(http.HandlerFunc(m.serve))
+	t.Cleanup(srv.Close)
+	return m, srv
+}
+
+func (m *legacyMCP) fail(w http.ResponseWriter, format string, args ...any) {
+	m.failures = append(m.failures, fmt.Sprintf(format, args...))
+	http.Error(w, "bad request", http.StatusBadRequest)
+}
+
+func (m *legacyMCP) serve(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	raw, _ := io.ReadAll(r.Body)
+	var msg struct {
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		m.fail(w, "body is not JSON-RPC: %s", raw)
+		return
+	}
+	if r.Header.Get("Mcp-Method") != "" {
+		m.fail(w, "%s carries Mcp-Method", msg.Method)
+		return
+	}
+	switch msg.Method {
+	case "initialize":
+		m.initializes++
+		if m.initStatus != 0 {
+			w.WriteHeader(m.initStatus)
+			return
+		}
+		if !m.noSession {
+			sess := fmt.Sprintf("wrapped-%d", m.initializes)
+			m.sessions[sess] = true
+			w.Header().Set("Mcp-Session-Id", sess)
+		}
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}`)
+	case "notifications/initialized":
+		if !m.sessions[r.Header.Get("Mcp-Session-Id")] {
+			m.fail(w, "notification without a known session")
+			return
+		}
+		m.notifications++
+		w.WriteHeader(http.StatusAccepted)
+	case "tools/call":
+		if !m.sessions[r.Header.Get("Mcp-Session-Id")] {
+			m.fail(w, "tools/call without a known session")
+			return
+		}
+		if v := r.Header.Get("MCP-Protocol-Version"); v != "2025-03-26" {
+			m.fail(w, "tools/call MCP-Protocol-Version = %q", v)
+			return
+		}
+		if strings.Contains(string(msg.Params), "_meta") {
+			m.fail(w, "tools/call carries _meta")
+			return
+		}
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"content":[]}}`)
+	default:
+		m.fail(w, "unexpected method %s", msg.Method)
+	}
+}
+
+func legacyConfig(url string) loadgenConfig {
+	return loadgenConfig{toolURL: url, tool: "web_search", legacySession: true}
+}
+
+func TestLegacyToolCallerUsesItsSession(t *testing.T) {
+	m, srv := newLegacyMCP(t)
+	call, err := newLegacyToolCaller(srv.Client(), legacyConfig(srv.URL), "")
+	if err != nil {
+		t.Fatalf("opening the session: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if o := call(); o.err != nil || o.label != "200" {
+			t.Errorf("call %d = %+v", i, o)
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.initializes != 1 || m.notifications != 1 {
+		t.Errorf("handshake: %d initialize and %d notifications, want 1 each", m.initializes, m.notifications)
+	}
+	if len(m.failures) > 0 {
+		t.Errorf("server saw: %v", m.failures)
+	}
+}
+
+func TestLegacyToolCallerNeedsASession(t *testing.T) {
+	m, srv := newLegacyMCP(t)
+	m.noSession = true
+	if _, err := newLegacyToolCaller(srv.Client(), legacyConfig(srv.URL), ""); err == nil ||
+		!strings.Contains(err.Error(), "Mcp-Session-Id") {
+		t.Errorf("initialize without a session id: err = %v, want one naming Mcp-Session-Id", err)
+	}
+
+	m.mu.Lock()
+	m.noSession, m.initStatus = false, http.StatusForbidden
+	m.mu.Unlock()
+	if _, err := newLegacyToolCaller(srv.Client(), legacyConfig(srv.URL), ""); err == nil ||
+		!strings.Contains(err.Error(), "403") {
+		t.Errorf("initialize answered 403: err = %v, want one naming the status", err)
+	}
+}
+
+func TestFixedConcurrencyOpensOneCallerPerWorker(t *testing.T) {
+	var opened atomic.Int32
+	newCaller := func() (func() outcome, error) {
+		opened.Add(1)
+		return func() outcome {
+			time.Sleep(time.Millisecond)
+			return outcome{label: "200", latency: time.Millisecond}
+		}, nil
+	}
+	c := loadgenConfig{concurrency: 3, duration: 50 * time.Millisecond, warmup: 5 * time.Second}
+	res, err := fixedConcurrencyCallers(c, modeTools, newCaller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.Load(); got != 4 {
+		t.Errorf("opened %d callers, want 4 (one for warmup, one per worker)", got)
+	}
+	if res.Statuses["200"] == 0 {
+		t.Errorf("no calls recorded: %+v", res)
 	}
 }

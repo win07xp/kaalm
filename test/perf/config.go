@@ -137,11 +137,14 @@ const (
 	providerPaced     = "perf-paced"
 )
 
-// toolProviderName is the ToolProvider testdata/infra.yaml defines in front
-// of the mock MCP server, and toolName the tool the tools phase calls.
+// testdata/infra.yaml defines two ToolProviders, one per MCP protocol era:
+// toolProviderName in front of the 2026-07-28 mock MCP server and
+// toolLegacyProviderName in front of the legacy session one. toolName is
+// the tool the tools phase calls on both.
 const (
-	toolProviderName = "perf-mcp"
-	toolName         = "web_search"
+	toolProviderName       = "perf-mcp"
+	toolLegacyProviderName = "perf-mcp-legacy"
+	toolName               = "web_search"
 )
 
 // defaultPhases is what a run with no -phases flag executes, in this order.

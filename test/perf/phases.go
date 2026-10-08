@@ -558,13 +558,15 @@ func (h *harness) runGateway(ctx context.Context) error {
 
 const (
 	toolsClassName = "perf-tools"
-	// toolsAgentName is the Agent whose identity the mTLS tool leg
-	// borrows; its grant names perf-mcp narrowed to the called tool.
+	// toolsAgentName is the Agent whose identity the mTLS tool legs
+	// borrow; it holds a grant on each ToolProvider, narrowed to the called
+	// tool.
 	toolsAgentName = "loadgen-tools"
 )
 
 // toolsResult is the tool plane under load: brokered tools/call through
-// POST /v1/mcp/perf-mcp, by auth mode.
+// POST /v1/mcp/perf-mcp by auth mode, and through /v1/mcp/perf-mcp-legacy
+// in the legacy session era.
 type toolsResult struct {
 	Legs []toolLeg `json:"legs"`
 }
@@ -584,38 +586,51 @@ type toolLeg struct {
 	GatewayUsageMax        usage              `json:"gatewayUsageMax"`
 }
 
-// toolsClass is the active class with perf-mcp allowed, under its own name
-// so the ramp's class never changes.
+// toolsClass is the active class with both perf ToolProviders allowed,
+// under its own name so the ramp's class never changes.
 func toolsClass() *kaalmv1beta1.AgentClass {
 	c := activeClass()
 	c.Name = toolsClassName
-	c.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{{Name: toolProviderName}}
+	c.Spec.AllowedToolProviders = []kaalmv1beta1.LocalObjectReference{
+		{Name: toolProviderName}, {Name: toolLegacyProviderName},
+	}
 	return c
 }
 
 func toolsAgentObj(ns, image string) *kaalmv1beta1.Agent {
 	a := agentObj(ns, toolsAgentName, toolsClassName, image, phaseTools, false)
-	a.Spec.Tools = []kaalmv1beta1.AgentToolGrant{{
-		ProviderRef: kaalmv1beta1.LocalObjectReference{Name: toolProviderName},
-		Tools:       []string{toolName},
-	}}
+	a.Spec.Tools = []kaalmv1beta1.AgentToolGrant{
+		{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: toolProviderName}, Tools: []string{toolName}},
+		{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: toolLegacyProviderName}, Tools: []string{toolName}},
+	}
 	return a
 }
 
 // toolLegSpecs are the tools phase's legs. The token-tier caller has no
 // workload, so the broker admits it on the provider's allowedNamespaces and
-// declared catalog; the mTLS caller goes through the agent's grant and the
-// class allowlist.
+// declared catalog; the mTLS callers go through the agent's grants and the
+// class allowlist. The legacy session leg is mTLS only: legacy-era clients
+// are agent frameworks in Kaalm-managed agents, the broker binds the
+// session to the workload identity, and the token-versus-mTLS cost is
+// already in the first two legs.
 var toolLegSpecs = []legSpec{
-	toolLegSpec("tools token tier: 2026-07-28, immediate tool server", "loadgen-tools-token", false),
-	toolLegSpec("tools mtls: 2026-07-28, immediate tool server", "loadgen-tools-mtls", true),
+	toolLegSpec("tools token tier: 2026-07-28, immediate tool server", "loadgen-tools-token",
+		toolProviderName, false),
+	toolLegSpec("tools mtls: 2026-07-28, immediate tool server", "loadgen-tools-mtls",
+		toolProviderName, true),
+	toolLegSpec("tools mtls: legacy session, immediate tool server", "loadgen-tools-legacy-mtls",
+		toolLegacyProviderName, true,
+		"-tool-url", gatewayBase+"/v1/mcp/"+toolLegacyProviderName, "-legacy-session"),
 }
 
-func toolLegSpec(name, job string, mtls bool) legSpec {
+// toolLegSpec reads the broker's figures for tools/call of toolName only,
+// so a legacy caller's initialize and notification, which name no tool,
+// stay out of the latency and the call counts.
+func toolLegSpec(name, job, provider string, mtls bool, args ...string) legSpec {
 	return legSpec{
-		name: name, provider: toolProviderName, job: job, mtls: mtls, mode: modeTools,
+		name: name, provider: provider, job: job, mtls: mtls, mode: modeTools, args: args,
 		histogram: metricToolDuration, counter: metricToolCalls,
-		labels: map[string]string{"provider": toolProviderName},
+		labels: map[string]string{"provider": provider, "tool": toolName},
 	}
 }
 
@@ -623,8 +638,10 @@ func (h *harness) runTools(ctx context.Context) error {
 	cfg := h.cfg
 	// Checked here rather than with the rest of the infrastructure, so a
 	// cluster without the image fails only this phase.
-	if err := h.k.kubectl("rollout", "status", "deploy/mock-mcp", "-n", cfg.Namespace, "--timeout=180s"); err != nil {
-		return fmt.Errorf("mock MCP server not ready (make perf-images builds and imports it): %w", err)
+	for _, deploy := range []string{"mock-mcp", "mock-mcp-legacy"} {
+		if err := h.k.kubectl("rollout", "status", "deploy/"+deploy, "-n", cfg.Namespace, "--timeout=180s"); err != nil {
+			return fmt.Errorf("mock MCP server %s not ready (make perf-images builds and imports it): %w", deploy, err)
+		}
 	}
 	if err := h.k.ensureClass(ctx, toolsClass()); err != nil {
 		return err

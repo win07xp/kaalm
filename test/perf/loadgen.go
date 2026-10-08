@@ -90,6 +90,8 @@ type loadgenConfig struct {
 	format      string
 	stream      bool
 	namespaces  []string
+	// legacySession makes tools mode speak the legacy session era.
+	legacySession bool
 }
 
 func runLoadgen(args []string) error {
@@ -131,6 +133,9 @@ func runLoadgen(args []string) error {
 	fs.StringVar(&c.toolURL, "tool-url", gatewayBase+"/v1/mcp/"+toolProviderName,
 		"tools mode: the broker endpoint of the ToolProvider")
 	fs.StringVar(&c.tool, "tool", toolName, "tools mode: the tool every tools/call names")
+	fs.BoolVar(&c.legacySession, "legacy-session", false,
+		"tools mode: speak the legacy session era: each caller sends initialize and notifications/initialized once, "+
+			"before measuring, then every tools/call carries the session id the broker returned")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -316,9 +321,23 @@ func gatewayBearer(c loadgenConfig) (string, error) {
 // until its Pod informer has seen a freshly created caller; a real client
 // retries the same way, and nothing is measured until the first 200.
 func fixedConcurrency(c loadgenConfig, mode string, once func() outcome) (*loadResult, error) {
+	return fixedConcurrencyCallers(c, mode, func() (func() outcome, error) { return once, nil })
+}
+
+// fixedConcurrencyCallers is fixedConcurrency for callers that hold state,
+// such as a protocol session: newCaller opens one caller per warmup attempt
+// and one per worker, all before the clock starts, so opening them is never
+// measured.
+func fixedConcurrencyCallers(
+	c loadgenConfig, mode string, newCaller func() (func() outcome, error),
+) (*loadResult, error) {
 	warmStart := time.Now()
 	for {
-		o := once()
+		call, err := newCaller()
+		o := outcome{err: err}
+		if err == nil {
+			o = call()
+		}
 		if o.err == nil && o.label == "200" {
 			break
 		}
@@ -329,17 +348,26 @@ func fixedConcurrency(c loadgenConfig, mode string, once func() outcome) (*loadR
 	}
 	warmup := time.Since(warmStart)
 
+	callers := make([]func() outcome, c.concurrency)
+	for i := range callers {
+		call, err := newCaller()
+		if err != nil {
+			return nil, fmt.Errorf("opening caller %d: %w", i, err)
+		}
+		callers[i] = call
+	}
+
 	rec := newRecorder()
 	ctx, cancel := context.WithTimeout(context.Background(), c.duration)
 	defer cancel()
 	start := time.Now()
 	var wg sync.WaitGroup
-	for i := 0; i < c.concurrency; i++ {
+	for _, call := range callers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
-				rec.recordOutcome(once())
+				rec.recordOutcome(call())
 			}
 		}()
 	}
@@ -454,16 +482,32 @@ func gatewayLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 // stateless one, with no initialize and no session.
 const mcpRevision = "2026-07-28"
 
+// rpcRequestBody is a JSON-RPC request with id 1.
+func rpcRequestBody(method string, params map[string]any) []byte {
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	return body
+}
+
+// toolCallParams names tool with no arguments.
+func toolCallParams(tool string) map[string]any {
+	return map[string]any{"name": tool, "arguments": map[string]any{}}
+}
+
 // toolCallBody is a self-describing tools/call request on mcpRevision.
 func toolCallBody(tool string) []byte {
-	body, _ := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{
-			"name": tool, "arguments": map[string]any{},
-			"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": mcpRevision},
-		},
-	})
-	return body
+	params := toolCallParams(tool)
+	params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": mcpRevision}
+	return rpcRequestBody("tools/call", params)
+}
+
+// legacyMCPRevision is the revision the legacy session leg speaks: the one
+// the mock MCP server's initialize answers with.
+const legacyMCPRevision = "2025-03-26"
+
+// legacyToolCallBody is toolCallBody without _meta: a legacy-era call names
+// its revision in the header the session negotiated, not in the body.
+func legacyToolCallBody(tool string) []byte {
+	return rpcRequestBody("tools/call", toolCallParams(tool))
 }
 
 // toolCallStatus labels a broker answer: "rpc_error" when an HTTP 200
@@ -488,27 +532,88 @@ func toolsLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c.legacySession {
+		return fixedConcurrencyCallers(c, modeTools, func() (func() outcome, error) {
+			return newLegacyToolCaller(cli, c, bearer)
+		})
+	}
 	body := toolCallBody(c.tool)
 	once := func() outcome {
-		req, _ := http.NewRequest(http.MethodPost, c.toolURL, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
+		req := newMCPRequest(c.toolURL, body, bearer)
 		req.Header.Set("MCP-Protocol-Version", mcpRevision)
 		req.Header.Set("Mcp-Method", "tools/call")
 		req.Header.Set("Mcp-Name", c.tool)
-		if bearer != "" {
-			req.Header.Set("Authorization", "Bearer "+bearer)
-		}
-		start := time.Now()
-		resp, err := cli.Do(req)
-		if err != nil {
-			return outcome{latency: time.Since(start), err: err}
-		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		_ = resp.Body.Close()
-		return outcome{label: toolCallStatus(resp.StatusCode, raw), latency: time.Since(start)}
+		return doToolCall(cli, req)
 	}
 	return fixedConcurrency(c, modeTools, once)
+}
+
+// newMCPRequest is a POST of one JSON-RPC message to the broker, with the
+// headers both protocol eras send.
+func newMCPRequest(url string, body []byte, bearer string) *http.Request {
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	return req
+}
+
+// doToolCall sends one tools/call and labels the answer.
+func doToolCall(cli *http.Client, req *http.Request) outcome {
+	start := time.Now()
+	resp, err := cli.Do(req)
+	if err != nil {
+		return outcome{latency: time.Since(start), err: err}
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+	return outcome{label: toolCallStatus(resp.StatusCode, raw), latency: time.Since(start)}
+}
+
+// newLegacyToolCaller opens one legacy-era session through the broker
+// (initialize, then notifications/initialized) and returns a caller whose
+// every tools/call carries the session id the broker returned. The broker
+// checks that id against the caller's identity on every call.
+func newLegacyToolCaller(cli *http.Client, c loadgenConfig, bearer string) (func() outcome, error) {
+	initBody := rpcRequestBody("initialize", map[string]any{
+		"protocolVersion": legacyMCPRevision,
+		"capabilities":    map[string]any{},
+		"clientInfo":      json.RawMessage(`{"name":"perf-loadgen","version":"1"}`),
+	})
+	resp, err := cli.Do(newMCPRequest(c.toolURL, initBody, bearer))
+	if err != nil {
+		return nil, fmt.Errorf("initialize: %w", err)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("initialize: HTTP %d", resp.StatusCode)
+	}
+	session := resp.Header.Get("Mcp-Session-Id")
+	if session == "" {
+		return nil, fmt.Errorf("initialize: the answer carries no Mcp-Session-Id")
+	}
+
+	notify := newMCPRequest(c.toolURL, []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`), bearer)
+	notify.Header.Set("Mcp-Session-Id", session)
+	notify.Header.Set("MCP-Protocol-Version", legacyMCPRevision)
+	status, _, err := doRequest(cli, notify)
+	if err != nil {
+		return nil, fmt.Errorf("notifications/initialized: %w", err)
+	}
+	if status < 200 || status > 299 {
+		return nil, fmt.Errorf("notifications/initialized: HTTP %d", status)
+	}
+
+	body := legacyToolCallBody(c.tool)
+	return func() outcome {
+		req := newMCPRequest(c.toolURL, body, bearer)
+		req.Header.Set("Mcp-Session-Id", session)
+		req.Header.Set("MCP-Protocol-Version", legacyMCPRevision)
+		return doToolCall(cli, req)
+	}, nil
 }
 
 // channelURL is channel i's webhook URL: the prefix with {ns} replaced by

@@ -37,9 +37,10 @@ limitations under the License.
 // returns per-method and per-tool counters for assertions (the S17
 // request-counter pattern).
 //
-// The perf harness (test/perf) also deploys it, with --modern and
-// --require-bearer, as the tool server its tools phase drives through the
-// gateway's broker.
+// The perf harness (test/perf) also deploys it twice, both with
+// --require-bearer, as the tool servers its tools phase drives through the
+// gateway's broker: with --modern for the 2026-07-28 legs, and without it
+// for the legacy session leg.
 package main
 
 import (

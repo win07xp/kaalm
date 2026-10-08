@@ -118,6 +118,55 @@ func TestGatewayLegSpecsKeepJobsAndArgs(t *testing.T) {
 	}
 }
 
+func TestToolLegSpecs(t *testing.T) {
+	want := []struct {
+		job, provider string
+		mtls, legacy  bool
+	}{
+		{"loadgen-tools-token", toolProviderName, false, false},
+		{"loadgen-tools-mtls", toolProviderName, true, false},
+		{"loadgen-tools-legacy-mtls", toolLegacyProviderName, true, true},
+	}
+	if len(toolLegSpecs) != len(want) {
+		t.Fatalf("%d tool legs, want %d", len(toolLegSpecs), len(want))
+	}
+	for i, w := range want {
+		spec := toolLegSpecs[i]
+		if spec.job != w.job || spec.provider != w.provider || spec.mtls != w.mtls || spec.mode != modeTools {
+			t.Errorf("leg %d: job %q provider %q mtls %v mode %q", i, spec.job, spec.provider, spec.mtls, spec.mode)
+		}
+		if spec.histogram != metricToolDuration || spec.counter != metricToolCalls ||
+			!reflect.DeepEqual(spec.labels, map[string]string{"provider": w.provider, "tool": toolName}) {
+			t.Errorf("leg %d reads %s/%s %v", i, spec.histogram, spec.counter, spec.labels)
+		}
+		args := strings.Join(spec.args, " ")
+		if got := strings.Contains(args, "-legacy-session"); got != w.legacy {
+			t.Errorf("leg %d args %q: -legacy-session %v, want %v", i, args, got, w.legacy)
+		}
+		if w.legacy && !strings.Contains(args, "-tool-url "+gatewayBase+"/v1/mcp/"+toolLegacyProviderName) {
+			t.Errorf("leg %d args %q do not target %s", i, args, toolLegacyProviderName)
+		}
+	}
+}
+
+func TestToolsClassAndAgentCoverBothProviders(t *testing.T) {
+	var allowed []string
+	for _, ref := range toolsClass().Spec.AllowedToolProviders {
+		allowed = append(allowed, ref.Name)
+	}
+	if want := []string{toolProviderName, toolLegacyProviderName}; !reflect.DeepEqual(allowed, want) {
+		t.Errorf("class allows %v, want %v", allowed, want)
+	}
+	grants := map[string][]string{}
+	for _, g := range toolsAgentObj("perf", "img").Spec.Tools {
+		grants[g.ProviderRef.Name] = g.Tools
+	}
+	want := map[string][]string{toolProviderName: {toolName}, toolLegacyProviderName: {toolName}}
+	if !reflect.DeepEqual(grants, want) {
+		t.Errorf("agent grants %v, want %v", grants, want)
+	}
+}
+
 // TestSpreadHoldMatchesPlacement checks that the hold's loadgen, given the
 // fleet's arguments, posts to the namespace the ramp put each agent in.
 func TestSpreadHoldMatchesPlacement(t *testing.T) {
