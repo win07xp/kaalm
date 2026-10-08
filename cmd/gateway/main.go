@@ -293,13 +293,7 @@ func main() {
 		// request was measurable under load, and a count a few
 		// seconds stale is within the margin those two already carry.
 		Replicas: gateway.CachedCount(5*time.Second, func() int {
-			var pods corev1.PodList
-			if err := cl.GetClient().List(context.Background(), &pods,
-				client.InNamespace(operatorNamespace),
-				client.MatchingLabels{"app.kubernetes.io/component": "gateway"}); err != nil || len(pods.Items) == 0 {
-				return 1
-			}
-			return len(pods.Items)
+			return gatewayReplicaCount(context.Background(), cl.GetClient(), operatorNamespace)
 		}),
 	}, store, tokens, gateway.NewMemorySpend())
 	server.Async = async
