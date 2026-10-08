@@ -87,8 +87,9 @@ The next milestone is **v1.1.0**, a fix release. It closes the gaps the
 docs audit filed between the books and the code; until each is fixed, its
 page describes the shipped behavior and cites the issue. It also verifies
 and documents the microVM path, Kata first
-([#168](https://github.com/win07xp/kaalm/issues/168)), adds the tool-plane
-and streaming phases of the performance harness
+([#168](https://github.com/win07xp/kaalm/issues/168)), adds four phases to
+the performance harness: the tool plane, streaming, many namespaces, and many
+providers and classes
 ([#175](https://github.com/win07xp/kaalm/issues/175)), and carries the
 tooling and test issues. The full list is on the
 [milestone](https://github.com/win07xp/kaalm/milestone/8).
