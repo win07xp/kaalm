@@ -31,15 +31,16 @@ import (
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// The phases, in the order `perf run` executes them. Each records its own
-// block on the summary and cleans up its own objects, so a failed phase
-// leaves the earlier numbers intact and the cluster reusable.
+// The phases, which `perf run` executes in the order -phases gives. Each
+// records its own block on the summary and cleans up its own objects, so a
+// failed phase leaves the earlier numbers intact and the cluster reusable.
 
 type gatewayResult struct {
 	Legs []gatewayLeg `json:"legs"`
@@ -370,6 +371,10 @@ const (
 	metricToolDuration = "kaalm_tool_call_duration_seconds"
 	metricToolCalls    = "kaalm_tool_calls_total"
 	metricProcessCPU   = "process_cpu_seconds_total"
+	// metricReconcileTime is controller-runtime's per-controller reconcile
+	// histogram, labeled by labelController.
+	metricReconcileTime = "controller_runtime_reconcile_time_seconds"
+	labelController     = "controller"
 )
 
 // gatewayLegDef is one leg of the gateway table: a provider reached over one
@@ -868,8 +873,8 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 			}
 		}
 		if ctl, err := h.scrapeController(ctx); err == nil {
-			agentReconciles := map[string]string{"controller": agentControllerName}
-			w.ReconcileMs = histStats(histogramDelta(prevCtl, ctl, "controller_runtime_reconcile_time_seconds", agentReconciles))
+			agentReconciles := map[string]string{labelController: agentControllerName}
+			w.ReconcileMs = histStats(histogramDelta(prevCtl, ctl, metricReconcileTime, agentReconciles))
 			w.WorkqueueDepth = ctl.gauge("workqueue_depth", map[string]string{"name": "agent"})
 			prevCtl = ctl
 		}
@@ -1217,6 +1222,283 @@ func (h *harness) deleteNamespaces(nss []string) {
 			h.note("deleting namespace %s: %v", name, err)
 		}
 	}
+}
+
+// ---- providers ----
+
+// providersResult is the control plane and the gateway with many more
+// ModelProviders and AgentClasses than the standard run's handful, which
+// grows the caches and indexes keyed by them. Its legs compare with the
+// gateway table's first two rows.
+type providersResult struct {
+	Providers         int     `json:"providers"`
+	Classes           int     `json:"classes"`
+	ProvidersReadySec float64 `json:"providersReadySec"`
+	ClassesReadySec   float64 `json:"classesReadySec"`
+	// Reconcile is per controller (modelprovider, agentclass) over the
+	// setup, from creating the first provider to the last class Ready.
+	Reconcile map[string]reconcileFigures `json:"reconcile"`
+	// Steady is the control-plane traffic over -idle-duration once all are
+	// Ready, with no agents.
+	Steady             *apiAudit    `json:"steady,omitempty"`
+	ControllerUsageMax usage        `json:"controllerUsageMax"`
+	GatewayUsageMax    usage        `json:"gatewayUsageMax"`
+	Legs               []gatewayLeg `json:"legs"`
+	TeardownSec        float64      `json:"teardownSec"`
+}
+
+type reconcileFigures struct {
+	Count float64 `json:"count"`
+	Ms    stats   `json:"ms"`
+}
+
+// The controllers whose reconciles the providers phase reports, by their
+// controller-runtime name.
+var providersControllers = []string{"modelprovider", "agentclass"}
+
+// manyProviders is the providers phase's ModelProviders: perf-fast's shape,
+// each on its own mock prefix, labeled for teardown.
+func manyProviders(ns string, n int) []*kaalmv1beta1.ModelProvider {
+	out := make([]*kaalmv1beta1.ModelProvider, 0, n)
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("perf-many-%02d", i)
+		out = append(out, &kaalmv1beta1.ModelProvider{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{phaseLabel: phaseProviders}},
+			Spec: kaalmv1beta1.ModelProviderSpec{
+				Type:           "openai-compatible",
+				Endpoint:       fmt.Sprintf("https://mock-provider.%s.svc:8443/ok/many%02d", ns, i),
+				CredentialsRef: kaalmv1beta1.SecretKeyReference{Name: "perf-mock-key", Key: "token"},
+				HealthCheck:    &kaalmv1beta1.ModelProviderHealthCheck{Enabled: false},
+				// The fleet namespace, as on every infra.yaml provider.
+				AllowedNamespaces: []string{ns},
+				Budget:            kaalmv1beta1.ModelProviderBudget{Period: "daily", PerNamespaceUSD: "1000000"},
+				Models: []kaalmv1beta1.ModelProviderModel{{
+					ID: "mock-model", CostPer1MInputTokens: "1.00", CostPer1MOutputTokens: "2.00",
+				}},
+			},
+		})
+	}
+	return out
+}
+
+// manyClasses is one AgentClass per provider, each allowing every provider:
+// the widest fan-out for the provider-to-class and class-to-provider watches.
+func manyClasses(providers []*kaalmv1beta1.ModelProvider) []*kaalmv1beta1.AgentClass {
+	refs := make([]kaalmv1beta1.LocalObjectReference, 0, len(providers))
+	for _, p := range providers {
+		refs = append(refs, kaalmv1beta1.LocalObjectReference{Name: p.Name})
+	}
+	out := make([]*kaalmv1beta1.AgentClass, 0, len(providers))
+	for _, p := range providers {
+		c := activeClass()
+		c.Name = p.Name
+		c.Labels = map[string]string{phaseLabel: phaseProviders}
+		c.Spec.AllowedProviders = append([]kaalmv1beta1.LocalObjectReference(nil), refs...)
+		out = append(out, c)
+	}
+	return out
+}
+
+// providersLegs are the gateway table's first two rows under their own job
+// names.
+func providersLegs() []legSpec {
+	out := make([]legSpec, 0, 2)
+	for _, d := range gatewayLegs[:2] {
+		job := "loadgen-providers-token"
+		if d.mtls {
+			job = "loadgen-providers-mtls"
+		}
+		out = append(out, llmLegSpec(d.name, d.provider, job, d.mtls))
+	}
+	return out
+}
+
+// allReady polls until every listed object reports Ready and returns how
+// long that took from start.
+func (h *harness) allReady(ctx context.Context, what string, start time.Time, list client.ObjectList,
+	conditions func() [][]metav1.Condition, want int) (float64, error) {
+	ready := 0
+	err := pollUntil(ctx, 10*time.Minute, 3*time.Second, func() (bool, error) {
+		if err := h.k.c.List(ctx, list, client.MatchingLabels{phaseLabel: phaseProviders}); err != nil {
+			return false, err
+		}
+		ready = 0
+		for _, conds := range conditions() {
+			if meta.IsStatusConditionTrue(conds, kaalmv1beta1.ConditionReady) {
+				ready++
+			}
+		}
+		return ready == want, nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("%d of %d %s Ready: %w", ready, want, what, err)
+	}
+	return round3(time.Since(start).Seconds()), nil
+}
+
+func (h *harness) runProviders(ctx context.Context) error {
+	cfg := h.cfg
+	n := cfg.ProvidersCount
+	res := &providersResult{Providers: n, Classes: n, Reconcile: map[string]reconcileFigures{}}
+	h.sum.Providers = res
+	deleted := false
+	defer func() {
+		if !deleted {
+			_, _ = h.deleteProvidersObjects(context.Background(), time.Minute)
+		}
+	}()
+
+	sampler := h.sampleUsage(ctx)
+	err := h.providersSetup(ctx, res)
+	peak := sampler.finish()
+	res.ControllerUsageMax, res.GatewayUsageMax = peak["kaalm-controller"], peak["kaalm-gateway"]
+	if err != nil {
+		return err
+	}
+
+	if err := h.k.ensureClass(ctx, activeClass()); err != nil {
+		return err
+	}
+	agent := loadgenAgentObj(cfg.Namespace, activeClassName, cfg.AgentImage, gatewayProviders)
+	mtlsSecret, cleanup, err := h.loadgenIdentity(ctx, agent)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	legs := providersLegs()
+	for i, spec := range legs {
+		h.logf("providers leg %d/%d: %s (%d callers, %s)",
+			i+1, len(legs), spec.name, cfg.GatewayConcurrency, cfg.GatewayDuration)
+		leg, _, err := h.runLeg(ctx, spec, mtlsSecret)
+		if err != nil {
+			return fmt.Errorf("providers %w", err)
+		}
+		res.Legs = append(res.Legs, leg)
+	}
+
+	took, err := h.deleteProvidersObjects(ctx, 10*time.Minute)
+	deleted = true
+	if err != nil {
+		return err
+	}
+	res.TeardownSec = round3(took.Seconds())
+	h.logf("  providers and classes gone after %.0fs", res.TeardownSec)
+	return nil
+}
+
+// providersSetup creates the providers, then the classes, records how long
+// each set took to turn Ready and what the controllers reconciled meanwhile,
+// and counts the control-plane traffic once all of them are Ready.
+func (h *harness) providersSetup(ctx context.Context, res *providersResult) error {
+	cfg := h.cfg
+	n := cfg.ProvidersCount
+	ctlBefore, err := h.scrapeController(ctx)
+	if err != nil {
+		return err
+	}
+
+	providers := manyProviders(cfg.Namespace, n)
+	objs := make([]client.Object, 0, n)
+	for _, p := range providers {
+		objs = append(objs, p)
+	}
+	h.logf("providers: creating %d ModelProviders", n)
+	start := time.Now()
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	var mps kaalmv1beta1.ModelProviderList
+	res.ProvidersReadySec, err = h.allReady(ctx, "ModelProviders", start, &mps, func() [][]metav1.Condition {
+		out := make([][]metav1.Condition, 0, len(mps.Items))
+		for i := range mps.Items {
+			out = append(out, mps.Items[i].Status.Conditions)
+		}
+		return out
+	}, n)
+	if err != nil {
+		return err
+	}
+	h.logf("  all Ready after %.0fs; creating %d AgentClasses that each allow all of them", res.ProvidersReadySec, n)
+
+	objs = objs[:0]
+	for _, c := range manyClasses(providers) {
+		objs = append(objs, c)
+	}
+	classStart := time.Now()
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	var classes kaalmv1beta1.AgentClassList
+	res.ClassesReadySec, err = h.allReady(ctx, "AgentClasses", classStart, &classes, func() [][]metav1.Condition {
+		out := make([][]metav1.Condition, 0, len(classes.Items))
+		for i := range classes.Items {
+			out = append(out, classes.Items[i].Status.Conditions)
+		}
+		return out
+	}, n)
+	if err != nil {
+		return err
+	}
+	h.logf("  all Ready after %.0fs", res.ClassesReadySec)
+
+	ctlAfter, err := h.scrapeController(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range providersControllers {
+		hist := histogramDelta(ctlBefore, ctlAfter, metricReconcileTime, map[string]string{labelController: name})
+		fig := reconcileFigures{Ms: histStats(hist)}
+		if hist != nil {
+			fig.Count = hist.count
+		}
+		res.Reconcile[name] = fig
+		h.logf("  %s: %.0f reconciles over the setup, p50 %.1f ms p99 %.1f ms", name, fig.Count, fig.Ms.P50, fig.Ms.P99)
+	}
+
+	if cfg.IdleDuration <= 0 {
+		return nil
+	}
+	h.logf("providers: counting control-plane traffic for %s with all of them Ready", cfg.IdleDuration)
+	steadyBefore, err := h.auditSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(cfg.IdleDuration):
+	}
+	steadyAfter, err := h.auditSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	res.Steady = audit(steadyBefore, steadyAfter, 0)
+	h.logAudit("providers steady audit", res.Steady)
+	return nil
+}
+
+// deleteProvidersObjects deletes the providers phase's AgentClasses and
+// ModelProviders and waits until both are gone.
+func (h *harness) deleteProvidersObjects(ctx context.Context, timeout time.Duration) (time.Duration, error) {
+	start := time.Now()
+	sel := client.MatchingLabels{phaseLabel: phaseProviders}
+	for _, obj := range []client.Object{&kaalmv1beta1.AgentClass{}, &kaalmv1beta1.ModelProvider{}} {
+		if err := h.k.c.DeleteAllOf(ctx, obj, sel); err != nil && !apierrors.IsNotFound(err) {
+			return 0, err
+		}
+	}
+	err := pollUntil(ctx, timeout, 3*time.Second, func() (bool, error) {
+		var classes kaalmv1beta1.AgentClassList
+		if err := h.k.c.List(ctx, &classes, sel); err != nil {
+			return false, err
+		}
+		var mps kaalmv1beta1.ModelProviderList
+		if err := h.k.c.List(ctx, &mps, sel); err != nil {
+			return false, err
+		}
+		return len(classes.Items)+len(mps.Items) == 0, nil
+	})
+	return time.Since(start), err
 }
 
 // ---- churn ----

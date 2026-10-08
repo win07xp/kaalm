@@ -80,6 +80,10 @@ type config struct {
 	// NamespacesAgents spread round-robin over NamespacesCount namespaces.
 	NamespacesCount  int
 	NamespacesAgents int
+
+	// The providers phase: this many extra ModelProviders and as many
+	// AgentClasses, each class allowing every one of them.
+	ProvidersCount int
 }
 
 // Phase names.
@@ -95,6 +99,7 @@ const (
 	phaseStream   = "stream"
 	// Opt-in phases.
 	phaseNamespaces = "namespaces"
+	phaseProviders  = "providers"
 )
 
 // Strings shared between the orchestrator and the in-cluster load generator.
@@ -146,7 +151,7 @@ var defaultPhases = []string{
 
 // optionalPhases run only when -phases names them: each takes long enough
 // that the default run should not grow by it unasked.
-var optionalPhases = []string{phaseNamespaces}
+var optionalPhases = []string{phaseNamespaces, phaseProviders}
 
 // knownPhase reports whether p is a default or an optional phase.
 func knownPhase(p string) bool {
@@ -216,6 +221,8 @@ func parseRunFlags(args []string) (config, error) {
 	fs.IntVar(&c.NamespacesCount, "namespaces-count", 20, "namespaces phase: namespaces the fleet spreads over")
 	fs.IntVar(&c.NamespacesAgents, "namespaces-agents", 400,
 		"namespaces phase: agents to reach (the baseline ramp's achieved fleet, under the machine's pod ceiling)")
+	fs.IntVar(&c.ProvidersCount, "providers-count", 50,
+		"providers phase: ModelProviders to add, and as many AgentClasses that each allow all of them")
 
 	if err := fs.Parse(args); err != nil {
 		return c, err
@@ -235,6 +242,9 @@ func parseRunFlags(args []string) (config, error) {
 	}
 	if c.NamespacesCount <= 0 || c.NamespacesAgents <= 0 {
 		return c, fmt.Errorf("namespaces-count and namespaces-agents must be positive")
+	}
+	if c.ProvidersCount <= 0 {
+		return c, fmt.Errorf("providers-count must be positive")
 	}
 	return c, nil
 }

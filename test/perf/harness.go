@@ -62,6 +62,7 @@ type summary struct {
 	Tools       *toolsResult      `json:"tools,omitempty"`
 	Stream      *streamResult     `json:"stream,omitempty"`
 	Namespaces  *namespacesResult `json:"namespaces,omitempty"`
+	Providers   *providersResult  `json:"providers,omitempty"`
 	Notes       []string          `json:"notes,omitempty"`
 }
 
@@ -168,6 +169,8 @@ func (h *harness) runPhases(ctx context.Context) error {
 			err = h.runStream(ctx)
 		case phaseNamespaces:
 			err = h.runNamespaces(ctx)
+		case phaseProviders:
+			err = h.runProviders(ctx)
 		}
 		if err != nil {
 			h.note("phase %s failed after %s: %v", p, time.Since(start).Round(time.Second), err)
@@ -295,6 +298,9 @@ func (h *harness) cleanLeftovers(ctx context.Context) {
 		}
 		h.deleteNamespaces(names)
 	}
+	if _, err := h.deleteProvidersObjects(ctx, 5*time.Minute); err != nil {
+		h.note("cleaning leftover %s objects: %v", phaseProviders, err)
+	}
 	// A tools phase that died before its cleanup leaves its caller agent.
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: h.cfg.Namespace, Name: toolsAgentName}}
 	if err := h.k.c.Delete(ctx, agent); err != nil && !apierrors.IsNotFound(err) {
@@ -398,6 +404,25 @@ func (h *harness) printTable() {
 				l.Name, l.Client.RPS, ttfb.P50, l.Client.LatencyMs.P50, ttfb.P99, l.Client.LatencyMs.P99)
 			fmt.Printf("  statuses %v  spend %.3f USD  usage missing %.0f  gw %.3f ms CPU/req, peak %.0f MiB\n",
 				l.Client.Statuses, l.SpendUSD, l.UsageMissing, l.GatewayCPUPerRequestMs, l.GatewayUsageMax.MemMiB)
+		}
+	}
+	if p := s.Providers; p != nil {
+		fmt.Printf("\nproviders: %d ModelProviders Ready in %.0fs, %d AgentClasses Ready in %.0fs; gone in %.0fs\n",
+			p.Providers, p.ProvidersReadySec, p.Classes, p.ClassesReadySec, p.TeardownSec)
+		for _, name := range providersControllers {
+			r := p.Reconcile[name]
+			fmt.Printf("  %-14s %6.0f reconciles  p50 %6.1f ms  p99 %6.1f ms\n", name, r.Count, r.Ms.P50, r.Ms.P99)
+		}
+		fmt.Printf("  peak: controller %.0f mCPU %.0f MiB, gateway %.0f mCPU %.0f MiB\n",
+			p.ControllerUsageMax.CPUMilli, p.ControllerUsageMax.MemMiB, p.GatewayUsageMax.CPUMilli, p.GatewayUsageMax.MemMiB)
+		if a := p.Steady; a != nil {
+			fmt.Printf("  steady audit (%.0fs): controller %.1f req/s; gateway %.1f req/s; apiserver %v\n",
+				a.Seconds, a.ControllerRequestsPerSec, a.GatewayRequestsPerSec, topEntries(a.APIServer, 6))
+		}
+		for _, l := range p.Legs {
+			fmt.Printf("  %-36s %6.1f rps  p50 %6.1f | %6.1f  p99 %6.1f | %6.1f  statuses %v  gw %.3f ms CPU/req\n",
+				l.Name, l.Client.RPS, l.Client.LatencyMs.P50, l.GatewaySideMs.P50,
+				l.Client.LatencyMs.P99, l.GatewaySideMs.P99, l.Client.Statuses, l.GatewayCPUPerRequestMs)
 		}
 	}
 	for _, n := range s.Notes {

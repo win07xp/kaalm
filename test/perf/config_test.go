@@ -53,15 +53,15 @@ func TestUnknownPhaseListsTheKnownOnes(t *testing.T) {
 }
 
 func TestOptInPhasesAreAccepted(t *testing.T) {
-	c, err := parseRunFlags([]string{"-phases", "namespaces"})
+	c, err := parseRunFlags([]string{"-phases", "namespaces,providers"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"namespaces"}; !reflect.DeepEqual(c.Phases, want) {
+	if want := []string{"namespaces", "providers"}; !reflect.DeepEqual(c.Phases, want) {
 		t.Errorf("phases = %v, want %v", c.Phases, want)
 	}
 	_, err = parseRunFlags([]string{"-phases", "nope"})
-	if err == nil || !strings.Contains(err.Error(), "namespaces") {
+	if err == nil || !strings.Contains(err.Error(), "namespaces") || !strings.Contains(err.Error(), "providers") {
 		t.Errorf("the unknown-phase error lists the opt-in phases too: %v", err)
 	}
 }
@@ -71,6 +71,7 @@ func TestSpreadFlagsMustBePositive(t *testing.T) {
 		{"-namespaces-count", "0"},
 		{"-namespaces-agents", "0"},
 		{"-namespaces-count", "-3"},
+		{"-providers-count", "0"},
 	} {
 		if _, err := parseRunFlags(args); err == nil {
 			t.Errorf("%v: want an error", args)
@@ -80,7 +81,8 @@ func TestSpreadFlagsMustBePositive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.NamespacesCount != 20 || c.NamespacesAgents != 400 {
-		t.Errorf("defaults: %d namespaces, %d agents", c.NamespacesCount, c.NamespacesAgents)
+	if c.NamespacesCount != 20 || c.NamespacesAgents != 400 || c.ProvidersCount != 50 {
+		t.Errorf("defaults: %d namespaces, %d agents, %d providers",
+			c.NamespacesCount, c.NamespacesAgents, c.ProvidersCount)
 	}
 }
