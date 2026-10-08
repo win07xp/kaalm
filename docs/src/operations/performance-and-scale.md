@@ -244,7 +244,31 @@ No stream ended without its terminator (no `incomplete` status), and no answer w
 | Largest apiserver rows | POST configmaps 1202, GET configmaps 591, WATCH secrets 466, GET secrets 440, PUT agentchannels/status 411, PUT leases 377 | POST configmaps 1201, GET configmaps 443, PUT agentchannels/status 400, APPLY configmaps 352, PUT leases 327, GET leases 67 |
 | Teardown | 400 agents gone in 80 s | 400 agents gone in 48 s |
 
-The 146 failed deliveries in the 20-namespace hold are connect timeouts to the agents' Service IPs (`dial tcp ... i/o timeout`) and request deadlines. They fall on 120 of the 400 agents, spread over all 20 namespaces. The cause is not known.
+The 146 failed deliveries in the 20-namespace hold are connect timeouts to the agents' Service IPs (`dial tcp ... i/o timeout`) and request deadlines. They fall on 120 of the 400 agents, spread over all 20 namespaces.
+
+The cause is k3s's embedded NetworkPolicy enforcement (kube-router), which drops some same-node traffic while policies span many namespaces. On a Cilium cluster the same fleet delivers every message. Nothing in Kaalm differs per namespace: every agent's NetworkPolicy is the same in every namespace (ingress on the agent port from the gateway Pods in `kaalm-system`).
+
+Two more runs of `-phases namespaces` on the default perf cluster (product code `e36cbf8`, October 8, 2026), and one on a cluster created with `CNI=cilium make perf-up`, which replaces flannel and k3s's NetworkPolicy controller with Cilium, give the comparison. A failed attempt is a delivery attempt whose outcome is not `ok`; a message fails after four attempts:
+
+| Run | Cluster CNI | Failed messages | Failed delivery attempts |
+|---|---|---|---|
+| October 8 run, above | flannel and kube-router | 146 | connect 718, timeout 64 |
+| Second run | flannel and kube-router | 35 | 303 (connect 245, timeout 58) |
+| Third run | flannel and kube-router | 0 | 45 (connect 20, timeout 25), each recovered by a retry |
+| Cilium run | Cilium | 0 | 0 (1201 messages, 1202 delivery attempts, each delivered on the first attempt) |
+
+The failures follow the gateway replica's node. In the run that labeled the gateway logs by replica, every failed attempt went from the gateway replica on the k3d server node (`k3d-kaalm-perf-server-0`) to an agent Pod on that same node. The other replica, on an agent node, reached the server node's agents without a failure, and the server-node replica reached the agents on the other two nodes without a failure. The agents were spread evenly over the three nodes, and the failing ones were 88 to 574 s old. kube-router's ipsets on the server node held both gateway Pod IPs, so the allow rules existed.
+
+The Cilium run, with the same 400 agents over 20 namespaces:
+
+| Measure | Cilium |
+|---|---|
+| Ramp | 400 Ready; 15.0 MiB host memory per agent |
+| Delivery time | p50 3 ms, p95 6 ms |
+| Control plane over the hold | 216 s: controller 2.8 req/s, 0.35 writes per agent per minute; gateway 10.3 req/s, 0.83 writes per agent per minute |
+| Teardown | 64 s |
+
+The result files of these three runs are not committed.
 
 ### Many providers and classes
 
@@ -273,7 +297,7 @@ The baseline is one developer machine. The numbers that transfer are the per-uni
 - **Provider latency.** Real providers answer in hundreds of milliseconds to seconds, so the gateway's own cost, which the immediate legs isolate, is a small fraction of every request. Compare against the 50 ms leg.
 - **Memory and nodes.** The ramp stops where host memory runs out on one machine. On a real cluster the fleet ceiling is the sum of node capacity divided by the per-agent figure, plus whatever the agent image itself needs beyond the starter.
 - **Certificate issuance.** Every agent waits for its cert-manager Certificate to be Ready before its Pod is created, so starting a fleet is paced by cert-manager's issuance rate. A production cert-manager can be tuned and scaled; the baseline runs the default single replica.
-- **The CNI.** k3s enforces NetworkPolicy with its embedded kube-router policy controller, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which lands inside wake latency. Cilium and Calico program policies differently and typically faster.
+- **The CNI.** k3s enforces NetworkPolicy with its embedded kube-router policy controller, whose ipset programming lags a freshly created Pod by up to about 20 seconds, which lands inside wake latency. It also drops some same-node traffic when policies span many namespaces, which fails deliveries that Cilium does not ([Many namespaces](#many-namespaces)). Cilium and Calico program policies differently and typically faster.
 - **Storage.** The local-path provisioner backs the churn fleet's PVCs and provisions each volume through a helper Pod. A CSI driver changes both the provisioning latency and the hibernate-and-wake cost.
 - **The apiserver.** k3s runs a single embedded apiserver on SQLite-backed storage. The controller's reconcile latency and the hold phase's callback records are apiserver-bound at scale; a multi-member etcd behaves differently under the same write rate.
 - **The knobs.** `controller.maxConcurrentReconciles` (default 4), the two replica counts, and the API client rate limits are the chart values that change throughput ([Configuration reference](deployment.md#configuration-reference)). The rate limits are per replica: `controller.client.qps` and `controller.client.burst` default to controller-runtime's 20 requests per second with a burst of 30, and `gateway.client.qps` and `gateway.client.burst` default to 100 per second with a burst of 200.
