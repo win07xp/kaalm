@@ -51,3 +51,36 @@ func TestUnknownPhaseListsTheKnownOnes(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestOptInPhasesAreAccepted(t *testing.T) {
+	c, err := parseRunFlags([]string{"-phases", "namespaces"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"namespaces"}; !reflect.DeepEqual(c.Phases, want) {
+		t.Errorf("phases = %v, want %v", c.Phases, want)
+	}
+	_, err = parseRunFlags([]string{"-phases", "nope"})
+	if err == nil || !strings.Contains(err.Error(), "namespaces") {
+		t.Errorf("the unknown-phase error lists the opt-in phases too: %v", err)
+	}
+}
+
+func TestSpreadFlagsMustBePositive(t *testing.T) {
+	for _, args := range [][]string{
+		{"-namespaces-count", "0"},
+		{"-namespaces-agents", "0"},
+		{"-namespaces-count", "-3"},
+	} {
+		if _, err := parseRunFlags(args); err == nil {
+			t.Errorf("%v: want an error", args)
+		}
+	}
+	c, err := parseRunFlags(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.NamespacesCount != 20 || c.NamespacesAgents != 400 {
+		t.Errorf("defaults: %d namespaces, %d agents", c.NamespacesCount, c.NamespacesAgents)
+	}
+}

@@ -197,3 +197,16 @@ func TestRecordStream(t *testing.T) {
 		t.Error("a non-streaming run reports no ttfbMs")
 	}
 }
+
+func TestChannelURL(t *testing.T) {
+	base := "https://gw:8080"
+	if got := channelURL(base, "/channels/perf/ramp-", nil, 4, 7); got != base+"/channels/perf/ramp-0007" {
+		t.Errorf("without namespaces: %s", got)
+	}
+	nss := []string{"a", "b", "c"}
+	for i, want := range []string{"/channels/a/s-0000", "/channels/b/s-0001", "/channels/c/s-0002", "/channels/a/s-0003"} {
+		if got := channelURL(base, "/channels/{ns}/s-", nss, 4, i); got != base+want {
+			t.Errorf("channel %d: %s, want %s", i, got, base+want)
+		}
+	}
+}

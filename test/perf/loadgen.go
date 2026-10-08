@@ -89,6 +89,7 @@ type loadgenConfig struct {
 	tool        string
 	format      string
 	stream      bool
+	namespaces  []string
 }
 
 func runLoadgen(args []string) error {
@@ -113,7 +114,10 @@ func runLoadgen(args []string) error {
 	fs.StringVar(&c.bearerFile, "bearer-file", "/var/run/hook/token", "channels mode: the webhook bearer secret")
 	fs.StringVar(&c.base, "base", "https://kaalm-gateway.kaalm-system.svc:8080", "channels mode: user listener base URL")
 	fs.StringVar(&c.pathPrefix, "path-prefix", "/channels/perf/ramp-",
-		"channels mode: channel path prefix; the index is appended")
+		"channels mode: channel path prefix; the index is appended, and {ns} is replaced as -namespaces says")
+	var namespaces string
+	fs.StringVar(&namespaces, "namespaces", "",
+		"channels mode: comma-separated namespaces; channel i's {ns} is namespace i modulo the list length")
 	fs.IntVar(&c.count, "count", 1, "channels mode: number of channels under the prefix")
 	fs.IntVar(&c.pad, "pad", 4, "channels mode: zero-padding width of the index")
 	fs.Float64Var(&c.rate, "rate", 1, "channels mode: messages per second across all channels, round-robin")
@@ -129,6 +133,9 @@ func runLoadgen(args []string) error {
 	fs.StringVar(&c.tool, "tool", toolName, "tools mode: the tool every tools/call names")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if namespaces != "" {
+		c.namespaces = strings.Split(namespaces, ",")
 	}
 	if c.format != formatOpenAI && c.format != formatAnthropic {
 		return fmt.Errorf("unknown -format %q (openai or anthropic)", c.format)
@@ -504,6 +511,16 @@ func toolsLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 	return fixedConcurrency(c, modeTools, once)
 }
 
+// channelURL is channel i's webhook URL: the prefix with {ns} replaced by
+// namespace i modulo the list (when there is a list), then the index
+// zero-padded to pad digits. The fleet places agent i the same way.
+func channelURL(base, pathPrefix string, namespaces []string, pad, i int) string {
+	if len(namespaces) > 0 {
+		pathPrefix = strings.ReplaceAll(pathPrefix, "{ns}", namespaces[i%len(namespaces)])
+	}
+	return fmt.Sprintf("%s%s%0*d", base, pathPrefix, pad, i)
+}
+
 // channelLoad posts webhook messages round-robin across the channels at a
 // fixed aggregate rate, so message i lands on channel i mod count. With rate =
 // count/interval every channel receives exactly one message per interval,
@@ -518,12 +535,10 @@ func channelLoad(cli *http.Client, c loadgenConfig) (*loadResult, error) {
 	if c.count <= 0 || c.rate <= 0 {
 		return nil, fmt.Errorf("channels mode needs count > 0 and rate > 0")
 	}
-	url := func(i int) string {
-		return fmt.Sprintf("%s%s%0*d", c.base, c.pathPrefix, c.pad, i)
-	}
 	newReq := func(i int) *http.Request {
 		body := fmt.Sprintf(`{"userId":"load","content":{"text":"ping %d"}}`, i)
-		req, _ := http.NewRequest(http.MethodPost, url(i), strings.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, channelURL(c.base, c.pathPrefix, c.namespaces, c.pad, i),
+			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+bearer)
 		return req

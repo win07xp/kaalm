@@ -20,6 +20,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,6 +87,29 @@ func TestGatewayLegSpecsKeepJobsAndArgs(t *testing.T) {
 		if spec.histogram != metricLLMDuration || spec.counter != metricLLMRequests ||
 			spec.labels["provider"] != d.provider {
 			t.Errorf("leg %d reads %s/%s %v", i, spec.histogram, spec.counter, spec.labels)
+		}
+	}
+}
+
+// TestSpreadHoldMatchesPlacement checks that the hold's loadgen, given the
+// fleet's arguments, posts to the namespace the ramp put each agent in.
+func TestSpreadHoldMatchesPlacement(t *testing.T) {
+	f := fleet{phase: phaseNamespaces, prefix: "spread-", namespaces: spreadNamespaces("perf", 20)}
+	args := holdLoadgenArgs(f, 400, 1, time.Minute)
+	var prefix string
+	var nss []string
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i] {
+		case "-path-prefix":
+			prefix = args[i+1]
+		case "-namespaces":
+			nss = strings.Split(args[i+1], ",")
+		}
+	}
+	for _, i := range []int{0, 1, 19, 20, 21, 399} {
+		want := "/channels/" + f.namespaceOf(i) + "/" + f.name(i)
+		if got := channelURL("", prefix, nss, 4, i); got != want {
+			t.Errorf("agent %d: loadgen posts to %s, fleet placed it at %s", i, got, want)
 		}
 	}
 }

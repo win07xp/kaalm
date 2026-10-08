@@ -35,6 +35,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
@@ -46,21 +47,22 @@ type harness struct {
 }
 
 type summary struct {
-	Commit      string          `json:"commit"`
-	StartedAt   time.Time       `json:"startedAt"`
-	FinishedAt  time.Time       `json:"finishedAt"`
-	Config      config          `json:"config"`
-	Environment environment     `json:"environment"`
-	Gateway     *gatewayResult  `json:"gateway,omitempty"`
-	Ramp        *rampResult     `json:"ramp,omitempty"`
-	Hold        *holdResult     `json:"hold,omitempty"`
-	Teardown    *teardownResult `json:"teardown,omitempty"`
-	Churn       *churnResult    `json:"churn,omitempty"`
-	Tasks       *tasksResult    `json:"tasks,omitempty"`
-	Restart     *restartResult  `json:"restart,omitempty"`
-	Tools       *toolsResult    `json:"tools,omitempty"`
-	Stream      *streamResult   `json:"stream,omitempty"`
-	Notes       []string        `json:"notes,omitempty"`
+	Commit      string            `json:"commit"`
+	StartedAt   time.Time         `json:"startedAt"`
+	FinishedAt  time.Time         `json:"finishedAt"`
+	Config      config            `json:"config"`
+	Environment environment       `json:"environment"`
+	Gateway     *gatewayResult    `json:"gateway,omitempty"`
+	Ramp        *rampResult       `json:"ramp,omitempty"`
+	Hold        *holdResult       `json:"hold,omitempty"`
+	Teardown    *teardownResult   `json:"teardown,omitempty"`
+	Churn       *churnResult      `json:"churn,omitempty"`
+	Tasks       *tasksResult      `json:"tasks,omitempty"`
+	Restart     *restartResult    `json:"restart,omitempty"`
+	Tools       *toolsResult      `json:"tools,omitempty"`
+	Stream      *streamResult     `json:"stream,omitempty"`
+	Namespaces  *namespacesResult `json:"namespaces,omitempty"`
+	Notes       []string          `json:"notes,omitempty"`
 }
 
 type environment struct {
@@ -164,6 +166,8 @@ func (h *harness) runPhases(ctx context.Context) error {
 			err = h.runTools(ctx)
 		case phaseStream:
 			err = h.runStream(ctx)
+		case phaseNamespaces:
+			err = h.runNamespaces(ctx)
 		}
 		if err != nil {
 			h.note("phase %s failed after %s: %v", p, time.Since(start).Round(time.Second), err)
@@ -276,6 +280,21 @@ func (h *harness) cleanLeftovers(ctx context.Context) {
 			h.note("cleaning leftover %s objects: %v", p.phase, err)
 		}
 	}
+	// A namespaces phase that died leaves its spread namespaces: clear the
+	// fleet in them, then the namespaces themselves.
+	var spread corev1.NamespaceList
+	if err := h.k.c.List(ctx, &spread, client.MatchingLabels{phaseLabel: phaseNamespaces}); err != nil {
+		h.note("listing leftover %s namespaces: %v", phaseNamespaces, err)
+	} else if len(spread.Items) > 0 {
+		names := make([]string, 0, len(spread.Items))
+		for i := range spread.Items {
+			names = append(names, spread.Items[i].Name)
+		}
+		if _, err := h.k.deletePhase(ctx, names, phaseNamespaces, "spread-", 10*time.Minute); err != nil {
+			h.note("cleaning leftover %s objects: %v", phaseNamespaces, err)
+		}
+		h.deleteNamespaces(names)
+	}
 	// A tools phase that died before its cleanup leaves its caller agent.
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: h.cfg.Namespace, Name: toolsAgentName}}
 	if err := h.k.c.Delete(ctx, agent); err != nil && !apierrors.IsNotFound(err) {
@@ -348,6 +367,14 @@ func (h *harness) printTable() {
 			t.Submitted, t.SubmitSec, t.Phases, t.MakespanSec, t.ThroughputPerMin)
 		fmt.Printf("; provision p50 %.0fs; run p50 %.0fs; total p50/p95 %.0f/%.0fs; retries %d\n",
 			t.ProvisionSec.P50, t.RunSec.P50, t.TotalSec.P50, t.TotalSec.P95, t.Retries)
+	}
+	if n := s.Namespaces; n != nil {
+		fmt.Printf("\nnamespaces: the fleet spread over %d namespaces\n", n.Namespaces)
+		printRamp("namespaces ramp", n.Ramp)
+		printHold("namespaces hold", n.Hold)
+		if t := n.Teardown; t != nil {
+			fmt.Printf("\nnamespaces teardown: %d agents gone in %.0fs\n", t.Agents, t.Seconds)
+		}
 	}
 	if t := s.Tools; t != nil {
 		fmt.Println("\ntools (client-observed ms | broker ms, forwarded calls):")

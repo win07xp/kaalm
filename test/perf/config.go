@@ -75,6 +75,11 @@ type config struct {
 	// Gateway steady state.
 	GatewayConcurrency int
 	GatewayDuration    time.Duration
+
+	// The namespaces phase: the ramp, hold, and teardown on a fleet of
+	// NamespacesAgents spread round-robin over NamespacesCount namespaces.
+	NamespacesCount  int
+	NamespacesAgents int
 }
 
 // Phase names.
@@ -88,6 +93,8 @@ const (
 	phaseRestart  = "restart"
 	phaseTools    = "tools"
 	phaseStream   = "stream"
+	// Opt-in phases.
+	phaseNamespaces = "namespaces"
 )
 
 // Strings shared between the orchestrator and the in-cluster load generator.
@@ -137,8 +144,9 @@ var defaultPhases = []string{
 	phaseGateway, phaseRamp, phaseHold, phaseRestart, phaseTeardown, phaseChurn, phaseTasks, phaseTools, phaseStream,
 }
 
-// optionalPhases run only when -phases names them.
-var optionalPhases []string
+// optionalPhases run only when -phases names them: each takes long enough
+// that the default run should not grow by it unasked.
+var optionalPhases = []string{phaseNamespaces}
 
 // knownPhase reports whether p is a default or an optional phase.
 func knownPhase(p string) bool {
@@ -205,6 +213,10 @@ func parseRunFlags(args []string) (config, error) {
 	fs.IntVar(&c.GatewayConcurrency, "gateway-concurrency", 32, "concurrent LLM callers per gateway leg")
 	fs.DurationVar(&c.GatewayDuration, "gateway-duration", time.Minute, "duration of each gateway leg")
 
+	fs.IntVar(&c.NamespacesCount, "namespaces-count", 20, "namespaces phase: namespaces the fleet spreads over")
+	fs.IntVar(&c.NamespacesAgents, "namespaces-agents", 400,
+		"namespaces phase: agents to reach (the baseline ramp's achieved fleet, under the machine's pod ceiling)")
+
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
@@ -220,6 +232,9 @@ func parseRunFlags(args []string) (config, error) {
 	}
 	if c.WaveSize <= 0 || c.RampTarget <= 0 {
 		return c, fmt.Errorf("ramp-target and wave-size must be positive")
+	}
+	if c.NamespacesCount <= 0 || c.NamespacesAgents <= 0 {
+		return c, fmt.Errorf("namespaces-count and namespaces-agents must be positive")
 	}
 	return c, nil
 }

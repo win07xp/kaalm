@@ -30,6 +30,7 @@ import (
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -1093,6 +1094,129 @@ func (h *harness) teardown(ctx context.Context, f fleet) (*teardownResult, error
 	}
 	h.logf("  gone after %.0fs", took.Seconds())
 	return &teardownResult{Agents: len(timings), Seconds: round3(took.Seconds())}, nil
+}
+
+// ---- namespaces ----
+
+// namespacesResult is the ramp, hold, and teardown on the same kind of fleet
+// spread over many namespaces, so the per-namespace list and RBAC paths that
+// one namespace never exercises carry the load. Its blocks compare with the
+// standard ramp, hold, and teardown.
+type namespacesResult struct {
+	Namespaces int             `json:"namespaces"`
+	Ramp       *rampResult     `json:"ramp,omitempty"`
+	Hold       *holdResult     `json:"hold,omitempty"`
+	Teardown   *teardownResult `json:"teardown,omitempty"`
+}
+
+// spreadSecrets are copied from the run's namespace into each spread
+// namespace, so testdata/infra.yaml stays the one source of their values.
+var spreadSecrets = []string{hookSecretName, callbackSecretName}
+
+func (h *harness) runNamespaces(ctx context.Context) error {
+	cfg := h.cfg
+	ramp, err := h.k.agentTimings(ctx, cfg.Namespace, phaseRamp)
+	if err != nil {
+		return err
+	}
+	if len(ramp) > 0 {
+		// Both fleets together would pass the machine's pod ceiling.
+		return errors.New("namespaces needs the ramp fleet gone: run teardown before it, or run it alone")
+	}
+	nss := spreadNamespaces(cfg.Namespace, cfg.NamespacesCount)
+	if err := h.prepareNamespaces(ctx, nss); err != nil {
+		return err
+	}
+	defer h.deleteNamespaces(nss)
+
+	res := &namespacesResult{Namespaces: len(nss)}
+	h.sum.Namespaces = res
+	f := fleet{
+		phase: phaseNamespaces, prefix: "spread-", target: cfg.NamespacesAgents,
+		namespaces: nss, holdJob: "loadgen-namespaces-hold",
+	}
+	h.logf("namespaces: %d agents over %d namespaces", f.target, len(nss))
+	if res.Ramp, err = h.ramp(ctx, f); err != nil {
+		return err
+	}
+	if res.Hold, err = h.hold(ctx, f); err != nil {
+		return err
+	}
+	res.Teardown, err = h.teardown(ctx, f)
+	return err
+}
+
+// prepareNamespaces waits out any namespace a previous run left Terminating,
+// creates each one with the phase label, copies the channel Secrets in, and
+// waits for trust-manager to distribute the CA bundle there.
+func (h *harness) prepareNamespaces(ctx context.Context, nss []string) error {
+	var terminating []string
+	if err := pollUntil(ctx, 10*time.Minute, 5*time.Second, func() (bool, error) {
+		terminating = terminating[:0]
+		for _, name := range nss {
+			var ns corev1.Namespace
+			err := h.k.c.Get(ctx, client.ObjectKey{Name: name}, &ns)
+			if err == nil && !ns.DeletionTimestamp.IsZero() {
+				terminating = append(terminating, name)
+			} else if err != nil && !apierrors.IsNotFound(err) {
+				return false, err
+			}
+		}
+		return len(terminating) == 0, nil
+	}); err != nil {
+		return fmt.Errorf("namespaces still Terminating from a previous run %v: %w", terminating, err)
+	}
+
+	secrets := make([]*corev1.Secret, 0, len(spreadSecrets))
+	for _, name := range spreadSecrets {
+		var sec corev1.Secret
+		if err := h.k.c.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, &sec); err != nil {
+			return fmt.Errorf("reading %s/%s to copy: %w", h.cfg.Namespace, name, err)
+		}
+		secrets = append(secrets, &sec)
+	}
+	objs := make([]client.Object, 0, len(nss)*(1+len(secrets)))
+	for _, name := range nss {
+		objs = append(objs, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Labels: map[string]string{phaseLabel: phaseNamespaces},
+		}})
+	}
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	objs = objs[:0]
+	for _, name := range nss {
+		for _, sec := range secrets {
+			objs = append(objs, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: sec.Name, Namespace: name, Labels: sec.Labels},
+				Type:       sec.Type,
+				Data:       sec.Data,
+			})
+		}
+	}
+	if err := h.k.createAll(ctx, objs); err != nil {
+		return err
+	}
+	for _, name := range nss {
+		if err := pollUntil(ctx, 2*time.Minute, 2*time.Second, func() (bool, error) {
+			_, err := h.k.cs.CoreV1().ConfigMaps(name).Get(ctx, "kaalm-ca", metav1.GetOptions{})
+			return err == nil, nil
+		}); err != nil {
+			return fmt.Errorf("trust bundle never reached namespace %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// deleteNamespaces starts deleting the spread namespaces and does not wait:
+// the next run of the phase waits for any still Terminating.
+func (h *harness) deleteNamespaces(nss []string) {
+	for _, name := range nss {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		if err := h.k.c.Delete(context.Background(), ns); err != nil && !apierrors.IsNotFound(err) {
+			h.note("deleting namespace %s: %v", name, err)
+		}
+	}
 }
 
 // ---- churn ----
