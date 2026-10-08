@@ -507,6 +507,19 @@ func (k *cluster) deletePhase(
 
 var errTimeout = errors.New("timed out")
 
+// sleepCtx waits d, or until ctx is done, so an interrupted run still
+// writes its summary.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // pollUntil calls fn every interval until it reports done or the timeout
 // passes (errTimeout, so callers can treat a timeout as a result). A few
 // consecutive errors are tolerated and logged: under load the k3d

@@ -1029,7 +1029,9 @@ func (h *harness) hold(ctx context.Context, f fleet) (*holdResult, error) {
 	}
 	res.Client = client
 	// Let detached deliveries and callbacks settle before reading the counters.
-	time.Sleep(30 * time.Second)
+	if err := sleepCtx(ctx, 30*time.Second); err != nil {
+		return nil, err
+	}
 	auditAfter, err := h.auditSnapshot(ctx)
 	if err != nil {
 		return nil, err
@@ -1627,7 +1629,9 @@ func (h *harness) runChurn(ctx context.Context) error {
 	}
 	res.Client = client
 	// The last messages' wakes may take the full wake budget to resolve.
-	time.Sleep(90 * time.Second)
+	if err := sleepCtx(ctx, 90*time.Second); err != nil {
+		return err
+	}
 	gwAfter, err := h.scrapeGateway(ctx)
 	if err != nil {
 		return err

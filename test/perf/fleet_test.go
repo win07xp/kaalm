@@ -18,7 +18,12 @@ limitations under the License.
 
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestFleetNamesAndPlacement(t *testing.T) {
 	f := fleet{phase: "p", prefix: "spread-", target: 5, namespaces: []string{"a", "b", "c"}}
@@ -44,5 +49,25 @@ func TestSpreadNamespaces(t *testing.T) {
 	got := spreadNamespaces("perf", 20)
 	if len(got) != 20 || got[0] != "perf-00" || got[9] != "perf-09" || got[19] != "perf-19" {
 		t.Errorf("spreadNamespaces(perf, 20) = %v", got)
+	}
+}
+
+func TestSleepCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled context: err = %v, want context.Canceled", err)
+	}
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Errorf("canceled context: waited %s, want an early return", took)
+	}
+
+	start = time.Now()
+	if err := sleepCtx(context.Background(), 10*time.Millisecond); err != nil {
+		t.Errorf("background context: err = %v", err)
+	}
+	if took := time.Since(start); took < 10*time.Millisecond {
+		t.Errorf("background context: returned after %s, want the full 10ms", took)
 	}
 }
