@@ -111,7 +111,7 @@ A ModelProvider is cluster-scoped and has no phase. [ModelProvider status](../..
 
 - **`Ready`** is `True` with `reason: CredentialsValid` when every check passes, and `False` with the reason from [What it checks](#what-it-checks) otherwise. A provider whose probe fails with `ProviderUnhealthy` stays `Ready=True`.
 - **`Healthy`** is `True` or `False` only from a probe in the same pass ([Liveness probe](#liveness-probe)). A pass that ends without one sets `Unknown` with `NotProbed`: a failing credential or configuration check, a disabled probe, or a held delete. [ModelProvider status](../../resources/modelprovider.md#status) gives the meaning.
-- **`GatewayReachable`** is `True` with `GatewayReady` when at least one gateway Pod in `kaalm-system` is Ready, else `False` with `GatewayUnavailable`. The value is cluster-wide, the same on every provider.
+- **`GatewayReachable`** is `True` with `GatewayReady` when at least one gateway Pod in `kaalm-system` is Ready and not being deleted, else `False` with `GatewayUnavailable`. The value is cluster-wide, the same on every provider.
 - **`BoundaryMarginRaised`** and `status.budgetUsage` come from [Budget reconciliation](#budget-reconciliation). The advisory conditions `MaxOutputTokensUnset`, `FallbackIneligible`, and `DegradeTargetNotCheapest` come from the checks above.
 - **Events.** Every `Ready=False` reason raises a `Warning` event with the same reason, once, when it first appears on `Ready`. [Event emission](../operations.md#event-emission) lists the rest.
 
@@ -119,7 +119,7 @@ A ModelProvider is cluster-scoped and has no phase. [ModelProvider status](../..
 
 - **A failing credential or configuration check.** The pass requeues every minute when the provider has a budget period, so the reduction and rollover keep running; without a period, only events re-run it. A change to the credential Secret, including its label or annotation, re-evaluates every provider that names it at once. A spec edit re-runs the checks at once. A change to any ModelProvider re-enqueues every other provider that declares a fallback, so a chain recovers when a missing provider appears or a bad one is fixed.
 - **After the configuration checks.** A pass requeues at the probe's next delay when the probe ran ([Probe backoff](#probe-backoff)). With the probe disabled, it requeues every minute for a provider with a budget period, so the reduction keeps running. With neither, only events re-run it.
-- **Gateway readiness.** A gateway Pod's creation, deletion, or change of Ready state re-enqueues every provider at once.
+- **Gateway readiness.** A gateway Pod's creation, deletion, or change of Ready state re-enqueues every provider at once, so a stopped replica's spend is folded right after its Pod is gone ([The reducer](../../gateways/llm/budgets-and-rate-limits.md#the-reducer)).
 - **Spend.** A replica's write to the budget ConfigMap re-enqueues its provider between timed passes. The previous period's rows appear in the first pass after a rollover boundary: the next requeue at the latest, or sooner when such a write arrives.
 - **Referrers.** A change to an Agent, AgentTask, or AgentClass that names the provider re-enqueues it at once, so the delete hold releases and the eligibility scan re-runs.
 

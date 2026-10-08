@@ -16,7 +16,7 @@ Five data movements make up the exchange. The first four run in every replica; t
 |---|---|---|---|
 | Seed | replica | Startup, once | Starts its in-memory counter from `_canonical` |
 | Count | replica | Every LLM call | Adds the call's cost to its in-memory counter |
-| Publish | replica | Every 10s, and immediately on settle inside the hard-mode boundary region | Writes its own key |
+| Publish | replica | Every 10s, immediately on settle inside the hard-mode boundary region, and once when the replica stops | Writes its own key |
 | Fold | replica | Every ConfigMap watch event, with the 10s tick as a backstop | Rebuilds its enforcement view from peers' current-period keys and `_retired` |
 | Reduce | reconciler | Every reconcile pass, including a pass where the provider fails a check. Passes are event-driven plus timed requeues ([ModelProviderReconciler Timing](../../controller/reconcilers/modelprovider.md#timing)) | Writes `_retired`, `_canonical`, `_previous`, and `status.budgetUsage` from every key |
 
@@ -36,7 +36,7 @@ data:
 The ConfigMap holds four kinds of key:
 
 - **Per-replica keys** (`kaalm-gateway-0`, `kaalm-gateway-1`) are partials: one replica's view of its own spend, tagged with the `period` it belongs to and the `_providerUID` of the ModelProvider it was written for ([When a provider is deleted](#when-a-provider-is-deleted)). Underscore-prefixed fields inside a partial, such as `_marginExceeded` ([Hard enforcement](#hard-enforcement)) and `_providerUID`, are flags or this tag, never spend. A flag value is never a bare number, so an older replica's parser cannot read it as a namespace total.
-- **`_retired`** is written only by the reconciler. When it prunes a terminated replica's current-period key, that key's totals fold into this period-tagged accumulator first, so spend a dead replica already published is never erased. Replicas fold `_retired` into their enforcement view like a peer partial.
+- **`_retired`** is written only by the reconciler. When it prunes the current-period key of a replica whose Pod is gone, that key's totals fold into this period-tagged accumulator first, so spend a stopped replica already published is never erased. Replicas fold `_retired` into their enforcement view like a peer partial.
 - **`_canonical`** is written only by the reconciler. It is the durable roll-up, including `_retired`.
 - **`_previous`** is written only by the reconciler. It holds the previous period's spend per source (each replica key and `_retired`) under `sources`, with the archived `period` and the period it was written in (`archivedIn`). Replicas never fold it, because the gateway enforces only the current period. Its value is a nested object, so no parser reads it as a namespace total, including an older replica's.
 
@@ -53,7 +53,7 @@ The value a replica enforces against is its own live counter, plus every peer's 
 On every pass the reconciler handles each key by its `period` tag and by whether a live gateway Pod of that name exists:
 
 - A current-period key from a live replica is summed.
-- A current-period key from a replica that no longer exists is folded into `_retired`, then deleted. Deleting the key must not delete the spend it recorded. Under soft enforcement the fold prevents a small bounded undercount per rollout. Under hard enforcement it keeps the cap intact, because a rolling restart that erased each replaced replica's published spend would void the ceiling once per rollout.
+- A current-period key from a replica whose Pod object is gone is folded into `_retired`, then deleted. Deleting the key must not delete the spend it recorded. A Pod that is being deleted still counts as live: it keeps publishing while it drains and publishes once more on exit, rewriting its whole partial, so folding its key earlier would add that partial to `_retired` again after each publish. The Pod's removal triggers a pass on every ModelProvider, so the fold follows the last publish. Under soft enforcement the fold prevents a small bounded undercount per rollout. Under hard enforcement it keeps the cap intact, because a rolling restart that erased each replaced replica's published spend would void the ceiling once per rollout.
 - An old-period key, from any replica and including `_retired`, is moved into `_previous` under its source name and deleted. Both happen in the same ConfigMap write, so a failed status write loses nothing, which is why the archive lives in the ConfigMap and not only in status. A replica can publish one more old-period partial after the boundary, because its tick publishes before it folds. A replica skips it when its ledger has already rolled to the new period, which happens at its first request or fold of that period, including a fold a peer's new-period publish triggers. So a source can appear again after it was archived. That partial is a newer snapshot of the same counter, so the reducer keeps the larger figure per namespace instead of adding the two, and the spend is never counted twice. Only the newest old period is kept.
 - A key tagged with another provider's UID is deleted without being summed, retired, or archived, so an earlier provider of the same name never enters this one's figures or its previous-period entry.
 
@@ -75,7 +75,7 @@ A replica's publish can race that delete, and a provider recreated under the sam
 
 ### Budget state on crash
 
-If all gateway replicas crash at once, up to 10s of spend, one publish interval, is lost. Under soft enforcement the loss is small relative to typical budget thresholds. [Hard enforcement](#hard-enforcement) tightens both the loss bound and the restart behavior.
+A replica that stops gracefully publishes its partial once more after it drains, so the spend settled since its last publish reaches its key and the reconciler's `_retired` fold keeps it. A crash or kill gives no such publish: if all gateway replicas crash at once, up to 10s of spend, one publish interval, is lost. Under soft enforcement the loss is small relative to typical budget thresholds. [Hard enforcement](#hard-enforcement) tightens both the loss bound and the restart behavior.
 
 ### The overspend bound
 
@@ -101,7 +101,7 @@ Soft enforcement is spend visibility and guardrails, not a financial cap: it add
 
 The ledger also answers "which agent spent it". Beside the per-namespace enforcement counters, each replica accumulates per-workload spend keyed `{namespace}/{workload}`, where the workload is the attested `agent/{name}` or `task/{name}` from the caller's certificate SAN, or the visible `(unattributed)` bucket for gateway-only-tier callers, which authenticate by token and carry no workload identity. Keeping that bucket visible makes the per-workload rows always sum to the namespace figure. Workload spend rolls over with the same period reset as the namespace counters. Admission never reads it, so hard enforcement is unaffected.
 
-Persistence uses the same exchange in a second object, `kaalm-agentspend-{provider}`, with the same one-key-per-replica partials, period tag, and seed at startup. The same provider tag and rules apply to it ([When a provider is deleted](#when-a-provider-is-deleted)). The reducer treats it like the budget ConfigMap: a pruned replica's current-period partial folds into `_retired` before its key is deleted, and old periods drop. The breakdown has its own ConfigMap for two reasons. Safety: the budget fold sums every non-underscore key in the budget ConfigMap as namespace spend, so workload keys inside it would silently corrupt utilization. Capacity: a ConfigMap is capped at about 1 MiB, and at the design target of 1000+ agents the workload keys need the room.
+Persistence uses the same exchange in a second object, `kaalm-agentspend-{provider}`, with the same one-key-per-replica partials, period tag, and seed at startup. The same provider tag and rules apply to it ([When a provider is deleted](#when-a-provider-is-deleted)). The reducer treats it like the budget ConfigMap: once a replica's Pod is gone, its current-period partial folds into `_retired` before its key is deleted, and old periods drop. The breakdown has its own ConfigMap for two reasons. Safety: the budget fold sums every non-underscore key in the budget ConfigMap as namespace spend, so workload keys inside it would silently corrupt utilization. Capacity: a ConfigMap is capped at about 1 MiB, and at the design target of 1000+ agents the workload keys need the room.
 
 Three deliberate boundaries:
 
@@ -126,7 +126,7 @@ marginUSD = replicas x maxObservedCostPerCall
 effectiveMarginPercent = max(boundaryMarginPercent, 100 x marginUSD / ceilingUSD)
 ```
 
-The first term covers one unsettled in-flight request per replica; the second covers spend a peer has settled but not propagated. The observed inputs are the largest settled cost of a single call and the peak spend rate this period. Neither shrinks until rollover, so an early burst widens the margin for the rest of the period, which errs toward throttling earlier, the safe direction. The replica count includes not-yet-Ready gateway Pods, also deliberately conservative.
+The first term covers one unsettled in-flight request per replica; the second covers spend a peer has settled but not propagated. The observed inputs are the largest settled cost of a single call and the peak spend rate this period. Neither shrinks until rollover, so an early burst widens the margin for the rest of the period, which errs toward throttling earlier, the safe direction. The replica count is every gateway Pod that exists, from the same listing as the rate limiter's count and at most 5 seconds old. It includes Pods that are not Ready, which is deliberately conservative, and Pods being deleted, because a draining Pod still holds in-flight requests and settled spend its peers have not seen. The rate limiter leaves draining Pods out ([Dividing by live replica count](#dividing-by-live-replica-count)).
 
 When the computed margin exceeds the configured knob, the replica raises the `_marginExceeded` flag in its published partial, and the ModelProviderReconciler surfaces it as a `BoundaryMarginRaised` condition and a Warning event on the ModelProvider. The operator learns the knob is undersized for the observed traffic without the guarantee ever having depended on it. One residual remains: a traffic burst without precedent in the current period can outrun the computed margin in the first staleness window it appears. Sizing the configured knob from the [soft overspend bound](#the-overspend-bound) formula with your own worst-case rates closes that gap.
 
@@ -162,7 +162,7 @@ The staleness window is not configurable: it is three publish intervals, 30 seco
 
 ### Restarts and rollover
 
-A restarting replica seeds from `_canonical` and folds live partials on top. Until the reconciler's next pass, the replica's own pre-restart key may be counted twice, so the enforcement view can transiently overcount. Overcounting blocks early rather than late, the correct failure side for a cap, and it clears within one reconcile. Rolling restarts do not erase published spend, because the reconciler folds pruned keys into `_retired` before deleting them ([The reducer](#the-reducer)).
+A restarting replica seeds from `_canonical` and folds live partials on top. Until the reconciler's next pass, the replica's own pre-restart key may be counted twice, so the enforcement view can transiently overcount. Overcounting blocks early rather than late, the correct failure side for a cap, and it clears within one reconcile. Rolling restarts do not erase published spend, because the reconciler folds a replaced replica's key into `_retired` before deleting it ([The reducer](#the-reducer)).
 
 At period rollover, counters, slots, and the observed-traffic tracker all reset, so the margin returns to the configured knob until new observations accrue. A request admitted before midnight settles into the new period, as in soft mode, and the boundary flag drops with the first new-period publish.
 
@@ -219,7 +219,7 @@ For example, with `requestsPerMinute: 2` and one replica, the third request in a
 
 ### Dividing by live replica count
 
-Each gateway replica divides each configured limit by the number of gateway Pods, a count that can be up to 5 seconds old. Each bucket's burst equals that per-replica share, except the request bucket and the tool-plane bucket (`ToolProvider` `requestsPerMinute`), which always hold at least one request or call ([Request limits below the replica count](#request-limits-below-the-replica-count)). The token bucket's burst is exactly `tokensPerMinute / number_of_replicas`, with no floor. When replicas scale up or down, each replica resizes its local buckets within that lag and the next refill cycle, so the configured value stays the intended cluster-wide limit regardless of replica count.
+Each gateway replica divides each configured limit by the number of gateway Pods that are not being deleted, a count that can be up to 5 seconds old. The hard budget's margin counts differently: it includes Pods being deleted ([The boundary region](#the-boundary-region)). Each bucket's burst equals that per-replica share, except the request bucket and the tool-plane bucket (`ToolProvider` `requestsPerMinute`), which always hold at least one request or call ([Request limits below the replica count](#request-limits-below-the-replica-count)). The token bucket's burst is exactly `tokensPerMinute / number_of_replicas`, with no floor. When replicas scale up or down, each replica resizes its local buckets within that lag and the next refill cycle, so the configured value stays the intended cluster-wide limit regardless of replica count.
 
 Because each replica enforces its share independently, the effective cluster-wide limit is approximate. Transient bursts may exceed the configured ceiling by up to one replica's full bucket: `configured_limit / number_of_replicas`. This is the accepted trade for a coordination-free request path.
 
@@ -233,7 +233,7 @@ The tool-plane bucket follows the same rules, counting calls instead of requests
 
 ### Worst-case deviation during scaling events
 
-During scale-up, existing replicas divide by N+1 as soon as the new Pod appears, before it serves traffic, momentarily reducing each existing replica's effective limit. During rolling restarts (`maxUnavailable: 1`), different replicas can transiently hold different bucket sizes, so the effective cluster-wide ceiling deviates by up to one replica's share.
+During scale-up, existing replicas divide by N+1 as soon as the new Pod appears, before it serves traffic, momentarily reducing each existing replica's effective limit. During rolling restarts (`maxUnavailable: 1`), different replicas can transiently hold different bucket sizes, so the effective cluster-wide ceiling deviates by up to one replica's share. A draining Pod leaves the count once its deletion starts, so it does not shrink the share of the replicas still serving.
 
 Per-replica division is the design point. A shared bucket coordinated through a ConfigMap, as the budget exchange is, would cost a write per request.
 
