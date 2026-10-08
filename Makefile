@@ -375,7 +375,10 @@ e2e: ## One-shot k3d e2e: recreate the cluster, build+import images, install the
 	$(MAKE) e2e-deploy
 	# -count=1 defeats go's test cache: the suite drives a live cluster the
 	# cache knows nothing about, and a replayed transcript proves nothing.
-	go test ./test/e2e/... -tags e2e -v -timeout 20m -count=1
+	# The suite takes about 16 minutes on a CI runner, and the timeout kills
+	# the whole suite at once, which reads as a flake. 30 minutes leaves room
+	# for a runner nearly twice as slow.
+	go test ./test/e2e/... -tags e2e -v -timeout 30m -count=1
 
 ##@ Performance
 
