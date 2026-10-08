@@ -103,3 +103,31 @@ func TestConsole_ChatBodyCapFollowsTheGateway(t *testing.T) {
 		}
 	}
 }
+
+// console.shutdown reaches the drain flags, and the Pod's grace period is
+// drainDelay + timeout + 5s.
+func TestConsole_ShutdownValuesReachFlagsAndGracePeriod(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		wantArgs  []string
+		wantGrace int64
+	}{
+		{"default", nil, []string{"--drain-delay=5s", "--shutdown-timeout=30s"}, 40},
+		{"custom", []string{"--set", "console.shutdown.drainDelay=2s", "--set", "console.shutdown.timeout=1m"},
+			[]string{"--drain-delay=2s", "--shutdown-timeout=1m"}, 67},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, d := renderConsole(t, tc.args...)
+			args := d.Spec.Template.Spec.Containers[0].Args
+			for _, want := range tc.wantArgs {
+				if !slices.Contains(args, want) {
+					t.Errorf("console args %v lack %s", args, want)
+				}
+			}
+			if got := gracePeriod(d); got != tc.wantGrace {
+				t.Errorf("terminationGracePeriodSeconds = %d, want %d", got, tc.wantGrace)
+			}
+		})
+	}
+}

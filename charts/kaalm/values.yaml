@@ -173,6 +173,9 @@ gateway:
   client:
     qps: 100
     burst: 200
+  shutdown:
+    drainDelay: 5s
+    timeout: 30s
   # Container resources, rendered verbatim. No CPU limit by default, so
   # request bursts are never throttled.
   resources:
@@ -267,6 +270,9 @@ console:
   healthPort: 8081
   # Log level for the JSON logs: debug, info, warn, or error.
   logLevel: info
+  shutdown:
+    drainDelay: 5s
+    timeout: 30s
   resources: {}
 
 # Roles for people (docs/src/security/rbac.md#roles-for-people). Off renders
