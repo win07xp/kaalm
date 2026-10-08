@@ -57,6 +57,15 @@ func TestGatewayReadinessChanged(t *testing.T) {
 	if !p.Delete(event.DeleteEvent{Object: gatewayPod(testOperatorNamespace, gwLabels, true)}) {
 		t.Error("a deleted gateway Pod must be admitted")
 	}
+	// The final delete of a draining Pod moves no readiness (it stopped
+	// counting when its deletion started), but it runs the budget and
+	// agent-spend folds after the Pod's last publish.
+	gone := gatewayPod(testOperatorNamespace, gwLabels, false)
+	goneAt := metav1.Now()
+	gone.DeletionTimestamp = &goneAt
+	if !p.Delete(event.DeleteEvent{Object: gone}) {
+		t.Error("the final delete of a terminating, not-Ready gateway Pod must be admitted")
+	}
 	if p.Generic(event.GenericEvent{Object: gatewayPod(testOperatorNamespace, gwLabels, true)}) {
 		t.Error("generic events carry no readiness change")
 	}

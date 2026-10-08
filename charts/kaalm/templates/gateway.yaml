@@ -33,6 +33,7 @@ spec:
         app.kubernetes.io/component: gateway
     spec:
       serviceAccountName: kaalm-gateway
+      terminationGracePeriodSeconds: {{ include "kaalm.terminationGracePeriod" (dict "name" "gateway.shutdown" "shutdown" .Values.gateway.shutdown) }}
       securityContext:
         runAsNonRoot: true
       containers:
@@ -66,6 +67,8 @@ spec:
             - --log-level={{ .Values.gateway.logLevel }}
             - --client-qps={{ .Values.gateway.client.qps }}
             - --client-burst={{ .Values.gateway.client.burst }}
+            - --drain-delay={{ .Values.gateway.shutdown.drainDelay }}
+            - --shutdown-timeout={{ .Values.gateway.shutdown.timeout }}
             {{- if .Values.gateway.tracing.otlpEndpoint }}
             - --otlp-endpoint={{ .Values.gateway.tracing.otlpEndpoint }}
             - --otlp-sample-ratio={{ .Values.gateway.tracing.sampleRatio }}

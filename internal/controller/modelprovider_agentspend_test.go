@@ -196,3 +196,35 @@ func TestModelProvider_AgentSpendDropsOtherIncarnation(t *testing.T) {
 		t.Errorf("_canonical = %s, want only the untagged 5.00", got.Data[gateway.CanonicalKey])
 	}
 }
+
+// The agent-spend fold counts a draining replica's spend once, the same way
+// the budget fold does.
+func TestModelProvider_AgentSpendFoldCountsDrainingReplicaOnce(t *testing.T) {
+	period := gateway.PeriodKey("monthly", time.Now())
+	partial := func(usd string) string { return fmt.Sprintf(`{"period":%q,"team-a/agent/x":%q}`, period, usd) }
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: gateway.AgentSpendConfigMapName("drain"), Namespace: testOperatorNamespace},
+		Data:       map[string]string{"gw-new": partial("5.00"), "gw-old": partial("10.00")},
+	}
+	old := gatewayPodObject("gw-old", true)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cm, gatewayPodObject("gw-new", false), old).Build()
+	r := &ModelProviderReconciler{Client: c, OperatorNamespace: testOperatorNamespace}
+	mp := eventsProvider("drain", func(mp *kaalmv1beta1.ModelProvider) {
+		mp.Spec.Budget = kaalmv1beta1.ModelProviderBudget{Period: "monthly", PerNamespaceUSD: "100"}
+	})
+	drainGateway(t, c, client.ObjectKeyFromObject(cm), old,
+		func(cm *corev1.ConfigMap) { cm.Data["gw-old"] = partial("12.00") },
+		func(live map[string]bool) error { return r.reconcileAgentSpend(context.Background(), mp, live) })
+
+	var got corev1.ConfigMap
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(cm), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Data["gw-old"]; ok {
+		t.Error("the removed replica's key survived the last fold")
+	}
+	if got.Data[gateway.CanonicalKey] != `{"team-a/agent/x":"17.00"}` {
+		t.Errorf("_canonical = %s, want 17.00 (5 live + 12 retired once)", got.Data[gateway.CanonicalKey])
+	}
+}

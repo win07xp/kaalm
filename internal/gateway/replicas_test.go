@@ -48,3 +48,18 @@ func TestCachedCountReevaluatesAfterTTL(t *testing.T) {
 		t.Fatalf("after the window: count=%d calls=%d, want a fresh evaluation", got, calls)
 	}
 }
+
+// NewServer gives the rate limiter and the hard budget their own counters:
+// the limiter's share leaves out draining replicas, the margin counts them.
+func TestNewServer_WiresSeparateReplicaCounters(t *testing.T) {
+	s := NewServer(Config{
+		RateLimitReplicas: func() int { return 2 },
+		BudgetReplicas:    func() int { return 4 },
+	}, newFakeStore(), nil, nil)
+	if got := s.RateLimiter.replicas(); got != 2 {
+		t.Errorf("rate limiter replicas = %d, want 2", got)
+	}
+	if got := s.Budget.replicasCount(); got != 4 {
+		t.Errorf("budget replicas = %d, want 4", got)
+	}
+}

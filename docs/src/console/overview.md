@@ -98,7 +98,9 @@ per-workload resolution lives here.
 
 The console serves the pages and the read API on one TLS listener, `:8443`,
 and the kubelet probes on a second TLS listener (`console.healthPort`, default
-`8081`) with no client auth.
+`8081`) with no client auth. `/readyz` answers `200` with `ok`, except while the
+console shuts down: then it answers `503` ([Shutdown and rolling
+restarts](../operations/deployment.md#shutdown-and-rolling-restarts)).
 
 | Method and path | Returns |
 |---|---|

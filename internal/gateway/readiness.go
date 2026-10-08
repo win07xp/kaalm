@@ -51,7 +51,9 @@ type readinessCheck struct {
 // readyzHandler answers the readiness probe with the four checks in
 // docs/src/gateways/llm/operations.md#gateway-readiness: a local TLS dial
 // of each listener, the informer sync state, and the serving certificate.
-// Every check reports one line; any failure answers 503.
+// Every check reports one line; any failure answers 503. Once the shutdown
+// sequence begins, it answers 503 "draining" without running the checks, so
+// the Pod leaves the Service endpoints while it still serves.
 func (s *Server) readyzHandler(clusterAddr, userAddr net.Addr, servingCert func() error) http.HandlerFunc {
 	checks := []readinessCheck{
 		{"cluster_listener", func(ctx context.Context) error { return dialTLS(ctx, clusterAddr) }},
@@ -60,6 +62,12 @@ func (s *Server) readyzHandler(clusterAddr, userAddr net.Addr, servingCert func(
 		{"serving_cert", func(context.Context) error { return servingCert() }},
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.draining.Load() {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("draining: shutting down\n"))
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
 		defer cancel()
 

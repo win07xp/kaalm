@@ -41,25 +41,30 @@ import (
 // GatewayReachable condition and stale-replica pruning.
 var gatewayPodLabels = map[string]string{labelKeyComponent: componentGateway}
 
-// gatewayPods returns the live gateway Pod names and how many are Ready.
-func (r *ModelProviderReconciler) gatewayPods(ctx context.Context) (names map[string]bool, ready int, err error) {
+// gatewayPods returns the live gateway Pod names, for the budget and
+// agent-spend folds, and how many are Ready, for GatewayReachable.
+//
+// A Pod being deleted stays live until its object is gone: a draining
+// gateway keeps publishing and publishes once more on exit, rewriting its
+// whole period partial. Folding its key earlier would add that partial to
+// _retired again after each rewrite. The Pod's removal re-enqueues every
+// provider (gatewayReadinessChanged), so the fold runs after the last
+// publish. A deleting Pod is not counted as Ready: it takes no new traffic.
+func (r *ModelProviderReconciler) gatewayPods(ctx context.Context) (live map[string]bool, ready int, err error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(r.OperatorNamespace),
 		client.MatchingLabels(gatewayPodLabels)); err != nil {
 		return nil, 0, err
 	}
-	names = map[string]bool{}
+	live = map[string]bool{}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		if !p.DeletionTimestamp.IsZero() {
-			continue
-		}
-		names[p.Name] = true
-		if podReady(p) {
+		live[p.Name] = true
+		if countsAsReadyGateway(p) {
 			ready++
 		}
 	}
-	return names, ready, nil
+	return live, ready, nil
 }
 
 // setGatewayReachable mirrors the cluster-wide gateway readiness onto this

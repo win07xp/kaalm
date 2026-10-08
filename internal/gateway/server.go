@@ -20,7 +20,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -28,6 +27,7 @@ import (
 	"time"
 
 	"github.com/win07xp/kaalm/internal/callbackpolicy"
+	"github.com/win07xp/kaalm/internal/drain"
 	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
@@ -53,9 +53,15 @@ type Config struct {
 	// MaxFallbackDepth bounds the total providers attempted per request,
 	// including the primary (default 3).
 	MaxFallbackDepth int
-	// Replicas returns the live gateway replica count for rate-limit
-	// division; nil means a single replica.
-	Replicas func() int
+	// RateLimitReplicas returns the gateway replica count the rate limiter
+	// divides each limit by: the Pods that take new traffic, so draining
+	// Pods are left out. nil means a single replica.
+	RateLimitReplicas func() int
+	// BudgetReplicas returns the gateway replica count the hard budget's
+	// boundary margin scales by: every gateway Pod that exists, draining
+	// ones included, because they still hold in-flight requests and spend
+	// their peers have not seen. nil means a single replica.
+	BudgetReplicas func() int
 	// UpstreamTimeout bounds each upstream provider attempt by inactivity:
 	// the wait from sending the request to the first response byte, then
 	// each gap between response body reads. A response that keeps sending
@@ -125,6 +131,14 @@ type Config struct {
 	// trusted like a provider endpoint; empty means the platform's default.
 	DiscordAPIBaseURL  string
 	WhatsAppAPIBaseURL string
+	// DrainDelay is how long the traffic listeners keep serving after the
+	// shutdown signal, while /readyz answers 503 and Service endpoints stop
+	// sending new connections. Zero shuts down at once.
+	DrainDelay time.Duration
+	// ShutdownTimeout bounds the wait, after DrainDelay, for in-flight
+	// requests and then background async and platform pipelines. Zero does
+	// not wait for in-flight work.
+	ShutdownTimeout time.Duration
 }
 
 // Server is the Kaalm Gateway's :8443 surface.
@@ -187,6 +201,13 @@ type Server struct {
 	// Informers are the caches the request path depends on; /readyz fails
 	// until each one reports its initial sync. Empty means no cache (tests).
 	Informers []InformerSync
+
+	// draining is set when the shutdown sequence begins; /readyz then
+	// answers 503 so the Pod leaves the Service endpoints.
+	draining atomic.Bool
+	// pipelines counts the background async and platform pipelines that
+	// handlers start, so the shutdown sequence can wait for them.
+	pipelines sync.WaitGroup
 }
 
 // ipResolver is the slice of net.Resolver the delivery dialer uses.
@@ -282,11 +303,11 @@ func NewServer(cfg Config, store Store, tokens *TokenAuthenticator, spend SpendR
 		Activity:      NewActivityStore(),
 		Budget:        NewBudgetLedger(),
 		ChannelHealth: NewChannelHealthStore(cfg.ChannelHealthWindow),
-		RateLimiter:   NewRateLimiter(cfg.Replicas),
+		RateLimiter:   NewRateLimiter(cfg.RateLimitReplicas),
 	}
 	// The effective boundary margin extrapolates observed traffic across the
-	// live replica count (hard budget enforcement).
-	s.Budget.SetReplicas(cfg.Replicas)
+	// replica count (hard budget enforcement).
+	s.Budget.SetReplicas(cfg.BudgetReplicas)
 	return s
 }
 
@@ -399,7 +420,7 @@ func (ls *listeners) close() {
 }
 
 // Run serves the cluster listener, the user listener, and the health port
-// until ctx is cancelled.
+// until ctx is cancelled, then drains them (internal/drain).
 func (s *Server) Run(ctx context.Context) error {
 	tlsCfg, err := s.TLSConfig()
 	if err != nil {
@@ -414,6 +435,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 // serve runs the three servers on already-bound listeners. /healthz is
 // liveness only (the process answers); /readyz runs the readiness checks.
+// When ctx ends, /readyz fails, the cluster and user listeners keep serving
+// for DrainDelay, and then they shut down within ShutdownTimeout, which also
+// bounds the wait for background pipelines. The health port stops last.
 func (s *Server) serve(ctx context.Context, ls *listeners, tlsCfg *tls.Config) error {
 	main := &http.Server{
 		Handler: s.Handler(), TLSConfig: tlsCfg,
@@ -438,29 +462,14 @@ func (s *Server) serve(ctx context.Context, ls *listeners, tlsCfg *tls.Config) e
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	errCh := make(chan error, 3)
-	go func() { errCh <- main.ServeTLS(ls.main, "", "") }()
-	go func() { errCh <- health.ServeTLS(ls.health, "", "") }()
-	go func() { errCh <- user.ServeTLS(ls.user, "", "") }()
-
-	shutdown := func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = main.Shutdown(shutdownCtx)
-		_ = health.Shutdown(shutdownCtx)
-		_ = user.Shutdown(shutdownCtx)
-	}
-	select {
-	case <-ctx.Done():
-		shutdown()
-		return nil
-	case err := <-errCh:
-		shutdown()
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	}
+	return drain.Group{
+		Delay:   s.Config.DrainDelay,
+		Timeout: s.Config.ShutdownTimeout,
+		OnDrain: func() { s.draining.Store(true) },
+		Pending: &s.pipelines,
+	}.Serve(ctx,
+		[]drain.Server{{HTTP: main, Listener: ls.main}, {HTTP: user, Listener: ls.user}},
+		drain.Server{HTTP: health, Listener: ls.health})
 }
 
 // lastGoodCertificate wraps the serving-cert source for the health

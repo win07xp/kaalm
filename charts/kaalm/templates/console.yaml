@@ -100,6 +100,7 @@ spec:
         app.kubernetes.io/component: console
     spec:
       serviceAccountName: kaalm-console
+      terminationGracePeriodSeconds: {{ include "kaalm.terminationGracePeriod" (dict "name" "console.shutdown" "shutdown" .Values.console.shutdown) }}
       securityContext:
         runAsNonRoot: true
       containers:
@@ -114,6 +115,8 @@ spec:
             - --tls-ca=/var/run/kaalm/ca.crt
             - --log-level={{ .Values.console.logLevel }}
             - --max-message-body-bytes={{ include "kaalm.bytes" .Values.gateway.maxMessageBodyBytes }}
+            - --drain-delay={{ .Values.console.shutdown.drainDelay }}
+            - --shutdown-timeout={{ .Values.console.shutdown.timeout }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

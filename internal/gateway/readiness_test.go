@@ -37,16 +37,28 @@ type readinessHarness struct {
 	ls       *listeners
 	certFile string
 	client   *http.Client
+	// cancel ends serve's context; done receives serve's result.
+	cancel context.CancelFunc
+	done   chan error
 }
 
 func newReadinessHarness(t *testing.T, informers ...InformerSync) *readinessHarness {
 	t.Helper()
+	return newReadinessHarnessWith(t, func(*Config) {}, informers...)
+}
+
+// newReadinessHarnessWith is newReadinessHarness with a Config the test
+// adjusts before the server is built.
+func newReadinessHarnessWith(t *testing.T, configure func(*Config), informers ...InformerSync) *readinessHarness {
+	t.Helper()
 	ca := newTestCA(t)
 	certFile, keyFile, caFile := certFiles(t, ca, "localhost")
-	s := NewServer(Config{
+	cfg := Config{
 		CertFile: certFile, KeyFile: keyFile, CAFile: caFile,
 		ListenAddr: "127.0.0.1:0", HealthAddr: "127.0.0.1:0", UserListenAddr: "127.0.0.1:0",
-	}, newFakeStore(), nil, nil)
+	}
+	configure(&cfg)
+	s := NewServer(cfg, newFakeStore(), nil, nil)
 	s.Informers = informers
 
 	tlsCfg, err := s.TLSConfig()
@@ -63,13 +75,14 @@ func newReadinessHarness(t *testing.T, informers ...InformerSync) *readinessHarn
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
+		case err := <-done:
+			done <- err // keep it for a test that already read it
+		case <-time.After(5*time.Second + cfg.DrainDelay + cfg.ShutdownTimeout):
 			t.Error("serve did not shut down")
 		}
 	})
 	return &readinessHarness{
-		s: s, ls: ls, certFile: certFile,
+		s: s, ls: ls, certFile: certFile, cancel: cancel, done: done,
 		client: &http.Client{
 			Timeout:   5 * time.Second,
 			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // test probe

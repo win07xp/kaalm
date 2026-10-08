@@ -207,8 +207,8 @@ func costOf(provider *kaalmv1beta1.ModelProvider, modelID string, usage Usage) f
 // stale. See docs/src/gateways/llm/budgets-and-rate-limits.md.
 type BudgetLedger struct {
 	now func() time.Time
-	// replicas returns the live gateway replica count for the effective
-	// margin; nil means one replica.
+	// replicas returns the gateway replica count for the effective margin,
+	// draining replicas included; nil means one replica.
 	replicas func() int
 	// kick carries provider names whose settles want an immediate partial
 	// publish; the publisher selects on it. Sends never block.
@@ -631,9 +631,16 @@ func (p *BudgetPublisher) clock() time.Time {
 	return time.Now()
 }
 
+// finalPublishTimeout bounds the publish Run makes when it stops. It fits
+// inside the 5 seconds the chart's grace period leaves after the drain.
+const finalPublishTimeout = 3 * time.Second
+
 // Run loops until ctx is done: the tick publishes and folds every interval,
 // and the ledger's kick channel triggers an immediate publish for a provider
-// whose settle happened inside the boundary region.
+// whose settle happened inside the boundary region. When ctx ends, Run
+// publishes once more, so spend settled since the last publish reaches this
+// replica's key before the replica exits, and the reconciler's _retired fold
+// keeps it.
 func (p *BudgetPublisher) Run(ctx context.Context) {
 	interval := p.Interval
 	if interval == 0 {
@@ -644,6 +651,7 @@ func (p *BudgetPublisher) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			p.publishFinal(ctx)
 			return
 		case <-ticker.C:
 			p.tick(ctx)
@@ -661,6 +669,20 @@ func (p *BudgetPublisher) publishByName(ctx context.Context, name string) {
 			p.publish(ctx, provider)
 			return
 		}
+	}
+}
+
+// publishFinal publishes every budgeted provider's partial on a context of
+// its own, since ctx has already ended. It does not fold: the replica is
+// exiting and enforces nothing more.
+func (p *BudgetPublisher) publishFinal(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalPublishTimeout)
+	defer cancel()
+	for _, provider := range p.Providers(ctx) {
+		if PeriodKey(provider.Spec.Budget.Period, p.clock()) == "" {
+			continue
+		}
+		p.publish(ctx, provider)
 	}
 }
 

@@ -229,6 +229,49 @@ func TestBudgetPublisher_RunDefaultInterval(t *testing.T) {
 	}
 }
 
+// Spend settled after the last periodic publish reaches this replica's key
+// when Run stops, so the reconciler's _retired fold keeps it once the
+// replica is gone.
+func TestBudgetPublisher_RunPublishesOnShutdown(t *testing.T) {
+	p := budgetProvider(kaalmv1beta1.ModelProviderBudgetPolicy{AtPercent: 100, Action: "block"})
+	disabled := budgetProvider()
+	disabled.Name = "disabled"
+	disabled.Spec.Budget.Period = "none"
+	client := k8sfake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: BudgetConfigMapName("prov"), Namespace: "kaalm-system"},
+	})
+	ledger := NewBudgetLedger()
+	pub := &BudgetPublisher{
+		Client: client, Ledger: ledger, OperatorNamespace: "kaalm-system",
+		PodName: "gw-0", Interval: time.Hour,
+		Providers: providersFn(p, disabled),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { pub.Run(ctx); close(done) }()
+
+	// Settled after the last tick, outside the boundary region: no kick.
+	ledger.Add(p, "team-a", "agent/test", 7)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancellation")
+	}
+
+	cm, err := client.CoreV1().ConfigMaps("kaalm-system").Get(context.Background(), BudgetConfigMapName("prov"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, spend, _, _, err := ParseBudgetPartial(cm.Data["gw-0"])
+	if err != nil || spend["team-a"] != 7 {
+		t.Errorf("own partial after shutdown = %q (%v), want team-a 7", cm.Data["gw-0"], err)
+	}
+	if _, err := client.CoreV1().ConfigMaps("kaalm-system").Get(context.Background(), BudgetConfigMapName("disabled"), metav1.GetOptions{}); err == nil {
+		t.Error("the final publish must skip a period=none provider")
+	}
+}
+
 // The reducer's previous-period archive is never folded as spend, whatever
 // shape its value has.
 func TestFoldPartials_SkipsPreviousArchive(t *testing.T) {

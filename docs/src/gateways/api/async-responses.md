@@ -155,7 +155,7 @@ Callers should treat a request whose poll is still unanswered after 5 to 10 minu
 
 ### Replica failure
 
-The placeholder ConfigMap is durable in etcd, but the per-request delivery pipeline (agent POST, retries, callback dispatch, retries) lives in memory on the replica that accepted the inbound webhook. If that replica dies between returning `202` and patching the ConfigMap (rolling restart, node drain, OOM kill, crash), the in-flight request is dropped. There is no per-request signal on the operator side.
+The placeholder ConfigMap is durable in etcd, but the per-request delivery pipeline (agent POST, retries, callback dispatch, retries) lives in memory on the replica that accepted the inbound webhook. If that replica dies between returning `202` and patching the ConfigMap (OOM kill, crash, node loss), the in-flight request is dropped. A replica that stops gracefully (a rolling restart or node drain) waits up to `gateway.shutdown.timeout` for its pipelines, so only a pipeline still running when the timeout ends is dropped ([Shutdown and rolling restarts](../../operations/deployment.md#shutdown-and-rolling-restarts)). There is no per-request signal on the operator side.
 
 ### Response-patch failure
 

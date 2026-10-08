@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -225,5 +226,43 @@ func TestRunAsyncPipeline_BoundCoversLargeWakeTimeout(t *testing.T) {
 	}
 	if got := act.deadline.Sub(start); got <= 20*time.Minute {
 		t.Errorf("pipeline bound %s cuts off the 20m wakeTimeout", got)
+	}
+}
+
+// The shutdown sequence waits on Server.pipelines, so an accepted async
+// message must count as pending work until its pipeline ends.
+func TestHandleAsyncAccept_PipelineIsPendingUntilDone(t *testing.T) {
+	release := make(chan struct{})
+	h := newUserHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		w.WriteHeader(http.StatusOK)
+	})
+	// Unblock the agent on a failed assertion too, so its server can close.
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	h.seedChannel("async")
+
+	resp := h.post(t, "/channels/team-a/support", "hook-token", []byte(`{}`))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("accept = %d", resp.StatusCode)
+	}
+	<-h.agentHits
+
+	done := make(chan struct{})
+	go func() {
+		h.server.pipelines.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("the pipeline is not tracked as pending while the agent runs")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pending count never dropped after the pipeline ended")
 	}
 }

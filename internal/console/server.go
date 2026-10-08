@@ -19,10 +19,12 @@ package console
 import (
 	"context"
 	"crypto/tls"
-	"errors"
+	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
+	"github.com/win07xp/kaalm/internal/drain"
 	"github.com/win07xp/kaalm/internal/tlsutil"
 )
 
@@ -44,6 +46,13 @@ type Config struct {
 	// The chart passes gateway.maxMessageBodyBytes, the cap the gateway's
 	// POST /v1/test-chat applies, so both hops refuse the same size.
 	MaxMessageBodyBytes int64
+	// DrainDelay is how long the main listener keeps serving after the
+	// shutdown signal, while /readyz answers 503 and the Service stops
+	// sending new connections. Zero shuts down at once.
+	DrainDelay time.Duration
+	// ShutdownTimeout bounds the wait, after DrainDelay, for in-flight
+	// requests. Zero does not wait.
+	ShutdownTimeout time.Duration
 }
 
 // Server is the console: one data layer, two faces (JSON API and pages),
@@ -55,6 +64,10 @@ type Server struct {
 	Access   *AccessChecker
 	Sessions *SessionStore
 	Gateway  GatewayClient
+
+	// draining is set when the shutdown sequence begins; /readyz then
+	// answers 503 so the Pod leaves the Service endpoints.
+	draining atomic.Bool
 }
 
 // NewServer wires a Server from its parts, applying defaults.
@@ -121,8 +134,10 @@ func (s *Server) Handler() http.Handler {
 }
 
 // Run serves the console listener and the health port until ctx is
-// cancelled, with the cache janitor running for the same lifetime. Rotation
-// is handled by the tlsutil loader per handshake.
+// cancelled, with the cache janitor running for the same lifetime, then
+// drains them (internal/drain): /readyz answers 503 while the main listener
+// keeps serving for DrainDelay. Rotation is handled by the tlsutil loader
+// per handshake.
 func (s *Server) Run(ctx context.Context) error {
 	loader := &tlsutil.CertLoader{CertFile: s.Config.CertFile, KeyFile: s.Config.KeyFile, CAFile: s.Config.CAFile}
 	if _, err := loader.Certificate(); err != nil {
@@ -134,37 +149,43 @@ func (s *Server) Run(ctx context.Context) error {
 			return loader.Certificate()
 		},
 	}
+	mainLn, err := net.Listen("tcp", s.Config.ListenAddr)
+	if err != nil {
+		return err
+	}
+	healthLn, err := net.Listen("tcp", s.Config.HealthAddr)
+	if err != nil {
+		_ = mainLn.Close()
+		return err
+	}
 	main := &http.Server{
-		Addr: s.Config.ListenAddr, Handler: s.Handler(), TLSConfig: tlsCfg,
+		Handler: s.Handler(), TLSConfig: tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	healthMux := http.NewServeMux()
-	ok := func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }
-	healthMux.HandleFunc("/healthz", ok)
-	healthMux.HandleFunc("/readyz", ok)
+	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	healthMux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if s.draining.Load() {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("draining: shutting down\n"))
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	})
 	health := &http.Server{
-		Addr: s.Config.HealthAddr, Handler: healthMux,
+		Handler:           healthMux,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: tlsCfg.GetCertificate},
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go s.janitor(ctx, sweepInterval)
 
-	errCh := make(chan error, 2)
-	go func() { errCh <- main.ListenAndServeTLS("", "") }()
-	go func() { errCh <- health.ListenAndServeTLS("", "") }()
-
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = main.Shutdown(shutdownCtx)
-		_ = health.Shutdown(shutdownCtx)
-		return nil
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	}
+	// test-chat is synchronous, so the drain has no background work to wait
+	// for beyond the in-flight requests.
+	return drain.Group{
+		Delay:   s.Config.DrainDelay,
+		Timeout: s.Config.ShutdownTimeout,
+		OnDrain: func() { s.draining.Store(true) },
+	}.Serve(ctx, []drain.Server{{HTTP: main, Listener: mainLn}}, drain.Server{HTTP: health, Listener: healthLn})
 }
