@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -98,6 +99,9 @@ func main() {
 	// layer reads nothing else, so no other informer ever starts.
 	cl, err := cluster.New(restCfg, func(o *cluster.Options) {
 		o.Scheme = scheme
+		// Nothing in the console reads managedFields; dropping them at the
+		// informer shrinks every cached object and every list copy.
+		o.Cache.DefaultTransform = cache.TransformStripManagedFields()
 	})
 	if err != nil {
 		logger.Error("building cluster cache", "error", err)

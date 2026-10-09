@@ -277,9 +277,17 @@ func main() {
 		// all the controller's RBAC lets it list: provider credentials live
 		// there. A Secret in a user namespace is served by secretSource
 		// below, through a Role scoped to its name.
-		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
-			&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},
-		}},
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},
+			},
+			// Nothing in the controller reads managedFields, and on a Pod
+			// they are the largest single field; dropping them at the
+			// informer shrinks every cached object and every copy made of
+			// one. Writes are unaffected: the API server keeps the live
+			// managedFields when an update omits them.
+			DefaultTransform: cache.TransformStripManagedFields(),
+		},
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
