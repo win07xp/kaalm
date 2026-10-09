@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -141,6 +142,58 @@ func TestDualModePaths_BearerErrorBranches(t *testing.T) {
 		t.Errorf("no credential = %d, want 401", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
+}
+
+// tokenCaller runs one bearer request from 10.0.0.1 through DualModePaths
+// for a token of team-a, and reports whether it reached the handler.
+func tokenCaller(t *testing.T, fs *fakeStore) bool {
+	t.Helper()
+	a := &Authenticator{Store: fs, Tokens: NewTokenAuthenticator(&fakeReviewer{
+		username: "system:serviceaccount:team-a:runner", authenticated: true})}
+	reached := false
+	h := a.DualModePaths(func(http.ResponseWriter, *http.Request) { reached = true })
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	r.RemoteAddr = "10.0.0.1:5555"
+	r.Header.Set("Authorization", "Bearer tok")
+	h(httptest.NewRecorder(), r)
+	return reached
+}
+
+// The Kaalm-managed precheck and the namespace cross-check share one Pod
+// lookup.
+func TestDualModePaths_TokenCallerLooksUpThePodOnce(t *testing.T) {
+	fs := newFakeStore()
+	fs.podsByIP["10.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-a"}}
+	if !tokenCaller(t, fs) {
+		t.Fatal("a token caller from a Pod in its namespace must be accepted")
+	}
+	if n := fs.podByIPCalls.Load(); n != 1 {
+		t.Errorf("PodByIP calls = %d, want 1", n)
+	}
+}
+
+// A Pod the informer has not seen at the precheck is looked up again after
+// the TokenReview, so a Pod that appears meanwhile is still accepted.
+func TestDualModePaths_PrecheckMissIsLookedUpAgain(t *testing.T) {
+	fs := newFakeStore()
+	fs.podsByIP["10.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-a"}}
+	fs.podByIPMisses.Store(1)
+	if !tokenCaller(t, fs) {
+		t.Fatal("a Pod found after the precheck must be accepted")
+	}
+	if n := fs.podByIPCalls.Load(); n != 2 {
+		t.Errorf("PodByIP calls = %d, want 2", n)
+	}
+	// A Pod in another namespace is refused, whichever lookup finds it.
+	fs = newFakeStore()
+	fs.podsByIP["10.0.0.1"] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-b"}}
+	if tokenCaller(t, fs) {
+		t.Error("a Pod in another namespace must be refused")
+	}
+	fs = newFakeStore()
+	if tokenCaller(t, fs) {
+		t.Error("a source IP with no Pod must be refused")
+	}
 }
 
 // TestInternalPaths_SourceIPCrossCheck: the controller and console SANs name

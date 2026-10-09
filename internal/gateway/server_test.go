@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +136,11 @@ type fakeStore struct {
 
 	toolProviders map[string]*kaalmv1beta1.ToolProvider
 	toolCreds     map[string]string
+
+	// podByIPCalls counts PodByIP calls; podByIPMisses, when positive,
+	// makes that many calls miss first, the informer-lag window.
+	podByIPCalls  atomic.Int64
+	podByIPMisses atomic.Int64
 }
 
 func newFakeStore() *fakeStore {
@@ -196,6 +202,10 @@ func (f *fakeStore) Credential(_ context.Context, p *kaalmv1beta1.ModelProvider)
 	return cred, nil
 }
 func (f *fakeStore) PodByIP(_ context.Context, ip string) (*corev1.Pod, bool) {
+	f.podByIPCalls.Add(1)
+	if f.podByIPMisses.Add(-1) >= 0 {
+		return nil, false
+	}
 	p, ok := f.podsByIP[ip]
 	return p, ok
 }
