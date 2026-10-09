@@ -183,6 +183,12 @@ type Server struct {
 	callbackClientOnce sync.Once
 	callbackClient     *http.Client
 
+	// platformMu guards the pooled platform reply client and the trust
+	// pool it was built for.
+	platformMu   sync.Mutex
+	platformHTTP *http.Client
+	platformPool *x509.CertPool
+
 	// credentialLog paces the LLM proxy's credential-refusal warning.
 	credentialLog logThrottle
 	// toolCredentialLog paces the MCP broker's credential-refusal warning.

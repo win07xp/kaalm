@@ -18,11 +18,15 @@ package gateway
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -215,6 +219,88 @@ func TestPlatformClient_UsesCallbackReadTimeout(t *testing.T) {
 	}
 	if client.Timeout != 7*time.Second {
 		t.Errorf("platform request bound = %s, want gateway.callbackReadTimeout (7s)", client.Timeout)
+	}
+}
+
+// countingTLSServer starts a TLS server that counts the connections it
+// opens and closes, and a Server whose callback trust pool holds its
+// certificate.
+func countingTLSServer(t *testing.T) (*httptest.Server, *Server, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	var opened, closed atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			opened.Add(1)
+		case http.StateClosed:
+			closed.Add(1)
+		}
+	}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	s := &Server{Config: Config{CallbackCAs: pool, CallbackReadTimeout: 5 * time.Second, CallbackBackoff: []time.Duration{}}}
+	return srv, s, &opened, &closed
+}
+
+func sendTestReply(t *testing.T, s *Server, url string) {
+	t.Helper()
+	res := s.sendPlatformRequest(context.Background(), func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
+	}, func(status int, _ []byte) replyBucket { return classifyReplyStatus(status) })
+	if res.bucket != bucketDelivered {
+		t.Fatalf("reply bucket = %v (status %d, err %v), want delivered", res.bucket, res.status, res.err)
+	}
+}
+
+// Replies share one pooled client, so a run of replies to one platform
+// reuses one connection instead of a TLS handshake and a leaked transport
+// per reply.
+func TestSendPlatformRequest_ReusesTheConnection(t *testing.T) {
+	srv, s, opened, _ := countingTLSServer(t)
+	for range 3 {
+		sendTestReply(t, s, srv.URL)
+	}
+	if got := opened.Load(); got != 1 {
+		t.Errorf("connections opened for 3 replies = %d, want 1", got)
+	}
+}
+
+func TestPlatformClient_RebuildsOnlyWhenTheTrustPoolChanges(t *testing.T) {
+	srv, s, _, closed := countingTLSServer(t)
+	first, err := s.platformClient()
+	if err != nil {
+		t.Fatalf("platformClient: %v", err)
+	}
+	again, err := s.platformClient()
+	if err != nil {
+		t.Fatalf("platformClient: %v", err)
+	}
+	if first != again {
+		t.Fatal("platformClient built a new client for an unchanged trust pool")
+	}
+	sendTestReply(t, s, srv.URL) // leaves one idle connection in first's pool
+
+	rotated := x509.NewCertPool()
+	rotated.AddCert(srv.Certificate())
+	s.Config.CallbackCAs = rotated
+	next, err := s.platformClient()
+	if err != nil {
+		t.Fatalf("platformClient: %v", err)
+	}
+	if next == first {
+		t.Fatal("platformClient kept the old client after the trust pool changed")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for closed.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the old client's idle connection was not closed after the rebuild")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
