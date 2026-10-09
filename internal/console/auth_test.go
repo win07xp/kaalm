@@ -25,11 +25,13 @@ import (
 	"time"
 )
 
-// fakeReviewer authenticates any token in its map. It is safe for
-// concurrent use; hook, when set, runs inside every review before it
-// answers.
+// fakeReviewer authenticates any token in its map and answers any other
+// token as not authenticated, or with an API error when apiErr is set. It is
+// safe for concurrent use; hook, when set, runs inside every review before
+// it answers.
 type fakeReviewer struct {
 	tokens map[string]Identity
+	apiErr bool
 	hook   func()
 
 	mu sync.Mutex
@@ -47,7 +49,10 @@ func (f *fakeReviewer) Review(_ context.Context, token string) (Identity, error)
 	if ok {
 		return id, nil
 	}
-	return Identity{}, fmt.Errorf("token not authenticated")
+	if f.apiErr {
+		return Identity{}, errors.New("token review: apiserver down")
+	}
+	return Identity{}, fmt.Errorf("%w: invalid", errNotAuthenticated)
 }
 
 // count is the number of reviews run so far.
@@ -154,21 +159,73 @@ func TestCachingReviewer(t *testing.T) {
 		t.Errorf("cached review must not hit the reviewer (calls %d)", fr.count())
 	}
 
-	// Failures are never cached.
-	if _, err := cr.Review(context.Background(), "bad"); err == nil {
-		t.Fatal("bad token must fail")
-	}
-	if _, err := cr.Review(context.Background(), "bad"); err == nil {
-		t.Fatal("bad token must fail again")
-	}
-	if fr.count() != 3 {
-		t.Errorf("failed reviews must pass through every time (calls %d)", fr.count())
-	}
-
 	now = now.Add(reviewCacheTTL + time.Second)
 	_, _ = cr.Review(context.Background(), "tok")
-	if fr.count() != 4 {
+	if fr.count() != 2 {
 		t.Error("an expired review entry must re-review")
+	}
+
+	// A token that fails review is refused from memory for
+	// failedReviewCacheTTL, then reviewed again.
+	before := fr.count()
+	for range 2 {
+		if _, err := cr.Review(context.Background(), "bad"); !errors.Is(err, errNotAuthenticated) {
+			t.Fatalf("bad token: err = %v, want errNotAuthenticated", err)
+		}
+	}
+	if got := fr.count() - before; got != 1 {
+		t.Errorf("two reviews of a bad token ran %d TokenReviews, want 1", got)
+	}
+	now = now.Add(failedReviewCacheTTL + time.Second)
+	if _, err := cr.Review(context.Background(), "bad"); err == nil {
+		t.Fatal("bad token must still fail")
+	}
+	if got := fr.count() - before; got != 2 {
+		t.Errorf("an expired failed review must re-review (TokenReviews %d, want 2)", got)
+	}
+}
+
+// A review that fails for any reason but the token itself is never cached.
+func TestCachingReviewer_NeverCachesAPIErrors(t *testing.T) {
+	fr := &fakeReviewer{apiErr: true}
+	cr := NewCachingReviewer(fr)
+	for range 2 {
+		if _, err := cr.Review(context.Background(), "tok"); err == nil || errors.Is(err, errNotAuthenticated) {
+			t.Fatalf("err = %v, want the API error", err)
+		}
+	}
+	if got := fr.count(); got != 2 {
+		t.Errorf("API errors ran %d TokenReviews for 2 reviews, want 2", got)
+	}
+}
+
+// Concurrent misses for one token share one TokenReview.
+func TestCachingReviewer_CollapsesConcurrentMisses(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	fr := &fakeReviewer{tokens: map[string]Identity{"tok": {Username: "priya"}}, hook: func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}}
+	cr := NewCachingReviewer(fr)
+
+	results := make(chan bool, 10)
+	for range 10 {
+		go func() {
+			id, err := cr.Review(context.Background(), "tok")
+			results <- err == nil && id.Username == "priya"
+		}()
+	}
+	<-entered
+	time.Sleep(100 * time.Millisecond) // let the other callers arrive
+	close(release)
+	for range 10 {
+		if !<-results {
+			t.Error("a waiter did not get the shared identity")
+		}
+	}
+	if got := fr.count(); got != 1 {
+		t.Errorf("10 concurrent misses ran %d TokenReviews, want 1", got)
 	}
 }
 

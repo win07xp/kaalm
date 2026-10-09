@@ -18,6 +18,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -49,8 +50,8 @@ func TestKubeTokenReviewer(t *testing.T) {
 	if err != nil || id.Username != "priya" || len(id.Groups) != 1 {
 		t.Fatalf("review = %+v, %v", id, err)
 	}
-	if _, err := r.Review(context.Background(), "bad"); err == nil {
-		t.Error("an unauthenticated token must error")
+	if _, err := r.Review(context.Background(), "bad"); !errors.Is(err, errNotAuthenticated) {
+		t.Errorf("an unauthenticated token: err = %v, want errNotAuthenticated", err)
 	}
 
 	// An apiserver failure surfaces as an error, never as authenticated.
@@ -59,8 +60,12 @@ func TestKubeTokenReviewer(t *testing.T) {
 		func(clienttesting.Action) (bool, runtime.Object, error) {
 			return true, nil, fmt.Errorf("apiserver down")
 		})
-	if _, err := (&KubeTokenReviewer{Client: cs2}).Review(context.Background(), "good"); err == nil {
+	_, err = (&KubeTokenReviewer{Client: cs2}).Review(context.Background(), "good")
+	if err == nil {
 		t.Error("an apiserver failure must error")
+	}
+	if errors.Is(err, errNotAuthenticated) {
+		t.Error("an apiserver failure must not read as an unauthenticated token")
 	}
 }
 
