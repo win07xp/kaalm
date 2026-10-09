@@ -105,7 +105,7 @@ way until the Secret holds a key the provider accepts.
 The probe is configurable through `spec.healthCheck` (`enabled`, default
 true; `intervalSeconds`, default 60; `timeoutSeconds`, default 10). A probe
 that keeps failing runs less often, up to every 10 minutes at the default
-interval, until it succeeds. A change to the Secret or the spec re-probes at
+interval, until it succeeds. A new key in the Secret or a change to the spec re-probes at
 once.
 
 ## 4. Trust a private CA
