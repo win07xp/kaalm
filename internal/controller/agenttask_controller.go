@@ -322,7 +322,7 @@ func (r *AgentTaskReconciler) driveProvisioning(
 	// remains.
 	if !pod.DeletionTimestamp.IsZero() {
 		r.setTaskReady(task, false, "PodTerminating", "waiting for the previous task Pod to terminate")
-		if err := r.Status().Update(ctx, task); err != nil {
+		if err := r.updateStatusIfChanged(ctx, task); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: certWaitRequeue}, nil
@@ -407,7 +407,22 @@ func (r *AgentTaskReconciler) awaitPodReady(
 		return ctrl.Result{}, err
 	}
 	r.setTaskReady(task, false, "PodProvisioning", "task Pod created, waiting for readiness")
-	return ctrl.Result{RequeueAfter: certWaitRequeue}, r.Status().Update(ctx, task)
+	return ctrl.Result{RequeueAfter: certWaitRequeue}, r.updateStatusIfChanged(ctx, task)
+}
+
+// updateStatusIfChanged writes the task's status only when it differs from
+// what the informer holds. A Provisioning task re-checks every
+// certWaitRequeue while it waits, and an unchanged write per re-check is a
+// PUT that moves nothing but is still an update event for every watcher.
+// A cache that lags an earlier write in the same pass costs at most one
+// redundant write, never a missed one.
+func (r *AgentTaskReconciler) updateStatusIfChanged(ctx context.Context, task *kaalmv1beta1.AgentTask) error {
+	var current kaalmv1beta1.AgentTask
+	if err := r.Get(ctx, client.ObjectKeyFromObject(task), &current); err == nil &&
+		equality.Semantic.DeepEqual(current.Status, task.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, task)
 }
 
 // createRejected holds a task whose Pod create, or a write of another
