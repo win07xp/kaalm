@@ -18,6 +18,8 @@ package console
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -307,5 +309,63 @@ func TestData_ListsKeepTheNewestByCreationTime(t *testing.T) {
 	all, total, _ := d.Fleet(ctx, "team-a", defaultListLimit)
 	if len(all) != 3 || total != 3 {
 		t.Errorf("under the limit every row returns: %d of %d", len(all), total)
+	}
+}
+
+// noCopyRecorder is a client.Reader that records, per list type, whether a
+// List asked to skip the deep copy.
+type noCopyRecorder struct {
+	client.Reader
+	noCopy map[string]bool
+}
+
+func (r *noCopyRecorder) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	lo := &client.ListOptions{}
+	lo.ApplyOptions(opts)
+	r.noCopy[fmt.Sprintf("%T", list)] = lo.UnsafeDisableDeepCopy != nil && *lo.UnsafeDisableDeepCopy
+	return r.Reader.List(ctx, list, opts...)
+}
+
+// The list reads only read the listed objects, so they skip the cache's
+// per-request deep copy of the namespace.
+func TestDataListsSkipTheDeepCopy(t *testing.T) {
+	seeded := seededData(t)
+	rec := &noCopyRecorder{Reader: seeded.Reader, noCopy: map[string]bool{}}
+	d := &Data{Reader: rec}
+	ctx := context.Background()
+
+	for _, read := range []struct {
+		list string
+		run  func(d *Data) (any, error)
+	}{
+		{"*v1.NamespaceList", func(d *Data) (any, error) { return d.Namespaces(ctx) }},
+		{"*v1beta1.AgentList", func(d *Data) (any, error) {
+			rows, _, err := d.Fleet(ctx, "team-a", defaultListLimit)
+			return rows, err
+		}},
+		{"*v1beta1.AgentTaskList", func(d *Data) (any, error) {
+			rows, _, err := d.Tasks(ctx, "team-a", defaultListLimit)
+			return rows, err
+		}},
+		{"*v1beta1.AgentChannelList", func(d *Data) (any, error) {
+			rows, _, err := d.Channels(ctx, "team-a", defaultListLimit)
+			return rows, err
+		}},
+		{"*v1beta1.ModelProviderList", func(d *Data) (any, error) { return d.Spend(ctx, "team-a") }},
+	} {
+		got, err := read.run(d)
+		if err != nil {
+			t.Fatalf("%s: %v", read.list, err)
+		}
+		if !rec.noCopy[read.list] {
+			t.Errorf("%s: the list read deep-copies the cache", read.list)
+		}
+		want, err := read.run(seeded)
+		if err != nil {
+			t.Fatalf("%s: %v", read.list, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: rows = %+v, want %+v", read.list, got, want)
+		}
 	}
 }
