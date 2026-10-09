@@ -322,3 +322,28 @@ func TestAgentClass_NamespacePatternReasonPrecedence(t *testing.T) {
 		})
 	}
 }
+
+// A pass that finds the class status already stored makes no write, and a
+// Ready=False class sends its Warning once, from the pass that wrote it.
+func TestAgentClass_UnchangedPassSkipsStatusWrite(t *testing.T) {
+	const name = "ac-no-op"
+	ac := &kaalmv1beta1.AgentClass{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Generation: 1, Finalizers: []string{kaalmv1beta1.ClassFinalizer},
+	}}
+	ac.Spec.AllowedProviders = []kaalmv1beta1.LocalObjectReference{{Name: "ac-no-op-missing"}}
+	writes := &statusWrites{}
+	c := classClientBuilder(t, ac).WithInterceptorFuncs(writes.funcs()).Build()
+	rec := record.NewFakeRecorder(16)
+
+	first := reconcileClass(t, c, rec, name)
+	second := reconcileClass(t, c, rec, name)
+	if n := writes.count(); n != 1 {
+		t.Errorf("two passes over an unchanged class made %d status writes, want 1", n)
+	}
+	if first.ResourceVersion != second.ResourceVersion {
+		t.Errorf("resourceVersion moved from %s to %s on an unchanged pass", first.ResourceVersion, second.ResourceVersion)
+	}
+	if got := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonInvalidReference); len(got) != 1 {
+		t.Errorf("two passes sent %d InvalidReference Warnings, want 1", len(got))
+	}
+}

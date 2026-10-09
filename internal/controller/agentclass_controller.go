@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,6 +88,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
+	// before is the stored status, so a pass that changes nothing writes
+	// nothing: a write is an update event for every watcher of the class.
+	before := ac.Status.DeepCopy()
 
 	// Validate.
 	var problems []string
@@ -245,14 +249,19 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Message: msg,
 		})
 	}
-	if err := r.Status().Update(ctx, &ac); err != nil {
-		return ctrl.Result{}, err
-	}
-	for _, w := range warnings {
-		r.Recorder.Event(&ac, w.eventType, w.reason, w.message)
-	}
-	if invalid != nil {
-		r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
+	// The events go out only after the write that records them. A pass
+	// that finds its status already stored sends none: the pass that stored
+	// it sent them.
+	if !equality.Semantic.DeepEqual(before, &ac.Status) {
+		if err := r.Status().Update(ctx, &ac); err != nil {
+			return ctrl.Result{}, err
+		}
+		for _, w := range warnings {
+			r.Recorder.Event(&ac, w.eventType, w.reason, w.message)
+		}
+		if invalid != nil {
+			r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
+		}
 	}
 	// Rule 53 is advisory with no condition, so its rising edge is held in
 	// memory; noting it after the status write keeps a failed write silent.
@@ -355,12 +364,14 @@ type classUsage struct {
 }
 
 func (r *AgentClassReconciler) countUsers(ctx context.Context, className string) (classUsage, error) {
+	// Both lists hand back the cache's own objects; they are only counted
+	// and read.
 	var agents kaalmv1beta1.AgentList
-	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
+	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: className}, client.UnsafeDisableDeepCopy); err != nil {
 		return classUsage{}, err
 	}
 	var tasks kaalmv1beta1.AgentTaskList
-	if err := r.List(ctx, &tasks, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
+	if err := r.List(ctx, &tasks, client.MatchingFields{IndexAgentClassRef: className}, client.UnsafeDisableDeepCopy); err != nil {
 		return classUsage{}, err
 	}
 	u := classUsage{agents: int32(len(agents.Items)), tasks: int32(len(tasks.Items))}
