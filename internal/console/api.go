@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // The list routes' limit query parameter (docs/src/console/overview.md#the-read-api): the default when absent, and the hard maximum a larger value
@@ -151,9 +153,16 @@ func (s *Server) requireAPI(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// namespaceReviewParallelism bounds the per-namespace reviews one namespace
+// list runs at once: enough to hide a webhook authorizer's tens of
+// milliseconds per review, without outrunning the client rate limit.
+const namespaceReviewParallelism = 16
+
 // visibleNamespaces returns the namespaces this caller may view. A caller
 // allowed to list agents in every namespace sees them all after one review;
-// only a caller without that grant costs one review per namespace.
+// only a caller without that grant costs one review per namespace. Those
+// reviews run in parallel, bounded by namespaceReviewParallelism, and share
+// the console's API client rate limit.
 func (s *Server) visibleNamespaces(ctx context.Context, id Identity) ([]string, error) {
 	all, err := s.Data.Namespaces(ctx)
 	if err != nil {
@@ -166,13 +175,22 @@ func (s *Server) visibleNamespaces(ctx context.Context, id Identity) ([]string, 
 	if everywhere {
 		return all, nil
 	}
+	allowed := make([]bool, len(all))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(namespaceReviewParallelism)
+	for i, ns := range all {
+		group.Go(func() error {
+			ok, err := s.Access.CanView(groupCtx, id, ns)
+			allowed[i] = ok
+			return err
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
 	visible := make([]string, 0, len(all))
-	for _, ns := range all {
-		allowed, err := s.Access.CanView(ctx, id, ns)
-		if err != nil {
-			return nil, err
-		}
-		if allowed {
+	for i, ns := range all {
+		if allowed[i] {
 			visible = append(visible, ns)
 		}
 	}

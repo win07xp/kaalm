@@ -19,11 +19,20 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // fakeChat records the last call and relays scripted responses for both
@@ -298,12 +307,12 @@ func TestAPI_NamespacesClusterWideGrantSkipsTheLoop(t *testing.T) {
 	h := newAPIHarness(t)
 	h.authz.allowed["priya/list/agents.kaalm.io/"] = true
 
-	before := h.authz.calls
+	before := h.authz.count()
 	got := decode[map[string][]string](t, h.get(t, "/api/v1/namespaces", "priya-token"))
 	if ns := got["namespaces"]; len(ns) != 2 {
 		t.Errorf("priya sees %v, want both namespaces", ns)
 	}
-	if calls := h.authz.calls - before; calls != 1 {
+	if calls := h.authz.count() - before; calls != 1 {
 		t.Errorf("a cluster-wide grant took %d reviews, want 1", calls)
 	}
 
@@ -441,4 +450,64 @@ func TestAPI_UnmatchedRoutesAnswerTheEnvelope(t *testing.T) {
 			t.Errorf("page 404 Content-Type = %q, want the mux's plain text", ct)
 		}
 	})
+}
+
+// A caller without the cluster-wide grant costs one review per namespace;
+// they run in parallel, bounded, and the visible list keeps its order.
+func TestVisibleNamespaces_ChecksNamespacesInParallel(t *testing.T) {
+	var objs []client.Object
+	allowed := map[string]bool{}
+	var want []string
+	for i := range 40 {
+		ns := fmt.Sprintf("ns-%02d", i)
+		objs = append(objs, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
+		if i%2 == 0 {
+			allowed["dev/list/agents.kaalm.io/"+ns] = true
+			want = append(want, ns)
+		}
+	}
+	data := &Data{Reader: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()}
+
+	var mu sync.Mutex
+	inFlight, most := 0, 0
+	az := &fakeAuthorizer{allowed: allowed, hook: func(string) {
+		mu.Lock()
+		inFlight++
+		most = max(most, inFlight)
+		mu.Unlock()
+		// Wait briefly for a second review to arrive, so a serial loop
+		// shows as one in flight.
+		deadline := time.Now().Add(100 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			mu.Lock()
+			seen := most
+			mu.Unlock()
+			if seen > 1 {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+	}}
+	s := NewServer(Config{}, data, &fakeReviewer{}, NewAccessChecker(az), &fakeChat{})
+	dev := Identity{Username: "dev"}
+
+	got, err := s.visibleNamespaces(context.Background(), dev)
+	if err != nil {
+		t.Fatalf("visibleNamespaces: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("visible = %v, want %v", got, want)
+	}
+	if most < 2 || most > 16 {
+		t.Errorf("most reviews in flight = %d, want 2..16", most)
+	}
+
+	// One failed review fails the list.
+	az.fail = map[string]bool{"other/list/agents.kaalm.io/ns-07": true}
+	if _, err := s.visibleNamespaces(context.Background(), Identity{Username: "other"}); err == nil {
+		t.Error("a failed review must fail the namespace list")
+	}
 }

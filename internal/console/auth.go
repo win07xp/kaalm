@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	authnv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,11 @@ const (
 	sessionCookie   = "kaalm_console_session"
 	sessionIDLength = 32
 )
+
+// accessReviewTimeout bounds one shared SubjectAccessReview. The review runs
+// detached from the request that started it, so a waiter that gives up does
+// not fail the others; this keeps a hung review from running forever.
+const accessReviewTimeout = 10 * time.Second
 
 // Identity is the TokenReview-authenticated caller.
 type Identity struct {
@@ -111,13 +117,15 @@ type accessEntry struct {
 // SubjectAccessReviews: viewing a namespace requires list on agents.kaalm.io
 // in it; test-chat requires create on agentchannels.kaalm.io (a channel is
 // the standing form of what test-chat does once). Results are cached per
-// (identity, namespace, verb) for sarCacheTTL.
+// (identity, namespace, verb) for sarCacheTTL, and concurrent misses for one
+// answer share one review.
 type AccessChecker struct {
 	Authz Authorizer
 
-	now   func() time.Time
-	mu    sync.Mutex
-	cache map[accessKey]accessEntry
+	now     func() time.Time
+	mu      sync.Mutex
+	cache   map[accessKey]accessEntry
+	flights singleflight.Group
 }
 
 // NewAccessChecker builds an AccessChecker over an Authorizer.
@@ -146,21 +154,45 @@ func (g *AccessChecker) CanChat(ctx context.Context, id Identity, namespace stri
 
 func (g *AccessChecker) allowed(ctx context.Context, id Identity, namespace, verb, resource string) (bool, error) {
 	key := accessKey{user: id.Username, namespace: namespace, verb: verb + ":" + resource}
-	g.mu.Lock()
-	if e, ok := g.cache[key]; ok && g.now().Before(e.expires) {
+	if allowed, ok := g.cached(key); ok {
+		return allowed, nil
+	}
+	// NUL cannot appear in a username, a namespace, or a verb.
+	flight := g.flights.DoChan(key.user+"\x00"+key.namespace+"\x00"+key.verb, func() (any, error) {
+		if allowed, ok := g.cached(key); ok {
+			return allowed, nil
+		}
+		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
+		defer cancel()
+		allowed, err := g.Authz.Allowed(reviewCtx, id, verb, "kaalm.io", resource, namespace)
+		if err != nil {
+			return false, err
+		}
+		g.mu.Lock()
+		g.cache[key] = accessEntry{allowed: allowed, expires: g.now().Add(sarCacheTTL)}
 		g.mu.Unlock()
-		return e.allowed, nil
+		return allowed, nil
+	})
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case res := <-flight:
+		if res.Err != nil {
+			return false, res.Err
+		}
+		return res.Val.(bool), nil
 	}
-	g.mu.Unlock()
+}
 
-	allowed, err := g.Authz.Allowed(ctx, id, verb, "kaalm.io", resource, namespace)
-	if err != nil {
-		return false, err
-	}
+// cached returns the unexpired cached answer for key, if any.
+func (g *AccessChecker) cached(key accessKey) (allowed, ok bool) {
 	g.mu.Lock()
-	g.cache[key] = accessEntry{allowed: allowed, expires: g.now().Add(sarCacheTTL)}
-	g.mu.Unlock()
-	return allowed, nil
+	defer g.mu.Unlock()
+	e, found := g.cache[key]
+	if !found || !g.now().Before(e.expires) {
+		return false, false
+	}
+	return e.allowed, true
 }
 
 // Sweep drops every expired answer. Lookups already ignore expired entries;
