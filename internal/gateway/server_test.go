@@ -678,7 +678,7 @@ func TestProxy_StreamingRelay(t *testing.T) {
 	if _, ok := up.body["stream_options"]; !ok {
 		t.Error("stream_options not injected into the upstream streaming request")
 	}
-	// Usage folded out of the stream. relayStream flushes each SSE line to the
+	// Usage folded out of the stream. relayStream flushes each SSE event to the
 	// client and records spend only after the scanner loop ends, so io.ReadAll
 	// above can return while the server is still between its final Flush and
 	// Spend.Record. Poll for the record instead of asserting instantly.
