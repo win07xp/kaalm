@@ -68,6 +68,31 @@ func (s *statusConflicts) funcs() interceptor.Funcs {
 	}
 }
 
+// statusWrites counts the status writes a fake client receives, so a test
+// can assert that a pass which changes nothing writes nothing.
+type statusWrites struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (s *statusWrites) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n
+}
+
+func (s *statusWrites) funcs() interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			opts ...client.SubResourceUpdateOption) error {
+			s.mu.Lock()
+			s.n++
+			s.mu.Unlock()
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	}
+}
+
 // withPrefix keeps the fake recorder's events that start with prefix
 // ("Warning Reason").
 func withPrefix(events []string, prefix string) []string {

@@ -42,10 +42,13 @@ var _ = Describe("MCP 2026-07-28 revision (S18, dual-era)", Ordered, func() {
 
 	It("negotiates the stateless revision: Healthy with status.mcpRevision 2026-07-28", func() {
 		Expect(utils.WaitRollout("e2e", "mock-mcp-modern", "120s")).To(Succeed())
+		// The probe re-runs only on its schedule, so a probe that failed while
+		// the mock was starting retries on the backoff (up to 150s at the 15s
+		// interval), not on the next unrelated event.
 		Eventually(func() (string, error) {
 			return utils.ResourceField("toolprovider", "", "search-tools-modern",
 				`{.status.conditions[?(@.type=="Healthy")].status}`)
-		}, "120s", "5s").Should(Equal("True"))
+		}, "240s", "5s").Should(Equal("True"))
 		Eventually(func() (string, error) {
 			return utils.ResourceField("toolprovider", "", "search-tools-modern", "{.status.mcpRevision}")
 		}, "60s", "3s").Should(Equal("2026-07-28"))

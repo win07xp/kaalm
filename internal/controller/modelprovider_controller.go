@@ -59,7 +59,12 @@ type ModelProviderReconciler struct {
 	OperatorNamespace string
 	// Health probes provider liveness. Injected so tests need no real provider.
 	Health ProviderHealthChecker
+	// Clock is injectable for tests; nil means time.Now.
+	Clock func() time.Time
 
+	// probes records each provider's last probe, so only a pass whose probe
+	// is due dials the upstream. The zero value is ready to use.
+	probes probeGate[ProviderProbeResult]
 	// events holds the state events a pass derives (a Ready=False reason or
 	// an advisory condition turning True) until finish writes the status
 	// that records them. The zero value is ready to use.
@@ -73,6 +78,13 @@ type ModelProviderReconciler struct {
 // +kubebuilder:rbac:groups="",namespace=kaalm-system,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+func (r *ModelProviderReconciler) now() time.Time {
+	if r.Clock != nil {
+		return r.Clock()
+	}
+	return time.Now()
+}
+
 // Reconcile validates and probes the provider and reconciles its status.
 func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -83,6 +95,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			// A provider can disappear without our finalizer pass (the
 			// finalizer stripped by hand); its series must not freeze.
 			dropBudgetCanonical(req.Name)
+			r.probes.forget(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -125,6 +138,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if credReason != kaalmv1beta1.ReasonCredentialsValid {
 		r.setReadyFalse(&mp, credReason, credMsg)
 		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+credReason)
+		r.probes.forget(mp.Name)
 		return r.finish(ctx, &mp, budgetRequeue(&mp, ctrl.Result{}))
 	}
 
@@ -140,16 +154,32 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		reason, msg := readyFalseFromProblems(problems)
 		r.setReadyFalse(&mp, reason, msg)
 		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+reason)
+		r.probes.forget(mp.Name)
 		return r.finish(ctx, &mp, budgetRequeue(&mp, ctrl.Result{}))
 	}
 	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Liveness probe.
+	// Liveness probe. Only a pass whose probe is due dials the upstream (see
+	// probeGate); any other pass reapplies the recorded result.
 	requeue := ctrl.Result{}
 	if healthCheckEnabled(&mp) {
-		res := r.Health.Probe(ctx, &mp, credential)
+		now := r.now()
+		key := newProbeKey(&mp, credential)
+		res, wait, cached := r.probes.cached(mp.Name, key, now)
+		if !cached {
+			res = r.Health.Probe(ctx, &mp, credential)
+		}
+		// delay is the wait before the next probe: what is left of the
+		// recorded one, or the interval or backoff from this probe.
+		delay := func(next time.Duration) time.Duration {
+			if cached {
+				return wait
+			}
+			r.probes.record(mp.Name, key, res, now.Add(next))
+			return next
+		}
 		switch {
 		case res.AuthFailed:
 			msg := "provider rejected the credential"
@@ -158,20 +188,24 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			}
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
 			r.setReadyFalse(&mp, kaalmv1beta1.ReasonCredentialsInvalid, msg)
-			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.probeRequeue(&mp)})
+			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: delay(r.probeRequeue(&mp))})
 		case res.Err != nil:
 			// A failed probe is an occurrence, not a state: it is reported on
-			// every failing pass, and the recorder folds the repeats into one
-			// event with a count, which keeps it visible through a long
-			// outage.
+			// every failing probe, and the recorder folds the repeats into
+			// one event with a count, which keeps it visible through a long
+			// outage. A pass that reuses the recorded failure sent nothing
+			// new to report.
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			requeue = ctrl.Result{RequeueAfter: r.probeRequeue(&mp)}
+			if !cached {
+				r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+			}
+			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&mp))}
 		default: // Healthy
 			r.setHealthy(&mp, true, kaalmv1beta1.ReasonUpstreamReachable, "provider is reachable")
-			requeue = ctrl.Result{RequeueAfter: r.interval(&mp)}
+			requeue = ctrl.Result{RequeueAfter: delay(r.interval(&mp))}
 		}
 	} else {
+		r.probes.forget(mp.Name)
 		setHealthyNotProbed(&mp.Status.Conditions, "healthCheck.enabled is false")
 	}
 
@@ -203,6 +237,7 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	// No budget pass runs once the delete has started, so nothing sets the
 	// series again before the finalizer goes.
 	dropBudgetCanonical(mp.Name)
+	r.probes.forget(mp.Name)
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
 }
@@ -229,6 +264,7 @@ func (r *ModelProviderReconciler) holdDelete(
 		return ctrl.Result{}, err
 	}
 	setHealthyNotProbed(&mp.Status.Conditions, "deletion is held")
+	r.probes.forget(mp.Name)
 	if msg, first := setDeletionBlocked(&mp.Status.Conditions, refs); first {
 		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, msg)
 	}
@@ -654,7 +690,7 @@ func (r *ModelProviderReconciler) interval(mp *kaalmv1beta1.ModelProvider) time.
 // probeRequeue is the delay before the next probe: the interval, backed off
 // while the Healthy condition is False (see probeRequeue).
 func (r *ModelProviderReconciler) probeRequeue(mp *kaalmv1beta1.ModelProvider) time.Duration {
-	return probeRequeue(mp.Status.Conditions, r.interval(mp), time.Now())
+	return probeRequeue(mp.Status.Conditions, r.interval(mp), r.now())
 }
 
 func (r *ModelProviderReconciler) setReady(mp *kaalmv1beta1.ModelProvider, ok bool, reason, msg string) {

@@ -80,10 +80,13 @@ var _ = Describe("Governed tool access (S18)", Ordered, func() {
 		}, "180s", "5s").Should(Equal("Running"))
 
 		By("the controller's own MCP probe (initialize, tools/list) succeeds on-cluster")
+		// The probe re-runs only on its schedule, so a probe that failed while
+		// the mock was starting retries on the backoff (up to 150s at the 15s
+		// interval), not on the next unrelated event.
 		Eventually(func() (string, error) {
 			return utils.ResourceField("toolprovider", "", "search-tools",
 				`{.status.conditions[?(@.type=="Healthy")].status}`)
-		}, "120s", "5s").Should(Equal("True"))
+		}, "240s", "5s").Should(Equal("True"))
 
 		By("the dual-era probe fell back to the handshake and recorded the legacy revision")
 		Eventually(func() (string, error) {

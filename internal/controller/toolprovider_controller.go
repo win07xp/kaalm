@@ -24,6 +24,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,7 +51,12 @@ type ToolProviderReconciler struct {
 	OperatorNamespace string
 	// Health probes tool server liveness. Injected so tests need no real server.
 	Health ToolHealthChecker
+	// Clock is injectable for tests; nil means time.Now.
+	Clock func() time.Time
 
+	// probes records each provider's last probe, so only a pass whose probe
+	// is due dials the server. The zero value is ready to use.
+	probes probeGate[ToolProbeResult]
 	// events holds the Warning a pass derives from a new Ready=False reason
 	// until finish writes the status that records it. The zero value is
 	// ready to use.
@@ -64,13 +70,24 @@ type ToolProviderReconciler struct {
 // +kubebuilder:rbac:groups="",namespace=kaalm-system,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+func (r *ToolProviderReconciler) now() time.Time {
+	if r.Clock != nil {
+		return r.Clock()
+	}
+	return time.Now()
+}
+
 // Reconcile validates and probes the tool provider and reconciles its status.
 func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var tp kaalmv1beta1.ToolProvider
 	if err := r.Get(ctx, req.NamespacedName, &tp); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			r.probes.forget(req.Name)
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
 	}
 	if !tp.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, &tp)
@@ -97,6 +114,7 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if reason != kaalmv1beta1.ReasonCredentialsValid {
 			r.setReadyFalse(&tp, reason, msg, msg)
 			setHealthyNotProbed(&tp.Status.Conditions, "Ready is False with reason "+reason)
+			r.probes.forget(tp.Name)
 			return r.finish(ctx, &tp, ctrl.Result{})
 		}
 		readyMsg = "provider is valid"
@@ -108,29 +126,48 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		msg := strings.Join(bad, "; ")
 		r.setReadyFalse(&tp, kaalmv1beta1.ReasonInvalidNamespacePattern, msg, msg)
 		setHealthyNotProbed(&tp.Status.Conditions, "Ready is False with reason "+kaalmv1beta1.ReasonInvalidNamespacePattern)
+		r.probes.forget(tp.Name)
 		return r.finish(ctx, &tp, ctrl.Result{})
 	}
 
-	// Liveness probe.
+	// Liveness probe. Only a pass whose probe is due dials the server (see
+	// probeGate); any other pass reapplies the recorded result.
 	requeue := ctrl.Result{}
 	if tp.Spec.HealthCheck == nil || tp.Spec.HealthCheck.Enabled {
-		res := r.Health.Probe(ctx, &tp, credential)
+		now := r.now()
+		key := newProbeKey(&tp, credential)
+		res, wait, cached := r.probes.cached(tp.Name, key, now)
+		if !cached {
+			res = r.Health.Probe(ctx, &tp, credential)
+		}
+		// delay is the wait before the next probe: what is left of the
+		// recorded one, or the interval or backoff from this probe.
+		delay := func(next time.Duration) time.Duration {
+			if cached {
+				return wait
+			}
+			r.probes.record(tp.Name, key, res, now.Add(next))
+			return next
+		}
 		switch {
 		case res.AuthFailed:
 			// A state: the event fires when Ready enters CredentialsInvalid,
-			// not on every probe pass while the credential stays rejected.
+			// not on every probe while the credential stays rejected.
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
 				kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential")
 			r.setReadyFalse(&tp, kaalmv1beta1.ReasonCredentialsInvalid, "server rejected the credential",
 				"tool server rejected the credential; credential rotation may be needed")
-			return r.finish(ctx, &tp, ctrl.Result{RequeueAfter: r.probeRequeue(&tp)})
+			return r.finish(ctx, &tp, ctrl.Result{RequeueAfter: delay(r.probeRequeue(&tp))})
 		case res.Err != nil:
-			// An occurrence: reported on every failing pass, and the recorder
-			// folds the repeats into one event with a count.
+			// An occurrence: reported on every failing probe, and the
+			// recorder folds the repeats into one event with a count. A pass
+			// that reuses the recorded failure has nothing new to report.
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, false,
 				kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			requeue = ctrl.Result{RequeueAfter: r.probeRequeue(&tp)}
+			if !cached {
+				r.Recorder.Event(&tp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+			}
+			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&tp))}
 		default: // Healthy
 			r.setCondition(&tp, kaalmv1beta1.ConditionHealthy, true,
 				kaalmv1beta1.ReasonUpstreamReachable, "server is reachable")
@@ -138,9 +175,10 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			// operator sees which revision each server speaks. A failed
 			// probe keeps the last negotiated value.
 			tp.Status.MCPRevision = res.MCPRevision
-			requeue = ctrl.Result{RequeueAfter: r.interval(&tp)}
+			requeue = ctrl.Result{RequeueAfter: delay(r.interval(&tp))}
 		}
 	} else {
+		r.probes.forget(tp.Name)
 		setHealthyNotProbed(&tp.Status.Conditions, "healthCheck.enabled is false")
 	}
 
@@ -155,6 +193,9 @@ func (r *ToolProviderReconciler) reconcileDelete(
 	if !controllerutil.ContainsFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer) {
 		return nil
 	}
+	// No probe runs once the delete has started; a provider whose delete is
+	// held probes at once if the hold ends without the delete finishing.
+	r.probes.forget(tp.Name)
 	refs, err := r.referrers(ctx, tp.Name)
 	if err != nil {
 		return err
@@ -201,7 +242,7 @@ func (r *ToolProviderReconciler) interval(tp *kaalmv1beta1.ToolProvider) time.Du
 // probeRequeue is the delay before the next probe: the interval, backed off
 // while the Healthy condition is False (see probeRequeue).
 func (r *ToolProviderReconciler) probeRequeue(tp *kaalmv1beta1.ToolProvider) time.Duration {
-	return probeRequeue(tp.Status.Conditions, r.interval(tp), time.Now())
+	return probeRequeue(tp.Status.Conditions, r.interval(tp), r.now())
 }
 
 func (r *ToolProviderReconciler) setCondition(
