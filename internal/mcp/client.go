@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -215,12 +216,23 @@ func ParseResponse(contentType string, r io.Reader, rawID []byte, maxLineBytes i
 	return resp, nil
 }
 
+// sseBufPool reuses readSSEResponse's 64 KiB scanner start buffer. The
+// capacity stays fixed, because a Scanner's line cap is the larger of its
+// maximum and its buffer's capacity; a Scanner that outgrows the buffer
+// allocates its own, and only the original goes back.
+var sseBufPool = sync.Pool{New: func() any {
+	b := make([]byte, 64*1024)
+	return &b
+}}
+
 // readSSEResponse scans an SSE stream for the JSON-RPC response whose id
 // matches the request. Other events (server notifications, unrelated ids)
 // are skipped; the stream ending without a match is an error.
 func readSSEResponse(r io.Reader, rawID []byte, maxLineBytes int) (Response, error) {
+	buf := sseBufPool.Get().(*[]byte)
+	defer sseBufPool.Put(buf)
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	scanner.Buffer((*buf)[:0], maxLineBytes)
 	var data strings.Builder
 	flush := func() (Response, bool) {
 		defer data.Reset()

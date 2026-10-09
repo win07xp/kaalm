@@ -19,7 +19,28 @@ package gateway
 import (
 	"io"
 	"net/http"
+	"sync"
 )
+
+// scanBufSize is the start buffer of a relay's line scanner. A Scanner's
+// line cap is the larger of its configured maximum and its buffer's
+// capacity, so the pooled buffers keep exactly this capacity.
+const scanBufSize = 64 * 1024
+
+// scanBufPool reuses the scanner start buffers of the stream relays and
+// the tools/list relay: one per stream was a quarter of the gateway's
+// allocated bytes under streaming load. A Scanner that outgrows its buffer
+// allocates its own; only the original goes back to the pool.
+var scanBufPool = sync.Pool{New: func() any {
+	b := make([]byte, scanBufSize)
+	return &b
+}}
+
+// getScanBuf takes a start buffer; the caller passes (*buf)[:0] to
+// Scanner.Buffer and returns buf with putScanBuf once no token is in use.
+func getScanBuf() *[]byte { return scanBufPool.Get().(*[]byte) }
+
+func putScanBuf(buf *[]byte) { scanBufPool.Put(buf) }
 
 // eventFlusher is the upstream reader of a stream relay. It flushes the
 // caller's response just before the relay waits on the upstream for more

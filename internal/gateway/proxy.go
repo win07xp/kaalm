@@ -624,7 +624,9 @@ func (s *Server) relayStream(
 
 	ef := &eventFlusher{r: resp.Body, f: flusher}
 	scanner := bufio.NewScanner(ef)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	buf := getScanBuf()
+	defer putScanBuf(buf)
+	scanner.Buffer((*buf)[:0], 1024*1024)
 	callerLeft := func() string {
 		spanError(ctx, outcomeClientClosed)
 		return outcomeClientClosed

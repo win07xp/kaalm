@@ -827,7 +827,9 @@ func relayMCPStream(
 	// line terminators included.
 	ef := &eventFlusher{r: io.LimitReader(resp.Body, maxBytes+1), f: flusher}
 	scanner := bufio.NewScanner(ef)
-	scanner.Buffer(make([]byte, 0, 64*1024), int(maxBytes)+1)
+	buf := getScanBuf()
+	defer putScanBuf(buf)
+	scanner.Buffer((*buf)[:0], int(maxBytes)+1)
 	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
 		advance, token, err := bufio.ScanLines(data, atEOF)
 		consumed += int64(advance)
