@@ -21,7 +21,7 @@ gw --> agent : relay
 == First chunk relayed: no fallback ==
 loop content chunks
   prov --> gw : chunk
-  gw --> agent : relay, unbuffered
+  gw --> agent : relay each event when complete
 end
 alt stream completes
   prov --> gw : message_delta (output_tokens)

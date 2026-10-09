@@ -122,7 +122,7 @@ The condition is the operator's signal that a chain was configured to cross and 
 
 ### Streaming across the crossing
 
-When the candidate answers with SSE, the relay translates event by event, still without buffering.
+When the candidate answers with SSE, the relay translates event by event and sends each translated event as described in [Streaming responses](request-handling.md#streaming-responses).
 
 | OpenAI chunk | Anthropic event |
 |---|---|
