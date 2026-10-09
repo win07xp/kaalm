@@ -41,7 +41,7 @@ func (u Usage) isZero() bool {
 
 // providerAdapter carries the per-provider knowledge: request-format paths,
 // credential header shape, usage extraction (buffered and streamed), and
-// streaming request fixups. Anthropic and OpenAI/OpenAI-compatible are the
+// whether a streaming request needs the usage option. Anthropic and OpenAI/OpenAI-compatible are the
 // served types; google-vertex is reserved and keeps only its
 // outbound adapter pieces.
 type providerAdapter interface {
@@ -54,9 +54,9 @@ type providerAdapter interface {
 	// accumulateStreamUsage inspects one SSE data payload and folds any usage
 	// it carries into u.
 	accumulateStreamUsage(data []byte, u *Usage)
-	// fixupRequestBody may rewrite the (already model-rewritten) request body
-	// map before forwarding, for example injecting stream_options.
-	fixupRequestBody(body map[string]any)
+	// streamUsageOption reports whether a streaming request in this format
+	// needs stream_options.include_usage set for the stream to carry usage.
+	streamUsageOption() bool
 	// upstreamPath rewrites the inbound request path for the upstream. Most
 	// adapters pass it through; Vertex embeds the model in the path and
 	// injects ?alt=sse.
@@ -204,7 +204,7 @@ func mayBeAnthropicUsageEvent(data []byte) bool {
 		bytes.Contains(data, []byte(`\u`))
 }
 
-func (anthropicAdapter) fixupRequestBody(map[string]any) {}
+func (anthropicAdapter) streamUsageOption() bool { return false }
 
 func (anthropicAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }
 
@@ -236,7 +236,7 @@ func (openaiAdapter) extractUsage(body []byte) (Usage, bool) {
 
 // accumulateStreamUsage: a usage object appears in the final chunk preceding
 // [DONE], present only when stream_options.include_usage was set (which
-// fixupRequestBody guarantees).
+// the proxy adds to a streaming request without stream_options).
 func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return
@@ -286,17 +286,10 @@ func mayCarryOpenAIUsage(data []byte) bool {
 	return false
 }
 
-// fixupRequestBody injects stream_options: {include_usage: true} into
-// streaming requests when absent; without it OpenAI-format streams emit no
-// usage at all. The extra terminal usage chunk is backward-compatible.
-func (openaiAdapter) fixupRequestBody(body map[string]any) {
-	stream, _ := body["stream"].(bool)
-	if !stream {
-		return
-	}
-	if _, present := body["stream_options"]; !present {
-		body["stream_options"] = map[string]any{"include_usage": true}
-	}
-}
+// streamUsageOption: without stream_options.include_usage, OpenAI-format
+// streams emit no usage at all, so a streaming request without its own
+// stream_options gets it (see needsStreamOptions). The extra terminal usage
+// chunk is backward-compatible.
+func (openaiAdapter) streamUsageOption() bool { return true }
 
 func (openaiAdapter) upstreamPath(inboundPath, _ string) string { return inboundPath }

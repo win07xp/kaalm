@@ -36,39 +36,42 @@ func TestAdapterFormatNames(t *testing.T) {
 	}
 }
 
-func TestAnthropicFixupIsNoOp(t *testing.T) {
-	body := map[string]any{"stream": true}
-	anthropicAdapter{}.fixupRequestBody(body)
-	if _, ok := body["stream_options"]; ok {
-		t.Error("anthropic must not inject stream_options")
+// prepareBody runs a request body through the proxy's preparation for a,
+// keeping its model.
+func prepareBody(t *testing.T, a providerAdapter, body string) string {
+	t.Helper()
+	f, err := scanRequestFields([]byte(body))
+	if err != nil {
+		t.Fatalf("%s: %v", body, err)
 	}
-	// Vertex fixup is also a no-op.
-	vBody := map[string]any{"stream": true}
-	vertexAdapter{}.fixupRequestBody(vBody)
-	if len(vBody) != 1 {
-		t.Error("vertex fixup must not mutate the body")
+	return string(rewriteRequestBody([]byte(body), f, f.model([]byte(body)), needsStreamOptions(a, f)))
+}
+
+func TestAnthropicAddsNoStreamOptions(t *testing.T) {
+	body := `{"model":"m","stream":true}`
+	if got := prepareBody(t, anthropicAdapter{}, body); got != body {
+		t.Errorf("anthropic must not add stream_options: %s", got)
+	}
+	// Vertex adds nothing either.
+	if got := prepareBody(t, vertexAdapter{}, body); got != body {
+		t.Errorf("vertex must not change the body: %s", got)
 	}
 }
 
-func TestOpenAIFixup(t *testing.T) {
-	// Non-streaming: untouched.
-	nonStream := map[string]any{"stream": false}
-	openaiAdapter{}.fixupRequestBody(nonStream)
-	if _, ok := nonStream["stream_options"]; ok {
-		t.Error("non-streaming request must not get stream_options")
-	}
-	// Streaming without stream_options: injected.
-	stream := map[string]any{"stream": true}
-	openaiAdapter{}.fixupRequestBody(stream)
-	opts, ok := stream["stream_options"].(map[string]any)
-	if !ok || opts["include_usage"] != true {
-		t.Errorf("stream_options.include_usage not injected: %v", stream["stream_options"])
-	}
-	// Streaming with an existing stream_options: preserved.
-	pre := map[string]any{"stream": true, "stream_options": map[string]any{"foo": "bar"}}
-	openaiAdapter{}.fixupRequestBody(pre)
-	if got := pre["stream_options"].(map[string]any); got["foo"] != "bar" {
-		t.Error("existing stream_options must be preserved")
+func TestOpenAIStreamOptions(t *testing.T) {
+	for _, c := range []struct{ name, body, want string }{
+		{"non-streaming", `{"model":"m","stream":false}`, `{"model":"m","stream":false}`},
+		{"streaming without stream_options", `{"model":"m","stream":true}`,
+			`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`},
+		{"existing stream_options", `{"model":"m","stream":true,"stream_options":{"foo":"bar"}}`,
+			`{"model":"m","stream":true,"stream_options":{"foo":"bar"}}`},
+		{"null stream_options", `{"model":"m","stream":true,"stream_options":null}`,
+			`{"model":"m","stream":true,"stream_options":null}`},
+		{"stream as a string", `{"model":"m","stream":"true"}`, `{"model":"m","stream":"true"}`},
+	} {
+		if got := prepareBody(t, openaiAdapter{}, c.body); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
 	}
 }
 

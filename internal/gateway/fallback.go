@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -132,16 +133,34 @@ type walkState struct {
 	// candidate (hard enforcement); the walk never re-admits the primary.
 	primarySettle func(costUSD float64)
 
-	// Crossing formats (since v0.7.0). parsed is the request as the caller
-	// sent it; inboundFormat is its format, or "" when it cannot cross (the
-	// legacy completions shape, Vertex). modelFor carries each candidate's
-	// model with the edge's modelMap applied; translated caches the body
+	// Crossing formats (since v0.7.0). body is the prepared request: the
+	// caller's bytes with the model rewritten and any stream_options added.
+	// request decodes it, once, when a crossing candidate needs it.
+	// inboundFormat is its format, or "" when it cannot cross (the legacy
+	// completions shape, Vertex). modelFor carries each candidate's model
+	// with the edge's modelMap applied; translated caches the body
 	// translated for each crossing candidate, built by the eligibility check
 	// and consumed by the attempt.
+	body          []byte
 	parsed        map[string]any
+	parsedDone    bool
 	inboundFormat llmtranslate.Format
 	modelFor      map[string]string
 	translated    map[string]map[string]any
+}
+
+// request returns the prepared body decoded, or nil when it is empty or
+// does not decode to an object. Only a crossing candidate needs the map, so
+// the decode waits until one does, and runs once.
+func (st *walkState) request() map[string]any {
+	if !st.parsedDone {
+		st.parsedDone = true
+		var m map[string]any
+		if len(st.body) > 0 && json.Unmarshal(st.body, &m) == nil {
+			st.parsed = m
+		}
+	}
+	return st.parsed
 }
 
 // candidateModel is the model a candidate serves: the edge's mapping when
@@ -348,9 +367,9 @@ func (s *Server) staticallyIneligible(provider *kaalmv1beta1.ModelProvider, st *
 	if !found {
 		return fmt.Sprintf("model %q not offered", model)
 	}
-	if st.crosses(provider) && st.parsed != nil {
+	if st.crosses(provider) && st.request() != nil {
 		if _, done := st.translated[provider.Name]; !done {
-			body, err := llmtranslate.Request(st.inboundFormat, formatForType(provider.Spec.Type), st.parsed, model,
+			body, err := llmtranslate.Request(st.inboundFormat, formatForType(provider.Spec.Type), st.request(), model,
 				maxOutputTokensOf(provider, model))
 			if err != nil {
 				return err.Error()
