@@ -76,7 +76,9 @@ func (k *KubeStore) secret(ctx context.Context, namespace, name string) (*corev1
 	return &sec, nil
 }
 
-// AgentByName looks up an Agent in the cache.
+// AgentByName looks up an Agent in the cache. The object is read-only: the
+// gateway cache skips the deep copy for this kind (cmd/gateway), so its maps
+// and slices are shared with the cache.
 func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*kaalmv1beta1.Agent, bool) {
 	var a kaalmv1beta1.Agent
 	if err := k.Reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &a); err != nil {
@@ -85,7 +87,9 @@ func (k *KubeStore) AgentByName(ctx context.Context, ns, name string) (*kaalmv1b
 	return &a, true
 }
 
-// TaskByName looks up an AgentTask in the cache.
+// TaskByName looks up an AgentTask in the cache. The object is read-only: the
+// gateway cache skips the deep copy for this kind (cmd/gateway), so its maps
+// and slices are shared with the cache.
 func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*kaalmv1beta1.AgentTask, bool) {
 	var t kaalmv1beta1.AgentTask
 	if err := k.Reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &t); err != nil {
@@ -94,7 +98,9 @@ func (k *KubeStore) TaskByName(ctx context.Context, ns, name string) (*kaalmv1be
 	return &t, true
 }
 
-// ClassByName looks up an AgentClass in the cache.
+// ClassByName looks up an AgentClass in the cache. The object is read-only: the
+// gateway cache skips the deep copy for this kind (cmd/gateway), so its maps
+// and slices are shared with the cache.
 func (k *KubeStore) ClassByName(ctx context.Context, name string) (*kaalmv1beta1.AgentClass, bool) {
 	var c kaalmv1beta1.AgentClass
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &c); err != nil {
@@ -103,7 +109,9 @@ func (k *KubeStore) ClassByName(ctx context.Context, name string) (*kaalmv1beta1
 	return &c, true
 }
 
-// ProviderByName looks up a ModelProvider in the cache.
+// ProviderByName looks up a ModelProvider in the cache. The object is read-only: the
+// gateway cache skips the deep copy for this kind (cmd/gateway), so its maps
+// and slices are shared with the cache.
 func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ModelProvider, bool) {
 	var p kaalmv1beta1.ModelProvider
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &p); err != nil {
@@ -112,7 +120,9 @@ func (k *KubeStore) ProviderByName(ctx context.Context, name string) (*kaalmv1be
 	return &p, true
 }
 
-// ToolProviderByName looks up a ToolProvider in the cache.
+// ToolProviderByName looks up a ToolProvider in the cache. The object is read-only: the
+// gateway cache skips the deep copy for this kind (cmd/gateway), so its maps
+// and slices are shared with the cache.
 func (k *KubeStore) ToolProviderByName(ctx context.Context, name string) (*kaalmv1beta1.ToolProvider, bool) {
 	var tp kaalmv1beta1.ToolProvider
 	if err := k.Reader.Get(ctx, types.NamespacedName{Name: name}, &tp); err != nil {
