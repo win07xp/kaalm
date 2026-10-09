@@ -783,8 +783,8 @@ func relayMCPBuffered(
 	return int64(n), resp.StatusCode, "", ""
 }
 
-// relayMCPStream forwards SSE events as they arrive, flushing per line,
-// bounded by the response cap and the caller's disconnect. The status line
+// relayMCPStream forwards SSE events as each one completes (events that
+// arrive together leave in one write, see eventFlusher), bounded by the response cap and the caller's disconnect. The status line
 // is already sent, so no error response is possible once the stream runs:
 // it ends with one JSON-RPC error event for the request id when it passes
 // the cap (response_too_large), when the upstream deadline passes
@@ -825,7 +825,8 @@ func relayMCPStream(
 	// Reading one byte past the cap tells a stream that passes it apart
 	// from one that ends exactly at it; the split counts raw bytes,
 	// line terminators included.
-	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxBytes+1))
+	ef := &eventFlusher{r: io.LimitReader(resp.Body, maxBytes+1), f: flusher}
+	scanner := bufio.NewScanner(ef)
 	scanner.Buffer(make([]byte, 0, 64*1024), int(maxBytes)+1)
 	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
 		advance, token, err := bufio.ScanLines(data, atEOF)
@@ -857,7 +858,7 @@ func relayMCPStream(
 		if err != nil {
 			return written, outcomeClientClosed, ""
 		}
-		flush()
+		ef.wrote(line)
 	}
 	err := scanner.Err()
 	switch {
@@ -882,8 +883,9 @@ func relayMCPStream(
 			bodyLog("mcp stream", tail)
 			n, _ := w.Write(append(tail, '\n'))
 			written += int64(n)
-			flush()
+			ef.wrote(tail)
 		}
+		ef.end()
 		return written, "", ""
 	default:
 		msg := fmt.Sprintf("reading the stream from tool provider %q failed; the stream is truncated", providerName)

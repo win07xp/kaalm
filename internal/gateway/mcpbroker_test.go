@@ -532,6 +532,70 @@ func TestMCPBroker_SSEStreamRelayed(t *testing.T) {
 	}
 }
 
+// A tool stream's event (a data line and a blank line) goes out in one
+// flush, not one per line.
+func TestRelayMCPStream_FlushesOncePerEventBoundary(t *testing.T) {
+	events := mcpStreamEvents(9) // ten events
+	w := newCountingWriter()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mcp/search", nil)
+	if _, errType, _ := relayMCPStream(w, req, sseResponse(events), 1<<20, json.RawMessage("7"), "search"); errType != "" {
+		t.Fatalf("errType = %q", errType)
+	}
+	if w.flushes != len(events) {
+		t.Errorf("flushes = %d, want one per event (%d)", w.flushes, len(events))
+	}
+}
+
+// A complete tool event reaches the caller while the tool server is still
+// sending the next one.
+func TestRelayMCPStream_CompleteEventNotHeldForTheNext(t *testing.T) {
+	eventA := `data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}` + "\n\n"
+	for _, c := range []struct{ name, next string }{
+		{"next event line", "event: message\n"},
+		{"partial next line", `data: {"js`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			release := make(chan struct{})
+			h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, eventA+c.next)
+				w.(http.Flusher).Flush()
+				select {
+				case <-release:
+				case <-r.Context().Done():
+				}
+			})
+			defer close(release)
+			h.seedToolRoute()
+			cert := agentCert(t, h.ca)
+
+			resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"), mcpCall("web_search"), nil)
+			defer func() { _ = resp.Body.Close() }()
+			got := make(chan string, 1)
+			go func() {
+				br := bufio.NewReader(resp.Body)
+				var seen strings.Builder
+				for {
+					line, err := br.ReadString('\n')
+					seen.WriteString(line)
+					if err != nil || line == "\n" {
+						got <- seen.String()
+						return
+					}
+				}
+			}()
+			select {
+			case text := <-got:
+				if text != eventA {
+					t.Errorf("first event = %q, want %q", text, eventA)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("the complete event was held until the tool server sent more")
+			}
+		})
+	}
+}
+
 func TestMCPBroker_UpstreamFailureMapping(t *testing.T) {
 	t.Run("refused connection", func(t *testing.T) {
 		h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {})

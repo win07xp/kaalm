@@ -583,7 +583,8 @@ func isSSE(resp *http.Response) bool {
 	return strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 }
 
-// relayStream forwards SSE chunks as they arrive with no buffering, folding
+// relayStream forwards SSE events to the caller as each one completes, and
+// events that arrive together leave in one write (see eventFlusher). It folds
 // usage out of the events the adapter recognizes. Spend is recorded, and the
 // tokens debited from the token rate limit, after the stream ends. A stream
 // that ends without usage settles at zero spend and is reported by
@@ -621,7 +622,8 @@ func (s *Server) relayStream(
 		}
 	}()
 
-	scanner := bufio.NewScanner(resp.Body)
+	ef := &eventFlusher{r: resp.Body, f: flusher}
+	scanner := bufio.NewScanner(ef)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	callerLeft := func() string {
 		spanError(ctx, outcomeClientClosed)
@@ -631,9 +633,7 @@ func (s *Server) relayStream(
 		if _, err := w.Write(append(line, '\n')); err != nil {
 			return false
 		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		ef.wrote(line)
 		return true
 	}
 	for scanner.Scan() {
@@ -675,6 +675,7 @@ func (s *Server) relayStream(
 				break
 			}
 		}
+		ef.end()
 		return outcomeError
 	}
 	if translator != nil {
@@ -684,6 +685,7 @@ func (s *Server) relayStream(
 			}
 		}
 	}
+	ef.end()
 	return outcomeOK
 }
 
