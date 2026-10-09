@@ -117,6 +117,8 @@ func TestHandleLLMProxy_RejectsDuplicateRoutingFields(t *testing.T) {
 	for _, c := range []struct{ body, field string }{
 		{`{"model":"prov/m1","model":"prov/m1","messages":[]}`, "model"},
 		{`{"model":"prov/m1","model":"other/m9","messages":[]}`, "model"},
+		{`{"model":"prov/m1","\u006dodel":"other/m9","messages":[]}`, "model"},
+		{`{"model":"prov/m1","\u0073tream":true,"stream":false}`, "stream"},
 		{`{"model":"prov/m1","stream":true,"stream":false,"messages":[]}`, "stream"},
 		{`{"model":"prov/m1","stream":true,"stream_options":null,"stream_options":{"include_usage":false}}`, "stream_options"},
 	} {
@@ -230,6 +232,9 @@ func TestScanRequestFields(t *testing.T) {
 		{body: `{"stream":"true","Model":"p/m"}`, members: 2},
 		{body: `{"model":"p/m","s\"q":"\\\""}`, model: "p/m", members: 2},
 		{body: `{"model":"p/m","model":"p/m"}`, err: `request body has more than one "model" field`},
+		{body: `{"model":"p/m","\u006dodel":"q/n"}`, err: `request body has more than one "model" field`},
+		{body: `{"\u0073tream":true,"stream":false}`, err: `request body has more than one "stream" field`},
+		{body: `{"\u006dodel":"p/m","stream":true}`, model: "p/m", streamTrue: true, members: 2},
 		{body: `{"stream":false,"stream":true}`, err: `request body has more than one "stream" field`},
 		{body: `{"stream_options":{},"stream_options":{}}`, err: `request body has more than one "stream_options" field`},
 		{body: `[]`, err: errNotObject.Error()},
@@ -290,6 +295,7 @@ func FuzzScanRequestFields(f *testing.F) {
 	for _, s := range []string{
 		`{}`, `{"model":"p/m","stream":true}`, `{"model":"p\/m","stream":true,"stream_options":null}`,
 		`{"model":"x"}`, `{ "a" : [ 1 , { "b" : "}" } ] , "model" : "q" }`, `{"model":"a","model":"b"}`,
+		`{"model":"a","\u006dodel":"b"}`, `{"\u006dodel":"a","\u0073tream":true}`,
 		`{"seed":12345678901234567891,"model":"m","messages":[{"content":"<b>\"x\"</b>"}]}`,
 		"{\"mod\xffel\":1,\"model\":\"\xff\"}", `{"stream":true}`, `{"Stream":true,"STREAM_OPTIONS":1}`,
 	} {

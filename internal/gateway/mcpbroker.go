@@ -822,14 +822,15 @@ func relayMCPBuffered(
 }
 
 // relayMCPStream forwards SSE events as each one completes (events that
-// arrive together leave in one write, see eventFlusher), bounded by the response cap and the caller's disconnect. The status line
-// is already sent, so no error response is possible once the stream runs:
-// it ends with one JSON-RPC error event for the request id when it passes
-// the cap (response_too_large), when the upstream deadline passes
-// (tool_timeout), or when the upstream read fails for any other reason
-// (tool_unavailable). On those failures the line the failure cut off is not
-// forwarded, so the event parses as its own message. A caller that left
-// gets no event, and the call's error type is client_closed. It returns the upstream bytes relayed
+// arrive together leave in one write, see eventFlusher), bounded by the
+// response cap and the caller's disconnect. The status line is already sent,
+// so no error response is possible once the stream runs: it ends with one
+// JSON-RPC error event for the request id when it passes the cap
+// (response_too_large), when the upstream deadline passes (tool_timeout), or
+// when the upstream read fails for any other reason (tool_unavailable). On
+// those failures the line the failure cut off is not forwarded, so the event
+// parses as its own message. A caller that left gets no event, and the call's
+// error type is client_closed. It returns the upstream bytes relayed
 // downstream, the error type, and the audit detail; only the detail carries
 // the transport error, because it can name the tool server's address.
 func relayMCPStream(
