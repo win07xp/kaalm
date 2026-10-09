@@ -453,3 +453,31 @@ func TestAccessChecker_CallerCancelDoesNotFailOthers(t *testing.T) {
 		t.Errorf("other waiter = %v, %v; want the shared answer true", r.ok, r.err)
 	}
 }
+
+func TestCachingReviewer_CancelledCallerStartsNoReview(t *testing.T) {
+	inner := &fakeReviewer{}
+	c := NewCachingReviewer(inner)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Review(ctx, "tok"); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := inner.count(); n != 0 {
+		t.Errorf("reviews run = %d, want 0 for a cancelled caller", n)
+	}
+}
+
+func TestAccessChecker_CancelledCallerStartsNoReview(t *testing.T) {
+	az := &fakeAuthorizer{}
+	g := NewAccessChecker(az)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := g.CanView(ctx, Identity{Username: "dev"}, "team-a"); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := az.count(); n != 0 {
+		t.Errorf("reviews run = %d, want 0 for a cancelled caller", n)
+	}
+}

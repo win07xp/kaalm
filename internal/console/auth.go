@@ -169,6 +169,11 @@ func (g *AccessChecker) allowed(ctx context.Context, id Identity, namespace, ver
 	if allowed, ok := g.cached(key); ok {
 		return allowed, nil
 	}
+	// A caller already gone starts no review: the review would run detached
+	// and cost a SubjectAccessReview nobody waits for.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	// NUL cannot appear in a username, a namespace, or a verb.
 	flight := g.flights.DoChan(key.user+"\x00"+key.namespace+"\x00"+key.verb, func() (any, error) {
 		if allowed, ok := g.cached(key); ok {
@@ -254,6 +259,10 @@ func (c *CachingReviewer) Review(ctx context.Context, token string) (Identity, e
 	key := sha256.Sum256([]byte(token))
 	if e, ok := c.cached(key); ok {
 		return e.id, e.err
+	}
+	// A caller already gone starts no review, as in AccessChecker.allowed.
+	if err := ctx.Err(); err != nil {
+		return Identity{}, err
 	}
 	flight := c.flights.DoChan(string(key[:]), func() (any, error) {
 		if e, ok := c.cached(key); ok {

@@ -511,3 +511,30 @@ func TestVisibleNamespaces_ChecksNamespacesInParallel(t *testing.T) {
 		t.Error("a failed review must fail the namespace list")
 	}
 }
+
+func TestVisibleNamespaces_StartsNoReviewAfterAFailure(t *testing.T) {
+	var objs []client.Object
+	for i := range 40 {
+		objs = append(objs, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("ns-%02d", i)}})
+	}
+	data := &Data{Reader: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()}
+	failKey := "dev/list/agents.kaalm.io/ns-00"
+	az := &fakeAuthorizer{fail: map[string]bool{failKey: true}, hook: func(key string) {
+		// Hold every other review so the failure lands while the first
+		// batch is still in flight.
+		if key != failKey {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}}
+	s := NewServer(Config{}, data, &fakeReviewer{}, NewAccessChecker(az), &fakeChat{})
+
+	if _, err := s.visibleNamespaces(context.Background(), Identity{Username: "dev"}); err == nil {
+		t.Fatal("a failed review must fail the namespace list")
+	}
+	// Reviews already in flight finish in the background; none may start
+	// after the failure cancels the list.
+	time.Sleep(200 * time.Millisecond)
+	if n := az.count(); n > namespaceReviewParallelism+1 {
+		t.Errorf("reviews run = %d, want at most %d (the first batch and the cluster-wide check)", n, namespaceReviewParallelism+1)
+	}
+}
