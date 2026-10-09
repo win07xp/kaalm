@@ -732,9 +732,12 @@ func streamErrorType(cause error) string {
 
 // usageMissing reports a 2xx response that settles at zero spend because it
 // carried no usage. Under hard enforcement such a response is invisible to
-// the budget, so it is logged and counted.
+// the budget, so it is counted, and logged at most once a minute per
+// provider: the line names the first response of each window.
 func (s *Server) usageMissing(namespace, provider, modelID string) {
-	slog.Warn("LLM response carried no usage; settled at zero spend",
-		"namespace", namespace, "provider", provider, "model", modelID)
+	if s.usageMissingLog.allow(provider, usageMissingLogInterval) {
+		slog.Warn("LLM response carried no usage; settled at zero spend",
+			"namespace", namespace, "provider", provider, "model", modelID)
+	}
 	s.Metrics.UsageMissing(provider, modelID)
 }

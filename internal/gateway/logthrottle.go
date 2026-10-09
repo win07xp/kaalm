@@ -28,10 +28,18 @@ import (
 // the ModelProvider or ToolProvider status already carries the cause.
 const credentialLogInterval = time.Minute
 
+// usageMissingLogInterval paces the warning for an LLM response that
+// carried no usage: one line per provider per minute per replica. A
+// provider that never reports usage repeats it on every request, and
+// kaalm_llm_usage_missing_total counts each response.
+const usageMissingLogInterval = time.Minute
+
 // logThrottle paces a log line per key: allow grants at most one line per key
 // in each interval. The zero value is ready to use. Entries are never pruned,
 // because the keys are ModelProvider or ToolProvider names (one throttle per
-// plane) and that set is bounded by the cluster's provider count.
+// warning: the credential warnings of each plane, the tool server's
+// rejection, and the missing usage) and that set is bounded by the
+// cluster's provider count.
 type logThrottle struct {
 	mu   sync.Mutex
 	last map[string]time.Time
