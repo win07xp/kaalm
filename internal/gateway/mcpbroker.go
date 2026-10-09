@@ -670,8 +670,10 @@ func (s *Server) relayFilteredToolsList(
 		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
 	if parsed.Error == nil && parsed.Result != nil {
+		// A null result decodes to a nil map: it holds no tools, so it is
+		// relayed unfiltered, like any result that is not an object.
 		var result map[string]json.RawMessage
-		if err := json.Unmarshal(parsed.Result, &result); err == nil {
+		if err := json.Unmarshal(parsed.Result, &result); err == nil && result != nil {
 			var tools []json.RawMessage
 			_ = json.Unmarshal(result["tools"], &tools)
 			kept := make([]json.RawMessage, 0, len(tools))

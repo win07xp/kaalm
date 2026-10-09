@@ -425,6 +425,26 @@ func TestMCPBroker_ToolsListAnswerCarriesOneMember(t *testing.T) {
 	}
 }
 
+// A tools/list answer whose result is null carries no tools to filter: a
+// narrowed caller gets it relayed, not a dropped connection.
+func TestMCPBroker_ToolsListNullResultIsRelayed(t *testing.T) {
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := relayToolsList(t, mode, `{"jsonrpc":"2.0","id":3,"result":null}`)
+			var got map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("decode %s: %v", raw, err)
+			}
+			if string(got["id"]) != "3" {
+				t.Errorf("id = %s, want 3 (body: %s)", got["id"], raw)
+			}
+			if r, ok := got["result"]; ok && string(r) != "null" {
+				t.Errorf("result = %s, want null or absent (body: %s)", r, raw)
+			}
+		})
+	}
+}
+
 func TestMCPBroker_SessionOwnership(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
