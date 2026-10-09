@@ -121,3 +121,11 @@ func createOrDelete() predicate.Predicate {
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
 }
+
+// fallbackSpecChanged admits a ModelProvider create, delete, or spec edit
+// (a generation change). The fallback checks read only other providers'
+// spec and existence, so a provider's status write (a spend fold) wakes no
+// fallback chain.
+func fallbackSpecChanged() predicate.Predicate {
+	return predicate.GenerationChangedPredicate{}
+}

@@ -190,3 +190,28 @@ func TestReferrerWatch_CreateOrDelete(t *testing.T) {
 		t.Error("createOrDelete admitted a generic event")
 	}
 }
+
+// fallbackSpecChanged is the predicate on the ModelProvider reconciler's
+// fallback watch: a provider status write (a spend fold) wakes no fallback
+// chain, and a create, delete, or spec edit does.
+func TestReferrerWatch_FallbackSpecChanged(t *testing.T) {
+	p := fallbackSpecChanged()
+	mp := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "mp", ResourceVersion: "1", Generation: 2}}
+
+	statusOnly := mp.DeepCopy()
+	statusOnly.ResourceVersion = "2"
+	statusOnly.Status.ObservedGeneration = 2
+	if admitsUpdate(p, mp, statusOnly) {
+		t.Error("a status-only provider update was admitted")
+	}
+
+	edited := mp.DeepCopy()
+	edited.ResourceVersion = "3"
+	edited.Generation = 3
+	if !admitsUpdate(p, mp, edited) {
+		t.Error("a provider spec edit was rejected")
+	}
+	if !p.Create(event.CreateEvent{Object: mp}) || !p.Delete(event.DeleteEvent{Object: mp}) {
+		t.Error("a provider create or delete was rejected")
+	}
+}

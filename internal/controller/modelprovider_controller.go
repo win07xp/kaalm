@@ -755,10 +755,8 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
-		// The fallback checks read other providers' spec and existence only,
-		// so a provider's status write (a spend fold) wakes no chain.
 		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+			builder.WithPredicates(fallbackSpecChanged())).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.providersForSecret)).
 		// GatewayReachable follows gateway Pod readiness event-driven.
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.allModelProviders),
