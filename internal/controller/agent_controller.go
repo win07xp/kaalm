@@ -1577,8 +1577,10 @@ func (r *AgentReconciler) driftWaitersOfClass(ctx context.Context, obj client.Ob
 	if !ok {
 		return nil
 	}
+	// The items are the cache's own objects, only read here.
 	var agents kaalmv1beta1.AgentList
-	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: ag.Spec.AgentClassRef.Name}); err != nil {
+	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: ag.Spec.AgentClassRef.Name},
+		client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	var reqs []reconcile.Request

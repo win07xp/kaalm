@@ -43,7 +43,8 @@ func (r *ModelProviderReconciler) scanFallbackEligibility(ctx context.Context, m
 			return err
 		}
 		var list kaalmv1beta1.ModelProviderList
-		if err := r.List(ctx, &list); err != nil {
+		// The items are the cache's own objects, only read here.
+		if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 			return err
 		}
 		providers := make(map[string]*kaalmv1beta1.ModelProvider, len(list.Items))
@@ -61,15 +62,17 @@ func (r *ModelProviderReconciler) scanFallbackEligibility(ctx context.Context, m
 // namespaces whose requests can reach its fallbacks.
 func (r *ModelProviderReconciler) callerNamespaces(ctx context.Context, mp *kaalmv1beta1.ModelProvider) ([]string, error) {
 	seen := map[string]bool{}
+	// Both lists hand back the cache's own objects; only their namespaces
+	// are read.
 	var agents kaalmv1beta1.AgentList
-	if err := r.List(ctx, &agents, client.MatchingFields{IndexProviderRef: mp.Name}); err != nil {
+	if err := r.List(ctx, &agents, client.MatchingFields{IndexProviderRef: mp.Name}, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, err
 	}
 	for i := range agents.Items {
 		seen[agents.Items[i].Namespace] = true
 	}
 	var tasks kaalmv1beta1.AgentTaskList
-	if err := r.List(ctx, &tasks, client.MatchingFields{IndexProviderRef: mp.Name}); err != nil {
+	if err := r.List(ctx, &tasks, client.MatchingFields{IndexProviderRef: mp.Name}, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, err
 	}
 	for i := range tasks.Items {
