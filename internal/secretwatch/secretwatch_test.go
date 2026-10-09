@@ -309,15 +309,25 @@ func TestWatcherConcurrentReadsOfAFailingSecret(t *testing.T) {
 	w := New(ctx, g.cs)
 	w.ErrorTTL = 20 * time.Millisecond
 
+	// Each reader polls on its own deadline and reports with t.Error:
+	// t.Fatal must run on the test goroutine.
+	deadline := time.Now().Add(waitTimeout)
 	var wg sync.WaitGroup
-	for range 20 {
+	for i := range 20 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			eventually(t, func() bool {
+			for {
 				_, err := w.Get(ctx, "team-a", "hook")
-				return err == nil
-			})
+				if err == nil {
+					return
+				}
+				if time.Now().After(deadline) {
+					t.Errorf("reader %d: no successful read in time, last error: %v", i, err)
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 		}()
 	}
 	time.Sleep(50 * time.Millisecond)
