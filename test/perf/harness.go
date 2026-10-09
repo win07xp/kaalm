@@ -367,12 +367,22 @@ func (h *harness) printTable() {
 		fmt.Printf("; wakes %.0f %v; hibernations %.0f; wake p50/p95/p99 %.0f/%.0f/%.0f ms; callbacks %.0f; statuses %v\n",
 			c.WakesTotal, c.WakesByResult, c.HibernationsTotal, c.WakeDurationMs.P50, c.WakeDurationMs.P95,
 			c.WakeDurationMs.P99, c.Callbacks, c.MessagesByStatus)
+		if a := c.Active; a != nil {
+			fmt.Printf("churn active audit (%.0fs, %d agents): controller %.1f req/s, %.2f writes/agent/min; "+
+				"gateway %.1f req/s; apiserver %v\n",
+				a.Seconds, a.Agents, a.ControllerRequestsPerSec, a.ControllerWritesPerAgentMinute,
+				a.GatewayRequestsPerSec, topEntries(a.APIServer, 6))
+		}
 	}
 	if t := s.Tasks; t != nil {
 		fmt.Printf("\ntasks: %d submitted in %.0fs; phases %v; makespan %.0fs (%.1f/min)",
 			t.Submitted, t.SubmitSec, t.Phases, t.MakespanSec, t.ThroughputPerMin)
 		fmt.Printf("; provision p50 %.0fs; run p50 %.0fs; total p50/p95 %.0f/%.0fs; retries %d\n",
 			t.ProvisionSec.P50, t.RunSec.P50, t.TotalSec.P50, t.TotalSec.P95, t.Retries)
+		if a := t.Audit; a != nil {
+			fmt.Printf("tasks audit (%.0fs): controller %.1f req/s; gateway %.1f req/s; apiserver %v\n",
+				a.Seconds, a.ControllerRequestsPerSec, a.GatewayRequestsPerSec, topEntries(a.APIServer, 6))
+		}
 	}
 	if n := s.Namespaces; n != nil {
 		fmt.Printf("\nnamespaces: the fleet spread over %d namespaces\n", n.Namespaces)
