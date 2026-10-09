@@ -445,6 +445,35 @@ func TestMCPBroker_ToolsListNullResultIsRelayed(t *testing.T) {
 	}
 }
 
+// An answer carrying an error member alongside its result still has the
+// result filtered: the caller never sees a tool its grant leaves out.
+func TestMCPBroker_ToolsListFilteredEvenWithAnError(t *testing.T) {
+	upstream := `{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"partial"},` +
+		`"result":{"tools":[{"name":"web_search"},{"name":"fetch_page"},{"name":"admin_reset"}]}}`
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := relayToolsList(t, mode, upstream)
+			var got struct {
+				Result struct {
+					Tools []struct {
+						Name string `json:"name"`
+					} `json:"tools"`
+				} `json:"result"`
+				Error *mcp.RPCError `json:"error"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("decode %s: %v", raw, err)
+			}
+			if len(got.Result.Tools) != 1 || got.Result.Tools[0].Name != "web_search" {
+				t.Errorf("tools = %+v, want only the granted web_search (body: %s)", got.Result.Tools, raw)
+			}
+			if got.Error == nil || got.Error.Code != -32000 {
+				t.Errorf("error = %+v, want the upstream error relayed (body: %s)", got.Error, raw)
+			}
+		})
+	}
+}
+
 func TestMCPBroker_SessionOwnership(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

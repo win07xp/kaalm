@@ -669,7 +669,9 @@ func (s *Server) relayFilteredToolsList(
 			Message: msg, Provider: providerName}, 0)
 		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
-	if parsed.Error == nil && parsed.Result != nil {
+	// Any result is filtered, even one that arrives beside an error member:
+	// the error is relayed too, and the tools must not leak through it.
+	if parsed.Result != nil {
 		// A null result decodes to a nil map: it holds no tools, so it is
 		// relayed unfiltered, like any result that is not an object.
 		var result map[string]json.RawMessage
