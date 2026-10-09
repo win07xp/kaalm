@@ -905,15 +905,15 @@ func (r *AgentChannelReconciler) reducePhase(channel *kaalmv1beta1.AgentChannel,
 // pruneAsyncConfigMaps deletes this channel's async response records. A
 // normal pass deletes the ones asyncRecordExpired reports, which includes the
 // creationTimestamp fallback for a record with no parseable expiry; the
-// finalizer sweep deletes them all.
+// finalizer sweep deletes them all. The list goes through IndexAsyncChannel,
+// so a pass reads only this channel's records, not every ConfigMap in the
+// operator namespace.
 func (r *AgentChannelReconciler) pruneAsyncConfigMaps(
 	ctx context.Context, channel *kaalmv1beta1.AgentChannel, sweepAll bool,
 ) error {
 	var cms corev1.ConfigMapList
-	if err := r.List(ctx, &cms, client.InNamespace(r.OperatorNamespace), client.MatchingLabels(map[string]string{
-		kaalmv1beta1.LabelChannelNamespace: channel.Namespace,
-		kaalmv1beta1.LabelChannelName:      channel.Name,
-	})); err != nil {
+	if err := r.List(ctx, &cms, client.InNamespace(r.OperatorNamespace),
+		client.MatchingFields{IndexAsyncChannel: channel.Namespace + "/" + channel.Name}); err != nil {
 		return err
 	}
 	now := time.Now()

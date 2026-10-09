@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -55,6 +58,10 @@ const (
 	// credentials reference, the names authSecretNames returns (a
 	// multi-value index).
 	IndexChannelSecretRef = "spec.secretRef.name"
+	// IndexAsyncChannel indexes the gateway's kaalm-async-* ConfigMaps by
+	// the channel their labels name, as "namespace/name", so a channel's
+	// prune reads only its own records.
+	IndexAsyncChannel = "asyncRecord.channel"
 )
 
 // SetupIndexers registers the field indexers the reconcilers depend on. It must
@@ -121,7 +128,24 @@ func SetupIndexers(ctx context.Context, mgr ctrl.Manager) error {
 	if err := idx.IndexField(ctx, &kaalmv1beta1.AgentChannel{}, IndexChannelSecretRef, channelSecretRefIndex); err != nil {
 		return err
 	}
+	if err := idx.IndexField(ctx, &corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex); err != nil {
+		return err
+	}
 	return nil
+}
+
+// asyncChannelIndex is the IndexAsyncChannel extractor. A record without
+// both channel labels, or a ConfigMap that is not an async record, is not
+// indexed.
+func asyncChannelIndex(o client.Object) []string {
+	if !strings.HasPrefix(o.GetName(), "kaalm-async-") {
+		return nil
+	}
+	ns, name := o.GetLabels()[kaalmv1beta1.LabelChannelNamespace], o.GetLabels()[kaalmv1beta1.LabelChannelName]
+	if ns == "" || name == "" {
+		return nil
+	}
+	return []string{ns + "/" + name}
 }
 
 // channelPathIndex is the IndexChannelPath extractor.

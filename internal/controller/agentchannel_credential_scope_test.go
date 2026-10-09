@@ -102,7 +102,7 @@ func preScopeObjects(t *testing.T, ch *kaalmv1beta1.AgentChannel) []client.Objec
 // scopeReconcile runs one channel pass on a fake client holding objs.
 func scopeReconcile(t *testing.T, ch *kaalmv1beta1.AgentChannel, objs ...client.Object) client.Client {
 	t.Helper()
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
 		WithObjects(append(objs, ch)...).WithStatusSubresource(ch).
 		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).Build()
 	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
@@ -199,7 +199,7 @@ func TestChannel_NotReadyPassWritesNothing(t *testing.T) {
 	}
 	var writes int
 	count := func() { writes++ }
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
 		WithObjects(ch, sec).WithStatusSubresource(ch).
 		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -317,7 +317,7 @@ func TestChannel_RoleWriteRejectedIsChildWriteRejected(t *testing.T) {
 			if !tc.preScope {
 				objs = objs[:2] // the Secrets only
 			}
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
 				WithObjects(append(objs, agent, ch)...).WithStatusSubresource(ch).
 				WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
 				WithInterceptorFuncs(roleWriteFailure(tc.verb, tc.object, forbidden)).Build()
@@ -354,7 +354,7 @@ func TestChannel_RoleWriteTransientErrorRetries(t *testing.T) {
 	ch := scopeFakeChannel("/channels/default/scope-ch")
 	agent := &kaalmv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "scope-agent", Namespace: "default"}}
 	unavailable := apierrors.NewServiceUnavailable("etcd is down")
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
 		WithObjects(append(preScopeObjects(t, ch)[:2], agent, ch)...).WithStatusSubresource(ch).
 		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
 		WithInterceptorFuncs(roleWriteFailure("create", channelRoleName(ch.Name), unavailable)).Build()
