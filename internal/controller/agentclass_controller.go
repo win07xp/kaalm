@@ -393,8 +393,10 @@ func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&kaalmv1beta1.AgentClass{}).
 		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider)).
 		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider)).
-		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
-		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload))
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload),
+			builder.WithPredicates(classUsageChanged())).
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload),
+			builder.WithPredicates(classUsageChanged()))
 	if r.CertCleanup != nil {
 		// cert-manager adds or removes the ownerReference on the controller
 		// Secret when its flag changes; re-evaluate every class then.
@@ -449,8 +451,9 @@ func (r *AgentClassReconciler) classesForProvider(ctx context.Context, obj clien
 	return reqs
 }
 
-// classForWorkload re-enqueues the AgentClass a workload references, so usage
-// counts and the delete hold stay fresh.
+// classForWorkload re-enqueues the AgentClass a workload references, on its
+// create and delete and on the changes classUsageChanged admits, so usage
+// counts, drift counts, and the delete hold stay fresh.
 func classForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
 	var className string
 	switch w := obj.(type) {

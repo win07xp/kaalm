@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -747,9 +748,12 @@ func (r *ModelProviderReconciler) finish(
 func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kaalmv1beta1.ModelProvider{}).
-		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload)).
-		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload)).
-		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass)).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload),
+			builder.WithPredicates(providerRefsChanged())).
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload),
+			builder.WithPredicates(providerRefsChanged())).
+		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
 		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.providersForSecret)).
@@ -812,6 +816,9 @@ func (r *ModelProviderReconciler) providerForBudgetCM(_ context.Context, obj cli
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }
 
+// providersForWorkload re-enqueues the providers an Agent or AgentTask names,
+// on its create and delete and when its provider references change
+// (providerRefsChanged), so the delete hold and the eligibility scan follow.
 func providersForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
 	var refs []kaalmv1beta1.AgentProviderReference
 	switch w := obj.(type) {
@@ -829,6 +836,8 @@ func providersForWorkload(_ context.Context, obj client.Object) []reconcile.Requ
 	return reqs
 }
 
+// providersForClass re-enqueues the providers an AgentClass allows, on its
+// create and delete and when its spec changes, so the delete hold follows.
 func providersForClass(_ context.Context, obj client.Object) []reconcile.Request {
 	ac, ok := obj.(*kaalmv1beta1.AgentClass)
 	if !ok {

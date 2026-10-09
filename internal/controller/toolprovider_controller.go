@@ -30,10 +30,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -292,12 +294,18 @@ func (r *ToolProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kaalmv1beta1.ToolProvider{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.toolProvidersForSecret)).
-		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
-		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload)).
-		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForClass)).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload),
+			builder.WithPredicates(toolGrantsChanged())).
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload),
+			builder.WithPredicates(toolGrantsChanged())).
+		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForClass),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 
+// toolProvidersForWorkload re-enqueues the ToolProviders an Agent or
+// AgentTask grants, on its create and delete and when its grants change
+// (toolGrantsChanged), so the delete hold follows.
 func toolProvidersForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
 	var grants []kaalmv1beta1.AgentToolGrant
 	switch w := obj.(type) {
@@ -315,6 +323,8 @@ func toolProvidersForWorkload(_ context.Context, obj client.Object) []reconcile.
 	return reqs
 }
 
+// toolProvidersForClass re-enqueues the ToolProviders an AgentClass allows,
+// on its create and delete and when its spec changes.
 func toolProvidersForClass(_ context.Context, obj client.Object) []reconcile.Request {
 	ac, ok := obj.(*kaalmv1beta1.AgentClass)
 	if !ok {
