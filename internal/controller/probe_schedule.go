@@ -28,7 +28,7 @@ import (
 // probeKey names the inputs a provider's liveness probe depends on: the
 // object (its UID, so a provider recreated under the same name probes
 // afresh), its spec (the generation), and the credential the probe sends,
-// kept only as a hash so the gate never holds the key itself.
+// kept only as a hash so the schedule never holds the key itself.
 type probeKey struct {
 	uid        types.UID
 	generation int64
@@ -48,16 +48,16 @@ type probeRecord[R any] struct {
 	due    time.Time
 }
 
-// probeGate lets a provider reconciler dial the upstream only when a probe
+// probeSchedule lets a provider reconciler dial the upstream only when a probe
 // is due. A provider reconciles on many events that do not touch the probe's
 // inputs (a referrer created, a budget write, a gateway Pod turning Ready),
 // and a dial on each of them costs an upstream request per event. A pass
-// probes when the gate holds no record for the provider, when the spec or
+// probes when the schedule holds no record for the provider, when the spec or
 // credential changed since the recorded probe, or when the recorded due time
 // has come; every other pass reuses the recorded result. The record is in
 // memory only, so a restarted or newly elected controller probes each
 // provider once on its first pass. The zero value is ready to use.
-type probeGate[R any] struct {
+type probeSchedule[R any] struct {
 	mu   sync.Mutex
 	last map[string]probeRecord[R]
 }
@@ -65,7 +65,7 @@ type probeGate[R any] struct {
 // cached returns the recorded result and the time left until the next
 // probe, when the provider has a record for the same inputs that is not yet
 // due.
-func (g *probeGate[R]) cached(name string, key probeKey, now time.Time) (R, time.Duration, bool) {
+func (g *probeSchedule[R]) cached(name string, key probeKey, now time.Time) (R, time.Duration, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rec, ok := g.last[name]
@@ -77,7 +77,7 @@ func (g *probeGate[R]) cached(name string, key probeKey, now time.Time) (R, time
 }
 
 // record stores a probe's result and when the next one is due.
-func (g *probeGate[R]) record(name string, key probeKey, result R, due time.Time) {
+func (g *probeSchedule[R]) record(name string, key probeKey, result R, due time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.last == nil {
@@ -90,7 +90,7 @@ func (g *probeGate[R]) record(name string, key probeKey, result R, due time.Time
 // once. A pass that ends before the probe calls it: whatever ended the pass
 // (a missing Secret, a bad fallback, a held delete, a disabled probe) may be
 // fixed without a spec or credential change, and the fix must show at once.
-func (g *probeGate[R]) forget(name string) {
+func (g *probeSchedule[R]) forget(name string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.last, name)

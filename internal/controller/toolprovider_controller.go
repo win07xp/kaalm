@@ -58,7 +58,7 @@ type ToolProviderReconciler struct {
 
 	// probes records each provider's last probe, so only a pass whose probe
 	// is due dials the server. The zero value is ready to use.
-	probes probeGate[ToolProbeResult]
+	probes probeSchedule[ToolProbeResult]
 	// events holds the Warning a pass derives from a new Ready=False reason
 	// until finish writes the status that records it. The zero value is
 	// ready to use.
@@ -133,7 +133,7 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Liveness probe. Only a pass whose probe is due dials the server (see
-	// probeGate); any other pass reapplies the recorded result.
+	// probeSchedule); any other pass reapplies the recorded result.
 	requeue := ctrl.Result{}
 	if tp.Spec.HealthCheck == nil || tp.Spec.HealthCheck.Enabled {
 		now := r.now()

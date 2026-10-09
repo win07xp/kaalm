@@ -40,13 +40,13 @@ func (c *testClock) now() time.Time              { return c.t }
 func (c *testClock) advance(d time.Duration)     { c.t = c.t.Add(d) }
 func (c *testClock) advancePast(res ctrl.Result) { c.advance(res.RequeueAfter + time.Second) }
 
-func TestProbeGate_CachedOnlyForSameInputsBeforeDue(t *testing.T) {
+func TestProbeSchedule_CachedOnlyForSameInputsBeforeDue(t *testing.T) {
 	now := time.Now()
 	obj := &kaalmv1beta1.ModelProvider{ObjectMeta: metav1.ObjectMeta{Name: "p", UID: "u1", Generation: 1}}
 	key := newProbeKey(obj, "sk-1")
-	var g probeGate[int]
+	var g probeSchedule[int]
 	if _, _, ok := g.cached("p", key, now); ok {
-		t.Fatal("an empty gate returned a record")
+		t.Fatal("an empty schedule returned a record")
 	}
 	g.record("p", key, 7, now.Add(time.Minute))
 	if res, wait, ok := g.cached("p", key, now.Add(10*time.Second)); !ok || res != 7 || wait != 50*time.Second {
@@ -77,16 +77,16 @@ func TestProbeGate_CachedOnlyForSameInputsBeforeDue(t *testing.T) {
 	}
 }
 
-// gatedProvider is a ModelProvider with the probe on at a 60 s interval.
-func gatedProvider(name string) *kaalmv1beta1.ModelProvider {
+// scheduledProvider is a ModelProvider with the probe on at a 60 s interval.
+func scheduledProvider(name string) *kaalmv1beta1.ModelProvider {
 	return eventsProvider(name, func(mp *kaalmv1beta1.ModelProvider) {
 		mp.Spec.HealthCheck = &kaalmv1beta1.ModelProviderHealthCheck{Enabled: true, IntervalSeconds: 60}
 	})
 }
 
-// gatedProviderReconciler builds a ModelProviderReconciler on a pinned clock
+// scheduledProviderReconciler builds a ModelProviderReconciler on a pinned clock
 // over a fake client holding objs, counting its status writes.
-func gatedProviderReconciler(
+func scheduledProviderReconciler(
 	t *testing.T, health ProviderHealthChecker, objs ...client.Object,
 ) (*ModelProviderReconciler, *testClock, *statusWrites, *record.FakeRecorder) {
 	t.Helper()
@@ -119,7 +119,7 @@ func mustReconcile(t *testing.T, r interface {
 // keeps the recorded result, requeues for the time left, and writes nothing.
 func TestModelProvider_ProbeRunsOnlyWhenDue(t *testing.T) {
 	health := newFakeHealth()
-	r, clock, writes, _ := gatedProviderReconciler(t, health, gatedProvider("pg-due"), providerKey("pg-due"))
+	r, clock, writes, _ := scheduledProviderReconciler(t, health, scheduledProvider("pg-due"), providerKey("pg-due"))
 
 	res := mustReconcile(t, r, "pg-due")
 	if health.count("pg-due") != 1 || res.RequeueAfter != time.Minute {
@@ -157,7 +157,7 @@ func TestModelProvider_ProbeRunsOnlyWhenDue(t *testing.T) {
 // makes the next pass probe at once, inside the interval.
 func TestModelProvider_SpecOrCredentialChangeProbesAtOnce(t *testing.T) {
 	health := newFakeHealth()
-	r, clock, _, _ := gatedProviderReconciler(t, health, gatedProvider("pg-chg"), providerKey("pg-chg"))
+	r, clock, _, _ := scheduledProviderReconciler(t, health, scheduledProvider("pg-chg"), providerKey("pg-chg"))
 	key := types.NamespacedName{Name: "pg-chg"}
 	probes := 0
 	expect := func(step string, probed bool) {
@@ -215,7 +215,7 @@ func TestModelProvider_SpecOrCredentialChangeProbesAtOnce(t *testing.T) {
 func TestModelProvider_CachedFailureSendsNoEvent(t *testing.T) {
 	health := newFakeHealth()
 	health.set("pg-fail", ProviderProbeResult{Err: errString("upstream 503")})
-	r, clock, _, rec := gatedProviderReconciler(t, health, gatedProvider("pg-fail"), providerKey("pg-fail"))
+	r, clock, _, rec := scheduledProviderReconciler(t, health, scheduledProvider("pg-fail"), providerKey("pg-fail"))
 	prefix := "Warning " + kaalmv1beta1.ReasonProviderUnhealthy
 
 	res := mustReconcile(t, r, "pg-fail")
@@ -245,7 +245,7 @@ func TestModelProvider_CachedFailureSendsNoEvent(t *testing.T) {
 	}
 }
 
-// The ToolProvider gates its probe the same way, and a pass between probes
+// The ToolProvider schedules its probe the same way, and a pass between probes
 // keeps the negotiated MCP revision.
 func TestToolProvider_ProbeRunsOnlyWhenDue(t *testing.T) {
 	tp := eventsToolProvider("tg-due")

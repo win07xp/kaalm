@@ -65,7 +65,7 @@ type ModelProviderReconciler struct {
 
 	// probes records each provider's last probe, so only a pass whose probe
 	// is due dials the upstream. The zero value is ready to use.
-	probes probeGate[ProviderProbeResult]
+	probes probeSchedule[ProviderProbeResult]
 	// events holds the state events a pass derives (a Ready=False reason or
 	// an advisory condition turning True) until finish writes the status
 	// that records them. The zero value is ready to use.
@@ -163,7 +163,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Liveness probe. Only a pass whose probe is due dials the upstream (see
-	// probeGate); any other pass reapplies the recorded result.
+	// probeSchedule); any other pass reapplies the recorded result.
 	requeue := ctrl.Result{}
 	if healthCheckEnabled(&mp) {
 		now := r.now()
@@ -767,8 +767,9 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // providersWithFallback re-enqueues every provider that declares a fallback
-// when any provider is created, deleted, or has its spec edited. The fallback tree is validated transitively, so
-// a provider created or fixed after its parent must wake the whole chain.
+// when any provider is created, deleted, or has its spec edited. The
+// fallback tree is validated transitively, so a provider created or fixed
+// after its parent must wake the whole chain.
 func (r *ModelProviderReconciler) providersWithFallback(ctx context.Context, obj client.Object) []reconcile.Request {
 	var list kaalmv1beta1.ModelProviderList
 	if err := r.List(ctx, &list); err != nil {
