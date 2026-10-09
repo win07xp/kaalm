@@ -199,7 +199,13 @@ The console authenticates humans with the cluster's own `TokenReview` and
    console memory. A session past the 24-hour cap leaves memory within five
    minutes, even if the browser never returns. JSON API callers skip sessions and send
    `Authorization: Bearer` on every request; those reviews are cached for
-   five minutes, so a revoked token works for up to five minutes.
+   five minutes, so a revoked token works for up to five minutes. A token that
+   fails its `TokenReview` is refused from memory for 10 seconds, with no new
+   review, so a script that retries a bad token costs the API server one
+   review per 10 seconds. The same wait applies to a token that became
+   valid after a failed review, such as an OIDC token the API server could not
+   verify at first: it can take up to 10 seconds to be accepted. The login
+   page and the five-minute session re-review always run a fresh review.
 3. **Authorization.** Every namespace-scoped read needs a
    `SubjectAccessReview` to pass: the caller must be allowed to `list`
    `agents.kaalm.io` in the namespace to see any of its panels. Test-chat has
@@ -209,7 +215,13 @@ The console authenticates humans with the cluster's own `TokenReview` and
    minutes, so a changed grant takes up to five minutes to show. The
    namespace list shows every namespace when the caller may `list`
    `agents.kaalm.io` cluster-wide, and otherwise only the namespaces where
-   the caller may. If a review fails, the namespace list request answers
+   the caller may. A caller without the cluster-wide grant costs one
+   `SubjectAccessReview` per namespace the first time, then the results are
+   cached for five minutes. Those reviews share the console's Kubernetes API
+   client rate limit (`console.client.qps` in the [configuration
+   reference](../operations/deployment.md#configuration-reference)), so on a
+   cluster with many namespaces, raise it to shorten that first list. If a
+   review fails, the namespace list request answers
    `503` instead of silently dropping the namespace.
 4. **The reads' identity.** The `SubjectAccessReview` decides whether the caller may read; the reads
    themselves run under the console's ServiceAccount. The console does not
