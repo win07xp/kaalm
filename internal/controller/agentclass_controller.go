@@ -391,8 +391,10 @@ func fqdnSupported(fn func() (bool, error)) (bool, error) {
 func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kaalmv1beta1.AgentClass{}).
-		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider)).
-		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider)).
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider),
+			builder.WithPredicates(createOrDelete())).
+		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider),
+			builder.WithPredicates(createOrDelete())).
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload),
 			builder.WithPredicates(classUsageChanged())).
 		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload),
@@ -424,7 +426,7 @@ func (r *AgentClassReconciler) allClasses(ctx context.Context, _ client.Object) 
 }
 
 // classesForToolProvider re-enqueues every AgentClass whose
-// allowedToolProviders lists the changed ToolProvider.
+// allowedToolProviders lists a ToolProvider that was created or deleted.
 func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj client.Object) []reconcile.Request {
 	var classes kaalmv1beta1.AgentClassList
 	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: obj.GetName()}); err != nil {
@@ -437,8 +439,8 @@ func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj c
 	return reqs
 }
 
-// classesForProvider re-enqueues every AgentClass whose allowedProviders lists the
-// changed ModelProvider.
+// classesForProvider re-enqueues every AgentClass whose allowedProviders lists
+// a ModelProvider that was created or deleted.
 func (r *AgentClassReconciler) classesForProvider(ctx context.Context, obj client.Object) []reconcile.Request {
 	var classes kaalmv1beta1.AgentClassList
 	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: obj.GetName()}); err != nil {
