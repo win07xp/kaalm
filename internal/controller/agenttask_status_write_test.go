@@ -29,8 +29,9 @@ import (
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
 )
 
-// A Provisioning task re-checks every certWaitRequeue while it waits for a
-// previous Pod to terminate or for its Pod to turn Ready. A re-check that finds nothing new writes no status.
+// A Provisioning task re-checks every certWaitRequeue while it waits: for
+// its Certificate, for a previous Pod to terminate, or for its Pod to turn
+// Ready. A re-check that finds nothing new writes no status.
 func TestDriveProvisioning_WaitingRecheckSkipsUnchangedStatus(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -47,6 +48,10 @@ func TestDriveProvisioning_WaitingRecheckSkipsUnchangedStatus(t *testing.T) {
 			pod.DeletionTimestamp = &now
 			return pod, nil
 		}, "PodTerminating"},
+		{"Certificate not Ready", func(t *testing.T, task *kaalmv1beta1.AgentTask) (*corev1.Pod, []client.Object) {
+			task.Status.PodName = ""
+			return nil, nil
+		}, kaalmv1beta1.ReasonCertificateNotReady},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
