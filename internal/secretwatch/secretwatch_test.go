@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +30,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 )
@@ -107,7 +110,7 @@ func TestWatcherReportsAbsentSecretAndSeesItAppear(t *testing.T) {
 	})
 }
 
-func TestWatcherFallsBackToLiveReadWhenSyncFails(t *testing.T) {
+func TestWatcherReturnsTheListErrorWhenSyncFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cs := fake.NewSimpleClientset()
@@ -120,8 +123,206 @@ func TestWatcherFallsBackToLiveReadWhenSyncFails(t *testing.T) {
 
 	_, err := w.Get(ctx, "team-a", "hook")
 	if !apierrors.IsForbidden(err) {
-		t.Fatalf("err = %v, want the live read's Forbidden", err)
+		t.Fatalf("err = %v, want the informer GET's Forbidden", err)
 	}
+}
+
+// grantable is a clientset holding team-a/hook whose GETs are refused as
+// Forbidden until grant is called, counting every GET.
+type grantable struct {
+	cs      *fake.Clientset
+	granted atomic.Bool
+	gets    atomic.Int32
+}
+
+func newGrantable() *grantable {
+	g := &grantable{cs: fake.NewSimpleClientset(secretObj("team-a", "hook", "s3cr3t"))}
+	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "hook", errors.New("no grant"))
+	g.cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		g.gets.Add(1)
+		if g.granted.Load() {
+			return false, nil, nil
+		}
+		return true, nil, forbidden
+	})
+	return g
+}
+
+func (g *grantable) grant() { g.granted.Store(true) }
+
+// A Secret the watcher may not read costs one fast error per read, not a
+// SyncTimeout wait and a live GET per read.
+func TestWatcherAnswersAFailedSyncAtOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := newGrantable()
+	w := New(ctx, g.cs)
+	w.ErrorTTL = time.Hour
+
+	readCtx, readCancel := context.WithTimeout(ctx, time.Second)
+	defer readCancel()
+	for i := range 20 {
+		if _, err := w.Get(readCtx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+			t.Fatalf("read %d: err = %v, want Forbidden", i, err)
+		}
+	}
+	// The first list, plus at most one reflector retry.
+	if got := g.gets.Load(); got > 2 {
+		t.Errorf("20 reads of a forbidden Secret cost %d GETs, want at most 2", got)
+	}
+}
+
+func TestWatcherAnswersTheCachedErrorUntilErrorTTL(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := newGrantable()
+	w := New(ctx, g.cs)
+	w.ErrorTTL = 200 * time.Millisecond
+
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+		t.Fatalf("first read: err = %v, want Forbidden", err)
+	}
+	g.grant()
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+		t.Fatalf("read within ErrorTTL: err = %v, want the cached Forbidden", err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	sec, err := w.Get(ctx, "team-a", "hook")
+	if err != nil {
+		t.Fatalf("read after ErrorTTL: %v", err)
+	}
+	if got := string(sec.Data["token"]); got != "s3cr3t" {
+		t.Fatalf("token = %q, want s3cr3t", got)
+	}
+	before := g.gets.Load()
+	for range 10 {
+		if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+			t.Fatalf("cached read: %v", err)
+		}
+	}
+	if got := g.gets.Load() - before; got != 0 {
+		t.Errorf("reads after the grant cost %d GETs, want 0 (cache hits)", got)
+	}
+}
+
+// With ErrorTTL 0 (the default) every read after a failure tries again, so
+// a caller retrying a Forbidden while a new grant propagates sees it land.
+func TestWatcherZeroErrorTTLRetriesOnTheNextRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := newGrantable()
+	w := New(ctx, g.cs)
+
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+		t.Fatalf("first read: err = %v, want Forbidden", err)
+	}
+	g.grant()
+	start := time.Now()
+	if _, err := w.Get(ctx, "team-a", "hook"); err != nil {
+		t.Fatalf("read after the grant: %v", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("read after the grant took %s, want well under the 2s SyncTimeout", took)
+	}
+}
+
+// A grant that lands is never hidden by the cached error: the informer's
+// own list retry picks it up even before ErrorTTL passes.
+func TestWatcherRecoversThroughTheInformersOwnRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := newGrantable()
+	w := New(ctx, g.cs)
+	w.ErrorTTL = time.Hour
+
+	if _, err := w.Get(ctx, "team-a", "hook"); !apierrors.IsForbidden(err) {
+		t.Fatalf("first read: err = %v, want Forbidden", err)
+	}
+	g.grant()
+	eventually(t, func() bool {
+		_, err := w.Get(ctx, "team-a", "hook")
+		return err == nil
+	})
+}
+
+// hangingClient blocks the first Secret GET until release is closed, so the
+// informer's list neither succeeds nor fails.
+type hangingClient struct {
+	kubernetes.Interface
+	first   *atomic.Bool
+	release chan struct{}
+}
+
+func (c hangingClient) CoreV1() typedcorev1.CoreV1Interface {
+	return hangingCore{CoreV1Interface: c.Interface.CoreV1(), c: c}
+}
+
+type hangingCore struct {
+	typedcorev1.CoreV1Interface
+	c hangingClient
+}
+
+func (h hangingCore) Secrets(namespace string) typedcorev1.SecretInterface {
+	return hangingSecrets{SecretInterface: h.CoreV1Interface.Secrets(namespace), c: h.c}
+}
+
+type hangingSecrets struct {
+	typedcorev1.SecretInterface
+	c hangingClient
+}
+
+func (h hangingSecrets) Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Secret, error) {
+	if h.c.first.CompareAndSwap(false, true) {
+		<-h.c.release
+	}
+	return h.SecretInterface.Get(ctx, name, opts)
+}
+
+func TestWatcherFallsBackToLiveReadWhenTheListHangs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	cs := hangingClient{
+		Interface: fake.NewSimpleClientset(secretObj("team-a", "hook", "s3cr3t")),
+		first:     &atomic.Bool{},
+		release:   release,
+	}
+	w := New(ctx, cs)
+	w.SyncTimeout = 50 * time.Millisecond
+
+	sec, err := w.Get(ctx, "team-a", "hook")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got := string(sec.Data["token"]); got != "s3cr3t" {
+		t.Fatalf("token = %q, want s3cr3t from the live read", got)
+	}
+}
+
+// Concurrent readers of a failing Secret share the replacement informer;
+// this case exists for -race.
+func TestWatcherConcurrentReadsOfAFailingSecret(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := newGrantable()
+	w := New(ctx, g.cs)
+	w.ErrorTTL = 20 * time.Millisecond
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			eventually(t, func() bool {
+				_, err := w.Get(ctx, "team-a", "hook")
+				return err == nil
+			})
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	g.grant()
+	wg.Wait()
 }
 
 func TestWatcherStopsIdleInformers(t *testing.T) {

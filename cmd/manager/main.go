@@ -317,6 +317,9 @@ func main() {
 		setupLog.Error(err, "unable to build the Secret watcher's clientset")
 		os.Exit(1)
 	}
+	// ErrorTTL stays 0: the reconcilers retry a Forbidden within one pass
+	// while a new Role reaches the authorizer, so every read must reach the
+	// API server.
 	secretWatcher := secretwatch.New(ctx, clientset)
 	secretSource := secretwatch.NewReader(secretWatcher)
 

@@ -23,6 +23,7 @@ package secretwatch
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -56,14 +57,22 @@ type Watcher struct {
 	client kubernetes.Interface
 	ctx    context.Context
 
-	// SyncTimeout bounds how long a first read waits for its informer's
-	// initial GET before reading live instead; a misconfigured grant then
-	// surfaces as the API error it always was, never as a hang.
+	// SyncTimeout bounds how long a read waits for its informer's first GET
+	// before reading live instead. A GET that fails is returned as the same
+	// API error, so a misconfigured grant surfaces as that error, never as a
+	// hang.
 	SyncTimeout time.Duration
 	// IdleTTL is how long an informer nobody has read outlives its last use.
 	// Channel Secrets come and go with their channels; the janitor keeps the
 	// watch count bounded by the Secrets still in use.
 	IdleTTL time.Duration
+	// ErrorTTL is how long reads of a Secret whose informer has not synced
+	// return that informer's last failed GET before the next read replaces
+	// it with a fresh informer. 0, the default, retries on every read, which
+	// the controller relies on to retry a Forbidden while a new Role reaches
+	// the authorizer. The informer's own list retry can pick up a grant
+	// sooner.
+	ErrorTTL time.Duration
 
 	mu        sync.Mutex
 	informers map[types.NamespacedName]*secretInformer
@@ -82,6 +91,15 @@ type secretInformer struct {
 	// changes is the subscribers' change handler on informer; nil while the
 	// watcher has no subscriber.
 	changes cache.ResourceEventHandlerRegistration
+	// failure is the informer's last failed list, or nil when its last list
+	// succeeded or none has finished.
+	failure atomic.Pointer[listFailure]
+}
+
+// listFailure is a failed informer GET and when it failed.
+type listFailure struct {
+	err error
+	at  time.Time
 }
 
 // New builds a watcher whose informers stop when ctx ends.
@@ -98,12 +116,17 @@ func New(ctx context.Context, client kubernetes.Interface) *Watcher {
 }
 
 // Get returns the current Secret from its informer, starting the informer on
-// first use. If the informer has not completed its initial GET within
-// SyncTimeout the read goes live, so the caller sees the same error a direct
-// read would.
+// first use. A failed informer GET is returned as its API error, so the
+// caller sees the same error a direct read would; see ErrorTTL for when the
+// next read tries again. If the informer's GET neither succeeds nor fails
+// within SyncTimeout the read goes live.
 func (w *Watcher) Get(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
 	entry := w.entryFor(namespace, name)
-	if !waitSynced(ctx, entry.informer, w.SyncTimeout) {
+	synced, err := waitSynced(ctx, entry, w.SyncTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if !synced {
 		return w.client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	}
 	obj, exists, err := entry.informer.GetStore().GetByKey(namespace + "/" + name)
@@ -125,8 +148,19 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 	defer w.mu.Unlock()
 	key := types.NamespacedName{Namespace: namespace, Name: name}
 	if entry, ok := w.informers[key]; ok {
-		entry.lastUsed = time.Now()
-		return entry
+		failure := entry.failure.Load()
+		if entry.informer.HasSynced() || failure == nil || time.Since(failure.at) < w.ErrorTTL {
+			entry.lastUsed = time.Now()
+			return entry
+		}
+		// The informer never synced and its last GET failed ErrorTTL ago:
+		// replace it, so this read issues one fresh GET. Concurrent readers
+		// share the replacement.
+		close(entry.stop)
+	}
+	entry := &secretInformer{
+		stop:     make(chan struct{}),
+		lastUsed: time.Now(),
 	}
 	lw := &cache.ListWatch{
 		ListFunc: func(metav1.ListOptions) (runtime.Object, error) {
@@ -134,11 +168,14 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 			if apierrors.IsNotFound(err) {
 				// An absent Secret is a valid, empty state: the watch below
 				// delivers it when it appears.
+				entry.failure.Store(nil)
 				return &corev1.SecretList{}, nil
 			}
 			if err != nil {
+				entry.failure.Store(&listFailure{err: err, at: time.Now()})
 				return nil, err
 			}
+			entry.failure.Store(nil)
 			return &corev1.SecretList{
 				ListMeta: metav1.ListMeta{ResourceVersion: sec.ResourceVersion},
 				Items:    []corev1.Secret{*sec},
@@ -149,11 +186,7 @@ func (w *Watcher) entryFor(namespace, name string) *secretInformer {
 			return w.client.CoreV1().Secrets(namespace).Watch(w.ctx, opts)
 		},
 	}
-	entry := &secretInformer{
-		informer: cache.NewSharedInformer(lw, &corev1.Secret{}, 0),
-		stop:     make(chan struct{}),
-		lastUsed: time.Now(),
-	}
+	entry.informer = cache.NewSharedInformer(lw, &corev1.Secret{}, 0)
 	if w.hasSubscribers() {
 		// Subscribers live on the watcher, so an informer the janitor
 		// stopped and a later read restarted gets the handler again. A
@@ -249,16 +282,20 @@ func (w *Watcher) changeHandler(key types.NamespacedName) cache.ResourceEventHan
 }
 
 // waitSynced polls HasSynced closely (the standard helper polls at 100 ms,
-// which would tax the very first read) until synced, the timeout, or ctx.
-func waitSynced(ctx context.Context, inf cache.SharedInformer, timeout time.Duration) bool {
+// which would tax the very first read) until synced, a failed GET (returned
+// as err), the timeout, or ctx.
+func waitSynced(ctx context.Context, entry *secretInformer, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
-	for !inf.HasSynced() {
+	for !entry.informer.HasSynced() {
+		if failure := entry.failure.Load(); failure != nil {
+			return false, failure.err
+		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return false
+			return false, nil
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return true
+	return true, nil
 }
 
 // janitor stops informers idle past IdleTTL and every informer when the
