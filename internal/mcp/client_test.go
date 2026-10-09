@@ -330,3 +330,37 @@ func TestClient_ResponseLimit(t *testing.T) {
 		}
 	})
 }
+
+// ParseResponseRaw returns the bytes the response was decoded from: the
+// whole JSON body, or the matching event's data.
+func TestParseResponseRaw(t *testing.T) {
+	answer := `{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}`
+	t.Run("json", func(t *testing.T) {
+		body := " " + answer + "\n"
+		resp, raw, err := ParseResponseRaw("application/json", strings.NewReader(body), []byte("3"), 1<<20)
+		if err != nil || string(raw) != body || string(resp.ID) != "3" {
+			t.Fatalf("resp %+v raw %q err %v, want the body as read", resp, raw, err)
+		}
+	})
+	for _, c := range []struct{ name, stream, want string }{
+		{"one data line", "data: " + answer + "\n\n", answer},
+		{"no space after the colon", "data:" + answer + "\n\n", answer},
+		{"one leading space removed", "data:  " + answer + "\n\n", " " + answer},
+		{"split across data lines", "data: {\"jsonrpc\":\"2.0\",\"id\":3,\ndata: \"result\":{\"tools\":[]}}\n\n",
+			`{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}`},
+		{"CRLF lines", "event: message\r\ndata: " + answer + "\r\n\r\n", answer},
+		{"earlier events skipped", ": ping\n\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n" +
+			"data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{}}\n\ndata: " + answer + "\n\n", answer},
+		{"unterminated last event", "data: " + answer, answer},
+	} {
+		t.Run("sse/"+c.name, func(t *testing.T) {
+			resp, raw, err := ParseResponseRaw("text/event-stream", strings.NewReader(c.stream), []byte("3"), 1<<20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(raw) != c.want || string(resp.ID) != "3" {
+				t.Errorf("raw %q id %s, want %q", raw, resp.ID, c.want)
+			}
+		})
+	}
+}

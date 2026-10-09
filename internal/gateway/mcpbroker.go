@@ -634,7 +634,7 @@ func (s *Server) relayFilteredToolsList(
 	maxBytes := s.mcpMaxBodyBytes()
 	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
 	rr := &readErrRecorder{r: lr}
-	parsed, err := mcp.ParseResponse(resp.Header.Get("Content-Type"), rr, msg.ID, int(maxBytes)+1)
+	parsed, raw, err := mcp.ParseResponseRaw(resp.Header.Get("Content-Type"), rr, msg.ID, int(maxBytes)+1)
 	if err != nil && lr.N <= 0 {
 		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
@@ -669,46 +669,84 @@ func (s *Server) relayFilteredToolsList(
 			Message: msg, Provider: providerName}, 0)
 		return 0, http.StatusServiceUnavailable, errToolUnavailable, msg + ": " + err.Error()
 	}
-	// Any result is filtered, even one that arrives beside an error member:
-	// the error is relayed too, and the tools must not leak through it.
-	if parsed.Result != nil {
-		// A null result decodes to a nil map: it holds no tools, so it is
-		// relayed unfiltered, like any result that is not an object.
-		var result map[string]json.RawMessage
-		if err := json.Unmarshal(parsed.Result, &result); err == nil && result != nil {
-			var tools []json.RawMessage
-			_ = json.Unmarshal(result["tools"], &tools)
-			kept := make([]json.RawMessage, 0, len(tools))
-			for _, raw := range tools {
-				var t struct {
-					Name string `json:"name"`
-				}
-				if json.Unmarshal(raw, &t) == nil && filter.permits(t.Name) {
-					kept = append(kept, raw)
-				}
+	// A caller allowed every tool gets the upstream answer as it came, unless
+	// its result may carry a cacheScope to rewrite. Any other result is
+	// filtered, even one that arrives beside an error member: the error is
+	// relayed too, and the tools must not leak through it.
+	encoded := raw
+	if filter.allow != nil || mayCarryCacheScope(parsed.Result) {
+		if parsed.Result != nil {
+			// A result that is not an object (null included) holds no
+			// tools, so it is relayed unfiltered.
+			if narrowed, ok := narrowToolsResult(parsed.Result, filter); ok {
+				parsed.Result = narrowed
 			}
-			keptRaw, _ := json.Marshal(kept)
-			result["tools"] = keptRaw
-			if _, ok := result["cacheScope"]; ok {
-				// The filter narrowed the catalog per caller: a shared
-				// cache must never serve this answer as the server's list.
-				result["cacheScope"] = json.RawMessage(`"private"`)
-			}
-			newResult, _ := json.Marshal(result)
-			parsed.Result = newResult
 		}
-	}
-	encoded, err := json.Marshal(parsed)
-	if err != nil {
-		msg := "re-encoding tools/list response"
-		writeError(w, http.StatusInternalServerError, errorBody{Type: errInternalUnavailable,
-			Message: msg, Provider: providerName, Retryable: true}, 0)
-		return 0, http.StatusInternalServerError, errInternalUnavailable, msg + ": " + err.Error()
+		encoded, err = json.Marshal(parsed)
+		if err != nil {
+			msg := "re-encoding tools/list response"
+			writeError(w, http.StatusInternalServerError, errorBody{Type: errInternalUnavailable,
+				Message: msg, Provider: providerName, Retryable: true}, 0)
+			return 0, http.StatusInternalServerError, errInternalUnavailable, msg + ": " + err.Error()
+		}
 	}
 	bodyLog("mcp response", encoded)
 	w.Header().Set("Content-Type", "application/json")
 	n, _ := w.Write(encoded)
 	return int64(n), http.StatusOK, "", ""
+}
+
+// mayCarryCacheScope reports whether a tools/list result can hold a
+// cacheScope member: the name as written, or a \u escape that could spell
+// it. A result without one needs no rewrite for a caller allowed every tool.
+func mayCarryCacheScope(result json.RawMessage) bool {
+	return bytes.Contains(result, []byte("cacheScope")) || bytes.Contains(result, []byte(`\u`))
+}
+
+// narrowToolsResult keeps the tools in a tools/list result that filter
+// permits, and marks a cacheScope private: the answer is per caller, so a
+// shared cache must never serve it as the server's list. It
+// returns false for a result that is not an object. Kept entries are
+// joined from the upstream bytes; the result is re-encoded, which compacts
+// it as encoding/json does.
+func narrowToolsResult(result json.RawMessage, filter *toolFilter) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(result, &m); err != nil || m == nil {
+		return nil, false
+	}
+	tools := m["tools"]
+	kept := make([]byte, 0, len(tools))
+	kept = append(kept, '[')
+	dec := json.NewDecoder(bytes.NewReader(tools))
+	if tok, err := dec.Token(); err == nil && tok == json.Delim('[') {
+		for dec.More() {
+			start := dec.InputOffset()
+			var t struct {
+				Name string `json:"name"`
+			}
+			err := dec.Decode(&t)
+			var typeErr *json.UnmarshalTypeError
+			if err != nil && !errors.As(err, &typeErr) {
+				break // the result already parsed, so this cannot happen
+			}
+			if err != nil || !filter.permits(t.Name) {
+				continue
+			}
+			if len(kept) > 1 {
+				kept = append(kept, ',')
+			}
+			kept = append(kept, bytes.TrimLeft(tools[start:dec.InputOffset()], " \t\r\n,")...)
+		}
+	}
+	m["tools"] = append(kept, ']')
+	if _, ok := m["cacheScope"]; ok {
+		m["cacheScope"] = json.RawMessage(`"private"`)
+	}
+	narrowed, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return narrowed, true
 }
 
 // readErrRecorder passes reads through and keeps the first error other than

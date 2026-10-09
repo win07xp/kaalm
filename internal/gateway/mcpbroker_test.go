@@ -474,6 +474,118 @@ func TestMCPBroker_ToolsListFilteredEvenWithAnError(t *testing.T) {
 	}
 }
 
+// allowAllToolsList relays upstream as the tools/list answer, in JSON or
+// as one SSE event, to a caller whose grant names no tools on a provider
+// with no declared catalog, and returns the reply body.
+func allowAllToolsList(t *testing.T, mode, upstream string) []byte {
+	t.Helper()
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		if mode == "sse" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, ": ping\n\ndata: %s\n\n", upstream)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, upstream)
+	})
+	h.seedToolRoute()
+	h.store.toolProviders["search"].Spec.Tools = nil
+	h.store.agents["team-a/sup"].Spec.Tools[0].Tools = nil
+	cert := agentCert(t, h.ca)
+	resp := postJSON(t, h.client(&cert), h.url("/v1/mcp/search"),
+		map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, nil)
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	return raw
+}
+
+// A caller allowed every tool gets the upstream answer as it came, unless
+// its result carries a cacheScope, which still becomes private.
+func TestMCPBroker_ToolsListAllAllowedPassesThrough(t *testing.T) {
+	list := `{ "jsonrpc": "2.0", "id": 3, "result": { "tools": [ {"name":"web_search","description":"<b>"}, ` +
+		`{"name":"admin_reset"} ] }, "x-extra": 1 }`
+	for _, mode := range []string{"json", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			if got := string(allowAllToolsList(t, mode, list)); got != list {
+				t.Errorf("reply:\n got %s\nwant %s", got, list)
+			}
+			for _, key := range []string{`"cacheScope"`, `"\u0063acheScope"`} {
+				upstream := `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"a"}],` + key + `:"public"}}`
+				var got struct {
+					Result struct {
+						CacheScope string `json:"cacheScope"`
+					} `json:"result"`
+				}
+				raw := allowAllToolsList(t, mode, upstream)
+				if err := json.Unmarshal(raw, &got); err != nil || got.Result.CacheScope != "private" {
+					t.Errorf("key %s: cacheScope = %q (%v), want private: %s", key, got.Result.CacheScope, err, raw)
+				}
+			}
+		})
+	}
+}
+
+// referenceNarrow is the tools/list filter as it was before the single
+// decode: every entry decoded on its own, the kept list re-encoded.
+func referenceNarrow(result json.RawMessage, filter *toolFilter) json.RawMessage {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(result, &m); err != nil || m == nil {
+		return result
+	}
+	var tools []json.RawMessage
+	_ = json.Unmarshal(m["tools"], &tools)
+	kept := make([]json.RawMessage, 0, len(tools))
+	for _, raw := range tools {
+		var t struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(raw, &t) == nil && filter.permits(t.Name) {
+			kept = append(kept, raw)
+		}
+	}
+	keptRaw, _ := json.Marshal(kept)
+	m["tools"] = keptRaw
+	if _, ok := m["cacheScope"]; ok {
+		m["cacheScope"] = json.RawMessage(`"private"`)
+	}
+	out, _ := json.Marshal(m)
+	return out
+}
+
+// The single-decode filter gives the same bytes as the decode-per-entry one.
+func TestNarrowToolsResultMatchesReEncode(t *testing.T) {
+	filters := []*toolFilter{{}, {allow: map[string]bool{"web_search": true, "": true}}, {allow: map[string]bool{}}}
+	for _, result := range []string{
+		`{"tools":[{"name":"web_search","description":"<b>&</b>"} , {"name":"fetch_page"}],"nextCursor":"c"}`,
+		`{"tools":[ "str", 5, null, {"name":7}, {"Name":"web_search"}, {"name":"web_search","name":"x"}, [1] ]}`,
+		`{"tools":{"name":"web_search"}}`,
+		`{"tools":null}`,
+		`{"tools":[]}`,
+		`{}`,
+		`{"cacheScope":"public","ttlMs":5,"tools":[{"name":"web_search"}]}`,
+		` { "tools" : [ { "name" : "web_search" , "inputSchema" : { "type" : "object" } } ] } `,
+	} {
+		for _, f := range filters {
+			want := referenceNarrow(json.RawMessage(result), f)
+			got, ok := narrowToolsResult(json.RawMessage(result), f)
+			if !ok || string(got) != string(want) {
+				t.Errorf("%s (allow %v):\n got %s (%v)\nwant %s", result, f.allow, got, ok, want)
+			}
+		}
+	}
+	for _, result := range []string{`null`, `[]`, `"x"`, `3`} {
+		if _, ok := narrowToolsResult(json.RawMessage(result), &toolFilter{}); ok {
+			t.Errorf("%s: a non-object result must not be narrowed", result)
+		}
+	}
+}
+
 func TestMCPBroker_SessionOwnership(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
