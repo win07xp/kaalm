@@ -17,6 +17,10 @@ limitations under the License.
 package gateway
 
 import (
+	"bytes"
+	"encoding/json"
+	"maps"
+	"reflect"
 	"testing"
 )
 
@@ -184,4 +188,99 @@ func TestAccumulateStreamUsage_Malformed(t *testing.T) {
 	if u.InputTokens != 0 {
 		t.Error("message_stop must not change usage")
 	}
+}
+
+// referenceOpenAIStreamUsage is openaiAdapter.accumulateStreamUsage without
+// its prefilter: every payload decoded.
+func referenceOpenAIStreamUsage(data []byte, u *Usage) {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
+		return
+	}
+	var chunk struct {
+		Usage *struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &chunk); err != nil || chunk.Usage == nil {
+		return
+	}
+	u.InputTokens = chunk.Usage.PromptTokens
+	u.OutputTokens = chunk.Usage.CompletionTokens
+}
+
+// referenceAnthropicStreamUsage is anthropicAdapter.accumulateStreamUsage
+// without its prefilter.
+func referenceAnthropicStreamUsage(data []byte, u *Usage) {
+	var evt struct {
+		Type    string `json:"type"`
+		Message struct {
+			Usage struct {
+				InputTokens int64 `json:"input_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+		Usage struct {
+			OutputTokens  int64           `json:"output_tokens"`
+			ServerToolUse json.RawMessage `json:"server_tool_use"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &evt); err != nil {
+		return
+	}
+	switch evt.Type {
+	case "message_start":
+		u.InputTokens = evt.Message.Usage.InputTokens
+	case "message_delta":
+		if evt.Usage.OutputTokens > 0 {
+			u.OutputTokens = evt.Usage.OutputTokens
+		}
+		if tools := serverToolCounts(evt.Usage.ServerToolUse); tools != nil {
+			u.ServerTools = tools
+		}
+	}
+}
+
+// streamUsageSeeds are payloads around the prefilters' edges.
+var streamUsageSeeds = []string{
+	`{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3}}`,
+	`{"choices":[{"delta":{"content":"usage"}}]}`,
+	`{"choices":[{"delta":{"content":"hi"}}]}`,
+	`{"USAGE":{"prompt_tokens":1,"completion_tokens":2}}`,
+	"{\"u\xc5\xbfage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}",
+	`{"usage":{"prompt_tokens":1,"completion_tokens":2}}`,
+	`{"usage":null}`,
+	`[DONE]`,
+	`{"type":"message_start","message":{"usage":{"input_tokens":7}}}`,
+	`{"type":"message_delta","usage":{"output_tokens":9,"server_tool_use":{"web_search_requests":2}}}`,
+	`{"type":"ping"}`,
+	`{"type":"content_block_delta","delta":{"type":"text_delta","text":"message_start"}}`,
+	`{"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
+	`{"TYPE":"message_delta","USAGE":{"OUTPUT_TOKENS":4}}`,
+}
+
+func fuzzStreamUsage(f *testing.F, got, want func([]byte, *Usage)) {
+	for _, s := range streamUsageSeeds {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, prior := range []Usage{{}, {InputTokens: 3, OutputTokens: 4, ServerTools: map[string]int64{"x": 1}}} {
+			g := prior
+			w := prior
+			g.ServerTools, w.ServerTools = maps.Clone(prior.ServerTools), maps.Clone(prior.ServerTools)
+			got(data, &g)
+			want(data, &w)
+			if !reflect.DeepEqual(g, w) {
+				t.Fatalf("payload %q from %+v: got %+v, want %+v", data, prior, g, w)
+			}
+		}
+	})
+}
+
+// The prefilter never skips a payload whose usage the full decode reads.
+func FuzzOpenAIStreamUsageMatchesFullDecode(f *testing.F) {
+	fuzzStreamUsage(f, openaiAdapter{}.accumulateStreamUsage, referenceOpenAIStreamUsage)
+}
+
+func FuzzAnthropicStreamUsageMatchesFullDecode(f *testing.F) {
+	fuzzStreamUsage(f, anthropicAdapter{}.accumulateStreamUsage, referenceAnthropicStreamUsage)
 }

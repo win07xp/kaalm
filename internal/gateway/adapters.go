@@ -161,6 +161,9 @@ func serverToolCounts(raw json.RawMessage) map[string]int64 {
 // output_tokens (and cumulative server_tool_use counts) on message_delta.
 // message_stop carries no usage.
 func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
+	if !mayBeAnthropicUsageEvent(data) {
+		return
+	}
 	var evt struct {
 		Type    string `json:"type"`
 		Message struct {
@@ -188,6 +191,17 @@ func (anthropicAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 			u.ServerTools = tools
 		}
 	}
+}
+
+// mayBeAnthropicUsageEvent reports whether an Anthropic stream payload can
+// be a message_start or message_delta event, the only events whose usage
+// accumulateStreamUsage reads, so the other events (the text deltas) skip
+// the decode. The decoder compares the type value exactly, so it must hold
+// one of the two names as written, or a \u escape that could spell one.
+func mayBeAnthropicUsageEvent(data []byte) bool {
+	return bytes.Contains(data, []byte("message_start")) ||
+		bytes.Contains(data, []byte("message_delta")) ||
+		bytes.Contains(data, []byte(`\u`))
 }
 
 func (anthropicAdapter) fixupRequestBody(map[string]any) {}
@@ -227,6 +241,9 @@ func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return
 	}
+	if !mayCarryOpenAIUsage(data) {
+		return
+	}
 	var chunk struct {
 		Usage *struct {
 			PromptTokens     int64 `json:"prompt_tokens"`
@@ -238,6 +255,35 @@ func (openaiAdapter) accumulateStreamUsage(data []byte, u *Usage) {
 	}
 	u.InputTokens = chunk.Usage.PromptTokens
 	u.OutputTokens = chunk.Usage.CompletionTokens
+}
+
+// mayCarryOpenAIUsage reports whether an OpenAI stream payload can hold a
+// usage member, so the content chunks skip the decode. encoding/json matches
+// a member name to a field case-insensitively, with Unicode folding (the
+// long s, U+017F, matches s), and after unescaping, so the payload must
+// hold a folded spelling of "usage" or a \u escape that could spell one.
+func mayCarryOpenAIUsage(data []byte) bool {
+	if bytes.Contains(data, []byte(`\u`)) {
+		return true
+	}
+	for i := 0; i+5 <= len(data); i++ {
+		if data[i]|0x20 != 'u' {
+			continue
+		}
+		j := i + 1
+		switch {
+		case data[j]|0x20 == 's':
+			j++
+		case data[j] == 0xc5 && j+1 < len(data) && data[j+1] == 0xbf: // U+017F
+			j += 2
+		default:
+			continue
+		}
+		if j+3 <= len(data) && data[j]|0x20 == 'a' && data[j+1]|0x20 == 'g' && data[j+2]|0x20 == 'e' {
+			return true
+		}
+	}
+	return false
 }
 
 // fixupRequestBody injects stream_options: {include_usage: true} into
