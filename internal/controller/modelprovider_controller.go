@@ -755,7 +755,10 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
-		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback)).
+		// The fallback checks read other providers' spec and existence only,
+		// so a provider's status write (a spend fold) wakes no chain.
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.providersForSecret)).
 		// GatewayReachable follows gateway Pod readiness event-driven.
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.allModelProviders),
@@ -764,7 +767,7 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // providersWithFallback re-enqueues every provider that declares a fallback
-// when any provider changes. The fallback tree is validated transitively, so
+// when any provider is created, deleted, or has its spec edited. The fallback tree is validated transitively, so
 // a provider created or fixed after its parent must wake the whole chain.
 func (r *ModelProviderReconciler) providersWithFallback(ctx context.Context, obj client.Object) []reconcile.Request {
 	var list kaalmv1beta1.ModelProviderList
