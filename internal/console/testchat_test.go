@@ -240,3 +240,71 @@ func BenchmarkGatewayChatClient_WorkloadSpend(b *testing.B) {
 		}
 	}
 }
+
+// selfSignedServer starts a TLS server whose certificate is a self-signed
+// CA leaf with the given SANs, and writes that certificate to caFile as the
+// trusted bundle.
+func selfSignedServer(t *testing.T, caFile string, dnsNames []string, ips []net.IP) *httptest.Server {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: "gateway"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		DNSNames:              dnsNames,
+		IPAddresses:           ips,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePEM(t, caFile, "CERTIFICATE", der, time.Now().Add(-time.Minute))
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// With no ServerName, the gateway certificate is checked against the URL
+// host, an IP address included: a certificate from the trusted CA that does
+// not name that IP is refused.
+func TestGatewayChatClient_VerifiesTheIPHostWithoutServerName(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ips    []net.IP
+		wantOK bool
+	}{
+		{name: "certificate without the IP SAN", wantOK: false},
+		{name: "certificate with the IP SAN", ips: []net.IP{net.ParseIP("127.0.0.1")}, wantOK: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			certFile, keyFile, caFile := filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key"), filepath.Join(dir, "ca.crt")
+			writeSelfSigned(t, certFile, keyFile, "console", time.Now().Add(-time.Minute))
+			srv := selfSignedServer(t, caFile, []string{"gateway.example"}, tc.ips)
+
+			c := &GatewayChatClient{
+				BaseURL: srv.URL, // https://127.0.0.1:<port>
+				Loader:  &tlsutil.CertLoader{CertFile: certFile, KeyFile: keyFile, CAFile: caFile},
+			}
+			status, _, err := c.WorkloadSpend(context.Background(), "ns")
+			if tc.wantOK && (err != nil || status != 200) {
+				t.Fatalf("spend = %d, %v; want 200", status, err)
+			}
+			if !tc.wantOK && err == nil {
+				t.Fatalf("spend = %d; a certificate that does not name 127.0.0.1 must fail verification", status)
+			}
+		})
+	}
+}

@@ -120,7 +120,8 @@ func (c *GatewayChatClient) httpClient() *http.Client {
 
 // tlsConfig builds the gateway TLS config. With a loader, the client
 // certificate comes from GetClientCertificate and the gateway chain is
-// verified in VerifyConnection against the current CA pool; the standard
+// verified in VerifyConnection against the current CA pool and the pinned
+// ServerName, or the BaseURL host when none is set; the standard
 // verification is skipped only because VerifyConnection replaces it.
 func (c *GatewayChatClient) tlsConfig() *tls.Config {
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: c.ServerName}
@@ -138,6 +139,15 @@ func (c *GatewayChatClient) tlsConfig() *tls.Config {
 		return cfg
 	}
 	cfg.InsecureSkipVerify = true // replaced by VerifyConnection below
+	// The name to verify is fixed here, not read from the connection state:
+	// the handshake leaves ConnectionState.ServerName empty for an IP host,
+	// and an empty name would skip the host check.
+	verifyName := c.ServerName
+	if verifyName == "" {
+		if u, err := url.Parse(c.BaseURL); err == nil {
+			verifyName = u.Hostname()
+		}
+	}
 	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return errors.New("gateway presented no certificate")
@@ -148,7 +158,7 @@ func (c *GatewayChatClient) tlsConfig() *tls.Config {
 		}
 		opts := x509.VerifyOptions{
 			Roots:         pool,
-			DNSName:       cs.ServerName,
+			DNSName:       verifyName,
 			Intermediates: x509.NewCertPool(),
 		}
 		for _, cert := range cs.PeerCertificates[1:] {
