@@ -70,6 +70,9 @@ type ModelProviderReconciler struct {
 	// an advisory condition turning True) until finish writes the status
 	// that records them. The zero value is ready to use.
 	events heldEvents
+	// ownWrites lets the For() watch skip the event of the reconciler's own
+	// status write.
+	ownWrites ownWrites
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=modelproviders,verbs=get;list;watch;update;patch
@@ -97,6 +100,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			// finalizer stripped by hand); its series must not freeze.
 			dropBudgetCanonical(req.Name)
 			r.probes.forget(req.Name)
+			r.ownWrites.forget(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -740,6 +744,9 @@ func (r *ModelProviderReconciler) finish(
 		return res, nil
 	}
 	err := r.Status().Update(ctx, mp)
+	if err == nil {
+		r.ownWrites.record(mp)
+	}
 	r.events.flush(r.Recorder, mp, err == nil)
 	return res, err
 }
@@ -747,7 +754,9 @@ func (r *ModelProviderReconciler) finish(
 // SetupWithManager wires the reconciler and its reference watches.
 func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kaalmv1beta1.ModelProvider{}).
+		// The update event of the reconciler's own status write is dropped
+		// (see ownWrites); every other change to the provider is a trigger.
+		For(&kaalmv1beta1.ModelProvider{}, builder.WithPredicates(r.ownWrites.skipOwn())).
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload),
 			builder.WithPredicates(providerRefsChanged())).
 		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload),

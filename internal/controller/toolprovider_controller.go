@@ -63,6 +63,9 @@ type ToolProviderReconciler struct {
 	// until finish writes the status that records it. The zero value is
 	// ready to use.
 	events heldEvents
+	// ownWrites lets the For() watch skip the event of the reconciler's own
+	// status write.
+	ownWrites ownWrites
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=toolproviders,verbs=get;list;watch;update;patch
@@ -87,6 +90,7 @@ func (r *ToolProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Get(ctx, req.NamespacedName, &tp); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.probes.forget(req.Name)
+			r.ownWrites.forget(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -274,6 +278,9 @@ func (r *ToolProviderReconciler) finish(
 		return res, nil
 	}
 	err := r.Status().Update(ctx, tp)
+	if err == nil {
+		r.ownWrites.record(tp)
+	}
 	r.events.flush(r.Recorder, tp, err == nil)
 	return res, err
 }
@@ -292,7 +299,9 @@ func (r *ToolProviderReconciler) setReadyFalse(tp *kaalmv1beta1.ToolProvider, re
 // reference watches that release the deletion hold when a referrer goes away.
 func (r *ToolProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kaalmv1beta1.ToolProvider{}).
+		// The update event of the reconciler's own status write is dropped
+		// (see ownWrites); every other change to the provider is a trigger.
+		For(&kaalmv1beta1.ToolProvider{}, builder.WithPredicates(r.ownWrites.skipOwn())).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.toolProvidersForSecret)).
 		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(toolProvidersForWorkload),
 			builder.WithPredicates(toolGrantsChanged())).
