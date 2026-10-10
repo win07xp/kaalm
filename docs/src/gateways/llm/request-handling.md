@@ -38,6 +38,18 @@ This page walks the request path, then covers how a model name identifies a prov
 
 10. **Usage and spend.** The gateway reads token usage from the response with the serving provider's adapter (see [Provider adapters](provider-routing.md#provider-adapters)); for a stream, from the usage-bearing SSE events. Spend is settled on the provider that served, at its prices for the model, and under hard enforcement the same step releases the admission slot. The same step subtracts the input plus output tokens from the step 6 token bucket, the primary provider's bucket for the requested model, even when a fallback served the call; see [The token limit](budgets-and-rate-limits.md#the-token-limit).
 
+### A caller that disconnects before the answer
+
+When the caller disconnects before the gateway answers, the fallback walk stops and no further candidate is tried, because no one is left to read the result. The gateway writes nothing to the caller. The request counts as `client_closed` on `kaalm_llm_requests_total`, and the `llm.request` span gets the same status. This holds for a buffered response and a stream alike; a stream's relay is under [Streaming responses](#streaming-responses).
+
+An attempt on a fallback candidate that was in progress when the caller left counts on `kaalm_llm_fallback_total` with the reason `client_closed`, and its `llm.forward` span gets that description instead of a failure class. The caller leaving is not the candidate's failure.
+
+Spend settles by what the gateway has from the attempt that was in progress:
+
+- A 2xx answer the gateway read in full settles its usage, because the provider did the work.
+- A streaming 2xx answer whose relay had not started counts on `kaalm_llm_usage_missing_total` and settles zero, as the stream relay does for a caller that left before it saw any usage.
+- Any other attempt settles zero: one with no response (a read that the caller's leaving cut off ends this way) or one with a non-2xx response.
+
 ### The forwarded-header contract
 
 Step 7 rewrites the request headers under four rules:
@@ -94,6 +106,6 @@ The gateway detects a streaming response (Server-Sent Events, SSE) from the upst
 
 A stream also ends this way when the provider goes silent for longer than the gap bound in step 8. The event is in the caller's format, whatever the serving provider's format is, and carries `provider_timeout` for the idle bound or `provider_error` for any other read failure. The [Mid-stream error event](../api/errors.md#mid-stream-error-event) reference shows the event in both formats.
 
-A stream that ends this way counts as `error` on `kaalm_llm_requests_total` and marks the `llm.request` span with the event's type. A caller that disconnects gets no event and counts as `client_closed`. [Observability](operations.md#observability) lists the `status` values.
+A stream that ends this way counts as `error` on `kaalm_llm_requests_total` and marks the `llm.request` span with the event's type. A caller that disconnects gets no event and counts as `client_closed`, as [A caller that disconnects before the answer](#a-caller-that-disconnects-before-the-answer) describes. [Observability](operations.md#observability) lists the `status` values.
 
 **Cross-format usage.** For a cross-format candidate, usage is read from the upstream's own events before translation. See [Provider adapters](provider-routing.md#provider-adapters).
