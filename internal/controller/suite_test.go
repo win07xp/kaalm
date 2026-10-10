@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -278,6 +279,9 @@ func runSuite(m *testing.M) int {
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
+		// The production manager strips managedFields from its cache; tests
+		// run on objects of the same shape.
+		Cache: cache.Options{DefaultTransform: cache.TransformStripManagedFields()},
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Host:    whOpts.LocalServingHost,
 			Port:    whOpts.LocalServingPort,
@@ -455,4 +459,35 @@ func withShortDeadline(task *kaalmv1beta1.AgentTask) {
 		task.Labels = map[string]string{}
 	}
 	task.Labels[shortDeadlineLabel] = "true"
+}
+
+// The suite's manager caches objects as the production manager does,
+// without managedFields, so a controller that read them from the cache
+// fails here and not only in a real install.
+func TestSuite_CacheStripsManagedFields(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "suite-managed-fields", Namespace: testOperatorNamespace},
+		Data:       map[string]string{"k": "v"},
+	}
+	if err := testClient.Create(ctxT(), cm); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = testClient.Delete(ctxT(), cm) })
+	var stored corev1.ConfigMap
+	if err := testAPIReader.Get(ctxT(), client.ObjectKeyFromObject(cm), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.ManagedFields) == 0 {
+		t.Fatal("the API server returned no managedFields; the test cannot tell")
+	}
+	eventually(t, func() error {
+		var cached corev1.ConfigMap
+		if err := testCache.Get(ctxT(), client.ObjectKeyFromObject(cm), &cached); err != nil {
+			return err
+		}
+		if n := len(cached.ManagedFields); n != 0 {
+			return fmt.Errorf("the cached ConfigMap holds %d managedFields entries, want 0", n)
+		}
+		return nil
+	})
 }
