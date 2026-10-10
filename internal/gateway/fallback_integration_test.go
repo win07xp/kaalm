@@ -17,6 +17,8 @@ limitations under the License.
 package gateway
 
 import (
+	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -25,6 +27,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -524,5 +527,83 @@ func TestIntegration_CrossFormatStreamFailureUsesTheCallersShape(t *testing.T) {
 	}
 	if strings.Contains(text, "message_stop") || strings.Contains(text, "[DONE]") {
 		t.Errorf("a truncated stream must not look complete:\n%s", text)
+	}
+}
+
+// A caller that leaves a non-stream request while the provider is answering
+// ends the walk: the request counts as client_closed, the fallback is not
+// tried, and no spend settles for the cut-off answer. The read can end in
+// the cancel error or, as the transport can report the cancel, a clean end
+// of the partial body; both are the caller leaving.
+func TestIntegration_CallerLeftNonStreamEndsTheWalk(t *testing.T) {
+	arrived := make(chan struct{}, 1)
+	release := make(chan struct{})
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"partial","choices":[`)
+		w.(http.Flusher).Flush()
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	t.Cleanup(func() { close(release) })
+	h.seedRoute()
+	h.server.Recorder = &recordingRecorder{}
+	var backupCalls atomic.Int64
+	h.addBackupProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		backupCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"from-backup","usage":{"prompt_tokens":3,"completion_tokens":1}}`))
+	})
+	h.store.providers["prov"].Spec.Fallback = []kaalmv1beta1.FallbackReference{{Name: "backup"}}
+	h.store.agents["team-a/sup"].Spec.Providers = append(h.store.agents["team-a/sup"].Spec.Providers,
+		kaalmv1beta1.AgentProviderReference{ProviderRef: kaalmv1beta1.LocalObjectReference{Name: "backup"}})
+	h.store.classes["std"].Spec.AllowedProviders = append(h.store.classes["std"].Spec.AllowedProviders,
+		kaalmv1beta1.LocalObjectReference{Name: "backup"})
+
+	cert := agentCert(t, h.ca)
+	raw, _ := json.Marshal(map[string]any{"model": "prov/m1", "messages": []any{}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url("/v1/chat/completions"), bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := h.client(&cert).Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the provider never got the request")
+	}
+	cancel()
+	<-done
+
+	requests := func(status string) float64 {
+		return testutil.ToFloat64(h.server.Metrics.llmRequests.WithLabelValues("prov", "m1", "team-a", status))
+	}
+	waitFor(t, func() bool { return requests(outcomeClientClosed) == 1 })
+	for _, status := range []string{outcomeOK, outcomeError} {
+		if got := requests(status); got != 0 {
+			t.Errorf("%s requests = %v, want 0", status, got)
+		}
+	}
+	if got := backupCalls.Load(); got != 0 {
+		t.Errorf("backup called %d times after the caller left", got)
+	}
+	if got := testutil.ToFloat64(h.server.Metrics.llmFallback.WithLabelValues("prov", "backup", "connect_error")); got != 0 {
+		t.Errorf("fallback counted %v times after the caller left", got)
+	}
+	if u := h.spend.Total("team-a", "prov", "m1"); u.InputTokens != 0 || u.OutputTokens != 0 {
+		t.Errorf("spend settled for a cut-off answer: %+v", u)
 	}
 }
