@@ -152,3 +152,35 @@ func TestAgentTask_HeldRecheckSkipsUnchangedStatus(t *testing.T) {
 		})
 	}
 }
+
+// A pass that starts on a stale copy of a held task, read before an earlier
+// pass moved the reason, finds the stored status already set and skips its
+// write. It sends no event either: the earlier pass already reported the
+// reason.
+func TestMarkTaskNotReady_StaleCopySkipsDuplicateEvent(t *testing.T) {
+	task := restoreTask("stale-held", kaalmv1beta1.TaskRunning, false, kaalmv1beta1.ReasonSecretNotOptedIn)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(task).
+		WithStatusSubresource(&kaalmv1beta1.AgentTask{}).Build()
+	rec := record.NewFakeRecorder(16)
+	r := &AgentTaskReconciler{Client: c, OperatorNamespace: "kaalm-system", Recorder: rec}
+	const msg = `imagePullSecret "pull" missing in namespace "default"`
+
+	stale := storedTask(t, c, task)
+	if err := r.markTaskNotReady(context.Background(), storedTask(t, c, task),
+		kaalmv1beta1.ReasonImagePullSecretMissing, msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.markTaskNotReady(context.Background(), stale,
+		kaalmv1beta1.ReasonImagePullSecretMissing, msg); err != nil {
+		t.Fatal(err)
+	}
+	close(rec.Events)
+	var events []string
+	for e := range rec.Events {
+		events = append(events, e)
+	}
+	if got := withPrefix(events, "Warning "+kaalmv1beta1.ReasonImagePullSecretMissing); len(got) != 1 {
+		t.Errorf("events = %q, want one %s warning", events, kaalmv1beta1.ReasonImagePullSecretMissing)
+	}
+	expectStoredReady(t, storedTask(t, c, task), metav1.ConditionFalse, kaalmv1beta1.ReasonImagePullSecretMissing)
+}

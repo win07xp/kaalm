@@ -417,12 +417,19 @@ func (r *AgentTaskReconciler) awaitPodReady(
 // A cache that lags an earlier write in the same pass costs at most one
 // redundant write, never a missed one.
 func (r *AgentTaskReconciler) updateStatusIfChanged(ctx context.Context, task *kaalmv1beta1.AgentTask) error {
+	_, err := r.writeStatusIfChanged(ctx, task)
+	return err
+}
+
+// writeStatusIfChanged is updateStatusIfChanged that also reports whether it
+// wrote, for a caller whose event must follow a write.
+func (r *AgentTaskReconciler) writeStatusIfChanged(ctx context.Context, task *kaalmv1beta1.AgentTask) (bool, error) {
 	var current kaalmv1beta1.AgentTask
 	if err := r.Get(ctx, client.ObjectKeyFromObject(task), &current); err == nil &&
 		equality.Semantic.DeepEqual(current.Status, task.Status) {
-		return nil
+		return false, nil
 	}
-	return r.Status().Update(ctx, task)
+	return true, r.Status().Update(ctx, task)
 }
 
 // createRejected holds a task whose Pod create, or a write of another
@@ -1198,17 +1205,19 @@ func (r *AgentTaskReconciler) setTaskReady(task *kaalmv1beta1.AgentTask, ok bool
 // reason when the reason first appears, not on each pass that finds the
 // problem again. A held task re-checks every notReadyRecheck, and a pass
 // that finds the same cause has nothing to write. The event follows a
-// successful write, so a pass that lost its write to a conflict does not
+// successful write, so a pass that lost its write to a conflict, or that
+// read a stale copy and found the stored status already set, does not
 // report the reason twice.
 func (r *AgentTaskReconciler) markTaskNotReady(
 	ctx context.Context, task *kaalmv1beta1.AgentTask, reason, msg string,
 ) error {
 	first := readyFalseIsNew(task.Status.Conditions, reason)
 	r.setTaskReady(task, false, reason, msg)
-	if err := r.updateStatusIfChanged(ctx, task); err != nil {
+	wrote, err := r.writeStatusIfChanged(ctx, task)
+	if err != nil {
 		return err
 	}
-	if first && r.Recorder != nil {
+	if first && wrote && r.Recorder != nil {
 		r.Recorder.Event(task, corev1.EventTypeWarning, reason, msg)
 	}
 	return nil
