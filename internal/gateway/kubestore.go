@@ -184,9 +184,14 @@ func (k *KubeStore) providerCredential(ctx context.Context, endpoint, name, key 
 // Ready channel holds the path, which happens only until the reconciler marks
 // the loser PathConflict, rule 15 picks the winner: the earliest
 // creationTimestamp, and on a tie the lower name.
+//
+// The returned channel shares memory with the informer cache and is
+// read-only: every webhook, poll, and platform request resolves its channel
+// here, and a reader that hands it to a goroutine deep copies it first.
 func (k *KubeStore) ChannelByPath(ctx context.Context, path string) (*kaalmv1beta1.AgentChannel, bool) {
 	var channels kaalmv1beta1.AgentChannelList
-	if err := k.Reader.List(ctx, &channels, client.MatchingFields{ChannelPathIndex: path}); err != nil {
+	if err := k.Reader.List(ctx, &channels, client.MatchingFields{ChannelPathIndex: path},
+		client.UnsafeDisableDeepCopy); err != nil {
 		return nil, false
 	}
 	var winner *kaalmv1beta1.AgentChannel

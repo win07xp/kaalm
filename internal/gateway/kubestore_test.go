@@ -266,6 +266,17 @@ func TestKubeStore_ChannelByPath(t *testing.T) {
 	if _, ok := k.ChannelByPath(ctx, "/channels/team-a/unknown"); ok {
 		t.Error("unknown path must miss")
 	}
+
+	// Every webhook, poll, and platform request resolves its channel here,
+	// and the callers only read it, so the List skips the deep copy.
+	rec := &recordingReader{Reader: k.Reader}
+	k.Reader = rec
+	if _, ok := k.ChannelByPath(ctx, "/channels/team-a/hook"); !ok {
+		t.Fatal("hit through the recording reader failed")
+	}
+	if rec.last.UnsafeDisableDeepCopy == nil || !*rec.last.UnsafeDisableDeepCopy {
+		t.Error("ChannelByPath must list with UnsafeDisableDeepCopy")
+	}
 }
 
 // TestKubeStore_ChannelByPathPicksRule15Winner: when two Ready channels share
