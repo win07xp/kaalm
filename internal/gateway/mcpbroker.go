@@ -623,8 +623,8 @@ func (s *Server) logToolCredentialRefusal(ctx context.Context, provider string, 
 // filters the tool set to the caller's grant, and replies as plain JSON: the
 // model never sees a tool it cannot call. It returns the outcome the caller
 // funnels into mcpResult, the audit detail included. ctx is the caller's
-// request context: a read that fails because the caller left writes nothing
-// and returns client_closed.
+// request context: when the caller left, it writes nothing and returns
+// client_closed, however the read ended.
 func (s *Server) relayFilteredToolsList(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, msg mcpRequest, filter *toolFilter,
 	providerName string,
@@ -635,14 +635,17 @@ func (s *Server) relayFilteredToolsList(
 	lr := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
 	rr := &readErrRecorder{r: lr}
 	parsed, raw, err := mcp.ParseResponseRaw(resp.Header.Get("Content-Type"), rr, msg.ID, int(maxBytes)+1)
+	// Checked before the read result, as on the buffered relay: a read
+	// that ended cleanly after the caller left can still hold a cut-off
+	// answer.
+	if ctx.Err() != nil {
+		return 0, statusClientClosedRequest, outcomeClientClosed, ""
+	}
 	if err != nil && lr.N <= 0 {
 		msg := fmt.Sprintf("tool provider response exceeds %d bytes", maxBytes)
 		writeError(w, http.StatusRequestEntityTooLarge, errorBody{Type: errResponseTooLarge,
 			Message: msg, Provider: providerName}, 0)
 		return 0, http.StatusRequestEntityTooLarge, errResponseTooLarge, msg
-	}
-	if err != nil && ctx.Err() != nil {
-		return 0, statusClientClosedRequest, outcomeClientClosed, ""
 	}
 	if err != nil && upstreamTimedOut(resp, err) {
 		// The upstream timeout covers the response, not only its headers.
@@ -778,13 +781,17 @@ func upstreamTimedOut(resp *http.Response, err error) bool {
 
 // relayMCPBuffered copies a JSON response through, capped. It returns the
 // outcome the caller funnels into mcpResult, the audit detail included. ctx
-// is the caller's request context: a read that fails because the caller
-// left writes nothing and returns client_closed.
+// is the caller's request context: when the caller left, it writes nothing
+// and returns client_closed, however the read ended.
 func relayMCPBuffered(
 	ctx context.Context, w http.ResponseWriter, resp *http.Response, maxBytes int64, providerName string,
 ) (respBytes int64, status int, errType, detail string) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
-	if err != nil && ctx.Err() != nil {
+	// A caller that left is client_closed whether the read failed or ended
+	// cleanly: once the call is canceled, the tool server can finish its
+	// response, and the transport can read that clean end before the cancel
+	// reaches the body, leaving a cut-off answer with no error.
+	if ctx.Err() != nil {
 		return 0, statusClientClosedRequest, outcomeClientClosed, ""
 	}
 	// A body cut by the upstream timeout can end in a clean io.EOF, so a
