@@ -58,9 +58,10 @@ func TestScrapeTargetsSkipsTerminatingPods(t *testing.T) {
 	// rollout; counting it would put its counters in one snapshot and not
 	// the next.
 	gone := metav1.Now()
+	running := corev1.PodStatus{Phase: corev1.PodRunning}
 	pods := []corev1.Pod{
-		{ObjectMeta: metav1.ObjectMeta{Name: "gw-new"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "gw-old", DeletionTimestamp: &gone}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "gw-new"}, Status: running},
+		{ObjectMeta: metav1.ObjectMeta{Name: "gw-old", DeletionTimestamp: &gone}, Status: running},
 		{ObjectMeta: metav1.ObjectMeta{Name: "gw-pending"}, Status: corev1.PodStatus{Phase: corev1.PodPending}},
 	}
 	got := scrapeTargets(pods)
