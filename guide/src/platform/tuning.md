@@ -1,7 +1,7 @@
-# Tuning the controller and gateway
+# Tuning the controller, gateway, and console
 
 The chart's defaults suit most clusters. The values on this page change how
-the two components behave under load, during debugging, when they issue
+the components behave under load, during debugging, when they issue
 workload certificates, or on a cluster whose DNS is not where the default
 expects; everything else is covered on the page that needs it. Set them on
 `helm install` or `helm upgrade`, and pass the same values on every upgrade, because

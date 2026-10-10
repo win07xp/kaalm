@@ -200,12 +200,13 @@ The console authenticates humans with the cluster's own `TokenReview` and
    minutes, even if the browser never returns. JSON API callers skip sessions and send
    `Authorization: Bearer` on every request; those reviews are cached for
    five minutes, so a revoked token works for up to five minutes. A token that
-   fails its `TokenReview` is refused from memory for 10 seconds, with no new
-   review, so a script that retries a bad token costs the API server one
-   review per 10 seconds. The same wait applies to a token that became
-   valid after a failed review, such as an OIDC token the API server could not
-   verify at first: it can take up to 10 seconds to be accepted. The login
-   page and the five-minute session re-review always run a fresh review.
+   the `TokenReview` reports as not authenticated is refused from memory for
+   10 seconds, with no new review, so a script that retries a bad token costs
+   the API server one review per 10 seconds. A token that becomes valid after
+   such a refusal, such as an OIDC token the API server could not verify at
+   first, is accepted within 10 seconds. A review that cannot run because the
+   API server returns an error is never cached. The login page and the
+   five-minute session re-review always run a fresh review.
 3. **Authorization.** Every namespace-scoped read needs a
    `SubjectAccessReview` to pass: the caller must be allowed to `list`
    `agents.kaalm.io` in the namespace to see any of its panels. Test-chat has

@@ -15,7 +15,7 @@
 - [Budgets, limits, and fallback](platform/budgets-limits-fallback.md)
 - [Providing tool access](platform/tool-access.md)
 - [Managing team access](platform/managing-access.md)
-- [Tuning the controller and gateway](platform/tuning.md)
+- [Tuning the controller, gateway, and console](platform/tuning.md)
 
 # Observing the platform
 
