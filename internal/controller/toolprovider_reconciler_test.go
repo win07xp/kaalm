@@ -434,16 +434,20 @@ func TestToolProvider_AuthFailedEmitsCredentialsInvalidOnEntry(t *testing.T) {
 		WithObjects(tp).WithStatusSubresource(tp).Build()
 	health := newFakeToolHealth()
 	rec := record.NewFakeRecorder(10)
+	clock := newTestClock()
 	r := &ToolProviderReconciler{
 		Client: c, Recorder: rec,
-		OperatorNamespace: testOperatorNamespace, Health: health,
+		OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "tp-authev"}}
+	// Each pass runs once the last probe's wait is over, so each one probes.
 	reconcile := func() {
 		t.Helper()
-		if _, err := r.Reconcile(ctx, req); err != nil {
+		res, err := r.Reconcile(ctx, req)
+		if err != nil {
 			t.Fatal(err)
 		}
+		clock.advancePast(res)
 	}
 	credEvents := func() int {
 		n := 0
@@ -537,7 +541,7 @@ func TestToolProvider_ReadyFalseWarningsFollowTheStatusWrite(t *testing.T) {
 	}
 }
 
-// A failing probe is an occurrence: every failing pass emits
+// A failing probe is an occurrence: every failing probe emits
 // ProviderUnhealthy.
 func TestToolProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
 	tp := eventsToolProvider("ev-tp-down")
@@ -546,12 +550,12 @@ func TestToolProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
 	health := newFakeToolHealth()
 	health.set("ev-tp-down", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Err: errString("connection refused")}})
 	rec := record.NewFakeRecorder(16)
-	r := &ToolProviderReconciler{Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health}
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-tp-down"}}
+	clock := newTestClock()
+	r := &ToolProviderReconciler{
+		Client: c, Recorder: rec, OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
+	}
 	for range 3 {
-		if _, err := r.Reconcile(ctxT(), req); err != nil {
-			t.Fatal(err)
-		}
+		clock.advancePast(mustReconcile(t, r, "ev-tp-down"))
 	}
 	if got := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonProviderUnhealthy); len(got) != 3 {
 		t.Fatalf("three failing probes emitted %d ProviderUnhealthy events, want 3", len(got))

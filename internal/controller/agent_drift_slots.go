@@ -91,8 +91,9 @@ type driftSlots struct {
 func (s *driftSlots) acquire(
 	ctx context.Context, c client.Reader, agent *kaalmv1beta1.Agent, class *kaalmv1beta1.AgentClass, now time.Time,
 ) (bool, error) {
+	// The items are the cache's own objects, only read here.
 	var agents kaalmv1beta1.AgentList
-	if err := c.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: class.Name}); err != nil {
+	if err := c.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: class.Name}, client.UnsafeDisableDeepCopy); err != nil {
 		return false, err
 	}
 

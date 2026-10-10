@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,6 +88,9 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
+	// before is the stored status, so a pass that changes nothing writes
+	// nothing: a write is an update event for every watcher of the class.
+	before := ac.Status.DeepCopy()
 
 	// Validate.
 	var problems []string
@@ -245,14 +249,19 @@ func (r *AgentClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Message: msg,
 		})
 	}
-	if err := r.Status().Update(ctx, &ac); err != nil {
-		return ctrl.Result{}, err
-	}
-	for _, w := range warnings {
-		r.Recorder.Event(&ac, w.eventType, w.reason, w.message)
-	}
-	if invalid != nil {
-		r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
+	// The events go out only after the write that records them. A pass
+	// that finds its status already stored sends none: the pass that stored
+	// it sent them.
+	if !equality.Semantic.DeepEqual(before, &ac.Status) {
+		if err := r.Status().Update(ctx, &ac); err != nil {
+			return ctrl.Result{}, err
+		}
+		for _, w := range warnings {
+			r.Recorder.Event(&ac, w.eventType, w.reason, w.message)
+		}
+		if invalid != nil {
+			r.Recorder.Event(&ac, corev1.EventTypeWarning, invalid.Reason, invalid.Message)
+		}
 	}
 	// Rule 53 is advisory with no condition, so its rising edge is held in
 	// memory; noting it after the status write keeps a failed write silent.
@@ -355,12 +364,14 @@ type classUsage struct {
 }
 
 func (r *AgentClassReconciler) countUsers(ctx context.Context, className string) (classUsage, error) {
+	// Both lists hand back the cache's own objects; they are only counted
+	// and read.
 	var agents kaalmv1beta1.AgentList
-	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
+	if err := r.List(ctx, &agents, client.MatchingFields{IndexAgentClassRef: className}, client.UnsafeDisableDeepCopy); err != nil {
 		return classUsage{}, err
 	}
 	var tasks kaalmv1beta1.AgentTaskList
-	if err := r.List(ctx, &tasks, client.MatchingFields{IndexAgentClassRef: className}); err != nil {
+	if err := r.List(ctx, &tasks, client.MatchingFields{IndexAgentClassRef: className}, client.UnsafeDisableDeepCopy); err != nil {
 		return classUsage{}, err
 	}
 	u := classUsage{agents: int32(len(agents.Items)), tasks: int32(len(tasks.Items))}
@@ -391,10 +402,14 @@ func fqdnSupported(fn func() (bool, error)) (bool, error) {
 func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kaalmv1beta1.AgentClass{}).
-		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider)).
-		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider)).
-		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload)).
-		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload))
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForProvider),
+			builder.WithPredicates(createOrDelete())).
+		Watches(&kaalmv1beta1.ToolProvider{}, handler.EnqueueRequestsFromMapFunc(r.classesForToolProvider),
+			builder.WithPredicates(createOrDelete())).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(classForWorkload),
+			builder.WithPredicates(classUsageChanged())).
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(classForWorkload),
+			builder.WithPredicates(classUsageChanged()))
 	if r.CertCleanup != nil {
 		// cert-manager adds or removes the ownerReference on the controller
 		// Secret when its flag changes; re-evaluate every class then.
@@ -410,47 +425,53 @@ func (r *AgentClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // allClasses re-enqueues every AgentClass, for a cluster-wide input such as
 // the certificate cleanup check.
 func (r *AgentClassReconciler) allClasses(ctx context.Context, _ client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes); err != nil {
+	if err := r.List(ctx, &classes, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(classes.Items))
-	for _, c := range classes.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	for i := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: classes.Items[i].Name}})
 	}
 	return reqs
 }
 
 // classesForToolProvider re-enqueues every AgentClass whose
-// allowedToolProviders lists the changed ToolProvider.
+// allowedToolProviders lists a ToolProvider that was created or deleted.
 func (r *AgentClassReconciler) classesForToolProvider(ctx context.Context, obj client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: obj.GetName()}); err != nil {
+	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedToolProviders: obj.GetName()},
+		client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(classes.Items))
-	for _, c := range classes.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	for i := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: classes.Items[i].Name}})
 	}
 	return reqs
 }
 
-// classesForProvider re-enqueues every AgentClass whose allowedProviders lists the
-// changed ModelProvider.
+// classesForProvider re-enqueues every AgentClass whose allowedProviders lists
+// a ModelProvider that was created or deleted.
 func (r *AgentClassReconciler) classesForProvider(ctx context.Context, obj client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var classes kaalmv1beta1.AgentClassList
-	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: obj.GetName()}); err != nil {
+	if err := r.List(ctx, &classes, client.MatchingFields{IndexAllowedProviders: obj.GetName()},
+		client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(classes.Items))
-	for _, c := range classes.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name}})
+	for i := range classes.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: classes.Items[i].Name}})
 	}
 	return reqs
 }
 
-// classForWorkload re-enqueues the AgentClass a workload references, so usage
-// counts and the delete hold stay fresh.
+// classForWorkload re-enqueues the AgentClass a workload references, on its
+// create and delete and on the changes classUsageChanged admits, so usage
+// counts, drift counts, and the delete hold stay fresh.
 func classForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
 	var className string
 	switch w := obj.(type) {

@@ -145,7 +145,7 @@ An ownerReference cannot cross a namespace boundary. The garbage collector resol
 
 Because cascade GC never sees them, cleanup is three explicit paths, and this is the only child that needs a finalizer sweep:
 
-- **On every pass**, valid or not, the AgentChannelReconciler prunes expired entries by label selector.
+- **On every pass**, valid or not, the AgentChannelReconciler prunes the channel's expired entries.
 - **On deletion**, the channel finalizer sweeps the whole label-matched set.
 - **Every 10 minutes**, the async orphan pruner deletes an expired entry whose channel no longer exists.
 

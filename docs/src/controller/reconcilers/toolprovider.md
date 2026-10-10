@@ -27,11 +27,11 @@ Rules 35 to 38, the tool grants, are checked on the [Agent](agent.md) and [Agent
 
 ## What it reports
 
-`Ready` is `True` with `CredentialsValid` when no check fails, also while `Healthy` is `False` for `ProviderUnhealthy`. Otherwise it carries the table's reason, or `DeletionBlocked` during a delete hold. A `Warning` event with the reason fires when a `Ready=False` reason first appears, and `ProviderUnhealthy` fires on every failing probe pass. A pass that ends at a Secret check or the pattern check, with the probe disabled, or in a delete hold sets `Healthy=Unknown` with `NotProbed`, for the [reason a ModelProvider does](modelprovider.md#what-it-reports). [Status](../../resources/toolprovider.md#status) lists the rest.
+`Ready` is `True` with `CredentialsValid` when no check fails, also while `Healthy` is `False` for `ProviderUnhealthy`. Otherwise it carries the table's reason, or `DeletionBlocked` during a delete hold. A `Warning` event with the reason fires when a `Ready=False` reason first appears, and `ProviderUnhealthy` fires on every failing probe. A pass that ends before the probe, at a Secret check or the pattern check, with the probe disabled, or in a delete hold, sets `Healthy=Unknown` with `NotProbed`, for the [reason a ModelProvider does](modelprovider.md#what-it-reports). [Status](../../resources/toolprovider.md#status) lists the rest.
 
 ## Timing
 
-- **A spec, Secret, or referrer change** re-runs the pass at once, without waiting out a probe backoff. A failed Secret check has no timed re-check.
+- **A spec, Secret, or referrer change** re-runs the checks at once. A referrer change is an Agent or AgentTask created, deleted, or changing its tool references, or an AgentClass created, deleted, or changing its spec. Only a spec edit or a new credential value also probes at once; other passes keep the last probe's result, as for a [ModelProvider](modelprovider.md#when-the-probe-runs). A failed Secret check has no timed re-check.
 - **A probed server**, including one that answers `CredentialsInvalid`, is re-probed every `healthCheck.intervalSeconds` (default 60), and a failing probe [backs off](modelprovider.md#probe-backoff), so a recovered server can take up to the backoff cap (10 minutes at the default interval) to show `Healthy`. With the probe disabled, nothing re-probes.
 
 ## Design choices

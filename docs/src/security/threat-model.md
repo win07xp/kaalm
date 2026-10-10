@@ -47,7 +47,7 @@ Granting `allowHandlerMounts` makes ConfigMap write access in a namespace equiva
 | Threat | Mitigation | Decision |
 |---|---|---|
 | Platform credentials leak through an etcd backup | Encrypt etcd at rest, outside Kaalm. | Out of scope |
-| Stale credentials after rotation fail silently | The gateway follows every Secret it uses through a watch; the ModelProviderReconciler re-reads the key and probes the provider on every pass ([Lifecycle of an LLM API key](credentials.md#lifecycle-of-an-llm-api-key)). | Mitigated |
+| Stale credentials after rotation fail silently | The gateway follows every Secret it uses through a watch; the ModelProviderReconciler re-reads the key on every pass and probes the provider again at once when the key changes ([Lifecycle of an LLM API key](credentials.md#lifecycle-of-an-llm-api-key)). | Mitigated |
 | A workload references a Secret that was never meant for it | A workload's `spec.env` may read only a Secret labeled `kaalm.io/workload-secret: "true"` ([rule 48](../resources/validation/references-and-access.md)). Otherwise the workload reports `Ready=False, reason=SecretNotOptedIn`, no new Pod is made, and the status names no key and does not say whether the Secret exists. A Pod that already runs stays in place. | Mitigated |
 | A channel credential leaks from an agent namespace | The Secret lives in that namespace, so the exposure is that namespace's channels. The team's credential manager rotates it ([Roles for people](rbac.md#roles-for-people)). | Accepted |
 

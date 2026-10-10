@@ -138,6 +138,9 @@ type churnResult struct {
 	Callbacks           float64            `json:"callbacks"`
 	TeardownSec         float64            `json:"teardownSec"`
 	Idle                *apiAudit          `json:"idle,omitempty"`
+	// Active is the control-plane traffic from the first churn message to
+	// the end of the settle after the last one.
+	Active *apiAudit `json:"active,omitempty"`
 }
 
 // apiAudit is what the operator asked of the control plane over a window:
@@ -304,6 +307,10 @@ type tasksResult struct {
 	ThroughputPerMin float64        `json:"throughputPerMin"`
 	Retries          int32          `json:"retries"`
 	TeardownSec      float64        `json:"teardownSec"`
+	// Audit is the control-plane traffic from submission until every task
+	// settles. Its per-agent rates are zero: the window has tasks, not
+	// agents.
+	Audit *apiAudit `json:"audit,omitempty"`
 }
 
 func (h *harness) scrapeGateway(ctx context.Context) (*snapshot, error) {
@@ -1627,14 +1634,11 @@ func (h *harness) runChurn(ctx context.Context) error {
 		h.logAudit("idle audit", res.Idle)
 	}
 
-	gwBefore, err := h.scrapeGateway(ctx)
+	activeBefore, err := h.auditSnapshot(ctx)
 	if err != nil {
 		return err
 	}
-	ctlBefore, err := h.scrapeController(ctx)
-	if err != nil {
-		return err
-	}
+	gwBefore, ctlBefore := activeBefore.gw, activeBefore.ctl
 	rate := float64(cfg.ChurnAgents) / cfg.ChurnCycle.Seconds()
 	h.logf("churn: %.2f msg/s for %s (one message per agent per %s)", rate, cfg.ChurnDuration, cfg.ChurnCycle)
 	client, err := h.k.runLoadgen(ctx, cfg.Namespace, "loadgen-churn", cfg.LoadgenImage, []string{
@@ -1653,14 +1657,13 @@ func (h *harness) runChurn(ctx context.Context) error {
 	if err := sleepCtx(ctx, 90*time.Second); err != nil {
 		return err
 	}
-	gwAfter, err := h.scrapeGateway(ctx)
+	activeAfter, err := h.auditSnapshot(ctx)
 	if err != nil {
 		return err
 	}
-	ctlAfter, err := h.scrapeController(ctx)
-	if err != nil {
-		return err
-	}
+	gwAfter, ctlAfter := activeAfter.gw, activeAfter.ctl
+	res.Active = audit(activeBefore, activeAfter, cfg.ChurnAgents)
+	h.logAudit("churn active audit", res.Active)
 	ns := map[string]string{"namespace": cfg.Namespace}
 	webhook := map[string]string{"channel_type": channelTypeWebhook}
 	res.MessagesByStatus = counterByLabel(gwBefore, gwAfter, "kaalm_channel_messages_total", "status", webhook)
@@ -1716,6 +1719,10 @@ func (h *harness) runTasks(ctx context.Context) error {
 		objs = append(objs, taskObj(cfg.Namespace, fmt.Sprintf("task-%04d", i), activeClassName, cfg.AgentImage))
 	}
 	h.logf("tasks: submitting %d AgentTasks at once", cfg.Tasks)
+	auditBefore, err := h.auditSnapshot(ctx)
+	if err != nil {
+		return err
+	}
 	start := time.Now()
 	if err := h.k.createAll(ctx, objs); err != nil {
 		return err
@@ -1726,7 +1733,7 @@ func (h *harness) runTasks(ctx context.Context) error {
 		kaalmv1beta1.TaskSucceeded: true, kaalmv1beta1.TaskFailed: true, kaalmv1beta1.TaskTimedOut: true,
 	}
 	taskLabels := client.MatchingLabels{phaseLabel: phaseTasks}
-	err := pollUntil(ctx, cfg.TaskTimeout, 3*time.Second, func() (bool, error) {
+	err = pollUntil(ctx, cfg.TaskTimeout, 3*time.Second, func() (bool, error) {
 		if err := h.k.c.List(ctx, &list, client.InNamespace(cfg.Namespace), taskLabels); err != nil {
 			return false, err
 		}
@@ -1741,6 +1748,12 @@ func (h *harness) runTasks(ctx context.Context) error {
 	if err != nil && !errors.Is(err, errTimeout) {
 		return err
 	}
+	auditAfter, auditErr := h.auditSnapshot(ctx)
+	if auditErr != nil {
+		return auditErr
+	}
+	res.Audit = audit(auditBefore, auditAfter, 0)
+	h.logAudit("tasks audit", res.Audit)
 	var provision, run, total []float64
 	var first, last time.Time
 	for i := range list.Items {

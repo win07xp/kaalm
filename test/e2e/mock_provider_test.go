@@ -26,10 +26,13 @@ var _ = Describe("Mock LLM provider", Ordered, func() {
 		}, "60s", "3s").Should(BeTrue())
 
 		By("the liveness probe reaches the mock's kaalm-ca certificate through the probe trust knob")
+		// The probe re-runs only on its schedule, so a probe that failed while
+		// the mock was starting retries on the backoff (up to 150s at the 15s
+		// interval), not on the next unrelated event.
 		Eventually(func() (string, error) {
 			return utils.ResourceField("modelprovider", "", "e2e-mock",
 				`{.status.conditions[?(@.type=="Healthy")].status}`)
-		}, "120s", "5s").Should(Equal("True"))
+		}, "240s", "5s").Should(Equal("True"))
 	})
 
 	It("forwards a token-authenticated LLM call to the mock and returns usage", func() {

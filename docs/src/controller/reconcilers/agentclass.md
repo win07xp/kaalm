@@ -39,7 +39,7 @@ A class has no phase. [AgentClass status](../../resources/agentclass.md#status) 
 
 ## Timing
 
-- **A watch event starts every pass,** and no pass schedules a timed re-check. A class turns `Ready` when a missing provider is created, as soon as the controller's cache sees it, and a held delete releases the same way after the last referrer goes.
+- **A watch event starts every pass,** and no pass schedules a timed re-check. A pass that finds the stored status already correct writes nothing and sends none of the events its status records, so a repeated pass repeats none of them. A class turns `Ready` when a missing provider is created, as soon as the controller's cache sees it, and a held delete releases the same way after the last referrer goes.
 - **A failed pass** retries with backoff and writes no status.
 - **A CNI change** shows after a controller restart ([CNI FQDN-policy probe](#cni-fqdn-policy-probe)).
 

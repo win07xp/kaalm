@@ -61,7 +61,7 @@ The probe never follows a redirect, so a redirecting endpoint cannot receive the
 |---|---|---|
 | `2xx` | `Healthy=True, reason=UpstreamReachable` | the healthy interval |
 | `401` or `403` (for `google-vertex`, also the failures under [The google-vertex probe](#the-google-vertex-probe)) | `Healthy=False` and `Ready=False`, both `reason=CredentialsInvalid`, and a `Warning` event when `Ready` first takes that reason; the pass ends | the failing backoff |
-| any other status (a `3xx` redirect, a `404`, a `5xx`) or a network failure | `Healthy=False, reason=ProviderUnhealthy` and a `Warning` event on every failing pass; `Ready` stays `True` | the failing backoff |
+| any other status (a `3xx` redirect, a `404`, a `5xx`) or a network failure | `Healthy=False, reason=ProviderUnhealthy` and a `Warning` event on every failing probe; `Ready` stays `True` | the failing backoff |
 
 The `401` and `403` class matches the credential problems in [Fallback triggers](../../gateways/llm/fallback.md#fallback-triggers).
 
@@ -110,24 +110,30 @@ The check is advisory and never sets `Ready=False`; the reason is under [`degrad
 A ModelProvider is cluster-scoped and has no phase. [ModelProvider status](../../resources/modelprovider.md#status) lists every condition.
 
 - **`Ready`** is `True` with `reason: CredentialsValid` when every check passes, and `False` with the reason from [What it checks](#what-it-checks) otherwise. A provider whose probe fails with `ProviderUnhealthy` stays `Ready=True`.
-- **`Healthy`** is `True` or `False` only from a probe in the same pass ([Liveness probe](#liveness-probe)). A pass that ends without one sets `Unknown` with `NotProbed`: a failing credential or configuration check, a disabled probe, or a held delete. [ModelProvider status](../../resources/modelprovider.md#status) gives the meaning.
+- **`Healthy`** is `True` or `False` from the latest probe, and the passes between probes keep it ([When the probe runs](#when-the-probe-runs)). A pass that ends before the probe sets `Unknown` with `NotProbed`: a failing credential or configuration check, a disabled probe, or a held delete. [ModelProvider status](../../resources/modelprovider.md#status) gives the meaning.
 - **`GatewayReachable`** is `True` with `GatewayReady` when at least one gateway Pod in `kaalm-system` is Ready and not being deleted, else `False` with `GatewayUnavailable`. The value is cluster-wide, the same on every provider.
 - **`BoundaryMarginRaised`** and `status.budgetUsage` come from [Budget reconciliation](#budget-reconciliation). The advisory conditions `MaxOutputTokensUnset`, `FallbackIneligible`, and `DegradeTargetNotCheapest` come from the checks above.
 - **Events.** Every `Ready=False` reason raises a `Warning` event with the same reason, once, when it first appears on `Ready`. [Event emission](../operations.md#event-emission) lists the rest.
 
 ## Timing
 
-- **A failing credential or configuration check.** The pass requeues every minute when the provider has a budget period, so the reduction and rollover keep running; without a period, only events re-run it. A change to the credential Secret, including its label or annotation, re-evaluates every provider that names it at once. A spec edit re-runs the checks at once. A change to any ModelProvider re-enqueues every other provider that declares a fallback, so a chain recovers when a missing provider appears or a bad one is fixed.
-- **After the configuration checks.** A pass requeues at the probe's next delay when the probe ran ([Probe backoff](#probe-backoff)). With the probe disabled, it requeues every minute for a provider with a budget period, so the reduction keeps running. With neither, only events re-run it.
+- **A failing credential or configuration check.** The pass requeues every minute when the provider has a budget period, so the reduction and rollover keep running; without a period, only events re-run it. A change to the credential Secret, including its label or annotation, re-evaluates every provider that names it at once. A spec edit re-runs the checks at once. Creating, deleting, or editing the spec of a ModelProvider re-enqueues every other provider that declares a fallback, so a chain recovers when a missing provider appears or a bad one is fixed. A status write, such as a spend fold, re-enqueues none.
+- **After the configuration checks.** A pass requeues for the time left until the probe is next due ([Probe backoff](#probe-backoff)). With the probe disabled, it requeues every minute for a provider with a budget period, so the reduction keeps running. With neither, only events re-run it.
 - **Gateway readiness.** A gateway Pod's creation, deletion, or change of Ready state re-enqueues every provider at once, so a stopped replica's spend is folded right after its Pod is gone ([The reducer](../../gateways/llm/budgets-and-rate-limits.md#the-reducer)).
 - **Spend.** A replica's write to the budget ConfigMap re-enqueues its provider between timed passes. The previous period's rows appear in the first pass after a rollover boundary: the next requeue at the latest, or sooner when such a write arrives.
-- **Referrers.** A change to an Agent, AgentTask, or AgentClass that names the provider re-enqueues it at once, so the delete hold releases and the eligibility scan re-runs.
+- **Referrers.** Creating or deleting an Agent or AgentTask that names the provider, or changing its provider references, re-enqueues the provider at once. So does creating, deleting, or editing the spec of an AgentClass that allows it. The delete hold then releases and the eligibility scan re-runs. A status-only change on a workload or class re-enqueues nothing, so status churn on a large fleet does not reach the providers.
+
+### When the probe runs
+
+The probe runs when its schedule comes due: the interval, or the backoff while it fails ([Probe backoff](#probe-backoff)). It also runs at once after a spec edit, a new credential value, and a controller restart or leader change. After a pass that ended before the probe, the next pass probes at once, because what ended it, such as a missing Secret or a held delete, can be fixed without a spec or credential change.
+
+Every other pass keeps the last probe's `Healthy` result and sends the upstream no request. That covers a referrer change, a budget write, and a gateway Pod change. A label or annotation edit on a valid credential Secret re-runs the checks but does not probe.
 
 ### Probe backoff
 
-A probe whose `Healthy` condition is not `False` requeues at `healthCheck.intervalSeconds` (default 60). A failing probe (`Healthy=False`, reason `ProviderUnhealthy` or `CredentialsInvalid`) backs off: each periodic failure doubles the wait (interval, 2x, 4x, 8x, and so on), capped at ten intervals or ten minutes, whichever is smaller, and never below the interval. A controller restart keeps the backoff, because it is read from the `Healthy` condition's `lastTransitionTime`. One successful probe returns the provider to the plain interval. A pass that runs no probe sets `Healthy` to `Unknown`, not `False`, so the first failure after it starts the backoff at the interval: time spent not probing says nothing about how long the upstream has been failing, and an operator who fixes a Secret sees a prompt re-probe.
+A probe whose `Healthy` condition is not `False` requeues at `healthCheck.intervalSeconds` (default 60). A failing probe (`Healthy=False`, reason `ProviderUnhealthy` or `CredentialsInvalid`) backs off: each periodic failure doubles the wait (interval, 2x, 4x, 8x, and so on), capped at ten intervals or ten minutes, whichever is smaller, and never below the interval. A controller restart keeps the backoff, because it is read from the `Healthy` condition's `lastTransitionTime`. One successful probe returns the provider to the plain interval. A pass that ends before the probe sets `Healthy` to `Unknown`, not `False`, so the first failure after it starts the backoff at the interval: time spent not probing says nothing about how long the upstream has been failing, and an operator who fixes a Secret sees a prompt re-probe.
 
-The backoff delays only the periodic requeue. The event-driven re-runs above are not delayed, so a fixed credential or endpoint takes effect at once. The same backoff governs the ToolProvider probe ([ToolProviderReconciler](toolprovider.md)).
+The backoff delays only the scheduled probe. A spec edit or a changed credential probes ahead of it ([When the probe runs](#when-the-probe-runs)), so a fixed credential or endpoint shows at once. A recovered upstream with the same spec and credential shows `Healthy` at the next scheduled probe, up to the backoff cap. The same backoff governs the ToolProvider probe ([ToolProviderReconciler](toolprovider.md)).
 
 ## Design choices
 

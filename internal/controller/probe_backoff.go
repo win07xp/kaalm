@@ -57,7 +57,7 @@ func probeRequeue(conds []metav1.Condition, interval time.Duration, now time.Tim
 // setHealthyNotProbed sets Healthy=Unknown with reason NotProbed on a
 // ModelProvider or ToolProvider pass that ends without probing: a failing
 // credential or configuration check, a disabled probe, or a held delete. True
-// and False come only from a probe in the same pass. Unknown, not False, is
+// and False come only from the latest probe (see probeSchedule). Unknown, not False, is
 // what lets probeRequeue start a fresh backoff at the next probe failure:
 // time spent not probing says nothing about how long the upstream has been
 // failing.

@@ -306,11 +306,10 @@ func TestModelProvider_ProviderUnhealthyOnEveryFailingProbe(t *testing.T) {
 	health := newFakeHealth()
 	health.set("ev-mp-down", ProviderProbeResult{Err: errString("upstream 503")})
 	r, rec := eventsProviderReconciler(t, &statusConflicts{}, health, mp, providerKey("ev-mp-down"))
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ev-mp-down"}}
+	clock := newTestClock()
+	r.Clock = clock.now
 	for range 3 {
-		if _, err := r.Reconcile(ctxT(), req); err != nil {
-			t.Fatal(err)
-		}
+		clock.advancePast(mustReconcile(t, r, "ev-mp-down"))
 	}
 	if got := withPrefix(drainEvents(rec), "Warning "+kaalmv1beta1.ReasonProviderUnhealthy); len(got) != 3 {
 		t.Fatalf("three failing probes emitted %d ProviderUnhealthy events, want 3", len(got))

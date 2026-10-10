@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kaalmv1beta1 "github.com/win07xp/kaalm/api/v1beta1"
@@ -59,11 +60,19 @@ type ModelProviderReconciler struct {
 	OperatorNamespace string
 	// Health probes provider liveness. Injected so tests need no real provider.
 	Health ProviderHealthChecker
+	// Clock is injectable for tests; nil means time.Now.
+	Clock func() time.Time
 
+	// probes records each provider's last probe, so only a pass whose probe
+	// is due dials the upstream. The zero value is ready to use.
+	probes probeSchedule[ProviderProbeResult]
 	// events holds the state events a pass derives (a Ready=False reason or
 	// an advisory condition turning True) until finish writes the status
 	// that records them. The zero value is ready to use.
 	events heldEvents
+	// ownWrites lets the For() watch skip the event of the reconciler's own
+	// status write.
+	ownWrites ownWrites
 }
 
 // +kubebuilder:rbac:groups=kaalm.io,resources=modelproviders,verbs=get;list;watch;update;patch
@@ -72,6 +81,13 @@ type ModelProviderReconciler struct {
 // +kubebuilder:rbac:groups=kaalm.io,resources=agents;agenttasks;agentclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",namespace=kaalm-system,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+
+func (r *ModelProviderReconciler) now() time.Time {
+	if r.Clock != nil {
+		return r.Clock()
+	}
+	return time.Now()
+}
 
 // Reconcile validates and probes the provider and reconciles its status.
 func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -83,6 +99,8 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			// A provider can disappear without our finalizer pass (the
 			// finalizer stripped by hand); its series must not freeze.
 			dropBudgetCanonical(req.Name)
+			r.probes.forget(req.Name)
+			r.ownWrites.forget(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -125,6 +143,7 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if credReason != kaalmv1beta1.ReasonCredentialsValid {
 		r.setReadyFalse(&mp, credReason, credMsg)
 		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+credReason)
+		r.probes.forget(mp.Name)
 		return r.finish(ctx, &mp, budgetRequeue(&mp, ctrl.Result{}))
 	}
 
@@ -140,16 +159,32 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		reason, msg := readyFalseFromProblems(problems)
 		r.setReadyFalse(&mp, reason, msg)
 		setHealthyNotProbed(&mp.Status.Conditions, "Ready is False with reason "+reason)
+		r.probes.forget(mp.Name)
 		return r.finish(ctx, &mp, budgetRequeue(&mp, ctrl.Result{}))
 	}
 	if err := r.scanFallbackEligibility(ctx, &mp); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Liveness probe.
+	// Liveness probe. Only a pass whose probe is due dials the upstream (see
+	// probeSchedule); any other pass reapplies the recorded result.
 	requeue := ctrl.Result{}
 	if healthCheckEnabled(&mp) {
-		res := r.Health.Probe(ctx, &mp, credential)
+		now := r.now()
+		key := newProbeKey(&mp, credential)
+		res, wait, cached := r.probes.cached(mp.Name, key, now)
+		if !cached {
+			res = r.Health.Probe(ctx, &mp, credential)
+		}
+		// delay is the wait before the next probe: what is left of the
+		// recorded one, or the interval or backoff from this probe.
+		delay := func(next time.Duration) time.Duration {
+			if cached {
+				return wait
+			}
+			r.probes.record(mp.Name, key, res, now.Add(next))
+			return next
+		}
 		switch {
 		case res.AuthFailed:
 			msg := "provider rejected the credential"
@@ -158,20 +193,24 @@ func (r *ModelProviderReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			}
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonCredentialsInvalid, msg)
 			r.setReadyFalse(&mp, kaalmv1beta1.ReasonCredentialsInvalid, msg)
-			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: r.probeRequeue(&mp)})
+			return r.finish(ctx, &mp, ctrl.Result{RequeueAfter: delay(r.probeRequeue(&mp))})
 		case res.Err != nil:
 			// A failed probe is an occurrence, not a state: it is reported on
-			// every failing pass, and the recorder folds the repeats into one
-			// event with a count, which keeps it visible through a long
-			// outage.
+			// every failing probe, and the recorder folds the repeats into
+			// one event with a count, which keeps it visible through a long
+			// outage. A pass that reuses the recorded failure sent nothing
+			// new to report.
 			r.setHealthy(&mp, false, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
-			requeue = ctrl.Result{RequeueAfter: r.probeRequeue(&mp)}
+			if !cached {
+				r.Recorder.Event(&mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonProviderUnhealthy, res.Err.Error())
+			}
+			requeue = ctrl.Result{RequeueAfter: delay(r.probeRequeue(&mp))}
 		default: // Healthy
 			r.setHealthy(&mp, true, kaalmv1beta1.ReasonUpstreamReachable, "provider is reachable")
-			requeue = ctrl.Result{RequeueAfter: r.interval(&mp)}
+			requeue = ctrl.Result{RequeueAfter: delay(r.interval(&mp))}
 		}
 	} else {
+		r.probes.forget(mp.Name)
 		setHealthyNotProbed(&mp.Status.Conditions, "healthCheck.enabled is false")
 	}
 
@@ -203,6 +242,7 @@ func (r *ModelProviderReconciler) reconcileDelete(
 	// No budget pass runs once the delete has started, so nothing sets the
 	// series again before the finalizer goes.
 	dropBudgetCanonical(mp.Name)
+	r.probes.forget(mp.Name)
 	controllerutil.RemoveFinalizer(mp, kaalmv1beta1.ProviderFinalizer)
 	return ctrl.Result{}, r.Update(ctx, mp)
 }
@@ -229,6 +269,7 @@ func (r *ModelProviderReconciler) holdDelete(
 		return ctrl.Result{}, err
 	}
 	setHealthyNotProbed(&mp.Status.Conditions, "deletion is held")
+	r.probes.forget(mp.Name)
 	if msg, first := setDeletionBlocked(&mp.Status.Conditions, refs); first {
 		r.events.add(mp, corev1.EventTypeWarning, kaalmv1beta1.ReasonDeletionBlocked, msg)
 	}
@@ -654,7 +695,7 @@ func (r *ModelProviderReconciler) interval(mp *kaalmv1beta1.ModelProvider) time.
 // probeRequeue is the delay before the next probe: the interval, backed off
 // while the Healthy condition is False (see probeRequeue).
 func (r *ModelProviderReconciler) probeRequeue(mp *kaalmv1beta1.ModelProvider) time.Duration {
-	return probeRequeue(mp.Status.Conditions, r.interval(mp), time.Now())
+	return probeRequeue(mp.Status.Conditions, r.interval(mp), r.now())
 }
 
 func (r *ModelProviderReconciler) setReady(mp *kaalmv1beta1.ModelProvider, ok bool, reason, msg string) {
@@ -703,6 +744,9 @@ func (r *ModelProviderReconciler) finish(
 		return res, nil
 	}
 	err := r.Status().Update(ctx, mp)
+	if err == nil {
+		r.ownWrites.record(mp)
+	}
 	r.events.flush(r.Recorder, mp, err == nil)
 	return res, err
 }
@@ -710,12 +754,18 @@ func (r *ModelProviderReconciler) finish(
 // SetupWithManager wires the reconciler and its reference watches.
 func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kaalmv1beta1.ModelProvider{}).
-		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload)).
-		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload)).
-		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass)).
+		// The update event of the reconciler's own status write is dropped
+		// (see ownWrites); every other change to the provider is a trigger.
+		For(&kaalmv1beta1.ModelProvider{}, builder.WithPredicates(r.ownWrites.skipOwn())).
+		Watches(&kaalmv1beta1.Agent{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload),
+			builder.WithPredicates(providerRefsChanged())).
+		Watches(&kaalmv1beta1.AgentTask{}, handler.EnqueueRequestsFromMapFunc(providersForWorkload),
+			builder.WithPredicates(providerRefsChanged())).
+		Watches(&kaalmv1beta1.AgentClass{}, handler.EnqueueRequestsFromMapFunc(providersForClass),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.providerForBudgetCM)).
-		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback)).
+		Watches(&kaalmv1beta1.ModelProvider{}, handler.EnqueueRequestsFromMapFunc(r.providersWithFallback),
+			builder.WithPredicates(fallbackSpecChanged())).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.providersForSecret)).
 		// GatewayReachable follows gateway Pod readiness event-driven.
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.allModelProviders),
@@ -724,11 +774,13 @@ func (r *ModelProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // providersWithFallback re-enqueues every provider that declares a fallback
-// when any provider changes. The fallback tree is validated transitively, so
-// a provider created or fixed after its parent must wake the whole chain.
+// when any provider is created, deleted, or has its spec edited. The
+// fallback tree is validated transitively, so a provider created or fixed
+// after its parent must wake the whole chain.
 func (r *ModelProviderReconciler) providersWithFallback(ctx context.Context, obj client.Object) []reconcile.Request {
+	// The items are the cache's own objects, only read here.
 	var list kaalmv1beta1.ModelProviderList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	var reqs []reconcile.Request
@@ -749,8 +801,9 @@ func (r *ModelProviderReconciler) providersForSecret(ctx context.Context, obj cl
 	if obj.GetNamespace() != r.OperatorNamespace {
 		return nil
 	}
+	// The items are the cache's own objects, only read here.
 	var list kaalmv1beta1.ModelProviderList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil
 	}
 	var reqs []reconcile.Request
@@ -776,6 +829,9 @@ func (r *ModelProviderReconciler) providerForBudgetCM(_ context.Context, obj cli
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }
 
+// providersForWorkload re-enqueues the providers an Agent or AgentTask names,
+// on its create and delete and when its provider references change
+// (providerRefsChanged), so the delete hold and the eligibility scan follow.
 func providersForWorkload(_ context.Context, obj client.Object) []reconcile.Request {
 	var refs []kaalmv1beta1.AgentProviderReference
 	switch w := obj.(type) {
@@ -793,6 +849,8 @@ func providersForWorkload(_ context.Context, obj client.Object) []reconcile.Requ
 	return reqs
 }
 
+// providersForClass re-enqueues the providers an AgentClass allows, on its
+// create and delete and when its spec changes, so the delete hold follows.
 func providersForClass(_ context.Context, obj client.Object) []reconcile.Request {
 	ac, ok := obj.(*kaalmv1beta1.AgentClass)
 	if !ok {

@@ -118,16 +118,18 @@ func providerKey(name string) *corev1.Secret {
 }
 
 // A ModelProvider that keeps failing its probe requeues on the backoff, and
-// one probe success brings it back to the interval.
+// one probe success brings it back to the interval. Each pass runs when the
+// last one's wait is over, so each one probes.
 func TestModelProvider_FailedProbeBacksOff(t *testing.T) {
 	ctx := context.Background()
-	mp := probedProvider("mp-backoff", metav1.ConditionFalse, time.Now().Add(-3*time.Minute))
+	clock := newTestClock()
+	mp := probedProvider("mp-backoff", metav1.ConditionFalse, clock.now().Add(-3*time.Minute))
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(mp, providerKey("mp-backoff")).WithStatusSubresource(mp).Build()
 	health := newFakeHealth()
 	r := &ModelProviderReconciler{
 		Client: c, Recorder: record.NewFakeRecorder(10),
-		OperatorNamespace: testOperatorNamespace, Health: health,
+		OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "mp-backoff"}}
 
@@ -140,15 +142,17 @@ func TestModelProvider_FailedProbeBacksOff(t *testing.T) {
 		t.Errorf("failing for 3m at a 1m interval: RequeueAfter = %v, want about 4m", res.RequeueAfter)
 	}
 
+	clock.advance(res.RequeueAfter)
 	health.set("mp-backoff", ProviderProbeResult{AuthFailed: true})
 	res, err = r.Reconcile(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !near(res.RequeueAfter, 4*time.Minute) {
-		t.Errorf("a rejected credential backs off too: RequeueAfter = %v, want about 4m", res.RequeueAfter)
+	if !near(res.RequeueAfter, 8*time.Minute) {
+		t.Errorf("a rejected credential backs off too: RequeueAfter = %v, want about 8m", res.RequeueAfter)
 	}
 
+	clock.advance(res.RequeueAfter)
 	health.set("mp-backoff", ProviderProbeResult{Healthy: true})
 	res, err = r.Reconcile(ctx, req)
 	if err != nil {
@@ -157,11 +161,15 @@ func TestModelProvider_FailedProbeBacksOff(t *testing.T) {
 	if res.RequeueAfter != time.Minute {
 		t.Errorf("after a success: RequeueAfter = %v, want the 1m interval", res.RequeueAfter)
 	}
+	if n := health.count("mp-backoff"); n != 3 {
+		t.Errorf("probes = %d, want 3", n)
+	}
 }
 
 // The ToolProvider probe backs off the same way.
 func TestToolProvider_FailedProbeBacksOff(t *testing.T) {
 	ctx := context.Background()
+	clock := newTestClock()
 	tp := &kaalmv1beta1.ToolProvider{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tp-backoff", Generation: 1,
@@ -172,7 +180,7 @@ func TestToolProvider_FailedProbeBacksOff(t *testing.T) {
 			HealthCheck: &kaalmv1beta1.ToolProviderHealthCheck{Enabled: true, IntervalSeconds: 30},
 		},
 		Status: kaalmv1beta1.ToolProviderStatus{
-			Conditions: healthyCond(metav1.ConditionFalse, time.Now().Add(-time.Minute)),
+			Conditions: healthyCond(metav1.ConditionFalse, clock.now().Add(-time.Minute)),
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
@@ -180,7 +188,7 @@ func TestToolProvider_FailedProbeBacksOff(t *testing.T) {
 	health := newFakeToolHealth()
 	r := &ToolProviderReconciler{
 		Client: c, Recorder: record.NewFakeRecorder(10),
-		OperatorNamespace: testOperatorNamespace, Health: health,
+		OperatorNamespace: testOperatorNamespace, Health: health, Clock: clock.now,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "tp-backoff"}}
 
@@ -193,6 +201,7 @@ func TestToolProvider_FailedProbeBacksOff(t *testing.T) {
 		t.Errorf("failing for 1m at a 30s interval: RequeueAfter = %v, want about 90s", res.RequeueAfter)
 	}
 
+	clock.advance(res.RequeueAfter)
 	health.set("tp-backoff", ToolProbeResult{ProviderProbeResult: ProviderProbeResult{Healthy: true}})
 	res, err = r.Reconcile(ctx, req)
 	if err != nil {

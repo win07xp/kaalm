@@ -810,7 +810,7 @@ func agentNotFoundFakeChannel() *kaalmv1beta1.AgentChannel {
 // later.
 func TestChannel_AgentNotFoundRequeuesEveryMinute(t *testing.T) {
 	ch := agentNotFoundFakeChannel()
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
 		WithObjects(ch).WithStatusSubresource(ch).Build()
 	r := &AgentChannelReconciler{Client: c, OperatorNamespace: testSystemNamespace}
 	res, err := r.Reconcile(context.Background(),
@@ -827,7 +827,7 @@ func TestChannel_AgentNotFoundRequeuesEveryMinute(t *testing.T) {
 // write has already happened.
 func TestChannel_NotReadyPruneErrorKeepsStatus(t *testing.T) {
 	ch := agentNotFoundFakeChannel()
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
 		WithObjects(ch).WithStatusSubresource(ch).
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -883,7 +883,7 @@ func TestChannel_ValidPruneErrorKeepsStatus(t *testing.T) {
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
 		WithIndex(&kaalmv1beta1.AgentChannel{}, IndexChannelPath, channelPathIndex).
 		WithObjects(agent, sec, ch).WithStatusSubresource(ch).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -927,7 +927,7 @@ func TestChannel_PruneFallsBackToCreationTime(t *testing.T) {
 		asyncRecord("kaalm-async-fb-expired", "default", "ch-fb", rfc(now.Add(-time.Minute)), now.Add(-61*time.Minute)),
 		asyncRecord("kaalm-async-fb-live", "default", "ch-fb", rfc(now.Add(30*time.Minute)), now.Add(-30*time.Minute)),
 	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).WithObjects(objs...).Build()
 	r := &AgentChannelReconciler{Client: c, OperatorNamespace: orphanTestNS}
 	ch := &kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Name: "ch-fb", Namespace: "default"}}
 	if err := r.pruneAsyncConfigMaps(context.Background(), ch, false); err != nil {
@@ -2214,6 +2214,67 @@ func TestValidateSecrets_OptInAndCallbackHosts(t *testing.T) {
 		}
 		if c.notInMsg != "" && strings.Contains(msg, c.notInMsg) {
 			t.Errorf("%s: message %q names %s", c.name, msg, c.notInMsg)
+		}
+	}
+}
+
+// The async-record index keys a kaalm-async- ConfigMap by the channel its
+// labels name; any other ConfigMap is not indexed.
+func TestAsyncChannelIndex(t *testing.T) {
+	now := time.Now()
+	labelled := asyncRecord("kaalm-async-idx", "team-a", "ch", "", now)
+	if got := asyncChannelIndex(labelled); len(got) != 1 || got[0] != "team-a/ch" {
+		t.Errorf("index = %q, want [team-a/ch]", got)
+	}
+	unlabelled := asyncRecord("kaalm-async-idx", "", "", "", now)
+	if got := asyncChannelIndex(unlabelled); got != nil {
+		t.Errorf("a record without channel labels is indexed as %q", got)
+	}
+	halfLabelled := asyncRecord("kaalm-async-idx", "team-a", "ch", "", now)
+	delete(halfLabelled.Labels, kaalmv1beta1.LabelChannelNamespace)
+	if got := asyncChannelIndex(halfLabelled); got != nil {
+		t.Errorf("a record with one channel label is indexed as %q", got)
+	}
+	other := asyncRecord("kaalm-budget-x", "team-a", "ch", "", now)
+	if got := asyncChannelIndex(other); got != nil {
+		t.Errorf("a ConfigMap without the kaalm-async- prefix is indexed as %q", got)
+	}
+}
+
+// A channel pass reads only its own channel's records, through the index,
+// instead of every ConfigMap in the operator namespace.
+func TestPruneAsyncConfigMaps_ListsThroughChannelIndex(t *testing.T) {
+	now := time.Now()
+	objs := []client.Object{
+		asyncRecord("kaalm-async-ix-expired", "default", "ch-ix", rfc(now.Add(-time.Minute)), now.Add(-time.Hour)),
+		asyncRecord("kaalm-async-ix-live", "default", "ch-ix", rfc(now.Add(time.Hour)), now),
+		asyncRecord("kaalm-async-ix-other", "default", "ch-other", rfc(now.Add(-time.Minute)), now.Add(-time.Hour)),
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).
+		WithIndex(&corev1.ConfigMap{}, IndexAsyncChannel, asyncChannelIndex).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.ConfigMapList); ok {
+					lo := (&client.ListOptions{}).ApplyOptions(opts)
+					if lo.FieldSelector == nil {
+						return fmt.Errorf("a ConfigMap list without the channel index scans the whole namespace")
+					}
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+	r := &AgentChannelReconciler{Client: c, OperatorNamespace: orphanTestNS}
+	ch := &kaalmv1beta1.AgentChannel{ObjectMeta: metav1.ObjectMeta{Name: "ch-ix", Namespace: "default"}}
+	if err := r.pruneAsyncConfigMaps(context.Background(), ch, false); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	for name, want := range map[string]bool{
+		"kaalm-async-ix-expired": false,
+		"kaalm-async-ix-live":    true,
+		"kaalm-async-ix-other":   true,
+	} {
+		if got := recordExists(t, c, name); got != want {
+			t.Errorf("%s exists = %v, want %v", name, got, want)
 		}
 	}
 }
