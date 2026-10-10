@@ -2115,6 +2115,44 @@ func TestRelayMCPBuffered_CallerGone(t *testing.T) {
 	}
 }
 
+// A caller that left is client_closed even when the response read ended
+// cleanly: the tool server can finish its response once the gateway cancels
+// the call, and the transport can read that clean end before the cancel
+// reaches the body.
+func TestRelayMCP_CallerGoneCleanEnd(t *testing.T) {
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	answer := func(body string) *http.Response {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(body))}
+	}
+
+	t.Run("buffered", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		n, status, errType, detail := relayMCPBuffered(gone, rec, answer(`{"jsonrpc":"2.0","id":7,"result":{"tools":[`), 1024, "search")
+		if n != 0 || status != statusClientClosedRequest || errType != outcomeClientClosed || detail != "" {
+			t.Errorf("outcome = (%d, %d, %q, %q), want (0, 499, client_closed, empty)", n, status, errType, detail)
+		}
+		if rec.Body.Len() != 0 {
+			t.Errorf("wrote %q to a caller that left", rec.Body)
+		}
+	})
+
+	t.Run("tools/list", func(t *testing.T) {
+		h := newHarness(t, func(http.ResponseWriter, *http.Request) {})
+		msg := mcpRequest{JSONRPC: "2.0", ID: json.RawMessage(`3`), Method: "tools/list"}
+		rec := httptest.NewRecorder()
+		n, status, errType, detail := h.server.relayFilteredToolsList(gone, rec,
+			answer(`{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}`), msg, &toolFilter{}, "search")
+		if n != 0 || status != statusClientClosedRequest || errType != outcomeClientClosed || detail != "" {
+			t.Errorf("outcome = (%d, %d, %q, %q), want (0, 499, client_closed, empty)", n, status, errType, detail)
+		}
+		if rec.Body.Len() != 0 {
+			t.Errorf("wrote %q to a caller that left", rec.Body)
+		}
+	})
+}
+
 // callerGoneHarness is a harness whose tool server signals arrived and then
 // waits, after sending nothing (mode "silent") or a 200 with part of a JSON
 // body (mode "partial"), so the caller can leave before the broker answers.
