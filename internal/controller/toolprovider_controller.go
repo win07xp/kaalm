@@ -212,7 +212,14 @@ func (r *ToolProviderReconciler) reconcileDelete(
 		// away. Healthy says the probe does not run during the hold.
 		before := slices.Clone(tp.Status.Conditions)
 		setHealthyNotProbed(&tp.Status.Conditions, "deletion is held")
-		return holdDeletion(ctx, r.Client, r.Recorder, tp, &tp.Status.Conditions, before, refs)
+		rv := tp.ResourceVersion
+		if err := holdDeletion(ctx, r.Client, r.Recorder, tp, &tp.Status.Conditions, before, refs); err != nil {
+			return err
+		}
+		if tp.ResourceVersion != rv {
+			r.ownWrites.record(tp)
+		}
+		return nil
 	}
 	controllerutil.RemoveFinalizer(tp, kaalmv1beta1.ToolProviderFinalizer)
 	return r.Update(ctx, tp)

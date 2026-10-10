@@ -137,3 +137,30 @@ func TestOwnStatusWrites_RecordIsOneShot(t *testing.T) {
 		t.Error("an event after forget was dropped")
 	}
 }
+
+// A ToolProvider whose delete is held writes its status through the shared
+// hold, and that write is its own too: its event starts no second pass.
+func TestOwnStatusWrites_ToolProviderHeldDelete(t *testing.T) {
+	now := metav1.Now()
+	tp := eventsToolProvider("own-write-held-tp")
+	tp.DeletionTimestamp = &now
+	c := heldDeleteClient(t, tp.Name, tp)
+	r := &ToolProviderReconciler{Client: c, Recorder: record.NewFakeRecorder(16), OperatorNamespace: testOperatorNamespace}
+	get := func() *kaalmv1beta1.ToolProvider {
+		t.Helper()
+		var got kaalmv1beta1.ToolProvider
+		if err := c.Get(ctxT(), client.ObjectKeyFromObject(tp), &got); err != nil {
+			t.Fatal(err)
+		}
+		return &got
+	}
+	before := get()
+	mustReconcile(t, r, tp.Name)
+	after := get()
+	if after.ResourceVersion == before.ResourceVersion {
+		t.Fatal("the held pass wrote no status; the test needs one that does")
+	}
+	if r.ownWrites.skipOwn().Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}) {
+		t.Error("the held delete's own status write was admitted")
+	}
+}
