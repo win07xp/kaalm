@@ -33,6 +33,8 @@ Two more phases run only when `-phases` names them, because each takes long enou
 
 Timings that come from API objects (time-to-Ready, task completion) have one-second granularity, so the distributions come from the Prometheus histograms and the objects supply the coarse per-agent numbers. Client-side percentiles are exact, from every sample the load generator recorded; gateway-side and delivery percentiles are interpolated from histogram bucket bounds, so they can sit above the client figure for the same leg, and a value at the top finite bucket reads as that bucket's bound.
 
+The gateway-side figures of a gateway, tools, or stream leg come from scraping every gateway replica's `/metrics` before and after the leg and subtracting. The scrape skips a terminating Pod, which stays Running for a few seconds while the gateway drains. When the two scrapes cover different gateway Pods, counters from different Pods do not subtract, so the leg leaves its gateway-side figures out (latency, request count, CPU per request, spend, budget utilization, missing usage, and the tools leg's calls by status), sets `gatewayPodsChanged: true` in its JSON, and prints a note under its summary line. The client-side figures stay. A ramp wave or the providers setup leaves out its controller reconcile figures the same way and logs a line.
+
 ## Run the harness
 
 ```bash

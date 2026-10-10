@@ -67,6 +67,12 @@ type gatewayLeg struct {
 	// summed across replicas, divided by the requests the gateway counted.
 	GatewayCPUPerRequestMs float64 `json:"gatewayCpuPerRequestMs"`
 	GatewayUsageMax        usage   `json:"gatewayUsageMax"`
+	// GatewayPodsChanged is set when the gateway Pods differed between the
+	// leg's two scrapes. The gateway-side figures (gatewaySideMs,
+	// gatewayRequests, gatewayCpuPerRequestMs, spend, budget, and missing
+	// usage) are then left out, because counters from different Pods do not
+	// subtract.
+	GatewayPodsChanged bool `json:"gatewayPodsChanged,omitempty"`
 }
 
 type rampResult struct {
@@ -489,20 +495,38 @@ func (h *harness) runLeg(ctx context.Context, spec legSpec, mtlsSecret string) (
 		Format:          spec.format,
 		Concurrency:     h.cfg.GatewayConcurrency,
 		Client:          client,
-		GatewaySideMs:   histStats(histogramDelta(before, after, spec.histogram, spec.labels)),
-		GatewayRequests: counterDelta(before, after, spec.counter, spec.labels),
 		GatewayUsageMax: peak["kaalm-gateway"],
 	}
+	gatewayFigures(&leg, spec, before, after)
+	if leg.GatewayPodsChanged {
+		h.logf("  gateway Pods changed during the leg (%v, then %v): gateway-side figures left out",
+			before.pods, after.pods)
+	}
+	h.logf("  client: %d requests, %.1f rps, p50 %.1f ms, p99 %.1f ms, statuses %v; gateway %.3f ms CPU per request",
+		client.Requests, client.RPS, client.LatencyMs.P50, client.LatencyMs.P99, client.Statuses,
+		leg.GatewayCPUPerRequestMs)
+	return leg, legScrapes{before: before, after: after}, nil
+}
+
+// podsChangedNote follows a summary line whose gateway-side figures were
+// left out.
+const podsChangedNote = "    gateway Pods changed during this leg: gateway-side figures left out"
+
+// gatewayFigures fills the leg's gateway-side figures from its two scrapes,
+// or marks the leg when the scrapes summed different gateway Pods.
+func gatewayFigures(leg *gatewayLeg, spec legSpec, before, after *snapshot) {
+	if podsChanged(before, after) {
+		leg.GatewayPodsChanged = true
+		return
+	}
+	leg.GatewaySideMs = histStats(histogramDelta(before, after, spec.histogram, spec.labels))
+	leg.GatewayRequests = counterDelta(before, after, spec.counter, spec.labels)
 	leg.GatewayCPUPerRequestMs = cpuPerRequestMs(counterDelta(before, after, metricProcessCPU, nil), leg.GatewayRequests)
 	if spec.counter == metricLLMRequests {
 		leg.SpendUSD = round3(counterDelta(before, after, "kaalm_llm_spend_usd_total", spec.labels))
 		leg.BudgetUtilization = after.gauge("kaalm_llm_budget_utilization", spec.labels)
 		leg.UsageMissing = counterDelta(before, after, "kaalm_llm_usage_missing_total", spec.labels)
 	}
-	h.logf("  client: %d requests, %.1f rps, p50 %.1f ms, p99 %.1f ms, statuses %v; gateway %.3f ms CPU per request",
-		client.Requests, client.RPS, client.LatencyMs.P50, client.LatencyMs.P99, client.Statuses,
-		leg.GatewayCPUPerRequestMs)
-	return leg, legScrapes{before: before, after: after}, nil
 }
 
 // loadgenIdentity creates an agent whose identity the mTLS legs borrow and
@@ -591,6 +615,9 @@ type toolLeg struct {
 	GatewayCalls           float64            `json:"gatewayCalls"`
 	GatewayCPUPerRequestMs float64            `json:"gatewayCpuPerRequestMs"`
 	GatewayUsageMax        usage              `json:"gatewayUsageMax"`
+	// GatewayPodsChanged is gatewayLeg's flag: the gateway-side figures,
+	// callsByStatus included, are left out.
+	GatewayPodsChanged bool `json:"gatewayPodsChanged,omitempty"`
 }
 
 // toolsClass is the active class with both perf ToolProviders allowed,
@@ -671,18 +698,22 @@ func (h *harness) runTools(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("tools %w", err)
 		}
-		res.Legs = append(res.Legs, toolLeg{
+		tl := toolLeg{
 			Name:                   leg.Name,
 			Provider:               leg.Provider,
 			MTLS:                   leg.MTLS,
 			Concurrency:            leg.Concurrency,
 			Client:                 leg.Client,
 			GatewaySideMs:          leg.GatewaySideMs,
-			CallsByStatus:          counterByLabel(scrapes.before, scrapes.after, metricToolCalls, "status", spec.labels),
 			GatewayCalls:           leg.GatewayRequests,
 			GatewayCPUPerRequestMs: leg.GatewayCPUPerRequestMs,
 			GatewayUsageMax:        leg.GatewayUsageMax,
-		})
+			GatewayPodsChanged:     leg.GatewayPodsChanged,
+		}
+		if !leg.GatewayPodsChanged {
+			tl.CallsByStatus = counterByLabel(scrapes.before, scrapes.after, metricToolCalls, "status", spec.labels)
+		}
+		res.Legs = append(res.Legs, tl)
 	}
 	h.sum.Tools = res
 	return nil
@@ -902,7 +933,12 @@ func (h *harness) ramp(ctx context.Context, f fleet) (*rampResult, error) {
 		}
 		if ctl, err := h.scrapeController(ctx); err == nil {
 			agentReconciles := map[string]string{labelController: agentControllerName}
-			w.ReconcileMs = histStats(histogramDelta(prevCtl, ctl, metricReconcileTime, agentReconciles))
+			if podsChanged(prevCtl, ctl) {
+				h.logf("  controller Pods changed during wave %d (%v, then %v): reconcile figures left out",
+					wave+1, prevCtl.pods, ctl.pods)
+			} else {
+				w.ReconcileMs = histStats(histogramDelta(prevCtl, ctl, metricReconcileTime, agentReconciles))
+			}
 			w.WorkqueueDepth = ctl.gauge("workqueue_depth", map[string]string{"name": "agent"})
 			prevCtl = ctl
 		}
@@ -1476,6 +1512,11 @@ func (h *harness) providersSetup(ctx context.Context, res *providersResult) erro
 	ctlAfter, err := h.scrapeController(ctx)
 	if err != nil {
 		return err
+	}
+	if podsChanged(ctlBefore, ctlAfter) {
+		h.logf("  controller Pods changed during the setup (%v, then %v): reconcile figures left out",
+			ctlBefore.pods, ctlAfter.pods)
+		ctlBefore, ctlAfter = nil, nil
 	}
 	for _, name := range providersControllers {
 		hist := histogramDelta(ctlBefore, ctlAfter, metricReconcileTime, map[string]string{labelController: name})
