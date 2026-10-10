@@ -46,9 +46,9 @@ An attempt on a fallback candidate that was in progress when the caller left cou
 
 Spend settles by what the gateway has from the attempt that was in progress:
 
-- A 2xx answer the gateway read in full settles its usage, because the provider did the work.
-- A streaming 2xx answer whose relay had not started counts on `kaalm_llm_usage_missing_total` and settles zero, as the stream relay does for a caller that left before it saw any usage.
-- Any other attempt settles zero: one with no response (a read that the caller's leaving cut off ends this way) or one with a non-2xx response.
+- A 2xx answer whose usage the gateway can read settles that usage, because the provider did the work.
+- A 2xx answer that the caller's leaving cut off, or a streaming 2xx answer whose relay had not started, counts on `kaalm_llm_usage_missing_total` and settles zero, as the stream relay does for a caller that left before it saw any usage.
+- An attempt with no response yet (the caller left before the provider's response headers arrived) or with a non-2xx response settles zero.
 
 ### The forwarded-header contract
 
