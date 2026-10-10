@@ -268,6 +268,22 @@ func newHarness(t testing.TB, upstreamFn http.HandlerFunc) *harness {
 	t.Helper()
 	h := &harness{ca: newTestCA(t), store: newFakeStore(), spend: NewMemorySpend(), upreqs: make(chan *capturedRequest, 8)}
 
+	// Registered first so it runs last, after the gateway listener and the
+	// upstream close: http.Server.Close does not wait for running handlers,
+	// and a gateway handler that outlives its test writes its audit line and
+	// metrics into the next one.
+	var inflight atomic.Int64
+	t.Cleanup(func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for inflight.Load() > 0 {
+			if time.Now().After(deadline) {
+				t.Errorf("%d gateway handlers still running 10s after the test", inflight.Load())
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+
 	h.upstream = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
@@ -304,7 +320,12 @@ func newHarness(t testing.TB, upstreamFn http.HandlerFunc) *harness {
 		t.Fatal(err)
 	}
 	h.listener = ln
-	srv := &http.Server{Handler: h.server.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	handler := h.server.Handler()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inflight.Add(1)
+		defer inflight.Add(-1)
+		handler.ServeHTTP(w, r)
+	}), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return h
