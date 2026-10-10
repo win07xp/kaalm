@@ -248,25 +248,36 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		body, inboundPath, pathAdapter, candAdapter, model := s.candidateRequest(st, cand, outBody, r.URL.Path, adapter, typeAdapter)
 		fr := s.forwardOnce(fctx, r, cand, body, inboundPath, pathAdapter, candAdapter, model)
 		fr.model, fr.format = model, formatForType(cand.Spec.Type)
-		if fr.class != classNone {
+		// A caller that left fails the attempt's read; that is not the
+		// candidate's failure.
+		callerLeft := ctx.Err() != nil
+		switch {
+		case callerLeft:
+			endForward(errors.New(outcomeClientClosed))
+		case fr.class != classNone:
 			endForward(errors.New(failClassName(fr.class)))
-		} else {
-			endForward(nil)
-		}
-		if fr.class != classNone {
 			st.observed[fr.class] = true
+		default:
+			endForward(nil)
 		}
 		// Count every attempt on a non-primary candidate as a fallback,
 		// whatever its outcome (a succeeding attempt is labeled "success").
 		if cand.Name != provider.Name {
 			reason := fallbackReasonSuccess
-			if fr.class != classNone {
+			switch {
+			case callerLeft:
+				reason = outcomeClientClosed
+			case fr.class != classNone:
 				reason = failClassName(fr.class)
 			}
 			s.Metrics.Fallback(provider.Name, cand.Name, reason)
 		}
 		return fr
 	})
+	if ctx.Err() != nil {
+		s.settleCallerLeft(ctx, res, adapter, c.Namespace, workload, &modelID, &answered, debitTokens)
+		return
+	}
 	if !ok {
 		status, body, retryAfter := exhaustionError(st.observed, st.maxRetryAfter, st.budgetBlocked, providerName)
 		s.Metrics.LLMRequest(providerName, modelID, c.Namespace, outcomeError)
@@ -275,6 +286,50 @@ func (s *Server) handleLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeWalkResult(ctx, w, res, adapter, inboundFormat, c.Namespace, workload, &modelID, &answered, debitTokens)
+}
+
+// settleCallerLeft ends a request whose caller left before the gateway
+// answered, and writes nothing. A 2xx answer read in full settles its usage,
+// since the provider did the work. A cut-off or streaming 2xx answer, whose
+// usage the gateway cannot read, counts as usage missing and settles zero, as
+// the stream relay does for a caller that left. Any other attempt settles
+// zero. The request counts as client_closed.
+func (s *Server) settleCallerLeft(
+	ctx context.Context, res forwardResult, adapter providerAdapter, namespace, workload string,
+	modelID, answered *string, debitTokens func(Usage),
+) {
+	if res.resp != nil {
+		defer func() { _ = res.resp.Body.Close() }()
+	}
+	if res.provider != "" {
+		*answered = res.provider
+	}
+	if res.model != "" {
+		*modelID = res.model
+	}
+	settleZero := func() {
+		if res.settle != nil {
+			res.settle(0)
+		}
+	}
+	if res.resp == nil || res.resp.StatusCode < 200 || res.resp.StatusCode > 299 {
+		settleZero()
+	} else {
+		servingAdapter := adapter
+		if res.chosen != nil {
+			if a, ok := adapterForProviderType(res.chosen.Spec.Type); ok {
+				servingAdapter = a
+			}
+		}
+		if usage, ok := servingAdapter.extractUsage(res.body); ok {
+			s.settleUsage(res.chosen, namespace, workload, *modelID, usage, res.settle, debitTokens)
+		} else {
+			s.usageMissing(namespace, *answered, *modelID)
+			settleZero()
+		}
+	}
+	s.Metrics.LLMRequest(*answered, *modelID, namespace, outcomeClientClosed)
+	spanError(ctx, outcomeClientClosed)
 }
 
 // writeWalkResult relays the winning attempt: a non-fallbackable failure
@@ -452,6 +507,14 @@ func (s *Server) forwardOnce(
 	// holds no connection and no timer.
 	body, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	if err != nil && ctx.Err() != nil {
+		// The caller left mid-read. The answer goes to the handler as read
+		// so far, the same as when the cancel ends the read cleanly, so a
+		// cut-off answer settles alike however the read ended.
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		fr.body = body
+		return fr
+	}
 	if err != nil {
 		class := classConnect
 		if errors.Is(err, errUpstreamIdle) {

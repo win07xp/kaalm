@@ -132,9 +132,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 // kaalm_tool_calls_total, and a span status description: the caller
 // disconnected before the gateway finished answering. For a tool call that
 // is while the call was forwarded, while a buffered or tools/list response
-// was read, or while a stream was relayed; for an LLM request, while a
-// stream was relayed. It is never a wire error type, because no caller
-// receives it.
+// was read, or while a stream was relayed; for an LLM request, at any point
+// before the answer was relayed in full, stream or not. It is never a wire
+// error type, because no caller receives it.
 const outcomeClientClosed = "client_closed"
 
 // outcomeOK and outcomeError are the kaalm_llm_requests_total statuses of a
@@ -149,7 +149,8 @@ const (
 // request whose fallback walk was exhausted, a provider's non-2xx relayed,
 // an untranslatable answer, or a stream the provider broke or let go idle;
 // rate_limited is a request the gateway's rate limit refused;
-// client_closed is a caller that left before a stream finished.
+// client_closed is a caller that left before the gateway finished
+// answering.
 func (m *Metrics) LLMRequest(provider, model, namespace, status string) {
 	if m == nil {
 		return

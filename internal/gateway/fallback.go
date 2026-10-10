@@ -286,6 +286,12 @@ func (s *Server) tryWithFallbacks(
 
 	res := attempt(ctx, provider)
 	res.settle = settle
+	// A caller that left ends the walk: no one waits for a fallback's
+	// answer, and the attempt's read failure is not the provider's. The
+	// handler settles and counts the request as client_closed.
+	if ctx.Err() != nil {
+		return res, true
+	}
 	if res.class == classNone && res.err == nil && res.resp != nil &&
 		res.resp.StatusCode >= 200 && res.resp.StatusCode <= 299 {
 		return res, true
